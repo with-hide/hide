@@ -18,6 +18,7 @@ mod node_home;
 mod node_link_facts;
 mod node_owner;
 mod node_session_activity;
+mod observer_review;
 mod opener_lifecycle;
 #[path = "support/private_herdr.rs"]
 mod private_herdr;

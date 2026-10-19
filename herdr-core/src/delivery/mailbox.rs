@@ -28,6 +28,8 @@ pub enum Command {
         id: String,
         intent: String,
         body: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        review: Option<super::watch::ReviewAssessment>,
     },
     Ack {
         id: String,
@@ -115,7 +117,7 @@ fn oldest_finished(ledger: &Ledger) -> Option<usize> {
         .letters
         .iter()
         .enumerate()
-        .filter(|(_, letter)| !letter.open())
+        .filter(|(_, letter)| !letter.open() && !super::watch::pending_review(ledger, &letter.id))
         .min_by_key(|(index, letter)| {
             (
                 letter
@@ -200,6 +202,7 @@ pub(crate) fn send(
         hook_confirmed: Some(false),
         waiting_answer: matches!(kind, "request" | "block"),
         reply_to,
+        review_assessment: None,
         created_at_unix_ms: now,
         finished_at_unix_ms: None,
         bell_errors: 0,
@@ -234,6 +237,16 @@ pub fn apply(
     if let Command::Send { intent, .. } | Command::Reply { intent, .. } = command
         && let Some(letter) = existing_intent(ledger, actor, intent, now)
     {
+        if let Command::Reply {
+            id, body, review, ..
+        } = command
+            && (review.is_some() || letter.review_assessment.is_some())
+            && (letter.reply_to.as_ref() != Some(id)
+                || letter.body != *body
+                || letter.review_assessment != *review)
+        {
+            return Err("intent_conflict".into());
+        }
         return Ok(json!(letter));
     }
     match command {
@@ -265,12 +278,33 @@ pub fn apply(
             }
             Ok(json!(letter))
         }
-        Command::Reply { id, intent, body } => {
+        Command::Reply {
+            id,
+            intent,
+            body,
+            review,
+        } => {
             let original = authorized(ledger, actor, id)?.clone();
             if !original.recipient.same_identity(actor) {
                 return Err("recipient_required".into());
             }
-            let reply = send(
+            let completion = review
+                .map(|assessment| {
+                    let index = super::watch::review_index(ledger, actor, id)?;
+                    let due = now
+                        .checked_add(super::watch::REVIEW_INTERVAL_MS)
+                        .ok_or("capacity")?;
+                    let cycle = ledger.watches[index]
+                        .review
+                        .as_ref()
+                        .ok_or("review_unavailable")?
+                        .cycle
+                        .checked_add(1)
+                        .ok_or("capacity")?;
+                    Ok::<_, String>((index, due, cycle, assessment))
+                })
+                .transpose()?;
+            let mut reply = send(
                 ledger,
                 actor,
                 &original.sender,
@@ -280,14 +314,37 @@ pub fn apply(
                 Some(id.clone()),
                 now,
             )?;
+            reply.review_assessment = *review;
+            ledger
+                .letters
+                .iter_mut()
+                .find(|stored| stored.id == reply.id)
+                .ok_or("letter_unavailable")?
+                .review_assessment = *review;
             let original = ledger
                 .letters
                 .iter_mut()
                 .find(|letter| letter.id == *id)
                 .ok_or("letter_unavailable")?;
             original.waiting_answer = false;
+            // An explicit conclusion also proves intake. It must not leave
+            // the completed request waiting to ring the same observer again.
+            if completion.is_some() {
+                record_intake(original, now);
+            }
             if original.state != State::Pending {
                 original.finished_at_unix_ms.get_or_insert(now);
+            }
+            if let Some((index, due, cycle, assessment)) = completion {
+                let review = ledger.watches[index]
+                    .review
+                    .as_mut()
+                    .ok_or("review_unavailable")?;
+                review.pending_letter = None;
+                review.completed_at_unix_ms = Some(now);
+                review.assessment = Some(assessment);
+                review.due_at_unix_ms = due;
+                review.cycle = cycle;
             }
             Ok(json!(reply))
         }
@@ -323,7 +380,7 @@ pub fn apply(
                 letter.finished_at_unix_ms.get_or_insert(now);
             }
             let letter = letter.clone();
-            end_report_watches(ledger, ended);
+            end_report_watches(ledger, ended, now);
             Ok(json!(letter))
         }
         Command::Show { id } => Ok(json!(authorized(ledger, actor, id)?)),
@@ -428,7 +485,7 @@ pub fn apply(
             }
             // Delivery and ending the matching watch are one durable transaction.
             for report in reports {
-                end_report_watches(ledger, Some(report));
+                end_report_watches(ledger, Some(report), now);
             }
             Ok(json!(Confirmed {
                 confirmed: ids.clone()
@@ -462,9 +519,9 @@ fn record_intake(letter: &mut Letter, now: u64) -> Option<(Actor, Actor)> {
     (letter.kind == "report").then(|| (letter.sender.clone(), letter.recipient.clone()))
 }
 
-fn end_report_watches(ledger: &mut Ledger, report: Option<(Actor, Actor)>) {
+fn end_report_watches(ledger: &mut Ledger, report: Option<(Actor, Actor)>, now: u64) {
     if let Some((sender, recipient)) = report {
-        ledger.watches.retain(|watch| {
+        super::watch::retain(ledger, now, |watch| {
             !(sender.same_identity(&watch.target) && recipient.same_identity(&watch.parent))
         });
     }
@@ -976,6 +1033,7 @@ mod tests {
             None,
             &Command::Reply {
                 id: first.id,
+                review: None,
                 intent: "reply".into(),
                 body: "done".into(),
             },
@@ -988,6 +1046,7 @@ mod tests {
             None,
             &Command::Reply {
                 id: second.id.clone(),
+                review: None,
                 intent: "reply".into(),
                 body: "different decision".into(),
             },
@@ -2307,6 +2366,7 @@ mod tests {
             None,
             &Command::Reply {
                 id: first.id.clone(),
+                review: None,
                 intent: "answer".into(),
                 body: "done".into(),
             },
@@ -2535,6 +2595,7 @@ mod tests {
             None,
             &Command::Reply {
                 id: answered.id.clone(),
+                review: None,
                 intent: "answer".into(),
                 body: "done".into(),
             },

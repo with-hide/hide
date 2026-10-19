@@ -471,6 +471,7 @@ fn spawn(
     }
     let Command::Spawn {
         parent,
+        review_policy,
         machine,
         name,
         intent,
@@ -485,6 +486,9 @@ fn spawn(
     else {
         return Err("invalid_spawn".into());
     };
+    if review_policy.is_some() && parent.is_none() {
+        return Err("review_parent_required".into());
+    }
     if parent.as_ref().is_some_and(|parent| !super::key(parent))
         || machine.as_ref().is_some_and(|machine| !super::key(machine))
         || ![name, intent, kind, repo, branch]
@@ -1544,6 +1548,7 @@ mod tests {
                 &Mutation::Reserve {
                     parent: self.parent.clone(),
                     command: Command::Spawn {
+                        review_policy: None,
                         parent: Some(self.parent.clone()),
                         machine: None,
                         name: name.into(),
@@ -1789,6 +1794,7 @@ mod tests {
                 .unwrap()
                 .to_owned();
             let command = Command::Spawn {
+                review_policy: None,
                 parent: Some("here".into()),
                 machine: None,
                 name: "recipient".into(),
@@ -1875,7 +1881,7 @@ mod tests {
                     )
                     .unwrap();
                 }
-                "stop" => watch::stop(&mut state, &actor, initial_watch).unwrap(),
+                "stop" => watch::stop(&mut state, &actor, initial_watch, 20).unwrap(),
                 _ => {
                     let report = mailbox::send(
                         &mut state,

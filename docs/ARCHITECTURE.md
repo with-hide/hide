@@ -823,6 +823,10 @@ Replayed confirmation after restart preserves a watch explicitly started after t
 Legacy letters with an absent or null field prove confirmation only in `delivered` state; an older `acknowledged` record cannot distinguish manual acknowledgement from confirmed intake.
 Older acknowledged records remain excluded from pull and keep their existing closed-state retention rules unless they still await a reply; the missing receipt never becomes delivery proof.
 The same core owns registration, spawning, lineage, the mailbox and inactivity watches; no external coordinator or conflict probe remains.
+An opt-in `observer-30m` spawn adds one durable periodic review cycle to its automatic watch, checked on the existing minute tick independently of activity.
+The designated Observer's explicit typed conclusion, rather than receipt or ordinary reply, records completion and sets the next thirty-minute deadline.
+One pending request is pinned inside the existing letter/ledger limits, and restart reuses it; watch removal ends scheduling and reassignment invalidates the former Observer's pending request.
+The check adds bounded in-memory watch/letter work and publishes only an admitted request or explicit completion; it adds no model, subprocess, session-body read or resident loop.
 A registration ends when its host's in-sync replica stops listing its pane: each publish hands the published pane set to `Runtime::observe_delivery`, which compares it with the previous one only when it moved (`coordination::gone_registrations`), and the delivery store ends what it found in its next transaction; a connect forgets the host's panes and notes the ledger's next id before asking for the snapshot, so a snapshot judges only registrations made before it.
 [delivery.md](delivery.md) owns the CLI, capacities, privacy, completion reports, remote delivery, manual fallback and the residual external-input race.
 

@@ -4,7 +4,7 @@ use herdr_core::delivery::{BODY_LIMIT, Command, HOOK_LETTERS};
 
 use crate::env::{self, Env};
 
-pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now]\nhide request reply <id> --intent <key> --body <text>\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nDelivery commands require a running daemon and a current agent pane; they do not require an open renderer.";
+pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now]\nhide request reply <id> --intent <key> --body <text> [--review scope-appropriate|delay-justified|reduce-scope|diagnosis-needed]\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nDelivery commands require a running daemon and a current agent pane; they do not require an open renderer.";
 
 pub fn parse<'a>(
     topic: &str,
@@ -122,6 +122,7 @@ pub fn parse<'a>(
             let mut intent = None;
             let mut body = None;
             let mut kind = None;
+            let mut review = None;
             let mut now = false;
             while let Some(flag) = args.next() {
                 if flag == "--now" && verb == Some("send") && !now {
@@ -130,6 +131,12 @@ pub fn parse<'a>(
                 }
                 let value = args.next().ok_or(USAGE)?.clone();
                 match flag.as_str() {
+                    "--review" if review.is_none() && verb == Some("reply") => {
+                        review = Some(
+                            serde_json::from_value(serde_json::Value::String(value))
+                                .map_err(|_| USAGE)?,
+                        );
+                    }
                     "--intent" if intent.is_none() && key(&value) => intent = Some(value),
                     "--body" if body.is_none() => body = Some(value),
                     "--kind"
@@ -165,6 +172,7 @@ pub fn parse<'a>(
                     id: subject,
                     intent,
                     body,
+                    review,
                 })
             }
         }

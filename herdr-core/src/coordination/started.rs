@@ -158,6 +158,7 @@ pub(crate) mod tests {
         child: Child,
     ) -> Result<String, String> {
         let command = crate::coordination::Command::Spawn {
+            review_policy: None,
             parent: delegated.then(|| parent.to_owned()),
             machine: (child.machine != caller.device_id).then(|| child.machine.to_owned()),
             name: format!("child-{branch}"),
@@ -407,6 +408,7 @@ pub(crate) mod tests {
             parent: origin.clone(),
             command: crate::coordination::Command::Spawn {
                 parent: None,
+                review_policy: None,
                 machine: None,
                 name: "child-hide-memory-m72".into(),
                 intent: "intent-hide-memory-m72".into(),

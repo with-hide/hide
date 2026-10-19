@@ -174,6 +174,20 @@ pub fn successful(command: Command) -> Result<Vec<u8>> {
     Ok(answer.stdout)
 }
 
+/// The existing no-model provider for a private local account. The local
+/// watch journey uses the same pane command loop as the SSH mailbox journey.
+pub(crate) fn install_provider(environment: &Environment, root: &Path) -> Result<()> {
+    fs::write(root.join("provider.c"), SHIM)?;
+    let mut compiler = environment.command("/usr/bin/cc");
+    compiler
+        .arg("-O1")
+        .arg(root.join("provider.c"))
+        .arg("-o")
+        .arg(environment.home.join("bin/claude"));
+    successful(compiler)?;
+    Ok(())
+}
+
 pub fn wait_for<T>(what: &str, observe: impl FnMut() -> Result<Option<T>>) -> Result<T> {
     wait_within(what, READY_BOUND, observe)
 }
@@ -231,7 +245,7 @@ pub struct Herdr {
 }
 
 impl Herdr {
-    fn start(
+    pub(crate) fn start(
         root: PathBuf,
         mut environment: Environment,
         binary: PathBuf,
@@ -442,7 +456,7 @@ impl Herdr {
         })
     }
 
-    fn stop(&mut self) -> Result<()> {
+    pub(crate) fn stop(&mut self) -> Result<()> {
         if let Some(mut server) = self.server.take() {
             let stop = capture(self.command(&["server", "stop"]))?;
             ensure!(stop.status.success(), "private Herdr stop refused");
@@ -583,14 +597,7 @@ impl Fixture {
                 .contains(manifest["version"].as_str().context("pin version")?),
             "fixture Herdr does not match repository pin"
         );
-        fs::write(root.join("provider.c"), SHIM)?;
-        let mut compiler = local_env.command("/usr/bin/cc");
-        compiler
-            .arg("-O1")
-            .arg(root.join("provider.c"))
-            .arg("-o")
-            .arg(local_env.home.join("bin/claude"));
-        successful(compiler)?;
+        install_provider(&local_env, &root)?;
         fs::copy(
             local_env.home.join("bin/claude"),
             remote_env.home.join("bin/claude"),
@@ -952,6 +959,8 @@ int main(int argc, char **argv) {
           fclose(out);
           rename(staged, timing);
         }
+      } else if (getenv("HIDE_DELIVERY_FIXTURE_ECHO")) {
+        puts(line); fflush(stdout);
       }
       size = 0;
     } else if (size + 1 < sizeof line) { line[size++] = byte; }

@@ -113,7 +113,7 @@ pub fn answer_schemas() -> Value {
 
 /// The fields an answer leaves out when they have no value
 /// (`skip_serializing_if`).
-const OMITTED: &[&str] = &["ack_command", "names"];
+const OMITTED: &[&str] = &["ack_command", "names", "review", "review_assessment"];
 
 /// Marks every property of every object schema in `schema` required, but
 /// those in `OMITTED`.
@@ -165,6 +165,13 @@ mod tests {
         }
         let watch = &schemas["agent"]["definitions"]["Watch"]["required"];
         assert!(watch.as_array().unwrap().contains(&json!("generation")));
+        assert!(!watch.as_array().unwrap().contains(&json!("review")));
+        assert!(
+            !schemas["letter"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("review_assessment"))
+        );
         let entry = &schemas["inbox"]["items"]["required"];
         let entry = match entry {
             Value::Array(entry) => entry.clone(),

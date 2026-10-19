@@ -215,6 +215,13 @@ pub const COMMANDS: &[Spec] = &[
         repeats: None,
         options: &[
             optional("--parent", Text),
+            Opt {
+                name: "--review-policy",
+                value: Some(OneOf(&["observer-30m"])),
+                required: false,
+                requires: &["--parent"],
+                conflicts: &[],
+            },
             optional("--machine", Text),
             required("--name", Text),
             required("--intent", Text),
@@ -231,6 +238,8 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["agent"],
         refusals: &[
             "spawn_busy",
+            "review_parent_required",
+            "invalid_review_policy",
             "machine_unknown",
             "machine_not_permitted",
             "machine_unavailable",
@@ -261,7 +270,19 @@ pub const COMMANDS: &[Spec] = &[
     spec(
         &["request", "reply"],
         ID,
-        &[required("--intent", Key), required("--body", Body)],
+        &[
+            required("--intent", Key),
+            required("--body", Body),
+            optional(
+                "--review",
+                OneOf(&[
+                    "scope-appropriate",
+                    "delay-justified",
+                    "reduce-scope",
+                    "diagnosis-needed",
+                ]),
+            ),
+        ],
         &["letter"],
     ),
     spec(&["request", "ack"], ID, &[], &["letter"]),

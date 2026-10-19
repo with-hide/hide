@@ -350,7 +350,8 @@ A corrupt, oversized or unsafe existing ledger is preserved, and commands return
 Capacity errors retain existing letters and watches.
 Finished letters never refuse a new one: the one-day cleanup is the normal way a finished letter leaves, and a full total is the backstop, so a mailbox that finishes more than 5000 letters in a day keeps its newest finished letters and loses the oldest ahead of the day.
 The store runs the cleanup on its own once a second when a finished letter is over a day old, including its first pass after start, so a ledger that was full of older finished letters shrinks without a new letter.
-A dropped letter leaves no reference that must resolve: a reply's `reply_to` and an agent's escalation read the ledger as it is and treat a missing original as absent, as they already do after the one-day cleanup; the machine clocks follow only letters awaiting intake, which are open; and the same intent sent again after the drop is a new letter.
+A pending periodic review pins its one request against cleanup and finished-letter eviction until completion or watch removal.
+Other dropped letters leave no reference that must resolve: a reply's `reply_to` and an agent's escalation read the ledger as it is and treat a missing original as absent, as they already do after the one-day cleanup; the machine clocks follow only letters awaiting intake, which are open; and the same intent sent again after the drop is a new letter.
 Every `capacity` refusal of a letter writes one `letter.capacity_refused` diagnostic with `cap` (`body`, `open`, or `total` when all 5000 are open), both panes, the body size, the letter count and the open count, never the body.
 
 | Resource or clock | Bound |
@@ -365,6 +366,7 @@ Every `capacity` refusal of a letter writes one `letter.capacity_refused` diagno
 | Intent retention and finished-letter cleanup | One day from the finish; open letters remain; a full 5000-letter total drops sooner (next row) |
 | Open / retained letters | 1024 / 5000; a letter is open while it awaits intake or a reply; at 5000 a new letter drops the finished letter that finished first (ties: the earlier sent), never an open one, and is refused with `capacity` only when none is finished |
 | Watches | 32 |
+| Opt-in Observer review | 30 minutes from watch start, then from explicit conclusion; at most one pending request per watch, inside the existing letter limits |
 | Letter body / ledger file | 16 KiB / 16 MiB |
 | Hook batch / context / total deadline | Five letters / 8 KiB / two seconds |
 
@@ -421,13 +423,41 @@ The minute tick admits at most one read per watched target, at most four remote 
 Different parents watching one exact target share that tick's activity sample while keeping independent warning clocks and intent keys.
 A warning rejected by capacity leaves other targets' exits and activity resets intact.
 Session discovery, ownership reads and helper I/O run outside `Mutex<Runtime>`.
-A tick also performs one bounded ledger encoding and bounded per-watch admission checks; it publishes only watch start, warning and end transitions.
+A tick also performs one bounded ledger encoding and bounded per-watch admission checks; it publishes only watch start, warning, review request and end transitions.
 A target exit or parent's explicit stop ends the watch.
 A normal reply closes the request's answer wait and leaves the watch active.
 A done target remains watched until exit, explicit stop or a completion report.
 The first receipt, an acknowledgement or the actual post-flush confirmation, records `hook_confirmed: true` and ends a matching sender-parent watch for `hide request send --kind report`; a confirmation still does after cancellation or the delivery deadline, and replay after restart preserves a watch explicitly started after that receipt.
 A `progress` letter is received the same way and ends no watch: it is the interim report, such as a plan, and the child is still at work after it.
 A report from an unwatched sender is an ordinary letter; the parent can restart a watch explicitly.
+
+### Periodic Observer review
+
+Sasu Implementor delegation opts in with `hide agent spawn --parent here --review-policy observer-30m ...`.
+The fixed policy requires delegation; handoffs and ordinary delegations keep their previous behavior.
+It is part of the durable spawn intent, so retrying that intent with another policy is refused.
+The automatic watch records its first deadline thirty minutes after it starts, independent of target input, output, status changes, commits, tests and progress letters.
+The existing minute tick sends one immediate watch letter to the designated Observer through the usual pane/session-bound delivery path.
+No model call, git subprocess, extra session-body read, timer or supervisor is added.
+
+The request identifies the work and asks the Observer to compare PRD/plan fidelity, actual completed results and remaining work, time spent implementing versus waiting for build/CI versus rework, scope/abstraction creep and repeated fixes or full tests without new evidence.
+Inspection should reuse the last actual review and unchanged baseline, starting with new changes, results and failures; it is not another full verification stage.
+Mandatory verification remains required, and new product decisions or authority go to the operator.
+
+Only the designated Observer completes the pending cycle with `hide request reply <letter-id> --review <assessment> --intent <key> --body '<grounds and concrete direction if needed>'`.
+The assessment is `scope-appropriate`, `delay-justified`, `reduce-scope` or `diagnosis-needed`; the body must be nonblank, with meaning judged by the Observer, never the daemon.
+Intake, ack, ordinary replies and target activity leave the pending review and deadline unchanged.
+An explicit conclusion also proves intake and atomically records the assessment, completion time and next deadline thirty minutes later.
+An exact retry returns the same reply without advancing time again; a changed conclusion using the same intent is refused.
+`hide watch list` exposes the policy, due time, pending letter and last conclusion.
+
+The active cycle and pending identity persist across restart, and capacity refusal leaves the review due for the next tick.
+A pending letter is kept even after ordinary finished-letter retention, within the same 5000-letter and 16 MiB ledger limits.
+Reassignment invalidates the former Observer's pending request and reissues it to the new Observer without postponing its due time.
+Report receipt, target exit and explicit stop remove the watch and cancel its pending review letter in the same durable transition, preventing further review requests and new doorbell reservations; retrying a completed spawn never rearms it.
+An external bell already in flight has the existing delivery race and cannot be recalled.
+Version-one ledgers without the optional policy/review fields retain inactivity-only behavior; an older binary cannot execute this new policy and must be upgraded before a caller requests it.
+The private `observer_review` daemon fixture observes due delivery, real doorbell, receipt versus conclusion, caller refusal, restart and stop; unit tests inject time for exact deadlines and capacity.
 
 ## Code-owned identities
 
@@ -488,7 +518,7 @@ A longer session is refused `session_too_long` when the record is made, never as
 An empty session or one holding a control character is refused `invalid_registration` by the same rule (`coordination::kept_session`).
 A build before this one reads a session past 256 bytes as a damaged ledger, so going back to it after such a registration answers every delivery and agent command `ledger_unavailable` until this build or a later one runs again.
 A caller with no such record is refused `participant_ended` when its record ended, `participant_session_changed` when its pane's live record belongs to another session (the pane's agent session changed), `ambiguous_participant` when two live records match, and `participant_unavailable` otherwise; a remote participant on a pane of the same name is never the local caller.
-`hide agent spawn` requires `--name`, `--intent`, `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--path`, `--model`, `--effort` and native arguments after `--`.
+`hide agent spawn` requires `--name`, `--intent`, `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--path`, `--review-policy observer-30m`, `--model`, `--effort` and native arguments after `--`.
 `--model` and `--effort` are the agent's launch choice: the start passes them in the kind's own spelling, and every wake, fork and reopen Hide makes of the agent starts it with them again (`docs/ARCHITECTURE.md`, Agent start), while native arguments after `--` apply to this start only.
 A choice the kind does not take is refused `invalid_launch_choice` before anything is created, and the choice is part of the intent, so the same intent with another choice is an `intent_conflict`.
 Choose responsibility when creating the agent; it cannot be transferred afterwards.

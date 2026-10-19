@@ -2062,6 +2062,7 @@ fn spawn_agent(
         },
         start.actor.clone(),
         crate::coordination::Command::Spawn {
+            review_policy: None,
             parent: None,
             machine: start.machine.clone(),
             name: agent_name(number, started),

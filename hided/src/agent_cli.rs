@@ -3,8 +3,8 @@
 use crate::env::{self, Env};
 use herdr_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [-- <native args>]";
-pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [-- <native args>]
+pub const USAGE: &str = "hide agent register [--check] [--machine <device>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--review-policy observer-30m] [--model <model>] [--effort <effort>] [-- <native args>]";
+pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--review-policy observer-30m] [--model <model>] [--effort <effort>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
   Hide starts the agent with them and starts it with them again whenever it wakes, forks or reopens the agent.
@@ -15,6 +15,10 @@ Choose responsibility when spawning:
     The child belongs to you, appears below you, and starts an automatic watch.
   Without --parent: hand work off to the operator as an independent root.
     The operator handles its questions and completion; no automatic watch starts.
+
+For Sasu Implementor supervision, add --review-policy observer-30m with --parent.
+  Hide requests an Observer review every 30 minutes, independent of child activity.
+  Only an explicit request reply --review conclusion starts the next interval.
 
 Both modes open their own tab without changing the current screen or keyboard focus.
 The origin field records who spawned the agent in both modes; it grants no authority.
@@ -57,6 +61,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
                     .as_slice(),
                     "spawn" => [
                         "--parent",
+                        "--review-policy",
                         "--machine",
                         "--name",
                         "--intent",
@@ -125,7 +130,21 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
             let kind = take("--kind")?;
             let repo = take("--repo")?;
             let branch = take("--branch")?;
+            let review_policy = flags
+                .remove("--review-policy")
+                .map(|policy| {
+                    if policy == "observer-30m" {
+                        Ok(herdr_core::delivery::watch::ReviewPolicy::Observer30m)
+                    } else {
+                        Err("invalid_review_policy")
+                    }
+                })
+                .transpose()?;
+            if review_policy.is_some() && !flags.contains_key("--parent") {
+                return Err("review_parent_required".into());
+            }
             Command::Spawn {
+                review_policy,
                 parent: flags.remove("--parent"),
                 machine: flags.remove("--machine"),
                 name,

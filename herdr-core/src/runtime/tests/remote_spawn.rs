@@ -391,6 +391,7 @@ impl Spawner {
             self.actor.clone(),
             Command::Spawn {
                 parent: parent.map(str::to_owned),
+                review_policy: None,
                 machine: machine.map(str::to_owned),
                 name: "worker".into(),
                 intent: intent.into(),
@@ -965,6 +966,7 @@ fn a_spawn_by_a_device_caller_is_refused_before_anything_is_made() {
             actor.clone(),
             Command::Spawn {
                 parent: Some("here".into()),
+                review_policy: None,
                 machine: Some(machine.into()),
                 name: "worker".into(),
                 intent: "from-device".into(),

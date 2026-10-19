@@ -64,6 +64,72 @@
                     ],
                     "type": "string"
                 },
+                "PeriodicReview": {
+                    "properties": {
+                        "assessment": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/ReviewAssessment"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
+                        "completed_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "cycle": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "due_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "pending_letter": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "policy": {
+                            "$ref": "#/definitions/ReviewPolicy"
+                        }
+                    },
+                    "required": [
+                        "policy",
+                        "due_at_unix_ms",
+                        "pending_letter",
+                        "completed_at_unix_ms",
+                        "assessment",
+                        "cycle"
+                    ],
+                    "type": "object"
+                },
+                "ReviewAssessment": {
+                    "enum": [
+                        "scope-appropriate",
+                        "delay-justified",
+                        "reduce-scope",
+                        "diagnosis-needed"
+                    ],
+                    "type": "string"
+                },
+                "ReviewPolicy": {
+                    "description": "An explicit opt-in; ordinary delegation retains its inactivity-only watch.",
+                    "enum": [
+                        "observer-30m"
+                    ],
+                    "type": "string"
+                },
                 "Runtime": {
                     "enum": [
                         "running",
@@ -113,6 +179,16 @@
                         },
                         "parent": {
                             "$ref": "#/definitions/Actor"
+                        },
+                        "review": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/PeriodicReview"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
                         },
                         "status_changed_at_unix_ms": {
                             "format": "uint64",
@@ -394,6 +470,72 @@
                     ],
                     "type": "string"
                 },
+                "PeriodicReview": {
+                    "properties": {
+                        "assessment": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/ReviewAssessment"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
+                        "completed_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "cycle": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "due_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "pending_letter": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "policy": {
+                            "$ref": "#/definitions/ReviewPolicy"
+                        }
+                    },
+                    "required": [
+                        "policy",
+                        "due_at_unix_ms",
+                        "pending_letter",
+                        "completed_at_unix_ms",
+                        "assessment",
+                        "cycle"
+                    ],
+                    "type": "object"
+                },
+                "ReviewAssessment": {
+                    "enum": [
+                        "scope-appropriate",
+                        "delay-justified",
+                        "reduce-scope",
+                        "diagnosis-needed"
+                    ],
+                    "type": "string"
+                },
+                "ReviewPolicy": {
+                    "description": "An explicit opt-in; ordinary delegation retains its inactivity-only watch.",
+                    "enum": [
+                        "observer-30m"
+                    ],
+                    "type": "string"
+                },
                 "Runtime": {
                     "enum": [
                         "running",
@@ -443,6 +585,16 @@
                         },
                         "parent": {
                             "$ref": "#/definitions/Actor"
+                        },
+                        "review": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/PeriodicReview"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
                         },
                         "status_changed_at_unix_ms": {
                             "format": "uint64",
@@ -714,6 +866,16 @@
                                 "null"
                             ]
                         },
+                        "review_assessment": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/ReviewAssessment"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
                         "sender": {
                             "$ref": "#/definitions/Actor"
                         },
@@ -768,6 +930,15 @@
                         "tool_handovers"
                     ],
                     "type": "object"
+                },
+                "ReviewAssessment": {
+                    "enum": [
+                        "scope-appropriate",
+                        "delay-justified",
+                        "reduce-scope",
+                        "diagnosis-needed"
+                    ],
+                    "type": "string"
                 },
                 "State": {
                     "enum": [
@@ -909,6 +1080,15 @@
                         "digest"
                     ],
                     "type": "object"
+                },
+                "ReviewAssessment": {
+                    "enum": [
+                        "scope-appropriate",
+                        "delay-justified",
+                        "reduce-scope",
+                        "diagnosis-needed"
+                    ],
+                    "type": "string"
                 },
                 "State": {
                     "enum": [
@@ -1060,6 +1240,16 @@
                         "null"
                     ]
                 },
+                "review_assessment": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/ReviewAssessment"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ]
+                },
                 "sender": {
                     "$ref": "#/definitions/Actor"
                 },
@@ -1162,6 +1352,72 @@
                         "session"
                     ],
                     "type": "object"
+                },
+                "PeriodicReview": {
+                    "properties": {
+                        "assessment": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/ReviewAssessment"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
+                        "completed_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "cycle": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "due_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "pending_letter": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "policy": {
+                            "$ref": "#/definitions/ReviewPolicy"
+                        }
+                    },
+                    "required": [
+                        "policy",
+                        "due_at_unix_ms",
+                        "pending_letter",
+                        "completed_at_unix_ms",
+                        "assessment",
+                        "cycle"
+                    ],
+                    "type": "object"
+                },
+                "ReviewAssessment": {
+                    "enum": [
+                        "scope-appropriate",
+                        "delay-justified",
+                        "reduce-scope",
+                        "diagnosis-needed"
+                    ],
+                    "type": "string"
+                },
+                "ReviewPolicy": {
+                    "description": "An explicit opt-in; ordinary delegation retains its inactivity-only watch.",
+                    "enum": [
+                        "observer-30m"
+                    ],
+                    "type": "string"
                 }
             },
             "properties": {
@@ -1205,6 +1461,16 @@
                 },
                 "parent": {
                     "$ref": "#/definitions/Actor"
+                },
+                "review": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/PeriodicReview"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ]
                 },
                 "status_changed_at_unix_ms": {
                     "format": "uint64",
@@ -1269,6 +1535,72 @@
                     ],
                     "type": "object"
                 },
+                "PeriodicReview": {
+                    "properties": {
+                        "assessment": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/ReviewAssessment"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
+                        "completed_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "cycle": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "due_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "pending_letter": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "policy": {
+                            "$ref": "#/definitions/ReviewPolicy"
+                        }
+                    },
+                    "required": [
+                        "policy",
+                        "due_at_unix_ms",
+                        "pending_letter",
+                        "completed_at_unix_ms",
+                        "assessment",
+                        "cycle"
+                    ],
+                    "type": "object"
+                },
+                "ReviewAssessment": {
+                    "enum": [
+                        "scope-appropriate",
+                        "delay-justified",
+                        "reduce-scope",
+                        "diagnosis-needed"
+                    ],
+                    "type": "string"
+                },
+                "ReviewPolicy": {
+                    "description": "An explicit opt-in; ordinary delegation retains its inactivity-only watch.",
+                    "enum": [
+                        "observer-30m"
+                    ],
+                    "type": "string"
+                },
                 "Watch": {
                     "properties": {
                         "activity_failures": {
@@ -1311,6 +1643,16 @@
                         },
                         "parent": {
                             "$ref": "#/definitions/Actor"
+                        },
+                        "review": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/PeriodicReview"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
                         },
                         "status_changed_at_unix_ms": {
                             "format": "uint64",
@@ -1552,6 +1894,19 @@
                     }
                 },
                 {
+                    "name": "--review-policy",
+                    "required": false,
+                    "requires": [
+                        "--parent"
+                    ],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "observer-30m"
+                        ]
+                    }
+                },
+                {
                     "name": "--machine",
                     "required": false,
                     "requires": [],
@@ -1638,6 +1993,8 @@
             ],
             "refusals": [
                 "spawn_busy",
+                "review_parent_required",
+                "invalid_review_policy",
                 "machine_unknown",
                 "machine_not_permitted",
                 "machine_unavailable",
@@ -1738,6 +2095,20 @@
                     "requires": [],
                     "value": {
                         "type": "body"
+                    }
+                },
+                {
+                    "name": "--review",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "scope-appropriate",
+                            "delay-justified",
+                            "reduce-scope",
+                            "diagnosis-needed"
+                        ]
                     }
                 }
             ],
@@ -1985,7 +2356,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:664d21d95baf7f8c6b93da7fa21cd5811f4cc7a5f89b0934fc5e240fdf8a13a4",
+    "digest": "sha256:ffc2390f5af05bb96111f048892ca29b40533f8fe9a126ab1fa39376853725bf",
     "envelopes": {
         "agent": {
             "answer": "value",

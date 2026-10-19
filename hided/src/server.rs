@@ -1263,6 +1263,15 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "intent_conflict" => {
             "Use a new intent, or repeat the request this intent was first used for"
         }
+        "review_parent_required" => {
+            "Use --review-policy observer-30m only when delegating with --parent here"
+        }
+        "review_unavailable" => {
+            "Reply with --review only to the current pending review letter as its designated Observer; inspect hide watch list"
+        }
+        "invalid_review_policy" => {
+            "Use --review-policy observer-30m with --parent here, or omit the policy for an ordinary delegation"
+        }
         "invalid_launch_choice" => {
             "Pass a --model that is a model name, and an --effort the agent's CLI takes (Claude Code: low, medium, high, xhigh, max; Codex: minimal, low, medium, high, xhigh), then run the command again"
         }

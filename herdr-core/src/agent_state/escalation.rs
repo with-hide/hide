@@ -796,6 +796,7 @@ mod tests {
             &actor("parent"),
             None,
             &crate::delivery::Command::Reply {
+                review: None,
                 id,
                 intent: "answer".into(),
                 body: "reply".into(),

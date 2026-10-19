@@ -63,6 +63,8 @@ pub struct Letter {
     pub hook_confirmed: Option<bool>,
     pub waiting_answer: bool,
     pub reply_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_assessment: Option<super::watch::ReviewAssessment>,
     pub created_at_unix_ms: u64,
     pub finished_at_unix_ms: Option<u64>,
     pub bell_errors: u8,
@@ -316,6 +318,7 @@ impl Ledger {
                 )
                 || letter.body.len() > BODY_LIMIT
                 || letter.body.trim().is_empty()
+                || (letter.review_assessment.is_some() && (letter.kind != "reply" || letter.reply_to.is_none()))
                 || letter.bell_errors > 3
                 || letter.bell_turn.as_ref().is_some_and(|turn| {
                     !hide_agent_hooks::delivery::valid_sha256_digest(&turn.session)
@@ -352,9 +355,25 @@ impl Ledger {
             }
         }
         let mut watches = HashSet::new();
+        let mut reviews = HashSet::new();
         for watch in &self.watches {
             if !watches.insert(&watch.id) || !watch.valid() || !watch.id.starts_with("watch-") {
                 return Err("ledger_unavailable".into());
+            }
+            if let Some(id) = watch
+                .review
+                .as_ref()
+                .and_then(|review| review.pending_letter.as_ref())
+            {
+                let valid = self.letters.iter().any(|letter| {
+                    &letter.id == id
+                        && letter.kind == "watch"
+                        && letter.recipient.same_identity(&watch.parent)
+                        && letter.sender.same_identity(&watch.parent)
+                });
+                if !reviews.insert(id) || !valid {
+                    return Err("ledger_unavailable".into());
+                }
             }
         }
         crate::coordination::validate_records(self)?;
@@ -378,7 +397,13 @@ impl Ledger {
 
     pub fn cleanup(&mut self, now: u64) -> bool {
         let before = self.letters.len();
-        self.letters.retain(|letter| letter.retained(now));
+        let pending: HashSet<_> = self
+            .watches
+            .iter()
+            .filter_map(|watch| watch.review.as_ref()?.pending_letter.clone())
+            .collect();
+        self.letters
+            .retain(|letter| letter.retained(now) || pending.contains(&letter.id));
         self.letters.len() != before
     }
 

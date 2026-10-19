@@ -4,6 +4,34 @@ use serde::{Deserialize, Serialize};
 use super::ledger::Ledger;
 use super::{Actor, FILE_LIMIT, INACTIVITY_MS, QUESTION_WINDOW_MS, SECOND_WARNING_MS, WATCH_LIMIT};
 
+pub const REVIEW_INTERVAL_MS: u64 = 30 * 60_000;
+
+/// An explicit opt-in; ordinary delegation retains its inactivity-only watch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum ReviewPolicy {
+    #[serde(rename = "observer-30m")]
+    Observer30m,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewAssessment {
+    ScopeAppropriate,
+    DelayJustified,
+    ReduceScope,
+    DiagnosisNeeded,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PeriodicReview {
+    pub policy: ReviewPolicy,
+    pub due_at_unix_ms: u64,
+    pub pending_letter: Option<String>,
+    pub completed_at_unix_ms: Option<u64>,
+    pub assessment: Option<ReviewAssessment>,
+    pub cycle: u64,
+}
+
 /// The inactivity episode and external notification reservation survive the
 /// watch itself, so stopping/restarting or sibling watches cannot resend.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -35,6 +63,8 @@ pub struct Watch {
     pub status_changed_at_unix_ms: u64,
     #[serde(default)]
     pub generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<PeriodicReview>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -45,6 +75,8 @@ pub struct View {
     pub warning_count: u8,
     pub first_warning_at_unix_ms: Option<u64>,
     pub last_activity_at_unix_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review: Option<PeriodicReview>,
 }
 
 impl Watch {
@@ -56,6 +88,7 @@ impl Watch {
             warning_count: self.warning_count,
             first_warning_at_unix_ms: self.first_warning_at_unix_ms,
             last_activity_at_unix_ms: self.last_activity_at_unix_ms,
+            review: self.review.clone(),
         }
     }
 
@@ -66,6 +99,13 @@ impl Watch {
             && self.warning_count <= 2
             && super::valid_key(&self.last_status)
             && (self.warning_count == 0) == self.first_warning_at_unix_ms.is_none()
+            && self.review.as_ref().is_none_or(|review| {
+                review
+                    .pending_letter
+                    .as_deref()
+                    .is_none_or(super::valid_key)
+                    && review.completed_at_unix_ms.is_some() == review.assessment.is_some()
+            })
     }
 }
 
@@ -109,19 +149,71 @@ pub fn start(
         last_state_change_seq: None,
         status_changed_at_unix_ms: activity,
         generation: 0,
+        review: None,
     };
     ledger.watches.push(watch.clone());
     Ok(watch)
 }
 
-pub fn stop(ledger: &mut Ledger, parent: &Actor, id: &str) -> Result<(), String> {
+pub fn stop(ledger: &mut Ledger, parent: &Actor, id: &str, now: u64) -> Result<(), String> {
     let index = ledger
         .watches
         .iter()
         .position(|watch| watch.id == id && watch.parent.same_identity(parent))
         .ok_or("watch_unavailable")?;
-    ledger.watches.remove(index);
+    let watch = ledger.watches.remove(index);
+    cancel_review(&mut ledger.letters, &watch, now);
     Ok(())
+}
+
+/// Every watch ending uses the same pending-letter retirement, in its
+/// existing durable transaction, before another doorbell can be admitted.
+pub(crate) fn retain(ledger: &mut Ledger, now: u64, mut keep: impl FnMut(&Watch) -> bool) {
+    ledger.watches.retain(|watch| {
+        let kept = keep(watch);
+        if !kept {
+            cancel_review(&mut ledger.letters, watch, now);
+        }
+        kept
+    });
+}
+
+fn cancel_review(letters: &mut [super::ledger::Letter], watch: &Watch, now: u64) {
+    if let Some(id) = watch
+        .review
+        .as_ref()
+        .and_then(|review| review.pending_letter.as_deref())
+        && let Some(letter) = letters.iter_mut().find(|letter| letter.id == id)
+    {
+        letter.state = super::ledger::State::Cancelled;
+        letter.waiting_answer = false;
+        letter.finished_at_unix_ms.get_or_insert(now);
+    }
+}
+
+pub(crate) fn pending_review(ledger: &Ledger, id: &str) -> bool {
+    ledger.watches.iter().any(|watch| {
+        watch
+            .review
+            .as_ref()
+            .and_then(|review| review.pending_letter.as_deref())
+            == Some(id)
+    })
+}
+
+pub(crate) fn review_index(ledger: &Ledger, actor: &Actor, id: &str) -> Result<usize, String> {
+    ledger
+        .watches
+        .iter()
+        .position(|watch| {
+            watch.parent.same_identity(actor)
+                && watch
+                    .review
+                    .as_ref()
+                    .and_then(|review| review.pending_letter.as_deref())
+                    == Some(id)
+        })
+        .ok_or_else(|| "review_unavailable".into())
 }
 
 pub fn assign(
@@ -160,8 +252,28 @@ pub fn assign(
         return Err("stale_generation".into());
     }
     if !watch.parent.same_identity(observer) {
-        watch.generation = watch.generation.checked_add(1).ok_or("capacity")?;
+        let generation = watch.generation.checked_add(1).ok_or("capacity")?;
+        let cycle = watch
+            .review
+            .as_ref()
+            .map(|review| review.cycle.checked_add(1).ok_or("capacity"))
+            .transpose()?;
+        watch.generation = generation;
         watch.parent = observer.clone();
+        // A conclusion belongs to the designated observer, not the prior
+        // recipient. The unchanged due time reissues it on the next tick.
+        if let Some(review) = &mut watch.review {
+            review.cycle = cycle.ok_or("ledger_unavailable")?;
+            if let Some(id) = review.pending_letter.take()
+                && let Some(letter) = ledger.letters.iter_mut().find(|letter| letter.id == id)
+            {
+                letter.state = super::ledger::State::Cancelled;
+                letter.waiting_answer = false;
+                letter
+                    .finished_at_unix_ms
+                    .get_or_insert(review.due_at_unix_ms);
+            }
+        }
     }
     Ok(watch.clone())
 }
@@ -215,7 +327,22 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
             .position(|watch| watch.id == reading.id)
         {
             size -= encoded_len(&ledger.watches[index])? + usize::from(ledger.watches.len() > 1);
-            ledger.watches.remove(index);
+            let ended = ledger.watches.remove(index);
+            let letter = ended
+                .review
+                .as_ref()
+                .and_then(|review| review.pending_letter.as_ref())
+                .and_then(|id| ledger.letters.iter().find(|letter| &letter.id == id))
+                .cloned();
+            cancel_review(&mut ledger.letters, &ended, now);
+            if let Some(before) = letter {
+                let after = ledger
+                    .letters
+                    .iter()
+                    .find(|letter| letter.id == before.id)
+                    .ok_or("ledger_unavailable")?;
+                size = resized(size, encoded_len(&before)?, encoded_len(after)?)?;
+            }
             result.transitions = true;
         }
     }
@@ -429,6 +556,83 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
             }
         }
     }
+    // This clock is independent of activity and still advances when a
+    // target's current projection is unavailable. Gone targets were removed
+    // above. One pending letter pins the review until explicit completion.
+    for index in 0..ledger.watches.len() {
+        let before = ledger.watches[index].clone();
+        let Some(review) = &before.review else {
+            continue;
+        };
+        if review.pending_letter.is_some() || now < review.due_at_unix_ms {
+            continue;
+        }
+        let letters_before = ledger.letters.len();
+        let full_before = (letters_before >= super::LETTER_LIMIT).then(|| ledger.letters.clone());
+        let sequence_before = ledger.next_id;
+        let outcome = (|| {
+            let body = format!(
+                "Observer review due for {} (watch {}).\nReuse the last actual review and unchanged PRD/plan context; inspect new changes, actual completed results, remaining work and failures first. Read the full baseline only when missing or changed; this is not another full verification stage. Separate implementation time, build/CI waiting and rework. Check scope or abstraction creep and repeated fixes/full tests without new evidence; keep mandatory verification.\nReply explicitly: hide request reply <this-letter-id> --review <scope-appropriate|delay-justified|reduce-scope|diagnosis-needed> --intent <key> --body '<one-line grounds and one concrete direction if needed>'. Escalate new product decisions or authority to the operator. Receipt, ack and ordinary replies do not complete this review.",
+                before.target.name, before.id
+            );
+            let letter = super::mailbox::send(
+                ledger,
+                &before.parent,
+                &before.parent,
+                &format!(
+                    "{}:review:{}:{}",
+                    before.id, before.generation, review.cycle
+                ),
+                &body,
+                "watch",
+                None,
+                now,
+            )?;
+            ledger
+                .letters
+                .iter_mut()
+                .find(|stored| stored.id == letter.id)
+                .ok_or("ledger_unavailable")?
+                .immediate = true;
+            ledger.watches[index]
+                .review
+                .as_mut()
+                .ok_or("ledger_unavailable")?
+                .pending_letter = Some(letter.id);
+            if full_before.is_some() {
+                return ledger.bytes().map(|bytes| bytes.len());
+            }
+            let growth = encoded_len(ledger.letters.last().ok_or("ledger_unavailable")?)?
+                + usize::from(letters_before > 0);
+            let next = resized(
+                size,
+                encoded_len(&before)?,
+                encoded_len(&ledger.watches[index])?,
+            )?;
+            resized(
+                next,
+                sequence_before.to_string().len(),
+                ledger.next_id.to_string().len() + growth,
+            )
+        })();
+        match outcome {
+            Ok(updated) => {
+                size = updated;
+                result.transitions = true;
+            }
+            Err(code) => {
+                ledger.watches[index] = before;
+                match full_before {
+                    Some(letters) => ledger.letters = letters,
+                    None => ledger.letters.truncate(letters_before),
+                }
+                ledger.next_id = sequence_before;
+                result
+                    .rejections
+                    .push((ledger.watches[index].id.clone(), code));
+            }
+        }
+    }
     Ok(result)
 }
 
@@ -500,6 +704,386 @@ mod tests {
             inactivity_ms: None,
             asking: false,
             blocked: false,
+        }
+    }
+
+    fn periodic() -> (Ledger, Actor, String) {
+        let mut ledger = Ledger::default();
+        let parent = actor("parent");
+        let watch = start(&mut ledger, &parent, &actor("child"), 0).unwrap();
+        ledger.watches[0].review = Some(PeriodicReview {
+            policy: ReviewPolicy::Observer30m,
+            due_at_unix_ms: REVIEW_INTERVAL_MS,
+            pending_letter: None,
+            completed_at_unix_ms: None,
+            assessment: None,
+            cycle: 0,
+        });
+        (ledger, parent, watch.id)
+    }
+
+    fn review_reply(
+        id: &str,
+        intent: &str,
+        review: Option<ReviewAssessment>,
+    ) -> super::super::Command {
+        super::super::Command::Reply {
+            id: id.into(),
+            intent: intent.into(),
+            body: "Within scope; continue the current step.".into(),
+            review,
+        }
+    }
+
+    #[test]
+    fn periodic_review_ignores_activity_and_only_explicit_conclusion_advances_it() {
+        use super::super::{Command, mailbox};
+        let (mut ledger, parent, id) = periodic();
+        tick(
+            &mut ledger,
+            &[reading(&id, REVIEW_INTERVAL_MS - 1)],
+            REVIEW_INTERVAL_MS - 1,
+        )
+        .unwrap();
+        assert!(ledger.letters.is_empty());
+        tick(
+            &mut ledger,
+            &[reading(&id, REVIEW_INTERVAL_MS)],
+            REVIEW_INTERVAL_MS,
+        )
+        .unwrap();
+        assert_eq!(ledger.letters.len(), 1);
+        let letter = ledger.letters[0].clone();
+        let plain = serde_json::to_value(review_reply(&letter.id, "legacy", None)).unwrap();
+        assert!(
+            plain.get("review").is_none(),
+            "ordinary replies must keep the old wire shape"
+        );
+        assert!(letter.immediate);
+        assert!(letter.recipient.same_identity(&parent));
+        assert!(
+            letter
+                .body
+                .contains("implementation time, build/CI waiting and rework")
+        );
+        assert!(letter.body.contains("keep mandatory verification"));
+        assert_eq!(ledger.watches[0].warning_count, 0);
+        mailbox::apply(
+            &mut ledger,
+            &parent,
+            None,
+            &Command::Ack {
+                id: letter.id.clone(),
+            },
+            REVIEW_INTERVAL_MS + 1,
+        )
+        .unwrap();
+        mailbox::apply(
+            &mut ledger,
+            &parent,
+            None,
+            &review_reply(&letter.id, "ordinary", None),
+            REVIEW_INTERVAL_MS + 2,
+        )
+        .unwrap();
+        let pending = ledger.watches[0].review.clone().unwrap();
+        assert_eq!(pending.pending_letter.as_deref(), Some(letter.id.as_str()));
+        assert_eq!(pending.completed_at_unix_ms, None);
+        assert_eq!(pending.due_at_unix_ms, REVIEW_INTERVAL_MS);
+        let bytes = ledger.bytes().unwrap();
+        let mut ledger: Ledger = serde_json::from_slice(&bytes).unwrap();
+        tick(
+            &mut ledger,
+            &[reading(&id, 4 * REVIEW_INTERVAL_MS)],
+            4 * REVIEW_INTERVAL_MS,
+        )
+        .unwrap();
+        assert_eq!(ledger.letters.len(), 2); // one request and the ordinary reply
+        let now = 4 * REVIEW_INTERVAL_MS + 1;
+        let command = review_reply(
+            &letter.id,
+            "conclusion",
+            Some(ReviewAssessment::ScopeAppropriate),
+        );
+        let answer = mailbox::apply(&mut ledger, &parent, None, &command, now).unwrap();
+        let completed = ledger.watches[0].review.clone().unwrap();
+        assert_eq!(completed.pending_letter, None);
+        assert_eq!(completed.completed_at_unix_ms, Some(now));
+        assert_eq!(completed.due_at_unix_ms, now + REVIEW_INTERVAL_MS);
+        assert_eq!(
+            completed.assessment,
+            Some(ReviewAssessment::ScopeAppropriate)
+        );
+        assert_eq!(
+            mailbox::apply(&mut ledger, &parent, None, &command, now + 1).unwrap(),
+            answer
+        );
+        assert_eq!(ledger.watches[0].review.as_ref(), Some(&completed));
+        assert_eq!(
+            mailbox::apply(
+                &mut ledger,
+                &parent,
+                None,
+                &review_reply(
+                    &letter.id,
+                    "another",
+                    Some(ReviewAssessment::ScopeAppropriate)
+                ),
+                now + 1
+            )
+            .unwrap_err(),
+            "review_unavailable"
+        );
+        assert_eq!(
+            mailbox::apply(
+                &mut ledger,
+                &parent,
+                None,
+                &review_reply(
+                    &letter.id,
+                    "conclusion",
+                    Some(ReviewAssessment::ReduceScope)
+                ),
+                now + 1
+            )
+            .unwrap_err(),
+            "intent_conflict"
+        );
+        tick(&mut ledger, &[], now + REVIEW_INTERVAL_MS - 1).unwrap();
+        assert_eq!(ledger.letters.len(), 3);
+        tick(&mut ledger, &[], now + REVIEW_INTERVAL_MS).unwrap();
+        assert_eq!(ledger.letters.len(), 4);
+        assert_ne!(
+            ledger.watches[0]
+                .review
+                .as_ref()
+                .unwrap()
+                .pending_letter
+                .as_deref(),
+            Some(letter.id.as_str())
+        );
+    }
+
+    #[test]
+    fn review_authority_survives_restart_and_handover_invalidates_the_old_request() {
+        use super::super::{Command, mailbox};
+        let (mut ledger, parent, id) = periodic();
+        tick(&mut ledger, &[], REVIEW_INTERVAL_MS).unwrap();
+        let first = ledger.letters[0].id.clone();
+        let mut impostor = parent.clone();
+        impostor.session = Some("new-occupant".into());
+        for wrong in [actor("child"), actor("stranger"), impostor] {
+            let before = ledger.clone();
+            assert!(
+                mailbox::apply(
+                    &mut ledger,
+                    &wrong,
+                    None,
+                    &review_reply(&first, "wrong", Some(ReviewAssessment::ScopeAppropriate)),
+                    REVIEW_INTERVAL_MS
+                )
+                .is_err()
+            );
+            assert_eq!(ledger, before);
+        }
+        mailbox::apply(
+            &mut ledger,
+            &parent,
+            None,
+            &Command::Ack { id: first.clone() },
+            REVIEW_INTERVAL_MS,
+        )
+        .unwrap();
+        assert!(!ledger.cleanup(super::super::RETENTION_MS + REVIEW_INTERVAL_MS));
+        // No unrelated completed letters existed, so cleanup actually keeps
+        // the acknowledged request even beyond ordinary retention.
+        assert!(ledger.letters.iter().any(|letter| letter.id == first));
+        let next = actor("next");
+        assign(&mut ledger, &parent, &id, &next, Some(0), None).unwrap();
+        let mut ledger: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+        tick(&mut ledger, &[], REVIEW_INTERVAL_MS + 1).unwrap();
+        let pending = ledger.watches[0]
+            .review
+            .as_ref()
+            .unwrap()
+            .pending_letter
+            .clone()
+            .unwrap();
+        assert_ne!(pending, first);
+        assert_eq!(
+            mailbox::apply(
+                &mut ledger,
+                &parent,
+                None,
+                &review_reply(&first, "old", Some(ReviewAssessment::ScopeAppropriate)),
+                REVIEW_INTERVAL_MS + 2
+            )
+            .unwrap_err(),
+            "review_unavailable"
+        );
+        mailbox::apply(
+            &mut ledger,
+            &next,
+            None,
+            &review_reply(&pending, "new", Some(ReviewAssessment::DiagnosisNeeded)),
+            REVIEW_INTERVAL_MS + 2,
+        )
+        .unwrap();
+        assert!(
+            !ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == pending)
+                .unwrap()
+                .open()
+        );
+        stop(&mut ledger, &next, &id, REVIEW_INTERVAL_MS + 3).unwrap();
+        let count = ledger.letters.len();
+        tick(&mut ledger, &[], 9 * REVIEW_INTERVAL_MS).unwrap();
+        assert_eq!(ledger.letters.len(), count);
+    }
+
+    #[test]
+    fn a_full_mailbox_keeps_the_review_due_until_capacity_returns() {
+        let (mut ledger, _, _) = periodic();
+        for index in 0..super::super::OPEN_LIMIT {
+            super::super::mailbox::send(
+                &mut ledger,
+                &actor("sender"),
+                &actor("recipient"),
+                &format!("full-{index}"),
+                "body",
+                "request",
+                None,
+                0,
+            )
+            .unwrap();
+        }
+        let before = ledger.clone();
+        let result = tick(&mut ledger, &[], REVIEW_INTERVAL_MS).unwrap();
+        assert_eq!(
+            result.rejections,
+            [(ledger.watches[0].id.clone(), "capacity".into())]
+        );
+        assert_eq!(ledger, before);
+        ledger.letters.clear();
+        tick(&mut ledger, &[], REVIEW_INTERVAL_MS + 1).unwrap();
+        assert_eq!(ledger.letters.len(), 1);
+        assert!(
+            ledger.watches[0]
+                .review
+                .as_ref()
+                .unwrap()
+                .pending_letter
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_pending_review_cannot_be_evicted_as_the_oldest_finished_letter() {
+        let (mut ledger, parent, _) = periodic();
+        tick(&mut ledger, &[], REVIEW_INTERVAL_MS).unwrap();
+        let pending = ledger.letters[0].id.clone();
+        super::super::mailbox::apply(
+            &mut ledger,
+            &parent,
+            None,
+            &super::super::Command::Ack {
+                id: pending.clone(),
+            },
+            REVIEW_INTERVAL_MS,
+        )
+        .unwrap();
+        while ledger.letters.len() < super::super::LETTER_LIMIT {
+            let letter = closed_letter(
+                &mut ledger,
+                "finished".into(),
+                false,
+                REVIEW_INTERVAL_MS + 1,
+            );
+            ledger.letters.push(letter);
+        }
+        super::super::mailbox::send(
+            &mut ledger,
+            &parent,
+            &parent,
+            "after-full",
+            "body",
+            "request",
+            None,
+            REVIEW_INTERVAL_MS + 2,
+        )
+        .unwrap();
+        assert_eq!(ledger.letters.len(), super::super::LETTER_LIMIT);
+        assert!(ledger.letters.iter().any(|letter| letter.id == pending));
+        ledger.validate().unwrap();
+    }
+
+    #[test]
+    fn every_watch_end_cancels_its_pending_review_before_another_wake() {
+        for ending in ["report", "exit", "stop"] {
+            let (mut ledger, parent, id) = periodic();
+            tick(&mut ledger, &[], REVIEW_INTERVAL_MS).unwrap();
+            let pending = ledger.letters[0].id.clone();
+            let now = REVIEW_INTERVAL_MS + 1;
+            if ending == "report" {
+                let child = ledger.watches[0].target.clone();
+                let letter = super::super::mailbox::send(
+                    &mut ledger,
+                    &child,
+                    &parent,
+                    "done",
+                    "Work complete",
+                    "report",
+                    None,
+                    now,
+                )
+                .unwrap();
+                super::super::mailbox::apply(
+                    &mut ledger,
+                    &parent,
+                    None,
+                    &super::super::Command::Ack { id: letter.id },
+                    now,
+                )
+                .unwrap();
+            } else if ending == "exit" {
+                let mut gone = reading(&id, now);
+                gone.gone = true;
+                tick(&mut ledger, &[gone], now).unwrap();
+            } else {
+                stop(&mut ledger, &parent, &id, now).unwrap();
+            }
+            assert!(ledger.watches.is_empty());
+            let original = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == pending)
+                .unwrap();
+            assert_eq!(original.state, super::super::ledger::State::Cancelled);
+            assert!(!original.awaiting_intake());
+            assert!(!original.bell_sent);
+            assert_eq!(
+                super::super::mailbox::apply(
+                    &mut ledger,
+                    &parent,
+                    None,
+                    &review_reply(&pending, "late", Some(ReviewAssessment::ScopeAppropriate)),
+                    now
+                )
+                .unwrap_err(),
+                "review_unavailable"
+            );
+            let mut ledger: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+            tick(&mut ledger, &[], now + REVIEW_INTERVAL_MS).unwrap();
+            assert_eq!(
+                ledger
+                    .letters
+                    .iter()
+                    .filter(|letter| letter.kind == "watch")
+                    .count(),
+                1
+            );
         }
     }
 
@@ -884,6 +1468,7 @@ mod tests {
             &target,
             None,
             &super::super::Command::Reply {
+                review: None,
                 id: request.id,
                 intent: "reply".into(),
                 body: "done".into(),
@@ -952,6 +1537,7 @@ mod tests {
             hook_confirmed: Some(true),
             waiting_answer: open,
             reply_to: None,
+            review_assessment: None,
             created_at_unix_ms: now,
             finished_at_unix_ms: (!open).then_some(now),
             bell_errors: 0,

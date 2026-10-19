@@ -160,6 +160,7 @@ mod tests {
                 "ack" => Command::Ack { id },
                 "cancel" => Command::Cancel { id },
                 _ => Command::Reply {
+                    review: None,
                     id,
                     intent: "checked".into(),
                     body: "I checked the target".into(),

@@ -67,6 +67,8 @@ pub enum Command {
     },
     Spawn {
         parent: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        review_policy: Option<watch::ReviewPolicy>,
         /// The device the child is created on; absent means the caller's own.
         /// `repo` and `path` are that device's paths.
         machine: Option<String>,
@@ -295,6 +297,8 @@ impl SpawnMode {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpawnRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_policy: Option<watch::ReviewPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed_tab: Option<naming::SeedTab>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -770,6 +774,7 @@ pub(crate) fn apply(
         }
         Mutation::Reserve { parent, command } => {
             let Command::Spawn {
+                review_policy,
                 machine,
                 name,
                 intent,
@@ -796,6 +801,9 @@ pub(crate) fn apply(
             } else {
                 SpawnMode::Handoff
             };
+            if review_policy.is_some() && (mode != SpawnMode::Delegation || caller.code_owned()) {
+                return Err("review_parent_required".into());
+            }
             if !resolve_actor(ledger, parent).is_some_and(|parent| parent.same_identity(caller)) {
                 return Err("parent_authority_required".into());
             }
@@ -831,6 +839,7 @@ pub(crate) fn apply(
                     || record.branch != *branch
                     || record.requested_path != *path
                     || record.mode != mode
+                    || record.review_policy != *review_policy
                     || record.args != *args
                     || record.launch != *launch
                     || !task_agrees
@@ -846,6 +855,7 @@ pub(crate) fn apply(
                 return Err("capacity".into());
             }
             let record = SpawnRecord {
+                review_policy: *review_policy,
                 seed_tab: None,
                 names: Some(naming::Names::default()),
                 id: allocate(ledger, "spawn")?,
@@ -1070,7 +1080,25 @@ pub(crate) fn apply(
             });
             let auto_watch_id =
                 if spawn.mode == SpawnMode::Delegation && !child.ended && !reported_complete {
-                    Some(watch::start(ledger, &parent, &child.actor, now)?.id)
+                    let watch = watch::start(ledger, &parent, &child.actor, now)?;
+                    if let Some(policy) = spawn.review_policy {
+                        let stored = ledger
+                            .watches
+                            .iter_mut()
+                            .find(|stored| stored.id == watch.id)
+                            .ok_or("watch_unavailable")?;
+                        stored.review = Some(watch::PeriodicReview {
+                            policy,
+                            due_at_unix_ms: now
+                                .checked_add(watch::REVIEW_INTERVAL_MS)
+                                .ok_or("capacity")?,
+                            pending_letter: None,
+                            completed_at_unix_ms: None,
+                            assessment: None,
+                            cycle: 0,
+                        });
+                    }
+                    Some(watch.id)
                 } else {
                     None
                 };
@@ -1162,9 +1190,7 @@ fn end_record(ledger: &mut Ledger, id: &str, now: u64) -> bool {
     };
     let live = !std::mem::replace(&mut record.ended, true);
     let target = record.actor.clone();
-    ledger
-        .watches
-        .retain(|watch| !watch.target.same_identity(&target));
+    watch::retain(ledger, now, |watch| !watch.target.same_identity(&target));
     if live {
         ledger.end_answer_waits_of(&target, now);
     }
@@ -1488,6 +1514,7 @@ mod tests {
     fn command(intent: &str) -> Command {
         Command::Spawn {
             parent: Some("here".into()),
+            review_policy: None,
             machine: None,
             name: "worker".into(),
             intent: intent.into(),
@@ -1912,6 +1939,75 @@ mod tests {
     }
     fn pending_spawn() -> (Ledger, Actor, String, String, AgentRecord) {
         pending_spawn_mode(SpawnMode::Delegation, "local")
+    }
+
+    #[test]
+    fn an_opted_in_spawn_installs_a_restart_safe_review_without_rearming_on_retry() {
+        let (mut ledger, actor, _, spawn, child) = pending_spawn();
+        ledger.spawns[0].review_policy = Some(watch::ReviewPolicy::Observer30m);
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::BindChild {
+                id: spawn.clone(),
+                record: child,
+            },
+            3,
+        )
+        .unwrap();
+        let complete = Mutation::Complete { id: spawn };
+        apply(&mut ledger, &actor, &complete, 10).unwrap();
+        assert_eq!(
+            ledger.watches[0].review.as_ref().unwrap().due_at_unix_ms,
+            10 + watch::REVIEW_INTERVAL_MS
+        );
+        let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+        let before = restored.clone();
+        apply(&mut restored, &actor, &complete, 100).unwrap();
+        assert_eq!(restored, before);
+        let id = restored.watches[0].id.clone();
+        watch::stop(&mut restored, &actor, &id, 200).unwrap();
+        apply(&mut restored, &actor, &complete, 200).unwrap();
+        assert!(restored.watches.is_empty());
+    }
+
+    #[test]
+    fn a_review_policy_is_a_delegation_choice_and_part_of_spawn_intent() {
+        let (mut ledger, actor, parent, _, _) = pending_spawn();
+        let mut command = command("once");
+        if let Command::Spawn { review_policy, .. } = &mut command {
+            *review_policy = Some(watch::ReviewPolicy::Observer30m);
+        }
+        let before = ledger.clone();
+        assert_eq!(
+            apply(
+                &mut ledger,
+                &actor,
+                &Mutation::Reserve {
+                    parent: parent.clone(),
+                    command: command.clone()
+                },
+                2
+            )
+            .unwrap_err(),
+            "intent_conflict"
+        );
+        assert_eq!(ledger, before);
+        if let Command::Spawn { parent, intent, .. } = &mut command {
+            *parent = None;
+            *intent = "independent".into();
+        }
+        assert_eq!(
+            apply(
+                &mut ledger,
+                &actor,
+                &Mutation::Reserve { parent, command },
+                2
+            )
+            .unwrap_err(),
+            "review_parent_required"
+        );
+        assert_eq!(ledger, before);
     }
 
     fn pending_spawn_mode(
@@ -2533,13 +2629,13 @@ mod tests {
         );
         assert_eq!(ledger, before);
         let released = ledger.watches[0].id.clone();
-        watch::stop(&mut ledger, &actor, &released).unwrap();
+        watch::stop(&mut ledger, &actor, &released, 6).unwrap();
         let receipt = apply(&mut ledger, &actor, &complete, 6).unwrap();
         let id = receipt["auto_watch_id"].as_str().unwrap();
         assert_eq!(receipt["completed"], true);
         assert!(ledger.watches.iter().any(|watch| watch.id == id));
         let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
-        watch::stop(&mut restored, &actor, id).unwrap();
+        watch::stop(&mut restored, &actor, id, 7).unwrap();
         let before = restored.clone();
         assert_eq!(apply(&mut restored, &actor, &complete, 7).unwrap(), receipt);
         assert_eq!(restored, before);

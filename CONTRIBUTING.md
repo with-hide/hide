@@ -237,7 +237,8 @@ Run the platform set after the web build with `bash scripts/verify-web.sh web e2
 Press an editor or clipboard chord in a spec with `ControlOrMeta`: Playwright binds its editing commands (copy, start of document) to the host system, so a `Meta` press only works on macOS.
 
 The remote mailbox crate-boundary lane is the `remote mailbox` job on a Linux runner, planned for a change to a crate it builds and tests, and the nightly's `remote mailbox (macOS)` job.
-Run it locally with `bash scripts/verify-cargo.sh cli && HIDE_E2E_HERDR_BIN=<pinned-binary> bash scripts/verify-cargo.sh nextest -p hided --test it -E 'test(/^(remote_delivery|held_letter_notice|remote_core|core_move|terminal_children|herdr_handoff)::/)' --run-ignored only`; the `held_letter_notice` module starts a real daemon with a seeded ledger against one private pinned Herdr and reads the diagnostic log for a held-letter notice's per-channel reasons.
+Run it locally with `bash scripts/verify-cargo.sh cli && HIDE_E2E_HERDR_BIN=<pinned-binary> bash scripts/verify-cargo.sh nextest -p hided --test it -E 'test(/^(remote_delivery|held_letter_notice|observer_review|remote_core|core_move|terminal_children|herdr_handoff)::/)' --run-ignored only`; the `held_letter_notice` module starts a real daemon with a seeded ledger against one private pinned Herdr and reads the diagnostic log for a held-letter notice's per-channel reasons.
+The `observer_review` module uses the same isolated daemon/Herdr prerequisites to observe a due review's real doorbell, receipt versus conclusion, authority, duplicate suppression, restart and stop.
 It starts only private Herdr servers and a loopback SSH account, with no external device.
 
 The additional gates that read an existing Herdr server, drive an installed app, or reach an external device are local steps and are not required in CI.
