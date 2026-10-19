@@ -3,8 +3,9 @@ import { useInterfaceTranslation } from "../i18n/translator";
 import { formatUnit } from "../i18n/format";
 import { requireInterfaceLanguage, type InterfaceLanguage } from "../i18n/locale";
 
-// How long ago an agent last changed state, counted on one clock for the
-// whole window (PRD labels-in-hided D-07, B8). The core publishes the moment
+// Time since a core-owned reference, counted on one clock for the
+// whole window. Agent rows use the latest prompt; archives use archive time.
+// The core publishes the moment
 // once; time passing never republishes the snapshot. Each label subscribes on
 // its own and re-renders only when its text changes, so a second passing
 // touches no row and a minute passing touches one span per row.

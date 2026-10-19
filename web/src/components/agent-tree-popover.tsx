@@ -344,7 +344,7 @@ function TreeItem({
           </span>
           <AgentPrHover agent={child} staleness={staleness} />
           {line.hasChildren && !line.open && !unavailable ? <DescendantMark agent={child} /> : null}
-          {unavailable ? null : <Elapsed since={child.state.request_since} className="shrink-0 font-mono text-micro text-muted-foreground" />}
+          {unavailable ? null : <Elapsed since={child.last_prompt_at_unix_ms} className="shrink-0 font-mono text-micro text-muted-foreground" />}
         </span>
         {ask && !unavailable ? (
           <span className="flex min-w-0 items-center gap-xs">
