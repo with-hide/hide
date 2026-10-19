@@ -201,6 +201,33 @@ fn a_readable_cursor_session_counts_without_claiming_a_hook_connection() {
 }
 
 #[test]
+fn an_agent_without_a_native_session_waits_without_a_connection_warning() {
+    for kind in ["codex", "claude"] {
+        let mut runtime = runtime();
+        runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+        kit_rows(&mut runtime, Some(true));
+        let mut starting = session(&[("w1:p1", kind, false)]);
+        starting["agents"][0]["agent_session"] = serde_json::Value::Null;
+        runtime.ingest_session(Ok(
+            crate::sidebar::owned_label_fixture(starting).expect("starting agent")
+        ));
+        assert_eq!(
+            connection_of(&runtime, "w1:p1"),
+            None,
+            "detecting {kind}'s process before its session is not a failed integration"
+        );
+
+        feed(&mut runtime, &[("w1:p1", kind, false)]);
+        assert!(connection_of(&runtime, "w1:p1").is_some());
+        feed(&mut runtime, &[("w1:p1", kind, true)]);
+        assert_eq!(
+            connection_of(&runtime, "w1:p1").map(|connection| connection.connected),
+            Some(true)
+        );
+    }
+}
+
+#[test]
 fn a_codex_pane_on_the_shared_server_says_so_and_one_started_earlier_says_that() {
     let mut runtime = runtime();
     runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
@@ -447,7 +474,8 @@ fn reopen_refuses_what_it_cannot_do_with_a_code_and_never_for_a_missing_hook() {
         })
     );
 
-    // A session whose conversation Herdr never reported cannot be resumed.
+    // Before Herdr reports a native session there is no warning or recovery
+    // control; even a stale request must not start a reopen.
     let mut anonymous = session(&[("w1:p3", "claude", false)]);
     anonymous["agents"][0]
         .as_object_mut()
@@ -456,13 +484,9 @@ fn reopen_refuses_what_it_cannot_do_with_a_code_and_never_for_a_missing_hook() {
     runtime.ingest_session(Ok(
         crate::sidebar::owned_label_fixture(anonymous).expect("session payload")
     ));
-    assert!(reopen(&mut runtime, "w1:p3"));
-    assert_eq!(
-        reopen_of(&runtime, "w1:p3"),
-        Some(PaneReopenSnapshot::Failed {
-            reason: PaneReopenFailure::SessionGone
-        })
-    );
+    assert!(!reopen(&mut runtime, "w1:p3"));
+    assert_eq!(connection_of(&runtime, "w1:p3"), None);
+    assert!(runtime.pane_reopens.is_empty());
 
     // A hook that is missing is Settings' to fix; Reopen would change nothing.
     runtime.ingest_hook_diagnosis(diagnosis(

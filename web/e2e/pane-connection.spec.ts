@@ -1,4 +1,4 @@
-// The Not connected chip on an isolated pinned Herdr and hided (PRD settings-cleanup B26, B28, B29, B31):
+// The integration status control on an isolated pinned Herdr and hided (PRD settings-cleanup B26, B28, B29, B31):
 // a Claude Code pane that was running when Hide's hook was installed wears the chip, its popover offers
 // Reopen and Not now, Reopen ends the agent and starts the same conversation in the same pane, and the
 // pane's own SessionStart hook (the real helper, run the way the agent would run it) turns the chip off.
@@ -88,7 +88,12 @@ test("a session started before the hook wears the chip, Not now keeps it, and Re
     // B28, B31: the popover says why and offers Reopen and Not now; Not now closes it and the chip stays.
     await chip.click();
     const popover = page.locator("[data-pane-connection-popover]");
-    await expect(popover).toContainText("Started before Hide was set up");
+    await expect(chip).toHaveAccessibleName("Hide integration limited");
+    await expect(chip).toHaveText("");
+    await chip.press("Escape");
+    await expect(chip).toBeFocused();
+    await chip.press("Enter");
+    await expect(popover).toContainText("Reconnect this session to Hide");
     await screenshot(page, "pane-connection-popover");
     await popover.locator("[data-pane-connection-dismiss]").click();
     await expect(popover).toHaveCount(0);

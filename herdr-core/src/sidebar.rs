@@ -488,7 +488,11 @@ pub fn project_pane_children_connected(
     let mut children = project_pane_children(agents, pane_id, tokens, status_of)?;
     let runtime = agents
         .iter()
-        .find(|agent| agent.pane_id == pane_id && agent.sleep.is_none())
+        // Process detection can precede the native session. No session yet
+        // is not proof of a failed hook.
+        .find(|agent| {
+            agent.pane_id == pane_id && agent.sleep.is_none() && agent.close_session.is_some()
+        })
         .and_then(|agent| crate::agent_hooks::runtime_of(&agent.agent_kind));
     children.connection = pane_connection(runtime, pane_id, &children, codex_daemon_on);
     Some(children)

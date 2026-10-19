@@ -62,9 +62,11 @@ it("draws no chip for a connected pane, a pane with nothing to judge, or a plain
 it("opens from the chip, closes with Not now and leaves the chip where it was", async () => {
   const { events, unmount } = await mount(pane(not()));
   expect(chip()?.getAttribute("data-pane-connection")).toBe("started_before_hide");
+  expect(chip()?.getAttribute("aria-label")).toBe("Hide integration limited");
+  expect(chip()?.textContent).toBe("");
   expect(popover()).toBeNull();
   await open();
-  expect(popover()?.textContent).toContain("Started before Hide was set up");
+  expect(popover()?.textContent).toContain("Reconnect this session to Hide");
   await act(async () => { (document.querySelector("[data-pane-connection-dismiss]") as HTMLElement).click(); });
   expect(popover()).toBeNull();
   expect(chip()).not.toBeNull();
@@ -119,7 +121,7 @@ it("explains the shared server, asks before turning it off and stopping it, and 
   const { events, render, unmount } = await mount(pane(not({ reason: "codex_shared_server" })));
   await open();
   expect(popover()?.textContent).toContain("Hide can't follow this Codex");
-  expect(popover()?.textContent).toContain("Reopen on its own server");
+  expect(popover()?.textContent).toContain("Reopen with Hide");
   expect(popover()?.textContent).toContain("Changes Codex everywhere on this Mac and stops its running shared server.");
 
   // The link asks first and sends nothing.
