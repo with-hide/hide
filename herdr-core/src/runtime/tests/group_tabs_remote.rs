@@ -1033,6 +1033,105 @@ fn a_global_start_respects_a_later_external_tab_or_pane_visit() {
 }
 
 #[test]
+fn an_added_pane_waits_for_its_final_tab_before_following_focus() {
+    for staged_before_answer in [false, true] {
+        let t = tree();
+        let (runtime, checkout) = live_tab_order_runtime(&t.main);
+        let mut runtime = super::workspace_view::with_new_views(runtime, "start-final-tab");
+        runtime.ingest_session_with_catalog(
+            Ok(tab_order_payload(
+                &t.main,
+                &["w-order:t1", "w-order:t2"],
+                &["w-order:t1", "w-order:t2"],
+                "w-order:t1",
+            )),
+            None,
+        );
+        let task = runtime
+            .begin_task_operation("agent_start", None, None, None, None)
+            .unwrap();
+        let prepared = runtime
+            .prepare_group_start(
+                task,
+                (crate::node::TEST_NODE, &t.main),
+                Some(super::super::group_starts::StartTarget {
+                    group_id: None,
+                    area_id: "a1".into(),
+                    tab_id: Some("w-order:t1".into()),
+                    add_pane: true,
+                }),
+                Some("add-to-live-tab"),
+                Some("claude"),
+                false,
+            )
+            .unwrap();
+        assert_eq!(prepared.saved.try_recv().unwrap(), Ok(()));
+        let staged = || {
+            tab_order_payload(
+                &t.main,
+                &["w-order:t1", "w-order:t2", "w-order:t3"],
+                &["w-order:t1", "w-order:t2", "w-order:t3"],
+                "w-order:t1",
+            )
+        };
+        if staged_before_answer {
+            runtime.ingest_session_with_catalog(Ok(staged()), None);
+        }
+        runtime.ingest_task_operation_result(
+            task,
+            Ok(live::WorktreeTaskOutcome {
+                path: t.main.clone(),
+                pane_id: "w-order:t3:p".into(),
+                created_tab_id: Some("w-order:t1".into()),
+                purpose_error: None,
+                unconfirmed_purpose_token: None,
+                issue_error: None,
+                shell: crate::agent_start::ShellStart::Plain,
+            }),
+        );
+        runtime.ingest_session_with_catalog(Ok(staged()), None);
+        assert_eq!(
+            checkout_active_tab_id(&runtime, &checkout).as_deref(),
+            Some("w-order:t1"),
+            "staging before answer: {staged_before_answer}; keep the live tab"
+        );
+        assert_eq!(
+            runtime.snapshot.focused.pane_id.as_deref(),
+            Some("w-order:t1:p"),
+            "the pane in its temporary tab must not receive focus"
+        );
+        assert!(runtime.pending_start_focus());
+
+        let mut settled = staged();
+        settled.tabs.retain(|tab| tab.tab_id != "w-order:t3");
+        let mut layout = settled.layouts.pop().unwrap();
+        let mut pane = layout.panes.pop().unwrap();
+        pane.rect.width = 40;
+        pane.rect.x = 40;
+        settled.layouts[0].panes[0].rect.width = 40;
+        settled.layouts[0].panes.push(pane);
+        settled.layouts[0]
+            .splits
+            .push(crate::sidebar::SessionLayoutSplitPayload {
+                direction: crate::model::PaneLayoutDirection::Right,
+                ratio: 0.5,
+                rect: layout.area,
+            });
+        runtime.ingest_session_with_catalog(Ok(settled), None);
+        assert_eq!(
+            checkout_active_tab_id(&runtime, &checkout).as_deref(),
+            Some("w-order:t1")
+        );
+        assert_eq!(
+            runtime.snapshot.focused.pane_id.as_deref(),
+            Some("w-order:t3:p"),
+            "the final tab now owns the new pane"
+        );
+        assert!(!runtime.pending_start_focus());
+    }
+}
+
+#[test]
 fn a_local_start_from_an_empty_checkout_keeps_its_visit_through_catalog_restore() {
     for boundary in ["catalog", "newer-visit", "reconnect"] {
         let t = tree();

@@ -4062,6 +4062,10 @@ impl Runtime {
                     Some(device) => super::operations::remote_pane_id(device, &pane_id),
                     None => pane_id,
                 };
+                let tab_id = created_tab_id.map(|tab| match device.as_deref() {
+                    Some(device) => crate::session_sync::remote_tab_id(device, &tab),
+                    None => tab,
+                });
                 let operation = self
                     .snapshot
                     .task_operation
@@ -4079,17 +4083,17 @@ impl Runtime {
                 let input_ready = operation.agent_phase.is_none().then(|| pane_id.clone());
                 let waits_for_local_catalog = operation.kind == "agent_start"
                     && device.is_none()
-                    && self.created_pane_place(&pane_id).is_none()
-                    && !self.catalog_workspaces().any(|workspace| {
-                        workspace.device_id == self.node.as_str()
-                            && workspace.checkouts.iter().any(|checkout| {
-                                checkout.path == path
-                                    && checkout
-                                        .tabs
-                                        .iter()
-                                        .any(|tab| tab.panes.iter().any(|pane| pane.id == pane_id))
-                            })
-                    });
+                    && !self
+                        .created_pane_place(&pane_id)
+                        .is_some_and(|(owner, tab)| {
+                            owner == path && tab_id.as_deref().is_none_or(|id| id == tab)
+                        })
+                    && !self.start_pane_is_listed(
+                        self.node.as_str(),
+                        &path,
+                        tab_id.as_deref(),
+                        &pane_id,
+                    );
                 crate::diagnostic!(serde_json::json!({
                     "component": "agent_start",
                     "kind": "start.focus_disposition",
@@ -4103,13 +4107,12 @@ impl Runtime {
                     "selected_pane_id": self.snapshot.focused.pane_id,
                 }));
                 if should_focus && let Some(device) = device.as_deref() {
-                    self.queue_start_focus(id, pane_id.clone());
+                    self.queue_start_focus(id, tab_id.clone(), pane_id.clone());
                     self.follow_start(Some(device));
                 } else if should_focus && waits_for_local_catalog {
-                    // A first Home's catalog may still contain only the
-                    // owner's seed pane. Wait for this returned pane, or the
-                    // next session stays scoped to the previous checkout.
-                    self.queue_start_focus(id, pane_id.clone());
+                    // Home may still list only its seed pane; an add-pane
+                    // result may still list the pane in its staging tab.
+                    self.queue_start_focus(id, tab_id, pane_id.clone());
                 } else if should_focus {
                     // Targeted creation intentionally did not focus Herdr.
                     // Use the same ordered, acknowledged focus as a pane press.
