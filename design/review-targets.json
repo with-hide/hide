@@ -8,36 +8,28 @@
     "measurement": "web/e2e/session-record-geometry.mjs",
     "frames": [
       {
-        "node": "UjBt0",
+        "node": "S9qdIR",
         "theme": "light",
-        "width": 680,
+        "width": 900,
         "scale": 1,
         "content": "reference",
-        "state": "rest"
+        "state": "restore"
       },
       {
-        "node": "qzilw",
+        "node": "HNRss",
         "theme": "dark",
-        "width": 680,
+        "width": 900,
         "scale": 1,
         "content": "reference",
-        "state": "rest"
+        "state": "restore"
       },
       {
-        "node": "jfBPl",
-        "theme": "light",
-        "width": 360,
-        "scale": 1,
-        "content": "reference",
-        "state": "rest"
-      },
-      {
-        "node": "B7kEEH",
+        "node": "x5Sqh",
         "theme": "dark",
-        "width": 360,
+        "width": 480,
         "scale": 1,
         "content": "reference",
-        "state": "rest"
+        "state": "restore"
       }
     ],
     "conditions": {
@@ -46,7 +38,8 @@
         "dark"
       ],
       "widths": [
-        680,
+        900,
+        480,
         360,
         300
       ],
@@ -65,14 +58,26 @@
       "pending": "Awaiting extraction with raw request",
       "question": "A question without an invented task",
       "loading": "First read skeleton",
-      "failed": "Read failure and retry"
+      "failed": "Read failure and retry",
+      "restore": "Closed pane with dated requests",
+      "restore-pending": "Restore in progress",
+      "restore-failed": "Restore refused with retry",
+      "restore-unknown": "Unconfirmed restore with status check",
+      "restore-missing": "Missing conversation",
+      "restore-live": "Restored session with open pane"
     },
     "urlStates": [
       "off",
       "pending",
       "question",
       "loading",
-      "failed"
+      "failed",
+      "restore",
+      "restore-pending",
+      "restore-failed",
+      "restore-unknown",
+      "restore-missing",
+      "restore-live"
     ],
     "rules": {
       "noOverlap": true,

@@ -14,7 +14,7 @@ import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 
-const AT = 1_790_000_000_000;
+const AT = new Date(2026, 9, 18, 17, 5).getTime();
 const SESSION: WorkSession = { device_id: "local", agent: "claude", session_id: "record-example" };
 const CHILD_SESSION: WorkSession = { ...SESSION, agent: "claude", session_id: "child-example" };
 const task = (id: string, chapter: string, name: string, end: WorkTask["end"], done: boolean, at: number): WorkTask => ({ id, chapter_id: chapter, name, end, done, at_unix_ms: at, last_at_unix_ms: at + 1000, unjudged: false });
@@ -84,12 +84,24 @@ export function SessionWorkScene({ params }: { params: URLSearchParams }) {
       record.missed = [];
       record.requests = [request(1, state === "question" ? "이 프로젝트 구조가 어떻게 되어 있어?" : "이 Mac에서 검증하고 결과를 정리해줘.", [], { judged: state === "question" })];
     }
+    if (state.startsWith("restore")) {
+      record.path = state === "restore-missing" ? null : "/fixture/conversation.jsonl";
+      record.ended_at_unix_ms = AT;
+      record.state = "idle";
+      record.tasks = []; record.missed = []; record.children = [];
+      record.requests = Array.from({length:6}, (_,i) => request(i, ["이전 진행 내용을 확인해줘", "구현 결과를 정리해줘", "원격 환경의 구현 계획을 검토하고 변경 사항을 요약해줘.", "날짜와 시간을 확인해줘.", "새 pane에서 같은 대화를 이어갈 수 있게 해줘.", "긴 한국어 요청과 mixed English text의 줄바꿈을 좁은 화면에서도 확인해줘."][i]!, [], {at_unix_ms: AT + (i < 3 ? 0 : 86_400_000) + i * 60_000}));
+      base.agents = state === "restore-live" ? base.agents.map(row => legacyAgentRow({...row,status_code:"done",mark:"done",group:"idle",activity:"stopped"})) : [];
+    }
     return { base, record, project };
   }, [params, state]);
   const actions = useMemo(() => createActions((event) => {
+    if (event.kind === "agent_start_in_checkout") {
+      if (state === "restore-failed") useShellStore.setState(s => ({rest:{...s.rest,status:{...s.rest?.status,last_error:{kind:"fixture_refusal",retryable:true,occurred_at:AT,request_id:String(event.payload.request_id),message:"Fixture start refused"}}}}));
+      if (state === "restore-unknown") useShellStore.setState(s => ({ rest: { ...s.rest, task_operation: { id: 42, kind: "agent_start", phase: "ready", repository_root: fixture.record.cwd, branch: null, base_branch: null, path: fixture.record.cwd, pane_id: "resumed", agent_kind: "claude", message: null, agent_phase: "unknown", agent_message: null, request_id: String(event.payload.request_id) } } }));
+    }
     if (event.kind === "session_work_search") useShellStore.setState({ sessionWorkSearch: { query: String(event.payload.query), loading: false, failure: null, results: [{ session: SESSION, title: fixture.record.title, matched: "세션 검색을 연결하고 좁은 칸에서도 읽기 좋게 해줘", at_unix_ms: AT, cwd: fixture.record.cwd }] } });
     return true;
-  }), [fixture]);
+  }), [fixture, state]);
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.base.rest, agents: fixture.base.agents, connection: "live", linkSummaries: { filling:false, projects:{[fixture.project.id]:{work:[{session:SESSION,title:fixture.record.title,fallback_title:fixture.record.fallback_title,native_title:fixture.record.native_title,manual_title:null,cwd:fixture.record.cwd,ended_at_unix_ms:AT,open_missed:fixture.record.missed.filter((item)=>item.status==="open").length,subtree_open_missed:0,missed:fixture.record.missed}]}} }, sessionRecord: { session: SESSION, loading: state === "loading", failure: state === "failed" ? "fixture_read_failed" : null, record: state === "loading" || state === "failed" ? null : fixture.record } });
     useUiStore.setState({ screen: { kind: "workspace" }, overlay: state === "search" ? "search" : "none" });
