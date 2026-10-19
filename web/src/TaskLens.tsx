@@ -180,6 +180,19 @@ const TaskGroups = memo(function TaskGroups({ list, view, byPane, agents, folds,
   // page keeps them, so the ⌥n numbers read the same drawn order.
   const foldsOpen = useUiStore((s) => s.taskFoldsOpen);
   const toggleFold = useUiStore((s) => s.toggleTaskFold);
+  const focusedRestFold = useMemo(() => {
+    if (focusedPane === null) return null;
+    const containsFocus = ({ card }: TaskEntry) => card.members.includes(focusedPane);
+    if (view === "status") return list.resting.some(containsFocus) ? taskFoldKey("rest", "") : null;
+    const group = list.groups.find((group) => group.resting.some(containsFocus));
+    return group ? taskFoldKey("rest", group.key) : null;
+  }, [focusedPane, list, view]);
+  // Entering a resting task reveals it, including a focused descendant.
+  // Read the current folds only on entry or a change of the containing fold:
+  // an explicit collapse must survive snapshots while focus stays here.
+  useLayoutEffect(() => {
+    if (focusedRestFold !== null && !useUiStore.getState().taskFoldsOpen.includes(focusedRestFold)) toggleFold(focusedRestFold);
+  }, [focusedPane, focusedRestFold, toggleFold]);
   const openFolds = useMemo(() => new Set(foldsOpen), [foldsOpen]);
   const opened = useMemo(() => new Set(folds), [folds]);
   const shown = taskSections(list, view, openFolds);
@@ -199,8 +212,9 @@ const TaskGroups = memo(function TaskGroups({ list, view, byPane, agents, folds,
   const scroller = useRef<HTMLDivElement>(null);
   const revealed = useRef<string | null>(null);
   useLayoutEffect(() => {
+    if (selected === null) { revealed.current = null; return; }
     const row = scroller.current?.querySelector<HTMLElement>('[data-selected="true"]');
-    if (selected === null || selected === revealed.current || !scroller.current || !row) return;
+    if (selected === revealed.current || !scroller.current || !row) return;
     revealed.current = selected;
     revealRow(scroller.current, [row], row);
   }, [selected]);

@@ -157,6 +157,46 @@ it("selects the row of the pane with the keyboard, and its nearest drawn ancesto
   expect(container.querySelector('[data-task-row="parent"] [data-descendant-mark]')).toBeNull();
 });
 
+it.each(["status", "project"] as const)("in %s reveals a resting pane on entry, keeps a manual fold closed until re-entry, and leaves other folds closed", async (view) => {
+  const agents = [row("rest"), row("other"), row("clean"), row("works")];
+  const cards = [card("rest", "resting", "hide-main"), card("other", "resting", "site-main"), card("clean", "cleanup", "hide-main"), card("works", "working", "hide-main")];
+  const rest = snapshot(agents, cards, view);
+  const { container } = await render(rest, agents, "rest");
+  const selected = () => container.querySelector('[data-task-row="rest"][data-selected="true"]');
+  expect(selected()).not.toBeNull();
+  expect(container.querySelector('[data-task-row="clean"]')).toBeNull();
+  if (view === "project") expect(container.querySelector('[data-task-row="other"]')).toBeNull();
+  await act(async () => container.querySelector<HTMLElement>('[data-task-fold="rest"] > button')!.click());
+  expect(selected()).toBeNull();
+  // An unrelated snapshot must not undo the operator's explicit collapse.
+  await act(async () => useShellStore.setState({ rest: snapshot(agents, cards, view) }));
+  expect(selected()).toBeNull();
+  await act(async () => useShellStore.setState({ focusedPaneId: "works" }));
+  await act(async () => useShellStore.setState({ focusedPaneId: "rest" }));
+  expect(selected()).not.toBeNull();
+});
+
+it.each(["status", "project"] as const)("in %s reveals the resting task for a focused child and when its task moves to rest", async (view) => {
+  const agents = [row("parent", { lineage_child_pane_ids: ["child"] }), row("child", { lineage_parent_pane_id: "parent", delegated: true })];
+  const { container } = await render(snapshot(agents, [card("parent", "done", "hide-main", ["parent", "child"])], view), agents, "child");
+  await act(async () => useShellStore.setState({ rest: snapshot(agents, [card("parent", "resting", "hide-main", ["parent", "child"])], view) }));
+  expect(container.querySelector('[data-task-fold="rest"] > button')?.getAttribute("aria-expanded")).toBe("true");
+  expect(container.querySelector('[data-task-row="parent"]')?.getAttribute("data-selected")).toBe("true");
+});
+
+it("reveals the focused resting task when changing the grouping or returning from Overview", async () => {
+  const agents = [row("rest")];
+  const cards = [card("rest", "resting", "hide-main")];
+  const { container } = await render(snapshot(agents, cards), agents, "rest");
+  await act(async () => useShellStore.setState({ rest: snapshot(agents, cards, "project") }));
+  expect(container.querySelector('[data-task-row="rest"][data-selected="true"]')).not.toBeNull();
+  await act(async () => container.querySelector<HTMLElement>('[data-task-fold="rest"] > button')!.click());
+  await act(async () => useUiStore.setState({ overviewOpen: true }));
+  expect(container.querySelector('[data-task-row="rest"]')).toBeNull();
+  await act(async () => useUiStore.setState({ overviewOpen: false }));
+  expect(container.querySelector('[data-task-row="rest"][data-selected="true"]')).not.toBeNull();
+});
+
 it("numbers the task rows top to bottom while ⌥ is held, an opened fold's rows after the groups, and a task's children never (electron-digit-shortcuts-hints D-02)", async () => {
   const agents = [row("ask", {}, { group: "needs_you" }), row("parent", { lineage_child_pane_ids: ["child"] }), row("child", { lineage_parent_pane_id: "parent", delegated: true }), row("done"), row("rest")];
   const cards = [card("ask", "needs_you", "hide-main"), card("parent", "working", "hide-main", ["parent", "child"]), card("done", "done", "site-main"), card("rest", "resting", "hide-main")];

@@ -218,7 +218,7 @@ type UiStore = {
   sidebarFocus: number;
   /** The raised Projects sections the operator unfolded past their cap; this page's alone, so a fresh list starts short. */
   raisedOpen: readonly string[];
-  /** The 태스크 list's 쉬는 중 and 정리할 것 folds the operator opened (`rest:<group>`, `cleanup:<group>`); this page's alone, so a fresh list starts folded (sidebar-task-lens B5). */
+  /** The 태스크 list's open folds (`rest:<group>`, `cleanup:<group>`, `archived:<group>`); page-local, opened by the operator or by entering a resting task (sidebar-task-lens B5). */
   taskFoldsOpen: readonly string[];
   /** The Factory secretary being started (PRD software-factory-ui B23). */
   secretaryStart: import("./factory/secretary").SecretaryStart | null;
