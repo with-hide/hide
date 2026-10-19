@@ -25,6 +25,10 @@ test('Overview selects explicitly, shares filters and preserves layout in a priv
     await expect(target).toBeVisible();
     const positions = () => graph.locator('.react-flow__node').evaluateAll(nodes => nodes.map(node => [node.getAttribute('data-id'), (node as HTMLElement).style.transform]));
     const before = await positions();
+    await target.click();
+    await expect(graph.locator('[data-graph-preview]')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(graph.locator('[data-graph-preview]')).toHaveCount(0);
     await target.hover();
     await expect(graph.locator('[data-graph-preview]')).toHaveCount(0);
     await target.focus();
