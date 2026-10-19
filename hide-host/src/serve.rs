@@ -364,7 +364,11 @@ fn serve_in(
                             Call::Kit {
                                 action,
                                 cli_dir,
-                                herdr_socket: if preserve_herdr_server { herdr_socket } else { kit_herdr_socket(herdr_socket, link.herdr_socket()) },
+                                herdr_socket: if preserve_herdr_server {
+                                    herdr_socket
+                                } else {
+                                    kit_herdr_socket(herdr_socket, link.herdr_socket())
+                                },
                                 retirement_projects,
                                 preserve_herdr_server,
                             },
