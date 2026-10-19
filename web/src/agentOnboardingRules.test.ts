@@ -61,7 +61,7 @@ describe("the first-run agent choice", () => {
 describe("the first-run Hide AI line in Korean (B46)", () => {
   it("takes 를 after a name that ends in a vowel sound and 을 after Grok, whose reading ends in a consonant", () => {
     const line = (id: string) => catalogs.ko[hideAiFirstRunKey(id)].replace("{{agent}}", id);
-    for (const id of ["claude-code", "codex", "gemini-cli", "opencode", "pi", "antigravity"]) expect(line(id)).toBe(`Hide AI는 ${id}를 씁니다`);
+    for (const id of ["claude-code", "codex", "opencode", "pi", "antigravity"]) expect(line(id)).toBe(`Hide AI는 ${id}를 씁니다`);
     expect(line("grok")).toBe("Hide AI는 grok을 씁니다");
     // English reads the same for every agent: no particle.
     expect(catalogs.en[hideAiFirstRunKey("grok")]).toBe(catalogs.en[hideAiFirstRunKey("codex")]);

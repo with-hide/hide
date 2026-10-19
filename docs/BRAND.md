@@ -89,9 +89,8 @@ There the plate is only for a mark that would vanish on the dark theme: the mani
 `web/src/assets/agents/manifest.json` is the only list: a bundled file names its source URL, licence, any modification and the date it was taken, and an agent without an official source mark is a monogram with the reason written beside it.
 `scripts/check-agent-logos.mjs` (run by `check-design-contract`) fails a bundled file the manifest does not list, an adapter with no entry, an unknown entry and an entry without its source and licence.
 A retired agent's logo may remain for stored sessions only when its manifest entry says `history_only: true` and names the retained reader in its note; an active adapter or provider cannot use that classification.
-A mark can outlive its agent's row in the kit while Hide AI still offers that agent: Gemini CLI's stays for the Hide AI provider.
 Marks are shown as the vendor published them: never recoloured, redrawn or approximated (design principle 10), and a mark whose source cannot be confirmed becomes a monogram rather than a guess.
-A mark is bundled in the format the vendor publishes, an SVG or, where it publishes none, its PNG (`gemini-cli.png`), named for its agent's id so `web/src/agentLogos.ts` maps it without a list of its own.
+A mark is bundled in the format the vendor publishes, an SVG or, where it publishes none, its PNG, named for its agent's id so `web/src/agentLogos.ts` maps it without a list of its own.
 An SVG that recolours itself under `prefers-color-scheme` takes the scheme from the app's theme inside an `<img>`, not from the plate behind it, so a dark-theme variant turns light on the light plate; where the vendor offers a fixed-colour variant that one is bundled instead, with the reason in its manifest `note` (Pi).
 Showing a mark names the product it belongs to and implies no endorsement; trademark questions go to the vendor's own brand page named in the manifest.
 

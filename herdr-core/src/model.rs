@@ -5882,8 +5882,7 @@ pub struct BackgroundAiProviderSnapshot {
     pub label: String,
     /// The id the Agents tab and the logos key the same agent by: the kit's
     /// adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`,
-    /// `cursor`), or `gemini-cli` for Gemini CLI, which Hide AI still uses
-    /// though the kit no longer lists it.
+    /// `antigravity`).
     pub agent: String,
     /// The availability class the provider layer reported: `ready`,
     /// `needs_login`, `not_installed`, `unavailable`, `unsupported`, or
@@ -5898,9 +5897,8 @@ pub struct BackgroundAiProviderSnapshot {
     /// Whether the agent's program was found; false only for
     /// `not_installed`.
     pub installed: bool,
-    /// Whether the agent's sign-in is checked without a request. False for
-    /// Gemini CLI, whose `ready` only means its program was found, so the
-    /// shell does not call it signed in and it is never chosen by itself.
+    /// Whether the agent's sign-in is checked without a request. Every
+    /// current provider checks it; older peers may report false.
     pub login_checked: bool,
     /// Whether Runs on and Add agent offer it: installed, signed in, a
     /// backend, and a call that cannot change files (D-15). Parked in a usage
@@ -5914,8 +5912,8 @@ pub struct BackgroundAiProviderSnapshot {
     /// The models this agent offers. Empty when they are not known, which
     /// `models_unavailable_reason` then says.
     pub models: Vec<String>,
-    /// The list is the CLI's documented one and cannot be asked for (Gemini
-    /// CLI), so the shell says so beside the menu (B36).
+    /// The list came from documented aliases rather than an account query,
+    /// as an older peer may report, so the shell labels it (B36).
     pub models_fixed: bool,
     /// Whether "CLI default" can be chosen: the agent is asked with no
     /// `--model` (B36). True for the agents measured against nothing yet.
@@ -5947,7 +5945,7 @@ impl BackgroundAiProviderSnapshot {
             state: "unread".to_owned(),
             headline: "Not checked yet".to_owned(),
             installed: true,
-            login_checked: provider.login_probe(),
+            login_checked: true,
             model: provider.default_model().to_owned(),
             cli_default: provider.default_model().is_empty(),
             ..Self::default()

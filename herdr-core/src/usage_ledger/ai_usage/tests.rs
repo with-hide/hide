@@ -43,7 +43,7 @@ fn a_drain_dates_answers_and_counts_unknown_attempts_apart() {
     queue.attempt("context_label", ProviderId::CLAUDE, &[tokens("m-1", 10)]);
     queue.attempt("context_label", ProviderId::CLAUDE, &[]);
     queue.attempt("context_label", ProviderId::CLAUDE, &[]);
-    queue.attempt("project_memory", ProviderId::GEMINI, &[]);
+    queue.attempt("project_memory", ProviderId::GROK, &[]);
     let batch = queue.take(&utc());
     let day = jiff::Timestamp::now().to_zoned(utc()).date().to_string();
     assert_eq!(batch.parts.len(), 1);
@@ -64,7 +64,7 @@ fn a_drain_dates_answers_and_counts_unknown_attempts_apart() {
         .collect();
     assert_eq!(
         unknown,
-        vec![("claude", "labels", 2), ("gemini-cli", "memory", 1)]
+        vec![("claude", "labels", 2), ("grok", "memory", 1)]
     );
     assert!(queue.take(&utc()).is_empty(), "a drain empties the queue");
 }

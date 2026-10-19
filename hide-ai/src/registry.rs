@@ -1,13 +1,13 @@
 //! The agents Hide AI can name, and how each one's backend is built.
 //!
 //! A provider is one row here: its stable id, the name a person reads, the
-//! agent id the logos and the kit key it by, whether its sign-in can be checked
-//! without a request, and the model it is asked for when nobody chose one.
+//! agent id the logos and the kit key it by, and the model it is asked for
+//! when nobody chose one.
 //! Where its CLI is found is not kept here: that is `hide_platform::programs`,
 //! the one search the install kit uses too. Nothing else in the
 //! workspace keeps a list of them; settings, the router and the core's
 //! Settings reader all iterate this one, in this order (D-06, D-18): Claude
-//! Code, Codex, Gemini CLI, Grok, OpenCode, Pi, Antigravity.
+//! Code, Codex, Grok, OpenCode, Pi, Antigravity.
 //!
 //! The id is a string the registry owns, not a closed enum, so a file written
 //! by a newer Hide that names an agent this build does not know is read, and
@@ -32,7 +32,6 @@ impl ProviderId {
     /// `claude`, so a file an earlier Hide wrote reads unchanged.
     pub const CLAUDE: Self = Self("claude");
     pub const CODEX: Self = Self("codex");
-    pub const GEMINI: Self = Self("gemini-cli");
     pub const GROK: Self = Self("grok");
     pub const OPENCODE: Self = Self("opencode");
     pub const PI: Self = Self("pi");
@@ -63,12 +62,6 @@ impl ProviderId {
             .iter()
             .copied()
             .find(|provider| provider.descriptor().agent == agent)
-    }
-
-    /// Whether this agent's sign-in can be checked without a request
-    /// ([`ProviderDescriptor::login_probe`]).
-    pub fn login_probe(self) -> bool {
-        self.descriptor().login_probe
     }
 
     pub fn descriptor(self) -> &'static ProviderDescriptor {
@@ -122,7 +115,6 @@ pub const CLI_DEFAULT_MODEL: &str = "";
 pub const PROVIDERS: &[ProviderId] = &[
     ProviderId::CLAUDE,
     ProviderId::CODEX,
-    ProviderId::GEMINI,
     ProviderId::GROK,
     ProviderId::OPENCODE,
     ProviderId::PI,
@@ -136,14 +128,8 @@ pub struct ProviderDescriptor {
     pub label: &'static str,
     /// The id of the same agent in the install kit's adapter table, which is
     /// how the shell joins "this agent is on and installed" to "Hide AI can
-    /// use it". `gemini-cli` is the one exception: the kit no longer lists
-    /// Gemini CLI, so for it the id only names its logo.
+    /// use it".
     pub agent: &'static str,
-    /// Whether the CLI can say it is signed in without making a request. An
-    /// agent that cannot (Gemini CLI) is `ready` only because its program was
-    /// found: it is never chosen by itself, and a sign-in failure on its first
-    /// request is remembered for the cooldown, not re-tried on every probe.
-    pub login_probe: bool,
     pub default_model: &'static str,
     /// The reasoning efforts a request may pick for this agent; empty means
     /// the agent takes none and only its CLI default runs.
@@ -155,7 +141,6 @@ const DESCRIPTORS: &[ProviderDescriptor] = &[
         id: ProviderId::CLAUDE,
         label: "Claude Code",
         agent: "claude-code",
-        login_probe: true,
         default_model: crate::claude::DEFAULT_MODEL,
         efforts: crate::claude::EFFORTS,
     },
@@ -163,23 +148,13 @@ const DESCRIPTORS: &[ProviderDescriptor] = &[
         id: ProviderId::CODEX,
         label: "Codex",
         agent: "codex",
-        login_probe: true,
         default_model: crate::codex::DEFAULT_MODEL,
         efforts: crate::codex::EFFORTS,
-    },
-    ProviderDescriptor {
-        id: ProviderId::GEMINI,
-        label: "Gemini CLI",
-        agent: "gemini-cli",
-        login_probe: false,
-        default_model: CLI_DEFAULT_MODEL,
-        efforts: &[],
     },
     ProviderDescriptor {
         id: ProviderId::GROK,
         label: "Grok",
         agent: "grok",
-        login_probe: true,
         default_model: CLI_DEFAULT_MODEL,
         efforts: &[],
     },
@@ -187,7 +162,6 @@ const DESCRIPTORS: &[ProviderDescriptor] = &[
         id: ProviderId::OPENCODE,
         label: "OpenCode",
         agent: "opencode",
-        login_probe: true,
         default_model: CLI_DEFAULT_MODEL,
         efforts: &[],
     },
@@ -195,7 +169,6 @@ const DESCRIPTORS: &[ProviderDescriptor] = &[
         id: ProviderId::PI,
         label: "Pi",
         agent: "pi",
-        login_probe: true,
         default_model: CLI_DEFAULT_MODEL,
         efforts: &[],
     },
@@ -203,7 +176,6 @@ const DESCRIPTORS: &[ProviderDescriptor] = &[
         id: ProviderId::ANTIGRAVITY,
         label: "Antigravity",
         agent: "antigravity",
-        login_probe: true,
         default_model: CLI_DEFAULT_MODEL,
         efforts: &[],
     },
@@ -229,9 +201,6 @@ pub fn build_backend(
             },
             sink,
         )),
-        ProviderId::GEMINI => Arc::new(crate::GeminiCliBackend::new(crate::TextCliConfig::new(
-            model,
-        ))),
         ProviderId::GROK => Arc::new(crate::GrokCliBackend::new(crate::TextCliConfig::new(model))),
         ProviderId::PI => Arc::new(crate::PiCliBackend::new(crate::TextCliConfig::new(model))),
         ProviderId::ANTIGRAVITY => Arc::new(crate::AntigravityCliBackend::new(
@@ -261,7 +230,6 @@ mod tests {
             [
                 "Claude Code",
                 "Codex",
-                "Gemini CLI",
                 "Grok",
                 "OpenCode",
                 "Pi",
@@ -272,6 +240,11 @@ mod tests {
 
     #[test]
     fn an_unknown_id_is_not_a_provider() {
+        for retired in ["gemini-cli", "gemini", "cursor"] {
+            assert_eq!(ProviderId::from_id(retired), None);
+            assert_eq!(ProviderId::for_agent(retired), None);
+            assert!(serde_json::from_value::<ProviderId>(serde_json::json!(retired)).is_err());
+        }
         assert_eq!(ProviderId::from_id("some-future-agent"), None);
         assert!(serde_json::from_str::<ProviderId>("\"some-future-agent\"").is_err());
         assert_eq!(

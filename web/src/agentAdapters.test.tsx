@@ -46,7 +46,7 @@ it.each(AGENT_ADAPTERS.map((row) => [row.id, row.herdr_kind, row.label]))("draws
   expect(renderToStaticMarkup(<AgentMark kind={` ${id.toUpperCase()} `} />)).toContain(`data-agent-mark="${herdrKind}"`);
 });
 
-// A plain shell has no kind, and a bundled logo that no adapter lists (Gemini CLI's, kept for Hide AI) names no agent Hide supports.
+// A plain shell has no kind, and a retired kind names no agent Hide actively supports.
 it.each(["future-agent", "gemini-cli", "cursor", "", null, undefined])("keeps %s neutral", (kind) => {
   const markup = renderToStaticMarkup(<AgentMark kind={kind} />);
   expect(markup).toContain('data-agent-mark="neutral"');

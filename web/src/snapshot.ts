@@ -1582,7 +1582,7 @@ export type CoreDiagnostic = { kind: string; message: string; occurred_at: numbe
 export type AiProvider = {
   id: string;
   label: string;
-  /** The id the logos key the same agent by: the install kit's adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`, `cursor`), or `gemini-cli` for Gemini CLI, which Hide AI still uses though the kit no longer lists it. */
+  /** The id the logos key the same agent by: the install kit's adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`, `antigravity`). */
   agent: string;
   /** `ready`, `needs_login`, `usage_limited`, `not_installed`, `unavailable`, `unsupported`, or `unread`. */
   state: string;
@@ -1595,12 +1595,12 @@ export type AiProvider = {
   selectable: boolean;
   /** When a usage limit ends (unix ms), when the agent said. */
   retry_at_ms: number | null;
-  /** False when the agent has no sign-in check (Gemini CLI): `ready` then only means its program was found; absent from an older daemon. */
+  /** Every current provider checks sign-in; false or absent remains readable from older peers. */
   login_checked?: boolean;
   /** The model it is asked for; empty is the CLI's own default. */
   model: string;
   models: string[];
-  /** The list is the CLI's documented one and cannot be asked for (Gemini CLI). */
+  /** The list is documented rather than queried, as an older peer may report. */
   models_fixed: boolean;
   /** "CLI default" can be chosen: the agent is asked with no `--model`. */
   cli_default: boolean;
