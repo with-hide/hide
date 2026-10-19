@@ -23,7 +23,7 @@ Its owner joins it outside `Mutex<Runtime>`; transport failure, a full queue or 
 An already-started send may finish after opt-out; nothing observed while disabled is retained or replayed on re-enable.
 The worker is enabled from persisted state before AI workers start; an absent build token, a privileged device fixture HOME or a HOME carrying `~/.hide/product-analytics-disabled` starts no transport.
 All browser/desktop and package smoke fixture homes write that disable-only marker on every system; it grants no fixture service-control authority.
-See [the build input](BUILD.md#product-analytics-build-input) and [Settings](UI_BEHAVIOR.md#general); transport tests use a real loopback HTTP peer, router tests distinguish invocations from retries and cancellation, and the Settings journey restarts the daemon after an opt-out.
+See [the build input](BUILD.md#product-analytics-build-input) and [Settings](UI_BEHAVIOR.md#privacy); transport tests use a real loopback HTTP peer, router tests distinguish invocations from retries and cancellation, and the Settings journey restarts the daemon after an opt-out.
 
 ## State placement and publication
 
