@@ -1876,8 +1876,10 @@ fn the_settings_diagnosis_reports_each_runtime_and_the_sessions_that_predate_the
     runtime.ingest_session(Ok(crate::sidebar::owned_label_fixture(serde_json::json!({
         "agents": [
             {"id":"instrumented-control","pane_id":"w1:p1","agent":"claude","agent_status":"working",
+             "agent_session":{"kind":"id","value":"instrumented-session"},
              "state_change_seq":1,"cwd":"/fixture","workspace_label":"Fixture","tokens":{"task":"Check hook reports"}},
             {"id":"older-control","pane_id":"w1:p2","agent":"claude","agent_status":"working",
+             "agent_session":{"kind":"id","value":"older-session"},
              "state_change_seq":2,"cwd":"/fixture","workspace_label":"Fixture","tokens":{"task":"Restore hook visibility"}}
         ],
         "panes": [
@@ -2251,6 +2253,7 @@ fn a_delegation_session_projects_every_state_the_operator_has_to_tell_apart() {
              "spawned_from_pane_id":"w1:p1",
              "tokens":{"task":"Review lineage behavior","status_question_new":"?","progress":"정체 임계값을 물어보는 중"}},
             {"id":"Uninstrumented","pane_id":"w1:p4","agent":"claude","agent_status":"working",
+             "agent_session":{"kind":"id","value":"uninstrumented-session"},
              "state_change_seq":4,"cwd":"/fixture","workspace_label":"hide",
              "tokens":{"task":"Restore hook visibility","progress":"started before the hook was installed"}},
             {"id":"Alone","pane_id":"w1:p5","agent":"claude","agent_status":"working",

@@ -591,7 +591,9 @@ An agent whose adapter declares no subagent count (`subagent_counts: None`: Pi a
 ### Not connected, and what fixes it
 
 A Claude Code or Codex pane whose session Hide does not hear also carries a connection (`PaneChildrenSnapshot.connection`), read from the same observation as the projection above (PRD settings-cleanup D-09, D-11, B26 to B31).
-It is judged by `sidebar::pane_connection` from `uninstrumented_code`, and by nothing else, for an agent that is awake: a sleeping agent has ended its process, so no hook can speak from its pane, and it carries no connection until it wakes.
+It is judged by `sidebar::pane_connection` from `uninstrumented_code` for an awake agent whose native session Herdr has reported.
+A process detected before its native session is not a failed integration and carries no connection judgement yet, without a timer or an assumption that it connected.
+A sleeping agent has ended its process, so no hook can speak from its pane, and it carries no connection until it wakes.
 Settings counts sessions and never these connections, so a pane that needs a Reopen says so only in its own header.
 
 | Instrumentation | Connection |
