@@ -103,6 +103,8 @@ When the behavior depends on the order of two events, the test fixes that order;
 
 - Set every fixture's `HOME` and Hide state folder to private paths before starting a candidate.
 - A restart fixture that requires completed native labels waits for the matching session, goal and end in the private `labels.json` before stopping the daemon; a rendered label alone does not prove its asynchronous save completed, and Windows fixture shutdown is forced.
+- The same boundary applies to Workspace views: `web/e2e/right-lane.spec.ts` waits for the expected tool, pin and active document in the private `workspace-views.json` before each restart, then checks the restored screen.
+  A rendered pin or selected document alone does not prove the save has landed; a missing save fails the persistence wait rather than racing the forced shutdown.
 - A retirement test injects its service-control boundary and uses private legacy folders and ledger fixtures.
   A real launchd call to the account's default retired-service label reaches the operator's service regardless of a private `HOME`, so it is never part of fixture teardown.
 - The private SSH mailbox fixture stages candidate executable copies without debug symbols, as shipped binaries are, and ad-hoc signs those copies on macOS.

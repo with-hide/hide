@@ -18623,10 +18623,10 @@
               "type": "text",
               "id": "JkPyX",
               "name": "Name",
-              "fill": "$--foreground",
+              "fill": "$--muted-foreground",
               "content": "sasu",
               "fontFamily": "$--font-ui",
-              "fontSize": "$--text-subhead",
+              "fontSize": "$--text-caption",
               "fontWeight": "600"
             },
             {
@@ -19189,7 +19189,12 @@
               "type": "ref",
               "ref": "qdhY0",
               "width": "fill_container",
-              "name": "Row / Collapsed"
+              "name": "Row / Collapsed",
+              "descendants": {
+                "JkPyX": {
+                  "fill": "$--foreground"
+                }
+              }
             }
           ]
         },
@@ -19223,6 +19228,9 @@
                 },
                 "iBYjj": {
                   "icon": "chevron-down"
+                },
+                "JkPyX": {
+                  "fill": "$--foreground"
                 }
               }
             }
@@ -19231,7 +19239,7 @@
         {
           "type": "frame",
           "id": "project-row-state-quiet",
-          "name": "State / No agents: nothing before the fold",
+          "name": "State / No agents: the label alone before the fold",
           "width": "fill_container",
           "layout": "vertical",
           "gap": "$--spacing-xxs",
@@ -19253,9 +19261,7 @@
               "name": "Row / No agents",
               "width": "fill_container",
               "descendants": {
-                "JkPyX": {
-                  "fontWeight": "400"
-                },
+                "JkPyX": {},
                 "project-status": {
                   "enabled": false
                 }
@@ -19266,7 +19272,7 @@
         {
           "type": "frame",
           "id": "project-row-state-resting",
-          "name": "State / Agents only resting: 400 in the foreground ink",
+          "name": "State / Agents only resting: the label in the muted ink",
           "width": "fill_container",
           "layout": "vertical",
           "gap": "$--spacing-xxs",
@@ -19289,8 +19295,7 @@
               "name": "Row / Resting",
               "descendants": {
                 "JkPyX": {
-                  "content": "team-notes",
-                  "fontWeight": "400"
+                  "content": "team-notes"
                 },
                 "project-turn": {
                   "enabled": false
@@ -19350,8 +19355,7 @@
               "name": "Row / Asleep",
               "descendants": {
                 "JkPyX": {
-                  "content": "sticky-notes",
-                  "fontWeight": "400"
+                  "content": "sticky-notes"
                 },
                 "project-status": {
                   "enabled": false
@@ -19393,8 +19397,7 @@
               "fill": "$--accent",
               "descendants": {
                 "JkPyX": {
-                  "content": "sticky-notes",
-                  "fontWeight": "400"
+                  "content": "sticky-notes"
                 },
                 "project-status": {
                   "enabled": false
@@ -19559,6 +19562,9 @@
                 },
                 "iBYjj": {
                   "icon": "chevron-down"
+                },
+                "JkPyX": {
+                  "fill": "$--foreground"
                 }
               }
             }
@@ -19590,7 +19596,8 @@
               "name": "Row / Narrow",
               "descendants": {
                 "JkPyX": {
-                  "content": "hide-sidebar-rea…"
+                  "content": "hide-sidebar-rea…",
+                  "fill": "$--foreground"
                 },
                 "project-turn": {
                   "enabled": true

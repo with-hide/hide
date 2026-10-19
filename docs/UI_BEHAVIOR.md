@@ -1411,8 +1411,9 @@ Core owner: `herdr-core/src/sidebar.rs`, `herdr-core/src/project_context.rs`, `h
 The project-row entry and Overview child-row requirements in PRD sidebar-row-click-overview-row D-03 and B5-B7 and web-project-overview are superseded by overview-remove.
 Project rows now open checkouts; shared Overview owns the only Overview selection and destination.
 
-The sidebar sets its words on three sizes: a project name 13, a checkout name, an agent title and a count 12/400, and a second line and a time 11; a section header is 10/500 in sentence case (`Projects · Recent activity · 5`), 26 high with its words on the baseline.
-A project name is 600 while one of its awake agents draws a mark (the turn, the ring or a dot to read), and 400 in the ordinary text color while its agents only rest or sleep or it has none; the core decides which (`agent_presence.working`) and the next snapshot moves it.
+The sidebar sets its words on three sizes: a checkout name, an agent title and a count 12/400, and a second line, a project name, a tab or group name and a time 11; a section header is 10/500 in sentence case (`Projects · Recent activity · 5`), 26 high with its words on the baseline.
+A project's own name is its block's label, 11/600, muted while its agents only rest or sleep or it has none and in the ordinary text color while one of its awake agents draws a mark (the turn, the ring or a dot to read); the core decides which (`agent_presence.working`) and the next snapshot moves it.
+A project's block is set off from the one above it by a hairline at its top and a 12px gap, so the last checkouts of one project never read as the next project's rows.
 A project row and a one-line plain folder are 36 high, a checkout row 32 or 48 with its second line, an agent row 28 or 44.
 A checkout name mutes its prefix up to and including the first slash (`prd/`), so the part that tells checkouts apart reads first; a name with no slash, or one that starts or ends with it, has no prefix.
 The checkout whose Workspace is in front turns its name 500 and nothing else about the row.
@@ -1427,7 +1428,7 @@ This is the 프로젝트 list; the `프로젝트 | 태스크` switch above it, �
 The sidebar hierarchy is Project > Workspace > Group > Tab > Agents; a Workspace corresponds to one checkout path, including a plain folder.
 Two checkouts of one repository share a project cycle.
 Each checkout row shows a kind glyph: home for the stored primary checkout, otherwise the pull-request lifecycle icon when current GitHub data has a pull request, then branch, commit for detached HEAD, or folder for a plain folder.
-A project row with checkouts draws no glyph of its own: its name starts on the row's inset and its checkouts' kind glyphs stand on that same column under it, one step shallower than a project glyph would put them (PRD sidebar-quiet-mark-indent D-06); a plain folder's row keeps its folder glyph, which says its checkout's kind (D-07).
+A project row with checkouts draws no glyph of its own: its name starts on the row's inset and its checkouts' kind glyphs stand on that same column under it, one step shallower than a project glyph would put them (PRD sidebar-quiet-mark-indent D-06); its type is the block's label and the hairline above the block is what tells one project from the next; a plain folder's row keeps its folder glyph, which says its checkout's kind (D-07).
 The primary choice belongs to the registered project and survives restart; a registration without a choice defaults to its root checkout.
 Changing it moves the home glyph and first position together without moving focus; a vanished choice stays stored and is marked again when that checkout returns.
 A checkout row's `Set as default checkout` sets it; the item is disabled with its reason on the checkout that already is the default, a plain folder, a checkout whose folder is missing, a project without a registration (pin it first), and a device's checkout, which is read-only for this action.
@@ -1479,6 +1480,9 @@ Their required secondary lines and metadata remain visible.
 An opened checkout keeps its rows on the sidebar background, without an enclosing card, border or group fill.
 Checkouts start open, and `session_collapsed_checkout_ids` keeps only the checkouts the operator explicitly closes across launches.
 An open checkout or plain folder lists its ungrouped collection and named groups in creation order, with tabs inside each group and the real agents beneath their tab.
+The ungrouped collection wears a header only while the checkout holds a named group: a checkout with none draws its rows alone under the checkout, with no header, on the columns a checkout's own tabs have always stood on.
+An empty ungrouped collection that is not the selected group draws nothing at all.
+A group header stands one step in from the checkout's own row, its disclosure chevron on the checkout's kind-glyph column and its briefcase and name past it, so a collection never reads deeper than the rows beneath it, and the tab guide hangs under that briefcase.
 The list uses the core's membership for every group, including groups whose canvases are hidden, rather than inferring membership from the front tab bar.
 Empty groups, drafts and terminal-only tabs stay reachable, with no invented agent row or agent count.
 Group disclosure changes only this page's fold state; selecting the group's name changes the checkout's selected group.

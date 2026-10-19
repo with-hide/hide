@@ -242,7 +242,9 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     expect(await rowGeometry(primaryRow, feature, primaryParts)).toEqual(atRest);
 
     // An unvisited agentless checkout uses the same single-line row height.
-    // Opening it exposes its empty Ungrouped collection (group-tabs B12).
+    // Opening it draws no collection header: it holds no named group for an
+    // ungrouped header to be told apart from, and it has no rows at all
+    // (group-tabs D-14).
     await project.locator("[data-empty-worktrees]").click();
     const emptyRow = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="empty"]') });
     const emptyButton = emptyRow.locator("[data-checkout]");
@@ -253,7 +255,8 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     const emptyId = await emptyButton.getAttribute("data-checkout");
     await expect.poll(() => last.get("focus_checkout")?.checkout_id).toBe(emptyId);
     await expect(emptyRow.locator("[data-checkout-toggle]")).toHaveAttribute("aria-expanded", "true");
-    await expect(emptyRow.locator("[data-checkout-agents-open]").getByRole("button", { name: "Ungrouped", exact: true })).toBeVisible();
+    await expect(emptyRow.locator("[data-sidebar-named-group]")).toHaveCount(0);
+    await expect(emptyRow.getByRole("button", { name: "Ungrouped", exact: true })).toHaveCount(0);
     await expect(emptyRow.locator("[data-pane]")).toHaveCount(0);
 
     // The chevron opens the agent rows below the row: their own marks stand
@@ -268,10 +271,11 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     await expect(feature.locator("[data-checkout-age]")).toBeVisible();
     // Indent D (sidebar-quiet-mark-indent B10-B12): a project with checkouts
     // draws no glyph, so its name and its checkouts' glyphs share one column;
-    // a checkout's name starts the next. Group tabs B12/D-02 adds a visible
-    // collection level: its tab/agent rows use the approved 12px group inset.
+    // a checkout's name starts the next, and while the checkout holds no named
+    // group its agents' marks stand on that name column too, with no collection
+    // header and no collection indent of their own (group-tabs D-14).
     // A title still follows its mark by the mark and one gap.
-    await expect(feature.locator('[data-sidebar-named-group="ungrouped"]')).toBeVisible();
+    await expect(feature.locator("[data-sidebar-named-group]")).toHaveCount(0);
     await expect(project.locator("[data-project-row] svg")).toHaveCount(0);
     const left = async (part: Locator) => (await part.boundingBox())!.x;
     const projectName = await left(project.locator("[data-project-row] [data-row-name]"));
@@ -279,7 +283,7 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     const checkoutName = await left(feature.locator("[data-checkout-menu] [data-row-name]"));
     const agentMark = await left(feature.locator(`[data-pane="${rowsPane}"] [data-agent-status-mark]`));
     const agentTitle = await left(feature.locator(`[data-pane="${rowsPane}"] [data-agent-title]`));
-    expect([checkoutGlyph - projectName, checkoutName - checkoutGlyph, agentMark - checkoutName, agentTitle - agentMark]).toEqual([0, 18, 12, 16]);
+    expect([checkoutGlyph - projectName, checkoutName - checkoutGlyph, agentMark - checkoutName, agentTitle - agentMark]).toEqual([0, 18, 0, 16]);
     expect((await featureButton.boundingBox())!.height).toBe(await featureButton.evaluate((node) => parseFloat(getComputedStyle(node).getPropertyValue("--size-checkout-row"))));
     await screenshot(page, "projects-sidebar-open");
 
@@ -599,7 +603,7 @@ function projectItem(page: Page, name: string): Locator {
 
 // PRD sidebar-titlebar-refresh B1-B3: the fold and the weight are the core's
 // decisions, which the list draws and a reload keeps.
-test("projects without agents fold under No agents, and only a working agent weighs a project's name", async ({ page }) => {
+test("projects without agents fold under No agents, and only a working agent brightens a project's name", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   const herdr = await startHerdr();
   let daemon: Daemon | null = null;
@@ -633,13 +637,25 @@ test("projects without agents fold under No agents, and only a working agent wei
     await expect(fold).toHaveAttribute("aria-expanded", "true", { timeout: 20_000 });
     await expect(quiet).toBeVisible();
 
-    // B3: an idle agent leaves the name at 400; a working one makes it 600.
+    // B3: an idle agent leaves the project's label muted; a working one
+    // brightens it to the ordinary text colour while its one 600 weight stays,
+    // because the label is what tells one project's block from the next
+    // (group-tabs D-16).
+    const toneOf = async (token: string) => page.evaluate((name) => {
+      const probe = document.createElement("span");
+      probe.style.color = `var(${name})`;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    }, token);
     const weight = busy.locator("[data-project-weight]");
     await expect(weight).toHaveAttribute("data-project-weight", "quiet");
-    await expect(weight).toHaveCSS("font-weight", "400");
+    await expect(weight).toHaveCSS("font-weight", "600");
+    await expect(weight).toHaveCSS("color", await toneOf("--muted-foreground"));
     await setFixtureLifecycle(herdr, busyPane, "working");
     await expect(weight).toHaveAttribute("data-project-weight", "working", { timeout: 20_000 });
-    await expect(weight).toHaveCSS("font-weight", "600");
+    await expect(weight).toHaveCSS("color", await toneOf("--foreground"));
     await expect(quiet.locator("[data-project-weight]")).toHaveAttribute("data-project-weight", "quiet");
 
     // B2: an agent started in the folded project takes it out of the fold, which goes with its last project.
