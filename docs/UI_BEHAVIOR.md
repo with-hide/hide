@@ -909,7 +909,16 @@ The list orders My turn, Working, Unread results, unknown, idle and sleeping, re
 An excluded ancestor stays dim as relationship context without increasing match counts.
 Only branches whose every descendant sleeps offer a reversible subtree fold; a descendant becoming idle or active releases that fold.
 Projects without matches move into a disclosure naming sleeping-only, no-session and filtered reasons, with a route to show each project and its sleeping sessions.
-One-project scope draws no outer group border or duplicate heading.
+Projects form a radial map: each center shows the actual project name, matching-session count and state totals, with sessions around it rather than inside a large enclosing box.
+One-project scope retains its center and offers All projects to return.
+A collapsed project keeps up to six stable-ID representatives and a remaining-session count; an oversized expansion stays summarized within the shared 400-node budget.
+Project search compares real names and counts and moves the camera to that center; the paged session list searches every matching session, including those outside the graph budget.
+A hidden selected session uses a reserved radial position without moving other nodes.
+When the confirmed focused device, pane and native session have a graph proof at entry, that exact session is highlighted without opening details; pane reuse cannot inherit the initial selection.
+The first camera centers the current project or a representative cluster at a readable zoom, and never automatically fits the entire map.
+Fit graph, Current pane and Reset layout remain explicit keyboard-accessible controls.
+Session drag handles move only that session; a project's handle moves its entire relative-positioned group, including summarized members when expanded later.
+Offsets live only in this mounted view, edges follow the moved endpoints, and Reset layout clears offsets and restores the initial camera without dispatching pane moves.
 A filtered-empty view offers Show all sessions, distinct from no current sessions and layout failure.
 Each agent shows its canonical task identity, agent, state and actual current progress; a model is shown only when the current launch proves it.
 Edges distinguish delegation from retained deliveries, whose graph metadata is direction, kind, time and count; no letter subject or body reaches this projection.
@@ -923,12 +932,15 @@ The bounded 30-day observation metadata carries no command or prompt content; it
 Letters and direct inputs share one newest-2,000-record graph budget.
 Group folds aggregate the facts of their members and never invent progress or an inferred relationship.
 The list is paged at fifty rows and stays usable when graph layout fails; the graph offers Retry beside that failure.
-The existing circular provider logos, StatusMark, root and child sizes, rings, delegation dashes, identity and progress stay intact.
+The existing circular provider logos, StatusMark, root and child sizes, rings, identity and progress stay intact.
 Initial zoom is readable without fitting every project; pan, zoom and explicit Fit graph expose the rest.
 Hover and keyboard focus emphasize relationships and never open details.
 Click, Enter or Space selects one session and opens its details beside the graph, using the existing overlay panel below the Overview breakpoint.
 Escape closes details first; changing filter or scope clears a selection that no longer matches.
-Letters start on as faint directional dashes, with count labels visible only for related hover, focus or selection; their labels remain keyboard reachable.
+Delegation has a solid parent-to-child arrow, letters have long dashes, and direct input has short dots; all retain arrow clearance and a contrasting underlay.
+All three kinds have separate curved lanes and real count labels, including aggregated project endpoints.
+Selecting a session or relationship strengthens related paths and dims the others; labels are keyboard targets that open the corresponding safe metadata.
+Selection and Replay flow trigger one finite token-timed flow animation; the motion switch and reduced motion disable it, and no decorative animation runs at idle.
 Mail visibility, hover, focus and selection do not enter the layout key or change node coordinates.
 Graph filters, selection, pan, zoom and folding stay local to the mounted view; filters survive graph/list and scope changes while Work remains mounted.
 Reduced motion removes decorative movement, and closing the view ends its layout work and listeners.
