@@ -83,7 +83,7 @@ fn both_shells_capture_the_state_route_and_route_changes_are_distinct_from_edits
 #[test]
 fn unbound_commands_keep_their_shape_on_both_platforms() {
     for (runtime, helper, windows, baseline) in BASELINES {
-        let expected: Value = serde_json::from_str(&baseline).unwrap();
+        let expected: Value = serde_json::from_str(baseline).unwrap();
         let events = expected["hooks"].as_object().unwrap();
         assert_eq!(
             events.len(),
@@ -136,7 +136,7 @@ fn unbound_install_preserves_command_shape_and_operator_source() {
             installed.contains(r#"{"hooks":[{"type":"command","command":"echo operator-hook"}]}"#)
         );
         let actual: Value = serde_json::from_str(&installed).unwrap();
-        let expected: Value = serde_json::from_str(&baseline).unwrap();
+        let expected: Value = serde_json::from_str(baseline).unwrap();
         assert_eq!(
             actual,
             expected,
