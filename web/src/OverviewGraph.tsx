@@ -107,7 +107,8 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
       const point = placed.nodes.get(row.id);
       if (!point) continue;
       const root = !model.lineage.some((edge) => edge.to === row.id);
-      const node: SessionNode = { id: row.id, parentId: row.projectId, extent: "parent", type: "session", position: { x: point.x, y: point.y }, style: { width: `calc(var(--size-overview-graph-${root ? "root" : "child"}-width) * max(1, var(--interface-scale, 1)))`, height: `calc(var(--size-overview-graph-${root ? "root" : "child"}-height) * max(1, var(--interface-scale, 1)))` }, selected: selection?.kind === "session" && selection.id === row.id, data: { row, root, progress: progressFor(row), context: model.context.has(row.id), highlighted: related.has(row.id), quietCount: model.quietBranches.get(row.id) ?? 0, folded: model.folded.has(row.id), fold, highlight, choose: chooseSession }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 2 };
+      // ELK owns these fixed coordinates; drag extents would clamp against a stale parent measurement.
+      const node: SessionNode = { id: row.id, parentId: row.projectId, type: "session", position: { x: point.x, y: point.y }, style: { width: `calc(var(--size-overview-graph-${root ? "root" : "child"}-width) * max(1, var(--interface-scale, 1)))`, height: `calc(var(--size-overview-graph-${root ? "root" : "child"}-height) * max(1, var(--interface-scale, 1)))` }, selected: selection?.kind === "session" && selection.id === row.id, data: { row, root, progress: progressFor(row), context: model.context.has(row.id), highlighted: related.has(row.id), quietCount: model.quietBranches.get(row.id) ?? 0, folded: model.folded.has(row.id), fold, highlight, choose: chooseSession }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 2 };
       nodes.push(node);
     }
   }
