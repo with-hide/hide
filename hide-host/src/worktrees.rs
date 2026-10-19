@@ -1685,7 +1685,7 @@ pub fn retire_owned(
             ],
         )?;
         if branches.lines().any(|name| name == branch) {
-            git(root, &["branch", "-D", "--", branch])?;
+            delete_branch(root, branch, discard)?;
         }
     }
     Ok(())
@@ -2355,15 +2355,15 @@ pub fn remove_confirmed(request: &ConfirmedRemoval) -> Result<String, String> {
     let Some(branch) = request.delete_branch.as_deref() else {
         return Ok(format!("Deleted {path}. Its local branch was kept."));
     };
-    let flag = if request.force_delete_branch {
-        "-D"
-    } else {
-        "-d"
-    };
-    match git(root, &["branch", flag, "--", branch]) {
+    match delete_branch(root, branch, request.force_delete_branch) {
         Ok(_) => Ok(format!("Deleted {path} and local branch {branch}.")),
         Err(detail) => Ok(format!("Deleted {path}; branch {branch} remains: {detail}")),
     }
+}
+
+fn delete_branch(root: &Path, branch: &str, force: bool) -> Result<String, String> {
+    let flag = if force { "-D" } else { "-d" };
+    git(root, &["branch", flag, "--", branch])
 }
 
 fn io_error(message: String) -> HostError {
