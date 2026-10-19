@@ -322,30 +322,32 @@ They never enter a commit; write them under `agents/runs/<slug>/`, which is igno
 
 ## Releases
 
-A manual [unsigned release candidate](docs/BUILD.md#unsigned-release-candidates) can prepare verified public Linux and Windows packages without creating a tag or publishing anything.
-It also runs the full existing agent journey on that source; the candidate receipt is produced only after both gates pass.
-This preparation workflow leaves the active tag-triggered publisher and the release procedure here unchanged.
+Official app releases are prepared and published by a private workflow from a reviewed commit already on public `main`.
+Pushing a tag by hand does not start official publication; the former public `release.yml` publisher is disabled.
+Signing credentials and the maintainer's publication procedure are managed outside this public repository.
+Existing releases and downloads remain available.
 
-A release is a tag on a commit that is already on `main`, never on a branch.
-Pushing a stable `vX.Y.Z` tag publishes that version when every gate passes, with nothing for a person to do (operator decision 2026-10-12, `release.yml`).
-A `vX.Y.Z-rc.N` tag runs the same gates and publishes a pre-release that is never the latest, for trying a signed build before its stable release ([docs/BUILD.md](docs/BUILD.md#release-asset-gate)).
-The gates:
-- The tagged commit's own `verify` push run on main must have passed; it ran every lane, the desktop and web end-to-end suites, Windows and the packages included.
-  The release waits up to 90 minutes for it, and refuses a run that was cancelled or failed: rerun that run, or tag a later main commit whose run passed.
-- `verify-cargo.sh test` and `verify-web.sh` pass again on macOS.
-- The [agent journey](docs/VERIFICATION.md#agent-journey) passes on the release's commit: before the tag, on the Mac, with every declared cell and the signed-in agents, and in `release.yml` on Linux and macOS, on the stand-ins, against the fake model with the pinned CLIs, and signed in for each agent whose key is set (`HIDE_CLAUDE_API_KEY`, `HIDE_CODEX_API_KEY`, `HIDE_AGY_API_KEY`, `HIDE_GROK_API_KEY`, `HIDE_OPENCODE_API_KEY`, `HIDE_PI_API_KEY`, `HIDE_OMP_API_KEY`; agy on Linux only, within its key's daily quota).
-  A failed cell stops the release; a `not measured` cell is shown in the version approval question with its reason, and neither a stand-in report nor a fake model report is the agents' evidence of a provider.
-- `package.yml` builds each package with `HIDE_VERSION=<version> pnpm --dir desktop package` on its own runner, installs it with its own installer and starts it.
-  The macOS app and dmg are signed and notarized, the dmg is mounted and checked, and the app the update zip holds is opened by the packaged-app specs (`local-kit.spec.ts` and `server-picker.spec.ts`); on Windows `desktop/scripts/smoke-windows-installer.mjs` installs, reinstalls while a Herdr server runs from the runtime copy, and uninstalls; on Ubuntu the deb and in a Fedora container the rpm are installed; on both systems `node desktop/scripts/smoke-package.mjs` starts the installed app's daemon, installs the kit, resolves the command in a fresh shell and checks daemon replacement with a second complete package fixture; on Windows `desktop/e2e/packaged-window.spec.ts` opens the installed `hide.exe` with its window on a private HOME and keeps a screenshot of the shell it draws; and on Windows and Linux `desktop/e2e/packaged-update.spec.ts` installs a release-numbered build and updates it to the next one from a local feed.
-- The [release asset gate](docs/BUILD.md#release-asset-gate) requires that version's fifteen files: `hide-v<version>-macos-arm64.dmg` and `.zip`, `hide-v<version>-windows-x64-setup.exe`, `hide-v<version>-linux-x64.deb` and `.rpm`, each with its verified `.sha256`, and the update files `latest-mac.yml`, `latest.yml` and `latest-linux.yml` with the zip's and the setup's `.blockmap`, whose digests and sizes must match the files.
+The public [unsigned release candidate](docs/BUILD.md#unsigned-release-candidates) prepares Linux and Windows packages and runs the full existing agent journey on an exact verified source.
+It creates no tag or Release, and produces its candidate receipt only after both gates pass.
+Public CI keeps the source, installation and update checks; official macOS signing and final publication run privately.
 
-The writer then adds the fifteen files to its exact draft, never deleting or overwriting one, reads the complete draft back, and publishes it: a stable tag as the latest release, which withhide.dev's download links follow, and an `-rc.N` tag as a pre-release those links ignore; legacy drafts require separate coverage review.
-The operator keeps immutable releases turned on in the repository's Settings; the workflow does not check it.
-A published release is therefore final: a fault the gates missed is fixed by the next version, not by changing the release.
-The macOS archive is signed with the Developer ID certificate and notarized (`HIDE_MACOS_SIGNING=developer-id`, [docs/BUILD.md](docs/BUILD.md)), and the release fails rather than ship it any other way.
-Its secrets belong to the repository's `release` environment, which only `package.yml`'s macOS job in a release run reads: `MACOS_DEVELOPER_ID_P12` (the certificate with its private key, as base64) and `MACOS_DEVELOPER_ID_P12_PASSWORD`, and the App Store Connect API key notarytool uses, `APPLE_NOTARY_KEY_P8` (the `.p8` file's text), `APPLE_NOTARY_KEY_ID` and `APPLE_NOTARY_ISSUER_ID`.
-[docs/BUILD.md](docs/BUILD.md#developer-id-signing) says what expires and how to replace the certificate or the key.
-The Windows and Linux packages are not signed, and [docs/INSTALL.md](docs/INSTALL.md) gives the SmartScreen and sandbox steps.
+An official release requires:
+
+- The source commit's own `verify` push run on main passed, including its full Rust, web, desktop and package lanes.
+- The [agent journey](docs/VERIFICATION.md#agent-journey) ran on the source with the signed-in agents on the Mac and with the public candidate's stand-in, fake-model and configured signed-in CI lanes.
+  A failed cell stops the release unless the operator explicitly approves it for that version; every unmeasured cell and its reason is shown in the version approval.
+  Stand-ins and fake models do not prove a provider or a login.
+- The candidate's Linux and Windows installers pass their installation, packaged-app and local-feed update checks.
+  The official macOS app and dmg pass Developer ID signing, notarization, mounting and isolated packaged-app checks, including the app expanded from its update zip.
+  Those macOS checks do not measure an installed app replacing itself through its updater.
+- The [release asset gate](docs/BUILD.md#release-asset-gate) accepts exactly fifteen files and their matching checksums and update digests.
+- The operator approves that version after reviewing the evidence and its limits.
+
+The publisher creates the public source tag and adds the verified files to its matching draft without deleting or overwriting assets.
+A stable `vX.Y.Z` becomes the latest release, which withhide.dev's download links follow; `vX.Y.Z-rc.N` is a pre-release those links ignore.
+Official publication requires immutable releases to be enabled.
+A published release is final: a fault the gates missed is fixed by the next version.
+The Windows and Linux packages are unsigned, and [docs/INSTALL.md](docs/INSTALL.md) gives the SmartScreen and sandbox steps.
 `package.yml` also runs as `pr.yml`'s `package` lane on a pull request that changes what goes into a package (`PACKAGE_PATHS` in `scripts/ci-plan.py`: `desktop/scripts/`, `desktop/package.json`, `desktop/resources/`, the Herdr pin and its fetch scripts, `verify-cargo.sh`, `verify-web.sh` and `toolchain-env.sh`, `hided/build.rs`, which embeds the web shell, `hided/src/cli.rs`, `hide-kit/` and `hide-agent-hooks/`, and the package and release workflows).
 There it also builds the macOS archive and runs the packaged app's own specs on it, keeps the packages for a week as the run's artifacts, and `verify` requires it like any planned lane.
 
