@@ -41,6 +41,7 @@ LANES = (
     "os-contract",
     "os-contract-macos",
     "agy-contract",
+    "omp-contract",
     "agent-journey",
     "agent-clis",
     "windows-check",
@@ -293,6 +294,7 @@ NAMED_LANES = (
     (".github/workflows/desktop-e2e.yml", {"desktop-e2e", "windows-desktop"}),
     (".github/workflows/os-contract.yml", {"os-contract", "os-contract-macos"}),
     (".github/workflows/agy-contract.yml", {"agy-contract"}),
+    (".github/workflows/omp-contract.yml", {"omp-contract"}),
     (".github/workflows/agent-journey.yml", JOURNEY_LANES),
     ("scripts/install-agy.sh", {"agy-contract"} | AGENT_CLI_LANES),
     (".github/workflows/agent-clis.yml", AGENT_CLI_LANES),
@@ -396,6 +398,8 @@ def classify(path, status, crates, root):
             lanes.add("os-contract-macos")
         if crate["name"] in AGY_CRATES:
             lanes.add("agy-contract")
+        if crate["name"] in {"hide-ai", "hide-platform"}:
+            lanes.add("omp-contract")
         if path.as_posix() in JOURNEY_CRATE_FILES:
             lanes.update(JOURNEY_LANES)
         return lanes, f"crate {crate['name']}: {path}", packages

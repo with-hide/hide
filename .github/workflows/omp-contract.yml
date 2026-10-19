@@ -1,0 +1,46 @@
+# The supported public SDKs with a synthetic login and localhost model.
+# Bun, SQLite and package resolution are native boundaries on every system.
+name: omp SDK contract
+on:
+  workflow_call:
+    inputs:
+      systems:
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  contract:
+    name: omp SDK (${{ matrix.system }})
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        system: ${{ fromJSON(inputs.systems) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Both supported official manifests declare engines.bun >=1.3.14.
+          bun-version: 1.3.14
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: The real SDK, auth store and transport preserve Hide AI's boundary
+        timeout-minutes: 20
+        run: |
+          for version in 18.7.0 18.12.2; do
+            install="$PWD/agents/runs/omp-ci/$version"
+            mkdir -p "$install"
+            printf '{"private":true,"dependencies":{"@oh-my-pi/pi-coding-agent":"%s"}}\n' "$version" > "$install/package.json"
+            bun install --ignore-scripts --cwd "$install"
+            export HIDE_TEST_BUN_BIN="$(bun -p 'process.execPath')"
+            export HIDE_TEST_OMP_PACKAGE="$(bun -e 'console.log(require("node:path").resolve(process.argv[1]))' "$install/node_modules/@oh-my-pi/pi-coding-agent")"
+            bash scripts/verify-cargo.sh test-scoped -p hide-ai --test it omp_sdk -- --ignored --nocapture
+          done
