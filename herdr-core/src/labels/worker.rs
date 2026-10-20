@@ -873,6 +873,7 @@ impl LabelWorker {
                                     pane.metadata_saved = Some(write.metadata.clone());
                                 }
                             }
+                            self.dirty = true;
                         }
                         Err(code) => {
                             if let Some(current) = self.pending_metadata.get_mut(&write.session) {
@@ -1054,16 +1055,21 @@ impl LabelWorker {
                 }
                 metadata.created_prs.truncate(20);
                 pane.metadata = Some(metadata.clone());
-                if pane.metadata_saved.as_ref() != Some(&metadata) {
-                    let session = SessionIdentity {
-                        device_id: self
-                            .target
-                            .strip_prefix("device:")
-                            .unwrap_or(&self.target)
-                            .into(),
-                        agent: pane.agent.as_str().into(),
-                        session_id: record.native_session_id.clone().expect("checked above"),
-                    };
+                let session = SessionIdentity {
+                    device_id: self
+                        .target
+                        .strip_prefix("device:")
+                        .unwrap_or(&self.target)
+                        .into(),
+                    agent: pane.agent.as_str().into(),
+                    session_id: record.native_session_id.clone().expect("checked above"),
+                };
+                if pane.metadata_saved.as_ref() != Some(&metadata)
+                    || self
+                        .pending_metadata
+                        .get(&session)
+                        .is_some_and(|write| write.metadata != metadata)
+                {
                     if self
                         .pending_metadata
                         .get(&session)
@@ -2587,7 +2593,7 @@ impl Reader {
                                 session_id: id.clone(),
                             };
                             let Some(client) = ledger.lock().ok().and_then(|l| l.clone()) else {
-                                return Ok(old.map(|(_, _, display, _)| display.clone()));
+                                return Err("record_ledger_unavailable".into());
                             };
                             if client.ledger_started_at().is_none() {
                                 return Err("record_ledger_unavailable".into());

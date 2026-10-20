@@ -300,7 +300,83 @@ fn closing_a_pane_before_its_metadata_is_indexed_keeps_the_pending_history() {
         panic!("the closed pane lost its pending conversation metadata")
     };
     assert_eq!(saved.goal.as_deref(), Some("pane가 닫혀도 보관할 제목"));
+
+    // Return to the already acknowledged title while the writer attachment
+    // is held. The intervening rename must not remain the desired save.
+    worker.set_summaries(false, Instant::now());
+    observe(&mut worker, &old);
+    settle(&mut worker, &wake);
+    worker.tick(Instant::now());
+    settle(&mut worker, &wake);
+    *ledger.lock().unwrap() = None;
+    use std::io::Write;
+    for (sequence, title) in [(2, "intermediate name"), (3, "")] {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"custom-title", "customTitle":title,"sessionId":"native-a"})
+        )
+        .unwrap();
+        drop(file);
+        let mut changed = old.clone();
+        changed.state_change_seq = sequence;
+        observe(&mut worker, &changed);
+        settle(&mut worker, &wake);
+        assert_eq!(
+            projection(&worker, &changed)
+                .record
+                .and_then(|binding| binding.metadata.manual_title),
+            (!title.is_empty()).then(|| title.to_owned())
+        );
+    }
+    *ledger.lock().unwrap() = Some(client.clone());
+    worker.tick(Instant::now() + Duration::from_secs(16));
+    settle(&mut worker, &wake);
+    let LedgerAnswer::Metadata(Some(current)) = client
+        .call(LedgerCall::Metadata(claude_session("native-a")))
+        .unwrap()
+    else {
+        panic!("the acknowledged title disappeared")
+    };
+    assert!(
+        current.manual_title.is_none(),
+        "the latest explicit clear must beat the queued rename"
+    );
+    worker.observe(&[], Some(&HashSet::new()), Instant::now(), unix_now_ms());
     drop(worker);
+
+    // A later startup has no pane cache and no attached ledger yet. Its
+    // native-only read must not clear analysis already committed in the DB.
+    let delayed = Arc::new(Mutex::new(None));
+    let (mut startup, wake) = harness.spawn_with_ledger(
+        store.clone(),
+        LOCAL_TARGET,
+        "local.sock",
+        ResumeSource::new(&harness, &path),
+        delayed.clone(),
+    );
+    startup.set_summaries(false, Instant::now());
+    observe(&mut startup, &old);
+    settle(&mut startup, &wake);
+    startup.observe(&[], Some(&HashSet::new()), Instant::now(), unix_now_ms());
+    *delayed.lock().unwrap() = Some(client.clone());
+    let later = Instant::now() + Duration::from_secs(16);
+    startup.tick(later);
+    settle_with_clock(&mut startup, &wake, || later);
+    let LedgerAnswer::Metadata(Some(retained)) = client
+        .call(LedgerCall::Metadata(claude_session("native-a")))
+        .unwrap()
+    else {
+        panic!("the committed conversation history disappeared")
+    };
+    assert_eq!(retained.goal, saved.goal);
+    assert_eq!(retained.summary, saved.summary);
+    drop(startup);
+
     let (mut resumed, wake) = harness.spawn_with_ledger(
         store,
         LOCAL_TARGET,
