@@ -2327,6 +2327,7 @@ Nothing runs under the runtime mutex: conversation reads run on the worker's rea
   A core move drops the section (`node_migration/reown.rs`).
   Native-proven display metadata waits for the shared links ledger in one pending value per device/provider/native session, at most 512 per label worker, independently of the source pane's lifetime or later conversation.
   The existing reader commits one value at a time and acknowledges it only after the indexed-only ledger writer returns; a newer pending value survives an older acknowledgement, and unavailable or unindexed saves retry on the existing 15-second tick.
+  Each pane submits a candidate only when its observed display changes; an acknowledgement rechecks capacity without turning unchanged values from other panes of the same conversation into new writes.
   The pending set contains only bounded display fields and identity, never a path or conversation facts; it is not another persistent store and adds no worker or timer.
   A first save whose history read failed merges existing analysis and PR history before writing while preserving the current native title and manual-title clear.
   Capacity and write failures reach the existing diagnostic log, and native reads retain priority over waiting writes.

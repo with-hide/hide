@@ -393,6 +393,151 @@ fn closing_a_pane_before_its_metadata_is_indexed_keeps_the_pending_history() {
     assert_eq!(harness.backend.calls(), 1);
 }
 
+/// Stable panes may disagree about a shared conversation's display, but an
+/// acknowledgement alone must not turn that disagreement into more writes.
+#[test]
+fn unchanged_panes_sharing_a_conversation_do_not_repeat_metadata_writes() {
+    use crate::links::{
+        ledger::{LedgerAnswer, LedgerCall},
+        store::LinkStore,
+        worker::{LinkWorker, Paths},
+    };
+    use std::io::Write;
+    let harness = Harness::new();
+    let paths = [
+        harness.session("a", "native-shared", &[("user", "first pane")]),
+        harness.session("b", "native-shared", &[("user", "second pane")]),
+    ];
+    for (path, title) in paths.iter().zip(["first title", "second title"]) {
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"custom-title","customTitle":title,"sessionId":"native-shared"})
+        )
+        .unwrap();
+    }
+    let blank_home = tempfile::tempdir().unwrap();
+    let db = harness.state.path().join("links.sqlite3");
+    let links = LinkWorker::spawn(
+        Paths {
+            store: db.clone(),
+            search: harness.state.path().join("search.sqlite3"),
+            local_device: LOCAL_TARGET.into(),
+        },
+        Arc::new(hide_node::Local::new(Some(blank_home.path().into()))),
+        QuietLinks,
+    )
+    .unwrap();
+    let client = links.client();
+    client.projects(Arc::default());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while client.ledger_started_at().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    let (mut index, _) = LinkStore::open(&db).unwrap();
+    index
+        .apply_answer(
+            LOCAL_TARGET,
+            &hide_session::links::ReadAnswer {
+                agent: hide_session::Agent::Claude,
+                path: paths[0].display().to_string(),
+                checkpoint: None,
+                has_more: false,
+                rescanned: true,
+                error: None,
+                facts: hide_session::links::LinkFacts {
+                    session_id: Some("native-shared".into()),
+                    cwd: Some("/fixture".into()),
+                    first_at_unix_ms: Some(unix_now_ms()),
+                    last_at_unix_ms: Some(unix_now_ms()),
+                    ..Default::default()
+                },
+            },
+            "fixture-native-index",
+        )
+        .unwrap();
+    drop(index);
+    let ledger = Arc::new(Mutex::new(None));
+    let (mut worker, wake) = harness.spawn_with_ledger(
+        harness.store(),
+        LOCAL_TARGET,
+        "local.sock",
+        ResumeSource::new(&harness, &paths[0]),
+        ledger.clone(),
+    );
+    worker.set_summaries(false, Instant::now());
+    let first = agent(&paths[0], "idle", 1);
+    let mut second = agent(&paths[1], "idle", 1);
+    second.pane_id = "w2:p2".into();
+    worker.observe(
+        &[first.clone(), second.clone()],
+        Some(&HashSet::from([
+            first.pane_id.clone(),
+            second.pane_id.clone(),
+        ])),
+        Instant::now(),
+        unix_now_ms(),
+    );
+    worker.tick(Instant::now());
+    settle(&mut worker, &wake);
+    assert_eq!(
+        projection(&worker, &first)
+            .record
+            .unwrap()
+            .metadata
+            .manual_title
+            .as_deref(),
+        Some("first title")
+    );
+    assert_eq!(
+        projection(&worker, &second)
+            .record
+            .unwrap()
+            .metadata
+            .manual_title
+            .as_deref(),
+        Some("second title")
+    );
+    *ledger.lock().unwrap() = Some(client.clone());
+    worker.tick(Instant::now());
+    settle(&mut worker, &wake);
+    let LedgerAnswer::Metadata(Some(saved)) = client
+        .call(LedgerCall::Metadata(claude_session("native-shared")))
+        .unwrap()
+    else {
+        panic!("the shared conversation was never committed")
+    };
+    assert!(matches!(
+        saved.manual_title.as_deref(),
+        Some("first title" | "second title")
+    ));
+    let sql = rusqlite::Connection::open(&db).unwrap();
+    let before: (u64, u64) = (
+        sql.query_row("PRAGMA data_version", [], |row| row.get(0))
+            .unwrap(),
+        sql.query_row("SELECT label_at FROM ledger_titles", [], |row| row.get(0))
+            .unwrap(),
+    );
+    // Tick/drain includes the already-ACKed case without another observation.
+    for _ in 0..8 {
+        worker.tick(Instant::now());
+        settle(&mut worker, &wake);
+    }
+    let after: (u64, u64) = (
+        sql.query_row("PRAGMA data_version", [], |row| row.get(0))
+            .unwrap(),
+        sql.query_row("SELECT label_at FROM ledger_titles", [], |row| row.get(0))
+            .unwrap(),
+    );
+    assert_eq!(
+        after, before,
+        "an ACK must not create a new metadata observation or SQLite commit"
+    );
+    assert_eq!(harness.backend.calls(), 0);
+}
+
 /// A real writer acknowledges an unindexed refusal, then stores the same
 /// unchanged display after the existing native index obtains the session.
 #[test]

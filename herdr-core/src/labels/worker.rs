@@ -292,6 +292,9 @@ struct PaneState {
     record_connection: RecordConnection,
     metadata: Option<SessionMetadata>,
     metadata_saved: Option<SessionMetadata>,
+    /// Last desired value considered for saving, independent of another
+    /// pane's acknowledgement of this same conversation.
+    metadata_observed: Option<SessionMetadata>,
     metadata_loaded: bool,
     cwd: Option<String>,
     generation: u64,
@@ -565,6 +568,7 @@ impl LabelWorker {
                                     && record.owner.is_some()))
                             .then(|| SessionMetadata::of_label(record)),
                             metadata_saved: None,
+                            metadata_observed: None,
                             metadata_loaded: false,
                             cwd: observed.cwd.clone(),
                             generation: self.next_generation,
@@ -608,6 +612,7 @@ impl LabelWorker {
                             pane.metadata = None;
                         }
                         pane.metadata_saved = None;
+                        pane.metadata_observed = None;
                         pane.metadata_loaded = false;
                         pane.reference_token = reference_token.clone();
                         pane.reference = observed.reference.clone();
@@ -1055,6 +1060,9 @@ impl LabelWorker {
                 }
                 metadata.created_prs.truncate(20);
                 pane.metadata = Some(metadata.clone());
+                if pane.metadata_observed.as_ref() == Some(&metadata) {
+                    continue;
+                }
                 let session = SessionIdentity {
                     device_id: self
                         .target
@@ -1075,6 +1083,7 @@ impl LabelWorker {
                         .get(&session)
                         .is_some_and(|write| write.metadata == metadata)
                     {
+                        pane.metadata_observed = Some(metadata);
                         continue;
                     }
                     if !self.pending_metadata.contains_key(&session)
@@ -1090,13 +1099,14 @@ impl LabelWorker {
                         MetadataWrite {
                             session,
                             owner: record.owner.clone().expect("proven record"),
-                            metadata,
+                            metadata: metadata.clone(),
                             at_unix_ms: super::overlay::unix_milliseconds(),
                             due: now,
                             merge_history: !pane.metadata_loaded,
                         },
                     );
                 }
+                pane.metadata_observed = Some(metadata);
             }
             self.store.save_target(&self.target, &self.records);
         }
@@ -1298,6 +1308,7 @@ impl LabelWorker {
             pane.events_loaded = false;
             pane.next_analysis_at = None;
             pane.metadata_saved = None;
+            pane.metadata_observed = None;
             pane.metadata_loaded = false;
             self.waiting.retain(|id| id != pane_id);
         }
