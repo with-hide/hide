@@ -615,6 +615,11 @@ mod tests {
                 ("hide_hooks", &HOOK_VERSION.to_string()),
                 ("hide_sub_working", "1"),
                 ("hide_sub_done", "1"),
+                // SHA-256 of the fixture's native session, "session-a".
+                (
+                    "hide_sub_session",
+                    "fa57a52dbf08190218529730a3e99db6946c6c29220fb6e0551e21598b0b05db",
+                ),
             ])
         );
     }
