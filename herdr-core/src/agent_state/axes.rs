@@ -940,6 +940,11 @@ pub fn apply_read_state(
         let settled_here = settled(agent);
         let first_settled = settled_here && connection.settled.insert(agent.pane_id.clone());
         if operator_pane_id == Some(agent.pane_id.as_str()) {
+            // A delayed read reveals no new native state to acknowledge.
+            // Keep the last confirmed fingerprint through this interval.
+            if agent.telemetry_stale {
+                continue;
+            }
             let mut current = read_fingerprint(agent);
             current.server = Some(connection.server_of(agent).to_owned());
             if records.get(&agent.pane_id) != Some(&current) {
@@ -1000,7 +1005,10 @@ pub fn apply_read_state(
         let Some(record) = records.get_mut(&agent.pane_id) else {
             continue;
         };
-        if record.unread != agent.unread && connection.judges_by_sequence(record, agent) {
+        if !agent.telemetry_stale
+            && record.unread != agent.unread
+            && connection.judges_by_sequence(record, agent)
+        {
             record.unread = agent.unread;
             changes.push(ReadRecordChange {
                 pane_id: agent.pane_id.clone(),
@@ -1031,7 +1039,7 @@ pub(crate) fn derive_read_state(
         // saved on another server keeps the verdict it was saved with.
         let read = operator_pane_id == Some(agent.pane_id.as_str())
             || records.get(&agent.pane_id).is_some_and(|record| {
-                if connection.judges_by_sequence(record, agent) {
+                if !agent.telemetry_stale && connection.judges_by_sequence(record, agent) {
                     record_covers(record, &read_fingerprint(agent))
                 } else {
                     !record.unread
@@ -1046,7 +1054,9 @@ pub(crate) fn derive_read_state(
 /// The demand axis. A block outranks a question and a question an approval,
 /// so the worse thing waiting is the one the row names.
 pub(crate) fn agent_demand(agent: &SessionAgentPayload) -> AgentDemand {
-    if agent.label.as_ref().is_some_and(|label| label.blocked) {
+    if agent.telemetry_stale {
+        AgentDemand::None
+    } else if agent.label.as_ref().is_some_and(|label| label.blocked) {
         AgentDemand::Error
     } else if agent
         .facts
@@ -1068,6 +1078,9 @@ pub(crate) fn agent_demand(agent: &SessionAgentPayload) -> AgentDemand {
 /// already working again; one an agent kind reads from its session's current
 /// state can, because Herdr keeps that kind `working` while it waits.
 pub(crate) fn agent_blocked(agent: &SessionAgentPayload) -> bool {
+    if agent.telemetry_stale {
+        return false;
+    }
     agent.agent_status.as_deref() == Some("blocked")
         || (agent
             .facts
@@ -1087,6 +1100,9 @@ pub(crate) fn agent_blocked(agent: &SessionAgentPayload) -> bool {
 /// task will wake the agent is not known, and a row announced as finished
 /// there is taken back when the read lands (#902). It goes on as it was.
 pub(crate) fn agent_activity(agent: &SessionAgentPayload) -> AgentActivity {
+    if agent.telemetry_stale {
+        return AgentActivity::Unknown;
+    }
     match agent.agent_status.as_deref() {
         Some("working") => AgentActivity::Working,
         Some("idle") | Some("done")
@@ -1108,6 +1124,9 @@ pub(crate) fn agent_activity(agent: &SessionAgentPayload) -> AgentActivity {
 /// It is deliberately separate from activity and read state; Herdr's
 /// tab-scoped seen value never decides Hide's pane-level read axis.
 pub(crate) fn agent_completed(agent: &SessionAgentPayload) -> bool {
+    if agent.telemetry_stale {
+        return false;
+    }
     match agent.agent_status.as_deref() {
         Some("done") => true,
         Some("idle") => agent.completion_seq.is_some(),

@@ -1143,6 +1143,7 @@ fn a_created_tab_joins_its_requested_checkout_while_an_external_tab_follows_its_
                 cwd: checkout_path.clone(),
                 label: "new".to_owned(),
                 area_id: None,
+                group_id: None,
                 admission_id: None,
             },
             Ok(RemoteControlOutcome::Acknowledged {

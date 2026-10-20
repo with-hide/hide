@@ -30,7 +30,7 @@ def spawned(**view):
 
 
 def measured_table(*passed):
-    """A one-agent table whose built cells are open, with `passed` settled pass."""
+    """A one-agent table whose declared cells are open, with `passed` settled pass."""
     table = cells.plan(contract(), ["codex"])
     for name in passed:
         cells.settle(table, "codex", name, cells.PASS, "fixture")
@@ -61,12 +61,12 @@ class Plan(unittest.TestCase):
         self.assertEqual(cells.exit_code({"codex": passed, "cursor": table["cursor"]}, ["codex", "cursor"],
                                          setup_failed=False), 0)
 
-    def test_unbuilt_agents_and_unselected_agents_are_not_measured_with_the_reason(self):
+    def test_a_new_adapter_participates_without_a_second_agent_list(self):
         codex = next(row for row in contract() if row["id"] == "codex")
-        unbuilt = {**codex, "id": "an-agent-not-built-yet"}
-        table = cells.plan([*contract(), unbuilt], ["codex", unbuilt["id"]])
+        added = {**codex, "id": "newly-registered-agent"}
+        table = cells.plan([*contract(), added], ["codex", added["id"]])
         for name in cells.CELLS:
-            self.assertEqual(table[unbuilt["id"]][name], cells.cell(cells.NOT_MEASURED, cells.NOT_BUILT))
+            self.assertEqual(table[added["id"]][name]["status"], cells.PENDING)
             self.assertEqual(table["codex"][name]["status"], cells.PENDING)
         self.assertEqual(table["claude-code"]["start"]["reason"], "not selected (--agents)")
 
@@ -103,7 +103,7 @@ class Propagation(unittest.TestCase):
 
 class ExitCodes(unittest.TestCase):
     def test_codes(self):
-        table = measured_table(*cells.BUILT_CELLS)
+        table = measured_table(*cells.CELLS)
         self.assertEqual(cells.exit_code(table, ["codex"], setup_failed=True), 2)
         self.assertEqual(cells.exit_code(table, ["codex"], setup_failed=False), 0)
         # One cell not measured, the others passed.

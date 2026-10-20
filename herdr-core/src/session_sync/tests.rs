@@ -55,6 +55,82 @@ fn every_session_sync_snapshot_fixture_obeys_the_generated_contract() {
 }
 
 #[test]
+fn unconfirmed_telemetry_preserves_identity_but_never_claims_activity_or_demand() {
+    let mut value = snapshot();
+    value["agents"] = json!([{
+        "pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1",
+        "terminal_id": "fixture-terminal", "focused": false, "revision": 1,
+        "name": "fixture-agent", "agent": "codex", "agent_status": "done",
+        "state_change_seq": 4, "completion_seq": 4, "tokens": {}
+    }]);
+    let mut replica = SessionReplica::from_snapshot(&value).unwrap();
+    let confirmed = replica.state.agents.clone();
+    let mut records = BTreeMap::new();
+    let mut connection = crate::agent_state::ReadConnection::new("same-server".into());
+    let mut rows = crate::sidebar::project_agents(replica.project()).agents;
+    crate::agent_state::apply_read_state(&mut rows, &mut records, &mut connection, Some("w1:p1"));
+    let read_before = records.clone();
+    assert!(replica.invalidate_agents());
+    assert!(
+        !replica.invalidate_agents(),
+        "repeated failures publish no transition"
+    );
+    let mut payload = replica.project();
+    assert!(payload.agents[0].telemetry_stale);
+    // Even an overlay made for the previous state cannot turn stale data
+    // into a current question or block.
+    payload.agents[0].label = Some(crate::sidebar::AgentLabel {
+        task: Some("retained task".into()),
+        question: true,
+        blocked: true,
+        ..Default::default()
+    });
+    let local = crate::sidebar::project_agents(payload.clone());
+    let (remote, _) = replica.project_remote("mini", payload).unwrap();
+    for row in [&local.agents[0], &remote.agents[0]] {
+        assert_eq!(row.activity, "unknown");
+        assert_eq!(row.demand, "none");
+        assert!(!row.completed);
+        assert!(!row.blocked);
+        assert!(row.requires_close_status_check);
+        assert_eq!(row.identity_label, "retained task");
+    }
+    let mut rows = crate::sidebar::project_agents(replica.project()).agents;
+    crate::agent_state::apply_read_state(&mut rows, &mut records, &mut connection, Some("w1:p1"));
+    assert_eq!(
+        records, read_before,
+        "a focused delay does not acknowledge Unknown"
+    );
+    crate::agent_state::apply_read_state(&mut rows, &mut records, &mut connection, None);
+    assert_eq!(
+        records, read_before,
+        "switching away keeps the confirmed read verdict"
+    );
+    let cache = fresh_catalog();
+    assert!(
+        agent_tick_needs_publish(&replica, &confirmed, Some(&cache)),
+        "an identical answer restores freshness"
+    );
+    replica.replace_agents(confirmed.clone());
+    replica.refresh_published_state().unwrap();
+    assert!(
+        !agent_tick_needs_publish(&replica, &confirmed, Some(&cache)),
+        "idle confirmed reads stay quiet"
+    );
+    let row = &crate::sidebar::project_agents(replica.project()).agents[0];
+    assert_eq!(row.activity, "stopped");
+    assert!(row.completed);
+    assert!(!row.requires_close_status_check);
+    let mut rows = crate::sidebar::project_agents(replica.project()).agents;
+    crate::agent_state::apply_read_state(&mut rows, &mut records, &mut connection, None);
+    assert!(
+        !rows[0].unread,
+        "an identical completion does not become news again"
+    );
+    assert_eq!(records, read_before);
+}
+
+#[test]
 fn start_claims_stay_internal_in_local_and_device_session_projections() {
     let claim = crate::start_claim::label(&"b".repeat(64));
     let mut value = snapshot();
@@ -2433,6 +2509,158 @@ fn coordinator_rebuilds_from_a_fresh_snapshot_after_a_clean_disconnect() {
 
     drop(handle);
     server.join().expect("fake server joins");
+    remove_fixture(folder, runtime);
+}
+
+/// A telemetry response can time out while the topology subscription is
+/// healthy. The real read deadline is the subject of this test; every other
+/// transition is ordered by socket requests or published state.
+#[test]
+fn a_timed_out_agent_read_keeps_the_stream_and_recovers_an_unchanged_answer() {
+    use std::sync::mpsc;
+
+    struct Server {
+        closer: hide_platform::ipc::ListenerCloser,
+        worker: Option<thread::JoinHandle<()>>,
+    }
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.closer.close();
+            self.worker.take().unwrap().join().unwrap();
+        }
+    }
+    let folder = tempfile::Builder::new()
+        .prefix("telemetry-read-")
+        .tempdir_in(socket_parent())
+        .unwrap();
+    let socket = folder.path().join("herdr.sock");
+    let listener = LocalListener::bind(&socket).unwrap();
+    let closer = listener.closer();
+    let agent = json!({
+        "pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1",
+        "terminal_id": "fixture-terminal", "focused": false, "revision": 1,
+        "name": "fixture-agent", "agent": "codex", "agent_status": "working",
+        "state_change_seq": 4, "tokens": {}, "cwd": "/tmp/fixture"
+    });
+    let mut initial = snapshot();
+    initial["agents"] = json!([agent.clone()]);
+    let (streams, subscriptions) = mpsc::channel();
+    let (reads, agent_reads) = mpsc::channel();
+    let server = Server {
+        closer,
+        worker: Some(thread::spawn(move || {
+            while let Ok(stream) = listener.accept() {
+                let mut reader = std::io::BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let mut stream = reader.into_inner();
+                let result = match request["method"].as_str().unwrap() {
+                    "events.subscribe" => json!({"type": "subscription_started"}),
+                    "session.snapshot" => {
+                        json!({"type": "session_snapshot", "snapshot": initial})
+                    }
+                    "agent.list" => {
+                        if reads.send((stream, request)).is_err() {
+                            return;
+                        }
+                        continue;
+                    }
+                    "pane.process_info" => json!({"type": "pane_process_info", "process_info": {
+                        "pane_id": request["params"]["pane_id"], "foreground_processes": []
+                    }}),
+                    method => panic!("unexpected fixture method {method}"),
+                };
+                let response = wire::checked_response_fixture(&request["id"], result);
+                writeln!(stream, "{response}").unwrap();
+                if request["method"] == "events.subscribe" && streams.send(stream).is_err() {
+                    return;
+                }
+            }
+        })),
+    };
+    let runtime = runtime_for_fixture(&socket, &folder.path().join("state.json"));
+    let handle = spawn(context_for_fixture(&runtime, &socket), None).unwrap();
+    let mut subscription = subscriptions.recv_timeout(Duration::from_secs(30)).unwrap();
+    let first_read = agent_reads.recv_timeout(Duration::from_secs(30)).unwrap();
+    // Hold the response across its actual one-second read deadline. Keeping
+    // this socket open distinguishes a timeout from a peer's EOF.
+    wait_until(Instant::now() + Duration::from_secs(30), || {
+        assert!(
+            subscriptions.try_recv().is_err(),
+            "a telemetry timeout closed the healthy subscription"
+        );
+        let guard = runtime.lock().unwrap();
+        guard
+            .snapshot()
+            .navigator
+            .agents
+            .iter()
+            .any(|row| row.activity == "unknown")
+    });
+    assert_eq!(
+        runtime.lock().unwrap().snapshot().status.herdr.state,
+        "connected"
+    );
+    let (mut recovery, request) = agent_reads.recv_timeout(Duration::from_secs(30)).unwrap();
+    writeln!(
+        subscription,
+        "{}",
+        json!({
+            "event": "tab_renamed", "data": {"type": "tab_renamed",
+                "workspace_id": "w1", "tab_id": "w1:t1", "label": "still-live"}
+        })
+    )
+    .unwrap();
+    wait_until(Instant::now() + Duration::from_secs(30), || {
+        let guard = runtime.lock().unwrap();
+        guard.snapshot().tab.label.as_deref() == Some("still-live")
+    });
+    {
+        let guard = runtime.lock().unwrap();
+        let row = &guard.snapshot().navigator.agents[0];
+        assert_eq!(row.activity, "unknown");
+        assert!(row.requires_close_status_check);
+        assert_eq!(guard.snapshot().status.herdr.state, "connected");
+    }
+    write_result(
+        &mut recovery,
+        &request,
+        json!({"type": "agent_list", "agents": [agent]}),
+    );
+    wait_until(Instant::now() + Duration::from_secs(30), || {
+        runtime.lock().unwrap().snapshot().navigator.agents[0].activity == "working"
+    });
+    assert!(
+        subscriptions.try_recv().is_err(),
+        "recovery must use the same subscription"
+    );
+    drop(subscription);
+    let reconnected = subscriptions
+        .recv_timeout(Duration::from_secs(30))
+        .expect("real EOF reconnects");
+    wait_until(Instant::now() + Duration::from_secs(30), || {
+        runtime.lock().unwrap().snapshot().status.herdr.state == "connected"
+    });
+    let (mut refused, request) = agent_reads.recv_timeout(Duration::from_secs(30)).unwrap();
+    writeln!(
+        refused,
+        "{}",
+        json!({
+            "id": request["id"], "error": {"code": "unsupported", "message": "agent list refused"}
+        })
+    )
+    .unwrap();
+    let after_refusal = subscriptions
+        .recv_timeout(Duration::from_secs(30))
+        .expect("an answered server refusal still rebuilds the projection");
+    drop(handle);
+    drop(first_read);
+    drop(recovery);
+    drop(reconnected);
+    drop(refused);
+    drop(after_refusal);
+    drop(server);
     remove_fixture(folder, runtime);
 }
 

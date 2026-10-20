@@ -1,5 +1,5 @@
-import { BriefcaseBusinessIcon, TerminalIcon, XIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { BriefcaseBusinessIcon, TerminalIcon } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { Actions } from "./actions";
 import type { AgentStartTarget } from "./agentLayout";
 import { rememberedSelection, modelToSend, selectKind, type AgentKind } from "./agentPicker";
@@ -83,15 +83,13 @@ export function InlineStartHost() {
   return null;
 }
 
-export function AgentTabStart({ workspace, target, groupName, actions, onCancel }: { workspace: ViewWorkspace; target: AgentStartTarget; groupName: string; actions: Actions; onCancel?: () => void }) {
+export function AgentTabStart({ workspace, target, groupName, actions }: { workspace: ViewWorkspace; target: AgentStartTarget; groupName: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const key = inlineStartKey(workspace.device_id, workspace.path, target);
   const held = useInlineStarts((state) => state.drafts[key]);
   const [initial] = useState<InlineStartDraft>(() => ({ text: "", selection: rememberedSelection(useShellStore.getState().rest?.ui_state?.agent_start), request: null, phase: "editing", taskId: null, failure: null }));
   const draft = held ?? initial;
   const [full, setFull] = useState(false);
-  const field = useRef<HTMLTextAreaElement>(null);
-  const sent = useRef(false);
   const connected = useShellStore((state) => state.connection === "live" && deviceConnected(state.rest, workspace.device_id));
   const busy = draft.phase === "pending" || draft.phase === "unknown";
   const locked = draft.request !== null;
@@ -99,15 +97,6 @@ export function AgentTabStart({ workspace, target, groupName, actions, onCancel 
   const terminalRetry = terminalIntent && draft.phase === "failed";
   const editingRestored = draft.request?.restored && !terminalIntent && (draft.phase === "failed" || draft.phase === "agent_failed");
   const update = (next: InlineStartDraft) => { const ok = useInlineStarts.getState().put(key, next); setFull(!ok); return ok; };
-  useEffect(() => {
-    if (held?.request) sent.current = true;
-    else if (!held && sent.current) onCancel?.();
-  }, [held, onCancel]);
-  useEffect(() => {
-    if (!onCancel || locked) return;
-    field.current?.focus();
-    return useUiStore.getState().pushEscape(onCancel);
-  }, [onCancel, locked]);
   const start = (terminal: boolean, confirmOnly = false) => {
     const latest = useInlineStarts.getState().drafts[key] ?? draft;
     if (!connected || latest.phase === "pending" || (latest.phase === "unknown" && !confirmOnly)) return;
@@ -124,9 +113,9 @@ export function AgentTabStart({ workspace, target, groupName, actions, onCancel 
   const failure = draft.failure ? "key" in draft.failure ? t(draft.failure.key) : draft.failure.message : null;
   return <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-lg" data-agent-tab-start={target.tab_id ?? "empty"}>
     <div className="flex w-full max-w-(--size-worktree-dialog) flex-col gap-md">
-      <div className="flex items-start justify-between gap-sm"><div className="min-w-0"><p className="flex items-center gap-xs text-caption text-muted-foreground" title={groupName}><BriefcaseBusinessIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{groupName}</span></p><h2 className="mt-xs text-title font-semibold">{t(target.add_pane ? "groups.addAgent" : target.tab_id ? "groups.draftTitle" : "groups.firstTitle")}</h2><p className="mt-xs text-caption text-muted-foreground">{t("groups.startHint")}</p></div>{onCancel && !locked ? <Button variant="ghost" size="icon-sm" aria-label={t("common.cancel")} onClick={onCancel}><XIcon /></Button> : null}</div>
+      <div className="flex items-start justify-between gap-sm"><div className="min-w-0"><p className="flex items-center gap-xs text-caption text-muted-foreground" title={groupName}><BriefcaseBusinessIcon className="size-(--size-icon-sm) shrink-0" /><span className="truncate">{groupName}</span></p><h2 className="mt-xs text-title font-semibold">{t(target.add_pane ? "groups.addAgent" : target.tab_id ? "groups.draftTitle" : "groups.firstTitle")}</h2><p className="mt-xs text-caption text-muted-foreground">{t("groups.startHint")}</p></div></div>
       <div className="overflow-hidden rounded-lg border border-input bg-background focus-within:ring-1 focus-within:ring-ring">
-        <textarea ref={field} rows={3} value={draft.text} readOnly={locked && !editingRestored} aria-label={t("shell.firstInstruction")} placeholder={t("groups.prompt")} className="block w-full resize-none bg-transparent p-md text-body text-foreground outline-none placeholder:text-muted-foreground" onChange={(event) => update({ ...draft, text: event.target.value, phase: editingRestored ? draft.phase : "editing", failure: null })} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!busy && !terminalIntent) start(false); } }} />
+        <textarea rows={3} value={draft.text} readOnly={locked && !editingRestored} aria-label={t("shell.firstInstruction")} placeholder={t("groups.prompt")} className="block w-full resize-none bg-transparent p-md text-body text-foreground outline-none placeholder:text-muted-foreground" onChange={(event) => update({ ...draft, text: event.target.value, phase: editingRestored ? draft.phase : "editing", failure: null })} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!busy && !terminalIntent) start(false); } }} />
         <div className="flex flex-wrap items-center justify-between gap-sm px-sm pb-sm"><AgentPicker actions={actions} value={draft.selection} onChange={(selection) => update({ ...draft, selection, phase: "editing", failure: null })} disabled={locked} /><Button disabled={!connected || busy || terminalIntent || draft.selection.kind === "terminal"} onClick={() => start(false)} data-group-start-agent="true">{t(busy ? "shell.starting" : "common.start")}</Button></div>
       </div>
       <Button variant="secondary" className="w-full" disabled={!connected || (locked && !terminalRetry)} onClick={() => start(true)} data-group-start-terminal="true"><TerminalIcon />{t(terminalRetry ? "groups.retryTerminal" : "groups.terminal")}</Button>

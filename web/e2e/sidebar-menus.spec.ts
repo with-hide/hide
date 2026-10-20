@@ -2,7 +2,7 @@
 // pinned Herdr and hided: a Git project Herdr shows without a registration,
 // with an agent in its main checkout and one in a linked worktree. The
 // project row's menu lists the board's items and Pin registers the row and
-// pins it; New tab in main opens a draft in the default checkout and brings
+// pins it; New tab in main opens a terminal in the default checkout and brings
 // it to the front, where an explicit start creates its terminal; Set as default
 // checkout moves the home glyph and the first place to the worktree; the agent row's Copy session id puts Herdr's
 // session id on the clipboard, and its Close tab… closes that agent's tab.
@@ -14,7 +14,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { claudeProjects, labelAgent, setFixtureSession, writeFixtureTranscript, startHerdr, type HerdrFixture } from "./herdr-fixture";
-import { startDraftTerminal } from "./group-start-helper";
+import { waitForTerminal } from "./group-start-helper";
 import { herdrTabs } from "./failure-dump";
 import { startHided } from "./hided-fixture";
 import { rest, screenshot } from "./wire";
@@ -261,7 +261,7 @@ test("a checkout row's menu offers worktree actions, and the default checkout ca
   } finally { stop(); }
 });
 
-test("New tab in main opens a draft in the default checkout and its terminal starts there", async ({ page }) => {
+test("New tab in main opens a terminal in the default checkout", async ({ page }) => {
   const { herdr, projectRow, main, stop } = await startMenus(page);
   try {
     const nativeTabs = () => (herdrTabs(herdr) as { tabs: string[] }[]).flatMap((workspace) => workspace.tabs).sort();
@@ -271,11 +271,9 @@ test("New tab in main opens a draft in the default checkout and its terminal sta
     const menu = await openMenu(page, projectRow, "repo actions");
     await menu.locator('[data-menu-item="new_tab_primary"]').click();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
-    await expect(liveTabs).toHaveCount(1);
-    expect(nativeTabs()).toEqual(before);
+    await expect(liveTabs).toHaveCount(2);
     await expect(main.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
-    const started = await startDraftTerminal(page);
+    const started = await waitForTerminal(page);
     await expect(liveTabs).toHaveCount(2, { timeout: 20_000 });
     await expect.poll(nativeTabs).toEqual([...before, started].sort());
     await expect(main.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");

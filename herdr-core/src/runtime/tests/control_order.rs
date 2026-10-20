@@ -69,6 +69,7 @@ fn create_action() -> RemoteControlAction {
         cwd: "/private/tmp/hide-control-order-create".to_owned(),
         label: "new".to_owned(),
         area_id: None,
+        group_id: None,
         admission_id: None,
     }
 }

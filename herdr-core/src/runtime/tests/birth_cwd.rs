@@ -182,6 +182,7 @@ fn acknowledge_created_tab(runtime: &mut Runtime, checkout_path: &str, tab_id: &
             cwd: checkout_path.to_owned(),
             label: "new".to_owned(),
             area_id: None,
+            group_id: None,
             admission_id: None,
         },
         Ok(RemoteControlOutcome::Acknowledged {
