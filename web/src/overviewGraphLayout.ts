@@ -3,7 +3,7 @@ import { placeCompoundWithin, type CompoundGroup, type CompoundPlacement, type C
 import type { OverviewGraphModel } from "./overviewGraphModel";
 import { useShellStore } from "./store";
 
-type Dimensions = { rootWidth: number; rootHeight: number; childWidth: number; childHeight: number; groupWidth: number; groupHeight: number; spacing: CompoundSpacing };
+type Dimensions = { rootWidth: number; rootHeight: number; childWidth: number; childHeight: number; compactWidth: number; compactHeight: number; groupWidth: number; groupHeight: number; compactGroupWidth: number; compactGroupHeight: number; spacing: CompoundSpacing };
 export type GraphLayout = { key: string; phase: "loading" | "ready" | "failed"; placement: CompoundPlacement | null; size: Dimensions | null };
 
 /** Geometry comes from the same numeric authority as the rest of Overview. */
@@ -18,7 +18,9 @@ function dimensions(element: HTMLElement, scale: number): Dimensions {
   return {
     rootWidth: read("root-width") * scale, rootHeight: read("root-height") * scale,
     childWidth: read("child-width") * scale, childHeight: read("child-height") * scale,
-    groupWidth: read("group-width"), groupHeight: read("group-height"),
+    compactWidth: read("compact-width") * scale, compactHeight: read("compact-height") * scale,
+    groupWidth: read("group-width") * scale, groupHeight: read("group-height") * scale,
+    compactGroupWidth: read("compact-group-width") * scale, compactGroupHeight: read("compact-group-height") * scale,
     spacing: { betweenLayers: gap, betweenNodes: gap, padding: read("padding"), header: read("header"), groups: read("project-gap") },
   };
 }
@@ -51,17 +53,17 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
       const size = dimensions(host.current, scale);
       const input = latest.current;
       const groups: CompoundGroup[] = input.projects.map((group) => {
-        const members = new Set(group.agents.map((row) => row.id));
+        const members = new Set(group.shown.map((row) => row.id));
         return {
-          id: group.id, width: size.groupWidth, height: size.groupHeight,
-          children: group.expanded ? group.agents.map((row) => {
-            const root = !input.lineage.some((edge) => edge.to === row.id);
-            return { id: row.id, width: root ? size.rootWidth : size.childWidth, height: root ? size.rootHeight : size.childHeight };
-          }) : [],
+          id: group.id, width: group.expanded ? size.groupWidth : size.compactGroupWidth, height: group.expanded ? size.groupHeight : size.compactGroupHeight,
+          children: [...group.shown.map((row) => {
+            const root = input.roots.has(row.id);
+            return { id: row.id, width: !group.expanded ? size.compactWidth : root ? size.rootWidth : size.childWidth, height: !group.expanded ? size.compactHeight : root ? size.rootHeight : size.childHeight };
+          }), ...(group.revealSlot ? [{ id: group.revealSlot, width: size.compactWidth, height: size.compactHeight }] : [])],
           edges: input.lineage.filter((edge) => members.has(edge.from) && members.has(edge.to)),
         };
       });
-      const placement = await placeCompoundWithin(groups, { ...size.spacing, header: input.singleProject ? 0 : size.spacing.header }, controller.signal);
+      const placement = await placeCompoundWithin(groups, size.spacing, controller.signal);
       if (!controller.signal.aborted) setLayout({ key, phase: "ready", placement, size });
     }
     void run().catch((error: unknown) => {

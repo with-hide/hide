@@ -1,6 +1,19 @@
 import type { Catalogs } from "../schema";
 
 const words = {
+  "overviewGraph.dragProject": ["Drag {{project}} group", "{{project}} 묶음 끌기", "{{project}} のグループを移動", "拖动 {{project}} 分组"],
+  "overviewGraph.dragSession": ["Drag {{session}}", "{{session}} 끌기", "{{session}} を移動", "拖动 {{session}}"],
+  "overviewGraph.moreSessions": ["{{count}} more sessions", "나머지 {{count}}개", "ほか {{count}} 件", "其余 {{count}} 个"],
+  "overviewGraph.currentPane": ["Current pane", "현재 pane", "現在の pane", "当前 pane"],
+  "overviewGraph.projects": ["Projects", "프로젝트", "プロジェクト", "项目"],
+  "overviewGraph.findProject": ["Find project", "프로젝트 검색", "プロジェクトを検索", "搜索项目"],
+  "overviewGraph.locateProject": ["Locate {{project}}", "{{project}} 위치로 이동", "{{project}} に移動", "定位 {{project}}"],
+  "overviewGraph.findSession": ["Find session", "세션 검색", "セッションを検索", "搜索会话"],
+  "overviewGraph.allProjects": ["All projects", "전체 프로젝트", "すべてのプロジェクト", "全部项目"],
+  "overviewGraph.motion": ["Flow motion", "연결 흐름", "接続の動き", "连接动画"],
+  "overviewGraph.replay": ["Replay flow", "흐름 재생", "流れを再生", "重播流向"],
+  "overviewGraph.resetLayout": ["Reset layout", "배치 초기화", "配置をリセット", "重置布局"],
+  "overviewGraph.delegations": ["{{count}} delegations", "위임 {{count}}건", "委任 {{count}} 件", "{{count}} 次委派"],
   "overviewGraph.filter": ["Session filter", "세션 필터", "セッション絞り込み", "会话筛选"],
   "overviewGraph.focus.all": ["All", "전체", "すべて", "全部"],
   "overviewGraph.focus.turn": ["My turn", "내 차례", "自分の番", "轮到我"],
