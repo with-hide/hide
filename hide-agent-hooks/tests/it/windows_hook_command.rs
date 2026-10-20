@@ -513,6 +513,75 @@ fn agys_cmd_tool_command_leaves_the_call_to_agy_when_the_helper_is_gone_or_fails
     }
 }
 
+// Temporary boundary instrumentation for the original Windows CI failure.
+// It changes neither stdin nor the capture's deadline or byte bound.
+fn traced_agy_shell(command: &str, case: &str) -> Command {
+    use base64::Engine;
+
+    let (prefix, encoded) = command.split_once("-EncodedCommand ").unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .unwrap();
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    let script = String::from_utf16(&units).unwrap();
+    let marker = |phase: &str| {
+        format!(
+            "[Console]::Error.WriteLine('[DEBUG-whpb] case={case} phase={phase} ticks=' + [DateTime]::UtcNow.Ticks)"
+        )
+    };
+    let boundary = " -PathType Leaf) { ";
+    assert!(script.contains(boundary), "the installed SessionStart form");
+    let script = script.replace(boundary, &format!("{boundary}{}; ", marker("helper-call")));
+    let script = format!(
+        "{}; {}; {}; }}; {}",
+        marker("ps-enter"),
+        script.strip_suffix(" }").unwrap(),
+        marker("helper-return"),
+        marker("ps-exit"),
+    );
+    let encoded = base64::engine::general_purpose::STANDARD.encode(
+        script
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    agy_shell(&format!(
+        "echo [DEBUG-whpb] case={case} phase=cmd-enter time=%time% 1>&2 & {prefix}-EncodedCommand {encoded}"
+    ))
+}
+
+fn traced_capture(
+    child: &mut hide_platform::process::OwnedChild,
+) -> hide_platform::process::CapturedOutput {
+    let started = std::time::Instant::now();
+    eprintln!(
+        "[DEBUG-whpb] phase=spawn-return pid={} unix_ms={}",
+        child.id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    );
+    let output = child.capture_until(started + std::time::Duration::from_secs(15), 64 * 1024);
+    eprintln!(
+        "[DEBUG-whpb] phase=capture-return pid={} elapsed_ms={}",
+        child.id(),
+        started.elapsed().as_millis(),
+    );
+    let output = output.unwrap();
+    eprintln!(
+        "[DEBUG-whpb] phase=captured pid={} status={} stdout_bytes={} stderr={}",
+        child.id(),
+        output.status,
+        output.stdout.len(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    output
+}
+
 #[test]
 fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
     use hide_agent_hooks::guidance::{self, GuidanceAgent};
@@ -537,7 +606,7 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
     let command = document["hide"]["SessionStart"][0]["command"]
         .as_str()
         .unwrap();
-    let mut shell = agy_shell(command);
+    let mut shell = traced_agy_shell(command, "session");
     shell
         .env(hide_platform::host::HOME_VARIABLE, &home)
         .env_remove("HERDR_PANE_ID")
@@ -551,12 +620,7 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
         .unwrap()
         .write_all(br#"{"conversationId":"ade08778-fcdd-4e96-88ba-fd1c4e594fa2"}"#)
         .unwrap();
-    let output = child
-        .capture_until(
-            std::time::Instant::now() + std::time::Duration::from_secs(15),
-            64 * 1024,
-        )
-        .unwrap();
+    let output = traced_capture(&mut child);
     assert!(output.status.success(), "{output:?}");
     let answer: Value = serde_json::from_slice(&output.stdout)
         .unwrap_or_else(|error| panic!("{error}: {output:?}"));
@@ -595,22 +659,18 @@ fn agys_windows_guard_preserves_korean_and_non_bmp_hook_answers() {
     guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
     let document: Value =
         serde_json::from_str(&std::fs::read_to_string(agent.config_path(&home)).unwrap()).unwrap();
-    let mut shell = agy_shell(
+    let mut shell = traced_agy_shell(
         document["hide"]["SessionStart"][0]["command"]
             .as_str()
             .unwrap(),
+        "guard",
     );
     shell
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = hide_platform::process::OwnedChild::spawn(&mut shell)
-        .unwrap()
-        .capture_until(
-            std::time::Instant::now() + std::time::Duration::from_secs(15),
-            64 * 1024,
-        )
-        .unwrap();
+    let mut child = hide_platform::process::OwnedChild::spawn(&mut shell).unwrap();
+    let output = traced_capture(&mut child);
     assert!(output.status.success(), "{output:?}");
     let received: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(

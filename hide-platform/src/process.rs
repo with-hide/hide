@@ -448,6 +448,13 @@ impl OwnedChild {
             let mut tree_ended = false;
             loop {
                 if Instant::now() >= deadline {
+                    #[cfg(windows)]
+                    eprintln!(
+                        "[DEBUG-whpb] phase=capture-deadline pid={} leader_exited={:?} tree_ended={:?}",
+                        self.child.id(),
+                        sys::has_exited(&self.child),
+                        sys::tree_ended(&self.child, &self.tie),
+                    );
                     return Err(CaptureFailureKind::Deadline);
                 }
                 if !exited && sys::has_exited(&self.child).map_err(CaptureFailureKind::Io)? {
@@ -2601,6 +2608,11 @@ mod sys {
         };
         command.creation_flags(CREATE_NEW_PROCESS_GROUP | windowless | CREATE_SUSPENDED);
         let mut child = command.spawn()?;
+        eprintln!(
+            "[DEBUG-whpb] phase=created pid={} windowless={}",
+            child.id(),
+            windowless != 0,
+        );
         // SAFETY: both handles are open; the child's is owned by `child`.
         let assigned = unsafe { AssignProcessToJobObject(job.0, child.as_raw_handle()) };
         if assigned == 0 {
@@ -2637,6 +2649,7 @@ mod sys {
             return Err(error);
         }
         let tie = Tie(job, true);
+        eprintln!("[DEBUG-whpb] phase=resumed pid={}", child.id());
         if let Some(deadline) = deadline.filter(|deadline| Instant::now() >= *deadline) {
             let owned = OwnedChild {
                 child,
@@ -2817,9 +2830,14 @@ mod sys {
                 }
                 let thread = Owned(thread);
                 // SAFETY: the thread handle is open; `u32::MAX` is the failure.
-                if unsafe { ResumeThread(thread.0) } == u32::MAX {
+                let previous_suspend_count = unsafe { ResumeThread(thread.0) };
+                if previous_suspend_count == u32::MAX {
                     return Err(io::Error::last_os_error());
                 }
+                eprintln!(
+                    "[DEBUG-whpb] phase=resume-thread pid={pid} tid={} previous_suspend_count={previous_suspend_count}",
+                    entry.th32ThreadID,
+                );
                 return Ok(());
             }
             // SAFETY: as for the first call.

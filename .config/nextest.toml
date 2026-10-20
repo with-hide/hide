@@ -27,6 +27,11 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 [profile.ci.junit]
 path = "junit.xml"
 
+# Temporary boundary observations, including a passing first attempt.
+[[profile.ci.overrides]]
+filter = 'binary_id(hide-agent-hooks::it) & test(/^windows_hook_command::agys_windows_(session|guard)_/)'
+success-output = "immediate"
+
 # The remote mailbox test drives two Herdr servers over SSH. It took 38 to
 # 63 s on the macOS runner in 19 green runs, and 36.7 s on the Linux runner
 # once the fixture's SSH server set TCP_NODELAY (one run, so the guard is sized
