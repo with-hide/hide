@@ -2760,6 +2760,8 @@ An unanswered session or unresolved checkout catalog preserves groups and drafts
 A node's tabs reach its areas when its session arrives (`reconcile_node_agent_topology`, through the same `reconcile_agent_topology`), the tab of the area in use is asked of the node's Herdr (`focus_node_tab`), the node's own focus moves the area in use (`sync_agent_selection`), and the panes of every area's tab attach as the front tab's do (`node_shown_agent_tabs`).
 New Agent tab requests use `agent_group.new_tab` with `terminal: true` and reuse the existing local or device tab-control queue, without entering the agent-start operation or waiting for shell integration.
 The control captures the selected group and area before admission, and its creation answer places the native tab there even if the operator changes groups meanwhile.
+When the authoritative catalog arrives before the answer, that answer reconciles its captured placement against the full known checkout topology before the visible tab can choose a group from membership.
+An unanswered catalog or a tab not yet listed keeps the existing pending placement; a newer group choice, including an empty group that sends no Herdr focus control, keeps the screen while the created tab joins its original group.
 Local requests retain the existing bounded input holder until the new pane can receive keys.
 Device terminal intents reserve the same display and pending-placement capacity before sending, with distinct admission identities and the existing request replay guard.
 Restore and replacement effects share that pending budget, and an unreserved fork or legacy result cannot consume capacity promised to a pending terminal.

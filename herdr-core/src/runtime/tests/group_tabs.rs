@@ -381,7 +381,11 @@ fn created_terminal_group(opens_owner: bool, catalog_first: bool, choose_another
             admission_id: None,
         }
     };
-    let created = if opens_owner { "w-new:t1" } else { "w-order:t4" };
+    let created = if opens_owner {
+        "w-new:t1"
+    } else {
+        "w-order:t4"
+    };
     let all = [TABS[0], TABS[1], TABS[2], created];
     let mut catalog = if opens_owner {
         split_checkout_payload(
