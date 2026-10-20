@@ -323,7 +323,8 @@ They never enter a commit; write them under `agents/runs/<slug>/`, which is igno
 ## Releases
 
 A manual [unsigned release candidate](docs/BUILD.md#unsigned-release-candidates) can prepare verified public Linux and Windows packages without creating a tag or publishing anything.
-It also runs the full existing agent journey on that source; the candidate receipt is produced only after both gates pass.
+It also runs the existing agent journey on that source; the candidate receipt is produced only after packaging and the selected journey pass.
+The optional `live_agents=false` defers signed-in provider calls while preserving stand-in and fake-model checks on all three systems, and records those provider checks as not measured for release approval.
 This preparation workflow leaves the active tag-triggered publisher and the release procedure here unchanged.
 
 A release is a tag on a commit that is already on `main`, never on a branch.
