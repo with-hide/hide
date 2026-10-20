@@ -355,14 +355,13 @@ fn agent(path: &Path, status: &str, seq: u64) -> ObservedAgent {
 }
 
 fn observe(worker: &mut LabelWorker, agent: &ObservedAgent) {
+    observe_at(worker, agent, Instant::now());
+}
+
+fn observe_at(worker: &mut LabelWorker, agent: &ObservedAgent, now: Instant) {
     let live = HashSet::from([agent.pane_id.clone()]);
-    worker.observe(
-        std::slice::from_ref(agent),
-        Some(&live),
-        Instant::now(),
-        1_000,
-    );
-    worker.tick(Instant::now());
+    worker.observe(std::slice::from_ref(agent), Some(&live), now, 1_000);
+    worker.tick(now);
 }
 
 fn unix_now_ms() -> u64 {
@@ -398,12 +397,21 @@ fn drain_until(
     woken: &Receiver<()>,
     ready: impl Fn(&LabelWorker) -> bool,
 ) {
+    drain_until_with_clock(worker, woken, Instant::now, ready);
+}
+
+fn drain_until_with_clock(
+    worker: &mut LabelWorker,
+    woken: &Receiver<()>,
+    clock: impl Fn() -> Instant,
+    ready: impl Fn(&LabelWorker) -> bool,
+) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !ready(worker) {
         let left = deadline.saturating_duration_since(Instant::now());
         assert!(!left.is_zero(), "the expected worker result did not arrive");
         let _ = woken.recv_timeout(left.min(Duration::from_millis(200)));
-        worker.drain(Instant::now(), unix_now_ms());
+        worker.drain(clock(), unix_now_ms());
     }
 }
 
@@ -2029,10 +2037,11 @@ fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
     harness.start_delay = Duration::from_secs(15);
     let path = harness.session("a", "native-a", &[("user", "첫 요청")]);
     harness.backend.begin("첫 요청의 실제 작업");
-    let (mut worker, woken, source) = harness.worker(harness.store());
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    let first_at = Instant::now();
     let first = agent(&path, "working", 5);
-    observe(&mut worker, &first);
-    settle(&mut worker, &woken);
+    observe_at(&mut worker, &first, first_at);
+    settle_with_clock(&mut worker, &woken, || first_at);
     assert_eq!(
         shown(&worker, &first).unwrap().progress.as_deref(),
         Some("첫 요청의 실제 작업 진행")
@@ -2045,11 +2054,20 @@ fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
     );
     harness.backend.begin("둘째 요청의 실제 작업");
     harness.backend.hold();
+    let second_at = first_at + Duration::from_secs(1);
     let second = agent(&path, "working", 6);
-    observe(&mut worker, &second);
-    settle(&mut worker, &woken);
-    worker.tick(Instant::now() + Duration::from_secs(20));
-    drain_until(&mut worker, &woken, |_| harness.backend.calls() == 2);
+    observe_at(&mut worker, &second, second_at);
+    settle_with_clock(&mut worker, &woken, || second_at);
+    let second_due = second_at + harness.start_delay;
+    worker.tick(second_due);
+    // The tick also starts a periodic read. Finish that second-turn read
+    // before replacing its file, while its analysis remains held.
+    drain_until_with_clock(
+        &mut worker,
+        &woken,
+        || second_due,
+        |worker| harness.backend.calls() == 2 && worker.reader_idle(),
+    );
 
     harness.session(
         "a",
@@ -2061,18 +2079,28 @@ fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
         ],
     );
     harness.backend.begin("셋째 요청의 실제 작업");
+    let third_at = second_due + Duration::from_secs(1);
     let third = agent(&path, "working", 7);
-    observe(&mut worker, &third);
-    drain_until(&mut worker, &woken, |worker| {
-        source.completed.load(Ordering::SeqCst) >= 3 && worker.reader_idle()
-    });
+    observe_at(&mut worker, &third, third_at);
+    drain_until_with_clock(
+        &mut worker,
+        &woken,
+        || third_at,
+        |worker| {
+            worker.reader_idle()
+                && shown_facts(worker, &third)
+                    .and_then(|facts| facts.operator_request)
+                    .is_some_and(|request| request.text == "셋째 요청")
+        },
+    );
     assert_eq!(shown(&worker, &third).unwrap().progress, None);
 
     harness.backend.release();
-    settle(&mut worker, &woken);
+    settle_with_clock(&mut worker, &woken, || third_at);
     assert_eq!(shown(&worker, &third).unwrap().progress, None);
-    worker.tick(Instant::now() + Duration::from_secs(20));
-    settle(&mut worker, &woken);
+    let third_due = third_at + harness.start_delay;
+    worker.tick(third_due);
+    settle_with_clock(&mut worker, &woken, || third_due);
     assert_eq!(
         shown(&worker, &third).unwrap().progress.as_deref(),
         Some("셋째 요청의 실제 작업 진행")
