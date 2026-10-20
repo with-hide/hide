@@ -418,7 +418,8 @@ The organization runs 20 jobs at once and five of them on macOS, so a pull reque
 
 A change to `herdr-core` or `hided` alone, outside `hided/build.rs` and `hided/src/cli.rs`, therefore starts one macOS lane, `desktop e2e`, as two shard jobs.
 What only macOS shows for such a change outside the app's suite (the OS contract's macOS leg, the web `@platform` tests and the remote mailbox lane on macOS) is found by the next nightly, which opens a `nightly-failure` issue when it fails; the cost is that delay.
-Until issue #1288 a web shell or crate change left `desktop e2e` out, and a desktop spec that asserted what the change did failed first on main's full run, where a red run stops every merge but the fix: #1106 (the session record, `session-work-ledger.spec.ts`) and #1147 (the file tree a lane close keeps, `right-lane.spec.ts`) kept main red 92 and 103 minutes on 2026-10-15.
+Until issue #1288 a web shell or crate change left `desktop e2e` out, and a desktop spec that asserted what the change did failed first on main's full run: #1106 (the session record, `session-work-ledger.spec.ts`) and #1147 (the file tree a lane close keeps, `right-lane.spec.ts`) kept main red 92 and 103 minutes on 2026-10-15.
+Such macOS failures still stop unrelated merges under [the main failure policy](../CONTRIBUTING.md#when-mains-push-run-fails); its development exception is limited to existing Windows-only failures.
 Replaying the 132 pull requests merged from 2026-10-14 to 2026-10-17 through the rule adds the 22-minute job (the median of 49 macOS runs on 2026-10-16, before the suite was split into two shards) to 48 of them, so 121 of the 132 run it; a missed desktop spec costs every pull request waiting on main, an extra job only the macOS queue.
 The desktop `@platform` tests run on Windows in a pull request (`windows-desktop`, about six minutes, on a Windows runner rather than a macOS one) and on Linux only in the nightly.
 
