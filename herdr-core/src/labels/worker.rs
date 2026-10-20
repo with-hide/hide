@@ -42,7 +42,7 @@ use super::facts::{InputView, LogTarget, PullRequestTimes, ReadFacts};
 use super::generator::{GeneratorLock, LockPlace};
 use super::input::{OperatorInput, Submit};
 use super::overlay::LabelOverlay;
-use super::record::{RecordBinding, RecordConnection};
+use super::record::{MetadataWrite, RecordBinding, RecordConnection};
 use super::store::{LabelStore, PaneRecord};
 use crate::links::ledger::{
     LedgerAnswer, LedgerCall, LedgerUpdate, RecordedRequest, SessionIdentity, SessionMetadata,
@@ -87,6 +87,8 @@ const READ_STALE: &str = "session_read_stale";
 /// The most sighted pull requests waiting between two takes; a read that
 /// finds more keeps the newest.
 const SIGHTED_LIMIT: usize = 32;
+/// Native-proven short records waiting for the existing ledger writer.
+const METADATA_WRITE_LIMIT: usize = 512;
 /// The most Memory receipts waiting between two takes; a hook writes at most
 /// one a prompt, so more means the core stopped taking them.
 const RECEIPT_LIMIT: usize = 64;
@@ -212,6 +214,10 @@ enum WorkerResult {
         result: Box<Result<LabelTranscript, ReadFailure>>,
     },
     Analysis(Box<AnalysisOutcome>),
+    Metadata {
+        write: Box<MetadataWrite>,
+        result: Result<SessionMetadata, String>,
+    },
 }
 
 /// What an analysis was asked under, carried back with its answer.
@@ -268,7 +274,6 @@ struct ReadJob {
     discover: bool,
     metadata: Option<(String, SessionMetadata)>,
     import_legacy: bool,
-    persist_metadata: Option<(String, SessionMetadata, u64)>,
 }
 
 /// Whether a refused read says only that the session is not there yet. The
@@ -287,7 +292,6 @@ struct PaneState {
     record_connection: RecordConnection,
     metadata: Option<SessionMetadata>,
     metadata_saved: Option<SessionMetadata>,
-    metadata_pending: Option<(SessionMetadata, u64)>,
     metadata_loaded: bool,
     cwd: Option<String>,
     generation: u64,
@@ -348,6 +352,8 @@ pub(crate) struct LabelWorker {
     wake: Wake,
     read_in_flight: Option<String>,
     analysis_in_flight: Option<String>,
+    metadata_in_flight: bool,
+    pending_metadata: BTreeMap<SessionIdentity, MetadataWrite>,
     /// Panes owing an analysis while another runs, in arrival order.
     waiting: VecDeque<String>,
     next_generation: u64,
@@ -408,6 +414,8 @@ impl LabelWorker {
             wake,
             read_in_flight: None,
             analysis_in_flight: None,
+            metadata_in_flight: false,
+            pending_metadata: BTreeMap::new(),
             waiting: VecDeque::new(),
             next_generation: 0,
             dirty: false,
@@ -557,7 +565,6 @@ impl LabelWorker {
                                     && record.owner.is_some()))
                             .then(|| SessionMetadata::of_label(record)),
                             metadata_saved: None,
-                            metadata_pending: None,
                             metadata_loaded: false,
                             cwd: observed.cwd.clone(),
                             generation: self.next_generation,
@@ -601,7 +608,6 @@ impl LabelWorker {
                             pane.metadata = None;
                         }
                         pane.metadata_saved = None;
-                        pane.metadata_pending = None;
                         pane.metadata_loaded = false;
                         pane.reference_token = reference_token.clone();
                         pane.reference = observed.reference.clone();
@@ -653,7 +659,7 @@ impl LabelWorker {
             }
         }
         self.schedule(now);
-        self.persist();
+        self.persist(now);
         changed
     }
 
@@ -671,7 +677,7 @@ impl LabelWorker {
         }
         if changed {
             self.dirty = true;
-            self.persist();
+            self.persist(Instant::now());
         }
         changed
     }
@@ -813,7 +819,7 @@ impl LabelWorker {
             }
         }
         self.schedule(now);
-        self.persist();
+        self.persist(now);
         changed
     }
 
@@ -844,10 +850,45 @@ impl LabelWorker {
                     (now, now_unix_ms),
                 ),
                 WorkerResult::Analysis(outcome) => self.handle_analysis(*outcome, now),
+                WorkerResult::Metadata { write, result } => {
+                    self.metadata_in_flight = false;
+                    match result {
+                        Ok(_) => {
+                            if self
+                                .pending_metadata
+                                .get(&write.session)
+                                .is_some_and(|current| {
+                                    current.at_unix_ms == write.at_unix_ms
+                                        && current.metadata == write.metadata
+                                })
+                            {
+                                self.pending_metadata.remove(&write.session);
+                            }
+                            for (id, pane) in &mut self.panes {
+                                if self.records.get(id).is_some_and(|record| {
+                                    record.owner.as_deref() == Some(write.owner.as_str())
+                                        && record.proven_for(pane.reference_token.as_deref())
+                                        && pane.record_connection == RecordConnection::Confirmed
+                                }) {
+                                    pane.metadata_saved = Some(write.metadata.clone());
+                                }
+                            }
+                        }
+                        Err(code) => {
+                            if let Some(current) = self.pending_metadata.get_mut(&write.session) {
+                                current.due = now + UNAVAILABLE_RETRY;
+                            }
+                            crate::diagnostic!(
+                                json!({"component":"labels","kind":"record.write_failed","target":self.target,"code":code})
+                            );
+                        }
+                    }
+                    false
+                }
             };
         }
         self.schedule(now);
-        self.persist();
+        self.persist(now);
         changed
     }
 
@@ -925,6 +966,7 @@ impl LabelWorker {
     pub(crate) fn settled(&self) -> bool {
         self.read_in_flight.is_none()
             && self.analysis_in_flight.is_none()
+            && !self.metadata_in_flight
             && self.waiting.is_empty()
             && !self
                 .panes
@@ -975,9 +1017,8 @@ impl LabelWorker {
         }
     }
 
-    fn persist(&mut self) {
+    fn persist(&mut self, now: Instant) {
         if std::mem::take(&mut self.dirty) {
-            let has_ledger = self.ledger.lock().is_ok_and(|l| l.is_some());
             for (id, pane) in &mut self.panes {
                 let Some(record) = self
                     .records
@@ -1013,13 +1054,42 @@ impl LabelWorker {
                 }
                 metadata.created_prs.truncate(20);
                 pane.metadata = Some(metadata.clone());
-                if has_ledger
-                    && pane.metadata_loaded
-                    && pane.metadata_saved.as_ref() != Some(&metadata)
-                    && pane.metadata_pending.as_ref().map(|(value, _)| value) != Some(&metadata)
-                {
-                    pane.metadata_pending = Some((metadata, super::overlay::unix_milliseconds()));
-                    pane.needs_read = true;
+                if pane.metadata_saved.as_ref() != Some(&metadata) {
+                    let session = SessionIdentity {
+                        device_id: self
+                            .target
+                            .strip_prefix("device:")
+                            .unwrap_or(&self.target)
+                            .into(),
+                        agent: pane.agent.as_str().into(),
+                        session_id: record.native_session_id.clone().expect("checked above"),
+                    };
+                    if self
+                        .pending_metadata
+                        .get(&session)
+                        .is_some_and(|write| write.metadata == metadata)
+                    {
+                        continue;
+                    }
+                    if !self.pending_metadata.contains_key(&session)
+                        && self.pending_metadata.len() >= METADATA_WRITE_LIMIT
+                    {
+                        crate::diagnostic!(
+                            json!({"component":"labels","kind":"record.write_capacity","target":self.target,"limit":METADATA_WRITE_LIMIT})
+                        );
+                        continue;
+                    }
+                    self.pending_metadata.insert(
+                        session.clone(),
+                        MetadataWrite {
+                            session,
+                            owner: record.owner.clone().expect("proven record"),
+                            metadata,
+                            at_unix_ms: super::overlay::unix_milliseconds(),
+                            due: now,
+                            merge_history: !pane.metadata_loaded,
+                        },
+                    );
                 }
             }
             self.store.save_target(&self.target, &self.records);
@@ -1031,11 +1101,30 @@ impl LabelWorker {
             return;
         }
         self.schedule_read();
+        self.schedule_metadata(now);
         self.schedule_analysis(now);
     }
 
+    fn schedule_metadata(&mut self, now: Instant) {
+        if self.metadata_in_flight || self.read_in_flight.is_some() {
+            return;
+        }
+        let Some(write) = self
+            .pending_metadata
+            .values()
+            .find(|write| write.due <= now)
+        else {
+            return;
+        };
+        if !self.ledger.lock().is_ok_and(|ledger| ledger.is_some()) {
+            return;
+        }
+        self.metadata_in_flight = true;
+        self.reader.write(write.clone());
+    }
+
     fn schedule_read(&mut self) {
-        if self.read_in_flight.is_some() {
+        if self.read_in_flight.is_some() || self.metadata_in_flight {
             return;
         }
         let next = self
@@ -1097,10 +1186,6 @@ impl LabelWorker {
                     pane.metadata_loaded && record.proven_for(pane.reference_token.as_deref())
                 })
                 .and_then(|record| Some((record.owner.clone()?, pane.metadata.clone()?))),
-            persist_metadata: record.and_then(|record| {
-                let (metadata, at) = pane.metadata_pending.clone()?;
-                Some((record.owner.clone()?, metadata, at))
-            }),
         };
         self.read_in_flight = Some(id);
         self.reader.submit(job);
@@ -1207,7 +1292,6 @@ impl LabelWorker {
             pane.events_loaded = false;
             pane.next_analysis_at = None;
             pane.metadata_saved = None;
-            pane.metadata_pending = None;
             pane.metadata_loaded = false;
             self.waiting.retain(|id| id != pane_id);
         }
@@ -1225,9 +1309,6 @@ impl LabelWorker {
         pane.metadata_loaded = !metadata_failed;
         if let Some(written) = metadata.persisted {
             pane.metadata_saved = Some(written.clone());
-            if pane.metadata_pending.as_ref().map(|(value, _)| value) == Some(&written) {
-                pane.metadata_pending = None;
-            }
         }
         if let Some(code) = metadata.failure {
             crate::diagnostic!(
@@ -2385,8 +2466,13 @@ fn provider(kind: Option<&str>) -> Option<Agent> {
 
 /// The worker's one reader thread: reads run one at a time, in the order
 /// the worker hands them in, and each answer wakes the coordinator.
+enum ReaderJob {
+    Read(Box<ReadJob>),
+    Write(Box<MetadataWrite>),
+}
+
 struct Reader {
-    jobs: Option<Sender<ReadJob>>,
+    jobs: Option<Sender<ReaderJob>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -2420,11 +2506,34 @@ impl Reader {
             );
             legacy.truncate(512);
         }
-        let (jobs, receiver) = channel::<ReadJob>();
+        let (jobs, receiver) = channel::<ReaderJob>();
         let thread = std::thread::Builder::new()
             .name("herdr-core-labels-reader".to_owned())
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
+                    let job = match job {
+                        ReaderJob::Read(job) => *job,
+                        ReaderJob::Write(write) => {
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    let client = ledger
+                                        .lock()
+                                        .ok()
+                                        .and_then(|value| value.clone())
+                                        .ok_or("record_ledger_unavailable")?;
+                                    write.save(&client)
+                                }))
+                                .unwrap_or_else(|_| Err("reader_panicked".into()));
+                            if results
+                                .send(WorkerResult::Metadata { write, result })
+                                .is_err()
+                            {
+                                return;
+                            }
+                            wake();
+                            continue;
+                        }
+                    };
                     // The answer must arrive whatever happens here: a panic
                     // that escaped would leave this server's reads in flight
                     // forever.
@@ -2482,21 +2591,6 @@ impl Reader {
                             };
                             if client.ledger_started_at().is_none() {
                                 return Err("record_ledger_unavailable".into());
-                            }
-                            if let Some((owner, pending, at)) = &job.persist_metadata
-                                && *owner == transcript.confirmed.owner
-                            {
-                                let LedgerAnswer::Metadata(saved) =
-                                    client.call(LedgerCall::SaveMetadata {
-                                        session: session.clone(),
-                                        metadata: Box::new(pending.clone()),
-                                        at_unix_ms: *at,
-                                    })?
-                                else {
-                                    return Err("record_answer_mismatch".into());
-                                };
-                                written = Some(pending.clone());
-                                return Ok(saved);
                             }
                             if let Some((owner, saved)) = &job.metadata
                                 && *owner == transcript.confirmed.owner
@@ -2603,7 +2697,12 @@ impl Reader {
 
     fn submit(&self, job: ReadJob) {
         if let Some(jobs) = self.jobs.as_ref() {
-            let _ = jobs.send(job);
+            let _ = jobs.send(ReaderJob::Read(Box::new(job)));
+        }
+    }
+    fn write(&self, write: MetadataWrite) {
+        if let Some(jobs) = &self.jobs {
+            let _ = jobs.send(ReaderJob::Write(Box::new(write)));
         }
     }
 }

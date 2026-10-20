@@ -202,6 +202,121 @@ impl crate::links::worker::Sink for QuietLinks {
     }
 }
 
+/// B2/B18: closing the source pane cannot cancel its conversation's pending
+/// save while the native index is still catching up.
+#[test]
+fn closing_a_pane_before_its_metadata_is_indexed_keeps_the_pending_history() {
+    use crate::links::{
+        ledger::{LedgerAnswer, LedgerCall},
+        store::LinkStore,
+        worker::{LinkWorker, Paths},
+    };
+    let harness = Harness::new();
+    let store = harness.store();
+    let path = harness.session(
+        "a",
+        "native-a",
+        &[("user", "보관할 작업"), ("assistant", "끝")],
+    );
+    let blank_home = tempfile::tempdir().unwrap();
+    let db = harness.state.path().join("links.sqlite3");
+    let links = LinkWorker::spawn(
+        Paths {
+            store: db.clone(),
+            search: harness.state.path().join("search.sqlite3"),
+            local_device: LOCAL_TARGET.into(),
+        },
+        Arc::new(hide_node::Local::new(Some(blank_home.path().into()))),
+        QuietLinks,
+    )
+    .unwrap();
+    let client = links.client();
+    client.projects(Arc::default());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while client.ledger_started_at().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    harness
+        .backend
+        .answer("pane가 닫혀도 보관할 제목", "done", "보관할 진행 요약");
+    // Hold the writer attachment until after the analysis and source close.
+    // This orders the startup boundary without relying on thread scheduling.
+    let ledger = Arc::new(Mutex::new(None));
+    let (mut worker, wake) = harness.spawn_with_ledger(
+        store.clone(),
+        LOCAL_TARGET,
+        "local.sock",
+        ResumeSource::new(&harness, &path),
+        ledger.clone(),
+    );
+    let old = agent(&path, "idle", 1);
+    observe(&mut worker, &old);
+    settle(&mut worker, &wake);
+    assert_eq!(
+        projection(&worker, &old)
+            .record
+            .unwrap()
+            .metadata
+            .goal
+            .as_deref(),
+        Some("pane가 닫혀도 보관할 제목")
+    );
+    worker.observe(&[], Some(&HashSet::new()), Instant::now(), unix_now_ms());
+    assert!(!store.target(LOCAL_TARGET).contains_key(&old.pane_id));
+
+    *ledger.lock().unwrap() = Some(client.clone());
+    // The real index boundary arrives after the source pane is already gone.
+    let (mut index, _) = LinkStore::open(&db).unwrap();
+    index
+        .apply_answer(
+            LOCAL_TARGET,
+            &hide_session::links::ReadAnswer {
+                agent: hide_session::Agent::Claude,
+                path: path.display().to_string(),
+                checkpoint: None,
+                has_more: false,
+                rescanned: true,
+                error: None,
+                facts: hide_session::links::LinkFacts {
+                    session_id: Some("native-a".into()),
+                    cwd: Some("/fixture".into()),
+                    first_at_unix_ms: Some(unix_now_ms()),
+                    last_at_unix_ms: Some(unix_now_ms()),
+                    ..Default::default()
+                },
+            },
+            "fixture-native-index",
+        )
+        .unwrap();
+    drop(index);
+    let later = Instant::now() + Duration::from_secs(16);
+    worker.tick(later);
+    settle_with_clock(&mut worker, &wake, || later);
+    let LedgerAnswer::Metadata(Some(saved)) = client
+        .call(LedgerCall::Metadata(claude_session("native-a")))
+        .unwrap()
+    else {
+        panic!("the closed pane lost its pending conversation metadata")
+    };
+    assert_eq!(saved.goal.as_deref(), Some("pane가 닫혀도 보관할 제목"));
+    drop(worker);
+    let (mut resumed, wake) = harness.spawn_with_ledger(
+        store,
+        LOCAL_TARGET,
+        "local.sock",
+        ResumeSource::new(&harness, &path),
+        Arc::new(Mutex::new(Some(client))),
+    );
+    let mut new = old;
+    new.pane_id = "w2:p2".into();
+    new.reference = None;
+    observe(&mut resumed, &new);
+    settle(&mut resumed, &wake);
+    assert_eq!(projection(&resumed, &new).record.unwrap().metadata, saved);
+    assert_eq!(harness.backend.calls(), 1);
+}
+
 /// A real writer acknowledges an unindexed refusal, then stores the same
 /// unchanged display after the existing native index obtains the session.
 #[test]
@@ -254,7 +369,11 @@ fn unindexed_history_retries_and_survives_old_pane_removal_and_reopen() {
         Arc::new(Mutex::new(Some(client.clone()))),
     );
     resumed.set_summaries(false, Instant::now());
-    observe(&mut resumed, &old);
+    // A display-only resume does not enqueue Requests, which itself indexes
+    // a hook-confirmed session. Keep the fixture genuinely unindexed here.
+    let mut intended = old.clone();
+    intended.reference = None;
+    observe(&mut resumed, &intended);
     settle(&mut resumed, &wake);
     let reads_before = source.reads.load(Ordering::SeqCst);
     for _ in 0..20 {
@@ -266,6 +385,18 @@ fn unindexed_history_retries_and_survives_old_pane_removal_and_reopen() {
         "an unindexed save must wait for its bounded retry"
     );
     let identity = claude_session("native-a");
+    let indexed: u64 = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM sessions WHERE device=?1 AND agent='claude' AND id='native-a'",
+            [LOCAL_TARGET],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        indexed, 0,
+        "the fixture must not index via a live Requests update"
+    );
     let before_index = client.call(LedgerCall::Metadata(identity.clone())).unwrap();
     // Native title updates may already create a display row independently
     // of indexing. The rejected history save must not have stored its goal.

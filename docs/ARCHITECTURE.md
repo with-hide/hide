@@ -2325,7 +2325,11 @@ Nothing runs under the runtime mutex: conversation reads run on the worker's rea
   At most 512 panes of a device and 64 devices are kept, the newest first, and a save that changes no mark writes nothing (a pane's state change or a new fact of the conversation alone does not rewrite the file).
   One mark this build cannot read is dropped alone with a `store.device_marks_dropped` diagnostic, and a cap that drops marks writes `store.device_marks_capped`.
   A core move drops the section (`node_migration/reown.rs`).
-  An unchanged pane imports its bounded display metadata into the shared links ledger through the existing reader until the writer acknowledges a commit; unindexed and failed saves retain one pending value per pane and retry.
+  Native-proven display metadata waits for the shared links ledger in one pending value per device/provider/native session, at most 512 per label worker, independently of the source pane's lifetime or later conversation.
+  The existing reader commits one value at a time and acknowledges it only after the indexed-only ledger writer returns; a newer pending value survives an older acknowledgement, and unavailable or unindexed saves retry on the existing 15-second tick.
+  The pending set contains only bounded display fields and identity, never a path or conversation facts; it is not another persistent store and adds no worker or timer.
+  A first save whose history read failed merges existing analysis and PR history before writing while preserving the current native title and manual-title clear.
+  Capacity and write failures reach the existing diagnostic log, and native reads retain priority over waiting writes.
   Once imported, a restart resumes from it with no analysis request for an unchanged pane; a file that cannot be read starts empty and records a diagnostic, and nothing in it is shown until a reference proves it.
   The first run with no `labels.json` imports the retired plugin's `display-state.json` once, taking only entries it had proven an owner for.
 - **One generator per Herdr server.** A worker generates only while the node on the machine that runs its server holds that server's lock for it (`Call::LabelLock`, `hide_host::label_lock`): an exclusive `flock` on `<socket>.hide-label-generator.lock` beside Herdr's socket, which every daemon reaching that server shares whatever HOME it runs with, so cores on any machine that label one server meet at one file and the core keeps no lock file of its own.
