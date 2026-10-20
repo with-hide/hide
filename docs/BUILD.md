@@ -259,7 +259,7 @@ The source must already be an ancestor of main; a branch, fork, PR run, incomple
 The workflow revision is main's dispatch revision and may differ from the source revision it builds.
 
 The workflow reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks.
-It runs the existing `agent-journey.yml` on the same source, with stand-ins and fake-model lanes on all three systems.
+It runs the existing `agent-journey.yml` on the same source, with stand-ins on Linux and macOS, Windows form checks, and fake-model lanes on all three systems.
 With `live_agents=true`, it also requests signed-in lanes on all three systems and agy signed in on Linux only, under the journey's existing missing-key and quota policy.
 With `live_agents=false`, signed-in checks are **not measured**, as recorded in the receipt and workflow summary; package, stand-in and fake-model failures still block the receipt.
 The selection never changes an earlier failure into a pass, and a successful candidate does not establish that every provider answered.
