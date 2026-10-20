@@ -6,6 +6,8 @@ import { agentClosing } from "../close";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useShellStore } from "../store";
 import { branchChip, forkLabel, lineParts, lineTone, markTone, markWords, rowAccessibleName, rowDimmed, rowSentence, sidebarLine, treeLine } from "../agentRow";
+import { recordWords } from "../agentRow";
+import { AgentRecordTitle } from "./agent-record-title";
 import { RowLineText } from "./row-line-text";
 import { homeTurnLine, originLine } from "../hideAiOrigin";
 import { AgentForkMark } from "./fork-mark";
@@ -144,7 +146,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   const offline = unreachable ? t("agents.line.disconnected", { device: remote.label }) : null;
   const titleTone = agent.state.title_emphasized || (selected && agent.state.selection_emphasizes_title) ? "text-foreground" : "text-subtle-foreground";
   // The mark's state and word ride the row's hint, which the mark sits inside (B3).
-  const hint = [device ? `${agent.identity_label} · ${device}` : agent.identity_label, agentProductName(agent.agent_kind), offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
+  const hint = [device ? `${agent.identity_label} · ${device}` : agent.identity_label, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
   const staleness = ask ? undefined : agentPrStaleness;
   const folded = tree ? tree.open !== true : true;
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -206,9 +208,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
             {/* The row button's name already reads all of this out. */}
-            <span aria-hidden="true" className={cn("pointer-events-none min-w-0 flex-auto truncate", titleTone)} data-agent-title="true">
-              {agent.identity_label}
-            </span>
+            <AgentRecordTitle agent={agent} className={cn("pointer-events-none", titleTone)} />
             <AgentForkMark agent={agent} />
             {closing ? (
               <span aria-hidden="true" className="pointer-events-none shrink-0 text-caption text-muted-foreground" data-agent-closing="true">

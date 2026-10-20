@@ -147,6 +147,9 @@ mod tests {
             other => (other, "none"),
         };
         SidebarAgentSnapshot {
+            record_connection: None,
+            record_summary: None,
+            record_metadata: None,
             telemetry_stale: false,
             close_session: None,
             state: Default::default(),

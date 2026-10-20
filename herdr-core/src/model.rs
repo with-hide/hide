@@ -1213,6 +1213,13 @@ fn is_zero_u32(value: &u32) -> bool {
 /// rule 4).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SidebarAgentSnapshot {
+    /// Display provenance only; independent of hook health and GitHub reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_connection: Option<crate::labels::record::RecordConnection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_summary: Option<String>,
+    #[serde(skip_serializing)]
+    pub(crate) record_metadata: Option<crate::links::ledger::SessionMetadata>,
     /// A delayed telemetry read leaves the last confirmed read fingerprint intact.
     #[serde(skip)]
     pub(crate) telemetry_stale: bool,
@@ -2004,11 +2011,13 @@ fn sidebar_tab_naming<S: serde::Serializer>(
 ) -> Result<S::Ok, S::Error> {
     #[derive(Serialize)]
     struct SidebarName<'a> {
+        focused_pane_id: &'a str,
         manual_name: Option<&'a str>,
         number: u32,
         named_by_operator: bool,
     }
     SidebarName {
+        focused_pane_id: &naming.focused_pane_id,
         manual_name: naming.manual_name(),
         number: naming.number,
         named_by_operator: naming.operator_name().is_some(),

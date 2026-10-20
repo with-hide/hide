@@ -1082,6 +1082,18 @@ The core owns the lens, the view option and the slot (`herdr-core/src/runtime/de
 
 ### The sidebar's 태스크 list
 
+
+A session title restored from saved conversation history carries the core's connection state on the shared Project, Task and agent-tree rows, the Overview graph/list/preview and project home, live-agent popovers, archive confirmations, feedback recipient menus and PR list heads.
+While checking it is dimmed beside `연결 확인 중`; an unsuccessful or uncertain check keeps it dimmed beside `연결 미확인`, and the worker retries without a new message or a retry button.
+A confirmed binding drops both the dimming and those words.
+The same state names and dims its PR mark without changing GitHub read-stale status, keyboard access or the existing PR card/link actions.
+The connection words keep one line while the title gives up width.
+A pane head, tab or graph node places them below the title within its existing height or two-line title budget, so both retain width.
+Accessible row names include the connection state and saved summary.
+Saved questions, approvals and work state do not become the current row's status through this display restoration.
+A new hook reference removes the old title and PR display before its own read completes.
+
+
 Under the sidebar's head (search ⌘K, Overview ⇧⌘O), right above the list, a `프로젝트 | 태스크` switch picks the list (PRD sidebar-task-lens D-10, B1, B39): 프로젝트 is the projects tree as before, with its raised Needs You and Done, and 태스크 the device's tasks.
 ⌘B shows and hides the sidebar, and ⇧⌘B (`Switch Projects and Tasks`; Alt+Shift+B on Windows and Linux; in a browser tab ⌥⇧B on macOS, where Chrome keeps ⇧⌘B, and Ctrl+Alt+Shift+B on Windows and Linux, where it keeps Alt+Shift+B) turns the switch; with the sidebar hidden it shows the sidebar on the other list (B2).
 A window starts on 프로젝트, and then the last list and view option chosen stay, through a restart too (B3).

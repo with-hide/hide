@@ -17,7 +17,7 @@ import { relationState } from "./lineage";
 import { deviceConnected } from "./devices";
 import { remoteTargetOfPane } from "./remote";
 import { useRelationProgress } from "./PaneRelations";
-import { markWords } from "./agentRow";
+import { markWords, recordWords } from "./agentRow";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { paneChildren, type PaneChildren } from "./paneChildren";
 import { sessionOfAgentOn } from "./sessionWork";
@@ -195,7 +195,7 @@ export function PaneRecordButton({ paneId, title, product, actions, children, pl
   const session = agent ? sessionOfAgentOn(agent, localId) : null;
   if (!session) return <>{plain}</>;
   // The mark's words ride the button's hint and name, which the mark sits inside (status-marks B36).
-  const words = agent ? markWords(t, agent) : null;
+  const words = agent ? [markWords(t, agent), recordWords(t, agent), agent.record_summary].filter(Boolean).join(" · ") : null;
   return (
     // The button names the agent as the plain head does, then what a press
     // does; the hint reveals a title the head cuts short.

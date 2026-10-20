@@ -37,11 +37,12 @@ it.each([
   { front: "mini", device: "local", modal: false }, { front: "mini", device: "local", modal: true },
   { front: "mini", device: "mini", modal: false }, { front: "mini", device: "mini", modal: true },
   { front: "local", device: "local", modal: false, overflow: true },
-])("opens a $device session from Overview with $front in front (modal=$modal, overflow=$overflow)", async ({ front, device, modal, overflow = false }: { front: string; device: string; modal: boolean; overflow?: boolean }) => {
+  ...(["checking", "unconfirmed", "confirmed"] as const).map((connection) => ({ front: "local", device: "local", modal: false, connection })),
+])("opens a $device session from Overview with $front in front (modal=$modal, overflow=$overflow)", async ({ front, device, modal, overflow = false, connection }: { front: string; device: string; modal: boolean; overflow?: boolean; connection?: "checking" | "unconfirmed" | "confirmed" }) => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   initializeInterfaceI18n("en");
   const pane = device === "local" ? "p1" : "remote:mini:pane:p1";
-  const agent = legacyAgentRow({ id: pane, pane_id: pane, device_id: device, identity_label: "Current work", agent_kind: "claude", session_id: "native-current", group: "working", activity: "working" });
+  const agent = legacyAgentRow({ id: pane, pane_id: pane, device_id: device, identity_label: "Current work", record_connection: connection, record_summary: connection ? "Retained conversation summary" : undefined, agent_kind: "claude", session_id: "native-current", group: "working", activity: "working" });
   const checkout: Checkout = { id: "checkout", workspace_id: "project", label: "main", path: "/fixture/project", branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
   const workspace: Workspace = { id: "project", label: "Project", device_id: device, path: "/fixture/project", registered: true, temporary: false, pinned: false, checkouts: [checkout], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: [{ pane_id: pane, project_id: "project", checkout_id: checkout.id }] } };
   const project: BoardProject = { workspace, agents: [agent], device: device === "local" ? null : "Mini" };
@@ -62,6 +63,11 @@ it.each([
   const root = createRoot(container);
   try {
     await act(async () => root.render(<TooltipProvider><OverviewGraph projects={projects} deviceId={device} actions={actions} /></TooltipProvider>));
+    if (connection) {
+      const row = container.querySelector("[data-graph-session-list] > button")!;
+      expect(row.getAttribute("aria-label")).toContain("Retained conversation summary");
+      expect(row.querySelector("[data-record-connection]")?.getAttribute("data-record-connection") ?? null).toBe(connection === "confirmed" ? null : connection);
+    }
     // B4/D09: a matching confirmed entry highlights without opening a panel.
     expect(container.querySelector("[data-graph-preview]")).toBeNull();
     expect(container.querySelector("[data-graph-session-list] > button")?.getAttribute("aria-pressed")).toBe(String(!overflow && front === device));
@@ -82,6 +88,7 @@ it.each([
       return;
     }
     await act(async () => container.querySelector<HTMLButtonElement>("[data-graph-session-list] button")!.click());
+    if (connection) expect(container.querySelector("[data-graph-preview] [data-record-connection]")?.getAttribute("data-record-connection") ?? null).toBe(connection === "confirmed" ? null : connection);
     const open = [...container.querySelectorAll<HTMLButtonElement>("[data-graph-preview] button")].find((button) => button.textContent === "Open session")!;
     expect(open).toBeDefined();
     await act(async () => open.click());

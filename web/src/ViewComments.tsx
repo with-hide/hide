@@ -12,10 +12,11 @@ import { agentProductName } from "./agentAdapters";
 import { noteShellLayer } from "./browserViews";
 import { agentMarkOf } from "./agentLogos";
 import { useAgentLogosShown } from "./agentLogoMode";
-import { markTone } from "./agentRow";
+import { markTone, rowAccessibleName } from "./agentRow";
 import { Button } from "./components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
 import { Hint } from "./components/ui/tooltip";
+import { AgentRecordTitle } from "./components/agent-record-title";
 import { StatusMark } from "./components/status-mark";
 import { useInterfaceTranslation } from "./i18n/client";
 import { allAgents } from "./paneAgents";
@@ -510,7 +511,7 @@ function AgentLine({ agent, logos }: { agent: AgentRow; logos: boolean }) {
     <>
       <StatusMark mark={agent.mark} className={markTone(agent)} />
       {logos && mark?.logo ? <img src={mark.logo} alt="" aria-hidden="true" className="size-(--size-icon-sm) shrink-0 rounded-xs object-contain" /> : null}
-      <span className="min-w-0 flex-1 truncate">{agent.identity_label}</span>
+      <AgentRecordTitle agent={agent} />
     </>
   );
 }
@@ -626,7 +627,7 @@ function SendButton({ group, display, workspace, actions, again = false }: { gro
           <DropdownMenuLabel>{recipient ? t("feedback.menu.sendTo") : t("feedback.sendChoose", { count })}</DropdownMenuLabel>
         )}
         {(recipient ? others : agents).map((agent) => (
-          <DropdownMenuItem key={agent.pane_id} data-view-feedback-to={agent.pane_id} onSelect={() => go({ kind: "pane", pane_id: agent.pane_id }, null)}>
+          <DropdownMenuItem key={agent.pane_id} aria-label={rowAccessibleName(t, agent, null)} data-view-feedback-to={agent.pane_id} onSelect={() => go({ kind: "pane", pane_id: agent.pane_id }, null)}>
             <AgentLine agent={agent} logos={logos} />
           </DropdownMenuItem>
         ))}

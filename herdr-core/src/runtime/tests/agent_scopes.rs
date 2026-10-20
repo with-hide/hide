@@ -219,6 +219,7 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
         closing_issues: vec![],
         live: true,
         duty: true,
+        provisional: false,
         created: true,
         settled_at_unix_ms: None,
     };
@@ -260,6 +261,39 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
         None,
         "a conversation in the primary checkout has no bar"
     );
+    let row = &mut runtime.snapshot.navigator.agents[1];
+    let mut provisional = row.request.as_ref().unwrap().pull_requests[0].clone();
+    provisional.number = 8;
+    provisional.url = "https://github.com/acme/ide/pull/8".into();
+    provisional.badge = crate::model::PullRequestBadge::Open;
+    provisional.provisional = true;
+    provisional.duty = false;
+    provisional.created = false;
+    row.request
+        .as_mut()
+        .unwrap()
+        .pull_requests
+        .push(provisional);
+    row.state.pr = crate::agent_state::sessions::own_prs(row);
+    assert_eq!(
+        row.state.pr.as_ref().unwrap().count,
+        2,
+        "history is displayed"
+    );
+    runtime.refresh_agent_scopes();
+    let card = runtime.snapshot.navigator.workspaces[0]
+        .agent_scope
+        .tasks
+        .cards
+        .iter()
+        .find(|c| c.root == "merged")
+        .unwrap();
+    assert_eq!(
+        card.stage,
+        Some(4),
+        "history cannot change current task progress"
+    );
+    assert_eq!(card.state, TaskState::Cleanup);
     runtime.snapshot.navigator.workspaces[0].checkouts[1].exists = false;
     assert!(
         runtime.refresh_agent_scopes(),

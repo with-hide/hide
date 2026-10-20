@@ -2208,6 +2208,23 @@ Two terminal facts stay core-routed on purpose: the PTY size, because which scre
 
 ### Agent labels in the core
 
+
+The current pane binding and conversation display record are separate (`labels/record.rs`).
+The links ledger stores bounded title, goal, summary, analyzed-turn hashes and PR sightings under its existing device/provider/native-ID key; its single writer, schema migration, deletion and retention remain the owners.
+`LedgerCall::Metadata` is a local, bounded query through the existing mailbox, with a one-second response deadline, performed only by the labels reader off the coordinator and Runtime lock.
+An already read owner reuses its in-memory metadata, and an unchanged display is not enqueued again.
+Legacy compatibility candidates are capped at 512 short records and twenty PRs per record, contain no paths or raw facts, and are imported only after an exact native owner match.
+A metadata write requires an indexed session so it cannot create an orphan outside existing retention.
+
+When Herdr reports no session reference, that same reader may ask `pane.process_info` for the exact pane, with a one-second deadline and the shared wire decoder.
+It accepts only the adapter's executable and explicit resume selector within 64 arguments and 8 KiB, refusing forks, conflicting candidates and unbounded input.
+The native owner proves the historical record, not the current process conversation; an argv-only locator remains unconfirmed and never feeds analysis, current turn facts or control.
+A hook reference takes priority immediately and advances the generation before reading; a successful current native read confirms that binding.
+The core carries the display connection state into shared rows, and UI controls continue to use the existing current-pane authority.
+Failures retain dimmed display history and retry on the existing worker at fifteen seconds, without another thread or retry queue.
+Unreadable and unknown-version labels files disable that instance's file writes while runtime observation continues, preserving their original bytes.
+
+
 What each Claude Code, Codex or OpenCode pane is doing (the session's goal, one line for its turn, and how the turn ended) is made by the core, not by a Herdr plugin and not through pane tokens (PRD labels-in-hided, overview-request-view D-08).
 The code is `herdr-core/src/labels/`.
 Each session-sync coordinator, one per Herdr server (this Mac's and each connected device's), owns a `LabelWorker` it feeds from the agent state it already follows; the core owns one `LabelAnalyzer` for all of them and one `LabelStore`.
@@ -2308,7 +2325,13 @@ Nothing runs under the runtime mutex: conversation reads run on the worker's rea
   At most 512 panes of a device and 64 devices are kept, the newest first, and a save that changes no mark writes nothing (a pane's state change or a new fact of the conversation alone does not rewrite the file).
   One mark this build cannot read is dropped alone with a `store.device_marks_dropped` diagnostic, and a cap that drops marks writes `store.device_marks_capped`.
   A core move drops the section (`node_migration/reown.rs`).
-  A restart resumes from it with no read and no request for an unchanged pane; a file that cannot be read starts empty and records a diagnostic, and nothing in it is shown until a reference proves it.
+  Native-proven display metadata waits for the shared links ledger in one pending value per device/provider/native session, at most 512 per label worker, independently of the source pane's lifetime or later conversation.
+  The existing reader commits one value at a time and acknowledges it only after the indexed-only ledger writer returns; a newer pending value survives an older acknowledgement, and unavailable or unindexed saves retry on the existing 15-second tick.
+  Each pane submits a candidate only when its observed display changes; an acknowledgement rechecks capacity without turning unchanged values from other panes of the same conversation into new writes.
+  The pending set contains only bounded display fields and identity, never a path or conversation facts; it is not another persistent store and adds no worker or timer.
+  A first save whose history read failed merges existing analysis and PR history before writing while preserving the current native title and manual-title clear.
+  Capacity and write failures reach the existing diagnostic log, and native reads retain priority over waiting writes.
+  Once imported, a restart resumes from it with no analysis request for an unchanged pane; a file that cannot be read starts empty and records a diagnostic, and nothing in it is shown until a reference proves it.
   The first run with no `labels.json` imports the retired plugin's `display-state.json` once, taking only entries it had proven an owner for.
 - **One generator per Herdr server.** A worker generates only while the node on the machine that runs its server holds that server's lock for it (`Call::LabelLock`, `hide_host::label_lock`): an exclusive `flock` on `<socket>.hide-label-generator.lock` beside Herdr's socket, which every daemon reaching that server shares whatever HOME it runs with, so cores on any machine that label one server meet at one file and the core keeps no lock file of its own.
   The node keys each lock by the socket as the core named it, and a node that dialed its core locks only its own Herdr server's file, the one it bridges.

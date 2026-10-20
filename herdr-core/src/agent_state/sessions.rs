@@ -122,7 +122,8 @@ pub(crate) fn row(agent: &SidebarAgentSnapshot) -> Row {
     }
 }
 
-/// The PRs this row holds the duty of, never its descendants' (PRD D-18,
+/// The PRs this row holds the duty of, plus its provisional history for
+/// display only, never its descendants' (PRD D-18,
 /// D-39): how many, the worst state, and each PR as an
 /// index into `request.pull_requests`, worst first, each in the one PR state
 /// ([`PrState::of`]). Closed PRs are not counted.
@@ -144,7 +145,7 @@ pub(crate) fn own_prs(agent: &SidebarAgentSnapshot) -> Option<PrSummary> {
         .request
         .iter()
         .flat_map(|request| request.pull_requests.iter().enumerate())
-        .filter(|(_, pull)| pull.duty && pull.live)
+        .filter(|(_, pull)| (pull.duty || pull.provisional) && pull.live)
         .map(|(index, pull)| OwnPr {
             index,
             state: pull.state(),

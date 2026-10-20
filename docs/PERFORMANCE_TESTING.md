@@ -88,6 +88,16 @@ Read actual job outcomes and retries; this mapping describes checked-in ownershi
 
 ## Resident ticks, timers and watchers
 
+
+Conversation display restoration reuses the labels reader and links writer, adding no timer, input callback or coordinator I/O.
+A missing hook reference admits one serialized process-info locator read (one-second deadline), the existing bounded native read, and one local metadata RPC (one-second deadline); failures retry no sooner than fifteen seconds.
+Only native owner plus current hook proof confirms a binding, and the same pane/provider/reference generation fences every result.
+An unchanged known owner reuses its display metadata without another ledger query, and unchanged metadata is not written again.
+Compatibility memory retains at most 512 short display records and twenty PRs per record; ledger queries return twenty PRs, use the existing sixteen-call mailbox and existing bounded write queue, and deletion follows existing session retention.
+The labels reader is joined by its coordinator owner and the links writer by its existing owner; their existing single-flight admission bounds pending restoration work.
+No new work occurs per keystroke or terminal frame, and publication follows actual display connection or metadata transitions.
+
+
 Use this ledger when deciding whether a feature can reuse an owner instead of adding another permanent loop.
 The source paths are the authority for cadence, admission and cleanup; a duration is a scheduling interval or deadline, never a measured latency guarantee.
 The ledger covers core/daemon background schedules, the desktop host's discovery watch and the shared elapsed display clock.

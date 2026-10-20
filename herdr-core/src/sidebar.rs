@@ -254,6 +254,9 @@ pub struct SessionAgentPayload {
     /// on by the label overlay, never read from Herdr.
     #[serde(skip)]
     pub(crate) facts: Option<crate::request_view::RowFacts>,
+    /// Display history, never used by agent_demand/activity or close proof.
+    #[serde(skip)]
+    pub(crate) record: Option<crate::labels::record::RecordBinding>,
 }
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize, Eq, PartialEq)]
@@ -643,10 +646,22 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
         .facts
         .as_ref()
         .and_then(|facts| line_text(facts.native_custom_title.as_deref(), MAX_LABEL_TEXT_CHARS));
-    let title = manual_title.or(task).or(native_title);
+    let title = manual_title.or(task).or(native_title).or_else(|| {
+        agent.record.as_ref().and_then(|r| {
+            line_text(r.metadata.manual_title.as_deref(), MAX_LABEL_TEXT_CHARS)
+                .or_else(|| line_text(r.metadata.goal.as_deref(), MAX_LABEL_TEXT_CHARS))
+                .or_else(|| line_text(r.metadata.native_title.as_deref(), MAX_LABEL_TEXT_CHARS))
+        })
+    });
     let identity_label = title.unwrap_or_else(|| provider_name(agent.agent.as_deref()));
     let projected = SidebarAgentSnapshot {
         telemetry_stale: agent.telemetry_stale,
+        record_connection: agent.record.as_ref().map(|r| r.connection),
+        record_summary: agent
+            .record
+            .as_ref()
+            .and_then(|r| line_text(Some(&r.metadata.summary), MAX_LABEL_TEXT_CHARS)),
+        record_metadata: agent.record.map(|r| r.metadata),
         close_session: agent.agent_session.clone(),
         state: Default::default(),
         resolved: None,

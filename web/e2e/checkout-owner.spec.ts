@@ -40,11 +40,15 @@ async function expectTabs(page: Page, herdr: HerdrFixture, count: number, timeou
 
 /** Two quick new-tab requests must both create terminals in the checkout's owner. */
 async function twoTerminals(page: Page, herdr: HerdrFixture): Promise<void> {
+  const shownBefore = await page.locator('[data-agent-tab-bar] [role="tab"]').count();
   const before = workspaces(herdr).reduce((sum, workspace) => sum + tabCount(herdr, workspace.workspace_id), 0);
   await page.locator("[data-terminal-host]").first().click();
   await page.keyboard.press(chord("new_tab"));
   await page.keyboard.press(chord("new_tab"));
   await expect.poll(() => workspaces(herdr).reduce((sum, workspace) => sum + tabCount(herdr, workspace.workspace_id), 0)).toBe(before + 2);
+  // Server creation can precede the page snapshot. Capture the selected tab
+  // only after both requested tabs have reached the strip.
+  await expectTabs(page, herdr, shownBefore + 2);
   await waitForTerminal(page);
 }
 

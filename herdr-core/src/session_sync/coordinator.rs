@@ -1705,11 +1705,23 @@ fn start_label_worker(
     });
     let worker = match &context.target {
         SessionSyncTarget::Local { socket_path } => match context.node() {
-            Some(node) => services.local_worker(socket_path, Arc::clone(node), wake, language),
+            Some(node) => services.local_worker(
+                socket_path,
+                Arc::clone(node),
+                wake,
+                language,
+                Arc::clone(&context.api_connector),
+            ),
             None => Ok(None),
         },
         SessionSyncTarget::Remote { target_id, .. } => services
-            .device_worker(target_id, context.runtime.clone(), wake, language)
+            .device_worker(
+                target_id,
+                context.runtime.clone(),
+                wake,
+                language,
+                Arc::clone(&context.api_connector),
+            )
             .map(Some),
     };
     worker.unwrap_or_else(|message| {
