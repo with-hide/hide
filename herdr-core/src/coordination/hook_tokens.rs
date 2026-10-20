@@ -350,7 +350,12 @@ fn restore(home: &std::path::Path, connector: &dyn ApiConnector, ask: &Ask) -> O
         if let Err(error) = request_with_connector(
             connector,
             "pane.report_metadata",
-            hide_agent_hooks::report::report_params(&ask.pane, report.0, counts),
+            hide_agent_hooks::report::report_params(
+                &ask.pane,
+                report.0,
+                counts,
+                ask.session.as_deref(),
+            ),
             REPORT_TIMEOUT,
         ) {
             return Outcome::Failed(format!("pane.report_metadata: {error}"));
@@ -390,7 +395,7 @@ fn finish(
         && let Err(error) = request_with_connector(
             connector,
             "pane.report_metadata",
-            hide_agent_hooks::report::report_params(&ask.pane, version, Counts::Clear),
+            hide_agent_hooks::report::report_params(&ask.pane, version, Counts::Clear, None),
             REPORT_TIMEOUT,
         )
     {
@@ -535,15 +540,16 @@ mod tests {
                 working: 1,
                 done: 1,
             }),
+            Some("session-a"),
         )
     }
 
     fn version_only(pane: &str) -> Value {
-        hide_agent_hooks::report::report_params(pane, HOOK_VERSION, Counts::Leave)
+        hide_agent_hooks::report::report_params(pane, HOOK_VERSION, Counts::Leave, None)
     }
 
     fn cleared(pane: &str) -> Value {
-        hide_agent_hooks::report::report_params(pane, HOOK_VERSION, Counts::Clear)
+        hide_agent_hooks::report::report_params(pane, HOOK_VERSION, Counts::Clear, None)
     }
 
     /// The tokens Herdr ends up holding for `pane`: every report merged in

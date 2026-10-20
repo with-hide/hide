@@ -239,6 +239,8 @@ They overlap, so they are never added together or converted into registered-agen
 The lineage chips still name only actual registered pane children.
 A hook total alone never holds a parent's wait.
 Totals may be partially known: each absent total stays unknown, and an observed zero is zero.
+Hook totals are current only when their reported native-session digest matches the projected row's session.
+Retained pane tokens from a replaced session and ownerless legacy, Grok or omp totals stay unknown in this common observation while their existing legacy fields remain compatible.
 
 Each observation says `unsupported`, `unknown`, `current`, `stale` or `lost`; a current observation names its `hooks` or `session` source and value.
 The snapshot's work kinds, execution states, observation states and sources are pinned in `contracts/snapshot-wire-enums.json`, checked against Rust serialization and the web's accepted types.

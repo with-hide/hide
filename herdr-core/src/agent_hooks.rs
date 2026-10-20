@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use hide_agent_adapter::HookDialect;
 use hide_agent_hooks::runtime::{
-    AgentRuntime, BLOCKED_TOKEN, DONE_TOKEN, INSTRUMENTED_TOKEN, WORKING_TOKEN,
+    AgentRuntime, BLOCKED_TOKEN, DONE_TOKEN, INSTRUMENTED_TOKEN, SESSION_TOKEN, WORKING_TOKEN,
 };
 use serde_json::Value;
 
@@ -29,6 +29,8 @@ pub struct PaneHookTokens {
     pub working: Option<u32>,
     pub done: Option<u32>,
     pub blocked: Option<u32>,
+    /// Exact native-session digest paired with the counts, never an ingress-time boolean.
+    pub session_digest: Option<[u8; 64]>,
 }
 
 impl PaneHookTokens {
@@ -38,6 +40,11 @@ impl PaneHookTokens {
             working: count(tokens, WORKING_TOKEN),
             done: count(tokens, DONE_TOKEN),
             blocked: count(tokens, BLOCKED_TOKEN),
+            session_digest: tokens
+                .get(SESSION_TOKEN)
+                .and_then(Value::as_str)
+                .filter(|digest| hide_agent_hooks::delivery::valid_sha256_digest(digest))
+                .and_then(|digest| digest.as_bytes().try_into().ok()),
         }
     }
 
@@ -193,6 +200,26 @@ mod tests {
         assert_eq!(read.version, Some(1));
         assert_eq!(read.working, None);
         assert_eq!(read.done, None);
+    }
+
+    #[test]
+    fn only_an_exact_lowercase_session_digest_proves_the_counts_owner() {
+        let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert_eq!(
+            PaneHookTokens::read(&tokens(&[(SESSION_TOKEN, digest)])).session_digest,
+            Some(digest.as_bytes().try_into().unwrap())
+        );
+        for malformed in [
+            "abc",
+            &"g".repeat(64),
+            &digest.to_uppercase(),
+            &format!(" {digest}"),
+        ] {
+            assert_eq!(
+                PaneHookTokens::read(&tokens(&[(SESSION_TOKEN, malformed)])).session_digest,
+                None
+            );
+        }
     }
 
     #[test]

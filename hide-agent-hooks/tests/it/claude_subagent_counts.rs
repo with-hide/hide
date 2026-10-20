@@ -306,16 +306,57 @@ fn a_new_session_whose_start_beats_herdrs_own_report_starts_a_fresh_record_at_it
         "read against the old session, ignored"
     );
     herdr.report_session(NESTED_SESSION);
+    assert_eq!(
+        herdr.reports.lock().unwrap().last().unwrap()["hide_sub_session"],
+        hide_agent_hooks::report::session_digest(PANE_SESSION).unwrap(),
+        "retained tokens still identify A after Herdr has moved to B"
+    );
 
     // The new session's next counted event: its own numbers, from zero.
     pane.subagent("SubagentStart", NESTED_SESSION, "new-a");
     assert_eq!(herdr.counts().last(), Some(&(1, 0)));
+    assert_eq!(
+        herdr.reports.lock().unwrap().last().unwrap()["hide_sub_session"],
+        hide_agent_hooks::report::session_digest(NESTED_SESSION).unwrap(),
+        "the new counts are paired with B in the same report"
+    );
     // The old session's late events are the old session's no more.
     pane.subagent("SubagentStop", PANE_SESSION, "old-b");
     pane.stop(PANE_SESSION, &[]);
     assert_eq!(herdr.counts().last(), Some(&(1, 0)));
     pane.subagent("SubagentStop", NESTED_SESSION, "new-a");
     assert_eq!(herdr.counts().last(), Some(&(0, 1)));
+}
+
+#[test]
+fn a_corrupt_count_record_reports_failure_without_publishing_a_false_zero() {
+    let machine = Machine::new("registered");
+    let herdr = Herdr::start(Some(PANE_SESSION));
+    let pane = Pane {
+        machine: &machine,
+        herdr: &herdr,
+    };
+    pane.session_start(PANE_SESSION, "startup");
+    pane.subagent("SubagentStart", PANE_SESSION, "still-running");
+    let before = herdr.reports.lock().unwrap().clone();
+    let record = machine
+        .home
+        .join(".hide/agent-hooks/panes")
+        .join(format!("{}.json", PANE.replace(':', "_")));
+    std::fs::write(&record, b"damaged record").unwrap();
+    pane.subagent("SubagentStop", PANE_SESSION, "another-child");
+    assert_eq!(
+        *herdr.reports.lock().unwrap(),
+        before,
+        "a failed read sends no count or owner proof"
+    );
+    assert_eq!(std::fs::read(record).unwrap(), b"damaged record");
+    assert!(
+        hide_agent_hooks::report::last_failure(&machine.home)
+            .unwrap()
+            .error
+            .contains("the pane's count could not be changed")
+    );
 }
 
 #[test]

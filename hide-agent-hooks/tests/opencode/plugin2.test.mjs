@@ -549,4 +549,19 @@ test("a subagent's run moves the counts of the pane showing its root, and the ro
   // Only the pane showing the child's root counted it.
   const counted = calls("subagents").filter((call) => call.input.working > 0 || call.input.done > 0);
   assert.ok(counted.every((call) => call.env.HERDR_PANE_ID === "w1:p1"), JSON.stringify(counted));
+  assert.ok(counted.every((call) => call.input.session_id === "ses_a"), JSON.stringify(counted));
+});
+
+test("equal zero totals after switching roots name the session now shown", async (t) => {
+  answer({ subagents: { reported: true } });
+  const host = await opencode(t);
+  host.create("ses_a");
+  host.create("ses_b");
+  const view = host.terminal("w1:p1", { type: "session", sessionID: "ses_a" });
+  await attached(view, "ses_a");
+  await until("subagents", 1, (input) => input.session_id === "ses_a" && input.working === 0 && input.done === 0);
+  view.route = { type: "session", sessionID: "ses_b" };
+  host.publish("session.execution.succeeded", { sessionID: "ses_b" });
+  await attached(view, "ses_b");
+  await until("subagents", 1, (input) => input.session_id === "ses_b" && input.working === 0 && input.done === 0);
 });

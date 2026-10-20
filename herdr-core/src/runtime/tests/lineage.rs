@@ -711,6 +711,7 @@ fn a_pane_with_children_lists_them_and_names_the_one_that_speaks_for_them() {
         working: Some(2),
         done: Some(4),
         blocked: None,
+        session_digest: None,
     };
     let children =
         crate::sidebar::project_pane_children(&rows, "parent", tokens, &installed).unwrap();
@@ -754,6 +755,83 @@ fn a_pane_with_children_lists_them_and_names_the_one_that_speaks_for_them() {
 }
 
 #[test]
+fn internal_work_hook_totals_follow_the_reported_session_when_a_pane_is_reused() {
+    use hide_agent_adapter::work::{WorkRead, WorkTotals};
+    let mut rows = instrumented_rows("claude");
+    let installed = hook_status_of(Some(hide_agent_hooks::HookStatus::Installed {
+        version: hide_agent_hooks::HOOK_VERSION,
+    }));
+    let digest = |session: &str| -> [u8; 64] {
+        crate::wire::session_digest(session)
+            .unwrap()
+            .as_bytes()
+            .try_into()
+            .unwrap()
+    };
+    let mut tokens = crate::agent_hooks::PaneHookTokens {
+        version: Some(hide_agent_hooks::HOOK_VERSION),
+        working: Some(3),
+        done: Some(9),
+        blocked: None,
+        session_digest: Some(digest("session-a")),
+    };
+    rows[0].lineage_session = crate::wire::session_digest("session-a");
+    let before =
+        crate::sidebar::project_pane_children(&rows, "parent", tokens, &installed).unwrap();
+    assert_eq!(
+        before.internal_work.subagents.current(),
+        Some(&WorkTotals {
+            working: Some(3),
+            done: Some(9)
+        })
+    );
+
+    // Herdr has moved to B while A's pane tokens remain after an ignored start.
+    rows[0].lineage_session = crate::wire::session_digest("session-b");
+    let replaced =
+        crate::sidebar::project_pane_children(&rows, "parent", tokens, &installed).unwrap();
+    assert_eq!(replaced.internal_work.subagents, WorkRead::Unknown);
+    assert_eq!(
+        (replaced.subagents.working, replaced.subagents.done),
+        (Some(3), Some(9)),
+        "legacy fields stay compatible"
+    );
+    assert_eq!(
+        replaced.chips, before.chips,
+        "a count never invents lineage"
+    );
+    tokens.session_digest = Some(digest("session-b"));
+    tokens.working = Some(0);
+    tokens.done = None;
+    let current =
+        crate::sidebar::project_pane_children(&rows, "parent", tokens, &installed).unwrap();
+    assert_eq!(
+        current.internal_work.subagents.current(),
+        Some(&WorkTotals {
+            working: Some(0),
+            done: None
+        })
+    );
+    tokens.done = Some(0);
+    let empty = crate::sidebar::project_pane_children(&rows, "parent", tokens, &installed).unwrap();
+    assert_eq!(
+        empty.internal_work.subagents.current(),
+        Some(&WorkTotals {
+            working: Some(0),
+            done: Some(0)
+        })
+    );
+    tokens.session_digest = None;
+    assert_eq!(
+        crate::sidebar::project_pane_children(&rows, "parent", tokens, &installed)
+            .unwrap()
+            .internal_work
+            .subagents,
+        WorkRead::Unknown
+    );
+}
+
+#[test]
 fn internal_work_counts_do_not_invent_execution_records_or_lineage() {
     use hide_agent_adapter::work::{WorkRead, WorkSource, WorkTotals};
     let installed = hook_status_of(Some(hide_agent_hooks::HookStatus::Installed {
@@ -761,6 +839,12 @@ fn internal_work_counts_do_not_invent_execution_records_or_lineage() {
     }));
     for kind in ["claude", "codex", "grok", "opencode", "omp", "agy", "pi"] {
         let rows = instrumented_rows(kind);
+        let owner = (!matches!(kind, "grok" | "omp")).then(|| {
+            crate::sidebar::fixture_lineage_session()
+                .as_bytes()
+                .try_into()
+                .unwrap()
+        });
         let counts = crate::sidebar::project_pane_children(
             &rows,
             "parent",
@@ -769,12 +853,15 @@ fn internal_work_counts_do_not_invent_execution_records_or_lineage() {
                 working: Some(7),
                 done: Some(3),
                 blocked: None,
+                session_digest: owner,
             },
             &installed,
         )
         .unwrap();
         if kind == "pi" {
             assert_eq!(counts.internal_work.subagents, WorkRead::Unsupported);
+        } else if owner.is_none() {
+            assert_eq!(counts.internal_work.subagents, WorkRead::Unknown);
         } else {
             assert_eq!(
                 counts.internal_work.subagents,
@@ -825,11 +912,12 @@ fn internal_work_counts_do_not_invent_execution_records_or_lineage() {
                 working: Some(0),
                 done: Some(0),
                 blocked: None,
+                session_digest: owner,
             },
             &installed,
         )
         .unwrap();
-        if kind != "pi" {
+        if kind != "pi" && owner.is_some() {
             assert_eq!(
                 zero.internal_work.subagents.current(),
                 Some(&WorkTotals {
@@ -845,6 +933,7 @@ fn internal_work_counts_do_not_invent_execution_records_or_lineage() {
                     working: Some(0),
                     done: None,
                     blocked: None,
+                    session_digest: owner,
                 },
                 &installed,
             )
@@ -871,6 +960,7 @@ fn an_instrumented_pane_with_no_children_is_a_different_answer_from_one_hide_can
         working: Some(0),
         done: Some(0),
         blocked: None,
+        session_digest: None,
     };
     let alone =
         crate::sidebar::project_pane_children(&rows, "child", reported, &installed).unwrap();
@@ -1914,6 +2004,7 @@ fn a_pane_whose_session_ended_draws_no_counts_even_though_its_tokens_remain() {
         working: Some(3),
         done: Some(9),
         blocked: None,
+        session_digest: None,
     };
     assert!(
         crate::sidebar::project_pane_children(&rows, "no-such-agent", leftover, &installed)

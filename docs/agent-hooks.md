@@ -177,9 +177,18 @@ Two things keep that from recurring: `report::tests` sends one report at a fake 
 | `hide_hooks` | The hook version this session reported with. Its presence is the proof that the session is instrumented at all |
 | `hide_sub_working` | Subagents currently running |
 | `hide_sub_done` | Subagents this session has finished |
+| `hide_sub_session` | SHA-256 of the exact native session value that owns those totals |
 
 `hide_sub_blocked` is defined and never written: neither shipped adapter can observe a blocked subagent from the four available events, so the count stays unknown rather than being drawn as a zero.
 A token that is not a count is dropped rather than coerced.
+The owner digest fits Herdr's 80-character token limit even when the native session is a long Windows or Unix path.
+Counts and their owner travel in one report; setting ownerless counts clears an earlier owner, and clearing the counts clears their owner too.
+The common `internal_work.subagents` observation is current only when this digest matches the row's native session at projection time.
+Older helpers, Grok and omp still supply their existing legacy totals, but without session proof the common observation stays unknown.
+omp's shared child collector does not prove that a late child event after a root switch belongs to the new root, so a current root path alone is insufficient proof for its totals.
+Older disk records keep their numbers without acquiring owner proof from a resume, compaction or partial update; a known session replacement or authoritative full plugin totals can establish a new baseline.
+Missing proof remains unknown if an older helper rewrites the record and drops the new field.
+An unreadable or corrupt count record fails the update and leaves its bytes and pane metadata unchanged; only a genuinely missing file starts a new baseline.
 
 A record belongs to one session.
 The first event of another session that the pane's agent now is starts the record over, so a new session in a reused pane never inherits the last one's numbers.
@@ -206,6 +215,7 @@ Two limits follow from the rule:
 A pane's own `SessionStart` can reach the socket before Herdr's own hook has reported the new session (Claude Code runs a start's hooks in parallel).
 Hide then reads it against the old session and ignores it, and the new session's next counted event starts its record from zero, so the old session's numbers are never added to (`claude_subagent_counts::a_new_session_whose_start_beats_herdrs_own_report_starts_a_fresh_record_at_its_next_event`).
 Until that event the pane's tokens still show the old session's counts.
+Their owner digest remains the old session's too, so the new common observation is unknown until the new session reports its own totals.
 
 What an event costs beyond the count it always made: one `pane.get` over the local socket, before the lock is taken, for `SessionStart`, `SubagentStart`, `SubagentStop` and a `Stop`, and none for an event that changes no count and finds the record already naming its session.
 `UserPromptSubmit` and `PreToolUse` never reach the count (the prompt hook and the spawn guard take them).

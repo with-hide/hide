@@ -474,7 +474,13 @@ pub fn project_pane_children(
         internal_work: InternalWork {
             subagents: if dialect.is_none() {
                 WorkRead::Unsupported
-            } else if instrumentation.working.is_some() || instrumentation.done.is_some() {
+            } else if tokens.session_digest.as_ref().is_some_and(|owner| {
+                agent
+                    .lineage_session
+                    .as_ref()
+                    .is_some_and(|session| owner.as_slice() == session.as_bytes())
+            }) && (instrumentation.working.is_some() || instrumentation.done.is_some())
+            {
                 WorkRead::Current {
                     source: WorkSource::Hooks,
                     value: WorkTotals {

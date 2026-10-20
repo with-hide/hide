@@ -1,4 +1,4 @@
-// hide-opencode-tui@2 sha256=073d18354689ad07799a5e7adcd6a912821bbff4a2d002498d977f6d3e299df5
+// hide-opencode-tui@3 sha256=e29e7a071b7cf920f8b3d08bfae478bdb6f26b91805efc8e83741b05359d4abd
 // Hide's OpenCode 2 plugin, its TUI half, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // It runs in the terminal, so in a Herdr pane it is that pane: it attaches to the root session the pane shows,
@@ -46,16 +46,16 @@ function publishCounts(state, api, force) {
     if (status.busy) working += 1;
     else if (status.ran) done += 1;
   }
-  const key = `${working}/${done}`;
+  const key = `${state.root}/${working}/${done}`;
   if (!force && key === state.published) return state.counting ?? Promise.resolve();
   // Only a report Herdr took counts as published: a failed one is sent again with the next change, prompt or rest.
   state.published = key;
-  state.nextCount = { working, done, key };
+  state.nextCount = { working, done, session: state.root, key };
   state.counting ??= (async () => {
     while (state.nextCount) {
       const next = state.nextCount;
       state.nextCount = null;
-      const answer = await helper(state, "subagents", { working: next.working, done: next.done }, COUNT_BUDGET_MS, state.pane);
+      const answer = await helper(state, "subagents", { working: next.working, done: next.done, session_id: next.session }, COUNT_BUDGET_MS, state.pane);
       if (answer?.reported !== true && state.published === next.key) state.published = null;
     }
     state.counting = null;

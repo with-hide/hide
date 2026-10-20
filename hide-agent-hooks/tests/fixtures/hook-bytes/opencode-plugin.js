@@ -1,4 +1,4 @@
-// hide-opencode-plugin@9 sha256=e77b53ad20d267cdc9f17e259e456ddef63d4d02784177cce800772f74c775e2
+// hide-opencode-plugin@10 sha256=5b282814ae5770d9f42a6816b8bf47f2d70cd6fe666dd4d3a356ef0b87095f13
 // Hide's OpenCode 1.x plugin, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane Hide manages, or when its helper is gone, it does nothing.
@@ -273,16 +273,16 @@ function publishCounts(state, force) {
     if (status.busy) working += 1;
     else if (status.ran) done += 1;
   }
-  const key = `${working}/${done}`;
+  const key = `${state.root}/${working}/${done}`;
   if (!force && key === state.published) return state.counting ?? Promise.resolve();
   // Only a report Herdr took counts as published: a failed one is sent again with the next change, prompt or rest.
   state.published = key;
-  state.nextCount = { working, done, key };
+  state.nextCount = { working, done, session: state.root, key };
   state.counting ??= (async () => {
     while (state.nextCount) {
       const next = state.nextCount;
       state.nextCount = null;
-      const answer = await helper(state, "subagents", { working: next.working, done: next.done }, COUNT_BUDGET_MS);
+      const answer = await helper(state, "subagents", { working: next.working, done: next.done, session_id: next.session }, COUNT_BUDGET_MS);
       if (answer?.reported !== true && state.published === next.key) state.published = null;
     }
     state.counting = null;

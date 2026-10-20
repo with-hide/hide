@@ -440,7 +440,7 @@ fn subagents(home: &Path, agent: &Agent, input: Input) -> Value {
     }
     let socket_path = report::socket_path(home);
     let outcome = match &socket_path {
-        Ok(path) => report::report(path, &pane, counts),
+        Ok(path) => report::report_latest(home, path, &pane, counts, who.session),
         Err(error) => Err(error.clone()),
     };
     let socket_path = socket_path.unwrap_or_default();
