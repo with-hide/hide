@@ -487,7 +487,22 @@ impl OwnedChild {
             }
             Ok(())
         })();
+        #[cfg(windows)]
+        eprintln!(
+            "[DEBUG-whpb] phase=capture-cleanup-before pid={} reaped={} tree_ended={:?}",
+            self.child.id(),
+            self.reaped,
+            sys::tree_ended(&self.child, &self.tie),
+        );
         let cleanup = self.finish_capture(deadline);
+        #[cfg(windows)]
+        eprintln!(
+            "[DEBUG-whpb] phase=capture-cleanup-after pid={} cleanup_ok={} reaped={} tree_ended={:?}",
+            self.child.id(),
+            cleanup.is_ok(),
+            self.reaped,
+            sys::tree_ended(&self.child, &self.tie),
+        );
         match (captured, cleanup) {
             (Ok(()), Ok(status)) => Ok(CapturedOutput {
                 status,

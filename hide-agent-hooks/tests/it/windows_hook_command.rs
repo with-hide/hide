@@ -573,12 +573,16 @@ fn traced_capture(
     );
     let output = output.unwrap();
     eprintln!(
-        "[DEBUG-whpb] phase=captured pid={} status={} stdout_bytes={} stderr={}",
+        "[DEBUG-whpb] phase=captured pid={} status={} stdout_bytes={}",
         child.id(),
         output.status,
         output.stdout.len(),
-        String::from_utf8_lossy(&output.stderr),
     );
+    for line in String::from_utf8_lossy(&output.stderr).lines() {
+        if line.starts_with("[DEBUG-whpb] ") {
+            eprintln!("{line}");
+        }
+    }
     output
 }
 

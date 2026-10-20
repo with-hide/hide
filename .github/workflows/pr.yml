@@ -79,6 +79,8 @@ on:
     branches: [main]
   # nightly.yml runs every lane on main once a day.
   workflow_call:
+  # Temporary branch-only diagnosis. Remove before delivery; never merge it.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -120,7 +122,14 @@ jobs:
         # The crate graph comes from `cargo metadata`, which needs no build.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci-plan.py plan --event "$GITHUB_EVENT_NAME" --draft "${{ github.event.pull_request.draft || false }}" --record ci-plan.json
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            test "$GITHUB_REF" = refs/heads/fix/windows-hook-process-boundary
+            printf '%s\n' 'lanes=["windows-check"]' 'full=false' >> "$GITHUB_OUTPUT"
+            echo 'Windows hook boundary diagnosis only; all other lanes are unrun.'
+          else
+            python3 scripts/ci-plan.py plan --event "$GITHUB_EVENT_NAME" --draft "${{ github.event.pull_request.draft || false }}" --record ci-plan.json
+          fi
       # The commits this run's lanes checked, for the pull request's next run.
       # Without it the next run plans its lanes as usual, so a failed upload
       # leaves this run's plan standing.
@@ -693,6 +702,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Refuse full verification for the temporary diagnosis
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo '::error::Windows hook boundary diagnosis only; full verification was not run. Do not merge.'
+          exit 1
       - uses: actions/checkout@v7
         with:
           sparse-checkout: scripts/ci-plan.py
