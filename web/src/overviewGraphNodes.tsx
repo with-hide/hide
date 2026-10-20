@@ -70,7 +70,7 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
     <button type="button" className="og-drag-handle og-session-drag nopan" aria-label={t("overviewGraph.dragSession", { session: row.agent.identity_label })}><GripIcon /></button>
     <button type="button" className="og-session-target nodrag nopan" aria-label={[rowAccessibleName(t, row.agent, row.device), data.context ? t("overviewGraph.context") : null, row.launchModel ? t("overviewGraph.launchModel", { model: row.launchModel }) : null].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
       <span className="og-orb"><AgentMark kind={row.agent.agent_kind} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} /></span></span>
-      <strong className="og-session-title"><AgentRecordTitle agent={row.agent} /></strong>
+      <strong className="og-session-title"><AgentRecordTitle agent={row.agent} stacked /></strong>
       <span className="og-model">{agentProductName(row.agent.agent_kind)}{row.launchModel ? <><br />{t("overviewGraph.launchModel", { model: row.launchModel })}</> : null}</span>
       <span className="og-session-status">{markWords(t, row.agent)}{data.current ? ` · ${t("overviewGraph.currentPane")}` : ""}</span>
       {data.context ? <span className="og-session-status">{t("overviewGraph.context")}</span> : null}

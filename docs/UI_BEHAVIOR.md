@@ -1088,7 +1088,7 @@ While checking it is dimmed beside `연결 확인 중`; an unsuccessful or uncer
 A confirmed binding drops both the dimming and those words.
 The same state names and dims its PR mark without changing GitHub read-stale status, keyboard access or the existing PR card/link actions.
 The connection words keep one line while the title gives up width.
-A pane head or tab places them below the title within its existing height, so both retain width.
+A pane head, tab or graph node places them below the title within its existing height or two-line title budget, so both retain width.
 Accessible row names include the connection state and saved summary.
 Saved questions, approvals and work state do not become the current row's status through this display restoration.
 A new hook reference removes the old title and PR display before its own read completes.
