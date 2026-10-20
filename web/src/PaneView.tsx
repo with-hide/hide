@@ -191,7 +191,7 @@ export const PaneView = memo(function PaneView({
   const dispatch = actions.dispatch;
   const title = paneTitle(pane);
   const recordAgent = agentsByPane(usePaneAgents()).get(paneId);
-  const titleContent = recordAgent && recordAgent.identity_label === title ? <AgentRecordTitle agent={recordAgent} /> : <span className="min-w-0 truncate">{title}</span>;
+  const titleContent = recordAgent && recordAgent.identity_label === title ? <AgentRecordTitle agent={recordAgent} stacked /> : <span className="min-w-0 truncate">{title}</span>;
   const paneMenu = usePaneMenu(pane, title, actions);
 
   // A dropped file or a pasted image stages through hided and reaches the

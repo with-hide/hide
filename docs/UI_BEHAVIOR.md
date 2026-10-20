@@ -1071,7 +1071,8 @@ A session title restored from saved conversation history carries the core's conn
 While checking it is dimmed beside `연결 확인 중`; an unsuccessful or uncertain check keeps it dimmed beside `연결 미확인`, and the worker retries without a new message or a retry button.
 A confirmed binding drops both the dimming and those words.
 The same state names and dims its PR mark without changing GitHub read-stale status, keyboard access or the existing PR card/link actions.
-The connection words keep one line while the title gives up width, so they do not wrap out of a fixed-height pane head or tab.
+The connection words keep one line while the title gives up width.
+A pane head or tab places them below the title within its existing height, so both retain width.
 Accessible row names include the connection state and saved summary.
 Saved questions, approvals and work state do not become the current row's status through this display restoration.
 A new hook reference removes the old title and PR display before its own read completes.
