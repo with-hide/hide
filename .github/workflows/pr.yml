@@ -354,12 +354,13 @@ jobs:
         timeout-minutes: 3
         run: bash scripts/install-nextest.sh
       - name: Compile the workspace for Windows
+        id: workspace-check
         run: bash scripts/verify-cargo.sh check --workspace --all-targets --keep-going --message-format short
       - name: Build the Windows test binaries
         id: tests
         # Built whatever the workspace check answered, so a compile error in
         # one target does not hide the tests that still build.
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || steps.workspace-check.outcome == 'success') }}
         timeout-minutes: 25
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS --no-run
       - name: hided's pane bootstrap, file opener, root identity, the device node's pane service, the CLI's daemon start and end-to-end tests
@@ -420,9 +421,27 @@ jobs:
         # Cursor run on Windows, OpenCode's plugin and Pi's and omp's
         # extension run in Node, and the helper's stdin deadline. It stands
         # on its own, so it runs whatever the step above answered.
-        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' && (github.event_name != 'workflow_dispatch' || success()) }}
         timeout-minutes: 15
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-agent-hooks) & (kind(lib) | kind(bin) | test(/^(hook_deadline|windows_hook_command|windows_scripts)::/))'
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
+            bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-agent-hooks) & (kind(lib) | kind(bin) | test(/^(hook_deadline|windows_hook_command|windows_scripts)::/))'
+            exit
+          fi
+          # One controlled comparison, with the production selection and
+          # bounds. Only concurrency differs; production retry policy stays.
+          echo '[DEBUG-whpb] condition=serial test_threads=1 retries=0 BEGIN'
+          serial=0
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-agent-hooks) & (kind(lib) | kind(bin) | test(/^(hook_deadline|windows_hook_command|windows_scripts)::/))' --retries 0 --test-threads 1 || serial=$?
+          echo "[DEBUG-whpb] condition=serial exit=$serial END"
+          # 100 means test failure; setup, build and listing errors stop.
+          if [[ "$serial" != 0 && "$serial" != 100 ]]; then exit "$serial"; fi
+          echo '[DEBUG-whpb] condition=original-parallel test_threads=num-cpus retries=0 BEGIN'
+          parallel=0
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-agent-hooks) & (kind(lib) | kind(bin) | test(/^(hook_deadline|windows_hook_command|windows_scripts)::/))' --retries 0 --test-threads num-cpus || parallel=$?
+          echo "[DEBUG-whpb] condition=original-parallel exit=$parallel END"
+          if [[ "$parallel" != 0 ]]; then exit "$parallel"; fi
+          exit "$serial"
       - name: Fetch the pinned Herdr runtime
         id: herdr
         # The proof below stands on its own, so it runs whatever the step

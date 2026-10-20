@@ -442,6 +442,16 @@ impl OwnedChild {
         self.bounded_drop = true;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
+        #[cfg(windows)]
+        let trace = trace_windows_hook_boundary();
+        #[cfg(windows)]
+        let trace_started = Instant::now();
+        #[cfg(windows)]
+        let mut trace_sample = 0;
+        #[cfg(windows)]
+        if trace {
+            sys::trace_hook_cpu(&self.child, "capture-start", 0, trace_started.elapsed());
+        }
         let captured = (|| {
             if output_limit == 0 || output_limit > MAX_CAPTURE_BYTES {
                 return Err(CaptureFailureKind::Io(io::Error::new(
@@ -460,9 +470,10 @@ impl OwnedChild {
             let mut exited = false;
             let mut tree_ended = false;
             loop {
-                if Instant::now() >= deadline {
+                let now = Instant::now();
+                if now >= deadline {
                     #[cfg(windows)]
-                    if trace_windows_hook_boundary() {
+                    if trace {
                         eprintln!(
                             "[DEBUG-whpb] phase=capture-deadline pid={} leader_exited={:?} tree_ended={:?}",
                             self.child.id(),
@@ -471,6 +482,19 @@ impl OwnedChild {
                         );
                     }
                     return Err(CaptureFailureKind::Deadline);
+                }
+                #[cfg(windows)]
+                if trace
+                    && let Some(&scheduled_ms) = [1000, 5000, 10000].get(trace_sample)
+                    && now.duration_since(trace_started).as_millis() >= scheduled_ms
+                {
+                    sys::trace_hook_cpu(
+                        &self.child,
+                        "capture-sample",
+                        scheduled_ms,
+                        now.duration_since(trace_started),
+                    );
+                    trace_sample += 1;
                 }
                 if !exited && sys::has_exited(&self.child).map_err(CaptureFailureKind::Io)? {
                     // The walk needs the leader unreaped, the group check
@@ -503,7 +527,8 @@ impl OwnedChild {
             Ok(())
         })();
         #[cfg(windows)]
-        if trace_windows_hook_boundary() {
+        if trace {
+            sys::trace_hook_cpu(&self.child, "capture-end", 0, trace_started.elapsed());
             eprintln!(
                 "[DEBUG-whpb] phase=capture-cleanup-before pid={} reaped={} tree_ended={:?}",
                 self.child.id(),
@@ -513,7 +538,7 @@ impl OwnedChild {
         }
         let cleanup = self.finish_capture(deadline);
         #[cfg(windows)]
-        if trace_windows_hook_boundary() {
+        if trace {
             eprintln!(
                 "[DEBUG-whpb] phase=capture-cleanup-after pid={} cleanup_ok={} reaped={} tree_ended={:?}",
                 self.child.id(),
@@ -2525,6 +2550,51 @@ mod sys {
     };
 
     use super::*;
+
+    // Temporary observation of the owned cmd.exe leader, not its descendants
+    // or the host's load. Called only by the two exact hook fixture threads.
+    pub(super) fn trace_hook_cpu(
+        child: &Child,
+        phase: &str,
+        scheduled_ms: u128,
+        elapsed: Duration,
+    ) {
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: Child owns the process handle and every output is writable.
+        let read = unsafe {
+            GetProcessTimes(
+                child.as_raw_handle() as HANDLE,
+                &mut created,
+                &mut exited,
+                &mut kernel,
+                &mut user,
+            )
+        };
+        if read == 0 {
+            let error = io::Error::last_os_error();
+            eprintln!(
+                "[DEBUG-whpb] phase={phase} pid={} scheduled_ms={scheduled_ms} elapsed_ms={} cpu_error={:?}",
+                child.id(),
+                elapsed.as_millis(),
+                error.raw_os_error(),
+            );
+        } else {
+            let ticks = |value: FILETIME| {
+                (u64::from(value.dwHighDateTime) << 32) | u64::from(value.dwLowDateTime)
+            };
+            eprintln!(
+                "[DEBUG-whpb] phase={phase} pid={} scheduled_ms={scheduled_ms} elapsed_ms={} leader_kernel_100ns={} leader_user_100ns={}",
+                child.id(),
+                elapsed.as_millis(),
+                ticks(kernel),
+                ticks(user),
+            );
+        }
+    }
 
     /// A handle that closes when dropped.
     struct Owned(HANDLE);
