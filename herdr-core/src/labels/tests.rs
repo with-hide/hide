@@ -397,19 +397,20 @@ fn drain_until(
     woken: &Receiver<()>,
     ready: impl Fn(&LabelWorker) -> bool,
 ) {
-    drain_until_with_clock(worker, woken, Instant::now, ready);
+    drain_until_with_clock(worker, woken, Instant::now, "worker result", ready);
 }
 
 fn drain_until_with_clock(
     worker: &mut LabelWorker,
     woken: &Receiver<()>,
     clock: impl Fn() -> Instant,
+    expected: &str,
     ready: impl Fn(&LabelWorker) -> bool,
 ) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !ready(worker) {
         let left = deadline.saturating_duration_since(Instant::now());
-        assert!(!left.is_zero(), "the expected worker result did not arrive");
+        assert!(!left.is_zero(), "the expected {expected} did not arrive");
         let _ = woken.recv_timeout(left.min(Duration::from_millis(200)));
         worker.drain(clock(), unix_now_ms());
     }
@@ -2066,6 +2067,7 @@ fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
         &mut worker,
         &woken,
         || second_due,
+        "held second analysis and completed second-turn read",
         |worker| harness.backend.calls() == 2 && worker.reader_idle(),
     );
 
@@ -2086,11 +2088,16 @@ fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
         &mut worker,
         &woken,
         || third_at,
+        "completed third-turn request read",
         |worker| {
             worker.reader_idle()
-                && shown_facts(worker, &third)
-                    .and_then(|facts| facts.operator_request)
-                    .is_some_and(|request| request.text == "셋째 요청")
+                && shown_facts(worker, &third).is_some_and(|facts| {
+                    facts
+                        .operator_request
+                        .iter()
+                        .chain(facts.other_request.iter())
+                        .any(|request| request.text == "셋째 요청")
+                })
         },
     );
     assert_eq!(shown(&worker, &third).unwrap().progress, None);
