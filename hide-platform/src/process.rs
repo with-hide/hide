@@ -373,6 +373,19 @@ pub struct OwnedChild {
     bounded_drop: bool,
 }
 
+// Temporary diagnostics belong to these two fixture threads only. In
+// particular, a hook child must never trace to an agent-owned stderr pipe.
+#[cfg(windows)]
+fn trace_windows_hook_boundary() -> bool {
+    matches!(
+        std::thread::current().name(),
+        Some(
+            "windows_hook_command::agys_windows_session_hook_reads_its_input_and_injects_guidance"
+                | "windows_hook_command::agys_windows_guard_preserves_korean_and_non_bmp_hook_answers"
+        )
+    )
+}
+
 impl OwnedChild {
     /// Starts `command` as a child that leads its own group, so a terminal's
     /// interrupt or hangup sent to this process's group no longer reaches it.
@@ -449,12 +462,14 @@ impl OwnedChild {
             loop {
                 if Instant::now() >= deadline {
                     #[cfg(windows)]
-                    eprintln!(
-                        "[DEBUG-whpb] phase=capture-deadline pid={} leader_exited={:?} tree_ended={:?}",
-                        self.child.id(),
-                        sys::has_exited(&self.child),
-                        sys::tree_ended(&self.child, &self.tie),
-                    );
+                    if trace_windows_hook_boundary() {
+                        eprintln!(
+                            "[DEBUG-whpb] phase=capture-deadline pid={} leader_exited={:?} tree_ended={:?}",
+                            self.child.id(),
+                            sys::has_exited(&self.child),
+                            sys::tree_ended(&self.child, &self.tie),
+                        );
+                    }
                     return Err(CaptureFailureKind::Deadline);
                 }
                 if !exited && sys::has_exited(&self.child).map_err(CaptureFailureKind::Io)? {
@@ -488,21 +503,25 @@ impl OwnedChild {
             Ok(())
         })();
         #[cfg(windows)]
-        eprintln!(
-            "[DEBUG-whpb] phase=capture-cleanup-before pid={} reaped={} tree_ended={:?}",
-            self.child.id(),
-            self.reaped,
-            sys::tree_ended(&self.child, &self.tie),
-        );
+        if trace_windows_hook_boundary() {
+            eprintln!(
+                "[DEBUG-whpb] phase=capture-cleanup-before pid={} reaped={} tree_ended={:?}",
+                self.child.id(),
+                self.reaped,
+                sys::tree_ended(&self.child, &self.tie),
+            );
+        }
         let cleanup = self.finish_capture(deadline);
         #[cfg(windows)]
-        eprintln!(
-            "[DEBUG-whpb] phase=capture-cleanup-after pid={} cleanup_ok={} reaped={} tree_ended={:?}",
-            self.child.id(),
-            cleanup.is_ok(),
-            self.reaped,
-            sys::tree_ended(&self.child, &self.tie),
-        );
+        if trace_windows_hook_boundary() {
+            eprintln!(
+                "[DEBUG-whpb] phase=capture-cleanup-after pid={} cleanup_ok={} reaped={} tree_ended={:?}",
+                self.child.id(),
+                cleanup.is_ok(),
+                self.reaped,
+                sys::tree_ended(&self.child, &self.tie),
+            );
+        }
         match (captured, cleanup) {
             (Ok(()), Ok(status)) => Ok(CapturedOutput {
                 status,
@@ -2623,11 +2642,13 @@ mod sys {
         };
         command.creation_flags(CREATE_NEW_PROCESS_GROUP | windowless | CREATE_SUSPENDED);
         let mut child = command.spawn()?;
-        eprintln!(
-            "[DEBUG-whpb] phase=created pid={} windowless={}",
-            child.id(),
-            windowless != 0,
-        );
+        if super::trace_windows_hook_boundary() {
+            eprintln!(
+                "[DEBUG-whpb] phase=created pid={} windowless={}",
+                child.id(),
+                windowless != 0,
+            );
+        }
         // SAFETY: both handles are open; the child's is owned by `child`.
         let assigned = unsafe { AssignProcessToJobObject(job.0, child.as_raw_handle()) };
         if assigned == 0 {
@@ -2664,7 +2685,9 @@ mod sys {
             return Err(error);
         }
         let tie = Tie(job, true);
-        eprintln!("[DEBUG-whpb] phase=resumed pid={}", child.id());
+        if super::trace_windows_hook_boundary() {
+            eprintln!("[DEBUG-whpb] phase=resumed pid={}", child.id());
+        }
         if let Some(deadline) = deadline.filter(|deadline| Instant::now() >= *deadline) {
             let owned = OwnedChild {
                 child,
@@ -2849,10 +2872,12 @@ mod sys {
                 if previous_suspend_count == u32::MAX {
                     return Err(io::Error::last_os_error());
                 }
-                eprintln!(
-                    "[DEBUG-whpb] phase=resume-thread pid={pid} tid={} previous_suspend_count={previous_suspend_count}",
-                    entry.th32ThreadID,
-                );
+                if super::trace_windows_hook_boundary() {
+                    eprintln!(
+                        "[DEBUG-whpb] phase=resume-thread pid={pid} tid={} previous_suspend_count={previous_suspend_count}",
+                        entry.th32ThreadID,
+                    );
+                }
                 return Ok(());
             }
             // SAFETY: as for the first call.
