@@ -5,6 +5,8 @@ import type { Catalog, Catalogs } from "../schema";
 export const agentPresentationEnglish = {
   "graph.workspaceHint": "↵ Workspace",
   "agents.status.error": "Blocked",
+  "agents.record.checking": "Checking connection",
+  "agents.record.unconfirmed": "Connection unconfirmed",
   "agents.status.question": "Question",
   "agents.status.approval": "Approval",
   "agents.status.working": "Working",
@@ -66,6 +68,8 @@ export const agentPresentationEnglish = {
 const ko = {
   "graph.workspaceHint": "↵ 작업공간",
   "agents.status.error": "막힘",
+  "agents.record.checking": "연결 확인 중",
+  "agents.record.unconfirmed": "연결 미확인",
   "agents.status.question": "질문",
   "agents.status.approval": "승인",
   "agents.status.working": "작업 중",
@@ -125,6 +129,8 @@ const ko = {
 } satisfies Catalog<typeof agentPresentationEnglish>;
 
 const zhCN = {
+  "agents.record.checking": "正在确认连接",
+  "agents.record.unconfirmed": "连接未确认",
   "graph.workspaceHint": "↵ 工作区",
   "agents.status.error": "受阻",
   "agents.status.question": "提问",
@@ -186,6 +192,8 @@ const zhCN = {
 } satisfies Catalog<typeof agentPresentationEnglish>;
 
 const ja = {
+  "agents.record.checking": "接続を確認中",
+  "agents.record.unconfirmed": "接続未確認",
   "graph.workspaceHint": "↵ ワークスペース",
   "agents.status.error": "ブロック",
   "agents.status.question": "質問",

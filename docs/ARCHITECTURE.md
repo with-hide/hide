@@ -2208,6 +2208,23 @@ Two terminal facts stay core-routed on purpose: the PTY size, because which scre
 
 ### Agent labels in the core
 
+
+The current pane binding and conversation display record are separate (`labels/record.rs`).
+The links ledger stores bounded title, goal, summary, analyzed-turn hashes and PR sightings under its existing device/provider/native-ID key; its single writer, schema migration, deletion and retention remain the owners.
+`LedgerCall::Metadata` is a local, bounded query through the existing mailbox, with a one-second response deadline, performed only by the labels reader off the coordinator and Runtime lock.
+An already read owner reuses its in-memory metadata, and an unchanged display is not enqueued again.
+Legacy compatibility candidates are capped at 512 short records and twenty PRs per record, contain no paths or raw facts, and are imported only after an exact native owner match.
+A metadata write requires an indexed session so it cannot create an orphan outside existing retention.
+
+When Herdr reports no session reference, that same reader may ask `pane.process_info` for the exact pane, with a one-second deadline and the shared wire decoder.
+It accepts only the adapter's executable and explicit resume selector within 64 arguments and 8 KiB, refusing forks, conflicting candidates and unbounded input.
+The native owner proves the historical record, not the current process conversation; an argv-only locator remains unconfirmed and never feeds analysis, current turn facts or control.
+A hook reference takes priority immediately and advances the generation before reading; a successful current native read confirms that binding.
+The core carries the display connection state into shared rows, and UI controls continue to use the existing current-pane authority.
+Failures retain dimmed display history and retry on the existing worker at fifteen seconds, without another thread or retry queue.
+Unreadable and unknown-version labels files disable that instance's file writes while runtime observation continues, preserving their original bytes.
+
+
 What each Claude Code, Codex or OpenCode pane is doing (the session's goal, one line for its turn, and how the turn ended) is made by the core, not by a Herdr plugin and not through pane tokens (PRD labels-in-hided, overview-request-view D-08).
 The code is `herdr-core/src/labels/`.
 Each session-sync coordinator, one per Herdr server (this Mac's and each connected device's), owns a `LabelWorker` it feeds from the agent state it already follows; the core owns one `LabelAnalyzer` for all of them and one `LabelStore`.

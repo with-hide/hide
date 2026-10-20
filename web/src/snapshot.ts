@@ -106,6 +106,9 @@ export type AgentRow = {
   id: string;
   pane_id: string;
   identity_label: string;
+  /** Conversation display provenance, independent of lifecycle and hook health. */
+  record_connection?: "checking" | "confirmed" | "unconfirmed";
+  record_summary?: string;
   /** The name Herdr knows the agent by (`agent start --name`, `agent rename`); absent when it was given none. */
   herdr_name?: string;
   agent_kind: string;

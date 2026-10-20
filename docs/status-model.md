@@ -788,6 +788,27 @@ The workspace inspector uses the canonical representative agent and disconnected
 
 ## Task identity
 
+Conversation display history belongs to `(device, provider, native session ID)` in the existing links ledger, independently of the pane that currently runs it.
+The label worker restores only title, goal, summary and PR references into a display binding; its current turn facts, wait causes, lifecycle and input target still require the existing current-reference proof.
+A missing Herdr reference may use the exact foreground executable's explicit resume argument as a history locator, after the native reader proves that record's owner.
+That argument is launch intent, not proof of the conversation the process currently has open: such a binding remains `unconfirmed`, spends no new analysis and supplies no current facts or control authority.
+A new Herdr hook reference supersedes the locator and clears the previous display immediately; only a native read for that reference and generation confirms the binding.
+No latest-session, cwd or reverse owner-hash guess is made.
+
+The core publishes `record_connection` as `checking`, `confirmed` or `unconfirmed` when a row has display history.
+Checking and unconfirmed history keeps its last title and valid PRs dimmed with the localized connection words; confirmed history removes that treatment.
+Failure keeps display history and retries through the existing single reader, at most once per pane per fifteen seconds after an unsuccessful confirmation.
+The row's branch may differ from a saved PR's branch; existing closed/merged filters remain, and a provisional relation never grants current PR duty or a confirmed-created mark.
+This connection state is separate from hook installation diagnosis and GitHub read staleness.
+A different provider or reference clears the old display, and generation fencing rejects old reads and analyses even on an A-to-B-to-A return.
+
+The existing labels file is compatibility input, never a second session-history database.
+Only a record with an explicit native ID and matching provider owner is eligible for import, repeated imports converge, and corrupt or newer labels files are preserved instead of overwritten by an empty save.
+The links writer keeps the existing device separation and session retention; display metadata adds no transcript, path or complete facts copy.
+Agent summaries Off hides saved goals and summaries while retaining native/manual titles and PR restoration.
+Regression owners are `labels/record_tests.rs`, `labels/store.rs`, `links/ledger_store_tests.rs`, the wire locator tests, and the shared row/PR tests.
+
+
 Project and Task session rows project a separate `last_prompt_at_unix_ms` from the latest dated actual request in the proven native session, whether sent by the operator or another agent.
 Missing or zero timestamps draw no elapsed time; status changes and daemon restarts never manufacture one.
 The existing `changed_at_unix_ms`, ordering, unread, waiting and escalation clocks keep their state semantics.

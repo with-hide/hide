@@ -1,4 +1,5 @@
 import type { HTMLAttributes, ReactNode } from "react";
+import { recordPending, recordWords } from "../agentRow";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { cn } from "../lib/utils";
@@ -118,13 +119,14 @@ export function AgentPrMark({ agent, family, staleness, disabled = false, onOpen
   const { t } = useInterfaceTranslation();
   const entries: MarkPulls = family ?? ownPulls(agent);
   const parts = prMarkParts(entries);
-  const label = useMarkLabel(parts, staleness);
+  const baseLabel = useMarkLabel(parts, staleness);
+  const label = [baseLabel, recordWords(t, agent)].filter(Boolean).join(" · ");
   if (!parts) return null;
   const only = entries.length === 1 ? entries[0]!.pull : null;
   if (only) {
     return (
       <Hint label={label}>
-        <button type="button" disabled={disabled} aria-label={label} data-agent-pr={agent.pane_id} className={PR_MARK_PRESS}
+        <button type="button" disabled={disabled} aria-label={label} data-agent-pr={agent.pane_id} className={cn(PR_MARK_PRESS, recordPending(agent) && "opacity-(--opacity-dimmed)")} data-record-provisional={recordPending(agent) || undefined}
           onClick={(event) => {
             event.stopPropagation();
             if ((event.metaKey || event.ctrlKey) && onExternal) onExternal(only);
@@ -139,7 +141,7 @@ export function AgentPrMark({ agent, family, staleness, disabled = false, onOpen
     <DropdownMenu>
       <Hint label={label}>
         <DropdownMenuTrigger asChild>
-          <button type="button" disabled={disabled} aria-label={label} data-agent-pr={agent.pane_id} onClick={(event) => event.stopPropagation()} className={PR_MARK_PRESS}>
+          <button type="button" disabled={disabled} aria-label={label} data-agent-pr={agent.pane_id} onClick={(event) => event.stopPropagation()} className={cn(PR_MARK_PRESS, recordPending(agent) && "opacity-(--opacity-dimmed)")} data-record-provisional={recordPending(agent) || undefined}>
             <PartsMark parts={parts} stale={staleness?.stale} />
           </button>
         </DropdownMenuTrigger>
@@ -190,12 +192,14 @@ export type MarkPulls = { pull: AgentPullRequest; state: PrState; owners?: Agent
  * stale mark still says when GitHub was read.
  */
 export function AgentPrHover({ agent, family, staleness, card }: { agent: AgentRow; family?: SessionPull[]; staleness?: PrStaleness; card?: (mark: ReactNode) => ReactNode }) {
+  const { t } = useInterfaceTranslation();
   const parts = prMarkParts(family ?? ownPulls(agent));
-  const label = useMarkLabel(parts, staleness);
+  const baseLabel = useMarkLabel(parts, staleness);
+  const label = [baseLabel, recordWords(t, agent)].filter(Boolean).join(" · ");
   if (!parts) return null;
-  const node = <PartsMark role="img" aria-label={label} data-agent-pr={agent.pane_id} parts={parts} stale={staleness?.stale} />;
+  const node = <PartsMark role="img" aria-label={label} data-agent-pr={agent.pane_id} parts={parts} stale={staleness?.stale} className={recordPending(agent) ? "opacity-(--opacity-dimmed)" : undefined} data-record-provisional={recordPending(agent) || undefined} />;
   if (card) return <>{card(node)}</>;
-  return staleness?.stale ? <Hint label={label}>{node}</Hint> : node;
+  return staleness?.stale || recordPending(agent) ? <Hint label={label}>{node}</Hint> : node;
 }
 
 /**

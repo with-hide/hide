@@ -240,6 +240,13 @@ impl LinkClient {
     /// Only a background worker may wait for a reply. Admission is bounded
     /// and every mutation is committed before its acknowledgement.
     pub fn call(&self, call: LedgerCall) -> Result<LedgerAnswer, String> {
+        // Metadata is a local read, never an external-effect acknowledgement.
+        // Its failure must not hold other panes' native reads for 15 seconds.
+        let timeout = if matches!(&call, LedgerCall::Metadata(_)) {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_secs(15)
+        };
         let (send, receive) = std::sync::mpsc::sync_channel(1);
         {
             let (lock, wake) = &*self.0;
@@ -258,7 +265,7 @@ impl LinkClient {
             wake.notify_one();
         }
         receive
-            .recv_timeout(Duration::from_secs(15))
+            .recv_timeout(timeout)
             .map_err(|_| "links_worker_timeout".to_owned())?
     }
     pub fn ledger_started_at(&self) -> Option<u64> {

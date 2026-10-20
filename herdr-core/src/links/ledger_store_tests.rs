@@ -9,6 +9,75 @@ fn session() -> SessionIdentity {
     }
 }
 
+#[test]
+fn saved_display_metadata_survives_reopen_and_never_crosses_device_or_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("links.sqlite3");
+    let (mut store, _) = LinkStore::open(&path).unwrap();
+    origin_native(&mut store, &session(), "/repo", 1_000);
+    let update = |at, goal: &str| LedgerUpdate::Metadata {
+        session: session(),
+        native_title: Some("native title".into()),
+        manual_title: None,
+        goal: Some(goal.into()),
+        summary: "저장한 진행 요약".into(),
+        created_prs: vec![("acme/project".into(), 7, 1_000)],
+        at_unix_ms: at,
+        analysed_start: Some(u64::MAX),
+        analysed_end: Some(8),
+    };
+    store
+        .apply_ledger_update(&update(2_000, "복원할 작업"))
+        .unwrap();
+    store
+        .apply_ledger_update(&update(2_000, "복원할 작업"))
+        .unwrap();
+    store
+        .apply_ledger_update(&update(1_000, "늦게 도착한 구형 라벨"))
+        .unwrap();
+    drop(store);
+    let (mut store, _) = LinkStore::open(&path).unwrap();
+    let LedgerAnswer::Metadata(Some(saved)) =
+        store.ledger_call(LedgerCall::Metadata(session())).unwrap()
+    else {
+        panic!("saved history missing")
+    };
+    assert_eq!(saved.goal.as_deref(), Some("복원할 작업"));
+    assert_eq!(saved.summary, "저장한 진행 요약");
+    assert_eq!(saved.native_title.as_deref(), Some("native title"));
+    assert_eq!(saved.analysed_start, Some(u64::MAX));
+    assert_eq!(saved.created_prs, [("acme/project".into(), 7, 1_000)]);
+    for other in [
+        SessionIdentity {
+            device_id: "device-b".into(),
+            ..session()
+        },
+        SessionIdentity {
+            agent: "claude".into(),
+            ..session()
+        },
+    ] {
+        assert!(matches!(
+            store.ledger_call(LedgerCall::Metadata(other)).unwrap(),
+            LedgerAnswer::Metadata(None)
+        ));
+    }
+    store
+        .remove_sessions(&[super::super::SessionKey {
+            device: session().device_id,
+            agent: session().agent,
+            id: session().session_id,
+        }])
+        .unwrap();
+    assert!(
+        matches!(
+            store.ledger_call(LedgerCall::Metadata(session())).unwrap(),
+            LedgerAnswer::Metadata(None)
+        ),
+        "existing retention owns metadata too"
+    );
+}
+
 fn origin_project(device: &str, repository: &str, epoch: u64) -> crate::links::ProjectFacts {
     crate::links::ProjectFacts {
         key: hide_project::project_id(device, std::path::Path::new("/repo")),

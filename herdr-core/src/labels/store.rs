@@ -43,6 +43,11 @@ pub(crate) struct PaneRecord {
     /// (`label_reference_token(provider, "id", native id)`).
     #[serde(default)]
     pub(crate) owner: Option<String>,
+    /// Provider of the last native-proven display record. Old records can
+    /// still prove this with their explicit native id and owner digest.
+    /// DeviceMark deliberately keeps its existing hash-only format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) provider: Option<String>,
     /// Native metadata proven for `owner`; missing on prior helper answers.
     #[serde(default)]
     pub(crate) native_session_id: Option<String>,
@@ -439,10 +444,12 @@ impl LabelStore {
         let Some(path) = state_dir.map(|dir| dir.join(LABELS_FILE)) else {
             return Self::in_memory(node);
         };
+        let mut writable = true;
         let file = match std::fs::read(&path) {
             Ok(bytes) => match serde_json::from_slice::<LabelsFile>(&bytes) {
                 Ok(file) if file.version == SCHEMA_VERSION => file,
                 Ok(file) => {
+                    writable = false;
                     crate::diagnostic!(json!({
                         "component": "labels",
                         "kind": "store.version_unknown",
@@ -451,6 +458,7 @@ impl LabelStore {
                     LabelsFile::default()
                 }
                 Err(error) => {
+                    writable = false;
                     crate::diagnostic!(json!({
                         "component": "labels",
                         "kind": "store.unreadable",
@@ -475,6 +483,7 @@ impl LabelStore {
                 file
             }
             Err(error) => {
+                writable = false;
                 crate::diagnostic!(json!({
                     "component": "labels",
                     "kind": "store.unreadable",
@@ -553,7 +562,10 @@ impl LabelStore {
             record.upgrade_v3();
         }
         let store = Self {
-            path: Some(path),
+            // A future or broken file is preserved byte-for-byte. The
+            // current runtime can recover in memory; reopening a readable
+            // file restores persistence without overwriting unknown data.
+            path: writable.then_some(path),
             node: node.to_owned(),
             writing: Arc::new(Mutex::new(())),
             file: Arc::new(Mutex::new(LabelsFile {
@@ -1043,6 +1055,26 @@ mod tests {
         std::fs::write(root.path().join(LABELS_FILE), b"{not json").unwrap();
         let store = LabelStore::open(Some(root.path()), None, LOCAL_TARGET);
         assert!(store.target(LOCAL_TARGET).is_empty());
+    }
+
+    #[test]
+    fn unreadable_and_future_files_are_never_replaced_by_an_empty_save() {
+        for original in [
+            b"{not json".as_slice(),
+            br#"{"version":999,"targets":{},"devices":{}}"#,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join(LABELS_FILE);
+            std::fs::write(&path, original).unwrap();
+            let store = LabelStore::open(Some(root.path()), None, LOCAL_TARGET);
+            store.save_target(
+                LOCAL_TARGET,
+                &BTreeMap::from([("w1:p1".into(), record("new-owner"))]),
+            );
+            store.flush();
+            drop(store);
+            assert_eq!(std::fs::read(path).unwrap(), original);
+        }
     }
 
     #[test]

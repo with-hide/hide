@@ -153,6 +153,8 @@ impl BacklogTarget {
 #[derive(Clone, Debug)]
 pub enum LedgerCall {
     Record(SessionIdentity),
+    /// Display-only history. Never contains a turn, wait or control proof.
+    Metadata(SessionIdentity),
     ReserveIssue {
         key: AttemptKey,
         repository: String,
@@ -221,6 +223,7 @@ pub struct BacklogMissedKey {
 #[derive(Debug)]
 pub enum LedgerAnswer {
     Record(Box<SessionRecord>),
+    Metadata(Option<SessionMetadata>),
     Attempt(IssueAttempt),
     Saved,
     Pending(Vec<PendingBacklog>),
@@ -238,6 +241,19 @@ pub struct SessionIdentity {
     pub device_id: String,
     pub agent: String,
     pub session_id: String,
+}
+
+/// Conversation-owned words, separate from a pane's current execution.
+/// Uses the link ledger's existing session retention and bounded PR list.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionMetadata {
+    pub native_title: Option<String>,
+    pub manual_title: Option<String>,
+    pub goal: Option<String>,
+    pub summary: String,
+    pub created_prs: Vec<(String, u64, u64)>,
+    pub analysed_start: Option<u64>,
+    pub analysed_end: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -372,6 +388,19 @@ pub struct TurnJudgment {
 
 #[derive(Clone, Debug)]
 pub enum LedgerUpdate {
+    /// A native-proven label, including the compatibility import. Older
+    /// observations cannot replace a newer saved label.
+    Metadata {
+        session: SessionIdentity,
+        native_title: Option<String>,
+        manual_title: Option<String>,
+        goal: Option<String>,
+        summary: String,
+        created_prs: Vec<(String, u64, u64)>,
+        at_unix_ms: u64,
+        analysed_start: Option<u64>,
+        analysed_end: Option<u64>,
+    },
     /// A turn observed with summaries off, or whose END judgment failed.
     /// It remains a raw request even if the label itself is retried later.
     Unjudged {
@@ -676,6 +705,7 @@ impl LedgerUpdate {
             Self::Unjudged { session, .. }
             | Self::ExcludeRequests { session, .. }
             | Self::Title { session, .. }
+            | Self::Metadata { session, .. }
             | Self::Requests { session, .. }
             | Self::Chapter { session, .. }
             | Self::TurnEnd { session, .. }

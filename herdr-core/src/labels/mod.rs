@@ -16,6 +16,7 @@ pub(crate) mod generator;
 mod import;
 pub(crate) mod input;
 pub(crate) mod overlay;
+pub(crate) mod record;
 pub(crate) mod store;
 pub(crate) mod worker;
 
@@ -105,6 +106,7 @@ impl LabelServices {
         node: Arc<dyn NodeLink>,
         wake: Wake,
         language: hide_ai::OutputLanguage,
+        connector: Arc<dyn hide_herdr_client::ApiConnector>,
     ) -> Result<Option<LabelWorker>, String> {
         if self.home.is_none() {
             return Ok(None);
@@ -127,7 +129,7 @@ impl LabelServices {
             },
             Arc::clone(&self.store),
             Arc::clone(&self.analyzer),
-            Arc::new(NodeTranscripts::new(own_channel(&node))),
+            Arc::new(NodeTranscripts::new(own_channel(&node)).with_connector(connector)),
             wake,
         )
         .map(Some)
@@ -153,6 +155,7 @@ impl LabelServices {
         runtime: Weak<Mutex<Runtime>>,
         wake: Wake,
         language: hide_ai::OutputLanguage,
+        connector: Arc<dyn hide_herdr_client::ApiConnector>,
     ) -> Result<LabelWorker, String> {
         LabelWorker::spawn(
             WorkerConfig {
@@ -169,7 +172,9 @@ impl LabelServices {
             },
             Arc::clone(&self.store),
             Arc::clone(&self.analyzer),
-            Arc::new(NodeTranscripts::new(device_channel(device_id, runtime))),
+            Arc::new(
+                NodeTranscripts::new(device_channel(device_id, runtime)).with_connector(connector),
+            ),
             wake,
         )
     }
@@ -214,11 +219,20 @@ pub(crate) type ChannelSource =
 /// process, a device's through its helper.
 pub(crate) struct NodeTranscripts {
     channel: ChannelSource,
+    connector: Option<Arc<dyn hide_herdr_client::ApiConnector>>,
 }
 
 impl NodeTranscripts {
     pub(crate) fn new(channel: ChannelSource) -> Self {
-        Self { channel }
+        Self {
+            channel,
+            connector: None,
+        }
+    }
+
+    fn with_connector(mut self, connector: Arc<dyn hide_herdr_client::ApiConnector>) -> Self {
+        self.connector = Some(connector);
+        self
     }
 }
 
@@ -242,6 +256,26 @@ fn device_channel(device_id: &str, runtime: Weak<Mutex<Runtime>>) -> ChannelSour
 }
 
 impl TranscriptSource for NodeTranscripts {
+    fn resolve(
+        &self,
+        pane: &str,
+        agent: hide_session::Agent,
+    ) -> Result<Option<(String, String)>, ReadFailure> {
+        let connector = self
+            .connector
+            .as_ref()
+            .ok_or_else(|| ReadFailure::Unavailable("session_process_unavailable".into()))?;
+        let params = crate::wire::pane_process_info_params(pane).map_err(ReadFailure::Refused)?;
+        let value = hide_herdr_client::request_small_response(
+            connector.as_ref(),
+            "pane.process_info",
+            params,
+            Duration::from_secs(1),
+        )
+        .map_err(|_| ReadFailure::Unavailable("session_process_unavailable".into()))?;
+        crate::wire::resumed_session_reference(value, pane, agent).map_err(ReadFailure::Refused)
+    }
+
     fn read(&self, request: &LabelTranscriptRequest) -> Result<LabelTranscript, ReadFailure> {
         let channel =
             (self.channel)().map_err(|reason| ReadFailure::Unavailable(reason.to_owned()))?;

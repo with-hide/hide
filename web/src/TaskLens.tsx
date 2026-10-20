@@ -1,3 +1,4 @@
+import { AgentRecordTitle } from "./components/agent-record-title";
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, FileTextIcon, GitBranchIcon, PlusIcon, ServerIcon } from "lucide-react";
 import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
@@ -5,7 +6,7 @@ import { deviceScope } from "./agentScope";
 import { AgentRowMark } from "./AgentRowMark";
 import { useAgentLogosShown } from "./agentLogoMode";
 import { agentProductName } from "./agentAdapters";
-import { backgroundTail, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
+import { backgroundTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
 import { askParts, DescendantMark, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
 import { childrenOf } from "./components/agent-tree-popover";
@@ -350,7 +351,7 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
   const words = card.state === "resting" || card.state === "cleanup" ? t(`taskLens.state.${card.state}`) : markWords(t, agent);
   const sentence = rowSentence(t, agent);
   // The visible second line follows the button and is read after it, so the name leaves the sentence to it.
-  const name = [agent.identity_label, forkLabel(t, agent), agentProductName(agent.agent_kind), words, hideAiWords(t, agent.hide_ai)].filter(Boolean).join(", ");
+  const name = [agent.identity_label, forkLabel(t, agent), agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, words, hideAiWords(t, agent.hide_ai)].filter(Boolean).join(", ");
   return (
     <EntryContextMenu asChild label={t("taskLens.more", { name: agent.identity_label })} title={agent.identity_label} items={menu.items} onSelect={menu.select} disabled={disabled} data-task-context={agent.pane_id}>
     <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
@@ -359,13 +360,13 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
       <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined} aria-label={name}
-            title={[agent.identity_label, agentProductName(agent.agent_kind), words, sentence].filter(Boolean).join("\n")}
+            title={[agent.identity_label, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, words, sentence].filter(Boolean).join("\n")}
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
             <StatusMark mark={agent.mark} className={markTone(agent)} />
             <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai ? "card" : null} />
-            <span className="min-w-0 truncate text-caption font-medium">{agent.identity_label}</span>
+            <AgentRecordTitle agent={agent} className="text-caption font-medium" />
             <AgentForkMark agent={agent} />
           </button>
           {open ? null : <DescendantMark agent={agent} />}
@@ -586,13 +587,13 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
       <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined}
-            aria-label={[child.identity_label, forkLabel(t, child), agentProductName(child.agent_kind), markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}
-            title={[child.identity_label, agentProductName(child.agent_kind), markWords(t, child), rowSentence(t, child)].filter(Boolean).join("\n")}
+            aria-label={[child.identity_label, forkLabel(t, child), agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}
+            title={[child.identity_label, agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, markWords(t, child), rowSentence(t, child)].filter(Boolean).join("\n")}
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
             <StatusMark mark={child.mark} className={markTone(child)} /><AgentRowMark kind={child.agent_kind} />
-            <span className={cn("min-w-0 truncate text-caption", quiet ? "text-subtle-foreground" : "text-foreground")}>{child.identity_label}</span>
+            <AgentRecordTitle agent={child} className={cn("text-caption", quiet ? "text-subtle-foreground" : "text-foreground")} />
             <AgentForkMark agent={child} />
           </button>
           {device ? <span className="flex shrink-0 items-center gap-xxs rounded-xs border border-border px-xxs text-micro text-muted-foreground" data-task-device={device}><ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />{device}</span> : null}

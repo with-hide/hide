@@ -24,6 +24,9 @@ use super::store::{LOCAL_TARGET, LabelStore};
 use super::worker::{LabelWorker, ObservedAgent, ReadFailure, TranscriptSource, WorkerConfig};
 use crate::sidebar::{AgentLabel, SessionSnapshotPayload};
 
+#[path = "record_tests.rs"]
+mod record_tests;
+
 /// A provider that answers from a queue and can hold an answer back.
 struct Scripted {
     answers: Mutex<VecDeque<Value>>,
@@ -4694,24 +4697,27 @@ fn a_session_file_that_never_appears_is_retried_a_bounded_number_of_times() {
     );
 }
 
-/// Only a file that is not there yet clears by itself: a refusal that waiting
-/// cannot change (a session outside the agent's own folder) is read again on
-/// the pane's next state change and on no timer.
+/// An unconfirmed binding retries automatically at the bounded cadence,
+/// without trusting even a permanently refused path or spending analysis.
 #[test]
-fn a_refusal_that_waiting_cannot_change_is_not_retried() {
+fn an_unconfirmed_refusal_retries_without_restoring_authority() {
     let harness = Harness::new();
     let (mut worker, woken, source) = harness.worker(harness.store());
     let outside = harness.home.path().join("elsewhere.jsonl");
     std::fs::write(&outside, "{}\n").unwrap();
     observe(&mut worker, &agent(&outside, "working", 1));
     settle(&mut worker, &woken);
-    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    let initial = source.reads.load(Ordering::SeqCst);
+    assert_eq!(initial, 1);
 
     for step in [16, 31, 61, 121, 10_000] {
         worker.tick(Instant::now() + Duration::from_secs(step));
         settle(&mut worker, &woken);
     }
-    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(source.reads.load(Ordering::SeqCst), initial + 5);
+    let refused = agent(&outside, "working", 1);
+    assert!(shown(&worker, &refused).is_none());
+    assert_eq!(harness.backend.calls(), 0);
 }
 
 /// A Claude Code session whose process started and whose turn launched a
