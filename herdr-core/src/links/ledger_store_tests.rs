@@ -78,6 +78,51 @@ fn saved_display_metadata_survives_reopen_and_never_crosses_device_or_provider()
     );
 }
 
+#[test]
+fn acknowledged_metadata_retries_only_after_index_and_keeps_new_title_clears() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("links.sqlite3");
+    let (mut store, _) = LinkStore::open(&path).unwrap();
+    let metadata = SessionMetadata {
+        manual_title: Some("old name".into()),
+        ..Default::default()
+    };
+    let save = |value: SessionMetadata, at| LedgerCall::SaveMetadata {
+        session: session(),
+        metadata: Box::new(value),
+        at_unix_ms: at,
+    };
+    assert_eq!(
+        store.ledger_call(save(metadata.clone(), 100)).unwrap_err(),
+        "ledger_metadata_session_not_indexed"
+    );
+    origin_native(&mut store, &session(), "/repo", 1_000);
+    assert!(matches!(
+        store.ledger_call(save(metadata.clone(), 100)).unwrap(),
+        LedgerAnswer::Metadata(Some(_))
+    ));
+    let renamed = SessionMetadata {
+        manual_title: Some("new name".into()),
+        ..Default::default()
+    };
+    store.ledger_call(save(renamed, 200)).unwrap();
+    store
+        .ledger_call(save(SessionMetadata::default(), 300))
+        .unwrap();
+    store.ledger_call(save(metadata, 100)).unwrap();
+    drop(store);
+    let (mut store, _) = LinkStore::open(&path).unwrap();
+    let LedgerAnswer::Metadata(Some(value)) =
+        store.ledger_call(LedgerCall::Metadata(session())).unwrap()
+    else {
+        panic!("missing committed metadata")
+    };
+    assert!(
+        value.manual_title.is_none(),
+        "explicit clear survives reopen and late legacy import"
+    );
+}
+
 fn origin_project(device: &str, repository: &str, epoch: u64) -> crate::links::ProjectFacts {
     crate::links::ProjectFacts {
         key: hide_project::project_id(device, std::path::Path::new("/repo")),

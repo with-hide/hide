@@ -242,7 +242,10 @@ impl LinkClient {
     pub fn call(&self, call: LedgerCall) -> Result<LedgerAnswer, String> {
         // Metadata is a local read, never an external-effect acknowledgement.
         // Its failure must not hold other panes' native reads for 15 seconds.
-        let timeout = if matches!(&call, LedgerCall::Metadata(_)) {
+        let timeout = if matches!(
+            &call,
+            LedgerCall::Metadata(_) | LedgerCall::SaveMetadata { .. }
+        ) {
             Duration::from_secs(1)
         } else {
             Duration::from_secs(15)

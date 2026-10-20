@@ -2192,6 +2192,7 @@ fn a_second_daemon_on_the_same_server_stands_by_and_shows_no_labels() {
     let (mut second, second_woken, source) = harness.worker(harness.store());
     observe(&mut second, &idle);
     assert_eq!(shown(&second, &idle), None);
+    assert!(record_tests::projection(&second, &idle).record.is_none());
     assert_eq!(source.reads.load(Ordering::SeqCst), 0);
     assert_eq!(harness.backend.calls(), 1);
 
@@ -3819,6 +3820,16 @@ fn an_omp_title_and_question_refresh_without_state_changes_or_repeated_analysis(
                 .as_deref(),
             expected
         );
+        let binding = record_tests::projection(&worker, &current).record;
+        assert_eq!(
+            binding
+                .as_ref()
+                .and_then(|b| b.metadata.manual_title.as_deref()),
+            expected
+        );
+        if expected.is_none() {
+            assert!(binding.is_none_or(|b| b.metadata.native_title.is_none()));
+        }
     }
     let mut file = std::fs::OpenOptions::new()
         .append(true)

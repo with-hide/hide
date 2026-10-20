@@ -542,6 +542,25 @@ impl LinkStore {
     }
 
     pub fn ledger_call(&mut self, call: LedgerCall) -> Result<LedgerAnswer, String> {
+        if let LedgerCall::SaveMetadata {
+            session,
+            metadata,
+            at_unix_ms,
+        } = call
+        {
+            self.apply_ledger_update(&LedgerUpdate::Metadata {
+                session: session.clone(),
+                native_title: metadata.native_title,
+                manual_title: metadata.manual_title,
+                goal: metadata.goal,
+                summary: metadata.summary,
+                created_prs: metadata.created_prs,
+                at_unix_ms,
+                analysed_start: metadata.analysed_start,
+                analysed_end: metadata.analysed_end,
+            })?;
+            return self.ledger_metadata(&session).map(LedgerAnswer::Metadata);
+        }
         if let LedgerCall::Metadata(session) = &call {
             return self.ledger_metadata(session).map(LedgerAnswer::Metadata);
         }
@@ -568,7 +587,9 @@ impl LinkStore {
     fn ledger_issue_call(&mut self, call: LedgerCall) -> Result<LedgerAnswer, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let answer = match call {
-            LedgerCall::Record(_) | LedgerCall::Metadata(_) => unreachable!(),
+            LedgerCall::Record(_) | LedgerCall::Metadata(_) | LedgerCall::SaveMetadata { .. } => {
+                unreachable!()
+            }
             LedgerCall::ReserveIssue {
                 key,
                 repository,
@@ -876,7 +897,7 @@ impl LinkStore {
                 }
                 tx.execute("INSERT INTO ledger_titles(device,agent,id,goal,summary,label_at,analysed_start,analysed_end,native_title,manual_title) \
                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(device,agent,id) DO UPDATE SET \
-                    native_title=COALESCE(ledger_titles.native_title,excluded.native_title),manual_title=COALESCE(ledger_titles.manual_title,excluded.manual_title),goal=excluded.goal,summary=excluded.summary,label_at=excluded.label_at,analysed_start=excluded.analysed_start,analysed_end=excluded.analysed_end \
+                    native_title=excluded.native_title,manual_title=excluded.manual_title,goal=excluded.goal,summary=excluded.summary,label_at=excluded.label_at,analysed_start=excluded.analysed_start,analysed_end=excluded.analysed_end \
                     WHERE excluded.label_at>=ledger_titles.label_at",
                     params![session.device_id, session.agent, session.session_id, goal, summary, *at_unix_ms as i64, analysed_start.map(|v|v as i64),analysed_end.map(|v|v as i64),native_title,manual_title]).map_err(failed)?;
                 for (repository, number, at) in created_prs {

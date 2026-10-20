@@ -797,12 +797,15 @@ No latest-session, cwd or reverse owner-hash guess is made.
 
 The core publishes `record_connection` as `checking`, `confirmed` or `unconfirmed` when a row has display history.
 Checking and unconfirmed history keeps its last title and valid PRs dimmed with the localized connection words; confirmed history removes that treatment.
+A provisional PR participates in the display summary without gaining current work duty or a session-created relation; the normal merged/closed display filter still applies.
 Failure keeps display history and retries through the existing single reader, at most once per pane per fifteen seconds after an unsuccessful confirmation.
 The row's branch may differ from a saved PR's branch; existing closed/merged filters remain, and a provisional relation never grants current PR duty or a confirmed-created mark.
 This connection state is separate from hook installation diagnosis and GitHub read staleness.
 A different provider or reference clears the old display, and generation fencing rejects old reads and analyses even on an A-to-B-to-A return.
 
 The existing labels file is compatibility input, never a second session-history database.
+The existing ledger writer acknowledges display saves after commit; an unindexed session or failed query remains pending and retries through the same bounded reader, and queue admission alone never settles a save.
+Native title changes preserve absent fields and apply explicit clears, and generator standby suppresses display bindings along with labels.
 Only a record with an explicit native ID and matching provider owner is eligible for import, repeated imports converge, and corrupt or newer labels files are preserved instead of overwritten by an empty save.
 The links writer keeps the existing device separation and session retention; display metadata adds no transcript, path or complete facts copy.
 Agent summaries Off hides saved goals and summaries while retaining native/manual titles and PR restoration.

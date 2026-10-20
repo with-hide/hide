@@ -186,6 +186,7 @@ pub(crate) fn shown_pull_requests(
                     closing_issues: pull_request.closing_issues.clone(),
                     live,
                     duty: link.duty,
+                    provisional: link.provisional,
                     created: link.sighted_at.is_some() && !link.provisional,
                     settled_at_unix_ms: settled,
                 },

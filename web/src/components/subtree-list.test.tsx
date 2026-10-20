@@ -25,7 +25,7 @@ it("names a descendant on this window's own machine This Mac, not by the host na
   vi.stubGlobal("navigator", { platform: "MacIntel", userAgent: "" });
   window.location.hash = "#token=t&node=mbp";
   const agent = (pane: string, device: string, label: string | null) => legacyAgentRow({
-    id: `agent:${pane}`, pane_id: pane, identity_label: pane, agent_kind: "claude", mark: "going", group: "working",
+    id: `agent:${pane}`, pane_id: pane, identity_label: "아주 긴 한국어 mixed title", record_connection: "unconfirmed", record_summary: "저장된 요약", agent_kind: "claude", mark: "going", group: "working",
     status_code: "working", activity: "working", device_id: device, ...(label ? { device_label: label } : {}),
   }) as AgentRow;
   const subtree: Subtree = {
@@ -50,6 +50,9 @@ it("names a descendant on this window's own machine This Mac, not by the host na
     await act(async () => root.render(<TooltipProvider><SubtreeList subtree={subtree} targetDevice="mini-node" /></TooltipProvider>));
     const child = container.querySelector('[data-subtree-row="child"]')?.getAttribute("aria-label") ?? "";
     expect(child).toContain("This Mac");
+    expect(child).toContain("Connection unconfirmed");
+    expect(child).toContain("저장된 요약");
+    expect(container.querySelectorAll('[data-record-connection="unconfirmed"]')).toHaveLength(2);
     expect(child).not.toContain("MacBook-Pro.local");
   } finally {
     await act(async () => root.unmount());

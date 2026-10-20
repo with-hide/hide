@@ -119,6 +119,10 @@ pub struct AgentPullRequestSnapshot {
     pub live: bool,
     /// This row holds the pull request's duty (D-31).
     pub duty: bool,
+    /// Display-only history, never current work responsibility. The shell
+    /// receives the row's shared record connection state instead.
+    #[serde(skip_serializing)]
+    pub(crate) provisional: bool,
     /// The row's session made it (D-31), as opposed to its branch having it.
     pub created: bool,
     pub settled_at_unix_ms: Option<u64>,

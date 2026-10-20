@@ -9,6 +9,6 @@ export function AgentRecordTitle({ agent, className }: { agent: AgentRow; classN
   const words = recordWords(t, agent);
   return <span className="flex min-w-0 flex-auto items-center gap-xs" title={[words, agent.record_summary].filter(Boolean).join("\n") || undefined}>
     <span className={cn("min-w-0 truncate", className, recordPending(agent) && "opacity-(--opacity-dimmed)")} data-agent-title="true">{agent.identity_label}</span>
-    {words ? <span className="shrink-0 text-micro font-normal text-muted-foreground" data-record-connection={agent.record_connection}>{words}</span> : null}
+    {words ? <span className="min-w-0 max-w-1/2 shrink break-words text-micro font-normal text-muted-foreground" data-record-connection={agent.record_connection}>{words}</span> : null}
   </span>;
 }

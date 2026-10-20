@@ -6,6 +6,7 @@ struct ResumeSource {
     inner: NodeTranscripts,
     locator: Mutex<Result<Option<(String, String)>, ReadFailure>>,
     attempts: AtomicUsize,
+    reads: AtomicUsize,
 }
 
 impl ResumeSource {
@@ -16,12 +17,14 @@ impl ResumeSource {
             inner: NodeTranscripts::new(Box::new(move || Ok(node.clone()))),
             locator: Mutex::new(Ok(Some(("path".into(), path.display().to_string())))),
             attempts: AtomicUsize::new(0),
+            reads: AtomicUsize::new(0),
         })
     }
 }
 
 impl TranscriptSource for ResumeSource {
     fn read(&self, request: &LabelTranscriptRequest) -> Result<LabelTranscript, ReadFailure> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
         self.inner.read(request)
     }
     fn resolve(
@@ -34,7 +37,7 @@ impl TranscriptSource for ResumeSource {
     }
 }
 
-fn projection(
+pub(super) fn projection(
     worker: &LabelWorker,
     observed: &ObservedAgent,
 ) -> crate::sidebar::SessionAgentPayload {
@@ -162,4 +165,181 @@ fn a_missing_locator_without_history_keeps_the_provider_name_and_retries() {
     settle_with_clock(&mut worker, &wake, || retry);
     assert_eq!(source.attempts.load(Ordering::SeqCst), 2);
     assert_eq!(harness.backend.calls(), 0);
+}
+
+#[test]
+fn restart_with_a_different_hook_never_projects_the_old_record() {
+    let harness = Harness::new();
+    let store = harness.store();
+    let a = harness.session("a", "a", &[("user", "기존 작업"), ("assistant", "끝")]);
+    harness.backend.answer("기존 대화 제목", "done", "");
+    let old = agent(&a, "idle", 1);
+    let (mut first, wake, _) = harness.worker(store.clone());
+    observe(&mut first, &old);
+    settle(&mut first, &wake);
+    drop(first);
+    let b = harness.session("b", "b", &[("user", "새 작업")]);
+    let current = agent(&b, "working", 2);
+    let (mut restarted, _, _) = harness.worker(store);
+    observe(&mut restarted, &current);
+    let row = projection(&restarted, &current);
+    assert!(
+        row.record.is_none(),
+        "old history must be absent before B's read lands"
+    );
+    assert!(row.label.is_none());
+    assert!(row.facts.is_none());
+}
+
+struct QuietLinks;
+impl crate::links::worker::Sink for QuietLinks {
+    fn summaries(&self, _: std::collections::BTreeMap<String, crate::links::ProjectLinkSummary>) {}
+    fn progress(&self, _: Vec<crate::links::ledger::WorkProgress>) {}
+    fn panel(&self, _: u64, _: Result<crate::links::worker::PanelAnswer, String>) {}
+    fn filling(&self, _: bool) {}
+    fn devices(&self) -> Vec<(String, Arc<dyn crate::node_access::NodeLink>)> {
+        vec![]
+    }
+}
+
+/// A real writer acknowledges an unindexed refusal, then stores the same
+/// unchanged display after the existing native index obtains the session.
+#[test]
+fn unindexed_history_retries_and_survives_old_pane_removal_and_reopen() {
+    use crate::links::{
+        ledger::{LedgerAnswer, LedgerCall},
+        store::LinkStore,
+        worker::{LinkWorker, Paths},
+    };
+    let harness = Harness::new();
+    let store = harness.store();
+    let path = harness.session(
+        "a",
+        "native-a",
+        &[("user", "보관할 작업"), ("assistant", "끝")],
+    );
+    harness.backend.answer("독립 보관할 제목", "done", "");
+    let old = agent(&path, "idle", 1);
+    let (mut first, wake, _) = harness.worker(store.clone());
+    observe(&mut first, &old);
+    settle(&mut first, &wake);
+    drop(first);
+    let blank_home = tempfile::tempdir().unwrap();
+    let db = harness.state.path().join("links.sqlite3");
+    let links = LinkWorker::spawn(
+        Paths {
+            store: db.clone(),
+            search: harness.state.path().join("search.sqlite3"),
+            local_device: LOCAL_TARGET.into(),
+        },
+        Arc::new(hide_node::Local::new(Some(blank_home.path().into()))),
+        QuietLinks,
+    )
+    .unwrap();
+    let client = links.client();
+    client.projects(Arc::default());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while client.ledger_started_at().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    let source = ResumeSource::new(&harness, &path);
+    let (mut resumed, wake) = harness.spawn_with_ledger(
+        store.clone(),
+        LOCAL_TARGET,
+        "local.sock",
+        source.clone(),
+        Arc::new(Mutex::new(Some(client.clone()))),
+    );
+    resumed.set_summaries(false, Instant::now());
+    observe(&mut resumed, &old);
+    settle(&mut resumed, &wake);
+    let reads_before = source.reads.load(Ordering::SeqCst);
+    for _ in 0..20 {
+        resumed.tick(Instant::now());
+    }
+    assert_eq!(
+        source.reads.load(Ordering::SeqCst),
+        reads_before,
+        "an unindexed save must wait for its bounded retry"
+    );
+    let identity = claude_session("native-a");
+    let before_index = client.call(LedgerCall::Metadata(identity.clone())).unwrap();
+    // Native title updates may already create a display row independently
+    // of indexing. The rejected history save must not have stored its goal.
+    let LedgerAnswer::Metadata(before_index) = before_index else {
+        panic!("metadata query returned another answer")
+    };
+    assert!(before_index.is_none_or(|metadata| metadata.goal.is_none()));
+    // The native indexer's existing boundary facts arrive after the failed save.
+    // Seed only that boundary in the fixture, without modifying the conversation.
+    let (mut index, _) = LinkStore::open(&db).unwrap();
+    index
+        .apply_answer(
+            LOCAL_TARGET,
+            &hide_session::links::ReadAnswer {
+                agent: hide_session::Agent::Claude,
+                path: path.display().to_string(),
+                checkpoint: None,
+                has_more: false,
+                rescanned: true,
+                error: None,
+                facts: hide_session::links::LinkFacts {
+                    session_id: Some("native-a".into()),
+                    cwd: Some("/fixture".into()),
+                    first_at_unix_ms: Some(unix_now_ms()),
+                    last_at_unix_ms: Some(unix_now_ms()),
+                    ..Default::default()
+                },
+            },
+            "fixture-native-index",
+        )
+        .unwrap();
+    drop(index);
+    let later = Instant::now() + Duration::from_secs(16);
+    resumed.tick(later);
+    settle_with_clock(&mut resumed, &wake, || later);
+    let LedgerAnswer::Metadata(Some(saved)) = client.call(LedgerCall::Metadata(identity)).unwrap()
+    else {
+        panic!("unchanged metadata was never retried")
+    };
+    assert_eq!(saved.goal.as_deref(), Some("독립 보관할 제목"));
+    drop(resumed);
+    drop(links);
+    store.flush();
+    let links = LinkWorker::spawn(
+        Paths {
+            store: db,
+            search: harness.state.path().join("search.sqlite3"),
+            local_device: LOCAL_TARGET.into(),
+        },
+        Arc::new(hide_node::Local::new(Some(blank_home.path().into()))),
+        QuietLinks,
+    )
+    .unwrap();
+    links.client().projects(Arc::default());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while links.client().ledger_started_at().is_none() {
+        assert!(Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    // Drop compatibility input, so only the reopened ledger can restore it.
+    store.save_target(LOCAL_TARGET, &Default::default());
+    let (mut next, wake) = harness.spawn_with_ledger(
+        store.clone(),
+        LOCAL_TARGET,
+        "local.sock",
+        ResumeSource::new(&harness, &path),
+        Arc::new(Mutex::new(Some(links.client()))),
+    );
+    let mut new = old.clone();
+    new.pane_id = "w2:p2".into();
+    new.reference = None;
+    observe(&mut next, &new);
+    settle(&mut next, &wake);
+    let shown = projection(&next, &new).record.unwrap();
+    assert_eq!(shown.metadata.goal, saved.goal);
+    assert_eq!(shown.metadata.native_title, saved.native_title);
+    assert_eq!(shown.metadata.summary, saved.summary);
+    assert_eq!(harness.backend.calls(), 1);
 }

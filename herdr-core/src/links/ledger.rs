@@ -155,6 +155,12 @@ pub enum LedgerCall {
     Record(SessionIdentity),
     /// Display-only history. Never contains a turn, wait or control proof.
     Metadata(SessionIdentity),
+    /// Returns only after the existing writer commits the display update.
+    SaveMetadata {
+        session: SessionIdentity,
+        metadata: Box<SessionMetadata>,
+        at_unix_ms: u64,
+    },
     ReserveIssue {
         key: AttemptKey,
         repository: String,

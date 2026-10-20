@@ -219,6 +219,7 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
         closing_issues: vec![],
         live: true,
         duty: true,
+        provisional: false,
         created: true,
         settled_at_unix_ms: None,
     };
