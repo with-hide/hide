@@ -1083,7 +1083,7 @@ The core owns the lens, the view option and the slot (`herdr-core/src/runtime/de
 ### The sidebar's 태스크 list
 
 
-A session title restored from saved conversation history carries the core's connection state on the shared Project, Task and agent-tree rows.
+A session title restored from saved conversation history carries the core's connection state on the shared Project, Task and agent-tree rows, the Overview graph/list/preview and project home, live-agent popovers, archive confirmations, feedback recipient menus and PR list heads.
 While checking it is dimmed beside `연결 확인 중`; an unsuccessful or uncertain check keeps it dimmed beside `연결 미확인`, and the worker retries without a new message or a retry button.
 A confirmed binding drops both the dimming and those words.
 The same state names and dims its PR mark without changing GitHub read-stale status, keyboard access or the existing PR card/link actions.

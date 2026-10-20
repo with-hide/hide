@@ -2,6 +2,7 @@ import { type ReactNode } from "react";
 import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
 import { markTone } from "./agentRow";
+import { AgentRecordTitle } from "./components/agent-record-title";
 import { Elapsed } from "./components/elapsed";
 import { StatusMark } from "./components/status-mark";
 import { Tooltip, TooltipContent, TooltipTrigger, useHintOpen } from "./components/ui/tooltip";
@@ -31,7 +32,7 @@ export function AgentMessagePopover({ agent, place, fallback, tone, onOpen, cont
           <span className="flex min-w-0 items-center gap-xs text-body font-medium text-foreground">
             <StatusMark mark={agent.mark} className={markTone(agent)} />
             <AgentMark kind={agent.agent_kind} />
-            <span className="min-w-0 flex-1 truncate">{agent.identity_label}</span>
+            <AgentRecordTitle agent={agent} />
             <span className="shrink-0 text-caption font-normal text-muted-foreground">{agentProductName(agent.agent_kind)}</span>
             <Elapsed since={agent.changed_at_unix_ms} className="font-mono text-caption text-muted-foreground" />
           </span>

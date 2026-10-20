@@ -5,9 +5,10 @@
 
 import type { Actions } from "./actions";
 import { archiveWorking } from "./archive";
-import { markTone } from "./agentRow";
+import { markTone, rowAccessibleName } from "./agentRow";
 import { agentProductName } from "./agentAdapters";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./components/ui/alert-dialog";
+import { AgentRecordTitle } from "./components/agent-record-title";
 import { RowMark } from "./components/subtree-list";
 import { useInterfaceTranslation } from "./i18n/client";
 import { agentsByPane, allAgents } from "./paneAgents";
@@ -34,10 +35,10 @@ export function ConfirmArchive({ actions }: { actions: Actions }) {
           </AlertDialogHeader>
           <ul className="flex min-w-0 flex-col gap-xxs text-caption" data-archive-working="true">
             {working.map((agent) => (
-              <li key={agent.pane_id} data-archive-working-row={agent.pane_id} className="flex min-w-0 items-start gap-xs">
+              <li key={agent.pane_id} aria-label={rowAccessibleName(t, agent, null)} data-archive-working-row={agent.pane_id} className="flex min-w-0 items-start gap-xs">
                 <span className="flex w-(--size-agent-mark) shrink-0 justify-center"><RowMark mark={agent.mark} tone={markTone(agent)} status={null} /></span>
                 <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-xs">
-                  <span className="min-w-0 break-words text-foreground">{agent.identity_label}</span>
+                  <AgentRecordTitle agent={agent} className="text-foreground" />
                   <span className="shrink-0 text-subtle-foreground">{agentProductName(agent.agent_kind)}</span>
                 </span>
               </li>

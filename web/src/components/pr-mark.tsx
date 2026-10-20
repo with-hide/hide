@@ -7,6 +7,7 @@ import { agentStaleness, ownPulls, PR_LOOK, prMarkParts, reviewWord, sessionStal
 import type { PrChip } from "../projectBoard";
 import type { AgentPullRequest, AgentRow, PrState } from "../snapshot";
 import { useShellStore } from "../store";
+import { AgentRecordTitle } from "./agent-record-title";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Hint, Tooltip, TooltipContent, TooltipTrigger, useHintOpen } from "./ui/tooltip";
 
@@ -163,7 +164,7 @@ function PrListHead({ agent, count }: { agent: AgentRow; count?: number }) {
   return (
     <DropdownMenuLabel className="flex min-w-0 items-baseline gap-xs">
       <span className="shrink-0">{t("agentSessions.pr.count", { count: count ?? agent.state.pr?.count ?? 0 })}</span>
-      <span className="min-w-0 truncate font-normal text-muted-foreground">{agent.identity_label}</span>
+      <AgentRecordTitle agent={agent} className="font-normal text-muted-foreground" />
     </DropdownMenuLabel>
   );
 }
