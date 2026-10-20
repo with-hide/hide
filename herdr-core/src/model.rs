@@ -2011,11 +2011,13 @@ fn sidebar_tab_naming<S: serde::Serializer>(
 ) -> Result<S::Ok, S::Error> {
     #[derive(Serialize)]
     struct SidebarName<'a> {
+        focused_pane_id: &'a str,
         manual_name: Option<&'a str>,
         number: u32,
         named_by_operator: bool,
     }
     SidebarName {
+        focused_pane_id: &naming.focused_pane_id,
         manual_name: naming.manual_name(),
         number: naming.number,
         named_by_operator: naming.operator_name().is_some(),

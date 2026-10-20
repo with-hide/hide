@@ -326,7 +326,7 @@ export const PaneView = memo(function PaneView({
                 {markSymbol ? <StatusMark mark={markSymbol} label={markStatus ? markWords(t, { mark: markSymbol, status_code: markStatus }) : undefined} className={markTone} data-pane-status-mark={markSymbol} /> : null}
                 <Hint label={agentProductName(agentKind)}><span className="flex shrink-0"><AgentMark kind={agentKind} /></span></Hint>
                 <Hint label={`${title}\n${agentProductName(agentKind)}`} reveals>
-                  <>{titleContent}<span className="sr-only">, {agentProductName(agentKind)}</span></>
+                  <span className="flex min-w-0 flex-1 items-center">{titleContent}<span className="sr-only">, {agentProductName(agentKind)}</span></span>
                 </Hint>
               </>
             }

@@ -218,7 +218,9 @@ fn unindexed_history_retries_and_survives_old_pane_removal_and_reopen() {
         "native-a",
         &[("user", "보관할 작업"), ("assistant", "끝")],
     );
-    harness.backend.answer("독립 보관할 제목", "done", "");
+    harness
+        .backend
+        .answer("독립 보관할 제목", "done", "보관할 진행 요약");
     let old = agent(&path, "idle", 1);
     let (mut first, wake, _) = harness.worker(store.clone());
     observe(&mut first, &old);
@@ -307,6 +309,11 @@ fn unindexed_history_retries_and_survives_old_pane_removal_and_reopen() {
     drop(resumed);
     drop(links);
     store.flush();
+    // A v5 title row migrates with empty new metadata columns. It must not
+    // suppress the still-required labels compatibility import in a new pane.
+    rusqlite::Connection::open(&db).unwrap().execute(
+        "UPDATE ledger_titles SET goal=NULL,summary='',label_at=0,analysed_start=NULL,analysed_end=NULL", [],
+    ).unwrap();
     let links = LinkWorker::spawn(
         Paths {
             store: db,
@@ -323,6 +330,31 @@ fn unindexed_history_retries_and_survives_old_pane_removal_and_reopen() {
         assert!(Instant::now() < deadline);
         std::thread::yield_now();
     }
+    let (mut importing, import_wake) = harness.spawn_with_ledger(
+        store.clone(),
+        LOCAL_TARGET,
+        "local.sock",
+        ResumeSource::new(&harness, &path),
+        Arc::new(Mutex::new(Some(links.client()))),
+    );
+    let mut moved = old.clone();
+    moved.pane_id = "w2:p1".into();
+    moved.reference = None;
+    observe(&mut importing, &moved);
+    settle(&mut importing, &import_wake);
+    let imported = projection(&importing, &moved).record.unwrap();
+    assert_eq!(imported.metadata.goal, saved.goal);
+    assert!(!saved.summary.is_empty());
+    assert_eq!(imported.metadata.summary, saved.summary);
+    let LedgerAnswer::Metadata(Some(imported)) = links
+        .client()
+        .call(LedgerCall::Metadata(claude_session("native-a")))
+        .unwrap()
+    else {
+        panic!("legacy import was not committed")
+    };
+    assert_eq!(imported.summary, saved.summary);
+    drop(importing);
     // Drop compatibility input, so only the reopened ledger can restore it.
     store.save_target(LOCAL_TARGET, &Default::default());
     let (mut next, wake) = harness.spawn_with_ledger(

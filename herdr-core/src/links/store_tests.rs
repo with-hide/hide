@@ -1316,7 +1316,13 @@ fn direct_observation_schema_migrates_existing_v4_without_recreating_retention_a
     let state = tempfile::tempdir().unwrap();
     let path = state.path().join("links.sqlite3");
     let (store, _) = LinkStore::open(&path).unwrap();
-    store.connection.execute_batch("DROP TABLE direct_observations; PRAGMA user_version=4;
+    store.connection.execute_batch("DROP TABLE direct_observations;
+        ALTER TABLE ledger_titles DROP COLUMN goal;
+        ALTER TABLE ledger_titles DROP COLUMN summary;
+        ALTER TABLE ledger_titles DROP COLUMN label_at;
+        ALTER TABLE ledger_titles DROP COLUMN analysed_start;
+        ALTER TABLE ledger_titles DROP COLUMN analysed_end;
+        PRAGMA user_version=4;
         INSERT INTO retention_aliases VALUES('old-project','new-project');
         INSERT INTO ledger_backlog VALUES('backlog-1','local','old-project','fixture-workspace','fixture/repo','Preserved backlog',1,'creating',NULL,NULL);").unwrap();
     drop(store);

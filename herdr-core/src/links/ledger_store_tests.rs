@@ -3048,7 +3048,7 @@ mod continuation {
         store
             .connection
             .execute(
-                "INSERT INTO ledger_titles VALUES(?1,?2,?3,NULL,NULL,?4) ON CONFLICT(device,agent,id) DO UPDATE SET state=excluded.state",
+                "INSERT INTO ledger_titles(device,agent,id,native_title,manual_title,state) VALUES(?1,?2,?3,NULL,NULL,?4) ON CONFLICT(device,agent,id) DO UPDATE SET state=excluded.state",
                 params![owner.device_id, owner.agent, owner.session_id, state],
             )
             .unwrap();

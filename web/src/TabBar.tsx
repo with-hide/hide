@@ -42,7 +42,8 @@ export function AgentTab({ number, entry, checkout, interaction, actions, renami
   const tab = checkout.tabs.find((row) => row.id === entry.source_id);
   const agent = tab?.agent;
   const rows = agentsByPane(usePaneAgents());
-  const recordAgent = tab?.panes.map(pane => rows.get(pane.id)).find(row => row?.identity_label === entry.label);
+  const focusedAgent = tab?.sidebar?.focused_pane_id ? rows.get(tab.sidebar.focused_pane_id) : undefined;
+  const recordAgent = focusedAgent?.identity_label === entry.label ? focusedAgent : undefined;
   // The core gives only agent panes an identity, on local and device tabs alike.
   // Native subagents live inside that pane and are not additional panes.
   const agentPaneCount = tab?.panes.reduce((count, pane) => count + Number(pane.identity_label !== null), 0) ?? 0;

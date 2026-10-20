@@ -681,7 +681,7 @@ export type TabAgent = Pick<AgentRow, "agent_kind" | "mark" | "demand" | "activi
 
 export type Tab = {
   /** `named_by_operator`: the manual name is one the operator gave through Rename, which keeps the tab when its agents leave. */
-  sidebar?: { manual_name: string | null; number: number; named_by_operator: boolean };
+  sidebar?: { manual_name: string | null; number: number; named_by_operator: boolean; focused_pane_id?: string };
   agent?: TabAgent | null;
   id: string | null;
   workspace_id: string | null;

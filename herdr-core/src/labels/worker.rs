@@ -267,6 +267,7 @@ struct ReadJob {
     request: LabelTranscriptRequest,
     discover: bool,
     metadata: Option<(String, SessionMetadata)>,
+    import_legacy: bool,
     persist_metadata: Option<(String, SessionMetadata, u64)>,
 }
 
@@ -1090,6 +1091,7 @@ impl LabelWorker {
                 turns,
             },
             discover: pane.reported_reference.is_none(),
+            import_legacy: !pane.metadata_loaded,
             metadata: record
                 .filter(|record| {
                     pane.metadata_loaded && record.proven_for(pane.reference_token.as_deref())
@@ -2506,23 +2508,52 @@ impl Reader {
                             else {
                                 return Err("record_answer_mismatch".into());
                             };
-                            if saved.is_some() {
-                                return Ok(saved);
-                            }
-                            if let Some((_, _, display, at)) = old {
+                            if let Some((_, _, display, at)) = old.filter(|_| job.import_legacy) {
+                                // A pre-migration title row is not proof that
+                                // its legacy goal/summary was imported. Fill
+                                // only missing history, under the legacy time
+                                // so a newer committed record still wins.
+                                let mut imported = saved.clone().unwrap_or_default();
+                                imported.native_title = imported
+                                    .native_title
+                                    .or_else(|| display.native_title.clone());
+                                imported.manual_title = imported
+                                    .manual_title
+                                    .or_else(|| display.manual_title.clone());
+                                imported.goal = imported.goal.or_else(|| display.goal.clone());
+                                if imported.summary.is_empty() {
+                                    imported.summary.clone_from(&display.summary);
+                                }
+                                imported.analysed_start =
+                                    imported.analysed_start.or(display.analysed_start);
+                                imported.analysed_end =
+                                    imported.analysed_end.or(display.analysed_end);
+                                for pr in &display.created_prs {
+                                    if !imported
+                                        .created_prs
+                                        .iter()
+                                        .any(|(repo, number, _)| repo == &pr.0 && *number == pr.1)
+                                    {
+                                        imported.created_prs.push(pr.clone());
+                                    }
+                                }
+                                imported.created_prs.truncate(20);
+                                if saved.as_ref() == Some(&imported) {
+                                    return Ok(saved);
+                                }
                                 let LedgerAnswer::Metadata(saved) =
                                     client.call(LedgerCall::SaveMetadata {
                                         session,
-                                        metadata: Box::new(display.clone()),
+                                        metadata: Box::new(imported),
                                         at_unix_ms: *at,
                                     })?
                                 else {
                                     return Err("record_answer_mismatch".into());
                                 };
-                                written = Some(display.clone());
+                                written = saved.clone();
                                 return Ok(saved);
                             }
-                            Ok(None)
+                            Ok(saved)
                         })();
                         let metadata = match metadata {
                             Ok(value) => MetadataRead {
