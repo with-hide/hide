@@ -51,12 +51,19 @@ test("@platform Overview restores its exact current session and keeps map moveme
     // Every member inside the packed footprint must travel with its center.
     const group = graph.locator(".react-flow__node-project").first();
     await graph.getByRole("button", { name: "Fit graph", exact: true }).click();
-    const footprint = await group.boundingBox();
-    if (!footprint) throw new Error("project footprint has no geometry");
-    const members = await graph.locator(".react-flow__node").evaluateAll((nodes, area) => nodes.filter(node => {
-      const box = node.getBoundingClientRect();
-      return box.x >= area.x - 1 && box.y >= area.y - 1 && box.right <= area.x + area.width + 1 && box.bottom <= area.y + area.height + 1;
-    }).map(node => node.getAttribute("data-id")), footprint);
+    // Read all bounds together: Fit graph can update the camera between awaits.
+    const members = await graph.locator(".react-flow__node").evaluateAll(nodes => {
+      const project = nodes.find(node => node.classList.contains("react-flow__node-project"));
+      if (!project) throw new Error("project footprint has no geometry");
+      const area = project.getBoundingClientRect();
+      return nodes.filter(node => {
+        const box = node.getBoundingClientRect();
+        return box.x >= area.x - 1 && box.y >= area.y - 1 && box.right <= area.x + area.width + 1 && box.bottom <= area.y + area.height + 1;
+      }).map(node => node.getAttribute("data-id"));
+    });
+    // The fixture has one project and two sessions; the center moves with both.
+    expect(members).toContain(await group.getAttribute("data-id"));
+    expect(members).toHaveLength(3);
     const originalGroup = await group.getAttribute("style");
     await drag(page, group.locator(".og-project-drag"), 40, 24);
     await expect.poll(() => group.getAttribute("style")).not.toBe(originalGroup);
