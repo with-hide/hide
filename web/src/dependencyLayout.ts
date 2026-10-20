@@ -114,66 +114,56 @@ export type CompoundGroup = NodeBox & { children: NodeBox[]; edges: GraphEdge[] 
 export type CompoundPlacement = { groups: Map<string, NodeBox & { x: number; y: number }>; nodes: Map<string, PlacedNode> };
 export type CompoundSpacing = Spacing & { padding: number; header: number; groups: number };
 
-/** The approved composition packs independent families, then projects, in separate layers. */
+/** Sessions occupy fixed radial slots; ELK packs their independent project footprints.
+ * Fixed ring capacity leaves existing slots still when another session is revealed.
+ * Each ring clears the actual label rectangles, avoiding diagonal-sized empty space.
+ */
 export async function placeCompoundGraph(elk: Pick<ELK, "layout">, groups: readonly CompoundGroup[], spacing: CompoundSpacing): Promise<CompoundPlacement> {
   const count = groups.reduce((sum, group) => sum + 1 + group.children.length, 0);
   if (count > LAYOUT_NODE_LIMIT) throw new Error(`compound graph has ${count} nodes, over the layout limit of ${LAYOUT_NODE_LIMIT}`);
-  const packing = (aspect: number, gap: number, padding = "[top=0,left=0,bottom=0,right=0]") => ({ "elk.algorithm": "rectpacking", "elk.aspectRatio": String(aspect), "elk.spacing.nodeNode": String(gap), "elk.padding": padding });
-  const project = (group: CompoundGroup): ElkNode => {
-    if (!group.children.length) return { id: group.id, width: group.width, height: group.height };
-    const adjacent = new Map(group.children.map((node) => [node.id, new Set<string>()]));
-    for (const edge of group.edges) {
-      if (!adjacent.has(edge.from) || !adjacent.has(edge.to)) throw new Error("lineage endpoint is outside its project");
-      adjacent.get(edge.from)!.add(edge.to);
-      adjacent.get(edge.to)!.add(edge.from);
-    }
-    const remaining = new Set(adjacent.keys());
-    const families: ElkNode[] = [];
-    for (const node of group.children) {
-      if (!remaining.has(node.id)) continue;
-      const members = new Set<string>();
-      const pending = [node.id];
-      remaining.delete(node.id);
-      while (pending.length) {
-        const id = pending.pop()!;
-        members.add(id);
-        for (const neighbor of adjacent.get(id)!) if (remaining.delete(neighbor)) pending.push(neighbor);
-      }
-      families.push({
-        id: `family:${node.id}`,
-        layoutOptions: {
-          "elk.algorithm": "layered", "elk.direction": "RIGHT", "elk.edgeRouting": "POLYLINE",
-          "elk.spacing.nodeNode": String(spacing.betweenNodes), "elk.layered.spacing.nodeNodeBetweenLayers": String(spacing.betweenLayers),
-          "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES", "elk.padding": "[top=0,left=0,bottom=0,right=0]",
-        },
-        children: group.children.filter((child) => members.has(child.id)),
-        edges: group.edges.filter((edge) => members.has(edge.from)).map((edge) => ({ id: `${edge.from}>${edge.to}`, sources: [edge.from], targets: [edge.to] })),
-      });
-    }
-    return { id: group.id, layoutOptions: packing(1.5, spacing.betweenNodes, `[top=${spacing.header},left=${spacing.padding},bottom=${spacing.padding},right=${spacing.padding}]`), children: families };
-  };
-  const sections: ElkNode[] = [];
-  for (const open of [true, false]) {
-    const members = groups.filter((group) => Boolean(group.children.length) === open);
-    if (members.length) sections.push({ id: open ? "expanded" : "collapsed", layoutOptions: packing(open ? 1.5 : 1.2, spacing.groups), children: members.map(project) });
-  }
-  const laid = await elk.layout({
-    id: "overview",
-    layoutOptions: { "elk.algorithm": "layered", "elk.direction": "RIGHT", "elk.layered.spacing.nodeNodeBetweenLayers": String(spacing.groups), "elk.padding": "[top=0,left=0,bottom=0,right=0]" },
-    children: sections,
-    edges: sections.length === 2 ? [{ id: "project-columns", sources: ["expanded"], targets: ["collapsed"] }] : [],
-  });
   const placed: CompoundPlacement = { groups: new Map(), nodes: new Map() };
-  for (const section of laid.children ?? []) for (const group of section.children ?? []) {
-    if (![group.x, group.y, group.width, group.height].every((value) => value !== undefined && Number.isFinite(value))) throw new Error("layout returned an incomplete project");
-    if (!Number.isFinite(section.x)) throw new Error("layout returned an incomplete project column");
-    // Align the columns at their tops rather than the synthetic routing edge's center.
-    placed.groups.set(group.id, { id: group.id, x: section.x! + group.x!, y: group.y!, width: group.width!, height: group.height! });
-    for (const family of group.children ?? []) for (const node of family.children ?? []) {
-      if (![node.x, node.y].every((value) => value !== undefined && Number.isFinite(value))) throw new Error("layout returned an incomplete session");
-      if (![family.x, family.y].every((value) => value !== undefined && Number.isFinite(value))) throw new Error("layout returned an incomplete family");
-      placed.nodes.set(node.id, { x: family.x! + node.x!, y: family.y! + node.y!, layer: 0 });
+  const footprints = groups.map((group) => {
+    const width = Math.max(0, ...group.children.map((node) => node.width));
+    const height = Math.max(0, ...group.children.map((node) => node.height));
+    const diagonal = Math.hypot(width, height);
+    const points: (PlacedNode & { id: string })[] = [];
+    let radius = 0;
+    let start = 0;
+    for (let ring = 1; start < group.children.length; ring += 1) {
+      // An ordinary ten/eleven-session project fits on one ring.
+      const members = group.children.slice(start, start + 12 * ring);
+      const angles = members.map((_, index) => -Math.PI / 2 + index * Math.PI * 2 / members.length);
+      let needed = ring === 1 ? 0 : radius + diagonal + spacing.betweenNodes;
+      const clearance = (dx: number, dy: number, w: number, h: number) => Math.min(w / Math.max(Math.abs(dx), Number.EPSILON), h / Math.max(Math.abs(dy), Number.EPSILON));
+      for (let i = 0; i < members.length; i += 1) {
+        const node = members[i]!;
+        const angle = angles[i]!;
+        needed = Math.max(needed, clearance(Math.cos(angle), Math.sin(angle), (group.width + node.width) / 2 + spacing.betweenNodes, (group.height + node.height) / 2 + spacing.betweenNodes));
+        for (let j = 0; j < i; j += 1) needed = Math.max(needed, clearance(Math.cos(angle) - Math.cos(angles[j]!), Math.sin(angle) - Math.sin(angles[j]!), (node.width + members[j]!.width) / 2 + spacing.betweenNodes, (node.height + members[j]!.height) / 2 + spacing.betweenNodes));
+      }
+      radius = needed;
+      for (let i = 0; i < members.length; i += 1) {
+        const node = members[i]!;
+        points.push({ id: node.id, x: Math.cos(angles[i]!) * radius - node.width / 2, y: Math.sin(angles[i]!) * radius - node.height / 2, layer: ring });
+      }
+      start += members.length;
     }
+    const extent = points.reduce((box, point, index) => ({
+      left: Math.min(box.left, point.x), top: Math.min(box.top, point.y),
+      right: Math.max(box.right, point.x + group.children[index]!.width), bottom: Math.max(box.bottom, point.y + group.children[index]!.height),
+    }), { left: -group.width / 2, top: -group.height / 2, right: group.width / 2, bottom: group.height / 2 });
+    // Symmetric bounds make the project heading the true cluster center.
+    const halfWidth = Math.max(-extent.left, extent.right) + spacing.padding;
+    const halfHeight = Math.max(-extent.top, extent.bottom) + spacing.padding;
+    for (const point of points) placed.nodes.set(point.id, { x: point.x + halfWidth, y: point.y + halfHeight, layer: point.layer });
+    return { id: group.id, width: halfWidth * 2, height: halfHeight * 2 };
+  });
+  const laid = await elk.layout({ id: "overview", layoutOptions: {
+    "elk.algorithm": "rectpacking", "elk.aspectRatio": "1.6", "elk.spacing.nodeNode": String(spacing.groups), "elk.padding": "[top=0,left=0,bottom=0,right=0]",
+  }, children: footprints });
+  for (const group of laid.children ?? []) {
+    if (![group.x, group.y, group.width, group.height].every((value) => value !== undefined && Number.isFinite(value))) throw new Error("layout returned an incomplete project");
+    placed.groups.set(group.id, { id: group.id, x: group.x!, y: group.y!, width: group.width!, height: group.height! });
   }
   if (placed.groups.size !== groups.length || placed.nodes.size !== count - groups.length) throw new Error("layout omitted a project or session");
   return placed;

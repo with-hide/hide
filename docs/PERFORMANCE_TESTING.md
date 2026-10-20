@@ -903,6 +903,15 @@ Issue comments use the existing detail worker, fifty per requested page and two 
 
 Work derives its graph from canonical agent, lineage, verified launch and bounded delivery facts, never from terminal output or letter bodies.
 The graph delivery projection keeps at most 2,000 metadata edges, independently of the existing 5,000-item delivery ledger, and publishes only changed facts.
+Overview radial placement packs bounded project footprints in the existing cancellable worker; it replaces the tree placement only for Work and keeps the shared 400-node/three-second boundary.
+Each admitted project reserves an access position before larger expansions spend the remaining budget, so a hidden member can be selected without another layout request.
+Protected current members reserve additional positions before admission, independently of the one selected-member position.
+Radial clearance checks label rectangles within each ring on the capped worker input, while edge labels check only their two endpoint rectangles during redraw, reserving the three kind-label lanes together before placing each count.
+Drag updates one local offset map and redraws the bounded nodes and edges; endpoint lookup uses a node-ID index rather than scanning the node array for each edge.
+Selection may reproject the existing bounded relationship metadata but starts no daemon request, provider read, inference, polling clock or pending-layout queue.
+The layout key contains representative identity, proven root sizing, expansion and interface scale, excluding labels, marks, hover, selection and relationship visibility.
+Replay owns one token-timed timeout, cleared on another play, motion change or unmount; idle has neither a decorative loop nor a new clock.
+
 `overviewGraphModel.ts` creates a stable structure key so status, model and elapsed-text updates do not schedule another layout.
 `dependencyLayout.ts` owns at most one layout Worker and AbortController with a deadline, terminates them on success, failure, cancellation and unmount, and refuses more than four hundred layout nodes.
 A failed layout leaves the fifty-row list usable with Retry; hover, zoom, folding and selection add no core event or reader.

@@ -4,9 +4,9 @@ import type { BoardProject } from "./projectBoard";
 import type { AgentRow, OverviewGraphMetadata, OverviewGraphParty } from "./snapshot";
 
 export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null };
-export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; expanded: boolean; roots: number; matches: number };
+export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; expanded: boolean; roots: number; matches: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null };
 export type GraphFocus = "all" | "turn" | "working" | "results";
-export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; folded?: ReadonlySet<string> };
+export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; folded?: ReadonlySet<string>; pinned?: readonly string[]; selected?: string | null };
 export type GraphActivity = Exclude<GraphFocus, "all"> | "unknown" | "idle" | "resting";
 export const GRAPH_FOCUS_DEFAULTS: GraphFocusOptions = { focus: "all", includeResting: false };
 
@@ -25,14 +25,16 @@ const PRIORITY: Record<GraphActivity, number> = { turn: 0, working: 1, results: 
 export type Communication = { kind: "letters" | "herdr_direct"; id: string; source: string; target: string; count: number; latest: number; kinds: Record<string, number>; directions: { from: string; to: string; count: number }[] };
 export type OverviewGraphModel = {
   projects: GraphProject[]; agents: GraphAgent[]; allAgents: GraphAgent[]; visible: GraphAgent[];
-  context: ReadonlySet<string>; quietBranches: ReadonlyMap<string, number>; folded: ReadonlySet<string>;
+  context: ReadonlySet<string>; roots: ReadonlySet<string>; quietBranches: ReadonlyMap<string, number>; folded: ReadonlySet<string>;
   omitted: { id: string; project: BoardProject; count: number; reason: "empty" | "resting" | "filtered" }[];
   counts: Record<GraphFocus, number>;
-  lineage: { from: string; to: string }[]; communication: Communication[];
+  lineage: { from: string; to: string; count: number }[]; communication: Communication[];
   limited: boolean; hidden: number; singleProject: boolean; structure: string;
 };
 
 export const graphProjectId = (project: BoardProject) => `project:${JSON.stringify([project.workspace.device_id, project.workspace.id])}`;
+export const graphSessionId = (deviceId: string, paneId: string, session: string | null) => `session:${JSON.stringify([deviceId, paneId, session])}`;
+
 const partyKey = (party: OverviewGraphParty) => JSON.stringify([party.device_id, party.pane_id, party.session]);
 
 /** Core-qualified parents can cross devices; reused plain pane IDs need one device match. */
@@ -80,7 +82,7 @@ export function overviewGraphFamily(row: GraphAgent, agents: readonly GraphAgent
 }
 
 /** Membership is the core's scope, never a cwd prefix, registration history or a fork origin. */
-function projectSessions(projects: readonly BoardProject[], metadata: OverviewGraphMetadata | undefined): Omit<GraphProject, "expanded">[] {
+function projectSessions(projects: readonly BoardProject[], metadata: OverviewGraphMetadata | undefined): Omit<GraphProject, "expanded" | "shown" | "revealSlot" | "revealed">[] {
   const proof = new Map((metadata?.sessions ?? []).map((session) => [JSON.stringify([session.device_id, session.pane_id]), session]));
   const seen = new Set<string>();
   return projects.map((project) => {
@@ -90,7 +92,7 @@ function projectSessions(projects: readonly BoardProject[], metadata: OverviewGr
       const deviceId = row.agent.device_id ?? remoteDevice ?? row.project.device_id;
       const session = proof.get(JSON.stringify([deviceId, row.agent.pane_id]));
       const digest = session?.session_digest ?? null;
-      const agentId = `session:${JSON.stringify([deviceId, row.agent.pane_id, digest ?? row.agent.session_id ?? null])}`;
+      const agentId = graphSessionId(deviceId, row.agent.pane_id, digest ?? row.agent.session_id ?? null);
       if (seen.has(agentId)) return [];
       seen.add(agentId);
       return [{ ...row, id: agentId, projectId: id, deviceId, digest, launchModel: session?.launch_model ?? null }];
@@ -172,31 +174,65 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     tuck.push(...(children.get(row.id) ?? []));
   }
   const omitted = sessions.filter((group) => !group.agents.some((row) => retained.has(row.id))).map((group) => ({ id: group.id, project: group.project, count: group.agents.length, reason: group.agents.length === 0 ? "empty" as const : group.agents.every((row) => graphActivity(row.agent) === "resting") ? "resting" as const : "filtered" as const }));
-  const all = sessions.filter((group) => group.agents.some((row) => retained.has(row.id))).map((group) => ({ ...group, matches: group.agents.filter((row) => matching.has(row.id)).length, agents: group.agents.filter((row) => retained.has(row.id) && !tucked.has(row.id)), expanded: projectId !== null || expanded.has(group.id) }))
-    .sort((a, b) => Number(b.expanded) - Number(a.expanded) || a.id.localeCompare(b.id));
-  // Groups count as visible nodes. Never slice a family's children into a false complete graph.
-  const groups = all.slice(0, LAYOUT_NODE_LIMIT);
+  const all = sessions.filter((group) => group.agents.some((row) => retained.has(row.id))).map((group) => ({ ...group, matches: group.agents.filter((row) => matching.has(row.id)).length, agents: group.agents.filter((row) => retained.has(row.id) && !tucked.has(row.id)), expanded: expanded.has(group.id) }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  // Centers share the 400-node budget with their representatives. Counts/list stay uncapped.
+  const pinned = new Set(options.pinned ?? []);
+  const priority = [...all].sort((a, b) => Number(b.agents.some((row) => pinned.has(row.id))) - Number(a.agents.some((row) => pinned.has(row.id))) || a.id.localeCompare(b.id));
+  // Admit complete center + access-slot pairs first. A greedy expanded project
+  // must not consume the one position another summarized project needs.
+  const groups: GraphProject[] = [];
+  let minimum = 0;
+  for (const group of priority) {
+    const protectedCount = group.agents.filter((row) => pinned.has(row.id)).length;
+    const access = Math.min(group.agents.length, protectedCount + 1);
+    if (minimum + 1 + access > LAYOUT_NODE_LIMIT) break;
+    groups.push({ ...group, shown: [], revealSlot: null, revealed: null });
+    minimum += 1 + access;
+  }
+  let room = LAYOUT_NODE_LIMIT - minimum;
+  let hidden = all.length - groups.length;
   for (const group of groups) {
     const projectedParents = lineageParents(group.agents);
     group.roots = group.agents.filter((row) => !projectedParents.has(row.id)).length;
+    const protectedRows = group.agents.filter((row) => pinned.has(row.id));
+    const ordered = [...protectedRows, ...group.agents.filter((row) => !pinned.has(row.id))];
+    const reserved = Math.min(group.agents.length, protectedRows.length + 1);
+    // One admission position is already reserved above. An open project needs
+    // no reveal slot, while every summary can reveal any of its list rows.
+    if (group.expanded && group.agents.length > room + reserved) group.expanded = false;
+    if (group.expanded || group.agents.length <= 1) {
+      group.shown = ordered.slice(0, room + reserved);
+      room -= group.shown.length - reserved;
+    } else {
+      group.shown = ordered.slice(0, Math.max(protectedRows.length, Math.min(6, room + reserved - 1)));
+      room -= group.shown.length + 1 - reserved;
+      group.revealSlot = `${group.id}:reveal`;
+      group.revealed = group.agents.find((row) => row.id === options.selected && !group.shown.some((shown) => shown.id === row.id))
+        ?? protectedRows.find((row) => !group.shown.some((shown) => shown.id === row.id)) ?? null;
+    }
+    if (expanded.has(group.id) && !group.expanded) hidden += group.agents.length - group.shown.length;
   }
-  let room = LAYOUT_NODE_LIMIT - groups.length;
-  let hidden = all.length - groups.length;
-  for (const group of groups) {
-    if (!group.expanded) continue;
-    if (group.agents.length > room) { group.expanded = false; hidden += group.agents.length; }
-    else room -= group.agents.length;
-  }
+  groups.sort((a, b) => a.id.localeCompare(b.id));
   const agents = matches.sort((a, b) => PRIORITY[graphActivity(a.agent)] - PRIORITY[graphActivity(b.agent)] || a.id.localeCompare(b.id));
   const admitted = new Set(groups.map((group) => group.id));
-  const visible = groups.flatMap((group) => group.expanded ? group.agents : []);
+  const visible = groups.flatMap((group) => [...group.shown, ...(group.revealed ? [group.revealed] : [])]);
   const visibleIds = new Set(visible.map((row) => row.id));
   const endpoint = new Map<string, string>();
   for (const row of allAgents) if (retained.has(row.id) && !tucked.has(row.id) && row.digest && admitted.has(row.projectId)) endpoint.set(partyKey({ device_id: row.deviceId, pane_id: row.agent.pane_id, session: row.digest }), visibleIds.has(row.id) ? row.id : row.projectId);
-  const lineage = visible.flatMap((row) => {
+  const lineageBundles = new Map<string, { from: string; to: string; count: number }>();
+  for (const row of allAgents) {
     const parent = parents.get(row.id);
-    return parent && visibleIds.has(parent.id) ? [{ from: parent.id, to: row.id }] : [];
-  }).sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
+    if (!parent || !retained.has(row.id) || !retained.has(parent.id) || tucked.has(row.id) || tucked.has(parent.id) || !admitted.has(row.projectId) || !admitted.has(parent.projectId)) continue;
+    const from = visibleIds.has(parent.id) ? parent.id : parent.projectId;
+    const to = visibleIds.has(row.id) ? row.id : row.projectId;
+    if (from === to) continue;
+    const key = JSON.stringify([from, to]);
+    const bundle = lineageBundles.get(key);
+    if (bundle) bundle.count += 1;
+    else lineageBundles.set(key, { from, to, count: 1 });
+  }
+  const lineage = [...lineageBundles.values()].sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
   const bundles = new Map<string, Communication>();
   const limit = Math.max(0, Math.min(2000, metadata?.limit ?? 2000));
   const records = [
@@ -219,13 +255,13 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     else bundle.directions.push({ from, to, count: 1 });
   }
   // Labels, status, model, letters, clocks and selection deliberately do not participate.
-  const structure = JSON.stringify([groups.map((group) => [group.id, group.expanded, group.expanded ? group.agents.map((row) => row.id) : []]), lineage.map((edge) => [edge.from, edge.to])]);
+  const structure = JSON.stringify([groups.map((group) => [group.id, group.expanded, group.shown.map((row) => [row.id, parents.has(row.id)]), group.revealSlot])]);
   const communication = [...bundles.values()];
   for (const bundle of communication) if (bundle.directions.length === 1) {
     bundle.source = bundle.directions[0]!.from;
     bundle.target = bundle.directions[0]!.to;
   }
-  return { projects: groups, agents, allAgents, visible, context, quietBranches, folded, omitted, counts, lineage, communication, limited: hidden > 0, hidden, singleProject: projectId !== null, structure };
+  return { projects: groups, agents, allAgents, visible, context, roots: new Set(allAgents.filter((row) => !parents.has(row.id)).map((row) => row.id)), quietBranches, folded, omitted, counts, lineage, communication, limited: hidden > 0, hidden, singleProject: projectId !== null, structure };
 }
 
 /** The most recently visited checkout's project opens first, then the core's activity order. */

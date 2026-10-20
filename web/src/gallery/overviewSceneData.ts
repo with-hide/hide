@@ -318,15 +318,14 @@ export function overviewFocusWorld(now: number, content: string): OverviewWorld 
   Object.assign(get("h-r2"), { mark: "asleep", identity_label: "잠든 릴리스 세션", lineage_parent_pane_id: "h-r1" });
   if (content === "long") for (const row of agents) row.identity_label += " · 긴 한국어 제목과 English identifiers 줄바꿈 확인";
   const extraProjects: Workspace[] = [];
-  const count = content === "many" ? 64 : 1;
-  for (let index = 0; index < count; index += 1) {
+  const sizes = content === "many" || content === "dense" ? [48, 30, ...Array(19).fill(8)] : content === "large" ? [48] : [3, 3, 3, 3, 2];
+  for (const [index, count] of sizes.entries()) {
     const id = `focus-project-${index}`;
-    const pane = `focus-pane-${index}`;
-    const row = agent({ pane, title: `쉬는 작업 ${index + 1}`, look: "idle", ago: MINUTE }, now);
-    if (content === "many" && index % 3 === 0) Object.assign(row, { mark: "going", group: "working", activity: "working", state: { ...get("h-a1c1").state, root: true } });
-    agents.push(row);
-    const one = checkout({ id: `${id}:main`, workspace: id, branch: "main", primary: true, panes: [pane] }, Math.floor(now / 1000));
-    extraProjects.push(workspace(id, { label: `실험 프로젝트 ${index + 1}`, checkouts: [one], agent_scope: scopeWith([card(pane, "working", [pane], [one.id], "0")]) }, REFERENCE_FOLDS));
+    const panes = Array.from({ length: count }, (_, session) => `focus-pane-${index}-${session}`);
+    const rows = panes.map((pane, session) => agent({ pane, title: `실험 작업 ${index + 1} · ${session + 1}${content === "long" ? " · 긴 한국어 제목과 English identifiers" : ""}`, look: session % 3 === 0 ? "working" : "idle", ago: MINUTE, ...(session > 0 && session % 3 === 0 ? { parent: panes[0] } : {}) }, now));
+    agents.push(...rows);
+    const one = checkout({ id: `${id}:main`, workspace: id, branch: "main", primary: true, panes }, Math.floor(now / 1000));
+    extraProjects.push(workspace(id, { label: `실험 프로젝트 ${index + 1}${content === "long" ? " · Korean and English 프로젝트 이름 줄바꿈" : ""}`, checkouts: [one], agent_scope: scopeWith(rows.map((row) => card(row.pane_id, "working", [row.pane_id], [one.id], "0"))) }, REFERENCE_FOLDS));
   }
   world.rest.navigator!.workspaces!.push(...extraProjects);
   if (content === "resting") for (const row of agents) Object.assign(row, { mark: "quiet", group: "seen", state: { ...get("h-r1").state } });
@@ -335,6 +334,10 @@ export function overviewFocusWorld(now: number, content: string): OverviewWorld 
     { id: "fixture-direct-two", sender: { device_id: "local", pane_id: "h-a1c1", session: "fixture-h-a1c1" }, recipient: { device_id: "local", pane_id: "h-a1", session: "fixture-h-a1" }, at_unix_ms: now - 2 * MINUTE },
     { id: "fixture-direct-cross-project", sender: { device_id: "local", pane_id: "b-1", session: "fixture-b-1" }, recipient: { device_id: "local", pane_id: "h-a3", session: "fixture-h-a3" }, at_unix_ms: now - 3 * MINUTE },
   ];
+  if (content === "empty") {
+    agents.splice(0);
+    for (const project of world.rest.navigator!.workspaces!) { project.agent_scope = scopeWith([]); for (const checkout of project.checkouts) checkout.agent_scope = scopeWith([]); }
+  }
   world.rest.overview_graph!.sessions = agents.map((row) => ({ device_id: "local", pane_id: row.pane_id, session_digest: `fixture-${row.pane_id}`, launch_model: row.agent_kind === "codex" ? "model-c" : "model-a" }));
   return world;
 }
