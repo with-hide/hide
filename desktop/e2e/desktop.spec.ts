@@ -119,8 +119,8 @@ test("attach: the app starts hided, shows the shell, and runs the native chords 
   await expect(sheet).toHaveCount(0);
 });
 
-// @platform: the native accelerator and menu bridge reach the same draft contract on each system.
-test("New tab: the native chord and menu each select one draft without starting a terminal", { tag: "@platform" }, async () => {
+// @platform: the native accelerator and menu bridge each open a terminal on every system.
+test("New tab: the native chord and menu each open one terminal directly", { tag: "@platform" }, async () => {
   ({ app } = await launch(run.env));
   const page = await app.firstWindow();
   const last = new Map<string, Record<string, unknown>>();
@@ -131,42 +131,45 @@ test("New tab: the native chord and menu each select one draft without starting 
   const start = page.locator("[data-agent-tab-start]");
   await expect(page.locator("[data-pane-view]").first()).toBeVisible();
   const before = await tabs.count();
-  const topology = herdrTabs(herdr);
+  const nativeTabCount = () => (herdrTabs(herdr) as { tabs: string[] }[]).reduce((sum, workspace) => sum + workspace.tabs.length, 0);
+  const beforeNative = nativeTabCount();
   const area = page.locator("[data-agent-area-id]");
   const areaId = await area.getAttribute("data-agent-area-id");
   const request = {
     workspace: { device_id: expect.any(String), path: toPage(path.join(herdr.root, "fixture")) },
-    group_id: null, action: "new_tab", request_id: expect.any(String),
+    group_id: null, action: "new_tab", terminal: true, request_id: expect.any(String),
   };
 
-  // Group-tabs B5/B6: creating a tab selects a durable draft and offers an explicit terminal start.
+  // New tab opens a shell in the keyboard's Agent area without a start form.
   await page.locator("[data-pane-view] .xterm-helper-textarea").first().focus();
   await page.keyboard.press(chord("new_tab", "electron"));
   await expect(tabs).toHaveCount(before + 1);
-  await expect(start).toHaveAttribute("data-agent-tab-start", /^draft:/);
-  const first = await start.getAttribute("data-agent-tab-start");
-  await expect(page.locator('[data-agent-tab-bar] [role=tab][aria-selected="true"]')).toHaveAttribute("data-tab", first!);
-  await expect(page.locator("[data-group-start-terminal=true]")).toBeEnabled();
+  await expect(start).toHaveCount(0);
+  const selected = area.locator('[data-agent-tab-bar] [role=tab][aria-selected="true"]');
+  await expect(selected).not.toHaveAttribute("data-tab", /^draft:/);
+  const first = await selected.getAttribute("data-tab");
+  await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", first!);
   await expect.poll(() => sent.get("agent_group.new_tab")).toBe(1);
   expect(last.get("agent_group.new_tab")).toMatchObject({ ...request, area_id: areaId });
   const firstRequest = last.get("agent_group.new_tab")!.request_id;
-  expect(herdrTabs(herdr)).toEqual(topology);
+  await expect.poll(nativeTabCount).toBe(beforeNative + 1);
 
-  // The browser-only chord must not create a tab; the native menu adds exactly the second draft.
+  // The browser-only chord creates no tab; the native menu adds exactly one more terminal.
   await page.keyboard.press(chord("new_tab"));
   await app.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById("new_tab")?.click());
   await expect(tabs).toHaveCount(before + 2);
-  await expect(start).toHaveAttribute("data-agent-tab-start", /^draft:/);
-  await expect(start).not.toHaveAttribute("data-agent-tab-start", first!);
-  const second = await start.getAttribute("data-agent-tab-start");
-  // From the draft's controls the menu uses the active Agent area (UI behavior, Area commands).
-  await expect(area.locator('[data-agent-tab-bar] [role=tab][aria-selected="true"]')).toHaveAttribute("data-tab", second!);
+  await expect(start).toHaveCount(0);
+  await expect(selected).not.toHaveAttribute("data-tab", first!);
+  await expect(selected).not.toHaveAttribute("data-tab", /^draft:/);
+  const second = await selected.getAttribute("data-tab");
+  await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", second!);
   await expect.poll(() => sent.get("agent_group.new_tab")).toBe(2);
   expect(last.get("agent_group.new_tab")).toMatchObject(request);
   expect(last.get("agent_group.new_tab")!.request_id).not.toBe(firstRequest);
   expect(sent.get("create_tab") ?? 0).toBe(0);
-  expect(herdrTabs(herdr)).toEqual(topology);
-  await screenshot(page, "desktop-new-tab-drafts");
+  await expect.poll(nativeTabCount).toBe(beforeNative + 2);
+  await expect(page.locator("[data-pane-view]")).toBeVisible();
+  await screenshot(page, "desktop-new-tab-terminals");
 });
 
 test("links: external links open in the default browser and the window stays on the daemon", async () => {

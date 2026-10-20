@@ -950,7 +950,7 @@ export function createActions(send: DispatchFn) {
   const createTab = (areaId?: string) => {
       const view = workspaceViewOf(rest());
       if (view?.agent_layout?.groups) {
-        agentGroup({ device_id: view.device_id, path: view.path }, view.agent_layout.group_id ?? null, { action: "new_tab", ...(areaId ? { area_id: areaId } : {}) });
+        agentGroup({ device_id: view.device_id, path: view.path }, view.agent_layout.group_id ?? null, { action: "new_tab", terminal: true, ...(areaId ? { area_id: areaId } : {}) });
         return;
       }
       if (remoteContext(rest())) {
@@ -1001,6 +1001,7 @@ export function createActions(send: DispatchFn) {
     }
     useGroupFeedback.setState({ request: { workspace, id: requestId } });
     dispatch({ schema_version: 2, kind: "agent_group", payload: { workspace, group_id: groupId, request_id: requestId, ...action } });
+    if (action.action === "new_tab" && action.terminal === true && workspace.device_id === localDeviceId(rest())) armKeyTarget(requestId);
     return requestId;
   };
   const agentLayout = (action: { action: string } & Record<string, unknown>) => {
@@ -1902,7 +1903,7 @@ export function createActions(send: DispatchFn) {
     newTabIn(deviceId: string, checkout: Checkout) {
       beginOpening({ checkoutId: checkout.id, deviceId, path: checkout.path, workspaceId: checkout.workspace_id });
       if (checkout.agent_groups) {
-        agentGroup({ device_id: deviceId, path: checkout.path }, checkout.agent_groups.selected, { action: "new_tab" });
+        agentGroup({ device_id: deviceId, path: checkout.path }, checkout.agent_groups.selected, { action: "new_tab", terminal: true });
         return;
       }
       if (deviceId !== localDeviceId(rest())) {

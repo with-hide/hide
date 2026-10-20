@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { startHerdr } from "./herdr-fixture";
-import { startDraftTerminal } from "./group-start-helper";
+import { waitForTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
@@ -39,15 +39,13 @@ test("Closing a worktree's last tab goes back to the checkout it was entered fro
     await expect(location).toHaveText("main");
 
     // The operator opens a draft in the worktree, then explicitly starts
-    // its terminal. Only the start opens the bound Herdr workspace.
+    // its terminal, opening the bound Herdr workspace in the same action.
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^fixture/ }) });
     const feature = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="feature"]') });
     await project.getByRole("button", { name: /^No agents/ }).click();
     await feature.locator("[data-checkout-menu]").click({ button: "right" });
     await page.getByRole("menu", { name: "feature actions" }).locator('[data-menu-item="new_tab_here"]').click();
-    await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
-    expect(boundToLinked()).toHaveLength(0);
-    await startDraftTerminal(page);
+    await waitForTerminal(page);
     await expect.poll(() => boundToLinked().length, { timeout: 20_000 }).toBe(1);
     await expect(location).toHaveText("feature", { timeout: 15_000 });
     const tabs = page.locator('[data-agent-tab-bar] [role="tab"]');

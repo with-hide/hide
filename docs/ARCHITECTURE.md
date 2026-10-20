@@ -1039,6 +1039,7 @@ The tab worker rechecks its connection and target while holding the result-publi
 A focus already accepted before a later connection change retains the control lane's existing retirement boundary.
 The global agent-start panel reads that result without issuing a second pane-focus intent, so a result left behind stays behind in the shell too.
 For a connected device, or a local start whose returned pane is neither in its checkout's catalog nor drawn ahead there, the current start may hold one follow for at most 90 seconds until its exact pane appears in that checkout's catalog, then sends one ordinary pane focus with device forwarding.
+When the start answer names a final tab, both immediate focus and that follow require the pane in that tab; an older catalog that still places an added pane in its temporary staging tab cannot consume the follow or move the visible tab.
 The task captures this navigation permission before Home sync or checkout preparation, so Home and checkout starts share the same rule; Home creation itself does not move Herdr's focus ahead of that result.
 For the first local Home, the catalog choosing its first checkout is a fallback rather than a user visit; it retains that permission while the control-lane serial is unchanged and no explicit navigation has cancelled it.
 A Home result that arrives before its returned pane's catalog waits on that same follow, including when its empty registration row or only its owner's seed pane is already listed, so the checkout and its pane are chosen together rather than focusing a pane while reconciliation still reads the previous checkout.
@@ -2728,6 +2729,13 @@ The selected group's layout is projected for local, inbound-node and outbound-SS
 The core retains the explicit remote checkout choice independently of a device's raw Herdr focus, so selecting an empty group or draft can navigate without creating or focusing a PTY.
 An unanswered session or unresolved checkout catalog preserves groups and drafts; authoritative topology reconciles live membership only, admitting ordinary external arrivals to ungrouped.
 A node's tabs reach its areas when its session arrives (`reconcile_node_agent_topology`, through the same `reconcile_agent_topology`), the tab of the area in use is asked of the node's Herdr (`focus_node_tab`), the node's own focus moves the area in use (`sync_agent_selection`), and the panes of every area's tab attach as the front tab's do (`node_shown_agent_tabs`).
+New Agent tab requests use `agent_group.new_tab` with `terminal: true` and reuse the existing local or device tab-control queue, without entering the agent-start operation or waiting for shell integration.
+The control captures the selected group and area before admission, and its creation answer places the native tab there even if the operator changes groups meanwhile.
+Local requests retain the existing bounded input holder until the new pane can receive keys.
+Device terminal intents reserve the same display and pending-placement capacity before sending, with distinct admission identities and the existing request replay guard.
+Restore and replacement effects share that pending budget, and an unreserved fork or legacy result cannot consume capacity promised to a pending terminal.
+The pending checkout choice grants a created device tab focus only until the operator makes another visit; a later placement retains the newer tab and area fronts.
+Older clients and saved drafts retain the draft-start transition.
 Externally created ordinary tabs join the ungrouped active area's bar without replacing the selected group or shown canvas, including when creation focuses the new tab in Herdr.
 The replica carries the creation cause and a focus-event revision with the authoritative workspace focus, including during partial publication and bootstrap replay.
 One pending creation pairing per live tab is consumed by its first `tab_focused` event; a later `tab_focused` event gets a new revision and is followed.

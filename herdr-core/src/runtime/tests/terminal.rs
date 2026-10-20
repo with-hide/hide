@@ -844,6 +844,7 @@ fn acknowledge_retention_tab(runtime: &mut Runtime, open_owner: bool) {
             cwd: path.into(),
             label: "6".into(),
             area_id: None,
+            group_id: None,
             admission_id: None,
         }
     } else {
@@ -852,6 +853,7 @@ fn acknowledge_retention_tab(runtime: &mut Runtime, open_owner: bool) {
             cwd: path.into(),
             label: "6".into(),
             area_id: None,
+            group_id: None,
             admission_id: None,
         }
     };

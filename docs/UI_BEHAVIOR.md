@@ -189,7 +189,9 @@ Group names are trimmed, contain 1 to 80 Unicode characters with no line breaks 
 Ungroup moves the group's tabs in order to the end of the ungrouped active area and closes no session.
 Undo restores the last ungrouping while its session-local receipt remains valid, until the next group mutation or the checkout's saved state is unloaded; Undo is shown only while it can act and does not survive restart.
 
-New tab creates a core-owned draft in the chosen area's bar without starting a shell or PTY.
+New tab opens one terminal immediately in the chosen area's bar, in the selected group, without an instruction field or provider picker.
+The button, keyboard shortcut and checkout menu use this same behavior on this machine and connected devices.
+Previously saved drafts remain available to finish or close.
 An empty group creates its first draft when a start is requested.
 Empty groups and grouped or ungrouped drafts show the instruction field, the shared provider/model picker and Start, with a terminal icon and secondary `Start with terminal` button always visible beside that start flow.
 Terminal start needs neither an instruction nor an agent selection.

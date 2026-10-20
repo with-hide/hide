@@ -99,6 +99,7 @@ fn requested_new_tab_area_survives_a_focus_change_before_topology_arrives() {
             cwd: "/agent-groups".into(),
             label: "Tab".into(),
             area_id: Some("a1".into()),
+            group_id: None,
             admission_id: None,
         },
         Ok(RemoteControlOutcome::Acknowledged {
@@ -508,6 +509,7 @@ fn admitted_tab_keeps_its_slot_when_external_topology_arrives_first() {
             cwd: "/agent-groups".into(),
             label: "Tab".into(),
             area_id: Some("a1".into()),
+            group_id: None,
             admission_id: Some(71),
         },
         Ok(RemoteControlOutcome::Acknowledged {
@@ -554,6 +556,7 @@ fn uncertain_create_retains_its_own_claim_until_a_definite_result() {
         cwd: "/agent-groups".into(),
         label: "Tab".into(),
         area_id: Some("a1".into()),
+        group_id: None,
         admission_id: Some(id),
     };
     runtime.ingest_local_control_failure(
@@ -773,7 +776,11 @@ fn reopen_unknown_claim_survives_error_and_retry_launch_failure_then_transfers_t
             agents: Vec::new(),
         })),
     );
-    assert_eq!(runtime.pending_agent_admissions("/agent-groups"), 0);
+    assert_eq!(
+        runtime
+            .pending_agent_admissions(&(runtime.node.as_str().to_owned(), "/agent-groups".into())),
+        0
+    );
     assert!(
         !runtime.admit_agent_tab("/agent-groups"),
         "known placement keeps the slot until topology arrives"

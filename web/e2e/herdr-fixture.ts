@@ -237,6 +237,11 @@ function cmdQuote(value: string): string {
   return `"${value}"`;
 }
 
+/** Runs these arguments through the shell the fixture actually selected. */
+export function paneCommandLine(shell: PaneShell, argv: string[]): string {
+  return argv.map(shell === "cmd" ? cmdQuote : posixQuote).join(" ");
+}
+
 /** Clears the pane and prints a fixture file through the shell it really runs. */
 export function printFileCommand(shell: PaneShell, file: string): string {
   return shell === "cmd" ? `cls & type ${cmdQuote(file)}` : `clear; cat ${posixQuote(file)}`;
@@ -247,12 +252,12 @@ export function paneProgramLine(shell: PaneShell, program: PaneProgram): string 
   const env = Object.entries(program.env ?? {});
   if (shell === "cmd") {
     const sets = env.map(([key, value]) => `set ${cmdQuote(`${key}=${value}`)} && `).join("");
-    const run = program.argv.map(cmdQuote).join(" ");
+    const run = paneCommandLine(shell, program.argv);
     // `call echo %^errorlevel%` reads the status when it runs, not when the line is parsed.
     return `${sets}${run} > ${cmdQuote(program.stdout ?? "nul")} 2> ${cmdQuote(program.stderr)} & >${cmdQuote(program.status)} call echo %^errorlevel%`;
   }
   const sets = env.map(([key, value]) => `${key}=${posixQuote(value)} `).join("");
-  return `${sets}${program.argv.map(posixQuote).join(" ")} > ${posixQuote(program.stdout ?? "/dev/null")} 2> ${posixQuote(program.stderr)}; printf '%s' "$?" > ${posixQuote(program.status)}`;
+  return `${sets}${paneCommandLine(shell, program.argv)} > ${posixQuote(program.stdout ?? "/dev/null")} 2> ${posixQuote(program.stderr)}; printf '%s' "$?" > ${posixQuote(program.status)}`;
 }
 
 /**

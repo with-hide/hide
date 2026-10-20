@@ -67,6 +67,7 @@ pub(super) struct TaskStartFocus {
 
 struct StartPaneFocus {
     workspace: workspace_view::WorkspaceKey,
+    tab: Option<String>,
     pane: String,
     generation: u64,
     deadline: std::time::Instant,
@@ -728,7 +729,7 @@ impl Runtime {
 
     /// One pending follow belongs to the current start, never a shell-side
     /// open intent. It expires with the start panel's 90-second answer bound.
-    pub(super) fn queue_start_focus(&mut self, task: u64, pane: String) {
+    pub(super) fn queue_start_focus(&mut self, task: u64, tab: Option<String>, pane: String) {
         let operation = self
             .snapshot
             .task_operation
@@ -755,6 +756,7 @@ impl Runtime {
         };
         active.pending_focus = Some(StartPaneFocus {
             workspace: (device.clone(), path),
+            tab,
             pane,
             generation: if device == self.node.as_str() {
                 self.live_generation
@@ -806,6 +808,25 @@ impl Runtime {
         true
     }
 
+    /// A start answer names the final tab, while an older catalog may still
+    /// place its pane in the temporary staging tab used by an add-pane start.
+    pub(super) fn start_pane_is_listed(
+        &self,
+        device: &str,
+        path: &str,
+        tab_id: Option<&str>,
+        pane_id: &str,
+    ) -> bool {
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == device)
+            .flat_map(|workspace| &workspace.checkouts)
+            .filter(|checkout| checkout.path == path)
+            .flat_map(|checkout| &checkout.tabs)
+            .filter(|tab| tab_id.is_none_or(|id| tab.id.as_deref() == Some(id)))
+            .flat_map(|tab| &tab.panes)
+            .any(|pane| pane.id == pane_id)
+    }
+
     pub(super) fn follow_start(&mut self, device: Option<&str>) -> bool {
         if !self.pending_start_focus() {
             return false;
@@ -819,17 +840,14 @@ impl Runtime {
         else {
             return false;
         };
-        // The exact pane must belong to this start's checkout on this
-        // connection before the ordinary focus boundary accepts it.
-        let listed = self
-            .catalog_workspaces()
-            .filter(|workspace| workspace.device_id == device)
-            .flat_map(|workspace| &workspace.checkouts)
-            .filter(|checkout| checkout.path == pending.workspace.1)
-            .flat_map(|checkout| &checkout.tabs)
-            .flat_map(|tab| &tab.panes)
-            .any(|pane| pane.id == pending.pane);
-        if !listed {
+        // The answer's final tab must own the exact pane on this connection
+        // before the ordinary focus boundary accepts it.
+        if !self.start_pane_is_listed(
+            device,
+            &pending.workspace.1,
+            pending.tab.as_deref(),
+            &pending.pane,
+        ) {
             return false;
         }
         let task = active.task;
