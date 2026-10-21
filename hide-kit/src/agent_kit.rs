@@ -394,8 +394,8 @@ fn dir_state(
         SkillObserved::Foreign => (
             ComponentState::Absent,
             Some(format!(
-                "a skill named {} that Hide did not write is already there; Hide left it alone",
-                crate::agents::SKILL_NAME
+                "skills named {} that Hide did not write are already there; Hide left them alone",
+                crate::agents::SKILLS.map(|skill| skill.name).join(" and ")
             )),
         ),
         SkillObserved::Unreadable(reason) => (ComponentState::Failed, Some(reason.clone())),
@@ -933,7 +933,7 @@ pub(crate) fn apply(target: &KitTarget, scope: &Scope, record: &mut Record) -> A
                 SkillObserved::Missing => switched_on || !recorded,
                 _ => false,
             };
-            if install_now && let Err(reason) = install_skill(dir, &target.home) {
+            if install_now && let Err(reason) = install_skill(dir, &target.home, switched_on) {
                 failures.skill.insert(dir, reason);
                 continue;
             }

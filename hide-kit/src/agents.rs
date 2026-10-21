@@ -10,9 +10,9 @@
 //!
 //! Three things a row can turn on for an agent the operator switched on:
 //!
-//! - the `hide-browser` skill stub, in the folder the agent reads
-//!   ([`SkillDir`]); the folder is shared by every agent that reads it, so
-//!   the stub stays while any of them is on;
+//! - Hide's skill stubs ([`SKILLS`]: `hide-browser`, `hide-conductor`), in
+//!   the folder the agent reads ([`SkillDir`]); the folder is shared by every
+//!   agent that reads it, so the stubs stay while any of them is on;
 //! - a hook: Claude Code and Codex keep their kit parts
 //!   ([`HookSupport::Part`]); Grok, whose documented command hooks
 //!   can refuse a shell call and report subagents, get Hide's hook file of
@@ -86,18 +86,6 @@ impl SkillDir {
     pub(crate) fn writable(self, home: &Path) -> bool {
         self == Self::Shared || self.folder(home).is_dir()
     }
-
-    fn skill_file(self, home: &Path) -> PathBuf {
-        skill_file_in(&self.path(home))
-    }
-}
-
-fn skill_folder_in(root: &Path) -> PathBuf {
-    root.join(SKILL_NAME)
-}
-
-fn skill_file_in(root: &Path) -> PathBuf {
-    skill_folder_in(root).join("SKILL.md")
 }
 
 /// What Hide writes into an agent's hook configuration, if anything.
@@ -206,15 +194,40 @@ const fn project_all() -> [AgentAdapter; hide_agent_adapter::ADAPTERS.len()] {
 /// The leaf declaration projected into the kit's installation policy.
 pub const ADAPTERS: &[AgentAdapter] = &project_all();
 
-/// The skill's name, and the folder it lives in.
-pub const SKILL_NAME: &str = "hide-browser";
+/// One skill stub Hide puts in every skill folder. A stub points at the
+/// binary and carries no usage, so it stays right as the help changes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Skill {
+    /// The skill's name, and the folder it lives in.
+    pub name: &'static str,
+    description: &'static str,
+    body: &'static str,
+    /// Raise it when the stub's text changes, so an older stub is replaced.
+    pub version: u32,
+}
 
-/// The marker line of the stub, which proves Hide wrote it and says which
+pub const BROWSER_SKILL: Skill = Skill {
+    name: "hide-browser",
+    description: "Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.",
+    body: "Run `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.",
+    version: 1,
+};
+
+/// Turns the session it runs in into a mission's Conductor (PRD
+/// software-factory-conductor B1).
+pub const CONDUCTOR_SKILL: Skill = Skill {
+    name: "hide-conductor",
+    description: "Run a mission in Hide as its Conductor: plan the work with the operator, start the agents that do it, follow their pull requests, and report. Use when the operator gives you a goal to carry out with several agents, or asks you to take over a mission.",
+    body: "Run `hide mission help` and follow what it prints. It explains how to plan a mission with the operator, start and follow its workers, change the plan when told, merge, report, and take over a mission whose Conductor is gone.",
+    version: 1,
+};
+
+/// Every stub Hide writes; each skill folder holds all of them.
+pub const SKILLS: [Skill; 2] = [BROWSER_SKILL, CONDUCTOR_SKILL];
+
+/// The marker line of a stub, which proves Hide wrote it and says which
 /// text it was. A file without it is the operator's and is never touched.
 const SKILL_MARKER_NAME: &str = "hide-skill";
-
-/// Raise it when the stub's text changes, so an older stub is replaced.
-pub const SKILL_VERSION: u32 = 1;
 
 pub fn adapter(id: &str) -> Option<&'static AgentAdapter> {
     let declaration = hide_agent_adapter::adapter(id)?;
@@ -337,12 +350,37 @@ pub(crate) fn login_shell() -> Option<PathBuf> {
 
 // --- The skill stub ------------------------------------------------------------
 
-/// The text of the stub. It points at the binary and carries no usage, so it
-/// stays right as `hide browser help` changes.
-pub(crate) fn skill_text() -> String {
-    format!(
-        "---\nname: {SKILL_NAME}\ndescription: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n---\n\n<!-- {SKILL_MARKER_NAME}@{SKILL_VERSION}: written by Hide; remove it from Settings, Agents -->\n\nRun `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n"
-    )
+impl Skill {
+    /// The text of the stub.
+    pub(crate) fn text(self) -> String {
+        format!(
+            "---\nname: {}\ndescription: {}\n---\n\n<!-- {SKILL_MARKER_NAME}@{}: written by Hide; remove it from Settings, Agents -->\n\n{}\n",
+            self.name, self.description, self.version, self.body
+        )
+    }
+
+    pub(crate) fn file_in(self, root: &Path) -> PathBuf {
+        root.join(self.name).join("SKILL.md")
+    }
+
+    /// What the skills folder `root` holds of this stub.
+    fn observe_in(self, root: &Path) -> SkillObserved {
+        let path = self.file_in(root);
+        match std::fs::read_to_string(&path) {
+            Ok(text) => match skill_marker_version(&text) {
+                Some(version) if version == self.version && text == self.text() => {
+                    SkillObserved::Current
+                }
+                Some(version) if version < self.version => SkillObserved::Stale,
+                Some(_) => SkillObserved::Edited,
+                None => SkillObserved::Foreign,
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => SkillObserved::Missing,
+            Err(error) => {
+                SkillObserved::Unreadable(format!("{} could not be read: {error}", path.display()))
+            }
+        }
+    }
 }
 
 /// The version in the stub's marker line. The marker counts only where Hide
@@ -384,30 +422,66 @@ pub(crate) fn observe_skill(dir: SkillDir, home: &Path) -> SkillObserved {
     observe_skill_in(&dir.path(home))
 }
 
-/// What the skills folder `root` holds of Hide's stub.
+/// What the skills folder `root` holds of Hide's stubs, as one piece: a
+/// folder that lacks a stub another of Hide's is beside (one written before
+/// that stub existed) is stale, and one where the operator's file holds a
+/// stub's name is foreign once Hide's others are current.
 pub(crate) fn observe_skill_in(root: &Path) -> SkillObserved {
-    let path = skill_file_in(root);
-    match std::fs::read_to_string(&path) {
-        Ok(text) => match skill_marker_version(&text) {
-            Some(SKILL_VERSION) if text == skill_text() => SkillObserved::Current,
-            Some(version) if version < SKILL_VERSION => SkillObserved::Stale,
-            Some(_) => SkillObserved::Edited,
-            None => SkillObserved::Foreign,
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => SkillObserved::Missing,
-        Err(error) => {
-            SkillObserved::Unreadable(format!("{} could not be read: {error}", path.display()))
-        }
+    combine(SKILLS.map(|skill| skill.observe_in(root)))
+}
+
+fn combine(each: [SkillObserved; SKILLS.len()]) -> SkillObserved {
+    if let Some(SkillObserved::Unreadable(reason)) = each
+        .iter()
+        .find(|observed| matches!(observed, SkillObserved::Unreadable(_)))
+    {
+        return SkillObserved::Unreadable(reason.clone());
+    }
+    let own: Vec<&SkillObserved> = each
+        .iter()
+        .filter(|observed| **observed != SkillObserved::Foreign)
+        .collect();
+    let any = |wanted: &[SkillObserved]| own.iter().any(|observed| wanted.contains(observed));
+    if own.is_empty() {
+        SkillObserved::Foreign
+    } else if own
+        .iter()
+        .all(|observed| **observed == SkillObserved::Missing)
+    {
+        SkillObserved::Missing
+    } else if any(&[SkillObserved::Stale, SkillObserved::Missing]) {
+        SkillObserved::Stale
+    } else if any(&[SkillObserved::Edited]) {
+        SkillObserved::Edited
+    } else if own.len() < each.len() {
+        // Hide's other stubs are in place; the operator's file keeps the
+        // name, which is what the report says.
+        SkillObserved::Foreign
+    } else {
+        SkillObserved::Current
     }
 }
 
-pub(crate) fn install_skill(dir: SkillDir, home: &Path) -> Result<(), String> {
-    let path = dir.skill_file(home);
-    crate::write_atomically(
-        &path,
-        skill_text().as_bytes(),
-        hide_platform::fs::Access::KeepOrPrivate,
-    )
+/// Writes every stub that is missing or older; an edited one only when the
+/// operator asked for it again (`reinstall`), and an operator's file never.
+pub(crate) fn install_skill(dir: SkillDir, home: &Path, reinstall: bool) -> Result<(), String> {
+    let root = dir.path(home);
+    for skill in SKILLS {
+        let write = match skill.observe_in(&root) {
+            SkillObserved::Missing | SkillObserved::Stale => true,
+            SkillObserved::Edited => reinstall,
+            SkillObserved::Current | SkillObserved::Foreign => false,
+            SkillObserved::Unreadable(reason) => return Err(reason),
+        };
+        if write {
+            crate::write_atomically(
+                &skill.file_in(&root),
+                skill.text().as_bytes(),
+                hide_platform::fs::Access::KeepOrPrivate,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Takes the stub out when it is Hide's, and the folder with it when nothing
@@ -419,24 +493,29 @@ pub(crate) fn remove_skill(dir: SkillDir, home: &Path) -> Result<bool, String> {
 /// [`remove_skill`] for any skills folder, which the retirement of an agent
 /// Hide no longer knows reaches by its path.
 pub(crate) fn remove_skill_in(root: &Path) -> Result<bool, String> {
-    match observe_skill_in(root) {
-        // An edited stub carries the operator's changes, so it stays.
-        SkillObserved::Missing | SkillObserved::Foreign | SkillObserved::Edited => Ok(false),
-        SkillObserved::Unreadable(reason) => Err(reason),
-        SkillObserved::Current | SkillObserved::Stale => {
-            let path = skill_file_in(root);
-            std::fs::remove_file(&path)
-                .map_err(|error| format!("{} could not be removed: {error}", path.display()))?;
-            // Only an empty folder goes; anything else in it is the
-            // operator's.
-            let _ = std::fs::remove_dir(skill_folder_in(root));
-            Ok(true)
+    let mut removed = false;
+    for skill in SKILLS {
+        match skill.observe_in(root) {
+            // An edited stub carries the operator's changes, so it stays.
+            SkillObserved::Missing | SkillObserved::Foreign | SkillObserved::Edited => {}
+            SkillObserved::Unreadable(reason) => return Err(reason),
+            SkillObserved::Current | SkillObserved::Stale => {
+                let path = skill.file_in(root);
+                std::fs::remove_file(&path)
+                    .map_err(|error| format!("{} could not be removed: {error}", path.display()))?;
+                // Only an empty folder goes; anything else in it is the
+                // operator's.
+                let _ = std::fs::remove_dir(root.join(skill.name));
+                removed = true;
+            }
         }
     }
+    Ok(removed)
 }
 
+/// The skills folder the stubs are in.
 pub(crate) fn skill_location(dir: SkillDir, home: &Path) -> String {
-    dir.skill_file(home).display().to_string()
+    dir.path(home).display().to_string()
 }
 
 /// One piece of an agent (its skill, its hook) as the report states it.
