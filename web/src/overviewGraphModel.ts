@@ -23,7 +23,7 @@ export function graphActivity(agent: AgentRow): GraphActivity {
 }
 const PRIORITY: Record<GraphActivity, number> = { turn: 0, working: 1, results: 2, unknown: 3, idle: 4, resting: 5 };
 /** One pair of sessions and every letter and Herdr input between them, by direction. */
-export type Communication = { id: string; source: string; target: string; letters: number; direct: number; latest: number; directions: { from: string; to: string; letters: number; direct: number }[] };
+export type Communication = { id: string; source: string; target: string; letters: number; direct: number; directions: { from: string; to: string; letters: number; direct: number }[] };
 /** A project row of the map's side column: its graph members and their states. */
 export type ProjectSummary = { id: string; project: BoardProject; sessions: number; turn: number; working: number; results: number; admitted: boolean };
 export type OverviewGraphModel = {
@@ -35,7 +35,7 @@ export type OverviewGraphModel = {
   layoutParents: ReadonlyMap<string, string | null>;
   counts: Record<GraphFocus, number>; summaries: ProjectSummary[];
   communication: Communication[];
-  limited: boolean; hidden: number; singleProject: boolean; structure: string;
+  limited: boolean; structure: string;
 };
 
 export const graphProjectId = (project: BoardProject) => `project:${JSON.stringify([project.workspace.device_id, project.workspace.id])}`;
@@ -273,9 +273,8 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     const [source, target] = [from, to].sort() as [string, string];
     const key = `pair:${JSON.stringify([source, target])}`;
     let pair = pairs.get(key);
-    if (!pair) { pair = { id: key, source, target, letters: 0, direct: 0, latest: 0, directions: [] }; pairs.set(key, pair); }
+    if (!pair) { pair = { id: key, source, target, letters: 0, direct: 0, directions: [] }; pairs.set(key, pair); }
     pair[record.type] += 1;
-    pair.latest = Math.max(pair.latest, record.at_unix_ms);
     let direction = pair.directions.find((row) => row.from === from && row.to === to);
     if (!direction) { direction = { from, to, letters: 0, direct: 0 }; pair.directions.push(direction); }
     direction[record.type] += 1;
@@ -289,6 +288,6 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
   const structure = JSON.stringify(groups.map((group) => [group.id, group.shown.map((row) => [row.id, layoutParents.get(row.id)]), group.revealSlot]));
   return {
     projects: groups, agents, allAgents, visible, context, roots: new Set(allAgents.filter((row) => !parents.has(row.id)).map((row) => row.id)), quietBranches, folded,
-    parents, teams: lineageRoots(allAgents, parents), layoutParents, counts, summaries, communication, limited: hidden > 0, hidden, singleProject: projectId !== null, structure,
+    parents, teams: lineageRoots(allAgents, parents), layoutParents, counts, summaries, communication, limited: hidden > 0, structure,
   };
 }

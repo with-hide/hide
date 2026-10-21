@@ -41,7 +41,7 @@ describe("current sessions in the Overview graph", () => {
     const graph = overviewGraphModel([p], facts, null);
     expect(graph.communication).toHaveLength(1);
     const [pair] = graph.communication;
-    expect(pair).toMatchObject({ letters: 1, direct: 3, latest: 40 });
+    expect(pair).toMatchObject({ letters: 1, direct: 3 });
     const a = idOf(graph, "a");
     const b = idOf(graph, "b");
     expect(pair!.directions.find((row) => row.from === a)).toEqual({ from: a, to: b, letters: 1, direct: 2 });

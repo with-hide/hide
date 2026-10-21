@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { between, communicationLines, hull, lineageLines, projectArea, teamOutline, turnLines } from "./overviewGraphLines";
 import type { Communication } from "./overviewGraphModel";
 
-const pair = (source: string, target: string, letters = 1): Communication => ({ id: `pair:${source}:${target}`, source, target, letters, direct: letters ? 0 : 1, latest: 0, directions: [{ from: source, to: target, letters, direct: letters ? 0 : 1 }] });
+const pair = (source: string, target: string, letters = 1): Communication => ({ id: `pair:${source}:${target}`, source, target, letters, direct: letters ? 0 : 1, directions: [{ from: source, to: target, letters, direct: letters ? 0 : 1 }] });
 // Two teams: a with child a1, b with child b1.
 const teams = new Map([["a", "a"], ["a1", "a"], ["b", "b"], ["b1", "b"]]);
 const drawn = () => true;
