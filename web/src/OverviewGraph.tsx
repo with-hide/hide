@@ -189,20 +189,21 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
       if (!members.length) continue;
       const accent = projectAccent(group.id);
       const middle = cloud(members.map((row) => pointOf(row.id)!), size.root.width / 2);
+      // Folded or not, the project keeps its glow, so its circle reads as the same project (PRD D-19).
+      const glow = middle.r * 2;
+      nodes.push({ id: `glow:${group.id}`, type: "glow", position: { x: middle.x - middle.r, y: middle.y - middle.r }, width: glow, height: glow, measured: { width: glow, height: glow }, data: { accent, emphasized: emphasizedProject(group.id) }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 0 } satisfies GlowNode);
       if (foldedProjects.has(group.id)) {
         // A folded project keeps its place as one circle where its sessions were.
         const summary = summariesById.get(group.id);
         if (!summary) continue;
         const orb = size.root.orb * 1.5;
-        const box = { width: size.label.width, height: orb + size.gap * 5 };
+        const box = { width: size.label.width, height: orb + size.gap * 7 };
         nodes.push({ id: cluster(group.id), type: "cluster", position: { x: middle.x - box.width / 2, y: middle.y - orb / 2 }, ...box, measured: box, data: { summary, accent, orb, emphasized: emphasizedProject(group.id), unfold: toggleFoldProject, point: setPointedProject }, dragHandle: ".og-cluster-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 } satisfies ClusterNode);
         orbs.set(cluster(group.id), { x: middle.x, y: middle.y, r: orb / 2 });
         for (const row of members) endpoint.set(row.id, cluster(group.id));
         clusterProject.set(cluster(group.id), group.id);
         continue;
       }
-      const glow = middle.r * 2;
-      nodes.push({ id: `glow:${group.id}`, type: "glow", position: { x: middle.x - middle.r, y: middle.y - middle.r }, width: glow, height: glow, measured: { width: glow, height: glow }, data: { accent, emphasized: emphasizedProject(group.id) }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 0 } satisfies GlowNode);
       const top = Math.min(...members.map((row) => pointOf(row.id)!.y)) - size.root.orb / 2 - size.gap * 2 - size.label.height;
       nodes.push({ id: group.id, type: "project", position: { x: middle.x - size.label.width / 2, y: top }, width: size.label.width, height: size.label.height, measured: size.label, data: { group, accent, current: current?.projectId === group.id, emphasized: emphasizedProject(group.id), fold: toggleFoldProject, point: setPointedProject }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 1 } satisfies ProjectNode);
       const drawnHere = new Set(members.map((row) => row.id));
