@@ -398,10 +398,17 @@ fn unix_agent(herdr: &PrivateHerdr) {
     } else {
         std::fs::copy(sleep, agent.join("claude")).unwrap();
     }
+    // Multicall coreutils dispatches by argv[0]; Linux still names the
+    // process from the copied executable, while macOS needs the agent argv.
+    let argv0 = if cfg!(target_os = "macos") {
+        "claude"
+    } else {
+        "sleep"
+    };
     let script = herdr.home.join("bin/claude");
     std::fs::write(
         &script,
-        "#!/bin/bash\nprintf '%s\\n' \"${PWD##*/} $*\" >> \"$HOME/claude-args\"\nexec -a claude \"$HOME/agent/claude\" 600\n",
+        format!("#!/bin/bash\nprintf '%s\\n' \"${{PWD##*/}} $*\" >> \"$HOME/claude-args\"\nexec -a {argv0} \"$HOME/agent/claude\" 600\n"),
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
