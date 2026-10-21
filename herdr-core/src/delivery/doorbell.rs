@@ -1039,6 +1039,11 @@ mod tests {
         letter: String,
         /// What the pane's visible screen shows when Herdr reads it.
         screen: Arc<Mutex<String>>,
+        /// How Herdr answers a read of that screen.
+        read_answer: Arc<Mutex<ReadAnswer>>,
+        /// A key that reaches the pane, at this time, while Herdr answers
+        /// the next read.
+        key_during_read: Arc<Mutex<Option<u64>>>,
         _worker: crate::delivery::worker::Worker,
         _root: tempfile::TempDir,
     }
@@ -1057,13 +1062,37 @@ mod tests {
             let answer = Arc::clone(&flags);
             let screen = Arc::new(Mutex::new(String::new()));
             let shown = Arc::clone(&screen);
+            let read_answer = Arc::new(Mutex::new(ReadAnswer::Screen));
+            let answered = Arc::clone(&read_answer);
+            let key_during_read = Arc::new(Mutex::new(None::<u64>));
+            let typed_during_read = Arc::clone(&key_during_read);
+            let owner = Arc::downgrade(&runtime);
             let herdr =
                 crate::fake_herdr::FakeHerdr::start_with_errors("doorbell", move |method, _| {
                     match method {
-                        "pane.read" => Ok(json!({"type": "pane_read", "read": {
-                            "pane_id": "recipient", "workspace_id": "w1", "tab_id": "w1:t1",
-                            "source": "visible", "format": "ansi", "revision": 1,
-                            "truncated": false, "text": *shown.lock().unwrap()}})),
+                        "pane.read" => {
+                            // The operator's key reaches the core while Herdr
+                            // answers, after the screen it answers was drawn.
+                            if let Some(at) = typed_during_read.lock().unwrap().take()
+                                && let Some(runtime) = owner.upgrade()
+                            {
+                                runtime
+                                    .lock()
+                                    .unwrap()
+                                    .note_delivery_key_at("recipient", at);
+                            }
+                            let truncated = match *answered.lock().unwrap() {
+                                ReadAnswer::Screen => false,
+                                ReadAnswer::Truncated => true,
+                                ReadAnswer::Refused(code) => {
+                                    return Err((code.into(), "read refused or timed out".into()));
+                                }
+                            };
+                            Ok(json!({"type": "pane_read", "read": {
+                                "pane_id": "recipient", "workspace_id": "w1", "tab_id": "w1:t1",
+                                "source": "visible", "format": "ansi", "revision": 1,
+                                "truncated": truncated, "text": *shown.lock().unwrap()}}))
+                        }
                         "agent.get" | "agent.prompt" => {
                             if method == "agent.prompt"
                                 && let Some(code) = submission_error
@@ -1135,6 +1164,8 @@ mod tests {
                 herdr,
                 flags,
                 screen,
+                read_answer,
+                key_during_read,
                 letter: sent["id"].as_str().unwrap().to_owned(),
                 _worker: worker,
                 _root: root,
@@ -1910,6 +1941,16 @@ mod tests {
     /// `tests/fixtures/composer`).
     const CODEX_EMPTY: &str =
         "\x1b[0m\x1b[1m› \x1b[0m\x1b[2mAsk Codex to do anything\x1b[0m\r\n\r\n  footer\r\n";
+    /// How the fake Herdr answers `pane.read`.
+    #[derive(Clone, Copy)]
+    enum ReadAnswer {
+        Screen,
+        /// The screen, marked cut.
+        Truncated,
+        /// An error with this code, as a refusal or Herdr's own timeout.
+        Refused(&'static str),
+    }
+
     const CODEX_DRAFT: &str = "\x1b[0m\x1b[1m› \x1b[0mhello 안녕하세요\r\n\r\n  footer\r\n";
 
     fn kinds_of(records: &[Value]) -> Vec<String> {
@@ -2117,6 +2158,145 @@ mod tests {
                 .filter(|record| record["kind"] == "composer.version_checked")
                 .count();
             assert_eq!(count, checked, "key during work: {key_during_work}");
+        }
+    }
+
+    /// A key that reaches the pane after the screen was read but before the
+    /// release applies may start the operator's newer draft, which the read
+    /// never saw: the release is refused, the letter stays held and nothing
+    /// is typed over it.
+    #[test]
+    fn a_key_after_the_read_refuses_the_release() {
+        let bell = Bell::start(json!({}));
+        bell.know_version(Some(true));
+        *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+        let start = now();
+        bell.runtime
+            .lock()
+            .unwrap()
+            .note_delivery_key_at("recipient", start - 40_000);
+        // The new key starts a draft of its own, which waits for its own rest
+        // and its own read.
+        *bell.key_during_read.lock().unwrap() = Some(start);
+        let mut doorbell = Doorbell::default();
+        let mut logged = Vec::new();
+        for at in [start, start + 250, start + 1_000] {
+            logged.extend(pass_logged(&bell, &mut doorbell, at));
+        }
+        assert_eq!(
+            kinds_of(&logged),
+            ["composer.read", "composer.release_refused"]
+        );
+        let refused = logged
+            .iter()
+            .find(|record| record["kind"] == "composer.release_refused")
+            .unwrap();
+        assert_eq!(refused["reason"], "input_after_read");
+        assert_eq!(held(&logged), ["draft"]);
+        assert!(bell.typed().is_empty());
+        assert_eq!(bell.attempts(), 0);
+    }
+
+    /// Nothing but a screen read empty releases a draft: a refused or
+    /// timed-out read, a cut screen, a screen with no composer where the
+    /// declaration puts it and a pane with no Herdr link each keep the hold,
+    /// type nothing and are logged once for the draft.
+    #[test]
+    fn a_read_that_shows_no_empty_composer_keeps_the_draft_hold() {
+        for (answer, screen, live, verdict) in [
+            (
+                ReadAnswer::Refused("timeout"),
+                CODEX_EMPTY,
+                true,
+                "read_failed",
+            ),
+            (
+                ReadAnswer::Refused("pane_not_found"),
+                CODEX_EMPTY,
+                true,
+                "read_failed",
+            ),
+            (ReadAnswer::Truncated, CODEX_EMPTY, true, "read_truncated"),
+            (
+                ReadAnswer::Screen,
+                "$ ls\r\nREADME.md\r\n",
+                true,
+                "not_found",
+            ),
+            (ReadAnswer::Screen, CODEX_EMPTY, false, "pane_unavailable"),
+        ] {
+            let bell = Bell::start(json!({}));
+            bell.know_version(Some(true));
+            *bell.screen.lock().unwrap() = screen.into();
+            *bell.read_answer.lock().unwrap() = answer;
+            let start = now();
+            {
+                let mut guard = bell.runtime.lock().unwrap();
+                guard.note_delivery_key_at("recipient", start - 40_000);
+                if !live {
+                    crate::runtime::delivery::tests::set_live(&mut guard, None);
+                }
+            }
+            let mut doorbell = Doorbell::default();
+            let mut logged = Vec::new();
+            for at in [start, start + 250, start + 1_000] {
+                logged.extend(pass_logged(&bell, &mut doorbell, at));
+            }
+            assert_eq!(kinds_of(&logged), ["composer.read"], "{verdict}");
+            let read = logged
+                .iter()
+                .find(|record| record["kind"] == "composer.read")
+                .unwrap();
+            assert_eq!(read["verdict"], verdict);
+            assert_eq!(held(&logged), ["draft"], "{verdict}");
+            assert!(bell.typed().is_empty(), "{verdict}");
+            assert_eq!(bell.attempts(), 0, "{verdict}");
+        }
+    }
+
+    /// A version check whose read fails says nothing about the screen: the
+    /// version is neither passed nor failed, so its next draft is still
+    /// `version_unchecked` and is not read.
+    #[test]
+    fn a_failed_check_read_records_nothing_for_the_version() {
+        for (answer, live, verdict) in [
+            (ReadAnswer::Refused("timeout"), true, "read_failed"),
+            (ReadAnswer::Truncated, true, "read_truncated"),
+            (ReadAnswer::Screen, false, "pane_unavailable"),
+        ] {
+            let bell = Bell::start(json!({}));
+            bell.know_version(None);
+            *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+            *bell.read_answer.lock().unwrap() = answer;
+            let start = now();
+            {
+                let mut guard = bell.runtime.lock().unwrap();
+                crate::runtime::delivery::tests::observe_turn_ended(
+                    &mut guard,
+                    "recipient",
+                    start - 60_000,
+                );
+                if !live {
+                    crate::runtime::delivery::tests::set_live(&mut guard, None);
+                }
+            }
+            let mut doorbell = Doorbell::default();
+            let checked = pass_logged(&bell, &mut doorbell, start);
+            let record = checked
+                .iter()
+                .find(|record| record["kind"] == "composer.version_checked")
+                .unwrap_or_else(|| panic!("{verdict}: {checked:?}"));
+            assert_eq!(record["verdict"], verdict);
+            bell.runtime
+                .lock()
+                .unwrap()
+                .note_delivery_key_at("recipient", start - 40_000);
+            let later = pass_logged(&bell, &mut doorbell, start + 20_000);
+            let skipped = later
+                .iter()
+                .find(|record| record["kind"] == "composer.not_read")
+                .unwrap_or_else(|| panic!("{verdict}: {later:?}"));
+            assert_eq!(skipped["reason"], "version_unchecked", "{verdict}");
         }
     }
 
