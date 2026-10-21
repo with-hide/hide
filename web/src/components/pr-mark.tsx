@@ -5,9 +5,11 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { cn } from "../lib/utils";
 import { agentStaleness, ownPulls, PR_LOOK, prMarkParts, reviewWord, sessionStaleness, staleLabel, type PrMarkParts, type PrStaleness, type SessionPull } from "../prMark";
 import type { PrChip } from "../projectBoard";
-import type { AgentPullRequest, AgentRow, PrState } from "../snapshot";
+import { pullRequestCard } from "../projects";
+import { catalogWorkspaces, type AgentPullRequest, type AgentRow, type PrState } from "../snapshot";
 import { useShellStore } from "../store";
 import { AgentRecordTitle } from "./agent-record-title";
+import { CheckoutCardHint } from "./pr-card";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Hint, Tooltip, TooltipContent, TooltipTrigger, useHintOpen } from "./ui/tooltip";
 
@@ -115,38 +117,45 @@ export const PR_MARK_PRESS = "flex shrink-0 items-center rounded-xs px-xxs outli
  * An agent row's own PRs, or a task root's complete family, as one mark
  * (PRD sidebar-task-lens B14): one PR opens on a press, several list each PR,
  * worst first, and choosing one opens it; ⌘-press opens one PR on GitHub.
+ * Under the pointer or focus it shows what the 프로젝트 row's mark shows: the
+ * PR card for one PR, the list for several.
  */
-export function AgentPrMark({ agent, family, staleness, disabled = false, onOpen, onExternal }: { agent: AgentRow; family?: SessionPull[]; staleness?: PrStaleness; disabled?: boolean; onOpen: (pull: AgentPullRequest) => void; onExternal?: (pull: AgentPullRequest) => void }) {
+export function AgentPrMark({ agent, family, staleness, disabled = false, side, onOpen, onExternal }: { agent: AgentRow; family?: SessionPull[]; staleness?: PrStaleness; disabled?: boolean; side?: "right" | "bottom"; onOpen: (pull: AgentPullRequest) => void; onExternal?: (pull: AgentPullRequest) => void }) {
   const { t } = useInterfaceTranslation();
   const entries: MarkPulls = family ?? ownPulls(agent);
   const parts = prMarkParts(entries);
   const baseLabel = useMarkLabel(parts, staleness);
   const label = [baseLabel, recordWords(t, agent)].filter(Boolean).join(" · ");
   if (!parts) return null;
+  const open = (pull: AgentPullRequest, external: boolean) => (external && onExternal ? onExternal(pull) : onOpen(pull));
+  const openUrl = (url: string, external: boolean) => {
+    const pull = entries.find((entry) => entry.pull.url === url)?.pull;
+    if (!pull) throw new Error("PR card names a pull request outside its mark");
+    open(pull, external);
+  };
   const only = entries.length === 1 ? entries[0]!.pull : null;
   if (only) {
     return (
-      <Hint label={label}>
+      <PrHoverCard agent={agent} pulls={entries} staleness={staleness} side={side} onOpenPullRequest={openUrl}>
         <button type="button" disabled={disabled} aria-label={label} data-agent-pr={agent.pane_id} className={cn(PR_MARK_PRESS, recordPending(agent) && "opacity-(--opacity-dimmed)")} data-record-provisional={recordPending(agent) || undefined}
           onClick={(event) => {
             event.stopPropagation();
-            if ((event.metaKey || event.ctrlKey) && onExternal) onExternal(only);
-            else onOpen(only);
+            open(only, event.metaKey || event.ctrlKey);
           }}>
           <PartsMark parts={parts} stale={staleness?.stale} />
         </button>
-      </Hint>
+      </PrHoverCard>
     );
   }
   return (
     <DropdownMenu>
-      <Hint label={label}>
+      <PrHoverCard agent={agent} pulls={entries} staleness={staleness} side={side} onOpenPullRequest={openUrl}>
         <DropdownMenuTrigger asChild>
           <button type="button" disabled={disabled} aria-label={label} data-agent-pr={agent.pane_id} onClick={(event) => event.stopPropagation()} className={cn(PR_MARK_PRESS, recordPending(agent) && "opacity-(--opacity-dimmed)")} data-record-provisional={recordPending(agent) || undefined}>
             <PartsMark parts={parts} stale={staleness?.stale} />
           </button>
         </DropdownMenuTrigger>
-      </Hint>
+      </PrHoverCard>
       <DropdownMenuContent align="start" className="w-(--size-pr-popover)" onClick={(event) => event.stopPropagation()} data-pr-list={agent.pane_id}>
         <PrListHead agent={agent} count={family?.length} />
         {entries.map((entry) => (
@@ -209,7 +218,7 @@ export function AgentPrHover({ agent, family, staleness, card }: { agent: AgentR
  * last read if it cannot be read now. Choosing a PR opens it; the list stays
  * open while the pointer moves into it.
  */
-export function PrHoverList({ agent, pulls, staleness, onOpen, children }: { agent: AgentRow; pulls: MarkPulls; staleness?: PrStaleness; onOpen: (pull: AgentPullRequest) => void; children: ReactNode }) {
+function PrHoverList({ agent, pulls, staleness, side = "right", onOpen, children }: { agent: AgentRow; pulls: MarkPulls; staleness?: PrStaleness; side?: "right" | "bottom"; onOpen: (pull: AgentPullRequest) => void; children: ReactNode }) {
   const { t, i18n } = useInterfaceTranslation();
   const { open, onOpenChange, triggerProps } = useHintOpen();
   const stale = staleLabel(staleness, t, requireInterfaceLanguage(i18n.language));
@@ -218,7 +227,7 @@ export function PrHoverList({ agent, pulls, staleness, onOpen, children }: { age
       <TooltipTrigger asChild {...triggerProps}>
         {children}
       </TooltipTrigger>
-      <TooltipContent side="right" align="start" aria-label={t("agentSessions.pr.list", { name: agent.identity_label })} className="pointer-events-auto flex w-(--size-pr-popover) flex-col gap-xxs rounded-md p-xs text-left" data-pr-list={agent.pane_id}>
+      <TooltipContent side={side} align="start" aria-label={t("agentSessions.pr.list", { name: agent.identity_label })} className="pointer-events-auto flex w-(--size-pr-popover) flex-col gap-xxs rounded-md p-xs text-left" data-pr-list={agent.pane_id}>
         {pulls.map(({ pull, state, owners }) => (
           <button key={pull.url} type="button" onClick={() => onOpen(pull)} data-pr-list-item={pull.number} className="flex min-w-0 items-center gap-xs rounded-xs px-xs py-xxs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring">
             <PrListItem pull={pull} state={state} owners={owners} />
@@ -228,4 +237,25 @@ export function PrHoverList({ agent, pulls, staleness, onOpen, children }: { age
       </TooltipContent>
     </Tooltip>
   );
+}
+
+/**
+ * Under the pointer or focus, a PR mark shows the existing PR card for one
+ * PR, and each PR with its state and title for several (B23), a root's
+ * family naming who holds each. The 프로젝트 row, the 태스크 row and the pane
+ * header draw the same card.
+ */
+export function PrHoverCard({ agent, pulls, staleness, side, onOpenPullRequest, children }: { agent: AgentRow; pulls: MarkPulls; staleness?: PrStaleness; side?: "right" | "bottom"; onOpenPullRequest: (url: string, external: boolean) => void; children: ReactNode }) {
+  const { t } = useInterfaceTranslation();
+  const trigger = <span className="relative z-10 flex shrink-0" data-pr-hover={agent.pane_id}>{children}</span>;
+  const single = pulls.length === 1 ? pulls[0]!.pull : null;
+  const pr = useShellStore((s) => (single ? catalogWorkspaces(s.rest).flatMap((project) => project.pull_requests ?? []).find((row) => row.url === single.url) : undefined));
+  if (pr && !staleness?.stale) {
+    return (
+      <CheckoutCardHint card={pullRequestCard(pr, t)} description={`#${pr.number} ${pr.title}`} side={side} onOpenPullRequest={onOpenPullRequest}>
+        {trigger}
+      </CheckoutCardHint>
+    );
+  }
+  return <PrHoverList agent={agent} pulls={pulls} staleness={staleness} side={side} onOpen={(pull) => onOpenPullRequest(pull.url, false)}>{trigger}</PrHoverList>;
 }

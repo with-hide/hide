@@ -301,7 +301,7 @@ export function PanePrChip({ paneId, actions }: { paneId: string; actions: Actio
 function PaneAgentPrMark({ agent, family, actions }: { agent: AgentRow; family?: SessionPull[]; actions: Actions }) {
   const staleness = useAgentStaleness(agent, family);
   // The pane names no project; the PR's URL finds the one that lists it.
-  return <AgentPrMark agent={agent} family={family} staleness={staleness} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />;
+  return <AgentPrMark agent={agent} family={family} staleness={staleness} side="bottom" onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />;
 }
 
 /**
