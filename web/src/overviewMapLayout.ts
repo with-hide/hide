@@ -1,167 +1,209 @@
-// Places the Overview work map (PRD overview-main-map D-01, D-02, D-13): the
-// operator at the center, every session without a placed parent on one ring
-// around the operator, grouped by project, and each team gathered outside its
-// root: children on a fan around their parent facing away from it, the way the
-// parent faces away from the operator. The same sessions in the same order
-// always land in the same places; status, letters and selection are not inputs.
-// Each session is a label rectangle whose orb sits at its top center; no two
-// rectangles, the operator's included, overlap.
+// Places the Overview work map (PRD overview-main-map D-01, D-02, D-13, D-18,
+// D-20) with d3-force, the way Obsidian's graph view does: the operator is fixed
+// at the origin, each project gathers around its own anchor on a circle around
+// the operator, a root is held loosely toward the operator, and a delegated
+// session is tied short and tight to its parent. The simulation settles before
+// the first paint, so nothing wobbles on open, and every start position comes
+// from the session's id, so the same sessions open in the same shape. When
+// sessions come or go, the ones already placed hold still while only the new
+// ones find a place. Drags move bodies and, unless motion is reduced, let the
+// physics pull a team along and settle on release.
 
+import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type ForceLink, type Simulation, type SimulationLinkDatum, type SimulationNodeDatum } from "d3-force";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
 
-/** A label rectangle with its orb at the top center: `orb` is the orb's diameter. */
-export type MapBox = { width: number; height: number; orb: number };
-/** `parent` names a placed session, or null for a session on the first ring. */
-export type MapSession = { id: string; projectId: string; parent: string | null; box: MapBox };
+/** `parent` names a placed session, or null for a root; `radius` is how much room the session's circle and words need. */
+export type MapSession = { id: string; projectId: string; parent: string | null; radius: number };
 export type MapInput = {
   /** Projects in drawing order; a session's project must be listed. */
-  projects: readonly { id: string }[];
-  /** Sessions in drawing order within their project and parent. */
+  projects: readonly string[];
   sessions: readonly MapSession[];
+  /** Room the operator's circle needs. */
   operator: number;
-  gap: number;
-  projectGap: number;
 };
-/** An orb center, its ring and angle, and the first-ring session whose team it belongs to. */
-export type MapPoint = { x: number; y: number; level: number; angle: number; team: string };
-export type MapPlacement = { nodes: Map<string, MapPoint> };
+type Point = { x: number; y: number };
+/** An orb center, and the session whose team it belongs to (a root names its own). */
+export type MapPoint = Point & { team: string };
 
-type Tree = { session: MapSession; level: number; children: Tree[] };
-/** A member of a team, its orb center relative to the team's root. */
-type Member = { tree: Tree; x: number; y: number };
+type Body = SimulationNodeDatum & { id: string; projectId: string; parent: string | null; radius: number; team: string; root: boolean };
+type Tie = SimulationLinkDatum<Body> & { kind: "team" | "operator"; length: number };
 
-const TURN = Math.PI * 2;
-const TOP = -Math.PI / 2;
-/** Children spread at most a quarter turn to either side of their parent's outward direction. */
-const FAN = Math.PI / 2;
+const OPERATOR = "\u0000operator";
+/** Ticks for alpha to fall from 1 to d3's alphaMin; a quicker decay than d3's 300 ticks keeps four hundred nodes within a frame budget the operator does not notice. */
+const SETTLE = 120;
+const DECAY = 1 - Math.pow(0.001, 1 / SETTLE);
 
-/** Half extents of a box measured from its orb center, symmetric so a distance can be solved for every direction. */
-const half = (box: MapBox) => ({ w: box.width / 2, h: Math.max(box.orb / 2, box.height - box.orb / 2) });
-
-/** The distance along (dx, dy) at which two half-extent boxes plus a gap stop overlapping. */
-function clearance(dx: number, dy: number, a: { w: number; h: number }, b: { w: number; h: number }, gap: number): number {
-  return Math.min((a.w + b.w + gap) / Math.max(Math.abs(dx), Number.EPSILON), (a.h + b.h + gap) / Math.max(Math.abs(dy), Number.EPSILON));
+/** A stable angle from an id, so a start position never depends on order or chance. */
+function angleOf(id: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < id.length; index += 1) hash = Math.imul(hash ^ id.charCodeAt(index), 16777619);
+  return ((hash >>> 0) / 4294967296) * Math.PI * 2;
 }
 
-/** The rectangle a box covers when its orb center is at (x, y). */
-const rect = (x: number, y: number, box: MapBox) => ({ left: x - box.width / 2, right: x + box.width / 2, top: y - box.orb / 2, bottom: y - box.orb / 2 + box.height });
-type Rect = ReturnType<typeof rect>;
-const overlaps = (a: Rect, b: Rect, gap: number) => a.left < b.right + gap && b.left < a.right + gap && a.top < b.bottom + gap && b.top < a.bottom + gap;
+export class ForceMap {
+  private readonly bodies = new Map<string, Body>();
+  private readonly anchors = new Map<string, Point>();
+  private readonly simulation: Simulation<Body, Tie>;
+  private ties: Tie[] = [];
+  private readonly operator: Body;
+  private reduced = false;
+  private listener: (() => void) | null = null;
 
-/** Whether no member of one group touches a member of another; members of one group are already apart. */
-function apart(groups: readonly (readonly Member[])[], gap: number): boolean {
-  const boxes = groups.map((group) => group.map((member) => rect(member.x, member.y, member.tree.session.box)));
-  for (let i = 0; i < boxes.length; i += 1) for (let j = i + 1; j < boxes.length; j += 1) {
-    for (const a of boxes[i]!) for (const b of boxes[j]!) if (overlaps(a, b, gap / 2)) return false;
+  constructor(input: MapInput, previous?: ForceMap) {
+    this.operator = { id: OPERATOR, projectId: "", parent: null, radius: input.operator, team: OPERATOR, root: false, x: 0, y: 0, fx: 0, fy: 0 };
+    this.simulation = forceSimulation<Body, Tie>().alphaDecay(DECAY).stop();
+    this.place(input, previous);
   }
-  return true;
-}
 
-const shift = (members: readonly Member[], x: number, y: number) => members.map((member) => ({ tree: member.tree, x: member.x + x, y: member.y + y }));
-
-/**
- * A subtree with its root at the origin facing `direction`: the children sit on
- * one arc around it, as close as the arc can be without any two members touching.
- */
-function arrange(tree: Tree, direction: number, gap: number): Member[] {
-  const own: Member[] = [{ tree, x: 0, y: 0 }];
-  const count = tree.children.length;
-  if (!count) return own;
-  const widest = tree.children.reduce((box, child) => { const size = half(child.session.box); return { w: Math.max(box.w, size.w), h: Math.max(box.h, size.h) }; }, { w: 0, h: 0 });
-  const near = clearance(Math.cos(direction), Math.sin(direction), half(tree.session.box), widest, gap);
-  const step = count > 1 ? Math.min((2 * FAN) / (count - 1), (widest.w * 2 + gap) / near) : 0;
-  const subtrees = tree.children.map((child, index) => { const angle = direction + (index - (count - 1) / 2) * step; return { angle, members: arrange(child, angle, gap) }; });
-  const at = (radius: number) => [own, ...subtrees.map((subtree) => shift(subtree.members, Math.cos(subtree.angle) * radius, Math.sin(subtree.angle) * radius))];
-  // Grow the arc until it fits, then close in on the nearest radius that still does.
-  let low = near;
-  let high = near;
-  for (let attempt = 0; !apart(at(high), gap); attempt += 1) {
-    if (attempt > 60) throw new Error(`overview map could not fit the team of ${tree.session.id}`);
-    low = high;
-    high *= 1.25;
+  /** Every session's orb center. */
+  positions(): Map<string, MapPoint> {
+    const out = new Map<string, MapPoint>();
+    for (const body of this.bodies.values()) out.set(body.id, { x: body.x!, y: body.y!, team: body.team });
+    return out;
   }
-  for (let attempt = 0; high - low > gap / 2 && attempt < 30; attempt += 1) {
-    const middle = (low + high) / 2;
-    if (apart(at(middle), gap)) high = middle; else low = middle;
-  }
-  return at(high).flat();
-}
 
-/** How far a team reaches to either side of its root, across the direction it faces. */
-function sideways(members: readonly Member[], direction: number): { lo: number; hi: number } {
-  const across = { x: -Math.sin(direction), y: Math.cos(direction) };
-  let lo = 0;
-  let hi = 0;
-  for (const member of members) {
-    const box = rect(member.x, member.y, member.tree.session.box);
-    for (const [x, y] of [[box.left, box.top], [box.right, box.top], [box.left, box.bottom], [box.right, box.bottom]] as const) {
-      const offset = x * across.x + y * across.y;
-      lo = Math.min(lo, offset);
-      hi = Math.max(hi, offset);
+  /** Called after each animated step and each settled drop, so the view can redraw. */
+  listen(listener: (() => void) | null) { this.listener = listener; }
+
+  /** With motion reduced, a drag moves only what the hand holds and the rest settles at once on release. */
+  reduceMotion(reduced: boolean) { this.reduced = reduced; }
+
+  /** The operator holds a session: it follows the hand, and unless motion is reduced its team is pulled along. */
+  grab(id: string) {
+    const body = this.bodies.get(id);
+    if (!body) return;
+    body.fx = body.x;
+    body.fy = body.y;
+    if (!this.reduced) this.animate(0.25);
+  }
+
+  drag(id: string, to: Point) {
+    const body = this.bodies.get(id);
+    if (!body) return;
+    body.fx = to.x;
+    body.fy = to.y;
+    if (this.reduced) { body.x = to.x; body.y = to.y; }
+  }
+
+  /** The session stays where it was put; the rest settles around it. */
+  drop(id: string) {
+    if (this.bodies.has(id)) this.settle();
+  }
+
+  /** Every session of a project moves together, with the place the project gathers around. */
+  moveProject(projectId: string, by: Point) {
+    const anchor = this.anchors.get(projectId);
+    if (!anchor) return;
+    this.simulation.stop();
+    anchor.x += by.x;
+    anchor.y += by.y;
+    for (const body of this.bodies.values()) {
+      if (body.projectId !== projectId) continue;
+      body.x! += by.x;
+      body.y! += by.y;
+      if (body.fx != null) body.fx += by.x;
+      if (body.fy != null) body.fy += by.y;
+      body.vx = 0;
+      body.vy = 0;
     }
   }
-  return { lo, hi };
-}
 
-export function placeOverviewMap(input: MapInput): MapPlacement {
-  const count = input.projects.length + input.sessions.length;
-  if (count > LAYOUT_NODE_LIMIT) throw new Error(`overview map has ${count} nodes, over the layout limit of ${LAYOUT_NODE_LIMIT}`);
-  const projectOrder = new Map(input.projects.map((project, index) => [project.id, index]));
-  for (const session of input.sessions) if (!projectOrder.has(session.projectId)) throw new Error(`session ${session.id} names an unlisted project`);
-  const byId = new Map(input.sessions.map((session) => [session.id, session]));
-  const kids = new Map<string, MapSession[]>();
-  for (const session of input.sessions) {
-    if (session.parent === null) continue;
-    if (!byId.has(session.parent)) throw new Error(`session ${session.id} names an unplaced parent`);
-    kids.set(session.parent, [...(kids.get(session.parent) ?? []), session]);
+  /** The project stays where it was put: its roots' ties to the operator take their new length, so no later settling pulls it back. */
+  dropProject() {
+    for (const tie of this.ties) {
+      const root = tie.target as Body;
+      if (tie.kind === "operator") tie.length = Math.hypot(root.x!, root.y!);
+    }
+    (this.simulation.force("tie") as ForceLink<Body, Tie>).distance((tie) => tie.length);
+    this.listener?.();
   }
-  // A lineage cycle has no ring member; its earliest session starts it so
-  // every session is placed exactly once.
-  const placed = new Set<string>();
-  const grow = (session: MapSession, level: number): Tree => {
-    placed.add(session.id);
-    const children = (kids.get(session.id) ?? []).filter((child) => !placed.has(child.id)).map((child) => grow(child, level + 1));
-    return { session, level, children };
-  };
-  const teams: Tree[] = [];
-  for (const session of input.sessions) if (session.parent === null) teams.push(grow(session, 1));
-  for (const session of input.sessions) if (!placed.has(session.id)) teams.push(grow(session, 1));
-  teams.sort((a, b) => projectOrder.get(a.session.projectId)! - projectOrder.get(b.session.projectId)!);
-  const operator: MapBox = { width: input.operator, height: input.operator, orb: input.operator };
-  const boundary = (index: number) => teams.length > 1 && teams[index]!.session.projectId !== teams[(index + 1) % teams.length]!.session.projectId;
-  const between = (index: number) => (teams.length > 1 ? (boundary(index) ? input.projectGap : input.gap) : 0);
-  // A team's shape depends on the direction it faces, and its direction on the
-  // room the teams before it take; two rounds settle both.
-  let angles = teams.map((_, index) => TOP + (TURN * index) / Math.max(teams.length, 1));
-  let shapes = teams.map((tree, index) => arrange(tree, angles[index]!, input.gap));
-  let radius = 0;
-  for (let round = 0; round < 2; round += 1) {
-    const reach = shapes.map((members, index) => sideways(members, angles[index]!));
-    const room = reach.reduce((total, side, index) => total + side.hi - side.lo + between(index), 0);
-    const clear = teams.reduce((far, tree, index) => Math.max(far, clearance(Math.cos(angles[index]!), Math.sin(angles[index]!), half(operator), half(tree.session.box), input.gap)), 0);
-    radius = Math.max(clear, room / TURN);
-    // Spread what is left between teams, twice as much where projects meet.
-    const weights = teams.map((_, index) => (boundary(index) ? 2 : 1));
-    const weight = weights.reduce((total, value) => total + value, 0);
-    const spare = Math.max(0, TURN - room / radius);
-    let cursor = TOP + (reach[0]?.lo ?? 0) / radius;
-    angles = teams.map((_, index) => {
-      const angle = cursor - reach[index]!.lo / radius;
-      cursor = angle + (reach[index]!.hi + between(index)) / radius + (spare * weights[index]!) / weight;
-      return angle;
+
+  /** Stop any animation; the owner calls this when the view closes or replaces the map. */
+  stop() { this.simulation.stop(); this.simulation.on("tick", null); this.listener = null; }
+
+  private settle() {
+    if (this.reduced) {
+      this.simulation.stop();
+      this.simulation.alpha(0.3).alphaTarget(0);
+      while (this.simulation.alpha() > this.simulation.alphaMin()) this.simulation.tick();
+      this.listener?.();
+      return;
+    }
+    this.animate(0);
+    if (this.simulation.alpha() < 0.1) this.simulation.alpha(0.1);
+  }
+
+  private animate(target: number) {
+    this.simulation.on("tick", () => this.listener?.()).alphaTarget(target).restart();
+  }
+
+  private place(input: MapInput, previous?: ForceMap) {
+    const count = input.projects.length + input.sessions.length;
+    if (count > LAYOUT_NODE_LIMIT) throw new Error(`overview map has ${count} nodes, over the layout limit of ${LAYOUT_NODE_LIMIT}`);
+    const projects = new Set(input.projects);
+    const byId = new Map(input.sessions.map((session) => [session.id, session]));
+    for (const session of input.sessions) {
+      if (!projects.has(session.projectId)) throw new Error(`session ${session.id} names an unlisted project`);
+      if (session.parent !== null && !byId.has(session.parent)) throw new Error(`session ${session.id} names an unplaced parent`);
+    }
+    // A team is named by its root; a lineage cycle is named by its smallest member.
+    const teamOf = (session: MapSession): string => {
+      const seen = new Set<string>();
+      let current = session;
+      while (current.parent !== null && !seen.has(current.id)) { seen.add(current.id); current = byId.get(current.parent)!; }
+      return current.parent === null ? current.id : [...seen].sort()[0]!;
+    };
+    // Projects gather on an ellipse around the operator, wider than tall like the screen and wide enough for how many sessions there are.
+    const reach = Math.max(380, 72 * Math.sqrt(input.sessions.length + 1));
+    input.projects.forEach((id, index) => {
+      const kept = previous?.anchors.get(id);
+      const angle = -Math.PI / 2 + (index / Math.max(input.projects.length, 1)) * Math.PI * 2;
+      this.anchors.set(id, kept ? { ...kept } : input.projects.length === 1 ? { x: 0, y: -reach * 0.6 } : { x: Math.cos(angle) * reach, y: Math.sin(angle) * reach * 0.7 });
     });
-    shapes = teams.map((tree, index) => arrange(tree, angles[index]!, input.gap));
+    // Parents start before their children, so a new child starts beside its parent.
+    const ordered: MapSession[] = [];
+    const queued = new Set<string>();
+    const visit = (session: MapSession) => {
+      if (queued.has(session.id)) return;
+      queued.add(session.id);
+      if (session.parent !== null) visit(byId.get(session.parent)!);
+      ordered.push(session);
+    };
+    // Identity order, never the caller's order, so the same set of sessions makes the same shape.
+    for (const session of [...input.sessions].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) visit(session);
+    const held: Body[] = [];
+    for (const session of ordered) {
+      const old = previous?.bodies.get(session.id);
+      const body: Body = { id: session.id, projectId: session.projectId, parent: session.parent, radius: session.radius, team: teamOf(session), root: session.parent === null };
+      if (old) {
+        // Already placed: it keeps its place, and an operator's pin, while the new ones settle.
+        body.x = old.x; body.y = old.y;
+        body.fx = old.x; body.fy = old.y;
+        if (old.fx == null) held.push(body);
+      } else {
+        const near: Point = session.parent !== null && this.bodies.has(session.parent) ? { x: this.bodies.get(session.parent)!.x!, y: this.bodies.get(session.parent)!.y! } : this.anchors.get(session.projectId)!;
+        const angle = angleOf(session.id);
+        const spread = session.parent !== null ? session.radius * 2 : 48;
+        body.x = near.x + Math.cos(angle) * spread;
+        body.y = near.y + Math.sin(angle) * spread;
+      }
+      this.bodies.set(session.id, body);
+    }
+    const ties: Tie[] = [];
+    this.ties = ties;
+    for (const body of this.bodies.values()) {
+      if (body.parent !== null && body.parent !== body.id) ties.push({ source: body.parent, target: body.id, kind: "team", length: this.bodies.get(body.parent)!.radius + body.radius });
+      else if (body.parent === null) ties.push({ source: OPERATOR, target: body.id, kind: "operator", length: reach * 0.63 });
+    }
+    this.simulation
+      .nodes([this.operator, ...this.bodies.values()])
+      .force("tie", forceLink<Body, Tie>(ties).id((body) => body.id).distance((tie) => tie.length).strength((tie) => (tie.kind === "team" ? 0.9 : 0.12)))
+      .force("charge", forceManyBody<Body>().strength((body) => (body.id === OPERATOR ? -600 : body.root ? -700 : -180)))
+      .force("collide", forceCollide<Body>((body) => body.radius).iterations(3))
+      .force("x", forceX<Body>((body) => this.anchors.get(body.projectId)?.x ?? 0).strength((body) => (body.id === OPERATOR ? 0 : body.root ? 0.12 : 0.02)))
+      .force("y", forceY<Body>((body) => this.anchors.get(body.projectId)?.y ?? 0).strength((body) => (body.id === OPERATOR ? 0 : body.root ? 0.12 : 0.02)))
+      .alpha(1).alphaTarget(0);
+    for (let step = 0; step < SETTLE; step += 1) this.simulation.tick();
+    for (const body of held) { body.fx = null; body.fy = null; }
   }
-  // A last check over every team: while one still touches another or the
-  // operator, the ring moves out, keeping every angle and every team's shape.
-  const at = (ring: number) => [[{ tree: { session: { id: "", projectId: "", parent: null, box: operator }, level: 0, children: [] }, x: 0, y: 0 }], ...shapes.map((members, index) => shift(members, Math.cos(angles[index]!) * ring, Math.sin(angles[index]!) * ring))];
-  for (let attempt = 0; teams.length && !apart(at(radius), input.gap); attempt += 1) {
-    if (attempt >= 60) throw new Error("overview map could not separate its teams");
-    radius += Math.max(input.gap, radius * 0.1);
-  }
-  const nodes = new Map<string, MapPoint>();
-  at(radius).slice(1).forEach((members, index) => {
-    for (const member of members) nodes.set(member.tree.session.id, { x: member.x, y: member.y, level: member.tree.level, angle: Math.atan2(member.y, member.x), team: teams[index]!.session.id });
-  });
-  return { nodes };
 }

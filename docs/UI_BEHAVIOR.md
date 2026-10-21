@@ -932,40 +932,50 @@ The Overview reads the same tasks for the Projects tab's `지금` counts and the
 
 ### Work
 
-Web owners are `web/src/overviewGraphModel.ts`, `web/src/overviewMapLayout.ts`, `web/src/overviewGraphLayout.ts`, `web/src/overviewGraphLines.ts` (which lines are drawn, the team outline and the project band), `web/src/overviewGraphDrag.ts` (the drag units), `web/src/OverviewGraph.tsx` and `web/src/overviewGraphNodes.tsx` (PRD overview-main-map).
+Web owners are `web/src/overviewGraphModel.ts`, `web/src/overviewMapLayout.ts` (the force map and its drags), `web/src/overviewGraphLayout.ts`, `web/src/overviewGraphLines.ts` (which lines are drawn, the team outline, a project's accent and glow), `web/src/OverviewGraph.tsx` (folding and what each folded session is drawn as) and `web/src/overviewGraphNodes.tsx` (PRD overview-main-map).
 Work offers graph and list views over real live agents, grouped by project and explicit parentage.
 Both views share All, My turn, Working and Unread results, with counts from canonical marks: `turn`, `going|waiting` and `done|unread`.
 Include sleeping starts off and excludes only `asleep`; idle sessions marked `quiet`, Seen demands and sleeping raised asks still marked `turn`, and `unknown`, remain available.
 The list orders My turn, Working, Unread results, unknown, idle and sleeping, retaining fifty-row pagination.
 A filter dims the sessions it does not match instead of removing them, so a filter never moves a circle; an excluded ancestor of a present session stays as dimmed context, and dimmed sessions never increase match counts.
 A filter with no match shows Show all sessions, distinct from no current sessions and layout failure.
-Only branches whose every descendant sleeps offer a reversible subtree fold; a descendant becoming idle or active releases that fold.
+A team folds into its root, and a project folds into one circle (PRD overview-main-map D-19).
+A team whose every descendant sleeps opens folded; one the operator folded or unfolded keeps that choice while the view is mounted.
 
-The graph is a map centred on the operator: a `나` circle sits at the centre, and every session without a lineage parent (a root) stands on one round ring around it, grouped by project in project order.
-A root's children sit as smaller circles on a fan just outside it, facing away from the operator, and each child's own children sit just outside that child the same way, so a team stays gathered at its root; the root and all its descendants share one dashed outline drawn around their circles and words.
-Each project is a faint band of the ring under its roots and teams, whose outer edge steps out only where a session reaches further, and its name sits in bold, larger than a session's title, just outside the band at the middle of its angles.
-Placement is computed in the web shell: the same sessions get the same places, and status, labels, letters, filters, selection and hiding never enter the layout key.
-No two session label rectangles, or a session and the operator, overlap; a layout that cannot separate them fails into the existing Retry and session list.
+The graph is a force map centred on the operator, the way Obsidian's graph view is drawn (PRD overview-main-map D-01, D-20): a `나` circle is fixed at the centre, and every session without a lineage parent (a root) is held loosely toward it by a faint line.
+Each project gathers around its own place on an ellipse around the operator, so a project's sessions settle as one cluster apart from the others.
+A delegated session is a small dot in its state colour, tied short to its parent by a faint line, and a grandchild sits outside its parent the same way (D-02).
+Behind each project's cluster is a soft glow in the project's accent colour, and its name sits in bold, larger than a session's title, in that colour above the cluster; there is no band or box (D-17).
+The accent is one of sky, violet, lime and amber, chosen by a stable hash of the project's id.
+Placement is computed in the web shell and settles before the first paint, so nothing wobbles on open; every start position comes from the session's id, so the same sessions open in the same shape (D-13).
+Status, labels, letters, filters, selection, hiding and folding never enter the layout key.
+When a session appears, every placed session holds still while only the new one finds a place beside its parent or in its project; a session that leaves takes only itself away.
+A map over the 400-node budget, or one the layout cannot place, fails into the existing Retry and session list.
 A root's circle shows its title and its sidebar second line (what it is doing, what it asks, what it waits for); a descendant shows only its title, plus what it asks in amber while it is the operator's turn.
 Provider, proved launch model, state words and judged tasks are not drawn under circles; the accessible name still reads title, state, provider and proved launch model.
 The ring colour and shape of each circle encode its mark (working, waiting, my turn, unread result, quiet), with the StatusMark beside it and a dashed outline on the current pane's session.
 
 Lines carry no words.
-Delegation lines are not drawn at rest; choosing a session brightens its team outline and draws its team's parent-to-child lines.
+Parent-to-child lines are always drawn faint; choosing a session brightens its team's lines and draws one dashed outline around the team's circles and words, which goes away when the choice is cleared (D-03).
 Letters and Herdr direct input between the same two sessions are one line with direction arrows: solid when any letter exists, short dots when only direct input does.
 A pair in different teams is always drawn; a pair inside one team is drawn only while that team is chosen.
-Only a root whose mark is `turn` draws an amber arrow to `나`; no other root is joined to the operator, and a descendant's ask reaches the operator through its root, which the core marks as the operator's turn.
+Every drawn root is joined to `나` by a faint line; a root whose mark is `turn` draws an amber arrow to `나` instead, and a descendant's ask reaches the operator through its root, which the core marks as the operator's turn.
+A folded team or project that holds the operator's turn draws the amber ring and the amber arrow on its folded circle (B26).
 A reply wait is not drawn as a line, because the core does not name its recipient.
 An unresolved endpoint is never joined by a similar name or pane number; only independently proven device, pane and native-session endpoints join current rows, and missing results, stale sessions and unproven recipients create no line.
 Direct input never creates inbox items, watches, lineage, read marks, letter notifications or phone pushes, and the bounded 30-day observation metadata carries no command or prompt content.
 Letters and direct inputs share one newest-2,000-record graph budget; no letter subject or body reaches the graph or its panel.
 
-With nothing chosen, the side column lists each project with a search box, its session count, its nonzero My turn, In progress and Unread counts in their colours, and a Hide toggle.
+With nothing chosen, the side column lists each project with a search box, its session count, its nonzero My turn, In progress and Unread counts in their colours, a Fold toggle and a Hide toggle.
 Choosing a project's name moves the camera to that project's sessions; a project outside the graph budget opens its project scope instead.
-Hide removes that project's sessions, names, outlines and lines from the map without moving any other circle; its row stays, dimmed, keeps its counts, and offers Show again, which returns the sessions to the same places.
+Hide removes that project's sessions, name, glow, outlines and lines from the map without moving any other circle; its row stays, dimmed, keeps its counts, and offers Show again, which returns the sessions to the same places.
 Hiding lasts while the view is mounted, survives the graph/list switch and scope changes, and never affects the list view or the filter counts.
 Hiding the project of the selected or highlighted session clears that selection.
-Below the project list, Waiting on you lists each root whose turn it is, drawn on the map or not, in a project that is not hidden, with its project, title and question, and Go answer focuses the asking pane: the root when it asks, else its first asking descendant.
+Below the project list, Waiting on you lists each root whose turn it is, drawn on the map or not, with its project, title and question, and Go answer focuses the asking pane: the root when it asks, else its first asking descendant.
+A root in a hidden project stays in the list with a `그래프에서 숨김` mark, because hiding a project from the map does not make its question wait less (D-21).
+Folding a team leaves its root circle with a chip that counts its descendants and shows their My turn, Working and Unread marks; choosing the chip unfolds it, and the descendants come back to their places (B24).
+Folding a project turns its cluster into one circle in the project's place, with its name, session count and nonzero counts; a line between that project and another ends on the circle, and choosing it unfolds the cluster to its old shape (B25).
+Fold all folds every project and Unfold all opens every project and every team; both sit in the toolbar of the graph view (B26).
 Choosing a session by click, Enter or Space replaces the column with its panel: title, state, project and branch, provider and proved launch model, what it does now, what it asks the operator when it asks, its team (every descendant with its state; choosing one selects it), its counterparts with sent and received counts only, and `세션 열기 · 기록 보기`.
 Below the Overview breakpoint the panel overlays the graph; Escape closes the panel first, and changing filter or scope clears a selection that no longer matches.
 Hover and keyboard focus outline the pointed session and its counterparts and never open details.
@@ -976,11 +986,13 @@ One-project scope offers All projects to return.
 When the confirmed focused device, pane and native session have a graph proof at entry, that exact session is highlighted without opening details; pane reuse cannot inherit the initial selection.
 The first camera, and Fit graph, put the operator at the centre of the view at the zoom that shows the whole map; when that zoom is too small to read, the first camera instead centres the current session (or the operator) at a readable zoom.
 Fit graph, Current pane and Reset layout remain explicit keyboard-accessible controls.
-Three things drag, none opening details: a project's name or band moves the whole project; a root's circle or its team's outline moves the root and every descendant; a descendant's circle moves only that circle.
-Clicking a circle opens details, and the text below it remains a selection target without becoming a drag handle; outlines, bands and lines follow the moved circles.
-Offsets live only in this mounted view, and Reset layout clears offsets and restores the initial camera without dispatching pane moves.
-The map has no decorative animation; there is nothing for reduced motion to remove.
-Graph filters, hiding, selection, pan, zoom and folding stay local to the mounted view; filters and hiding survive graph/list and scope changes while Work remains mounted, and closing the view ends its listeners.
+Two things drag, neither opening details (D-18).
+A project's name, or its folded circle, moves every session of the project and nothing else, and the project stays where it is put.
+A session's circle follows the hand and its team is pulled along by the physics; on release it stays where it was put and the rest settles around it.
+With reduced motion, nothing is pulled while a circle is held, and the map settles at once on release.
+Clicking a circle opens details, and the text below it remains a selection target without becoming a drag handle; outlines, glows and lines follow the moved circles.
+Moves live only in this mounted view, and Reset layout places the map again from the start and restores the initial camera without dispatching pane moves.
+Graph filters, hiding, selection, pan, zoom, moves and folding stay local to the mounted view; filters and hiding survive graph/list and scope changes while Work remains mounted, and closing the view stops the map's physics and ends its listeners.
 
 ### A record beside the tabs
 

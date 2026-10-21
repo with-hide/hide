@@ -15,7 +15,6 @@
 .overview-graph .react-flow { background-image: radial-gradient(color-mix(in srgb, var(--border) 40%, transparent) var(--size-hairline), transparent var(--size-hairline)); background-size: var(--spacing-xl) var(--spacing-xl); }
 .overview-graph .react-flow__node { border: 0; background: transparent; border-radius: 0; font-family: inherit; color: inherit; }
 .overview-graph .react-flow__handle { opacity: 0; pointer-events: none; }
-.overview-graph .react-flow__node-team, .overview-graph .react-flow__node-operator { pointer-events: none; }
 .og-filters, .og-filters > div, .og-filters label { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-sm); }
 .og-filters { padding: var(--spacing-sm) var(--spacing-lg); gap: var(--spacing-lg); font-size: var(--text-caption); }
 .og-filters button span { font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
@@ -25,23 +24,33 @@
 /* The operator at the center of the map. */
 .og-operator { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; border: var(--size-hairline) solid var(--foreground); border-radius: 50%; background: var(--secondary); color: var(--foreground); font-size: var(--text-body); font-weight: 600; }
 
-/* A project's name, outside its sessions, is its whole group's drag handle. */
-/* A project is a faint band under its sessions; only the band and the name take a drag, and the
-   empty rest of its box, like a team outline's, leaves the canvas to pan. */
-.og-canvas .react-flow__node-project, .og-canvas .react-flow__node-team { pointer-events: none; }
-.og-project { position: relative; width: 100%; height: 100%; pointer-events: none; }
-.og-project-area { position: absolute; inset: 0; overflow: visible; }
-.og-project-area path { fill: color-mix(in srgb, var(--foreground) 3%, transparent); stroke: none; pointer-events: visiblePainted; cursor: grab; }
-.og-project[data-current="true"] .og-project-area path, .og-project[data-highlighted="true"] .og-project-area path { fill: color-mix(in srgb, var(--foreground) 5%, transparent); }
-.og-project-name { position: absolute; transform: translate(-50%, -50%); overflow: hidden; color: var(--muted-foreground); font-size: var(--text-title); font-weight: 700; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; pointer-events: auto; cursor: grab; }
-.og-project-drag:active { cursor: grabbing; }
-.og-project[data-current="true"] .og-project-name, .og-project[data-highlighted="true"] .og-project-name { color: var(--foreground); }
+/* A project is a soft light of its color behind its sessions, with its name above them as the
+   project's drag handle. Nothing but the name takes the pointer, so the canvas pans everywhere else. */
+.og-project { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; overflow: hidden; font-size: var(--text-headline); font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; opacity: 0.8; cursor: grab; }
+.og-project[data-current="true"], .og-project[data-highlighted="true"] { opacity: 1; }
+.og-project-drag:active, .og-cluster-drag:active { cursor: grabbing; }
+.og-glow { display: block; overflow: visible; }
+/* A project's accent, from a stable hash of its id (PRD D-17). */
+[data-accent="sky"] { --og-accent: var(--accent-choice-sky); }
+[data-accent="violet"] { --og-accent: var(--accent-choice-violet); }
+[data-accent="lime"] { --og-accent: var(--accent-choice-lime); }
+[data-accent="amber"] { --og-accent: var(--accent-choice-amber); }
+.og-project, .og-cluster strong { color: var(--og-accent); }
+.og-glow-core, .og-glow-edge { stop-color: var(--og-accent); }
+.og-glow-edge { stop-opacity: 0; }
+.og-glow-core { stop-opacity: 0.1; }
+:root.light .og-glow-core { stop-opacity: 0.18; }
+/* A folded project is one circle with its name and counts; choosing the circle unfolds it. */
+.og-cluster { display: flex; width: 100%; height: 100%; flex-direction: column; align-items: center; gap: var(--spacing-xxs); text-align: center; }
+.og-cluster-orb { display: flex; flex-shrink: 0; align-items: center; justify-content: center; border: var(--graph-edge-flow-width) solid var(--og-accent); border-radius: 50%; background: var(--secondary); color: var(--foreground); font-size: var(--text-title); font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; }
+.og-cluster[data-turn="true"] .og-cluster-orb { border-color: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--warning); }
+.og-cluster-orb:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
+.og-cluster strong { max-width: 100%; overflow: hidden; padding-inline: var(--spacing-xxs); border-radius: var(--radius-sm); background: var(--background); font-size: var(--text-title); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.og-cluster .og-state-counts { justify-content: center; background: var(--background); border-radius: var(--radius-sm); padding-inline: var(--spacing-xxs); }
 
-/* A root and its delegated descendants share one dashed outline; choosing the team brightens it. */
-.og-team { display: block; overflow: visible; pointer-events: none; }
-.og-team path { pointer-events: visiblePainted; cursor: grab; }
-.og-team path { fill: color-mix(in srgb, var(--foreground) 2%, transparent); stroke: var(--subtle-foreground); stroke-width: var(--graph-edge-width); stroke-dasharray: var(--spacing-xxs) var(--spacing-xs); }
-.og-team[data-selected="true"] path { fill: color-mix(in srgb, var(--foreground) 4%, transparent); stroke: var(--muted-foreground); }
+/* The chosen team's dashed outline goes round its root and every delegated descendant. */
+.og-team { display: block; overflow: visible; }
+.og-team path { fill: color-mix(in srgb, var(--foreground) 3%, transparent); stroke: var(--muted-foreground); stroke-width: var(--graph-edge-width); stroke-dasharray: var(--spacing-xxs) var(--spacing-xs); }
 
 .og-session { position: relative; --og-orb-size: var(--size-overview-graph-child-orb); width: 100%; height: 100%; }
 .og-session[data-ring="true"] { --og-orb-size: var(--size-overview-graph-root-orb); }
@@ -55,7 +64,7 @@
 .og-orb .og-provider { width: 60%; height: 60%; }
 .og-session[data-mark="going"] .og-orb, .og-session[data-mark="waiting"] .og-orb { border-color: var(--agent-working); }
 .og-session[data-mark="waiting"] .og-orb { border-style: dashed; }
-.og-session[data-mark="turn"] .og-orb { border-color: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--warning); }
+.og-session[data-mark="turn"] .og-orb, .og-session[data-folded-turn="true"] .og-orb { border-color: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--warning); }
 .og-session[data-mark="done"] .og-orb { border-color: var(--success); }
 .og-session[data-mark="unread"] .og-orb { border-color: var(--foreground); }
 .og-session-drag { cursor: grab; }
@@ -71,12 +80,29 @@
 .og-session[data-context="true"] .og-session-target, .og-session[data-muted="true"] .og-session-target { opacity: var(--opacity-dimmed); }
 .og-session[data-highlighted="true"] .og-orb { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
 .og-session[data-current="true"] .og-orb { outline: var(--size-hairline) dashed var(--primary); outline-offset: var(--spacing-xs); }
-.og-fold { position: absolute; top: 100%; left: 0; width: 100%; background: var(--background); color: var(--muted-foreground); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); font-size: var(--text-micro); cursor: pointer; pointer-events: auto; }
-.og-fold:focus-visible { outline: var(--size-hairline) solid var(--ring); }
+/* A delegated session is a small dot filled with its state's color. */
+.og-dot { display: block; flex-shrink: 0; width: var(--og-orb-size); height: var(--og-orb-size); margin-bottom: var(--spacing-xxs); border-radius: 50%; background: var(--muted-foreground); }
+.og-session[data-mark="going"] .og-dot, .og-session[data-mark="waiting"] .og-dot { background: var(--agent-working); }
+.og-session[data-mark="turn"] .og-dot { background: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--background), 0 0 0 calc(var(--size-hairline) * 3) var(--warning); }
+.og-session[data-mark="done"] .og-dot { background: var(--success); }
+.og-session[data-mark="unread"] .og-dot { background: var(--foreground); }
+.og-session[data-mark="quiet"] .og-dot, .og-session[data-mark="asleep"] .og-dot { opacity: var(--opacity-dimmed); }
+.og-session-target:hover .og-dot, .og-session[data-selected="true"] .og-dot { outline: var(--size-hairline) solid var(--foreground); outline-offset: var(--size-hairline); }
+.og-session[data-highlighted="true"] .og-dot { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
+.og-session[data-current="true"] .og-dot { outline: var(--size-hairline) dashed var(--primary); outline-offset: var(--spacing-xs); }
+/* A team root carries its fold: the descendant count, and when folded the states folded away. */
+.og-team-chip { position: absolute; top: 0; left: calc(50% + var(--og-orb-size) / 2 + var(--spacing-xxs)); display: inline-flex; align-items: center; gap: var(--spacing-xxs); padding: 0 var(--spacing-xs); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-lg); background: var(--card); color: var(--muted-foreground); font-size: var(--text-micro); font-variant-numeric: tabular-nums; cursor: pointer; pointer-events: auto; }
+.og-team-chip[data-folded="true"] { color: var(--foreground); }
+.og-team-chip[data-folded="true"][data-turn="true"] { border-color: var(--warning); }
+.og-team-chip:focus-visible { outline: var(--size-hairline) solid var(--ring); }
+.og-team-states { display: inline-flex; align-items: center; gap: var(--size-hairline); }
 
-/* Lines carry no words: delegation for the chosen team, letters solid, Herdr input dotted, my turn in amber. */
+/* Lines carry no words: each root faintly to the operator, delegation faint and bright for the chosen
+   team, letters solid, Herdr input dotted, my turn in amber. */
 .og-edge-underlay { stroke: var(--background); stroke-width: calc(var(--graph-edge-flow-width) + var(--spacing-xs)); pointer-events: none; }
-.overview-graph .og-lineage .react-flow__edge-path { stroke: var(--muted-foreground); stroke-width: var(--graph-edge-width); }
+.overview-graph .og-mine .react-flow__edge-path { stroke: var(--border); stroke-width: var(--graph-edge-width); }
+.overview-graph .og-lineage .react-flow__edge-path { stroke: color-mix(in srgb, var(--muted-foreground) 50%, transparent); stroke-width: var(--graph-edge-width); }
+.overview-graph .og-lineage.og-emphasized .react-flow__edge-path { stroke: var(--muted-foreground); }
 .overview-graph .og-communication .react-flow__edge-path { stroke: var(--subtle-foreground); stroke-width: var(--graph-edge-width); }
 .overview-graph .og-direct-input .react-flow__edge-path { stroke-dasharray: var(--size-hairline) var(--spacing-xs); stroke-linecap: round; }
 .overview-graph .og-turn .react-flow__edge-path { stroke: var(--warning); stroke-width: var(--graph-edge-flow-width); }
@@ -124,3 +150,4 @@
 .og-team-list > button:hover { background: var(--accent); }
 .og-team-list > button > span:not([data-mark]), .og-talks > div > span:not([data-mark]) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .og-team-list > button > small, .og-talks > div > small { flex-shrink: 0; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.og-hidden-mark { flex-shrink: 0; color: var(--muted-foreground); }

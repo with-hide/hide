@@ -1,4 +1,4 @@
-import { MarkerType, ReactFlow, ReactFlowProvider, useReactFlow, useNodesInitialized, type NodeChange, type Edge, type Node, type NodeTypes, type EdgeTypes } from "@xyflow/react";
+import { MarkerType, ReactFlow, ReactFlowProvider, useReactFlow, useNodesInitialized, type Edge, type Node, type NodeTypes, type EdgeTypes } from "@xyflow/react";
 import { MaximizeIcon, MinusIcon, PlusIcon, XIcon, LocateFixedIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
@@ -10,8 +10,7 @@ import { askWhat } from "./components/agent-tree";
 import { RevisitStar, starred } from "./components/revisit-mark";
 import { Button } from "./components/ui/button";
 import { useEscapeLayer, useReturnFocus } from "./components/ui/layer";
-import { dropAt, sessionPlace, teamKey, type Dragged, type Placed } from "./overviewGraphDrag";
-import { between, communicationLines, lineageLines, projectArea, teamOutline, turnLines, type Area, type Orb } from "./overviewGraphLines";
+import { between, cloud, communicationLines, lineageLines, projectAccent, teamOutline, turnLines, type Area, type Orb } from "./overviewGraphLines";
 import { Hint } from "./components/ui/tooltip";
 import { StatusMark } from "./components/status-mark";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -20,7 +19,7 @@ import { Input } from "./components/ui/input";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
 import { graphActivity, graphSessionId, overviewGraphModel, overviewGraphTeam, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
 import { useGraphTheme, useOverviewGraphLayout } from "./overviewGraphLayout";
-import { GraphLine, GraphStateCounts, hasGraphLine, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, TeamGraphNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type TeamNode } from "./overviewGraphNodes";
+import { ClusterGraphNode, GlowGraphNode, GraphLine, GraphStateCounts, hasGraphLine, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, TeamGraphNode, type ClusterNode, type GlowNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type TeamNode } from "./overviewGraphNodes";
 import type { BoardProject } from "./projectBoard";
 import { sessionOfAgentOn } from "./sessionWork";
 import type { WorkSession } from "./snapshot";
@@ -30,7 +29,7 @@ import "@xyflow/react/dist/base.css";
 import "./overviewGraph.css";
 
 type Props = { projects: BoardProject[]; deviceId: string; actions: Actions; onOpenRecord?: (session: WorkSession) => void };
-const NODE_TYPES: NodeTypes = { operator: OperatorGraphNode, project: ProjectGraphNode, team: TeamGraphNode, session: SessionGraphNode };
+const NODE_TYPES: NodeTypes = { operator: OperatorGraphNode, project: ProjectGraphNode, glow: GlowGraphNode, cluster: ClusterGraphNode, team: TeamGraphNode, session: SessionGraphNode };
 const EDGE_TYPES: EdgeTypes = { line: LineGraphEdge };
 const PAGE_SIZE = 50;
 const OPERATOR = "operator";
@@ -71,18 +70,20 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   });
   const [highlightedSession, setHighlightedSession] = useState<string | null>(initialSelection ?? entry?.id ?? null);
   const [projectQuery, setProjectQuery] = useState("");
-  const [offsets, setOffsets] = useState<Map<string, { x: number; y: number }>>(() => new Map());
   const [mode, setMode] = useState<"graph" | "list">("graph");
   const [selection, setSelection] = useState<string | null>(initialSelection);
   const [hovered, setHovered] = useState<string | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
-  const [folded, setFolded] = useState<Set<string>>(() => new Set());
+  // A team's fold the operator chose; a team nobody chose for opens folded when every descendant sleeps.
+  const [teamFolds, setTeamFolds] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  const [foldedProjects, setFoldedProjects] = useState<ReadonlySet<string>>(() => new Set());
+  // Each drag step redraws from the live map.
+  const [, setMoved] = useState(0);
   const [retry, setRetry] = useState(0);
   const host = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const theme = useGraphTheme();
-  const model = useMemo(() => overviewGraphModel(projects, rest?.overview_graph, projectId, { focus, includeResting, folded, pinned: entry ? [entry.id] : [], selected: highlightedSession }), [projects, rest?.overview_graph, projectId, focus, includeResting, folded, entry, highlightedSession]);
-  useEffect(() => { if ([...folded].some((id) => !model.folded.has(id))) setFolded(new Set(model.folded)); }, [folded, model.folded]);
+  const model = useMemo(() => overviewGraphModel(projects, rest?.overview_graph, projectId, { focus, includeResting, pinned: entry ? [entry.id] : [], selected: highlightedSession }), [projects, rest?.overview_graph, projectId, focus, includeResting, entry, highlightedSession]);
   const layout = useOverviewGraphLayout(model, host, retry);
   const flow = useReactFlow();
   const { fitView, zoomIn, zoomOut } = flow;
@@ -95,7 +96,8 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   // The whole map, with the operator at the center of the view rather than the middle of the map's bounds.
   const operatorZoom = useCallback(() => {
     const canvas = host.current?.querySelector(".og-canvas")?.getBoundingClientRect();
-    const bounds = flow.getNodesBounds(flow.getNodes());
+    // A glow reaches past its sessions and is not part of what must fit.
+    const bounds = flow.getNodesBounds(flow.getNodes().filter((node) => node.type !== "glow"));
     const across = Math.max(-bounds.x, bounds.x + bounds.width);
     const down = Math.max(-bounds.y, bounds.y + bounds.height);
     return canvas && across > 0 && down > 0 ? Math.min(1, Math.min(canvas.width / (2 * across), canvas.height / (2 * down)) / 1.16) : 1;
@@ -114,16 +116,16 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     cameraInitialized.current = true;
     restoreCamera();
   }, [nodesInitialized, layout.phase, restoreCamera]);
-  useEffect(() => {
-    const admitted = new Set([...model.projects.map((group) => group.id), ...model.allAgents.map((row) => row.id)]);
-    setOffsets((previous) => [...previous.keys()].some((id) => !admitted.has(id)) ? new Map([...previous].filter(([id]) => admitted.has(id))) : previous);
-  }, [model.structure, model.projects, model.allAgents]);
   const rememberOpener = useCallback((target?: HTMLElement) => {
     const active = target ?? document.activeElement;
     if (active instanceof HTMLElement && active !== document.body && !active.closest(".og-details")) opener.current = active;
   }, []);
   const highlight = useCallback((id: string | null, keyboard: boolean) => { if (keyboard) setFocused(id); else setHovered(id); }, []);
-  const fold = useCallback((id: string) => setFolded((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }), []);
+  const teamFolded = useCallback((root: string) => teamFolds.get(root) ?? model.quietBranches.has(root), [teamFolds, model.quietBranches]);
+  const toggleTeam = useCallback((root: string) => setTeamFolds((previous) => new Map(previous).set(root, !(previous.get(root) ?? model.quietBranches.has(root)))), [model.quietBranches]);
+  const toggleFoldProject = useCallback((id: string) => setFoldedProjects((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }), []);
+  const foldAll = () => setFoldedProjects(new Set(model.projects.map((group) => group.id)));
+  const unfoldAll = () => { setFoldedProjects(new Set()); setTeamFolds(new Map(model.allAgents.map((row) => [row.id, false]))); };
   const chooseSession = useCallback((id: string, target?: HTMLElement) => {
     const row = model.allAgents.find((row) => row.id === id);
     // A session outside the graph budget has a deterministic route back to a graph.
@@ -148,114 +150,142 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const toggleProject = useCallback((id: string) => setHiddenProjects((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }), [setHiddenProjects]);
   const openRecord = onOpenRecord ?? actions.openSessionRecord;
   const activeSession = selection ?? highlightedSession;
-  const placed = layout.placement;
   const size = layout.size;
-  // React Flow requires parents before their relative-positioned children.
+  const map = layout.map;
+  // Positions come from the live map, so a drag step shows at once.
+  const points = map?.positions() ?? layout.points;
   const nodes: Node[] = [];
   const orbs = new Map<string, Orb>();
-  const teamOf = (id: string) => placed?.nodes.get(id)?.team ?? placed?.nodes.get(model.projects.find((group) => group.revealed?.id === id)?.revealSlot ?? "")?.team ?? id;
+  const projectsById = new Map(model.projects.map((group) => [group.id, group]));
+  const agentsById = new Map(model.allAgents.map((row) => [row.id, row]));
+  const pointOf = (id: string) => points.get(id) ?? points.get(projectsById.get(agentsById.get(id)?.projectId ?? "")?.revealSlot ?? "");
+  const teamOf = (id: string) => pointOf(id)?.team ?? id;
   const chosenTeam = selection ? teamOf(selection) : null;
   const lineageTeam = selection ? model.teams.get(selection) ?? selection : null;
   const counterparts = new Set(model.communication.flatMap((pair) => pair.source === selection ? [pair.target] : pair.target === selection ? [pair.source] : []));
   const pointed = hovered ?? focused;
   const pointedRelated = new Set(pointed ? [pointed, ...model.communication.flatMap((pair) => pair.source === pointed ? [pair.target] : pair.target === pointed ? [pair.source] : [])] : []);
-  // Where each drawn session's box stands relative to the operator, its project's drag left out:
-  // its place, moved by its own drag and by its team's.
-  const placedAt = new Map<string, Placed>();
-  const local = new Map<string, Placed>();
-  if (placed && size) {
-    nodes.push({ id: OPERATOR, type: "operator", position: placed.operator, width: size.operator, height: size.operator, measured: { width: size.operator, height: size.operator }, data: { label: t("overviewGraph.operator") }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 2 } satisfies OperatorNode);
-    const projectsById = new Map(model.projects.map((group) => [group.id, group]));
-    for (const row of model.visible) {
-      const group = projectsById.get(row.projectId);
-      const point = placed.nodes.get(row.id) ?? (group?.revealSlot ? placed.nodes.get(group.revealSlot) : undefined);
-      if (!point || !group || !shownProject(row.projectId)) continue;
-      placedAt.set(row.id, point);
-      local.set(row.id, sessionPlace(row.id, point, offsets));
-    }
-    // A project is its band around the operator with its name outside; sessions stand inside it,
-    // so dragging the band or the name moves the whole project.
-    const activeProject = activeSession ? model.allAgents.find((row) => row.id === activeSession)?.projectId : undefined;
-    const visibleByProject = new Map<string, GraphAgent[]>();
-    for (const row of model.visible) visibleByProject.set(row.projectId, [...(visibleByProject.get(row.projectId) ?? []), row]);
+  const summariesById = new Map(model.summaries.map((summary) => [summary.id, summary]));
+  // What each placed session is drawn as: itself, its folded team's root, or its folded project's circle.
+  const endpoint = new Map<string, string>();
+  const cluster = (id: string) => `cluster:${id}`;
+  const visibleByProject = new Map<string, GraphAgent[]>();
+  for (const row of model.visible) visibleByProject.set(row.projectId, [...(visibleByProject.get(row.projectId) ?? []), row]);
+  if (size && layout.phase === "ready") {
+    nodes.push({ id: OPERATOR, type: "operator", position: { x: -size.operator / 2, y: -size.operator / 2 }, width: size.operator, height: size.operator, measured: { width: size.operator, height: size.operator }, data: { label: t("overviewGraph.operator") }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 3 } satisfies OperatorNode);
+    orbs.set(OPERATOR, { x: 0, y: 0, r: size.operator / 2 });
+    const activeProject = activeSession ? agentsById.get(activeSession)?.projectId : undefined;
     const sessions: SessionNode[] = [];
     for (const group of model.projects) {
       if (!shownProject(group.id)) continue;
-      const members = (visibleByProject.get(group.id) ?? []).filter((row) => local.has(row.id));
+      const members = (visibleByProject.get(group.id) ?? []).filter((row) => pointOf(row.id));
       if (!members.length) continue;
-      const areas = members.map((row) => { const at = local.get(row.id)!; const shape = at.ring ? size.root : size.child; return { left: at.x, top: at.y, right: at.x + shape.width, bottom: at.y + shape.height }; });
-      const area = projectArea(areas, size.gap, size.operator / 2 + size.gap, size.label);
-      const offset = offsets.get(group.id) ?? { x: 0, y: 0 };
-      const frame = { x: area.left + offset.x, y: area.top + offset.y };
-      nodes.push({ id: group.id, type: "project", position: frame, width: area.width, height: area.height, measured: { width: area.width, height: area.height }, data: { group, area: area.path, label: area.label, labelWidth: size.label.width, base: { x: area.left, y: area.top }, current: current?.projectId === group.id, highlighted: activeProject === group.id }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 0 } satisfies ProjectNode);
+      const accent = projectAccent(group.id);
+      const middle = cloud(members.map((row) => pointOf(row.id)!), size.root.width / 2);
+      if (foldedProjects.has(group.id)) {
+        // A folded project keeps its place as one circle where its sessions were.
+        const summary = summariesById.get(group.id);
+        if (!summary) continue;
+        const orb = size.root.orb * 1.5;
+        const box = { width: size.label.width, height: orb + size.gap * 5 };
+        nodes.push({ id: cluster(group.id), type: "cluster", position: { x: middle.x - box.width / 2, y: middle.y - orb / 2 }, ...box, measured: box, data: { summary, accent, orb, unfold: toggleFoldProject }, dragHandle: ".og-cluster-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 } satisfies ClusterNode);
+        orbs.set(cluster(group.id), { x: middle.x, y: middle.y, r: orb / 2 });
+        for (const row of members) endpoint.set(row.id, cluster(group.id));
+        continue;
+      }
+      const glow = middle.r * 2;
+      nodes.push({ id: `glow:${group.id}`, type: "glow", position: { x: middle.x - middle.r, y: middle.y - middle.r }, width: glow, height: glow, measured: { width: glow, height: glow }, data: { accent }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 0 } satisfies GlowNode);
+      const top = Math.min(...members.map((row) => pointOf(row.id)!.y)) - size.root.orb / 2 - size.gap * 2 - size.label.height;
+      nodes.push({ id: group.id, type: "project", position: { x: middle.x - size.label.width / 2, y: top }, width: size.label.width, height: size.label.height, measured: size.label, data: { group, accent, current: current?.projectId === group.id, highlighted: activeProject === group.id }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 1 } satisfies ProjectNode);
+      const drawnHere = new Set(members.map((row) => row.id));
       for (const row of members) {
-        const at = local.get(row.id)!;
-        const shape = at.ring ? size.root : size.child;
-        orbs.set(row.id, { x: at.x + offset.x + shape.width / 2, y: at.y + offset.y + shape.orb / 2, r: shape.orb / 2 });
+        const point = pointOf(row.id)!;
+        const root = point.team === row.id || row.id === group.revealed?.id;
+        // A folded team's descendants are drawn as their root.
+        if (!root && drawnHere.has(point.team) && teamFolded(point.team)) { endpoint.set(row.id, point.team); continue; }
+        endpoint.set(row.id, row.id);
+        const shape = root ? size.root : size.child;
+        orbs.set(row.id, { x: point.x, y: point.y, r: shape.orb / 2 });
+        const descendants = root ? members.filter((member) => member.id !== row.id && pointOf(member.id)!.team === row.id) : [];
+        const activity = descendants.map((member) => graphActivity(member.agent));
+        const team = descendants.length ? { count: descendants.length, turn: activity.filter((value) => value === "turn").length, going: activity.filter((value) => value === "working").length, done: activity.filter((value) => value === "results").length, folded: teamFolded(row.id), toggle: () => toggleTeam(row.id) } : null;
         const related = selection === row.id || teamOf(row.id) === chosenTeam || model.teams.get(row.id) === lineageTeam || counterparts.has(row.id);
         // The layout owns these fixed dimensions. Retaining them also preserves React Flow's
         // measured handle bounds when hover/focus replaces a controlled node object.
         const measured = { width: shape.width, height: shape.height };
-        sessions.push({ id: row.id, parentId: group.id, type: "session", position: { x: at.x - area.left, y: at.y - area.top }, ...measured, measured, selected: activeSession === row.id, data: { row, ring: at.ring, context: model.context.has(row.id), muted: selection !== null && !related, highlighted: pointedRelated.has(row.id), current: current?.id === row.id, quietCount: model.quietBranches.get(row.id) ?? 0, folded: model.folded.has(row.id), fold, highlight, choose: chooseSession }, dragHandle: ".og-session-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 });
+        sessions.push({ id: row.id, type: "session", position: { x: point.x - shape.width / 2, y: point.y - shape.orb / 2 }, ...measured, measured, selected: activeSession === row.id, data: { row, ring: root, context: model.context.has(row.id), muted: selection !== null && !related, highlighted: pointedRelated.has(row.id), current: current?.id === row.id, team, highlight, choose: chooseSession }, dragHandle: ".og-session-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 });
       }
     }
-    // A team outline follows its members, words included, wherever they are dragged; dragging it moves the team.
-    const teams = new Map<string, Area[]>();
-    for (const node of sessions) {
-      const orb = orbs.get(node.id)!;
-      const shape = node.data.ring ? size.root : size.child;
-      const area = { left: orb.x - shape.width / 2, top: orb.y - orb.r, right: orb.x + shape.width / 2, bottom: orb.y - orb.r + shape.height };
-      const team = teamOf(node.id);
-      teams.set(team, [...(teams.get(team) ?? []), area]);
-    }
-    for (const [team, members] of teams) {
-      if (members.length < 2) continue;
-      const shape = teamOutline(members, size.gap / 2);
-      const moved = offsets.get(teamKey(team)) ?? { x: 0, y: 0 };
-      nodes.push({ id: teamKey(team), type: "team", position: { x: shape.left, y: shape.top }, width: shape.width, height: shape.height, measured: { width: shape.width, height: shape.height }, data: { path: shape.path, width: shape.width, height: shape.height, selected: team === chosenTeam, base: { x: shape.left - moved.x, y: shape.top - moved.y } }, draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 1 } satisfies TeamNode);
+    // The chosen team's dashed outline goes round its circles and words.
+    if (chosenTeam) {
+      const members = sessions.filter((node) => teamOf(node.id) === chosenTeam).map((node): Area => ({ left: node.position.x, top: node.position.y, right: node.position.x + node.width!, bottom: node.position.y + node.height! }));
+      if (members.length > 1) {
+        const shape = teamOutline(members, size.gap / 2);
+        nodes.push({ id: `team:${chosenTeam}`, type: "team", position: { x: shape.left, y: shape.top }, width: shape.width, height: shape.height, measured: { width: shape.width, height: shape.height }, data: { path: shape.path, width: shape.width, height: shape.height, selected: true }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 1 } satisfies TeamNode);
+      }
     }
     nodes.push(...sessions);
-    orbs.set(OPERATOR, { x: placed.operator.x + size.operator / 2, y: placed.operator.y + size.operator / 2, r: size.operator / 2 });
   }
   const arrow = (color: string) => ({ type: MarkerType.ArrowClosed, color, width: 18, height: 18, orient: "auto-start-reverse" });
   const clearance = size ? size.gap / 3 : 0;
   const edges: Edge[] = [];
+  const line = (id: string, from: string, to: string, className: string, extra: Partial<LineEdge> = {}) => {
+    const a = orbs.get(from);
+    const b = orbs.get(to);
+    const data = a && b ? between(a, b, clearance) : null;
+    if (data) edges.push({ id, source: from, target: to, sourceHandle: "source", targetHandle: "target", type: "line", className, data, focusable: false, selectable: false, zIndex: 0, ...extra } satisfies LineEdge);
+  };
   const lineState = { selection, lineageTeam, pointed, teams: model.teams };
-  for (const { parent, child } of lineageLines(model.visible.map((row) => row.id), model.layoutParents, teamOf, chosenTeam)) {
-    const from = orbs.get(parent);
-    const to = orbs.get(child);
-    const data = from && to ? between(from, to, clearance) : null;
-    if (data) edges.push({ id: `lineage:${parent}:${child}`, source: parent, target: child, sourceHandle: "source", targetHandle: "target", type: "line", className: "og-lineage", data, focusable: false, selectable: false, zIndex: 0 } satisfies LineEdge);
+  // Every drawn root, and every folded project, is tied faintly to the operator; one holding the
+  // operator's turn, its own or a folded member's, points at it in amber instead, muted outside the chosen team.
+  const tied = new Map<string, boolean>();
+  for (const [id, at] of endpoint) {
+    if (at === id && pointOf(id)?.team !== id) continue;
+    tied.set(at, (tied.get(at) ?? false) || graphActivity(agentsById.get(id)!.agent) === "turn");
   }
-  for (const { pair, active, muted } of communicationLines(model.communication, (id) => orbs.has(id), lineState)) {
-    const data = between(orbs.get(pair.source)!, orbs.get(pair.target)!, clearance);
-    if (!data) continue;
+  const turns = new Map(turnLines([...tied].map(([id, turn]) => ({ id, turn })), new Set(tied.keys()), lineState).map((turn) => [turn.id, turn.muted]));
+  for (const id of tied.keys()) {
+    const muted = turns.get(id);
+    if (muted === undefined) line(`mine:${id}`, OPERATOR, id, "og-mine");
+    else line(`turn:${id}`, id, OPERATOR, `og-turn${muted ? " og-muted" : ""}`, { markerEnd: arrow("var(--warning)") });
+  }
+  for (const { parent, child, emphasized } of lineageLines(model.visible.filter((row) => endpoint.get(row.id) === row.id).map((row) => row.id), model.layoutParents, teamOf, chosenTeam)) {
+    if (endpoint.get(parent) === parent) line(`lineage:${parent}:${child}`, parent, child, `og-lineage${emphasized ? " og-emphasized" : ""}`);
+  }
+  // A pair is drawn between what its sessions are drawn as; two ends folded into one draw nothing.
+  const pairsDrawn = new Set<string>();
+  for (const { pair, active, muted } of communicationLines(model.communication, (id) => endpoint.has(id), lineState)) {
+    const from = endpoint.get(pair.source)!;
+    const to = endpoint.get(pair.target)!;
+    const key = JSON.stringify([from, to].sort());
+    if (from === to || pairsDrawn.has(key)) continue;
+    pairsDrawn.add(key);
     const marker = arrow("var(--subtle-foreground)");
-    edges.push({ id: pair.id, source: pair.source, target: pair.target, sourceHandle: "source", targetHandle: "target", type: "line", className: `og-communication${pair.letters === 0 ? " og-direct-input" : ""}${active ? " og-emphasized" : muted ? " og-muted" : ""}`, data, markerEnd: marker, markerStart: pair.directions.length > 1 ? marker : undefined, focusable: false, selectable: false, zIndex: 0 } satisfies LineEdge);
-  }
-  const operatorOrb = orbs.get(OPERATOR);
-  for (const { id, muted } of turnLines(model.visible.filter((row) => orbs.has(row.id)).map((row) => ({ id: row.id, turn: graphActivity(row.agent) === "turn" })), model.roots, lineState)) {
-    const data = operatorOrb ? between(orbs.get(id)!, operatorOrb, clearance) : null;
-    if (data) edges.push({ id: `turn:${id}`, source: id, target: OPERATOR, sourceHandle: "source", targetHandle: "target", type: "line", className: `og-turn${muted ? " og-muted" : ""}`, data, markerEnd: arrow("var(--warning)"), focusable: false, selectable: false, zIndex: 0 } satisfies LineEdge);
+    line(pair.id, from, to, `og-communication${pair.letters === 0 ? " og-direct-input" : ""}${active ? " og-emphasized" : muted ? " og-muted" : ""}`, { markerEnd: marker, markerStart: pair.directions.length > 1 ? marker : undefined });
   }
   const positionOf = (id: string) => orbs.get(id) ?? { x: 0, y: 0 };
+  // A session follows the hand through the physics; a project's name or folded circle carries every session of the project.
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
-  const moveNodes = (changes: NodeChange[]) => {
-    const moves = changes.flatMap((change) => {
-      if (change.type !== "position" || !change.position) return [];
-      const node = nodeById.get(change.id);
-      if (node?.type === "project" || node?.type === "team") return [{ dragged: { kind: node.type, id: change.id, base: (node as ProjectNode | TeamNode).data.base } as Dragged, position: change.position }];
-      const placed = placedAt.get(change.id);
-      const parent = node?.parentId ? nodeById.get(node.parentId) as ProjectNode | undefined : undefined;
-      return placed && parent ? [{ dragged: { kind: "session", id: change.id, placed, frame: parent.data.base } as Dragged, position: change.position }] : [];
-    });
-    if (moves.length) setOffsets((previous) => moves.reduce<Map<string, { x: number; y: number }>>((offsets, move) => dropAt(offsets, move.dragged, move.position), new Map(previous)));
+  const projectOfHandle = (node: Node) => node.type === "project" ? node.id : node.type === "cluster" ? (node as ClusterNode).data.summary.id : null;
+  const dragStart = (_: unknown, node: Node) => { if (node.type === "session") map?.grab(node.id); };
+  const dragging = (_: unknown, node: Node) => {
+    const shown = nodeById.get(node.id);
+    if (!map || !shown) return;
+    if (node.type === "session") map.drag(node.id, { x: node.position.x + (orbs.get(node.id)!.x - shown.position.x), y: node.position.y + (orbs.get(node.id)!.y - shown.position.y) });
+    const project = projectOfHandle(node);
+    if (project) map.moveProject(project, { x: node.position.x - shown.position.x, y: node.position.y - shown.position.y });
+    setMoved((value) => value + 1);
   };
-  const showList = mode === "list" || layout.phase === "failed" || !placed;
+  const dragStop = (_: unknown, node: Node) => {
+    if (node.type === "session") map?.drop(node.id);
+    else if (projectOfHandle(node)) map?.dropProject();
+    setMoved((value) => value + 1);
+  };
+  const showList = mode === "list" || layout.phase === "failed" || !size;
   return <div className="overview-graph" ref={host} data-overview-graph="true" data-graph-phase={layout.phase}>
     <div className="og-toolbar">
       <div><h2>{t("overviewGraph.title")}</h2></div>
-      <div className="og-toolbar-actions">{projectId ? <Button variant="ghost" size="sm" onClick={() => useUiStore.getState().setOverview({ projectId: null })}>{t("overviewGraph.allProjects")}</Button> : null}<div role="group" aria-label={t("overviewGraph.title")}><Button variant={mode === "graph" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>{t("overviewGraph.graph")}</Button><Button variant={mode === "list" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "list"} onClick={() => setMode("list")}>{t("overviewGraph.list")}</Button></div></div>
+      <div className="og-toolbar-actions">{mode === "graph" ? <><Button variant="ghost" size="sm" onClick={foldAll}>{t("overviewGraph.foldAll")}</Button><Button variant="ghost" size="sm" onClick={unfoldAll}>{t("overviewGraph.unfoldAll")}</Button></> : null}{projectId ? <Button variant="ghost" size="sm" onClick={() => useUiStore.getState().setOverview({ projectId: null })}>{t("overviewGraph.allProjects")}</Button> : null}<div role="group" aria-label={t("overviewGraph.title")}><Button variant={mode === "graph" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>{t("overviewGraph.graph")}</Button><Button variant={mode === "list" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "list"} onClick={() => setMode("list")}>{t("overviewGraph.list")}</Button></div></div>
     </div>
     <div className="og-filters">
       <div role="group" aria-label={t("overviewGraph.filter")}>{(["all", "turn", "working", "results"] as const).map((value) => <Button key={value} variant={focus === value ? "secondary" : "ghost"} size="sm" aria-pressed={focus === value} data-focus={value} onClick={() => setFocus(value)}>{t(`overviewGraph.focus.${value}`)} <span>{model.counts[value]}</span></Button>)}</div>
@@ -266,10 +296,10 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     {model.agents.length > 0 && layout.phase === "failed" && mode === "graph" ? <div className="og-notice" role="status"><span>{t("overviewGraph.failed")}</span><Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>{t("overviewGraph.retry")}</Button></div> : null}
     {model.agents.length === 0 ? <div className="og-empty"><p>{t(model.allAgents.length > 0 ? "overviewGraph.filteredEmpty" : "overviewGraph.empty")}</p>{model.allAgents.length > 0 ? <Button variant="outline" size="sm" onClick={() => { setFocus("all"); setIncludeResting(true); }}>{t("overviewGraph.resetFilters")}</Button> : null}<Button variant="outline" size="sm" onClick={() => actions.openStartPanel(projectId ?? undefined)}>{t("overviewGraph.newAgent")}</Button></div> : null}
     {model.agents.length > 0 ? <div className="og-stage">
-      <div className="og-canvas">{!showList ? <ReactFlow zIndexMode="manual" colorMode={theme} nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} nodesDraggable onNodesChange={moveNodes} nodesConnectable={false} nodesFocusable={false} edgesFocusable={false} elementsSelectable={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null} panOnDrag panOnScroll zoomOnScroll defaultViewport={{ x: 24, y: 24, zoom: 1 }} minZoom={0.05} maxZoom={2} onPaneClick={() => { close(); setHighlightedSession(null); }} ariaLabelConfig={{ "node.a11yDescription.default": t("overviewGraph.nodeHelp"), "node.a11yDescription.keyboardDisabled": t("overviewGraph.nodeHelp") }}>
-        <div className="og-zoom nopan nodrag"><Hint label={t("overviewGraph.zoomOut")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomOut({ duration: 0 })}><MinusIcon /></Button></Hint><Hint label={t("overviewGraph.zoomIn")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomIn({ duration: 0 })}><PlusIcon /></Button></Hint><Hint label={t("overviewGraph.fit")}><Button variant="ghost" size="icon-sm" onClick={fitOperator}><MaximizeIcon /></Button></Hint><Hint label={t("overviewGraph.currentPane")}><Button variant="ghost" size="icon-sm" disabled={!current} onClick={() => { if (current) { setHighlightedSession(current.id); if (orbs.has(current.id)) { const point = positionOf(current.id); void flow.setCenter(point.x, point.y, { zoom: 1, duration: 0 }); } else centerProject(current.projectId); } }}><LocateFixedIcon /></Button></Hint><Hint label={t("overviewGraph.resetLayout")}><Button variant="ghost" size="icon-sm" onClick={() => { setOffsets(new Map()); cameraInitialized.current = false; }}><RotateCcwIcon /></Button></Hint></div>
+      <div className="og-canvas">{!showList ? <ReactFlow zIndexMode="manual" colorMode={theme} nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} nodesDraggable onNodeDragStart={dragStart} onNodeDrag={dragging} onNodeDragStop={dragStop} nodesConnectable={false} nodesFocusable={false} edgesFocusable={false} elementsSelectable={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null} panOnDrag panOnScroll zoomOnScroll defaultViewport={{ x: 24, y: 24, zoom: 1 }} minZoom={0.05} maxZoom={2} onPaneClick={() => { close(); setHighlightedSession(null); }} ariaLabelConfig={{ "node.a11yDescription.default": t("overviewGraph.nodeHelp"), "node.a11yDescription.keyboardDisabled": t("overviewGraph.nodeHelp") }}>
+        <div className="og-zoom nopan nodrag"><Hint label={t("overviewGraph.zoomOut")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomOut({ duration: 0 })}><MinusIcon /></Button></Hint><Hint label={t("overviewGraph.zoomIn")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomIn({ duration: 0 })}><PlusIcon /></Button></Hint><Hint label={t("overviewGraph.fit")}><Button variant="ghost" size="icon-sm" onClick={fitOperator}><MaximizeIcon /></Button></Hint><Hint label={t("overviewGraph.currentPane")}><Button variant="ghost" size="icon-sm" disabled={!current} onClick={() => { if (current) { setHighlightedSession(current.id); if (orbs.has(current.id)) { const point = positionOf(current.id); void flow.setCenter(point.x, point.y, { zoom: 1, duration: 0 }); } else centerProject(current.projectId); } }}><LocateFixedIcon /></Button></Hint><Hint label={t("overviewGraph.resetLayout")}><Button variant="ghost" size="icon-sm" onClick={() => { layout.reset(); cameraInitialized.current = false; }}><RotateCcwIcon /></Button></Hint></div>
       </ReactFlow> : <SessionList key={`${focus}:${includeResting}`} rows={model.agents} selected={activeSession} choose={chooseSession} />}</div>
-      {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn model={model} query={projectQuery} setQuery={setProjectQuery} hidden={hiddenProjects} toggle={toggleProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} actions={actions} />}
+      {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn model={model} query={projectQuery} setQuery={setProjectQuery} hidden={hiddenProjects} toggle={toggleProject} folded={foldedProjects} toggleFold={toggleFoldProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} actions={actions} />}
     </div> : null}
   </div>;
 }
@@ -281,11 +311,11 @@ function askingPane(row: GraphAgent, model: OverviewGraphModel): string {
 }
 
 /** With nothing chosen, the side column lists the projects with their states, then what waits on the operator. */
-function ProjectColumn({ model, query, setQuery, hidden, toggle, locate, choose, actions }: { model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; actions: Actions }) {
+function ProjectColumn({ model, query, setQuery, hidden, toggle, folded, toggleFold, locate, choose, actions }: { model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; folded: ReadonlySet<string>; toggleFold: (id: string) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const needle = query.trim().toLocaleLowerCase();
-  // Every root whose turn it is, drawn or not, so the list agrees with the projects' My turn counts.
-  const waiting = model.allAgents.filter((row) => model.roots.has(row.id) && graphActivity(row.agent) === "turn" && !hidden.has(row.projectId));
+  // Every root whose turn it is, drawn, folded or hidden, so the list agrees with the projects' My turn counts.
+  const waiting = model.allAgents.filter((row) => model.roots.has(row.id) && graphActivity(row.agent) === "turn");
   return <aside className="og-navigator" aria-label={t("overviewGraph.projects")} data-graph-projects="true">
     <Input aria-label={t("overviewGraph.findProject")} placeholder={t("overviewGraph.findProject")} value={query} onChange={(event) => setQuery(event.target.value)} />
     <div className="og-project-list">{model.summaries.filter((summary) => summary.project.workspace.label.toLocaleLowerCase().includes(needle)).sort((a, b) => a.project.workspace.label.localeCompare(b.project.workspace.label, undefined, { numeric: true }) || a.id.localeCompare(b.id)).map((summary) => {
@@ -293,13 +323,14 @@ function ProjectColumn({ model, query, setQuery, hidden, toggle, locate, choose,
       const off = hidden.has(summary.id);
       return <div key={summary.id} data-graph-project-row={summary.project.workspace.id} data-hidden={off}>
         <button type="button" aria-label={t("overviewGraph.locateProject", { project: label })} disabled={off} onClick={() => locate(summary)}><strong>{label}</strong><GraphStateCounts summary={summary} /><span className="og-count">{summary.sessions}</span></button>
+        <Button variant="ghost" size="sm" aria-pressed={folded.has(summary.id)} aria-label={t(folded.has(summary.id) ? "overviewGraph.unfoldProject" : "overviewGraph.foldProject", { project: label, count: summary.sessions })} disabled={off || !summary.admitted} onClick={() => toggleFold(summary.id)}>{t(folded.has(summary.id) ? "overviewGraph.unfold" : "overviewGraph.fold")}</Button>
         <Button variant="ghost" size="sm" aria-pressed={off} aria-label={t(off ? "overviewGraph.revealProject" : "overviewGraph.hideProject", { project: label })} disabled={!summary.admitted} onClick={() => toggle(summary.id)}>{t(off ? "overviewGraph.reveal" : "overviewGraph.hide")}</Button>
       </div>;
     })}</div>
     {waiting.length > 0 ? <section className="og-waiting" aria-label={t("overviewGraph.waiting")}>
       <h3>{t("overviewGraph.waiting")} <span>{waiting.length}</span></h3>
       {waiting.map((row) => <div key={row.id} className="og-ask" data-graph-ask={row.agent.pane_id}>
-        <button type="button" className="og-ask-who" aria-label={rowAccessibleName(t, row.agent, row.device)} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} /><span><AgentRecordTitle agent={row.agent} /></span><small>{row.project.label}</small></button>
+        <button type="button" className="og-ask-who" aria-label={rowAccessibleName(t, row.agent, row.device)} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} /><span><AgentRecordTitle agent={row.agent} /></span><small>{row.project.label}</small>{hidden.has(row.projectId) ? <small className="og-hidden-mark">{t("overviewGraph.hiddenProject")}</small> : null}</button>
         <p>{row.agent.state.ask ? askWhat(t, row.agent.state.ask.verb, row.agent.state.ask.what) : <GraphLine agent={row.agent} />}</p>
         <Button variant="secondary" size="sm" onClick={() => actions.openAgent(askingPane(row, model))}>{t("overviewGraph.answer")}</Button>
       </div>)}

@@ -1,16 +1,21 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import type { OverviewGraphModel } from "./overviewGraphModel";
-import { placeOverviewMap, type MapBox } from "./overviewMapLayout";
+import { ForceMap, type MapPoint } from "./overviewMapLayout";
 import { useShellStore } from "./store";
 
-type Dimensions = { root: MapBox; child: MapBox; operator: number; label: { width: number; height: number }; gap: number; projectGap: number };
-/** Boxes' top left corners with the operator's center at the origin. `ring` sessions take the root box and
- * stand on the ring, `team` names the ring session they belong to. */
-export type GraphPlacement = {
-  operator: { x: number; y: number };
-  nodes: Map<string, { x: number; y: number; ring: boolean; team: string }>;
+/** A box with its orb at the top center: `orb` is the orb's diameter. */
+export type GraphBox = { width: number; height: number; orb: number };
+type Dimensions = { root: GraphBox; child: GraphBox; operator: number; label: { width: number; height: number }; gap: number };
+export type GraphLayout = {
+  phase: "loading" | "ready" | "failed";
+  size: Dimensions | null;
+  /** Each placed session's orb center, with the operator's at the origin, and its team. */
+  points: ReadonlyMap<string, MapPoint>;
+  /** The live map that drags move; null until placed or after a failure. */
+  map: ForceMap | null;
+  /** Places every session afresh, dropping every drag. */
+  reset: () => void;
 };
-export type GraphLayout = { key: string; phase: "loading" | "ready" | "failed"; placement: GraphPlacement | null; size: Dimensions | null };
 
 /** Geometry comes from the same numeric authority as the rest of Overview. */
 function dimensions(element: HTMLElement, scale: number): Dimensions {
@@ -24,9 +29,12 @@ function dimensions(element: HTMLElement, scale: number): Dimensions {
   return {
     root: { width: read("root-width"), height: read("root-height"), orb: read("root-orb") },
     child: { width: read("child-width"), height: read("child-height"), orb: read("child-orb") },
-    operator: read("root-orb"), label: { width: read("root-width") * 2, height: gap * 2 }, gap, projectGap: read("project-gap"),
+    operator: read("root-orb"), label: { width: read("root-width") * 2, height: gap * 2 }, gap,
   };
 }
+
+/** The room a session's circle and words need around its orb center, for the physics to keep apart. */
+const room = (box: GraphBox, gap: number) => Math.max(box.width / 2, box.height - box.orb / 2) * 0.85 + gap / 2;
 
 /** Appearance writes the interface scale on the root; release its observer with the graph. */
 function useGraphScale(): number {
@@ -41,44 +49,69 @@ function useGraphScale(): number {
   return scale;
 }
 
-/** Topology and text geometry own placement. Status, filters, hiding and correspondence only redraw existing places. */
-export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObject<HTMLDivElement | null>, retry: number) {
+/** The operator's reduced-motion setting, followed while the graph is open. */
+function useReducedMotion(): boolean {
+  const query = "(prefers-reduced-motion: reduce)";
+  const [reduced, setReduced] = useState(() => window.matchMedia?.(query).matches ?? false);
+  useEffect(() => {
+    const media = window.matchMedia?.(query);
+    if (!media) return;
+    const change = () => setReduced(media.matches);
+    media.addEventListener("change", change);
+    return () => media.removeEventListener("change", change);
+  }, []);
+  return reduced;
+}
+
+/**
+ * Topology and text geometry own placement. Status, filters, hiding, folding and
+ * correspondence only redraw existing places. A changed set of sessions keeps
+ * every placed session where it is and places only the new ones; a changed
+ * interface scale, Retry and Reset layout place everything afresh.
+ */
+export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObject<HTMLDivElement | null>, retry: number): GraphLayout {
   const latest = useRef(model);
   latest.current = model;
-  const [layout, setLayout] = useState<GraphLayout>({ key: "", phase: "loading", placement: null, size: null });
   const scale = useGraphScale();
+  const reduced = useReducedMotion();
   const key = `${model.structure}:${scale}`;
-  // Placement is synchronous, so it lands before paint and no loading notice flashes between structures.
+  const [state, setState] = useState<{ key: string; phase: GraphLayout["phase"]; size: Dimensions | null; map: ForceMap | null; points: ReadonlyMap<string, MapPoint> }>({ key: "", phase: "loading", size: null, map: null, points: new Map() });
+  const current = useRef<{ map: ForceMap; scale: number } | null>(null);
+  // Reset layout counts up; a placement for a count not yet placed starts afresh.
+  const [resets, setResets] = useState(0);
+  const placedResets = useRef(0);
+  // Placement is synchronous, so it lands before paint and nothing wobbles or flashes on open.
   useLayoutEffect(() => {
     try {
       if (!host.current) throw new Error("overview graph has no layout host");
       const size = dimensions(host.current, scale);
       const input = latest.current;
-      const map = placeOverviewMap({
-        projects: input.projects.map((group) => ({ id: group.id })),
+      const keep = current.current && current.current.scale === scale && placedResets.current === resets ? current.current.map : undefined;
+      placedResets.current = resets;
+      const map = new ForceMap({
+        projects: input.projects.map((group) => group.id),
         sessions: input.projects.flatMap((group) => [
-          ...group.shown.map((row) => ({ id: row.id, projectId: group.id, parent: input.layoutParents.get(row.id) ?? null, box: input.layoutParents.get(row.id) == null ? size.root : size.child })),
-          ...(group.revealSlot ? [{ id: group.revealSlot, projectId: group.id, parent: null, box: size.root }] : []),
+          ...group.shown.map((row) => { const parent = input.layoutParents.get(row.id) ?? null; return { id: row.id, projectId: group.id, parent, radius: room(parent === null ? size.root : size.child, size.gap) }; }),
+          ...(group.revealSlot ? [{ id: group.revealSlot, projectId: group.id, parent: null, radius: room(size.root, size.gap) }] : []),
         ]),
-        operator: size.operator, gap: size.gap, projectGap: size.projectGap,
-      });
-      const nodes: GraphPlacement["nodes"] = new Map();
-      for (const group of input.projects) {
-        for (const id of [...group.shown.map((row) => row.id), ...(group.revealSlot ? [group.revealSlot] : [])]) {
-          const point = map.nodes.get(id);
-          if (!point) throw new Error("layout omitted a session");
-          const ring = id === group.revealSlot || input.layoutParents.get(id) == null;
-          const box = ring ? size.root : size.child;
-          nodes.set(id, { x: point.x - box.width / 2, y: point.y - box.orb / 2, ring, team: point.team });
-        }
-      }
-      setLayout({ key, phase: "ready", placement: { operator: { x: -size.operator / 2, y: -size.operator / 2 }, nodes }, size });
+        operator: size.operator + size.gap * 2,
+      }, keep);
+      current.current?.map.stop();
+      current.current = { map, scale };
+      map.reduceMotion(reduced);
+      map.listen(() => setState((previous) => (previous.map === map ? { ...previous, points: map.positions() } : previous)));
+      setState({ key, phase: "ready", size, map, points: map.positions() });
     } catch (error: unknown) {
       useShellStore.getState().noteDiagnostic(`overview_graph.layout_failed projects=${latest.current.projects.length} visible=${latest.current.visible.length} cause=${error instanceof Error ? error.message : String(error)}`);
-      setLayout({ key, phase: "failed", placement: null, size: null });
+      current.current?.map.stop();
+      current.current = null;
+      setState({ key, phase: "failed", size: null, map: null, points: new Map() });
     }
-  }, [key, host, retry, scale]);
-  return layout.key === key ? layout : { key, phase: "loading" as const, placement: layout.placement, size: layout.size };
+  }, [key, host, retry, scale, resets, reduced]);
+  useEffect(() => () => { current.current?.map.stop(); current.current = null; }, []);
+  const reset = useCallback(() => setResets((value) => value + 1), []);
+  if (state.key !== key) return { phase: "loading", size: state.size, points: state.points, map: null, reset };
+  return { phase: state.phase, size: state.size, points: state.points, map: state.map, reset };
 }
 
 /** React Flow's theme class must follow the shell rather than reset inherited tokens. */

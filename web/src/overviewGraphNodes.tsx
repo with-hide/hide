@@ -1,4 +1,5 @@
 import { BaseEdge, Handle, Position, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
+import { useId } from "react";
 import { AgentMark } from "./AgentMark";
 import { badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
 import { AgentRecordTitle } from "./components/agent-record-title";
@@ -8,6 +9,7 @@ import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { GraphAgent, GraphProject, ProjectSummary } from "./overviewGraphModel";
+import type { ProjectAccent } from "./overviewGraphLines";
 import type { AgentRow } from "./snapshot";
 
 /** Custom button focus follows the same viewport rule as React Flow's node focus. */
@@ -25,10 +27,16 @@ function useRevealNode(id: string) {
 }
 
 export type OperatorNode = Node<{ label: string }, "operator">;
-/** `base` is where the node stands before the operator drags it; `area` and `label` are relative to the node. */
-export type ProjectNode = Node<{ group: GraphProject; area: string; label: { x: number; y: number }; labelWidth: number; base: { x: number; y: number }; current: boolean; highlighted: boolean }, "project">;
-export type TeamNode = Node<{ path: string; width: number; height: number; selected: boolean; base: { x: number; y: number } }, "team">;
-export type SessionNode = Node<{ row: GraphAgent; ring: boolean; context: boolean; muted: boolean; highlighted: boolean; current: boolean; quietCount: number; folded: boolean; fold: (id: string) => void; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
+/** A project's name above its sessions, in the project's color; dragging it moves the whole project. */
+export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; current: boolean; highlighted: boolean }, "project">;
+/** The soft light behind a project's sessions, fading to nothing at its edge. */
+export type GlowNode = Node<{ accent: ProjectAccent }, "glow">;
+/** A folded project: one circle with its name and counts. */
+export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent; orb: number; unfold: (id: string) => void }, "cluster">;
+export type TeamNode = Node<{ path: string; width: number; height: number; selected: boolean }, "team">;
+/** A team root's fold: how many descendants, their states, and whether they are folded away. */
+export type TeamFold = { count: number; turn: number; going: number; done: number; folded: boolean; toggle: () => void };
+export type SessionNode = Node<{ row: GraphAgent; ring: boolean; context: boolean; muted: boolean; highlighted: boolean; current: boolean; team: TeamFold | null; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
 /** A straight relationship between two orbs, already trimmed to their edges; it carries no words. */
 export type LineEdge = Edge<{ x1: number; y1: number; x2: number; y2: number }, "line">;
 
@@ -61,35 +69,57 @@ export function OperatorGraphNode({ data }: NodeProps<OperatorNode>) {
   return <div className="og-operator" role="img" aria-label={data.label}><Ports /><span aria-hidden="true">{data.label}</span></div>;
 }
 
-/** A project's band around the operator and its name just outside it; dragging either moves every session of the project. */
-export function ProjectGraphNode({ data, width, height }: NodeProps<ProjectNode>) {
+export function ProjectGraphNode({ data }: NodeProps<ProjectNode>) {
   const { t } = useInterfaceTranslation();
-  const { group } = data;
-  const title = t("overviewGraph.dragProject", { project: group.project.workspace.label });
-  return <div className="og-project" data-graph-project={group.project.workspace.id} data-current={data.current} data-highlighted={data.highlighted}>
-    <svg className="og-project-area" width={width} height={height} aria-hidden="true"><path className="og-project-drag" d={data.area} /></svg>
-    <span className="og-project-name og-project-drag" style={{ left: data.label.x, top: data.label.y, maxWidth: data.labelWidth }} title={title}>{group.project.workspace.label}</span>
+  const label = data.group.project.workspace.label;
+  return <div className="og-project og-project-drag" data-graph-project={data.group.project.workspace.id} data-current={data.current} data-highlighted={data.highlighted} data-accent={data.accent} title={t("overviewGraph.dragProject", { project: label })}>{label}</div>;
+}
+
+export function GlowGraphNode({ id, data, width, height }: NodeProps<GlowNode>) {
+  const gradient = `og-glow-${useId().replace(/:/g, "")}`;
+  return <svg className="og-glow" width={width} height={height} aria-hidden="true" data-glow={id} data-accent={data.accent}>
+    <defs><radialGradient id={gradient}><stop offset="0%" className="og-glow-core" /><stop offset="100%" className="og-glow-edge" /></radialGradient></defs>
+    <circle cx={(width ?? 0) / 2} cy={(height ?? 0) / 2} r={(width ?? 0) / 2} fill={`url(#${gradient})`} />
+  </svg>;
+}
+
+/** A folded project stands as one circle; choosing it unfolds the project, dragging it moves the project. */
+export function ClusterGraphNode({ data }: NodeProps<ClusterNode>) {
+  const { t } = useInterfaceTranslation();
+  const { summary } = data;
+  const label = summary.project.workspace.label;
+  return <div className="og-cluster" data-graph-cluster={summary.project.workspace.id} data-turn={summary.turn > 0} data-accent={data.accent}>
+    <Ports />
+    <button type="button" className="og-cluster-orb og-cluster-drag nopan" style={{ width: data.orb, height: data.orb }} aria-label={t("overviewGraph.unfoldProject", { project: label, count: summary.sessions })} onClick={() => data.unfold(summary.id)}>{summary.sessions}</button>
+    <strong>{label}</strong>
+    <GraphStateCounts summary={summary} />
   </div>;
 }
 
-/** The dashed outline around a root and its delegated descendants. */
+/** The dashed outline around a chosen team: its root and every delegated descendant. */
 export function TeamGraphNode({ data }: NodeProps<TeamNode>) {
   return <svg className="og-team" data-selected={data.selected} width={data.width} height={data.height} aria-hidden="true"><path d={data.path} /></svg>;
 }
 
 export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>) {
   const { t } = useInterfaceTranslation();
-  const { row, ring, choose, highlight } = data;
+  const { row, ring, choose, highlight, team } = data;
   const reveal = useRevealNode(id);
   const asking = row.agent.mark === "turn";
-  return <div className="og-session" data-ring={ring} data-mark={row.agent.mark} data-selected={selected} data-current={data.current} data-context={data.context} data-muted={data.muted} data-highlighted={data.highlighted} data-graph-session={row.agent.pane_id}>
+  return <div className="og-session" data-ring={ring} data-mark={row.agent.mark} data-selected={selected} data-current={data.current} data-context={data.context} data-muted={data.muted} data-highlighted={data.highlighted} data-folded-turn={team?.folded === true && team.turn > 0} data-graph-session={row.agent.pane_id}>
     <Ports />
     <button type="button" className="og-session-target nopan" aria-label={[rowAccessibleName(t, row.agent, row.device), starred(row.agent) ? t("taskLens.revisit.starred") : null, data.current ? t("overviewGraph.currentPane") : null, data.context ? t("overviewGraph.context") : null, row.launchModel ? t("overviewGraph.launchModel", { model: row.launchModel }) : null].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
-      <span className="og-orb og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })}><AgentMark kind={row.agent.agent_kind} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} /></span></span>
+      {ring
+        ? <span className="og-orb og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })}><AgentMark kind={row.agent.agent_kind} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} /></span></span>
+        // A delegated session is a small dot in its state's color.
+        : <span className="og-dot og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })} />}
       <strong className="og-session-title"><AgentRecordTitle agent={row.agent} stacked />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong>
       {ring || asking ? <GraphLine agent={row.agent} className={asking ? "og-session-line og-asking" : "og-session-line"} /> : null}
     </button>
-    {data.quietCount > 0 ? <button type="button" className="og-fold nodrag nopan" aria-expanded={!data.folded} onClick={() => data.fold(row.id)}>{t(data.folded ? "overviewGraph.unfoldQuiet" : "overviewGraph.foldQuiet", { count: data.quietCount })}</button> : null}
+    {team ? <button type="button" className="og-team-chip nodrag nopan" data-folded={team.folded} data-turn={team.turn > 0} aria-expanded={!team.folded} aria-label={t(team.folded ? "overviewGraph.unfoldTeam" : "overviewGraph.foldTeam", { count: team.count })} onClick={team.toggle}>
+      <span>{team.folded ? `+${team.count}` : team.count}</span>
+      {team.folded ? <span className="og-team-states">{badgeParts({ turn: team.turn, going: team.going, done: team.done }).map((part) => <StatusMark key={part.state} mark={part.mark} />)}</span> : null}
+    </button> : null}
   </div>;
 }
 

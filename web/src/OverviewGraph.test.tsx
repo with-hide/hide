@@ -18,7 +18,7 @@ import type { DispatchFn } from "./ws";
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 // Layout failure is a supported surface with the same session preview actions.
 vi.mock("./overviewGraphLayout", () => ({
-  useOverviewGraphLayout: () => ({ key: "fixture", phase: "failed", placement: null }),
+  useOverviewGraphLayout: () => ({ phase: "failed", size: null, points: new Map(), map: null, reset: () => {} }),
   useGraphTheme: () => "light",
 }));
 const savedShell = useShellStore.getState();
@@ -166,13 +166,19 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
     expect(preview()).toBeNull();
     const listed = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("[data-graph-session-list] > button")].find((row) => row.textContent?.includes(name))!;
     expect(listed("검증 자식").getAttribute("aria-pressed")).toBe("true");
+    // B25: a project folds into one circle from its row, and unfolds from the same place.
+    await act(async () => button("Fold 알파 into one circle")!.click());
+    await act(async () => button("Unfold 알파, 2 sessions")!.click());
+    expect(button("Fold 알파 into one circle")).toBeDefined();
     // B14: hiding the highlighted session's project clears it; the row stays, dimmed, with its counts.
     await act(async () => button("Hide 알파 on the map")!.click());
     expect(listed("검증 자식").getAttribute("aria-pressed")).toBe("false");
     const hidden = column().querySelector('[data-graph-project-row="alpha"]')!;
     expect(hidden.getAttribute("data-hidden")).toBe("true");
     expect(hidden.querySelector('[data-state="turn"]')?.textContent).toContain("1");
-    expect(column().querySelector('[data-graph-ask="r"]')).toBeNull();
+    // D-21/B27: a hidden project's question still waits for the operator, marked hidden.
+    expect(column().querySelector('[data-graph-ask="r"] .og-hidden-mark')?.textContent).toBe("Hidden on the map");
+    expect(button("Fold 알파 into one circle")!.disabled).toBe(true);
     await act(async () => button("Show 알파 on the map again")!.click());
     expect(column().querySelector('[data-graph-project-row="alpha"]')?.getAttribute("data-hidden")).toBe("false");
   } finally { await act(async () => reactRoot.unmount()); }

@@ -6,7 +6,7 @@ import type { AgentRow, OverviewGraphMetadata, OverviewGraphParty } from "./snap
 export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null };
 export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; roots: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null };
 export type GraphFocus = "all" | "turn" | "working" | "results";
-export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; folded?: ReadonlySet<string>; pinned?: readonly string[]; selected?: string | null };
+export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; pinned?: readonly string[]; selected?: string | null };
 export type GraphActivity = Exclude<GraphFocus, "all"> | "unknown" | "idle" | "resting";
 export const GRAPH_FOCUS_DEFAULTS: GraphFocusOptions = { focus: "all", includeResting: false };
 
@@ -28,7 +28,9 @@ export type Communication = { id: string; source: string; target: string; letter
 export type ProjectSummary = { id: string; project: BoardProject; sessions: number; turn: number; working: number; results: number; admitted: boolean };
 export type OverviewGraphModel = {
   projects: GraphProject[]; agents: GraphAgent[]; allAgents: GraphAgent[]; visible: GraphAgent[];
-  context: ReadonlySet<string>; roots: ReadonlySet<string>; quietBranches: ReadonlyMap<string, number>; folded: ReadonlySet<string>;
+  context: ReadonlySet<string>; roots: ReadonlySet<string>;
+  /** Sessions whose every descendant sleeps, with how many descendants: a team the map opens folded. */
+  quietBranches: ReadonlyMap<string, number>;
   /** Each current session's verified lineage parent and lineage root. */
   parents: ReadonlyMap<string, string>; teams: ReadonlyMap<string, string>;
   /** Each drawn session's nearest drawn ancestor, or null on the first ring. */
@@ -186,16 +188,7 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
       if (left === 0) ready.push(parent);
     }
   }
-  const folded = new Set([...(options.folded ?? [])].filter((id) => quietBranches.has(id)));
-  const tucked = new Set<string>();
-  const tuck = [...folded].flatMap((id) => children.get(id) ?? []);
-  while (tuck.length > 0) {
-    const row = tuck.pop()!;
-    if (tucked.has(row.id)) continue;
-    tucked.add(row.id);
-    tuck.push(...(children.get(row.id) ?? []));
-  }
-  const all = sessions.filter((group) => group.agents.some((row) => retained.has(row.id))).map((group) => ({ ...group, agents: group.agents.filter((row) => retained.has(row.id) && !tucked.has(row.id)) }))
+  const all = sessions.filter((group) => group.agents.some((row) => retained.has(row.id))).map((group) => ({ ...group, agents: group.agents.filter((row) => retained.has(row.id)) }))
     .sort((a, b) => a.id.localeCompare(b.id));
   // Project names share the 400-node budget with their sessions. Counts and the list stay uncapped.
   const pinned = new Set(options.pinned ?? []);
@@ -287,7 +280,7 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
   // Labels, status, filters, letters, clocks and selection deliberately do not participate.
   const structure = JSON.stringify(groups.map((group) => [group.id, group.shown.map((row) => [row.id, layoutParents.get(row.id)]), group.revealSlot]));
   return {
-    projects: groups, agents, allAgents, visible, context, roots: new Set(allAgents.filter((row) => !parents.has(row.id)).map((row) => row.id)), quietBranches, folded,
+    projects: groups, agents, allAgents, visible, context, roots: new Set(allAgents.filter((row) => !parents.has(row.id)).map((row) => row.id)), quietBranches,
     parents, teams: lineageRoots(allAgents, parents), layoutParents, counts, summaries, communication, limited: hidden > 0, structure,
   };
 }

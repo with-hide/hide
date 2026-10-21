@@ -925,7 +925,9 @@ Issue comments use the existing detail worker, fifty per requested page and two 
 
 Work derives its graph from canonical agent, lineage, verified launch and bounded delivery facts, never from terminal output or letter bodies.
 The graph delivery projection keeps at most 2,000 metadata edges, independently of the existing 5,000-item delivery ledger, and publishes only changed facts.
-Work places its operator-centred map synchronously on the main thread in `overviewMapLayout.ts`: one ring of roots and a fan per team, over at most four hundred nodes; it runs only when the structure key changes, and every search (a team fan's radius, the ring's radius) is bounded and fails into the list instead of looping.
+Work places its operator-centred force map synchronously on the main thread in `overviewMapLayout.ts` (d3-force), over at most four hundred nodes, only when the structure key changes: a fixed 120 ticks of Barnes-Hut charge, collision and ties, so the cost is O(ticks × n log n) and never loops.
+Measured on an Apple Silicon Mac in the unit-test runtime, 75 nodes took about 15 ms, 225 about 67 ms and 399 about 140 ms; placing one new session beside 398 held ones took about 130 ms, because held sessions still take part in each tick.
+A drag runs the same simulation on d3's animation timer only while a circle is held or settling, about two seconds after release, and the view stops it when it unmounts or replaces the map.
 On a 2026 MacBook in vitest, the slowest shape measured was one root with 398 children at about 43 ms, a 255-session binary team about 5 ms, and 399 roots or 200 one-session projects under 2 ms.
 Each admitted project reserves an access position before the remaining room is shared in identity order, so a hidden member can be selected without another layout request.
 Protected current members reserve additional positions before admission, independently of the one selected-member position.

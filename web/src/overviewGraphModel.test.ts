@@ -243,20 +243,16 @@ describe("Overview focus", () => {
     expect(graph.summaries.map((row) => row.id)).toEqual([graphProjectId(active)]);
     expect(graph.limited).toBe(false);
   });
-  it("offers folds only for completely sleeping descendant branches, and releases a fold when a child becomes idle", () => {
+  it("names a team whose every descendant sleeps, and stops naming it when one wakes", () => {
     const rows = [agent("root"), agent("quiet", { mark: "asleep", lineage_parent_pane_id: "root" }), agent("leaf", { mark: "asleep", lineage_parent_pane_id: "quiet" })];
-    const p = project("family", rows);
     const options = { focus: "all" as const, includeResting: true };
-    const before = overviewGraphModel([p], undefined, null, options);
+    const before = overviewGraphModel([project("family", rows)], undefined, null, options);
     const root = idOf(before, "root");
     expect(before.quietBranches.get(root)).toBe(2);
-    const folded = overviewGraphModel([p], undefined, null, { ...options, folded: new Set([root]) });
-    expect(folded.visible.map((row) => row.agent.pane_id)).toEqual(["root"]);
-    expect(folded.agents).toHaveLength(3);
-    const changed = project("family", rows.map((row) => row.pane_id === "leaf" ? { ...row, mark: "quiet" } : row));
-    const active = overviewGraphModel([changed], undefined, null, { ...options, folded: new Set([root]) });
-    expect(active.folded.size).toBe(0);
-    expect(active.visible).toHaveLength(3);
+    // Folding is drawn by the map; the model keeps every session in place.
+    expect(before.visible).toHaveLength(3);
+    const changed = overviewGraphModel([project("family", rows.map((row) => row.pane_id === "leaf" ? { ...row, mark: "quiet" } : row))], undefined, null, options);
+    expect(changed.quietBranches.has(root)).toBe(false);
   });
   it("shows idle-only projects by default and restores sleeping sessions on request", () => {
     const idle = project("idle", [agent("idle", { mark: "quiet" })]);
