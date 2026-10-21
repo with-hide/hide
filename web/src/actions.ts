@@ -2028,6 +2028,18 @@ export function createActions(send: DispatchFn) {
     createTab,
     agentGroup,
     agentLayout,
+    movePane(intent: import("./paneMove").PaneMoveIntent) {
+      dispatch({ schema_version: 2, kind: "pane_move", payload: intent });
+    },
+    previewPaneMove(payload: { request_id: string; workspace: { device_id: string; checkout_path: string }; group_id: string | null; tab_id: string }) {
+      dispatch({ schema_version: 2, kind: "pane_move_preview", payload });
+    },
+    cancelPaneMovePreview(requestId: string) {
+      dispatch({ schema_version: 2, kind: "pane_move_preview_cancel", payload: { request_id: requestId } });
+    },
+    checkPaneMove(requestId: string) {
+      dispatch({ schema_version: 2, kind: "pane_move_check", payload: { request_id: requestId } });
+    },
     runAgentCommand,
 
     focusTab(tabId: string) {
