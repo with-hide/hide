@@ -25,15 +25,29 @@ export async function startMove(page: Page, crossWorkspace = false) {
     daemon = await startHided(herdr, "pane-move");
     const payloads = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, payloads);
+    const operations = new Map<string, string>();
+    page.on("websocket", socket => socket.on("framereceived", ({ payload }) => {
+      const frame = JSON.parse(String(payload)) as { payload?: { rest?: { status?: { async_operations?: { id: string; kind: string; phase: string }[] } } } };
+      for (const operation of frame.payload?.rest?.status?.async_operations ?? []) if (operation.kind === "pane.move") operations.set(operation.id, operation.phase);
+    }));
+    // Geometry may already match the desired edge. Await this exact request's
+    // authoritative receipt before attempting another gesture on the pane.
+    const completed = async (count = sent.get("pane_move") ?? 1) => {
+      await expect.poll(() => sent.get("pane_move")).toBe(count);
+      await expect.poll(() => operations.get(String(payloads.get("pane_move")?.request_id))).toBe("completed");
+    };
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     for (const pane of herdr.panes) await expect(paneView(page, pane)).toHaveAttribute("data-transport", "controlling");
     await expect(tabTitle(page, target.tab.tab_id)).toBeVisible();
-    return { herdr, daemon, target, sent, payloads, stop };
+    return { herdr, daemon, target, sent, payloads, completed, stop };
   } catch (error) { stop(); throw error; }
 }
 export async function beginDrag(page: Page, paneId: string, target: Locator, edge: "left" | "right" | "up" | "down" = "right") {
-  const source = (await paneView(page, paneId).locator("[data-pane-move-title]").first().boundingBox())!;
+  const title = paneView(page, paneId).locator("[data-pane-move-title]").first();
+  await target.scrollIntoViewIfNeeded();
+  await title.hover();
+  const source = (await title.boundingBox())!;
   const destination = (await target.boundingBox())!;
   await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
   await page.mouse.down();

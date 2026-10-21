@@ -18,7 +18,7 @@ test("header edges insert in all four directions while retaining terminal, proce
     for (const [index, edge] of (["left", "right", "up", "down"] as const).entries()) await test.step(edge, async () => {
       await beginDrag(page, source, paneView(page, target), edge);
       await expect(page.locator('[data-pane-move-target="pane"]')).toBeVisible(); await page.mouse.up();
-      await expect.poll(() => flow.sent.get("pane_move")).toBe(index + 1);
+      await flow.completed(index + 1);
       await expect(page.locator('[data-pane-move-status]')).toHaveCount(0);
       await expectDirection(page, source, target, edge);
     });
@@ -57,14 +57,14 @@ test("a tab drop and the keyboard move menu keep the same terminal in a new tab"
   try {
     const source = flow.herdr.panes[0], before = paneFacts(flow.herdr).find(pane => pane.pane_id === source)!;
     const process = processFacts(flow.herdr, source), session = sessionOf(flow.herdr, source);
-    await beginDrag(page, source, tabTitle(page, flow.target.tab.tab_id)); await page.mouse.up();
+    await beginDrag(page, source, tabTitle(page, flow.target.tab.tab_id)); await page.mouse.up(); await flow.completed();
     await expect.poll(() => paneFacts(flow.herdr).find(pane => pane.terminal_id === before.terminal_id)?.tab_id).toBe(flow.target.tab.tab_id);
     await expect(paneView(page, source)).toBeVisible();
     await expectDirection(page, source, flow.target.root_pane.pane_id, "right");
     await paneView(page, source).locator(`[data-pane-menu="${source}"]`).focus(); await page.keyboard.press("Enter");
     await page.locator('[data-menu-item="pane_move"]').focus(); await page.keyboard.press("ArrowRight");
     await page.locator('[data-menu-item="pane_move_area:a1"]').focus(); await page.keyboard.press("ArrowRight");
-    const choice = page.getByRole("menuitem", { name: "Move to new tab", exact: true }); await choice.focus(); await page.keyboard.press("Enter");
+    const choice = page.getByRole("menuitem", { name: "Move to new tab", exact: true }); await choice.focus(); await page.keyboard.press("Enter"); await flow.completed(2);
     await expect.poll(() => paneFacts(flow.herdr).find(pane => pane.terminal_id === before.terminal_id)?.tab_id).not.toBe(flow.target.tab.tab_id);
     expect(paneFacts(flow.herdr).find(pane => pane.terminal_id === before.terminal_id)).toMatchObject({ pane_id: source, terminal_id: before.terminal_id });
     expect(processFacts(flow.herdr, source)).toEqual(process);
@@ -81,7 +81,7 @@ test("a cross-workspace tab drop keeps the terminal and xterm under the new publ
     const source = flow.herdr.panes[0], before = paneFacts(flow.herdr).find(pane => pane.pane_id === source)!;
     const process = processFacts(flow.herdr, source), session = sessionOf(flow.herdr, source);
     const textarea = await paneView(page, source).locator(".xterm-helper-textarea").elementHandle();
-    await beginDrag(page, source, tabTitle(page, flow.target.tab.tab_id)); await page.mouse.up();
+    await beginDrag(page, source, tabTitle(page, flow.target.tab.tab_id)); await page.mouse.up(); await flow.completed();
     await expect.poll(() => paneFacts(flow.herdr).find(pane => pane.terminal_id === before.terminal_id)?.tab_id).toBe(flow.target.tab.tab_id);
     const after = paneFacts(flow.herdr).find(pane => pane.terminal_id === before.terminal_id)!;
     expect(after.pane_id).not.toBe(source); expect(sessionOf(flow.herdr, after.pane_id)).toBe(session);
