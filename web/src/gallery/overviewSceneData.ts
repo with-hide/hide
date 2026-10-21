@@ -40,6 +40,8 @@ type AgentSpec = {
   parent?: string;
   children?: string[];
   ask?: AgentState["ask"];
+  /** What the session is doing now, as its quiet sentence. */
+  now?: string;
   pulls?: { pr: AgentPullRequest; state: PullState }[];
   approval?: boolean;
 };
@@ -51,6 +53,7 @@ function agent(spec: AgentSpec, now: number): AgentRow {
     ...preset,
     root: spec.parent === undefined,
     ask: spec.ask ?? null,
+    line: spec.now ? { text: spec.now, mode: "quiet", tone: { kind: "subtle", read: false } } : preset.line,
     pr: pulls.length ? { count: pulls.length, worst: pulls[0]!.state, pulls: pulls.map((one, index) => ({ index, state: one.state })) } : null,
     request_since: now - spec.ago,
   };
@@ -132,19 +135,19 @@ export function overviewWorld(now: number): OverviewWorld {
   const billingPr = pull("example/billing-api", 88, "Verify webhook signatures", "failed");
   const agents: AgentRow[] = [
     agent({ pane: "h-a3", title: "배포 전 변경 확인", look: "asking", ago: 3 * MINUTE, ask: { verb: "answer", what: "프로덕션 배포 전에 이번 변경 범위를 확인해 주세요", more: 0 }, pulls: [{ pr: hidePrs.release, state: "mergeable" }] }, now),
-    agent({ pane: "h-a1", title: "사이드바 가독성 개선", look: "working", ago: MINUTE, children: ["h-a1c1", "h-a1c2", "h-a1c3", "h-a1c4"], pulls: [{ pr: hidePrs.sidebar, state: "pending" }] }, now),
+    agent({ pane: "h-a1", now: "좁은 폭 줄바꿈 고치는 중", title: "사이드바 가독성 개선", look: "working", ago: MINUTE, children: ["h-a1c1", "h-a1c2", "h-a1c3", "h-a1c4"], pulls: [{ pr: hidePrs.sidebar, state: "pending" }] }, now),
     agent({ pane: "h-a1c1", title: "컴포넌트 구조 정리", look: "working", ago: 40_000, kind: "codex", parent: "h-a1", children: ["h-a1g1"] }, now),
     agent({ pane: "h-a1c2", title: "한글 가독성 확인", look: "done", ago: 6 * MINUTE, parent: "h-a1" }, now),
     agent({ pane: "h-a1c3", title: "긴 한국어와 English title wrapping 검토", look: "working", ago: 3 * MINUTE, parent: "h-a1", kind: "codex" }, now),
     agent({ pane: "h-a1c4", title: "키보드 이동 확인", look: "idle", ago: 15 * MINUTE, parent: "h-a1" }, now),
     agent({ pane: "h-a1g1", title: "모바일 표 너비 조정", look: "working", ago: 2 * MINUTE, parent: "h-a1c1" }, now),
-    agent({ pane: "h-e1", title: "키보드 단축키와 English 화면 연결 검증", look: "working", ago: 4 * MINUTE, kind: "codex" }, now),
-    agent({ pane: "h-q2", title: "검색 팔레트", look: "idle", ago: 3 * 60 * MINUTE, pulls: [{ pr: hidePrs.search, state: "merged" }] }, now),
-    agent({ pane: "h-r1", title: "릴리스 노트 초안", look: "idle", ago: 26 * 60 * MINUTE }, now),
-    agent({ pane: "h-r2", title: "의존성 업데이트 검토", look: "idle", ago: 2 * 24 * 60 * MINUTE }, now),
+    agent({ pane: "h-e1", now: "English 화면 단축키 확인 중", title: "키보드 단축키와 English 화면 연결 검증", look: "working", ago: 4 * MINUTE, kind: "codex" }, now),
+    agent({ pane: "h-q2", now: "PR 머지됨", title: "검색 팔레트", look: "idle", ago: 3 * 60 * MINUTE, pulls: [{ pr: hidePrs.search, state: "merged" }] }, now),
+    agent({ pane: "h-r1", now: "초안 끝", title: "릴리스 노트 초안", look: "idle", ago: 26 * 60 * MINUTE }, now),
+    agent({ pane: "h-r2", now: "변경 목록 정리 끝", title: "의존성 업데이트 검토", look: "idle", ago: 2 * 24 * 60 * MINUTE }, now),
     agent({ pane: "b-1", title: "결제 재시도 로그 정리", look: "asking", approval: true, ago: 9 * MINUTE, kind: "codex", ask: { verb: "approval", what: "마이그레이션을 운영 DB에 실행할까요?", more: 0 } }, now),
-    agent({ pane: "b-2", title: "웹훅 서명 검증 추가", look: "working", ago: 2 * MINUTE, pulls: [{ pr: billingPr, state: "failed" }] }, now),
-    agent({ pane: "s-1", title: "랜딩 문구 다듬기", look: "done", ago: 12 * MINUTE }, now),
+    agent({ pane: "b-2", now: "CI 실패 고치는 중", title: "웹훅 서명 검증 추가", look: "working", ago: 2 * MINUTE, pulls: [{ pr: billingPr, state: "failed" }] }, now),
+    agent({ pane: "s-1", now: "문구 3안 끝", title: "랜딩 문구 다듬기", look: "done", ago: 12 * MINUTE }, now),
   ];
 
   const hideCheckouts: Checkout[] = [

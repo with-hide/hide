@@ -4,9 +4,9 @@ import type { BoardProject } from "./projectBoard";
 import type { AgentRow, OverviewGraphMetadata, OverviewGraphParty } from "./snapshot";
 
 export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null };
-export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; expanded: boolean; roots: number; matches: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null };
+export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; roots: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null };
 export type GraphFocus = "all" | "turn" | "working" | "results";
-export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; folded?: ReadonlySet<string>; pinned?: readonly string[]; selected?: string | null; preferredProject?: string | null };
+export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; folded?: ReadonlySet<string>; pinned?: readonly string[]; selected?: string | null };
 export type GraphActivity = Exclude<GraphFocus, "all"> | "unknown" | "idle" | "resting";
 export const GRAPH_FOCUS_DEFAULTS: GraphFocusOptions = { focus: "all", includeResting: false };
 
@@ -22,13 +22,19 @@ export function graphActivity(agent: AgentRow): GraphActivity {
   }
 }
 const PRIORITY: Record<GraphActivity, number> = { turn: 0, working: 1, results: 2, unknown: 3, idle: 4, resting: 5 };
-export type Communication = { kind: "letters" | "herdr_direct"; id: string; source: string; target: string; count: number; latest: number; kinds: Record<string, number>; directions: { from: string; to: string; count: number }[] };
+/** One pair of sessions and every letter and Herdr input between them, by direction. */
+export type Communication = { id: string; source: string; target: string; letters: number; direct: number; latest: number; directions: { from: string; to: string; letters: number; direct: number }[] };
+/** A project row of the map's side column: its graph members and their states. */
+export type ProjectSummary = { id: string; project: BoardProject; sessions: number; turn: number; working: number; results: number; admitted: boolean };
 export type OverviewGraphModel = {
   projects: GraphProject[]; agents: GraphAgent[]; allAgents: GraphAgent[]; visible: GraphAgent[];
   context: ReadonlySet<string>; roots: ReadonlySet<string>; quietBranches: ReadonlyMap<string, number>; folded: ReadonlySet<string>;
-  omitted: { id: string; project: BoardProject; count: number; reason: "empty" | "resting" | "filtered" }[];
-  counts: Record<GraphFocus, number>;
-  lineage: { from: string; to: string; count: number }[]; communication: Communication[];
+  /** Each current session's verified lineage parent and lineage root. */
+  parents: ReadonlyMap<string, string>; teams: ReadonlyMap<string, string>;
+  /** Each drawn session's nearest drawn ancestor, or null on the first ring. */
+  layoutParents: ReadonlyMap<string, string | null>;
+  counts: Record<GraphFocus, number>; summaries: ProjectSummary[];
+  communication: Communication[];
   limited: boolean; hidden: number; singleProject: boolean; structure: string;
 };
 
@@ -58,31 +64,43 @@ function lineageParents(agents: readonly GraphAgent[]): ReadonlyMap<string, Grap
   return parents;
 }
 
-/** Count current, core-verified relationships, including children outside the visible-node budget. */
-export function overviewGraphFamily(row: GraphAgent, agents: readonly GraphAgent[]): { direct: number; descendants: number } {
+/** Each session's lineage root; a cycle's root is its smallest member, so the walk always ends. */
+function lineageRoots(agents: readonly GraphAgent[], parents: ReadonlyMap<string, string>): Map<string, string> {
+  const team = new Map<string, string>();
+  for (const row of agents) {
+    const path: string[] = [];
+    const seen = new Set<string>();
+    let current: string | undefined = row.id;
+    while (current !== undefined && !team.has(current) && !seen.has(current)) { seen.add(current); path.push(current); current = parents.get(current); }
+    const root = current === undefined ? path.at(-1)! : team.has(current) ? team.get(current)! : path.slice(path.indexOf(current)).sort()[0]!;
+    for (const id of path) team.set(id, root);
+  }
+  return team;
+}
+
+/** A session's current, core-verified descendants in tree order, each with its depth below it. */
+export function overviewGraphTeam(row: GraphAgent, model: Pick<OverviewGraphModel, "allAgents" | "parents">): { row: GraphAgent; depth: number }[] {
   const children = new Map<string, GraphAgent[]>();
-  const parents = lineageParents(agents);
-  for (const child of agents) {
-    const parent = parents.get(child.id);
-    if (!parent) continue;
-    const siblings = children.get(parent.id) ?? [];
-    siblings.push(child);
-    children.set(parent.id, siblings);
+  for (const child of model.allAgents) {
+    const parent = model.parents.get(child.id);
+    if (parent) children.set(parent, [...(children.get(parent) ?? []), child]);
   }
-  const direct = children.get(row.id) ?? [];
   const seen = new Set([row.id]);
-  const pending = [...direct];
-  while (pending.length > 0) {
-    const child = pending.pop()!;
-    if (seen.has(child.id)) continue;
-    seen.add(child.id);
-    pending.push(...(children.get(child.id) ?? []));
-  }
-  return { direct: direct.filter((child) => child.id !== row.id).length, descendants: seen.size - 1 };
+  const team: { row: GraphAgent; depth: number }[] = [];
+  const visit = (id: string, depth: number) => {
+    for (const child of [...(children.get(id) ?? [])].sort((a, b) => a.id.localeCompare(b.id))) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      team.push({ row: child, depth });
+      visit(child.id, depth + 1);
+    }
+  };
+  visit(row.id, 1);
+  return team;
 }
 
 /** Membership is the core's scope, never a cwd prefix, registration history or a fork origin. */
-function projectSessions(projects: readonly BoardProject[], metadata: OverviewGraphMetadata | undefined): Omit<GraphProject, "expanded" | "shown" | "revealSlot" | "revealed">[] {
+function projectSessions(projects: readonly BoardProject[], metadata: OverviewGraphMetadata | undefined): Pick<GraphProject, "id" | "project" | "agents" | "roots">[] {
   const proof = new Map((metadata?.sessions ?? []).map((session) => [JSON.stringify([session.device_id, session.pane_id]), session]));
   const seen = new Set<string>();
   return projects.map((project) => {
@@ -99,7 +117,7 @@ function projectSessions(projects: readonly BoardProject[], metadata: OverviewGr
     });
     agents.sort((a, b) => a.id.localeCompare(b.id));
     const parents = lineageParents(agents);
-    return { id, project, agents, matches: agents.length, roots: agents.filter((row) => !parents.has(row.id)).length };
+    return { id, project, agents, roots: agents.filter((row) => !parents.has(row.id)).length };
   });
 }
 
@@ -110,34 +128,38 @@ export function overviewProjectGraphCounts(projects: readonly BoardProject[], me
   return new Map(projectSessions(projects, metadata).map((group) => [group.id, { total: group.agents.length, roots: group.roots, children: group.agents.length - group.roots }]));
 }
 
-export function overviewGraphModel(projects: readonly BoardProject[], metadata: OverviewGraphMetadata | undefined, expanded: ReadonlySet<string>, projectId: string | null, options: GraphFocusOptions = GRAPH_FOCUS_DEFAULTS): OverviewGraphModel {
+export function overviewGraphModel(projects: readonly BoardProject[], metadata: OverviewGraphMetadata | undefined, projectId: string | null, options: GraphFocusOptions = GRAPH_FOCUS_DEFAULTS): OverviewGraphModel {
   const scoped = projects.filter((project) => projectId === null || project.workspace.id === projectId);
   const sessions = projectSessions(scoped, metadata);
   const allAgents = sessions.flatMap((group) => group.agents);
-  const parents = lineageParents(allAgents);
+  const parentRows = lineageParents(allAgents);
+  const parents = new Map([...parentRows].map(([id, parent]) => [id, parent.id]));
   const counts = { all: 0, turn: 0, working: 0, results: 0 };
+  const present = (row: GraphAgent) => options.includeResting || graphActivity(row.agent) !== "resting";
   const matches = allAgents.filter((row) => {
     const activity = graphActivity(row.agent);
-    if (activity !== "resting" || options.includeResting) counts.all += 1;
+    if (present(row)) counts.all += 1;
     if (activity === "turn" || activity === "working" || activity === "results") counts[activity] += 1;
-    return (options.includeResting || activity !== "resting") && (options.focus === "all" || activity === options.focus);
+    return present(row) && (options.focus === "all" || activity === options.focus);
   });
-  const retained = new Set(matches.map((row) => row.id));
-  const matching = new Set(retained);
-  // Stop at already visited ancestors: linear work across all matched paths, cycles included.
+  const matching = new Set(matches.map((row) => row.id));
+  // The map holds every present session and its ancestors whatever the filter,
+  // so a filter dims sessions instead of moving them.
+  const retained = new Set<string>();
   const visited = new Set<string>();
-  for (const row of matches) {
+  // Stop at already visited ancestors: linear work across all paths, cycles included.
+  for (const row of allAgents.filter(present)) {
     let current: GraphAgent | undefined = row;
     while (current && !visited.has(current.id)) {
       visited.add(current.id);
       retained.add(current.id);
-      current = parents.get(current.id);
+      current = parentRows.get(current.id);
     }
   }
   const context = new Set([...retained].filter((id) => !matching.has(id)));
   const children = new Map<string, GraphAgent[]>();
   for (const row of allAgents) {
-    const parent = parents.get(row.id);
+    const parent = parentRows.get(row.id);
     if (!parent) continue;
     const siblings = children.get(parent.id) ?? [];
     siblings.push(row);
@@ -157,7 +179,7 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     quiet.set(row.id, safe);
     descendantCount.set(row.id, count);
     if (safe && count > 0 && retained.has(row.id)) quietBranches.set(row.id, count);
-    const parent = parents.get(row.id);
+    const parent = parentRows.get(row.id);
     if (parent) {
       const left = pending.get(parent.id)! - 1;
       pending.set(parent.id, left);
@@ -173,35 +195,36 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     tucked.add(row.id);
     tuck.push(...(children.get(row.id) ?? []));
   }
-  const omitted = sessions.filter((group) => !group.agents.some((row) => retained.has(row.id))).map((group) => ({ id: group.id, project: group.project, count: group.agents.length, reason: group.agents.length === 0 ? "empty" as const : group.agents.every((row) => graphActivity(row.agent) === "resting") ? "resting" as const : "filtered" as const }));
-  const all = sessions.filter((group) => group.agents.some((row) => retained.has(row.id))).map((group) => ({ ...group, matches: group.agents.filter((row) => matching.has(row.id)).length, agents: group.agents.filter((row) => retained.has(row.id) && !tucked.has(row.id)), expanded: expanded.has(group.id) }))
+  const all = sessions.filter((group) => group.agents.some((row) => retained.has(row.id))).map((group) => ({ ...group, agents: group.agents.filter((row) => retained.has(row.id) && !tucked.has(row.id)) }))
     .sort((a, b) => a.id.localeCompare(b.id));
-  // Centers share the 400-node budget with their representatives. Counts/list stay uncapped.
+  // Project names share the 400-node budget with their sessions. Counts and the list stay uncapped.
   const pinned = new Set(options.pinned ?? []);
-  const admissionPriority = new Map(all.map((group) => [group.id, Number(group.id === options.preferredProject) * 8 + Number(group.agents.some((row) => row.id === options.selected)) * 4 + Number(group.agents.some((row) => pinned.has(row.id))) * 2 + Number(group.expanded)]));
+  const admissionPriority = new Map(all.map((group) => [group.id, Number(group.agents.some((row) => row.id === options.selected)) * 4 + Number(group.agents.some((row) => pinned.has(row.id))) * 2]));
   const priority = [...all].sort((a, b) => admissionPriority.get(b.id)! - admissionPriority.get(a.id)! || a.id.localeCompare(b.id));
-  // Admit complete center + access-slot pairs first. A greedy expanded project
-  // must not consume the one position another summarized project needs.
+  // Admit complete name + access-slot pairs first. A greedy large project
+  // must not consume the one position another project needs.
   const groups: GraphProject[] = [];
   let minimum = 0;
   for (const group of priority) {
     const protectedCount = group.agents.filter((row) => pinned.has(row.id)).length;
-    const access = group.expanded ? Math.min(group.agents.length, protectedCount + 1) : 0;
+    const access = Math.min(group.agents.length, protectedCount + 1);
     if (minimum + 1 + access > LAYOUT_NODE_LIMIT) break;
     groups.push({ ...group, shown: [], revealSlot: null, revealed: null });
     minimum += 1 + access;
   }
   let room = LAYOUT_NODE_LIMIT - minimum;
   let hidden = all.length - groups.length;
+  // Admitted projects share the remaining room in identity order, so choosing a
+  // session reveals it in its reserved slot without moving another project's members.
+  groups.sort((a, b) => a.id.localeCompare(b.id));
   for (const group of groups) {
     const projectedParents = lineageParents(group.agents);
     group.roots = group.agents.filter((row) => !projectedParents.has(row.id)).length;
     const protectedRows = group.agents.filter((row) => pinned.has(row.id));
     const ordered = [...protectedRows, ...group.agents.filter((row) => !pinned.has(row.id))];
-    if (!group.expanded) continue;
     const reserved = Math.min(group.agents.length, protectedRows.length + 1);
-    // One admission position is already reserved above. An open project needs
-    // no reveal slot, while every summary can reveal any of its list rows.
+    // One admission position is already reserved above. A complete project
+    // needs no reveal slot, while every summary can reveal any of its list rows.
     if (group.agents.length <= room + reserved) {
       group.shown = ordered.slice(0, room + reserved);
       room -= group.shown.length - reserved;
@@ -212,64 +235,60 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
       group.revealed = group.agents.find((row) => row.id === options.selected && !group.shown.some((shown) => shown.id === row.id))
         ?? protectedRows.find((row) => !group.shown.some((shown) => shown.id === row.id)) ?? null;
     }
+    // Places follow identity, never which member happens to be protected.
+    group.shown.sort((a, b) => a.id.localeCompare(b.id));
     hidden += group.agents.length - group.shown.length - Number(group.revealed !== null);
   }
-  groups.sort((a, b) => a.id.localeCompare(b.id));
   const agents = matches.sort((a, b) => PRIORITY[graphActivity(a.agent)] - PRIORITY[graphActivity(b.agent)] || a.id.localeCompare(b.id));
   const admitted = new Set(groups.map((group) => group.id));
   const visible = groups.flatMap((group) => [...group.shown, ...(group.revealed ? [group.revealed] : [])]);
-  const visibleIds = new Set(visible.map((row) => row.id));
-  const endpoint = new Map<string, string>();
-  for (const row of allAgents) if (retained.has(row.id) && !tucked.has(row.id) && row.digest && admitted.has(row.projectId)) endpoint.set(partyKey({ device_id: row.deviceId, pane_id: row.agent.pane_id, session: row.digest }), visibleIds.has(row.id) ? row.id : row.projectId);
-  const lineageBundles = new Map<string, { from: string; to: string; count: number }>();
-  for (const row of allAgents) {
-    const parent = parents.get(row.id);
-    if (!parent || !retained.has(row.id) || !retained.has(parent.id) || tucked.has(row.id) || tucked.has(parent.id) || !admitted.has(row.projectId) || !admitted.has(parent.projectId)) continue;
-    const from = visibleIds.has(parent.id) ? parent.id : parent.projectId;
-    const to = visibleIds.has(row.id) ? row.id : row.projectId;
-    if (from === to) continue;
-    const key = JSON.stringify([from, to]);
-    const bundle = lineageBundles.get(key);
-    if (bundle) bundle.count += 1;
-    else lineageBundles.set(key, { from, to, count: 1 });
+  const placed = new Set(groups.flatMap((group) => group.shown.map((row) => row.id)));
+  const layoutParents = new Map<string, string | null>();
+  for (const row of visible) {
+    // A revealed member stands in its project's access slot, outside any team.
+    let parent: string | undefined = placed.has(row.id) ? parents.get(row.id) : undefined;
+    const seen = new Set([row.id]);
+    while (parent !== undefined && !placed.has(parent) && !seen.has(parent)) { seen.add(parent); parent = parents.get(parent); }
+    layoutParents.set(row.id, parent !== undefined && placed.has(parent) && parent !== row.id ? parent : null);
   }
-  const lineage = [...lineageBundles.values()].sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
-  const bundles = new Map<string, Communication>();
+  const summaries = sessions.flatMap((group): ProjectSummary[] => {
+    const members = group.agents.filter((row) => retained.has(row.id));
+    if (!members.length) return [];
+    const activity = members.map((row) => graphActivity(row.agent));
+    return [{ id: group.id, project: group.project, sessions: members.length, turn: activity.filter((value) => value === "turn").length, working: activity.filter((value) => value === "working").length, results: activity.filter((value) => value === "results").length, admitted: admitted.has(group.id) }];
+  }).sort((a, b) => a.id.localeCompare(b.id));
+  // Every proven session keeps its counterparts, drawn or not; the view decides which pairs it draws.
+  const endpoint = new Map<string, string>();
+  for (const row of allAgents) if (row.digest) endpoint.set(partyKey({ device_id: row.deviceId, pane_id: row.agent.pane_id, session: row.digest }), row.id);
+  const pairs = new Map<string, Communication>();
   const limit = Math.max(0, Math.min(2000, metadata?.limit ?? 2000));
   const records = [
     ...(metadata?.available ? metadata.letters.slice(0, Math.min(2000, metadata.limit)).map((letter) => ({ ...letter, type: "letters" as const })) : []),
-    ...(metadata?.direct_inputs ?? []).slice(0, 2000).map((input) => ({ ...input, kind: "herdr_direct", type: "herdr_direct" as const })),
+    ...(metadata?.direct_inputs ?? []).slice(0, 2000).map((input) => ({ ...input, type: "direct" as const })),
   ].sort((a, b) => b.at_unix_ms - a.at_unix_ms || b.id.localeCompare(a.id)).slice(0, limit);
-  for (const letter of records) {
-    const from = endpoint.get(partyKey(letter.sender));
-    const to = endpoint.get(partyKey(letter.recipient));
+  for (const record of records) {
+    const from = endpoint.get(partyKey(record.sender));
+    const to = endpoint.get(partyKey(record.recipient));
     if (!from || !to || from === to) continue;
     const [source, target] = [from, to].sort() as [string, string];
-    const key = `${letter.type}:${JSON.stringify([source, target])}`;
-    let bundle = bundles.get(key);
-    if (!bundle) { bundle = { kind: letter.type, id: key, source, target, count: 0, latest: 0, kinds: {}, directions: [] }; bundles.set(key, bundle); }
-    bundle.count += 1;
-    bundle.latest = Math.max(bundle.latest, letter.at_unix_ms);
-    bundle.kinds[letter.kind] = (bundle.kinds[letter.kind] ?? 0) + 1;
-    const direction = bundle.directions.find((row) => row.from === from && row.to === to);
-    if (direction) direction.count += 1;
-    else bundle.directions.push({ from, to, count: 1 });
+    const key = `pair:${JSON.stringify([source, target])}`;
+    let pair = pairs.get(key);
+    if (!pair) { pair = { id: key, source, target, letters: 0, direct: 0, latest: 0, directions: [] }; pairs.set(key, pair); }
+    pair[record.type] += 1;
+    pair.latest = Math.max(pair.latest, record.at_unix_ms);
+    let direction = pair.directions.find((row) => row.from === from && row.to === to);
+    if (!direction) { direction = { from, to, letters: 0, direct: 0 }; pair.directions.push(direction); }
+    direction[record.type] += 1;
   }
-  // Labels, status, model, letters, clocks and selection deliberately do not participate.
-  const structure = JSON.stringify([groups.map((group) => [group.id, group.expanded, group.shown.map((row) => [row.id, parents.has(row.id)]), group.revealSlot])]);
-  const communication = [...bundles.values()];
-  for (const bundle of communication) if (bundle.directions.length === 1) {
-    bundle.source = bundle.directions[0]!.from;
-    bundle.target = bundle.directions[0]!.to;
+  const communication = [...pairs.values()].sort((a, b) => a.id.localeCompare(b.id));
+  for (const pair of communication) if (pair.directions.length === 1) {
+    pair.source = pair.directions[0]!.from;
+    pair.target = pair.directions[0]!.to;
   }
-  return { projects: groups, agents, allAgents, visible, context, roots: new Set(allAgents.filter((row) => !parents.has(row.id)).map((row) => row.id)), quietBranches, folded, omitted, counts, lineage, communication, limited: hidden > 0, hidden, singleProject: projectId !== null, structure };
-}
-
-/** The most recently visited checkout's project opens first, then the core's activity order. */
-export function initialGraphExpansion(projects: readonly BoardProject[], projectId: string | null, recentCheckoutIds: readonly string[] = []): Set<string> {
-  const selected = projectId ? projects.find((project) => project.workspace.id === projectId) : undefined;
-  const recent = recentCheckoutIds.map((id) => projects.find((project) => project.workspace.checkouts.some((checkout) => checkout.id === id))).find(Boolean);
-  const active = (project: BoardProject) => scopeAgents([project]).some((row) => graphActivity(row.agent) !== "resting");
-  const first = selected ?? (recent && active(recent) ? recent : undefined) ?? projects.find(active) ?? recent ?? projects.find((project) => project.workspace.agent_scope.members.length > 0) ?? projects[0];
-  return new Set(first ? [graphProjectId(first)] : []);
+  // Labels, status, filters, letters, clocks and selection deliberately do not participate.
+  const structure = JSON.stringify(groups.map((group) => [group.id, group.shown.map((row) => [row.id, layoutParents.get(row.id)]), group.revealSlot]));
+  return {
+    projects: groups, agents, allAgents, visible, context, roots: new Set(allAgents.filter((row) => !parents.has(row.id)).map((row) => row.id)), quietBranches, folded,
+    parents, teams: lineageRoots(allAgents, parents), layoutParents, counts, summaries, communication, limited: hidden > 0, hidden, singleProject: projectId !== null, structure,
+  };
 }

@@ -1,10 +1,17 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { placeCompoundWithin, type CompoundGroup, type CompoundPlacement, type CompoundSpacing } from "./dependencyLayout";
 import type { OverviewGraphModel } from "./overviewGraphModel";
+import { placeOverviewMap, type MapBox } from "./overviewMapLayout";
 import { useShellStore } from "./store";
 
-type Dimensions = { rootWidth: number; rootHeight: number; childWidth: number; childHeight: number; compactWidth: number; compactHeight: number; groupWidth: number; groupHeight: number; compactGroupWidth: number; compactGroupHeight: number; spacing: CompoundSpacing };
-export type GraphLayout = { key: string; phase: "loading" | "ready" | "failed"; placement: CompoundPlacement | null; size: Dimensions | null };
+type Dimensions = { root: MapBox; child: MapBox; operator: number; label: { width: number; height: number }; gap: number; projectGap: number };
+/** Label and operator boxes are absolute; a session's box is relative to its project's label, its React Flow parent.
+ * `ring` sessions take the root box and stand on the first ring, `team` names the first-ring session they belong to. */
+export type GraphPlacement = {
+  operator: { x: number; y: number };
+  groups: Map<string, { x: number; y: number; width: number; height: number }>;
+  nodes: Map<string, { x: number; y: number; ring: boolean; team: string }>;
+};
+export type GraphLayout = { key: string; phase: "loading" | "ready" | "failed"; placement: GraphPlacement | null; size: Dimensions | null };
 
 /** Geometry comes from the same numeric authority as the rest of Overview. */
 function dimensions(element: HTMLElement, scale: number): Dimensions {
@@ -12,16 +19,13 @@ function dimensions(element: HTMLElement, scale: number): Dimensions {
   const read = (name: string) => {
     const value = Number.parseFloat(style.getPropertyValue(`--size-overview-graph-${name}`));
     if (!Number.isFinite(value) || value <= 0) throw new Error(`missing overview graph token: ${name}`);
-    return value;
+    return value * scale;
   };
   const gap = read("gap");
   return {
-    rootWidth: read("root-width") * scale, rootHeight: read("root-height") * scale,
-    childWidth: read("child-width") * scale, childHeight: read("child-height") * scale,
-    compactWidth: read("compact-width") * scale, compactHeight: read("compact-height") * scale,
-    groupWidth: read("group-width") * scale, groupHeight: read("group-height") * scale,
-    compactGroupWidth: read("compact-group-width") * scale, compactGroupHeight: read("compact-group-height") * scale,
-    spacing: { betweenLayers: gap, betweenNodes: gap, padding: read("padding"), header: read("header"), groups: read("project-gap") },
+    root: { width: read("root-width"), height: read("root-height"), orb: read("root-orb") },
+    child: { width: read("child-width"), height: read("child-height"), orb: read("child-orb") },
+    operator: read("root-orb"), label: { width: read("root-width"), height: gap * 2 }, gap, projectGap: read("project-gap"),
   };
 }
 
@@ -38,7 +42,7 @@ function useGraphScale(): number {
   return scale;
 }
 
-/** Topology and text geometry own requests. Status and correspondence only redraw existing places. */
+/** Topology and text geometry own placement. Status, filters, hiding and correspondence only redraw existing places. */
 export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObject<HTMLDivElement | null>, retry: number) {
   const latest = useRef(model);
   latest.current = model;
@@ -46,48 +50,37 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
   const scale = useGraphScale();
   const key = `${model.structure}:${scale}`;
   useEffect(() => {
-    const controller = new AbortController();
-    setLayout((previous) => ({ key, phase: "loading", placement: previous.placement, size: previous.size }));
-    async function run() {
+    try {
       if (!host.current) throw new Error("overview graph has no layout host");
       const size = dimensions(host.current, scale);
       const input = latest.current;
-      const groups: CompoundGroup[] = input.projects.map((group) => {
-        const members = new Set(group.shown.map((row) => row.id));
-        return {
-          id: group.id, width: group.expanded ? size.groupWidth : size.compactGroupWidth, height: group.expanded ? size.groupHeight : size.compactGroupHeight,
-          children: [...group.shown.map((row) => {
-            const root = input.roots.has(row.id);
-            return { id: row.id, width: !group.expanded ? size.compactWidth : root ? size.rootWidth : size.childWidth, height: !group.expanded ? size.compactHeight : root ? size.rootHeight : size.childHeight };
-          }), ...(group.revealSlot ? [{ id: group.revealSlot, width: size.compactWidth, height: size.compactHeight }] : [])],
-          edges: input.lineage.filter((edge) => members.has(edge.from) && members.has(edge.to)),
-        };
+      const map = placeOverviewMap({
+        projects: input.projects.map((group) => ({ id: group.id, label: size.label })),
+        sessions: input.projects.flatMap((group) => [
+          ...group.shown.map((row) => ({ id: row.id, projectId: group.id, parent: input.layoutParents.get(row.id) ?? null, box: input.layoutParents.get(row.id) == null ? size.root : size.child })),
+          ...(group.revealSlot ? [{ id: group.revealSlot, projectId: group.id, parent: null, box: size.root }] : []),
+        ]),
+        operator: size.operator, gap: size.gap, projectGap: size.projectGap,
       });
-      const placement = await placeCompoundWithin(groups, size.spacing, controller.signal);
-      if (!controller.signal.aborted) setLayout({ key, phase: "ready", placement, size });
-    }
-    void run().catch((error: unknown) => {
-      if (controller.signal.aborted) return;
+      const groups = new Map([...map.labels].map(([id, point]) => [id, { x: point.x - size.label.width / 2, y: point.y - size.label.height / 2, ...size.label }]));
+      const nodes: GraphPlacement["nodes"] = new Map();
+      for (const group of input.projects) {
+        const label = groups.get(group.id);
+        for (const id of [...group.shown.map((row) => row.id), ...(group.revealSlot ? [group.revealSlot] : [])]) {
+          const point = map.nodes.get(id);
+          if (!point || !label) throw new Error("layout omitted a project or session");
+          const ring = id === group.revealSlot || input.layoutParents.get(id) == null;
+          const box = ring ? size.root : size.child;
+          nodes.set(id, { x: point.x - box.width / 2 - label.x, y: point.y - box.orb / 2 - label.y, ring, team: point.team });
+        }
+      }
+      setLayout({ key, phase: "ready", placement: { operator: { x: -size.operator / 2, y: -size.operator / 2 }, groups, nodes }, size });
+    } catch (error: unknown) {
       useShellStore.getState().noteDiagnostic(`overview_graph.layout_failed projects=${latest.current.projects.length} visible=${latest.current.visible.length} cause=${error instanceof Error ? error.message : String(error)}`);
       setLayout({ key, phase: "failed", placement: null, size: null });
-    });
-    return () => controller.abort();
+    }
   }, [key, host, retry, scale]);
   return layout.key === key ? layout : { key, phase: "loading" as const, placement: layout.placement, size: layout.size };
-}
-
-/** No polling clock or retained observer survives the graph's owner. */
-export function useGraphReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() => typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches);
-  useEffect(() => {
-    if (typeof matchMedia === "undefined") return;
-    const query = matchMedia("(prefers-reduced-motion: reduce)");
-    const update = () => setReduced(query.matches);
-    query.addEventListener("change", update);
-    update();
-    return () => query.removeEventListener("change", update);
-  }, []);
-  return reduced;
 }
 
 /** React Flow's theme class must follow the shell rather than reset inherited tokens. */

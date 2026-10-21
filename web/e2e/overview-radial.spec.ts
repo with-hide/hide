@@ -1,11 +1,11 @@
-// Approved radial-map B4-B11/B17/B24: the private runtime supplies identity and
-// topology; camera, drags and playback must stay local to the mounted graph.
+// Approved radial-map B4-B11/B17/B24 and PRD overview-main-map B1, B13, B14, B17:
+// the private runtime supplies identity and topology; camera, drags and hiding
+// stay local to the mounted graph and never move another circle.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { openOverview } from "./overview-entry";
 import { enterWorkspace } from "./wire";
-import { unchangedForFrames } from "./wait";
 
 async function drag(page: Page, handle: Locator, dx: number, dy: number) {
   const box = await handle.boundingBox();
@@ -38,17 +38,20 @@ test("@platform Overview restores its exact current session and keeps map moveme
     if (!canvas || !orb || !title) throw new Error("current identity has no canvas geometry");
     expect(orb.y).toBeGreaterThanOrEqual(canvas.y);
     expect(title.y + title.height).toBeLessThanOrEqual(canvas.y + canvas.height);
-    const heading = await graph.locator(".og-project-center").first().boundingBox();
-    if (!heading) throw new Error("project heading has no geometry");
-    expect(heading.y + heading.height).toBeLessThanOrEqual(orb.y);
-    await graph.getByRole("button", { name: "Collapse all", exact: true }).click();
-    await expect(graph.locator("[data-graph-session]")).toHaveCount(0);
+    // B1: the operator sits at the centre and the project's name is drawn.
+    await expect(graph.locator(".og-operator")).toHaveCount(1);
     await expect(graph.locator("[data-graph-project]")).toHaveCount(1);
-    await graph.locator(".og-project-heading").click();
-    await expect(current).toHaveCount(1);
-    await expect(graph).toHaveAttribute("data-graph-phase", "ready");
-    const positions = () => graph.locator(".react-flow__node").evaluateAll(nodes => nodes.map(node => [node.getAttribute("data-id"), (node as HTMLElement).style.transform]));
+    // Team outlines follow their members; every other node keeps its own place.
+    const positions = () => graph.locator(".react-flow__node").evaluateAll(nodes => nodes.filter(node => !node.getAttribute("data-id")?.startsWith("team:")).map(node => [node.getAttribute("data-id"), (node as HTMLElement).style.transform]));
     const before = await positions();
+    // B13/B14: hiding the project removes its sessions; showing it again restores the same places.
+    const row = graph.locator("[data-graph-project-row]").first();
+    await row.getByRole("button", { name: /^Hide .* on the map$/ }).click();
+    await expect(graph.locator("[data-graph-session]")).toHaveCount(0);
+    await expect(row).toHaveAttribute("data-hidden", "true");
+    await row.getByRole("button", { name: /^Show .* on the map again$/ }).click();
+    await expect(current).toHaveCount(1);
+    await expect.poll(positions).toEqual(before);
     const session = current.locator("xpath=..");
     const originalSession = await session.getAttribute("style");
     // Operators grab the provider circle itself; no separate grip control.
@@ -64,36 +67,17 @@ test("@platform Overview restores its exact current session and keeps map moveme
     await graph.getByRole("button", { name: "Reset layout", exact: true }).click();
     await expect.poll(positions).toEqual(before);
     // React Flow renders absolute transforms even though our node data is relative.
-    // Every member inside the packed footprint must travel with its center.
+    // Dragging a project's name moves exactly that name and its sessions.
     const group = graph.locator(".react-flow__node-project").first();
-    await graph.getByRole("button", { name: "Fit graph", exact: true }).click();
-    // Fit commits its viewport on a frame; measure the drag target after it settles.
-    await unchangedForFrames(page, () => graph.locator(".react-flow__viewport").getAttribute("style"), 3);
-    // Read all bounds together: Fit graph can update the camera between awaits.
-    const members = await graph.locator(".react-flow__node").evaluateAll(nodes => {
-      const project = nodes.find(node => node.classList.contains("react-flow__node-project"));
-      if (!project) throw new Error("project footprint has no geometry");
-      const area = project.getBoundingClientRect();
-      return nodes.filter(node => {
-        const box = node.getBoundingClientRect();
-        return box.x >= area.x - 1 && box.y >= area.y - 1 && box.right <= area.x + area.width + 1 && box.bottom <= area.y + area.height + 1;
-      }).map(node => node.getAttribute("data-id"));
-    });
-    // The fixture has one project and two sessions; the center moves with both.
-    expect(members).toContain(await group.getAttribute("data-id"));
-    expect(members).toHaveLength(3);
+    const projectId = await group.getAttribute("data-id");
+    const members = await graph.locator(".react-flow__node-session").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-id")));
+    expect(members).toHaveLength(2);
     const originalGroup = await group.getAttribute("style");
     await drag(page, group.locator(".og-project-drag"), 40, 24);
     await expect.poll(() => group.getAttribute("style")).not.toBe(originalGroup);
     const afterGroup = await positions();
-    expect(afterGroup.filter((row, i) => JSON.stringify(row) !== JSON.stringify(before[i])).map(row => row[0]).sort()).toEqual(members.sort());
+    expect(afterGroup.filter((row, i) => JSON.stringify(row) !== JSON.stringify(before[i])).map(row => row[0]).sort()).toEqual([projectId, ...members].sort());
     await graph.getByRole("button", { name: "Reset layout", exact: true }).click();
     await expect.poll(positions).toEqual(before);
-    await graph.getByRole("button", { name: "Replay flow", exact: true }).click();
-    await expect(graph).toHaveAttribute("data-playing", "true");
-    await expect(graph).toHaveAttribute("data-playing", "false");
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await expect(graph.getByRole("button", { name: "Replay flow", exact: true })).toBeDisabled();
-    await expect(graph).toHaveAttribute("data-motion", "false");
   } finally { daemon?.stop(); herdr.stop(); }
 });
