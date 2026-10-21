@@ -1819,9 +1819,9 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "memory_expand", payload: { workspace_id: workspaceId, number } });
     },
 
-    /** The Memory tab said how many older cards were cleared, the newest at `throughUnixMs`. */
-    memoryEvictionsSeen(workspaceId: string, throughUnixMs: number) {
-      dispatch({ schema_version: 2, kind: "memory_evictions_seen", payload: { workspace_id: workspaceId, through_unix_ms: throughUnixMs } });
+    /** The Memory tab showed how many older cards were cleared, the newest at `throughUnixMs`; false when it was not sent. */
+    memoryEvictionsSeen(workspaceId: string, throughUnixMs: number): boolean {
+      return dispatch({ schema_version: 2, kind: "memory_evictions_seen", payload: { workspace_id: workspaceId, through_unix_ms: throughUnixMs } }) !== false;
     },
 
     /** Searches the opened Project's cards; empty words clear the search. */

@@ -829,7 +829,7 @@ It retains the original human source and document quote; unrelated document comm
 When the owning document incorporates it, background reconciliation turns the card into the existing document pointer without another promotion.
 Turning Memory off retains cards and analysis progress; its setting explains that enabling it again catches up on unprocessed conversations, including conversations from the disabled period.
 A Project at its 10,000-card limit makes room for a new card by forgetting its least recently used one, and the tab says so in one quiet line under the head, `N older cards were cleared to make room for new ones.` (`새 카드를 남기려고 오래된 카드 N개를 지웠습니다.`), counting the cards forgotten that way since the tab last said so.
-The line is said once: it stays while the tab is open, and the next time the tab opens it is gone until another card is cleared, when it counts only the new ones.
+The line is said once: it counts as seen once it is in view on a visible page, stays while the tab is open, and the next time the tab opens it is gone until another card is cleared, when it counts only the new ones.
 `hide memory undo mN` brings one of the newest 1,000 cleared cards back, and so does `되돌리기` on a card just forgotten, but not while the Project is at its limit: the undo is refused with `mN cannot come back while this Project's Memory is full; forget another card first`.
 A card added by hand is never cleared this way.
 Only when every card is one a person made or settled (added by hand, a confirmed correction, or a card whose promotion is under way, merged or kept) does the line become the warning `This Project's Memory is full, so new cards are not kept.`, from the same check that refuses a new card; merges and corrections of existing cards still land.
