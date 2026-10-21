@@ -20,14 +20,21 @@ ROOT = Path(__file__).resolve().parents[2]
 class Pane:
     """A composer that holds what was sent to it, read as the example would judge it."""
 
-    def __init__(self, paste_survives=0):
+    def __init__(self, paste_survives=0, submits_lines=False):
         self.held, self.sent, self.paste_survives = "", [], paste_survives
+        # A program that takes each pasted line break as Enter, as Grok 1.0.52
+        # took an LF-separated paste on Windows.
+        self.submits_lines, self.prompts = submits_lines, 0
 
     def key(self, _event, payload):
         data = base64.b64decode(payload["bytes_base64"])
         self.sent.append(data)
         if data.startswith(b"\x1b[200~"):
-            self.held += "P" * (len(data) - 12)
+            lines = data[6:-6].split(b"\r")
+            if self.submits_lines:
+                self.prompts += len(lines) - 1
+                lines = lines[-1:]
+            self.held += "P" * len(b"\r".join(lines))
         elif data == composer.BACKSPACE * composer.BACKSPACES_PER_READ:
             self.held = self.held[:max(0, len(self.held) - composer.BACKSPACES_PER_READ)]
         else:
@@ -46,6 +53,7 @@ def journey_over(pane):
         runtime=SimpleNamespace(owner=SimpleNamespace(cancelled=threading.Event()),
                                 command=lambda *_args, **_kw: (0, "screen", "")),
         daemon=SimpleNamespace(dispatch=pane.key),
+        conversation=lambda: {"events": [{"role": "user"}] * (1 + pane.prompts)},
         take_keys=lambda record: record.setdefault("terminal", ["controlling"]) and True,
         evidence=lambda name, value: name + ".json",
         settle=lambda name, verdict, evidence=None: settled.append((name, verdict)))
@@ -67,7 +75,23 @@ class Measure(unittest.TestCase):
         self.assertEqual([step["verdict"] for step in journey.record["composer"]["steps"]],
                          ["not_empty", "empty", "not_empty", "empty"])
         self.assertFalse(any(b"\r" in data.replace(composer.PASTE, b"") or b"\n" in data.replace(composer.PASTE, b"")
-                             for data in pane.sent), "no Return reaches the agent")
+                             for data in pane.sent), "no Return reaches the agent outside the paste")
+
+    def test_the_paste_is_bracketed_with_the_line_breaks_hides_terminal_sends(self):
+        pane = Pane()
+        self.run_cell(pane)
+        paste = next(data for data in pane.sent if data.startswith(b"\x1b[200~"))
+        self.assertTrue(paste.endswith(b"\x1b[201~"))
+        self.assertEqual(paste.count(b"\r"), 11)
+        self.assertNotIn(b"\n", paste)
+
+    def test_a_paste_that_submits_its_lines_fails_at_the_paste_step(self):
+        pane = Pane(submits_lines=True)
+        journey, settled = self.run_cell(pane)
+        self.assertEqual(settled[0][1], (cells.FAIL, "after pasted the session holds 11 new prompt(s): "
+                                                     "the keys started a turn"))
+        self.assertEqual(journey.record["composer"]["steps"][-1]["name"], "pasted")
+        self.assertEqual(pane.held, "", "the cell still clears what the paste left")
 
     def test_the_screen_decides_when_a_paste_is_gone_not_a_count_of_presses(self):
         pane = Pane()
