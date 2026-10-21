@@ -117,12 +117,17 @@ fn an_ancestor_is_passed_over_only_when_the_account_neither_owns_nor_may_add_to_
     let established = private::establish_dir_durability(&anchor);
     if cfg!(windows) {
         assert_eq!(synced.unwrap_err().kind(), ErrorKind::PermissionDenied);
-        let closed = fs::canonicalize(&closed).unwrap();
-        assert!(matches!(
-            established,
-            Err(private::DirectoryDurabilityError::Uncertain { path, source, .. })
-                if path == closed && source.kind() == ErrorKind::PermissionDenied
-        ));
+        // `closed` is flushed to keep `anchor` in it, so `anchor`'s entry is
+        // the one left uncertain.
+        let anchor = fs::canonicalize(&anchor).unwrap();
+        assert!(
+            matches!(
+                &established,
+                Err(private::DirectoryDurabilityError::Uncertain { path, source, .. })
+                    if *path == anchor && source.kind() == ErrorKind::PermissionDenied
+            ),
+            "{established:?}"
+        );
     } else {
         synced.unwrap();
         assert_eq!(
@@ -165,17 +170,22 @@ fn an_ancestor_is_flushed_only_to_keep_a_folder_the_account_made() {
         identity::file_id(&anchor).unwrap()
     );
 
-    // The same folder made the account's own: `closed` is flushed for it,
-    // and the account may not flush `closed`.
+    // The same folder made the account's own: `closed` is flushed to keep
+    // it, the account may not flush `closed`, and `system`'s entry is the
+    // one left uncertain.
     let user = std::env::var("USERNAME").unwrap();
     icacls(&system, &["/setowner", &user]);
     assert!(private::owned_by_current_user(&system).unwrap());
-    let closed = fs::canonicalize(&closed).unwrap();
-    assert!(matches!(
-        private::establish_dir_durability(&anchor),
-        Err(private::DirectoryDurabilityError::Uncertain { path, source, .. })
-            if path == closed && source.kind() == ErrorKind::PermissionDenied
-    ));
+    let system = fs::canonicalize(&system).unwrap();
+    let established = private::establish_dir_durability(&anchor);
+    assert!(
+        matches!(
+            &established,
+            Err(private::DirectoryDurabilityError::Uncertain { path, source, .. })
+                if *path == system && source.kind() == ErrorKind::PermissionDenied
+        ),
+        "{established:?}"
+    );
     assert!(names(&anchor).is_empty());
 }
 
