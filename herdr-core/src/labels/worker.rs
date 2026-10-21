@@ -224,6 +224,9 @@ enum WorkerResult {
 struct AnalysisMeta {
     ledger_session: Option<SessionIdentity>,
     work_author: bool,
+    /// The ledger names the pane's parent, so its header shows its newest
+    /// request, whoever sent it, rather than the operator's.
+    delegated: bool,
     /// The sender of the descendant's report, progress or block that woke
     /// the turn: the one letter that continues its task, the ledger checking
     /// the lineage (PRD task-continuation D-02). A watch alert or a reply
@@ -2134,6 +2137,7 @@ impl LabelWorker {
         let meta = AnalysisMeta {
             ledger_session,
             work_author,
+            delegated: ledger.parent_name.is_some(),
             work_letter,
             turn_witness,
             offset: events
@@ -2303,10 +2307,13 @@ impl LabelWorker {
                 // it ended; a turn the agent resumed since keeps no stale end.
                 // Another agent's letter is not kept beside an operator's
                 // request: the header shows the operator's (D-10), and a lead
-                // pane's letters would push its summary out of the ring.
+                // pane's letters would push its summary out of the ring. A
+                // delegated child's header shows its newest request, so it
+                // keeps them all.
                 let mut turns_changed = false;
                 if let Some(offset) = outcome.offset {
-                    let shown = record.facts.operator_request.is_none()
+                    let shown = outcome.delegated
+                        || record.facts.operator_request.is_none()
                         || record
                             .facts
                             .requester_at(offset)

@@ -2307,6 +2307,55 @@ fn letter_turns_do_not_push_the_operators_request_summary_out() {
     assert_eq!(summaries, [(true, "요청 보기 화면 작업 요청")]);
 }
 
+/// D-09: a delegated child's header shows its newest request, so its
+/// parent's follow-up keeps a summary beside its first request.
+#[test]
+fn a_delegated_childs_follow_up_from_its_parent_keeps_its_summary() {
+    use crate::links::ledger::LedgerContext;
+    let harness = Harness::new();
+    let (mut worker, woken, _store, client) = cold_ledger_worker(&harness);
+    client.prime_context_for_test(
+        claude_session("native-a"),
+        LedgerContext {
+            parent_name: Some("ci-lead".into()),
+            ..Default::default()
+        },
+    );
+    let mut turns = vec![("user", "CI 확인해줘")];
+    let path = harness.session("a", "native-a", &turns);
+    // The child's first request counts as the operator's, as a spawned
+    // child's does before Hide watched its input.
+    harness.input.record("w1:p1", turn_at(0) - 300, false);
+    harness.backend.begin("지속적 통합 확인 작업");
+    observe(&mut worker, &agent(&path, "working", 3));
+    settle(&mut worker, &woken);
+    turns.push(("assistant", "확인했습니다"));
+    harness.session("a", "native-a", &turns);
+    harness.backend.answer("지속적 통합 확인 작업", "done", "");
+    observe(&mut worker, &agent(&path, "idle", 4));
+    settle(&mut worker, &woken);
+    turns.push((
+        "user",
+        "Hide letter r1 from ci-lead (claude) [request]\nCI 다시 봐줘",
+    ));
+    harness.session("a", "native-a", &turns);
+    harness.backend.begin("지속적 통합 재확인 작업");
+    let next = agent(&path, "working", 5);
+    observe(&mut worker, &next);
+    settle(&mut worker, &woken);
+    let facts = shown_facts(&worker, &next).unwrap();
+    assert!(facts.operator_request.is_some());
+    let summaries: Vec<_> = facts
+        .recent_turns
+        .iter()
+        .map(|turn| turn.request.as_str())
+        .collect();
+    assert_eq!(
+        summaries,
+        ["지속적 통합 확인 작업 요청", "지속적 통합 재확인 작업 요청"]
+    );
+}
+
 #[test]
 fn an_imported_label_shows_only_for_the_session_it_was_proven_for() {
     let harness = Harness::new();
