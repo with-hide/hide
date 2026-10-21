@@ -61,10 +61,10 @@ FIXTURE_AGENTS = ("claude-code", "codex")
 # Why the stand-in lane leaves every other agent unstarted.
 FIXTURE_ONLY = "a stand-in imitates Claude Code and Codex only; the fake model lane measures this agent"
 # Cells the C stand-in does not imitate: it answers no question from its
-# start's context, forks nothing, writes no title and no token usage. The
-# keyless lane measures them once it runs the pinned CLIs on a fake model.
+# start's context, draws no composer, forks nothing, writes no title and no
+# token usage. The keyless lane measures them once it runs the pinned CLIs on a fake model.
 FIXTURE_UNIMITATED = {cell: "the C stand-in does not imitate it; the signed-in lane measures it"
-                      for cell in ("guidance_memory", "fork", "title", "usage")}
+                      for cell in ("guidance_memory", "composer", "fork", "title", "usage")}
 FIXTURE_CELLS = tuple(name for name in cells.CELLS
                       if name != "start_untrusted" and name not in FIXTURE_UNIMITATED)
 

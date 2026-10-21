@@ -557,6 +557,9 @@ def main(argv=None):
     card_writer = checkout / "target/debug/examples" / exe("journey_memory")
     if not card_writer.is_file():
         refuse("build_the_memory_card_writer_first: bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory")
+    composer_judge = checkout / "target/debug/examples" / exe("journey_composer")
+    if not composer_judge.is_file():
+        refuse("build_the_composer_judge_first: bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer")
     slug = ("agent-journey-" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
             + "-" + os.urandom(3).hex())
     run = (args.run_dir or checkout / "agents/runs" / slug).absolute()
@@ -676,6 +679,7 @@ def main(argv=None):
                                           **({"fake_env": agent["fake_env"]} if fake else {})} if legacy
                                          else {"args": [], "env": ci.route_names(rows[key]["herdr_kind"], fixture_bin,
                                                                                  agent.get("fake_env"))}),
+                                  composer_judge=composer_judge,
                                   model=rows[key]["model_flag"] and models.get(key),
                                   quota=quota_rows)
                 for step in STEPS:
