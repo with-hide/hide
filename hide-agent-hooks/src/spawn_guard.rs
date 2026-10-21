@@ -269,9 +269,14 @@ fn simple_commands(text: &str) -> Vec<Vec<String>> {
 pub(crate) struct ShellLine {
     pub commands: Vec<Vec<String>>,
     pub targets: Vec<(usize, String)>,
+    /// For each command, whether running the line can skip it: it follows
+    /// `&&` or `||` in its list, sits in an `if`, loop or `case` body, or in
+    /// a function. Only the observation reads it.
+    pub conditional: Vec<bool>,
     /// The text of each `$(...)` command substitution, which the shell runs
-    /// as a line of its own. Only the observation reads them.
-    pub substitutions: Vec<String>,
+    /// as a line of its own, and whether its command is conditional. Only
+    /// the observation reads them.
+    pub substitutions: Vec<(bool, String)>,
 }
 
 pub(crate) fn shell_line(text: &str) -> ShellLine {
@@ -296,7 +301,16 @@ struct Lexer {
     /// A quote, backtick or `$(` that the text ended inside. A shell reads such
     /// a line as a syntax error and runs none of it, so nothing in it is a launch.
     unclosed: bool,
-    substitutions: Vec<String>,
+    substitutions: Vec<(bool, String)>,
+    conditional: Vec<bool>,
+    /// The current list has passed `&&` or `||`.
+    and_or: bool,
+    /// Open `if`, loop and `case` bodies.
+    compound: usize,
+    /// A function was defined; its body runs only when called.
+    function: bool,
+    /// `and_or` as each open `(` subshell found it.
+    subshells: Vec<bool>,
 }
 
 impl Lexer {
@@ -315,7 +329,16 @@ impl Lexer {
             heredocs: Vec::new(),
             unclosed: false,
             substitutions: Vec::new(),
+            conditional: Vec::new(),
+            and_or: false,
+            compound: 0,
+            function: false,
+            subshells: Vec::new(),
         }
+    }
+
+    fn is_conditional(&self) -> bool {
+        self.and_or || self.compound > 0 || self.function || self.subshells.contains(&true)
     }
 
     fn peek(&self, offset: usize) -> Option<char> {
@@ -341,6 +364,7 @@ impl Lexer {
                 }
                 '\n' => {
                     self.end_command();
+                    self.and_or = false;
                     self.at += 1;
                     self.heredoc_bodies();
                 }
@@ -348,11 +372,27 @@ impl Lexer {
                     self.comment();
                 }
                 ';' | '|' | '(' | ')' => {
+                    // `name()` defines a function.
+                    self.function |= c == '('
+                        && self.peek(1) == Some(')')
+                        && (self.in_word || !self.words.is_empty());
                     self.end_command();
                     self.at += 1;
                     // `&&`-style doubling of the same character is one operator.
-                    if matches!(c, ';' | '|') && self.peek(0) == Some(c) {
+                    let doubled = matches!(c, ';' | '|') && self.peek(0) == Some(c);
+                    if doubled {
                         self.at += 1;
+                    }
+                    match c {
+                        ';' => self.and_or = false,
+                        '|' if doubled => self.and_or = true,
+                        '(' => self.subshells.push(std::mem::take(&mut self.and_or)),
+                        ')' => {
+                            if let Some(outer) = self.subshells.pop() {
+                                self.and_or = outer;
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 '&' => {
@@ -373,12 +413,14 @@ impl Lexer {
             return ShellLine {
                 commands: Vec::new(),
                 targets: Vec::new(),
+                conditional: Vec::new(),
                 substitutions: Vec::new(),
             };
         }
         ShellLine {
             commands: self.commands,
             targets: self.targets,
+            conditional: self.conditional,
             substitutions: self.substitutions,
         }
     }
@@ -407,7 +449,20 @@ impl Lexer {
         self.next_is_file = false;
         self.heredoc_next = None;
         if !self.words.is_empty() {
-            self.commands.push(std::mem::take(&mut self.words));
+            let words = std::mem::take(&mut self.words);
+            self.conditional.push(self.is_conditional());
+            // Words that open or close a body, past the keywords before them.
+            for word in &words {
+                match word.as_str() {
+                    "if" | "while" | "until" | "for" | "select" | "case" => self.compound += 1,
+                    "fi" | "done" | "esac" => self.compound = self.compound.saturating_sub(1),
+                    "function" => self.function = true,
+                    "then" | "else" | "elif" | "do" | "{" | "!" | "time" => continue,
+                    _ => {}
+                }
+                break;
+            }
+            self.commands.push(words);
         }
     }
 
@@ -523,8 +578,11 @@ impl Lexer {
                     depth -= 1;
                     if depth == 0 {
                         // Between this `(` and its `)`.
-                        self.substitutions
-                            .push(self.word[start + 1..self.word.len() - 1].to_owned());
+                        let conditional = self.is_conditional();
+                        self.substitutions.push((
+                            conditional,
+                            self.word[start + 1..self.word.len() - 1].to_owned(),
+                        ));
                         return;
                     }
                 }
@@ -662,7 +720,8 @@ impl Lexer {
         } else {
             self.end_command();
             self.at += 1;
-            if self.peek(0) == Some('&') {
+            self.and_or = self.peek(0) == Some('&');
+            if self.and_or {
                 self.at += 1;
             }
         }

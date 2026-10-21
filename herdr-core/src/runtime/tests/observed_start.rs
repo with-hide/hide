@@ -164,12 +164,12 @@ impl Starting {
     }
 }
 
-/// B14: Herdr's answer, or the name the command gave, finds the started
+/// B14: Herdr's answer, or the pane the command gave, finds the started
 /// agent; it is a root whose origin is the starting agent, and nothing
 /// watches it.
 #[test]
 fn a_started_agent_is_recorded_as_a_root_whose_origin_is_its_starter() {
-    for target in [reported(), written(CHILD_NAME)] {
+    for target in [reported(), written(CHILD_PANE)] {
         let starting = starting();
         starting.observe(observation(target)).unwrap();
         let ledger = starting.ledger();
@@ -210,8 +210,8 @@ fn a_start_without_a_matching_new_session_records_nothing() {
         starting.observe(observation(other)).unwrap_err(),
         "child_unavailable"
     );
-    // `herdr pane run sender codex` names the sender's own pane, whose agent
-    // Hide saw before the call: that is not the agent it started.
+    // A pane whose agent Hide saw before the call (here the sender's own)
+    // names whatever ran there, not the agent the call started.
     assert_eq!(
         starting
             .observe(observation(written("sender")))

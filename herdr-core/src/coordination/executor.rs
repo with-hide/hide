@@ -1270,7 +1270,7 @@ pub(crate) fn link_fork(
 /// current list; exactly one must answer, with its session already shown.
 pub(crate) fn link_started(
     runtime: &std::sync::Weak<std::sync::Mutex<crate::runtime::Runtime>>,
-    source: &str,
+    source: &crate::delivery::Actor,
     raw_source: &str,
     started: impl Fn(&ProjectedAgent) -> bool,
     within: Duration,
@@ -1279,7 +1279,11 @@ pub(crate) fn link_started(
     let (client, authority, actor) = runtime
         .lock()
         .map_err(|_| "delivery_unavailable")?
-        .coordination_fork_context(source)?;
+        .coordination_fork_context(&source.pane_id)?;
+    // The pane may hold another agent since the sender was proven.
+    if !actor.same_identity(source) {
+        return Err("observation_native_changed".into());
+    }
     let CoordinationContext {
         connector,
         host_scope,

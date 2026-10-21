@@ -162,22 +162,46 @@ fn positionals<'a>(words: &'a [String], options: &[&str]) -> Option<Vec<&'a str>
 /// guard's lexer; no other pattern decides what a word is.
 fn commands(command: &str, env: &dyn Fn(&str) -> Option<String>) -> Commands {
     let mut found = Commands::default();
-    read_line(command, env, &mut found, 0);
+    read_line(command, env, &mut found, 0, false, false);
     found
 }
 
 /// How deep `$(...)` substitutions are read; a shell runs each as a line.
 const SUBSTITUTION_DEPTH: u8 = 4;
 
-fn read_line(command: &str, env: &dyn Fn(&str) -> Option<String>, found: &mut Commands, depth: u8) {
+/// Reads one shell line into `found`. A command the line can skip
+/// (`conditional`) keeps no literal target, since the call's end does not
+/// show it ran; a substitution takes its command's state, and a line aimed
+/// at another server anywhere routes every substitution in it.
+fn read_line(
+    command: &str,
+    env: &dyn Fn(&str) -> Option<String>,
+    found: &mut Commands,
+    depth: u8,
+    conditional: bool,
+    away: bool,
+) {
     let line = spawn_guard::shell_line(command.trim());
     if depth < SUBSTITUTION_DEPTH {
-        for inner in &line.substitutions {
-            read_line(inner, env, found, depth + 1);
+        let line_away = away
+            || line.commands.iter().any(|words| {
+                spawn_guard::aims_away(spawn_guard::command_words(words, env, true).0, env)
+            });
+        for (skippable, inner) in &line.substitutions {
+            read_line(
+                inner,
+                env,
+                found,
+                depth + 1,
+                conditional || *skippable,
+                line_away,
+            );
         }
     }
-    let mut away = false;
-    for words in &line.commands {
+    let mut away = away;
+    for (words, skippable) in line.commands.iter().zip(&line.conditional) {
+        let conditional = conditional || *skippable;
+        let written = |word: &str| literal(word).filter(|_| !conditional);
         let launch = spawn_guard::launch_of(words, env, away);
         let (words, foreign) = spawn_guard::command_words(words, env, true);
         let herdr = words.split_first().filter(|(program, _)| {
@@ -212,20 +236,31 @@ fn read_line(command: &str, env: &dyn Fn(&str) -> Option<String>, found: &mut Co
                 found.routed |= routed;
                 found
                     .prompts
-                    .push(args.first().and_then(|word| literal(word)));
+                    .push(args.first().and_then(|word| written(word)));
             }
             (Some("agent"), Some("start")) if launch.is_some() || routed => {
                 found.routed |= routed;
-                // Herdr names the agent it starts; the name identifies it
-                // where the pane alone would name whatever runs there.
-                let name = launch.and_then(|launch| launch.name);
-                found.starts.push(name.as_deref().and_then(literal));
+                // The pane it starts in (D-23); the core admits only an agent
+                // it had not seen there before the call.
+                let pane = rest[2..]
+                    .iter()
+                    .position(|word| word == "--")
+                    .map_or(&rest[2..], |end| &rest[2..2 + end])
+                    .iter()
+                    .enumerate()
+                    .find_map(|(at, word)| match word.strip_prefix("--pane") {
+                        Some("") => rest.get(2 + at + 1),
+                        Some(value) => value.strip_prefix('=').map(|_| word),
+                        None => None,
+                    })
+                    .and_then(|word| written(word.strip_prefix("--pane=").unwrap_or(word)));
+                found.starts.push(pane);
             }
             (Some("pane"), Some("run")) if launch.is_some() || routed => {
                 found.routed |= routed;
                 found
                     .starts
-                    .push(rest.get(2).and_then(|pane| literal(pane)));
+                    .push(rest.get(2).and_then(|pane| written(pane)));
             }
             _ => {}
         }
@@ -476,10 +511,11 @@ fn recipients(
     (found, outcome)
 }
 
-/// Herdr's complete JSON answer lines in a provider's result: a structured
-/// answer, or each line of the known output envelopes that parses whole as
-/// one answer. No scan for a JSON substring inside a line: a clipped,
-/// prefixed or decorated line is not an answer.
+/// Herdr's complete JSON answers in a provider's result: a structured
+/// answer, an output made only of JSON values (`| jq .` prints each answer
+/// over several lines), or else each line of the known output envelopes that
+/// parses whole as one answer. No scan for a JSON substring inside a line: a
+/// clipped, prefixed or decorated line is not an answer.
 fn herdr_answers(value: &Value) -> Vec<Value> {
     let mut answers = Vec::new();
     let mut budget = RESULT_LIMIT;
@@ -498,11 +534,17 @@ fn collect_answers(value: &Value, answers: &mut Vec<Value>, budget: &mut usize, 
             return;
         }
         *budget -= text.len();
-        answers.extend(
-            text.lines()
-                .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
-                .filter(answer_line),
-        );
+        match serde_json::Deserializer::from_str(text)
+            .into_iter::<Value>()
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(values) => answers.extend(values.into_iter().filter(answer_line)),
+            Err(_) => answers.extend(
+                text.lines()
+                    .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+                    .filter(answer_line),
+            ),
+        }
         return;
     }
     // Known provider envelopes; never recursively search arbitrary metadata.
@@ -875,6 +917,40 @@ mod tests {
         );
     }
 
+    /// A prompt the line can skip keeps no written target, since the call's
+    /// end does not show it ran; Herdr's answer still names its recipient.
+    #[test]
+    fn a_prompt_the_line_can_skip_keeps_no_written_target() {
+        let hidden = json!({"stdout":"ok\n"});
+        for command in [
+            "herdr agent list | grep -q worker && herdr agent prompt worker go; echo ok",
+            "test -f done || herdr agent prompt reviewer x",
+            "if false; then herdr agent prompt peer x; fi",
+            "for i in 1 2; do herdr agent prompt peer x >/dev/null; done",
+            "f() { herdr agent prompt peer x; }; echo ok",
+            "test -f done || r=$(herdr agent prompt peer x)",
+        ] {
+            let fact = one(observe(call(command, &hidden), 1, &|_| None).unwrap());
+            assert!(fact.target.is_none(), "{command}");
+        }
+        for command in [
+            "if test -f x; then echo y; fi; herdr agent prompt peer x >/dev/null",
+            "test -f x && echo y; herdr agent prompt peer x >/dev/null",
+            "(cd /tmp && echo y); herdr agent prompt peer x >/dev/null",
+        ] {
+            let fact = one(observe(call(command, &hidden), 1, &|_| None).unwrap());
+            assert_eq!(fact.target.unwrap().pane_id, "peer", "{command}");
+        }
+        let result = json!({"stdout":answer().to_string()});
+        let fact = one(observe(
+            call("test -f done || herdr agent prompt reviewer x", &result),
+            1,
+            &|_| None,
+        )
+        .unwrap());
+        assert_eq!(fact.target.unwrap().pane_id, "w1:p2");
+    }
+
     /// B3, B10: each answer line is one recipient, once per pane.
     #[test]
     fn a_loop_yields_one_observation_per_distinct_recipient() {
@@ -1020,7 +1096,10 @@ mod tests {
                 one(observe(call("herdr agent prompt $T hi", &result), 1, &|_| None).unwrap());
             assert!(fact.target.is_none(), "{result}");
         }
+        let pretty = |value: Value| serde_json::to_string_pretty(&value).unwrap();
         for result in [
+            json!({"stdout":pretty(answer())}),
+            json!({"stdout":format!("{}\n{}\n", pretty(answer()), pretty(answer()))}),
             json!({"stdout":answer().to_string(),"stderr":"unrelated warning"}),
             json!({"content":[{"type":"image"},{"type":"text","text":answer().to_string()}]}),
             json!({"content":[{"type":"text","text":format!("{}\n\n\nWall time: 0.34 seconds", answer())}]}),
@@ -1038,6 +1117,7 @@ mod tests {
             "HERDR_SOCKET_PATH=/foreign herdr agent prompt worker hi",
             "herdr --session foreign agent prompt worker hi",
             "export HERDR_SOCKET_PATH=/foreign; herdr agent prompt worker hi",
+            "export HERDR_SOCKET_PATH=/foreign; r=$(herdr agent prompt worker hi)",
         ] {
             let fact = one(observe(call(command, &result), 1, &|_| None).unwrap());
             assert_eq!(
@@ -1084,7 +1164,11 @@ mod tests {
         for (command, target) in [
             (
                 "herdr agent start helper --kind codex --pane w1:p3 >/dev/null",
-                "helper",
+                "w1:p3",
+            ),
+            (
+                "herdr agent start helper --pane=w1:p5 --kind codex; echo",
+                "w1:p5",
             ),
             ("herdr pane run w1:p4 codex", "w1:p4"),
         ] {

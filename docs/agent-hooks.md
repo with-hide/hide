@@ -1020,18 +1020,19 @@ Grok's Bash result supplies raw UTF-8 bytes in `output`; the adapter requires th
 omp's [completed Bash result](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/coding-agent/src/tools/bash.ts) appends a `Wall time:` notice line, which is simply not an answer line.
 An answer naming a pane (`agent_prompted`, or the `agent_info` a `--wait` returns) proposes that pane, its terminal and its native session.
 Only when the call's output carries no answer, and the shell ran to its end with its command text whole (not failed, interrupted, backgrounded or truncated), does the target the command wrote stand in: a pane id or a Herdr agent name, never a word holding a variable, substitution or glob.
+A command the line can skip writes no stand-in, because the shell's end does not show it ran: one after `&&` or `||` in its list, in an `if`, loop or `case` body, or in a function; a `$(...)` takes its command's state.
 A `--wait` that ended in `timeout` or `agent_prompt_stalled` after Herdr took the input also falls back to the written target.
 When Herdr's answer and the written target disagree, only the answer counts.
 The exact `agent_blocked` refusal is an observed rejection; any other refusal, such as `agent_not_found` or `agent_not_ready`, names no recipient.
-A call aimed at another Herdr server, session or machine (a global flag before the subcommand, or a `HERDR_SOCKET_PATH`/`HERDR_SESSION` assignment or export in the line) names no recipient.
+A call aimed at another Herdr server, session or machine (a global flag before the subcommand, or a `HERDR_SOCKET_PATH`/`HERDR_SESSION` assignment or export in the line, which every `$(...)` in that line takes too) names no recipient.
 Each distinct recipient becomes its own observation, up to 64 for one call; past that, the call keeps one observation without a recipient and the helper records the `capacity` diagnostic.
 Success means PTY submission was observed, never model intake, reply, work completion, a Hide letter receipt, lineage or a watch.
-A variable target whose output was discarded, and a call inside `bash -c`, a script or an alias, still names no recipient (D-17).
+A variable target whose output was discarded or transformed, such as `for p in w1:p2 w1:p3; do herdr agent prompt $p … >/dev/null; done` or `… | jq -r .result.type`, and a call inside `bash -c`, a script or an alias, still names no recipient (D-17).
 The parser emits typed metadata containing runtime, native session, tool correlation, observation time, status, reason and any recipient candidate; the `DirectObservation` shape is unchanged, and a written target travels in its `pane_id` with no terminal or native reference.
 Prompt bodies, commands and result bodies never cross the observation admission boundary.
 
 A started agent is observed the same way and sent on its own (`hide observation --hook --start`, `HookCommand::StartObservation`), never in the same request as prompts, so a daemon that does not know it refuses only the start.
-Herdr's `agent_started` answer names the started pane, terminal and session; without one, `agent start`'s name or `pane run`'s pane stands in.
+Herdr's `agent_started` answer names the started pane, terminal and session; without one, the pane `agent start --pane` or `pane run` wrote stands in, and is admitted only for an agent Hide had not yet seen in that pane when the hook reported the call, so a start whose answer was discarded is usually not recorded.
 The core records the started agent only as the operator's root whose origin is the starting agent, the shape a handoff's child has: no parent, no watch, no pane tokens (D-23, D-25).
 The spawn guard still refuses these launches in a registered checkout before they run, so only a launch the guard did not see is recorded.
 The existing owned helper transport sends the call's observations, each at most 8 KiB, as one array to one `hide` child, within 1.2 seconds and with no original-operation retry; the child asks the daemon once per observation.

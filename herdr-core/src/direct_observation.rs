@@ -255,7 +255,8 @@ impl PreparedObservation {
     /// Records the agent the call started, with the sender as its origin
     /// (PRD direct-prompt-observation-widen D-23). Herdr's current list
     /// names it: by the pane, terminal and session Herdr reported, else by
-    /// the name or pane the command wrote. No session yet records nothing.
+    /// the pane the command wrote, holding an agent Hide had not seen there
+    /// by the observation time. No session yet records nothing.
     fn record_start(&self) -> Result<(), String> {
         let claim = self
             .observation
@@ -268,9 +269,7 @@ impl PreparedObservation {
         let started = |agent: &crate::session_sync::ProjectedAgent| {
             let named = match &claim.terminal_id {
                 Some(terminal) => agent.pane_id == claim.pane_id && &agent.terminal_id == terminal,
-                None => {
-                    agent.pane_id == claim.pane_id || agent.name.as_ref() == Some(&claim.pane_id)
-                }
+                None => agent.pane_id == claim.pane_id,
             };
             named
                 && agent.agent_session.is_some()
@@ -283,7 +282,7 @@ impl PreparedObservation {
         };
         let result = crate::coordination::link_started(
             &self.runtime,
-            &self.sender.actor.pane_id,
+            &self.sender.actor,
             &self.sender.raw_pane,
             started,
             self.remaining()?,
