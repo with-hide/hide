@@ -36,6 +36,7 @@ import { frontDeviceId, localDeviceId, railShown } from "./devices";
 import { machineName } from "./screenMachine";
 import { allAgents, boardProjects, type OpenTarget } from "./navigation";
 import { cardOfItem } from "./overviewTasks";
+import { takeOverPrompt, takeOverProvider } from "./missions";
 import { backlogIntent } from "./overviewBacklog";
 import { paneProgress, sessionOfAgent, workKey } from "./sessionWork";
 import { expectSurface, type Surface } from "./recent";
@@ -1640,6 +1641,51 @@ export function createActions(send: DispatchFn) {
       if (state.overviewOpen || state.screen?.kind !== "workspace") state.setScreen({ kind: "workspace" });
       state.showLane();
       dispatch({ schema_version: 2, kind: "pr_open", payload: { workspace_id: projectId, pr_number: number, ...(checkoutId ? { checkout_id: checkoutId } : {}), ...(openWorkspace ? { open_workspace: true } : {}) } });
+    },
+
+    /**
+     * A mission's map in the lane's 보기 slot (PRD software-factory-conductor
+     * B14, B46): the Conductor row's mark, the task list or the Overview open
+     * it. Away from a Workspace, the mission's checkout comes to the front
+     * first, its Agent tab and the keyboard where they were.
+     */
+    openMission(missionId: string) {
+      const mission = rest()?.missions?.items.find((row) => row.id === missionId);
+      if (!mission) return diagnostic(`mission_open: no mission ${missionId}`);
+      const state = ui();
+      if (state.overviewOpen) state.setOverviewOpen(false);
+      if (!workspaceInFront()) {
+        const checkout = (mission.device_id === localDeviceId(rest()) ? rest()?.navigator?.workspaces : rest()?.status?.remote?.find((row) => row.target_id === mission.device_id)?.session?.workspaces)
+          ?.flatMap((row) => row.checkouts)
+          .find((row) => row.path === mission.checkout_path);
+        if (!checkout) return diagnostic(`mission_open: checkout ${mission.checkout_path} is not listed`);
+        this.openWorkspace(mission.device_id, checkout.workspace_id, checkout.id);
+        state.setScreen({ kind: "workspace" });
+      }
+      state.showLane();
+      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId } } });
+    },
+
+    /**
+     * 이어받기 (D-40, B44): a new agent tab in the mission's checkout, told to
+     * take the mission; the core refuses it while a Conductor is still there.
+     */
+    takeOverMission(missionId: string) {
+      const mission = rest()?.missions?.items.find((row) => row.id === missionId);
+      if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);
+      const provider = takeOverProvider(mission, rest()?.ui_state?.agent_start);
+      this.startAgent({
+        target: { checkoutPath: mission.checkout_path },
+        ...(mission.device_id !== localDeviceId(rest()) ? { deviceId: mission.device_id } : {}),
+        provider,
+        model: rest()?.ui_state?.agent_start?.models?.[provider] ?? null,
+        prompt: takeOverPrompt(mission),
+      });
+    },
+
+    /** Settings › Conductor (D-31, B48): the whole value, checked by the core before it is kept. */
+    setConductorSettings(settings: import("./snapshot").ConductorSettings) {
+      dispatch({ schema_version: 2, kind: "conductor_settings_set", payload: { settings } });
     },
 
     /** The PRs tool, for a list that is not tied to one pull request (`이슈 없는 PR N`). */

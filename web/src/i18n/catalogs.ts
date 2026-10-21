@@ -9,6 +9,7 @@ import { usageCatalogs, usageEnglish } from "./resources/usage";
 import { commandsCatalogs, commandsEnglish } from "./resources/commands";
 import { agentSessionsCatalogs, agentSessionsEnglish } from "./resources/agentSessions";
 import { taskLensCatalogs, taskLensEnglish } from "./resources/taskLens";
+import { missionsCatalogs, missionsEnglish } from "./resources/missions";
 import { archiveCatalogs, archiveEnglish } from "./resources/archive";
 import { boardCatalogs, boardEnglish } from "./resources/board";
 import { cleanupCatalogs, cleanupEnglish } from "./resources/cleanup";
@@ -60,6 +61,7 @@ export const english = {
   ...overviewGraphEnglish,
   ...agentSessionsEnglish,
   ...taskLensEnglish,
+  ...missionsEnglish,
   ...archiveEnglish,
   ...shellEnglish,
   ...editorSearchEnglish,
@@ -115,6 +117,7 @@ export const catalogs = {
     ...overviewGraphCatalogs.ko,
     ...agentSessionsCatalogs.ko,
     ...taskLensCatalogs.ko,
+    ...missionsCatalogs.ko,
     ...archiveCatalogs.ko,
     ...shellCatalogs.ko,
     ...editorSearchCatalogs.ko,
@@ -165,6 +168,7 @@ export const catalogs = {
     ...overviewGraphCatalogs["zh-CN"],
     ...agentSessionsCatalogs["zh-CN"],
     ...taskLensCatalogs["zh-CN"],
+    ...missionsCatalogs["zh-CN"],
     ...archiveCatalogs["zh-CN"],
     ...shellCatalogs["zh-CN"],
     ...editorSearchCatalogs["zh-CN"],
@@ -215,6 +219,7 @@ export const catalogs = {
     ...overviewGraphCatalogs.ja,
     ...agentSessionsCatalogs.ja,
     ...taskLensCatalogs.ja,
+    ...missionsCatalogs.ja,
     ...archiveCatalogs.ja,
     ...shellCatalogs.ja,
     ...editorSearchCatalogs.ja,

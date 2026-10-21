@@ -22,6 +22,7 @@ import { UsageScene } from "./UsageScene";
 import { ProjectSettingsScene } from "./ProjectSettingsScene";
 import { SessionWorkScene } from "./SessionWorkScene";
 import { PrCardScene } from "./PrCardScene";
+import { MissionScene } from "./MissionScene";
 import { PALETTE_HIDE_CLASS } from "../theme";
 
 export function mountGallery(root: Root) {
@@ -48,6 +49,11 @@ export function mountGallery(root: Root) {
     }
     if (scene === "pr-card") {
       root.render(<StrictMode><PrCardScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "mission") {
+      document.title = "hide · Mission scene";
+      root.render(<StrictMode><MissionScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "session-record") {
