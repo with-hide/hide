@@ -13,35 +13,36 @@
 .overview-graph .react-flow__node { border: 0; background: transparent; border-radius: 0; font-family: inherit; color: inherit; }
 .overview-graph .react-flow__handle { opacity: 0; pointer-events: none; }
 .overview-graph .react-flow__edgelabel-renderer { z-index: 0; }
-/* The group footprint owns relative child positions; only its center is painted. */
+/* The group footprint owns relative child positions; only its top heading is painted. */
 .og-project { position: relative; width: 100%; height: 100%; pointer-events: none; }
-.og-project-center { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: calc(var(--size-overview-graph-group-width) * var(--interface-scale, 1)); padding: var(--spacing-md); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-lg); background: var(--card); pointer-events: auto; }
+.og-project-center { position: absolute; left: 50%; top: var(--size-overview-graph-padding); transform: translateX(-50%); width: calc(var(--size-overview-graph-group-width) * var(--interface-scale, 1)); padding: var(--spacing-xs); border: var(--size-hairline) solid transparent; border-radius: var(--radius-sm); background: var(--background); pointer-events: auto; }
 .og-project[data-expanded="false"] .og-project-center { width: calc(var(--size-overview-graph-compact-group-width) * var(--interface-scale, 1)); padding: var(--spacing-sm); }
 .og-project[data-expanded="false"] .og-project-heading strong { font-size: var(--text-body); }
 .og-project[data-expanded="false"] .og-state-counts { gap: var(--spacing-xs); font-size: var(--text-micro); }
 .og-project[data-current="true"] .og-project-center, .og-project[data-highlighted="true"] .og-project-center { border-color: var(--primary); box-shadow: 0 0 0 var(--spacing-xs) color-mix(in srgb, var(--primary) 12%, transparent); }
-.og-project-heading { display: flex; width: 100%; align-items: start; gap: var(--spacing-sm); padding: var(--spacing-sm); text-align: left; background: transparent; border: 0; color: var(--foreground); cursor: pointer; }
-.og-project-heading > svg { width: var(--size-icon); height: var(--size-icon); flex-shrink: 0; color: var(--primary); }
-.og-project-heading strong { min-width: 0; flex: 1; overflow-wrap: anywhere; font-size: var(--text-title); font-weight: 600; }
+.og-project-heading { display: flex; width: 100%; align-items: center; gap: var(--spacing-xs); padding: var(--spacing-xs); padding-right: var(--spacing-lg); text-align: left; background: transparent; border: 0; color: var(--foreground); cursor: pointer; }
+.og-project-heading > svg { width: var(--size-icon-sm); height: var(--size-icon-sm); flex-shrink: 0; color: var(--primary); }
+.og-project-heading strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-width: 0; flex: 1; overflow-wrap: anywhere; font-size: var(--text-body); font-weight: 500; }
 .og-count { flex-shrink: 0; font-size: var(--text-caption); color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-.og-project-summary { padding-inline: var(--spacing-sm); }
-.og-project-more { display: flex; align-items: center; gap: var(--spacing-xs); margin-top: var(--spacing-sm); border: 0; background: transparent; color: var(--muted-foreground); font-size: var(--text-caption); cursor: pointer; }
-.og-project-more svg { width: var(--size-icon-sm); height: var(--size-icon-sm); }
+.og-project-summary { padding-inline: var(--spacing-xs); }
+.og-project-summary .og-state-counts { gap: var(--spacing-sm); font-size: var(--text-micro); }
 .og-drag-handle { display: flex; position: absolute; right: 0; top: 0; padding: var(--spacing-xxs); border: 0; border-radius: var(--radius-sm); background: var(--card); color: var(--muted-foreground); cursor: grab; pointer-events: auto; }
 .og-drag-handle:active { cursor: grabbing; }
 .og-drag-handle svg { width: var(--size-icon-sm); height: var(--size-icon-sm); }
-.og-drag-handle:focus-visible, .og-project-more:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
+.og-drag-handle:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
 .og-session { position: relative; --og-orb-size: var(--size-overview-graph-child-orb); width: 100%; height: 100%; }
 .og-session[data-root="true"] { --og-orb-size: var(--size-overview-graph-root-orb); }
 .overview-graph .og-session .react-flow__handle-left { left: calc(50% - var(--og-orb-size) / 2 - var(--spacing-xs)); top: calc(var(--og-orb-size) / 2); }
 .overview-graph .og-session .react-flow__handle-right { right: calc(50% - var(--og-orb-size) / 2 - var(--spacing-xs)); top: calc(var(--og-orb-size) / 2); }
 .og-session-target { display: flex; width: 100%; height: 100%; flex-direction: column; align-items: center; gap: var(--spacing-xxs); padding: 0 var(--spacing-xs); background: transparent; color: var(--foreground); border: 0; border-radius: var(--radius-sm); text-align: center; cursor: pointer; pointer-events: auto; }
 .og-session-target > * { flex-shrink: 0; }
-.og-session-target:hover, .og-session[data-selected="true"] .og-session-target { background: color-mix(in srgb, var(--accent) 48%, transparent); }
+.og-session-target:hover .og-orb, .og-session[data-selected="true"] .og-orb { background: var(--accent); }
 .og-project-heading:focus-visible, .og-session-target:focus-visible, .og-letter-label:focus-visible, .og-list > button:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
 .og-orb { display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; width: var(--og-orb-size); height: var(--og-orb-size); margin-bottom: var(--spacing-xs); border: var(--size-hairline) solid var(--border); border-radius: 50%; background: var(--secondary); }
 .og-session[data-root="true"] .og-orb { border-color: var(--primary); box-shadow: 0 0 0 var(--spacing-xs) color-mix(in srgb, var(--primary) 12%, transparent); margin-bottom: var(--spacing-sm); }
 .og-orb .og-provider { width: 65%; height: 65%; }
+.og-session-drag { cursor: grab; }
+.og-session-drag:active { cursor: grabbing; }
 .og-orb-state { position: absolute; right: calc(-1 * var(--spacing-xxs)); bottom: 0; display: flex; border-radius: 50%; background: var(--card); padding: var(--size-hairline); }
 .og-session-title { max-width: 100%; font-size: var(--text-caption); font-weight: 500; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .og-session[data-root="true"] .og-session-title { font-size: var(--text-body); font-weight: 600; }
@@ -54,7 +55,7 @@
 .og-progress { color: var(--primary); font-variant-numeric: tabular-nums; }
 .og-session[data-state="delegating"] .og-orb { border-style: dashed; }
 .og-session[data-state="turn"] .og-orb { border-color: var(--warning); }
-.overview-graph .og-lineage .react-flow__edge-path { stroke: var(--primary); stroke-width: var(--graph-edge-width); }
+.overview-graph .og-lineage .react-flow__edge-path { stroke: color-mix(in srgb, var(--primary) 45%, var(--border)); stroke-width: var(--graph-edge-width); }
 .overview-graph .og-communication .react-flow__edge-path { stroke: var(--agent-working); stroke-width: var(--graph-edge-width); stroke-dasharray: var(--graph-flow-dash) var(--graph-flow-gap); opacity: 1; }
 .overview-graph .og-communication.selected .react-flow__edge-path, .overview-graph .og-communication:hover .react-flow__edge-path { opacity: 1; stroke-width: var(--graph-edge-flow-width); }
 .og-letter-label { position: absolute; pointer-events: all; padding: var(--spacing-xxs) var(--spacing-sm); border: var(--size-hairline) solid color-mix(in srgb, var(--agent-working) 30%, var(--border)); border-radius: var(--radius-lg); background: var(--card); color: var(--agent-working); font-size: var(--text-micro); line-height: 1.3; white-space: nowrap; cursor: pointer; font-variant-numeric: tabular-nums; }
@@ -127,3 +128,6 @@
 @media (prefers-reduced-motion: reduce) { .overview-graph .og-playing .og-flow-tracer { display: none; animation: none; } .overview-graph * { scroll-behavior: auto; } }
 
 .overview-graph .react-flow__node-project { pointer-events: none; }
+
+.overview-graph .og-lineage.og-emphasized .react-flow__edge-path { stroke: var(--primary); }
+.og-letter-label[data-kind="lineage"] { border-color: transparent; color: var(--muted-foreground); }

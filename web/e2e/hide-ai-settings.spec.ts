@@ -107,6 +107,8 @@ test("Add agent offers the agents Hide AI can use, dims the one it cannot, and t
     await expect(group).toContainText("If Claude Code can't answer");
     // D-16: an empty list is no fallback, and there is no switch.
     await expect(group.locator("[data-ai-fallback]")).toHaveCount(0);
+    await expect(group).toContainText("None added:");
+    await expect(group).toContainText("your usage limit");
     await expect(group.getByRole("switch")).toHaveCount(0);
 
     // B38: Grok and Pi are choosable, OpenCode is installed but dimmed under its heading with the reason.
@@ -125,9 +127,11 @@ test("Add agent offers the agents Hide AI can use, dims the one it cannot, and t
     // B39: added in the order chosen, numbered, each with its own model and a remove.
     await menu.locator("[data-ai-add-item='pi']").click();
     await expect(group.locator("[data-ai-fallback='pi']")).toBeVisible();
+    await expect(group).not.toContainText("None added:");
     await group.locator("[data-ai-add-agent]").click();
     await page.locator("[data-ai-add-item='grok']").click();
     await expect(group.locator("[data-ai-fallback]")).toHaveCount(2);
+    await expect(group).not.toContainText("None added:");
     await expect(group.locator("[data-ai-fallback-order]")).toHaveText(["1", "2"]);
     expect(await group.locator("[data-ai-fallback]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-ai-fallback")))).toEqual(["pi", "grok"]);
     await expect.poll(() => stored(daemon).fallback?.map((entry) => entry.provider)).toEqual(["pi", "grok"]);
@@ -202,7 +206,7 @@ test("a saved retired Gemini choice stays unchosen, preserves model data and nev
   }
 });
 
-test("Hide AI reads without sideways scrolling in Korean and English, light and dark, on a narrow window", async ({ page }) => {
+test("Hide AI reads without sideways scrolling in all four languages, light and dark, on a narrow window", async ({ page }) => {
   // B65: the sheet shrinks with its window; the longest lines (the stand-in line, the fallback note, the dimmed reasons) wrap, not clip.
   const { herdr, daemon } = await start("hide-ai-narrow", true);
   try {
@@ -220,6 +224,8 @@ test("Hide AI reads without sideways scrolling in Korean and English, light and 
       ["en", "light"],
       ["ko", "light"],
       ["ko", "dark"],
+      ["ja", "light"],
+      ["zh-CN", "dark"],
     ] as const) {
       await page.locator('[data-settings-tab="general"]').click();
       await page.locator("[data-interface-language]").click();

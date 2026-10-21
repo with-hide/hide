@@ -41,7 +41,8 @@ Only checkouts in the current connected catalog contribute to that inventory; a 
   The CLI returns one JSON line, exits nonzero on refusal, and never starts Hide.
   Its successful result includes `cdp_http_url` and `browser_ws_url` when the native gateway can issue a capability for that display.
   If discovery fails after placement, the result retains its applied View receipt and carries `browser_control.state: unavailable` with a retry command; discovery does not undo or repeat the open.
-- Open in Browser in the Explorer's menu on an HTML file of a local or connected device checkout.
+- Click, double-click or press Enter on an HTML file (`.html`, `.htm` or `.xhtml`, case-insensitive) in the Explorer of a local or connected device checkout, or choose Open in Browser in its menu.
+  Open source in the same menu opens the file as an ordinary editor tab; Open to the side keeps its editor behavior.
   The device host must have file access consent for a remote page to load.
 - Click an HTML path (`.html`, `.htm` or `.xhtml`, case-insensitive) in a local desktop terminal, or choose Open in browser from that path's right-click menu.
   The shell sends one `browser_open` event with the owning registered checkout and `reveal: true`, so the page and its checkout come forward together; the existing local `file:` boundary checks the address.

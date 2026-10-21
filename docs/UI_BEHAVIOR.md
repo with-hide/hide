@@ -17,10 +17,14 @@ After the path, a Git checkout shows a small neutral FileDiff and the whole chec
 Clicking the count opens Changes idempotently and leaves terminal keyboard ownership in place; its tooltip explains the count, while a conflict, loading, unavailable or stale read has a distinct small mark and never claims a clean tree.
 Upstream differences use ↑/↓ counts against the tracking branch, with zero hidden and no-upstream/gone distinct; the small detail names the tracking ref and the last FETCH_HEAD time, which is the last local remote observation, not a live remote comparison.
 Only the ↑ arrow uses the existing success green and only the ↓ arrow uses warning orange; both counts and the file count remain neutral, including when the branch is ahead and behind at once.
-At the right, the current HEAD's subject and relative age open a compact detail with the full subject, short SHA and explicit local time; no commit is invented for an unborn branch.
-The adjacent CI mark describes only that exact SHA, combining its GitHub check-runs and commit statuses even on main without a PR, and distinguishes passing, pending, failed, none, unknown, unavailable and stale.
-Its detail names the target SHA and read time, excludes uncommitted edits explicitly, and opens only a URL actually returned by the provider in the existing Browser View.
-An incomplete check-run list beyond the bounded read is unknown, never a partial success.
+At the right, the current HEAD's subject and relative age open a compact history popover directly below that trigger, with up to five newest commits from the captured HEAD; no commit is invented for an unborn branch.
+Each compact item has its subject on the first line and short SHA and relative time on the second, with the exact local time available on the timestamp.
+Its associated CI result sits at the right of that second line; commits with no CI omit the result.
+The adjacent CI mark describes only that exact SHA, using GitHub's aggregate statusCheckRollup even on main without a PR, and distinguishes passing, pending, failed, none, unknown, unavailable and stale.
+Its trigger opens the same history below itself, with initial focus on the content so no CI hint covers the first item; Tab reaches the CI links and their read-time hints.
+Each CI result opens only the provider-returned URL validated against that repository and exact commit in the existing Browser View.
+An outside click closes the history and keeps the clicked destination's focus; Escape closes it and returns focus to its trigger.
+CI describes committed changes only, and a provider error or unknown aggregate never becomes success.
 Changing device, checkout, connection or HEAD fences old results; the front checkout's file status refreshes independently of the Changes lane and stale data is labelled.
 On narrow widths the relative age disappears before the subject, then the subject contracts to the commit icon, preserving the path, count and trailing tools; details remain keyboard reachable and Escape returns to their triggers.
 Compact commit and CI buttons keep their own icon and text footprint even when the open sidebar leaves less space than the window width; they never overflow into Overview or Open server.
@@ -435,7 +439,7 @@ The new-tab page offers no tools or panes; ⌘P remains the file palette everywh
 
 A web page is a view like a file: it opens in the active area, has a tab, splits, moves, and closes like one, and comes back after a restart at the address it last showed.
 A page with an address carries a globe mark and the page's title, else its host, else a local file's name; its tooltip and accessible name carry `Page`, the title, and the full address.
-It opens from `hide browser open` in a connected Herdr pane or a shell inside a registered checkout, from Open in Browser on an HTML file in the Explorer's menu (listed after Open to the side), from a page that opens a tab (beside that page, which stays in view: in the area next to it, else in a new area to its right), and from the address field.
+It opens from `hide browser open` in a connected Herdr pane or a shell inside a registered checkout, from clicking or pressing Enter on an HTML file in the Explorer or its Open in Browser menu item, from a page that opens a tab (beside that page, which stays in view: in the area next to it, else in a new area to its right), and from the address field.
 A sign-in popup a page opens is a small window of its own above hide, so the sign-in can report back to the page and close; ⌘W closes it.
 A link that would open another app (Slack, Zoom) asks first with the app's name, and opens in that app only on Open.
 On a connected SSH device, the native page uses that device's localhost or consented checkout resources; a route failure appears in the page's existing failure state.
@@ -582,7 +586,9 @@ A right-click in the terminal focuses that pane, like a click, and opens a longe
 The Zoom pane chord on a tab's only pane does nothing either, on this machine and on a device: the core does not send it and logs `pane.zoom.single_pane` (`remote.control.zoom_single_pane` for a device).
 Copy pane ID, here and in an agent row's menu, copies the id the pane's own Herdr knows it by (`w9J:p52`), the one `herdr pane read` takes on that device, without the `remote:` scope Hide gives a device's pane.
 The right-click leaves the drag selection as it was, so Copy copies what the operator selected; the program in the pane never hears it.
-A wheel over the pane moves a drag selection with the text it covers: the pane has no scrollback of its own, so the selection is placed again on the rows that text moved to, kept only for the part still on screen. Once none of it is on screen the highlight goes, but Copy (⌘C, the menu, Ctrl+C where a selection makes it copy) still takes the text that was selected, until the next click, drag, select all or key; Ctrl+C interrupts again only after that.
+A wheel over the pane moves a drag selection with the text it covers: the pane has no scrollback of its own, so the highlight is placed again on the rows that text moved to, drawn only for the part still on screen.
+Clipping the highlight preserves the original selection ends and Copy text; reversing the scroll while part remains visible restores the complete highlight.
+Once none of it is on screen the highlight goes, but Copy (⌘C, the menu, Ctrl+C where a selection makes it copy) still takes the text that was selected, until the next click, drag, select all or key; Ctrl+C interrupts again only after that.
 
 A pane whose agent sleeps (PRD agent-sleep) shows its state in place of the terminal, which stays hidden until the agent is back because the shell under it is not what the operator was talking to: Sleeping with the last progress line and Wake agent; Waking… with how old the resumed conversation is; or `Couldn’t resume this conversation` with the core's plain reason, Retry, and Start new session.
 Its second row carries no ask while it sleeps, and typed input to the pane goes nowhere, from the first moment its end begins until the agent is back: keys, a dropped file's path, the find keys and a phone's reply alike ([The phone app](#the-phone-app)).
@@ -805,6 +811,8 @@ Merged promotions leave To ask and become document pointers; closed-unmerged pro
 A promotion row whose agent is alive is also in Needs You while the operator has something to do (`PR #n 리뷰` or `CI 실패`), and choosing that row opens this tab with it open (Work Hide AI does for a home); the row here still shows the progress, the pull request and the agent link whether or not it is in Needs You.
 When the pull request merges or closes, its agent ends and its worktree goes with the branch kept, so a closed attempt's `Agent ↗` link leaves with the pane.
 A card that was not processed returns with `Card was not processed · Ended without a PR` in warning text and the agent's reason behind the row; every failed row offers Retry, continuing the shared branch and PR, and `Don't promote`, which leaves an ordinary card.
+When a promotion reports a card outdated, its empty, clean worktree is released after its agent has left; committed or uncommitted work stays and a later promotion continues on that same branch and PR.
+An outdated card sharing a batch waits while any sibling still runs, has an open PR or follows a building branch.
 A card whose decision the code does not have yet, which another branch builds, stays in To ask as a progress row, `Goes in with the PR that builds it`, with `Agent ↗` to that branch's agent and `PR <number>` once its pull request is open; it asks nothing, puts no dot on the tab and is still given to agents, and that pull request's merge makes it a document pointer like any merged promotion.
 When nothing builds it, one row says `Not built yet · nothing builds it` with a clock mark in the checkbox slot and the agent's reason behind the row, and offers only `Keep as is`, which leaves an ordinary card that is not asked about again, its document disagreement included, until its text changes.
 A new rule or lesson suggestion keeps its source-session counts and dismissal until its revision changes; at most three new suggestions are open.
@@ -834,7 +842,13 @@ An empty Project says no cards yet and when sessions are analyzed.
 
 ## Terminal image attachment boundary
 
-Web owner: `web/src/attachments.ts`, `web/src/PaneView.tsx`. Core owner: `herdr-core/src/runtime/attachments.rs`; device staging `hide-node/src/ssh/attachments.rs`.
+Web owner: `web/src/attachments.ts`, `web/src/PaneView.tsx`, `web/src/explorerDrag.ts`, `web/src/terminals.ts`. Core owner: `herdr-core/src/runtime/attachments.rs`; device staging `hide-node/src/ssh/attachments.rs`.
+
+Dragging an Explorer file onto a terminal focuses that pane and inserts the original absolute path as quoted text, without submitting it.
+Image files instead read through the checkout's existing bounded file-bytes stream and enter the same binary attachment flow as an external image drop, retaining their original format and filename.
+One Explorer image read is admitted at a time, capped at 20 MiB, and a page reconnection, receiving pane closure, or terminal transport generation change during that read discards the result.
+Folders and files from another device show the forbidden drop cursor and insert nothing; moving files inside Explorer keeps its existing behavior.
+Image acceptance and display remain the receiving program's responsibility, as for other terminal attachments.
 
 Dropping local file URLs into a visible terminal focuses that receiving pane and starts one attachment intent through the existing ordered writer.
 Paste captures PNG or TIFF clipboard images at the same ingress; ordinary text and keys keep their existing terminal behavior.
@@ -914,18 +928,23 @@ The list orders My turn, Working, Unread results, unknown, idle and sleeping, re
 An excluded ancestor stays dim as relationship context without increasing match counts.
 Only branches whose every descendant sleeps offer a reversible subtree fold; a descendant becoming idle or active releases that fold.
 Projects without matches move into a disclosure naming sleeping-only, no-session and filtered reasons, with a route to show each project and its sleeping sessions.
-Projects form a radial map: each center shows the actual project name, matching-session count and state totals, with sessions around it rather than inside a large enclosing box.
+Projects form a radial map: a small top-centered heading shows the actual project name, matching-session count and state totals, with radial sessions below it and no central card or large enclosing box.
 One-project scope retains its center and offers All projects to return.
-A collapsed project keeps up to six stable-ID representatives and a remaining-session count; an oversized expansion stays summarized within the shared 400-node budget.
-Each admitted center reserves an access position for a hidden selected member, and selecting a session whose project is outside that budget opens its project scope with that session selected.
-The current member has its own protected position, so choosing another member cannot displace it at the graph limit.
-Up to twelve sessions share the first ring; summarized projects use smaller centers and representative nodes showing task titles and state, with provider and proved launch model retained in their accessible names and details.
+A collapsed project hides every agent, including the current or previously selected one, retaining only its heading and counts; Collapse all applies this to every project and frames the remaining headings.
+An explicit project expansion or collapse centers that project; background status updates never move the camera.
+An oversized expanded project retains stable-ID representatives and an access slot within the shared 400-node budget.
+Admission prioritizes the last explicitly toggled or selected project, then the selected session and current project's protected positions and expanded projects before collapsed headings, so expanding a heading at the limit retains it.
+Each admitted expanded project reserves an access position for a hidden selected member, and selecting a session whose project is outside that budget opens its project scope with that session selected.
+In an expanded project, the current member has its own protected position, so choosing another member cannot displace it at the graph limit.
+Up to twelve sessions share the first ring; agent circles and labels stay below the project heading, including for one session.
+Representative nodes retain task titles and state, with provider and proved launch model in accessible names and details.
 Project search compares real names and counts and moves the camera to that center; the paged session list searches every matching session, including those outside the graph budget.
-A hidden selected session uses a reserved radial position without moving other nodes.
+Selecting a session from the uncapped list expands its project; in an oversized expanded project the hidden selection uses its reserved position without moving other representatives.
 When the confirmed focused device, pane and native session have a graph proof at entry, that exact session is highlighted without opening details; pane reuse cannot inherit the initial selection.
 The first camera shows the current project's whole ordinary cluster at a readable zoom; a cluster too large for that zoom centers the exact current member instead, and it never automatically fits the entire map.
 Fit graph, Current pane and Reset layout remain explicit keyboard-accessible controls.
-Session drag handles move only that session; a project's handle moves its entire relative-positioned group, including summarized members when expanded later.
+Dragging a session's provider circle moves only that session, without opening details; clicking the same circle opens details, and the text below it remains a selection target without becoming a drag handle.
+A project's handle moves its entire relative-positioned group, including summarized members when expanded later.
 Offsets live only in this mounted view, edges follow the moved endpoints, and Reset layout clears offsets and restores the initial camera without dispatching pane moves.
 A filtered-empty view offers Show all sessions, distinct from no current sessions and layout failure.
 Each agent shows its canonical task identity, agent, state and actual current progress; a model is shown only when the current launch proves it.
@@ -1110,12 +1129,13 @@ Archived sessions fold last, into `보관됨 N ›`: under 정리할 것 in each
 프로젝트별 draws one group per project, the projects with a 내 차례 first, its head the project's name with its counts by state in the same order and names (`내 차례 1 · 일하는 중 2`), the same order inside and its own folds, and no project name on the rows.
 Where a project's rows change state, a small grey label names the band (`내 차례` in the warning colour, `읽을 것`, `일하는 중`, `대기`); it is skipped by the arrow keys and hidden from assistive technology, and each band's list carries the state's name instead; 상태별 draws no band labels, since its heads already name the state.
 Inside a group 내 차례 stands longest-waiting first and the others stand most recent first (B9).
+Inside `쉬는 중`, both views order rows by their latest actual native prompt, newest first, so the order matches the age on each row; unknown prompt times stand last and equal times retain their existing order.
 
 A row is one task, its root agent; descendants are its children only, and a memory question, a pull request with no session, a delegated child are never rows of their own (B7).
 Its first line is the row's own status mark (the sidebar's, status-marks D-12), the title, while folded no count of its children but `! N` in the warning colour when a hidden descendant asks the operator (status-marks D-24, B35), the PR mark and the elapsed time (B8, B10).
 In both 프로젝트 and 태스크, a session's elapsed time measures its latest actual native prompt, including a real request letter from another agent, rather than its latest state change.
 State changes and a daemon restart preserve that reference; a new session never inherits it, and an unknown prompt time leaves the slot empty until the native read succeeds.
-The existing localized units and shared clock also apply to child rows; ordering, unread state, waiting and escalation still use their own existing state times.
+The existing localized units and shared clock also apply to child rows; open-task ordering, unread state, waiting and escalation still use their own existing state times.
 Its second line is the sidebar's line in its parts: on 내 차례 the verb and the question (`질문 · …`) or the block's cause (`막힘 · …`) in the warning colour, a waiting ring's `대기 · ` and its cause, a stop's word (`끝남 · `, `일 남음 · `) and the background tail, work in progress its sentence alone, a waking, failed or unknown row its state, a sleeping row none (status-marks B10, B27, B29, B31, B33); on 쉬는 중 only unfinished work has a line, and a read one draws the quiet ring; with nothing to say there is no second line, and no stage bar is drawn.
 An unknown row is dimmed with no mark (status-marks B16).
 A row with children opens them in place under its chevron, five per parent and the rest behind `N개 더`, indented to the third level; a child in another checkout carries a branch line, a child on another device a device chip, a finished child a quiet title, and pressing a child goes to its pane, bringing its device to the front (B10, B11).
@@ -1299,7 +1319,10 @@ Under the light theme a mark the theme draws differently on a light background t
 The same marks stand beside a file in ⌘P, on a View tab and on a History row.
 A changed file's name takes its status mark's color; a folder's name stays plain and its dot carries the state.
 
-The tree's context menu on a file row is Open to the side (and Open in Browser for an HTML file), a separator, the reveal, a separator, Cut, Copy, Paste (only while the clipboard holds an item) and Duplicate, a separator, Copy Path and Copy Relative Path, a separator, Rename, a separator, Move to Trash.
+Clicking, double-clicking or pressing Enter on an HTML file (`.html`, `.htm` or `.xhtml`, case-insensitive) opens it directly in a Browser View through the same device-scoped file boundary as Open in Browser.
+Other file kinds keep their editor preview and pin behavior.
+The tree's context menu on a file row is Open to the side (and Open in Browser, then Open source for an HTML file), a separator, the reveal, a separator, Cut, Copy, Paste (only while the clipboard holds an item) and Duplicate, a separator, Copy Path and Copy Relative Path, a separator, Rename, a separator, Move to Trash.
+Open source opens HTML as an ordinary editor tab, and Open to the side keeps its editor behavior.
 A folder row has New File and New Folder in place of the opens.
 Each item shows the chord that does the same, as the operator has it bound, at its end.
 The item set the menu offers is a presentation decision a test can check directly (`explorerMenuItems` in `web/src/explorer.ts`), not something the platform decides implicitly.
@@ -1319,7 +1342,11 @@ A clipboard that refuses the write goes to the diagnostic log, and nothing else 
 Collapse All changes only the tree's expansion, which the next press on a folder restores.
 
 Cut, Copy, Paste and Duplicate work on one item, the selected row or the row the menu opened on.
-Cut and Copy (⌘X and ⌘C, Ctrl+X and Ctrl+C on Windows and Linux) put the item in the Explorer's own clipboard, which holds one item and names the checkout and device it came from; they never touch the system clipboard, so a text field's paste is unchanged.
+Cut and Copy (⌘X and ⌘C, Ctrl+X and Ctrl+C on Windows and Linux) put the item in the Explorer's own clipboard, which holds one item and names the checkout and device it came from.
+Copy of a file also writes its absolute path to the system clipboard, so another text field or app can paste that path.
+Pasting it into a terminal in this window inserts a quoted path, or uses binary attachment ingress for an image, just as dragging that file does.
+That file treatment applies only while the system text still matches this window's copied file; ordinary copied text and the explicit Copy Path and Copy Relative Path commands retain plain-text paste.
+Cut and folder Copy remain internal file operations, and a terminal paste never moves or duplicates the original file.
 A cut item is drawn faded until it is pasted.
 Paste (⌘V, Ctrl+V) puts the item in the selected folder, in the folder of the selected file, or at the root when nothing is selected; the menu's Paste on a folder row pastes into that folder, on a file row into its folder.
 The folder a paste lands in opens, and the new item is selected.
@@ -1403,7 +1430,7 @@ Switching Workspaces replaces the decoration root, and no per-row, hover, select
 
 Core owner: `herdr-core/src/runtime/editor.rs` (`place_editor_tab`, `promote_editor_tab`), `EditorTabSnapshot.preview`. The web Workspace's one-preview-per-View-area model is the same idea applied per area; see [Web Workspace](#web-workspace).
 
-A single click on an Explorer file or a History row opens it in the checkout's one preview tab (VS Code's model): the strip draws the title in italic, and the next single click replaces the tab in the same slot instead of adding one.
+A single click on an Explorer file other than HTML, or a History row, opens it in the checkout's one preview tab (VS Code's model): the strip draws the title in italic, and the next single click replaces the tab in the same slot instead of adding one.
 The core owns the preview flag and decides replacement and promotion; the shell only says what the click meant.
 Promotion happens in the same slot, on four triggers: a double-click on the Explorer row, a double-click on the tab title, the first edit, and Keep Open; a drag to a new slot promotes as well.
 A dirty tab is never replaced: the core promotes it where it sits and opens the new preview beside it.
@@ -1492,6 +1519,9 @@ The sidebar's right edge sets the width of its content column, the lists right o
 A double-click on the edge returns the width to 292, and a press that does not move changes nothing.
 A width outside the bounds is refused into the diagnostic log: a sent one leaves the width as it was, and a stored one opens the sidebar at 292.
 
+Sticky section markers update at most once per animation frame, with a pending frame cancelled when the list leaves.
+Focus visibility uses current header geometry, so a row under a header is revealed even before its marker updates; a fully visible occurrence leaves scrolling unchanged.
+
 ### Sidebar hierarchy
 
 This is the 프로젝트 list; the `프로젝트 | 태스크` switch above it, ⇧⌘B, and the 태스크 list are in [The sidebar's 태스크 list](#the-sidebars-태스크-list) (PRD sidebar-task-lens B1-B3).
@@ -1560,10 +1590,12 @@ A tab line selects its owning group, area and tab, while an agent row continues 
 The sidebar keeps a root and its complete lineage subtree together under the root's actual tab; children working in another tab do not inflate that tab's physical agent count.
 Tab names use the manual name or localized `Tab N` from the core's stable number, while a draft reads New tab; automatic tabbar task titles remain independent.
 The tab line's tooltip and accessible name give its name and recognized agent count, or its name alone when it holds no agent; shell panes never count as agents.
+An unnamed tab with exactly one recognized physical agent draws that agent's row alone, without a tab heading or guide, in both ungrouped and named collections.
+Manual-name and multi-agent tabs retain their heading and guide, and terminal-only tabs remain reachable through their tab line.
 Group, tab and agent controls are stops in Arrow Up/Down and Home/End traversal, and click, Enter and Space use the same navigation.
 Lineage children retain their `--size-lineage-indent` step and elbow rails, and each root's lineage disclosure stays in its trailing slot.
 A tab has no disclosure state of its own; a stored tab fold from an earlier version is ignored on load and dropped on the next write.
-For a catalog without named-group metadata the previous tab-segment presentation remains: manual-name or multi-agent tabs have a quiet line and guide, an unnamed single-agent tab is its row alone, and a named empty tab remains reachable.
+For a catalog without named-group metadata the same single-agent rule applies, and a named empty tab remains reachable.
 Focused sidebar agent and checkout rows use the neutral `--secondary` fill.
 Root shortcuts follow the physical grouping order and deduplicate raised occurrences, with no numbers for group lines, tab lines or children.
 A closed checkout draws its status badge and still shows questioning or blocked Needs You rows.
@@ -2438,6 +2470,8 @@ Every value is the core's `status.background_ai`; the tab sends `ai_settings` ev
   The Model select lists what the agent reported, with `CLI default` first where the agent can be asked without a model, and a marker "Fixed list" when an older peer reports that catalog form; the stored model is always offered, and a list that failed to load leaves it in place with one line.
 - **If <Runs on> can't answer** lists the agents the operator added, in the order added, each with a number, its mark and state, its own model select and a remove ×; there is no switch and no reordering, so an empty list is no fallback and a different order is a remove and an add.
   `+ Add agent` opens a menu of selectable agents not yet used; installed agents Hide AI cannot use yet are listed under "Hide AI can't use these yet", dimmed, each with its reason (not signed in, can't guarantee it only reads, not supported yet), and an agent that is not installed is not listed.
+  Its note explains that exceeding the configured usage threshold, signing out, exhausting provider usage or provider unavailability tries the next listed agent.
+  Only an empty list adds that Hide AI waits for Runs on to become available again.
   With nothing to offer the button is disabled.
   Choosing a listed agent as Runs on takes it off the list.
 - **Usage limit** (PRD hide-ai-usage-limit D-01 to D-09) is one select of 80%, 90%, 95% or No limit under the fallback list, 90% by default and for an install that never chose; a stored percent that is none of them is still shown.

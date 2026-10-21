@@ -12,7 +12,9 @@
 //!
 //! The server is private: its own socket, session, config and home.
 
-use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
 use hide_herdr_client::LocalSocketConnector;
@@ -384,20 +386,36 @@ fn pane_path(herdr: &PrivateHerdr) -> String {
 /// `claude` on unix: records the folder it started in and its arguments,
 /// then runs as a long-lived process of that name, which Herdr reads as the
 /// agent. Linux names a process after its file, macOS after its first
-/// argument.
+/// argument. Build a native stand-in: a system sleep may be a multicall
+/// binary that refuses to run under the agent's name.
 #[cfg(unix)]
 fn unix_agent(herdr: &PrivateHerdr) {
     let agent = herdr.home.join("agent");
     std::fs::create_dir_all(&agent).unwrap();
-    let sleep = ["/bin/sleep", "/usr/bin/sleep"]
-        .into_iter()
-        .find(|path| Path::new(path).is_file())
-        .unwrap();
-    if cfg!(target_os = "macos") {
-        std::os::unix::fs::symlink(sleep, agent.join("claude")).unwrap();
-    } else {
-        std::fs::copy(sleep, agent.join("claude")).unwrap();
-    }
+    let source = agent.join("agent.c");
+    std::fs::write(
+        &source,
+        "#include <unistd.h>\nint main(int argc, char **argv) { (void)argv; if (argc > 1) sleep(600); return 0; }\n",
+    )
+    .unwrap();
+    let compiled = Command::new("cc")
+        .arg(&source)
+        .arg("-o")
+        .arg(agent.join("claude"))
+        .output()
+        .expect("the native agent fixture needs a C compiler");
+    assert!(
+        compiled.status.success(),
+        "compile the native agent fixture: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    // Validate this file before a start's deadline; no arguments exits.
+    assert!(
+        Command::new(agent.join("claude"))
+            .status()
+            .expect("start the native agent fixture")
+            .success()
+    );
     let script = herdr.home.join("bin/claude");
     std::fs::write(
         &script,

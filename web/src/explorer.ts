@@ -350,7 +350,7 @@ export function selectionAfterRemoval(rows: ExplorerRow[], path: string, rootPat
   return parentSelection(rows, path) ?? rootPath;
 }
 
-export type ExplorerMenuId = "new-file" | "new-folder" | "open-beside" | "open-browser" | "reveal_external" | "cut" | "copy" | "paste" | "duplicate" | "copy_path" | "copy_relative_path" | "rename" | "trash";
+export type ExplorerMenuId = "new-file" | "new-folder" | "open-beside" | "open-browser" | "open-source" | "reveal_external" | "cut" | "copy" | "paste" | "duplicate" | "copy_path" | "copy_relative_path" | "rename" | "trash";
 
 /**
  * The tree's context menu (docs/UI_BEHAVIOR.md, Explorer file management): a
@@ -385,7 +385,10 @@ export function explorerMenuItems({ isDirectory, row, html, besideReason, reveal
     items.push({ id: "new-folder", label: translate("explorer.newFolder"), unavailable: null });
   } else if (row) {
     items.push({ id: "open-beside", label: translate("history.openBeside"), unavailable: besideReason });
-    if (html) items.push({ id: "open-browser", label: translate("explorer.openBrowser"), unavailable: null });
+    if (html) {
+      items.push({ id: "open-browser", label: translate("explorer.openBrowser"), unavailable: null });
+      items.push({ id: "open-source", label: translate("panes.menu.openSource"), unavailable: null });
+    }
   }
   const external = revealExternalEntry(reveal, device, node, translate, null, true);
   items.push(...external);

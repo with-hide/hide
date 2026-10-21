@@ -13,14 +13,14 @@ import { WorkspaceScreen } from "../WorkspaceScreen";
 import { REFERENCE_FOLDS, sidebarStatusAxisScene } from "./sceneData";
 import { sceneParams } from "./SidebarScene";
 
-const STATES = ["work", "group", "tab", "narrow", "plain", "plain-start"] as const;
+const STATES = ["work", "group", "tab", "narrow", "plain", "plain-start", "single"] as const;
 function tabId(tab: Tab): string {
   if (tab.id === null) throw new Error("Group scene requires a real tab identity");
   return tab.id;
 }
 
 export function GroupTabsScene({ params }: { params: URLSearchParams }) {
-  const { theme, scale, content } = sceneParams(params);
+  const { theme, scale, content, width } = sceneParams(params);
   const state = params.get("state") ?? "group";
   if (!(STATES as readonly string[]).includes(state)) throw new Error(`Unknown Group tabs state ${state}`);
   const scene = useMemo(() => {
@@ -40,7 +40,10 @@ export function GroupTabsScene({ params }: { params: URLSearchParams }) {
     checkout.tabs.slice(0, 3).forEach((tab, index) => {
       tab.sidebar = { number: index + 1, manual_name: names[index]!, named_by_operator: true };
     });
-    checkout.strip = checkout.tabs.map(tab => ({ id: `strip:${tabId(tab)}`, kind: "herdr", source_id: tabId(tab), label: tab.sidebar?.manual_name ?? "탭 4", preview: false }));
+    // The second tab has one physical agent inside a named collection.
+    // Its row stands alone, as the ungrouped fourth tab already does.
+    if (state === "single") checkout.tabs[1]!.sidebar = { number: 2, manual_name: null, named_by_operator: false };
+    checkout.strip = checkout.tabs.map(tab => ({ id: `strip:${tabId(tab)}`, kind: "herdr", source_id: tabId(tab), label: tab.sidebar?.manual_name ?? `탭 ${tab.sidebar?.number}`, preview: false }));
     if (!plain) groups.push({ id: "login", name: content === "long" ? "로그인 개편과 여러 작업의 진행 상황을 함께 확인하는 긴 그룹 이름" : "로그인 개편", tabs: checkout.tabs.slice(0, 3).map(tabId) }, { id: "release", name: "릴리스 준비", tabs: [] });
     const selected = plain ? null : empty ? "release" : "login";
     const selectedGroup = groups.find(group => group.id === selected)!;
@@ -54,7 +57,7 @@ export function GroupTabsScene({ params }: { params: URLSearchParams }) {
     navigator.focused_workspace_id = project.id;
     navigator.focused_checkout_id = checkout.id;
     navigator.focused_device_id = "local";
-    fixture.rest.ui_state = { ...fixture.rest.ui_state, sidebar_width: 264, device_rail_visible: false, left_sidebar_visible: true, agent_start: { kind: "claude", models: {} } };
+    fixture.rest.ui_state = { ...fixture.rest.ui_state, sidebar_width: width ?? 264, device_rail_visible: false, left_sidebar_visible: true, agent_start: { kind: "claude", models: {} } };
     fixture.rest.pane_layouts = checkout.tabs.map(tab => ({ workspace_id: project.id, tab_id: tabId(tab), focused_pane_id: tab.panes[0]!.id, zoomed: false, root: tab.panes.length === 1 ? { type: "pane", pane_id: tab.panes[0]!.id } : { type: "split", direction: "right", ratio: 0.5, first: { type: "pane", pane_id: tab.panes[0]!.id }, second: { type: "pane", pane_id: tab.panes[1]!.id } } }));
     fixture.rest.workspace_view = {
       device_id: "local", path: checkout.path, tool: null, last_tool: null, prs: { only_checkout: false }, pinned: false, tree: false,
@@ -63,7 +66,7 @@ export function GroupTabsScene({ params }: { params: URLSearchParams }) {
       agent_layout: { root: { area: { id: "a1", active, displays: selectedGroup.tabs.map(id => ({ id })) } }, active_area: "a1", display_count: selectedGroup.tabs.length, limits: { areas: 6, depth: 3, displays: 64 }, canvases: {}, group_id: selected, groups, drafts, can_undo_group: false },
     };
     return fixture;
-  }, [content, state]);
+  }, [content, state, width]);
   const actions = useMemo(() => createActions(() => false), []);
   useLayoutEffect(() => {
     const focusedPaneId = state === "work" || state === "plain" ? "a1" : null;

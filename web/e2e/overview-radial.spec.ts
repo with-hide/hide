@@ -5,6 +5,7 @@ import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { openOverview } from "./overview-entry";
 import { enterWorkspace } from "./wire";
+import { unchangedForFrames } from "./wait";
 
 async function drag(page: Page, handle: Locator, dx: number, dy: number) {
   const box = await handle.boundingBox();
@@ -37,20 +38,37 @@ test("@platform Overview restores its exact current session and keeps map moveme
     if (!canvas || !orb || !title) throw new Error("current identity has no canvas geometry");
     expect(orb.y).toBeGreaterThanOrEqual(canvas.y);
     expect(title.y + title.height).toBeLessThanOrEqual(canvas.y + canvas.height);
+    const heading = await graph.locator(".og-project-center").first().boundingBox();
+    if (!heading) throw new Error("project heading has no geometry");
+    expect(heading.y + heading.height).toBeLessThanOrEqual(orb.y);
+    await graph.getByRole("button", { name: "Collapse all", exact: true }).click();
+    await expect(graph.locator("[data-graph-session]")).toHaveCount(0);
+    await expect(graph.locator("[data-graph-project]")).toHaveCount(1);
+    await graph.locator(".og-project-heading").click();
+    await expect(current).toHaveCount(1);
+    await expect(graph).toHaveAttribute("data-graph-phase", "ready");
     const positions = () => graph.locator(".react-flow__node").evaluateAll(nodes => nodes.map(node => [node.getAttribute("data-id"), (node as HTMLElement).style.transform]));
     const before = await positions();
     const session = current.locator("xpath=..");
     const originalSession = await session.getAttribute("style");
-    await drag(page, current.locator(".og-session-drag"), 48, 32);
+    // Operators grab the provider circle itself; no separate grip control.
+    await drag(page, current.locator(".og-orb"), 48, 32);
     await expect.poll(() => session.getAttribute("style")).not.toBe(originalSession);
     const afterSession = await positions();
     expect(afterSession.filter((row, i) => JSON.stringify(row) !== JSON.stringify(before[i]))).toHaveLength(1);
+    await expect(graph.locator("[data-graph-preview]")).toHaveCount(0);
+    await current.locator(".og-orb").click();
+    await expect(graph.locator("[data-graph-preview]")).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(graph.locator("[data-graph-preview]")).toHaveCount(0);
     await graph.getByRole("button", { name: "Reset layout", exact: true }).click();
     await expect.poll(positions).toEqual(before);
     // React Flow renders absolute transforms even though our node data is relative.
     // Every member inside the packed footprint must travel with its center.
     const group = graph.locator(".react-flow__node-project").first();
     await graph.getByRole("button", { name: "Fit graph", exact: true }).click();
+    // Fit commits its viewport on a frame; measure the drag target after it settles.
+    await unchangedForFrames(page, () => graph.locator(".react-flow__viewport").getAttribute("style"), 3);
     // Read all bounds together: Fit graph can update the camera between awaits.
     const members = await graph.locator(".react-flow__node").evaluateAll(nodes => {
       const project = nodes.find(node => node.classList.contains("react-flow__node-project"));

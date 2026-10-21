@@ -1,8 +1,8 @@
 // The sidebar's 태스크 list as data (PRD sidebar-task-lens B4-B9): the rail's
 // device's tasks in the core's order (`agent_scope.tasks` of the device),
 // cut into the groups the list draws. The core decides each task's state and
-// order; this only places a task under its state or its project and folds
-// the resting and cleanup ones.
+// order for open tasks; this places a task under its state or its project,
+// orders resting rows by the request age they display, and folds them.
 
 import type { ProjectTasksScope, TaskCardScope, TaskState } from "./agentScope";
 import { archivedProject } from "./archive";
@@ -67,7 +67,14 @@ export function taskList(tasks: ProjectTasksScope | null | undefined, rows: Read
     entries.push({ card, agent, project: card.checkouts.map((id) => byCheckout.get(id)).find((row) => row !== undefined) ?? null });
   }
   const open = entries.filter(({ card }) => card.state !== "resting" && card.state !== "cleanup");
-  const resting = entries.filter(({ card }) => card.state === "resting");
+  const resting = entries.filter(({ card }) => card.state === "resting")
+    .sort((a, b) => {
+      const at = a.agent.last_prompt_at_unix_ms;
+      const bt = b.agent.last_prompt_at_unix_ms;
+      if (at == null) return bt == null ? 0 : 1;
+      if (bt == null) return -1;
+      return bt - at;
+    });
   const cleanup = entries.filter(({ card }) => card.state === "cleanup");
   const archived = archivedRows.map((row) => ({ row, project: archivedProject(row, projects) }));
   if (view === "status") {

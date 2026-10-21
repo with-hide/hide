@@ -138,7 +138,6 @@ export async function placeCompoundGraph(elk: Pick<ELK, "layout">, groups: reado
       for (let i = 0; i < members.length; i += 1) {
         const node = members[i]!;
         const angle = angles[i]!;
-        needed = Math.max(needed, clearance(Math.cos(angle), Math.sin(angle), (group.width + node.width) / 2 + spacing.betweenNodes, (group.height + node.height) / 2 + spacing.betweenNodes));
         for (let j = 0; j < i; j += 1) needed = Math.max(needed, clearance(Math.cos(angle) - Math.cos(angles[j]!), Math.sin(angle) - Math.sin(angles[j]!), (node.width + members[j]!.width) / 2 + spacing.betweenNodes, (node.height + members[j]!.height) / 2 + spacing.betweenNodes));
       }
       radius = needed;
@@ -151,12 +150,12 @@ export async function placeCompoundGraph(elk: Pick<ELK, "layout">, groups: reado
     const extent = points.reduce((box, point, index) => ({
       left: Math.min(box.left, point.x), top: Math.min(box.top, point.y),
       right: Math.max(box.right, point.x + group.children[index]!.width), bottom: Math.max(box.bottom, point.y + group.children[index]!.height),
-    }), { left: -group.width / 2, top: -group.height / 2, right: group.width / 2, bottom: group.height / 2 });
-    // Symmetric bounds make the project heading the true cluster center.
+    }), { left: -group.width / 2, top: 0, right: group.width / 2, bottom: 0 });
     const halfWidth = Math.max(-extent.left, extent.right) + spacing.padding;
-    const halfHeight = Math.max(-extent.top, extent.bottom) + spacing.padding;
-    for (const point of points) placed.nodes.set(point.id, { x: point.x + halfWidth, y: point.y + halfHeight, layer: point.layer });
-    return { id: group.id, width: halfWidth * 2, height: halfHeight * 2 };
+    const headingBottom = spacing.padding + group.height;
+    const offsetY = headingBottom + (points.length ? spacing.betweenNodes : 0) - extent.top;
+    for (const point of points) placed.nodes.set(point.id, { x: point.x + halfWidth, y: point.y + offsetY, layer: point.layer });
+    return { id: group.id, width: halfWidth * 2, height: offsetY + extent.bottom + spacing.padding };
   });
   const laid = await elk.layout({ id: "overview", layoutOptions: {
     "elk.algorithm": "rectpacking", "elk.aspectRatio": "1.6", "elk.spacing.nodeNode": String(spacing.groups), "elk.padding": "[top=0,left=0,bottom=0,right=0]",

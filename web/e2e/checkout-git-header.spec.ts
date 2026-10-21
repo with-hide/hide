@@ -12,7 +12,7 @@ test("checkout header reads working files with Changes closed, current-SHA statu
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
-    const fixture = checkoutGitFixture(herdr);
+    const fixture = checkoutGitFixture(herdr, { historyCount: 6 });
     daemon = await startHided(herdr, "checkout-header");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -21,8 +21,27 @@ test("checkout header reads working files with Changes closed, current-SHA statu
     await expect(files).toHaveCount(0);
     await expect(page.locator('[data-checkout-ci="failed"]')).toBeVisible({ timeout: 15_000 });
     const requests = fs.readFileSync(fixture.log, "utf8");
-    expect(requests).toContain(`/commits/${fixture.sha}/check-runs?per_page=100`);
-    expect(requests).toContain(`/commits/${fixture.sha}/status`);
+    expect(requests).toContain("HideCheckoutChecks");
+    await page.locator("[data-checkout-commit]").click();
+    const history = page.locator("[data-commit-history]");
+    await expect(history).toBeVisible();
+    await expect(page.locator('[data-slot="popover-content"]')).toBeFocused();
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
+    await expect(history.locator("[data-commit-history-item]")).toHaveCount(5);
+    const failedRow = history.locator(`[data-commit-history-item="${fixture.sha}"]`);
+    await expect(failedRow.locator('[data-commit-ci="failed"]')).toBeVisible();
+    const placement = await failedRow.evaluate(row => {
+      const title = row.querySelector("p")!.getBoundingClientRect();
+      const time = row.querySelector("time")!.getBoundingClientRect();
+      const ci = row.querySelector("[data-commit-ci]")!.getBoundingClientRect();
+      return { titleBottom: title.bottom, timeTop: time.top, timeRight: time.right, ciTop: ci.top, ciLeft: ci.left };
+    });
+    expect(placement.ciTop).toBeGreaterThanOrEqual(placement.titleBottom);
+    expect(placement.ciLeft).toBeGreaterThanOrEqual(placement.timeRight);
+    await page.keyboard.press("Tab");
+    await expect(failedRow.locator('[data-commit-ci="failed"]')).toBeFocused();
+    await expect(page.getByRole("tooltip")).toBeVisible();
+    await page.keyboard.press("Escape");
     await expect(page.locator('aside[data-lane="changes"]')).toHaveCount(0);
     fs.writeFileSync(path.join(fixture.root, "tracked.txt"), "edited\n");
     await expect(files).toHaveText("1", { timeout: 5_000 });
@@ -35,7 +54,7 @@ test("checkout header reads working files with Changes closed, current-SHA statu
     const next = git(fixture.root, ["rev-parse", "HEAD"]).trim();
     await expect(page.locator("[data-checkout-commit]")).toHaveAttribute("data-checkout-commit", next, { timeout: 5_000 });
     await expect(files).toHaveCount(0, { timeout: 5_000 });
-    await expect(page.locator('[data-checkout-ci="none"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("[data-checkout-ci]")).toHaveCount(0, { timeout: 15_000 });
     fs.unlinkSync(path.join(fixture.root, "tracked.txt"));
     await expect(files).toHaveText("1", { timeout: 5_000 });
     const terminal = page.locator(`[data-terminal-host="${herdr.panes[0]}"] textarea`);
@@ -48,7 +67,7 @@ test("checkout header reads working files with Changes closed, current-SHA statu
     const commit = page.locator("[data-checkout-commit]");
     await commit.focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByText(next.slice(0, 12), { exact: true })).toBeVisible();
+    await expect(page.getByText(next.slice(0, 7), { exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(commit).toBeFocused();
     await screenshot(page, "checkout-header-browser");
