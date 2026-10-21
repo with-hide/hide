@@ -5284,6 +5284,44 @@ impl Runtime {
                         }
                     }
                 }
+                // The catalog may already contain the tab before its answer
+                // supplies the captured group and area. Apply that receipt to
+                // the full known checkout topology before selection reads the
+                // tab's temporary Ungrouped membership. An unanswered catalog
+                // or an unlisted tab leaves the receipt for normal admission.
+                let known_placement = created_tab_id.as_ref().and_then(|id| {
+                    let key = &self.workspace_views.as_ref()?.agent_placements.get(id)?.0;
+                    if self.catalog_from_coordinator && !self.catalog_paths.knows(&key.1) {
+                        return None;
+                    }
+                    let checkout = self
+                        .snapshot
+                        .navigator
+                        .workspaces
+                        .iter()
+                        .filter(|workspace| workspace.device_id == key.0)
+                        .flat_map(|workspace| &workspace.checkouts)
+                        .find(|checkout| {
+                            checkout.path == key.1
+                                && checkout.tabs.iter().any(|tab| tab.id.as_ref() == Some(id))
+                        })?;
+                    let topology = checkout
+                        .tabs
+                        .iter()
+                        .filter_map(|tab| Some((tab.id.clone()?, tab.delegated)))
+                        .collect::<Vec<_>>();
+                    Some((key.clone(), topology))
+                });
+                if let Some((key, topology)) = known_placement {
+                    match self.reconcile_agent_topology(&key, &topology) {
+                        Ok(true) => self.persist_workspace_views(),
+                        Ok(false) => {}
+                        Err(error) => self.push_diagnostic(
+                            "agent_layout.reconcile_refused",
+                            format!("Creation placement for {}: {error:?}", key.1),
+                        ),
+                    }
+                }
                 let can_show_created = match (&action, created_tab_id.as_deref()) {
                     (
                         RemoteControlAction::CreateTab { cwd, .. }
@@ -5296,11 +5334,37 @@ impl Runtime {
                 // names where they are now, and the creation's answer is the
                 // older request: the new tab waits in the strip rather than
                 // taking the screen back from the tab they chose.
-                let chosen_since = created_tab_id.is_some()
-                    && self
-                        .control_lane
-                        .running_serial()
-                        .is_some_and(|serial| self.last_view_intent_serial > serial);
+                // An empty group selection sends no Herdr focus control,
+                // so it has no newer lane serial. The captured placement
+                // still names the creation's group; another selected group
+                // keeps the screen while this tab joins its original group.
+                let group_chosen_since = match &action {
+                    RemoteControlAction::CreateTab {
+                        cwd,
+                        area_id: Some(_),
+                        group_id,
+                        ..
+                    }
+                    | RemoteControlAction::OpenOwner {
+                        cwd,
+                        area_id: Some(_),
+                        group_id,
+                        ..
+                    } => self
+                        .workspace_views
+                        .as_ref()
+                        .and_then(|store| store.views.get(self.node.as_str(), cwd))
+                        .is_some_and(|view| {
+                            view.agent_groups.selected.as_deref() != group_id.as_deref()
+                        }),
+                    _ => false,
+                };
+                let chosen_since = group_chosen_since
+                    || (created_tab_id.is_some()
+                        && self
+                            .control_lane
+                            .running_serial()
+                            .is_some_and(|serial| self.last_view_intent_serial > serial));
                 if chosen_since && can_show_created {
                     crate::diagnostic!(serde_json::json!({
                         "component": "tab_control",

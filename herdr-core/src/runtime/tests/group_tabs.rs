@@ -280,6 +280,174 @@ fn geometry(node: &Node<crate::agent_layout::Tab>) -> Value {
 }
 
 #[test]
+fn a_created_terminal_keeps_its_group_before_or_after_the_catalog() {
+    for opens_owner in [false, true] {
+        for catalog_first in [false, true] {
+            created_terminal_group(opens_owner, catalog_first, false);
+        }
+    }
+}
+
+#[test]
+fn a_created_terminal_preserves_a_group_chosen_while_its_answer_was_pending() {
+    for opens_owner in [false, true] {
+        for catalog_first in [false, true] {
+            created_terminal_group(opens_owner, catalog_first, true);
+        }
+    }
+}
+
+#[test]
+fn an_external_terminal_keeps_the_selected_group_and_joins_ungrouped() {
+    let (mut runtime, _) = setup();
+    let selected = create(&mut runtime, "selected", "My work");
+    let all = [TABS[0], TABS[1], TABS[2], "w-order:t4"];
+    let mut catalog = tab_order_payload(PATH, &all, &all, "w-order:t4");
+    catalog.tab_focus = Some(crate::sidebar::SessionTabFocus {
+        generation: 1,
+        workspace_id: "w-order".into(),
+        tab_id: "w-order:t4".into(),
+        revision: 1,
+        creation: true,
+    });
+    runtime.ingest_session(Ok(catalog));
+    runtime.sync_workspace_view();
+    assert_eq!(
+        published(&runtime).group_id.as_deref(),
+        Some(selected.as_str())
+    );
+    assert_eq!(tabs(&runtime, None), all);
+    assert!(runtime.shown_agent_tabs().is_empty());
+    assert!(runtime.snapshot().terminal.pane_id.is_none());
+}
+
+#[test]
+fn an_unanswered_catalog_cannot_prune_groups_on_a_creation_answer() {
+    let (mut runtime, _) = setup();
+    let selected = create(&mut runtime, "selected", "My work");
+    runtime.catalog_paths = Default::default();
+    runtime.begin_catalog_coordinator();
+    runtime.ingest_local_control_result(
+        RemoteControlAction::CreateTab {
+            workspace_id: "w-order".into(),
+            cwd: PATH.into(),
+            label: "New terminal".into(),
+            area_id: Some("a1".into()),
+            group_id: Some(selected.clone().into_boxed_str()),
+            admission_id: None,
+        },
+        Ok(RemoteControlOutcome::Acknowledged {
+            created_tab_id: Some("w-order:t4".into()),
+            created_pane_id: Some("w-order:t4:p".into()),
+        }),
+        1,
+    );
+    runtime.sync_workspace_view();
+    assert_eq!(
+        published(&runtime).group_id.as_deref(),
+        Some(selected.as_str())
+    );
+    assert_eq!(tabs(&runtime, None), TABS);
+}
+
+fn created_terminal_group(opens_owner: bool, catalog_first: bool, choose_another: bool) {
+    let (mut runtime, _) = setup();
+    let destination = create(&mut runtime, "destination", "Terminal work");
+    let other = create(&mut runtime, "other", "Other work");
+    select(&mut runtime, "choose-destination", Some(&destination));
+    let area = published(&runtime).active_area.clone();
+    let action = if opens_owner {
+        RemoteControlAction::OpenOwner {
+            owner: crate::checkout_owner::OwnerOpen::for_checkout(
+                crate::node::TEST_NODE,
+                PATH,
+                PATH,
+                false,
+                "Terminal work",
+            ),
+            cwd: PATH.into(),
+            label: "New terminal".into(),
+            area_id: Some(area.clone()),
+            group_id: Some(destination.clone().into_boxed_str()),
+            admission_id: None,
+        }
+    } else {
+        RemoteControlAction::CreateTab {
+            workspace_id: "w-order".into(),
+            cwd: PATH.into(),
+            label: "New terminal".into(),
+            area_id: Some(area.clone()),
+            group_id: Some(destination.clone().into_boxed_str()),
+            admission_id: None,
+        }
+    };
+    let created = if opens_owner {
+        "w-new:t1"
+    } else {
+        "w-order:t4"
+    };
+    let all = [TABS[0], TABS[1], TABS[2], created];
+    let mut catalog = if opens_owner {
+        split_checkout_payload(
+            PATH,
+            &[("w-order", &TABS, TABS[0]), ("w-new", &[created], created)],
+            "w-new",
+        )
+    } else {
+        tab_order_payload(PATH, &all, &all, created)
+    };
+    catalog.tab_focus = Some(crate::sidebar::SessionTabFocus {
+        generation: 1,
+        workspace_id: if opens_owner { "w-new" } else { "w-order" }.into(),
+        tab_id: created.into(),
+        revision: 1,
+        creation: true,
+    });
+    if catalog_first {
+        runtime.ingest_session(Ok(catalog.clone()));
+        runtime.sync_workspace_view();
+    }
+    if choose_another {
+        select(&mut runtime, "choose-other-while-pending", Some(&other));
+    }
+    runtime.ingest_local_control_result(
+        action,
+        Ok(RemoteControlOutcome::Acknowledged {
+            created_tab_id: Some(created.into()),
+            created_pane_id: Some(format!("{created}:p")),
+        }),
+        1,
+    );
+    runtime.sync_workspace_view();
+    let selected = if choose_another { &other } else { &destination };
+    assert_eq!(
+        published(&runtime).group_id.as_ref(),
+        Some(selected),
+        "creation answer: owner={opens_owner}, catalog_first={catalog_first}"
+    );
+    if catalog_first {
+        assert_eq!(tabs(&runtime, Some(&destination)), [created]);
+        assert_eq!(tabs(&runtime, None), TABS);
+    }
+    runtime.ingest_session(Ok(catalog));
+    runtime.sync_workspace_view();
+    assert_eq!(published(&runtime).group_id.as_ref(), Some(selected));
+    assert_eq!(tabs(&runtime, Some(&destination)), [created]);
+    assert_eq!(tabs(&runtime, None), TABS);
+    if choose_another {
+        assert!(runtime.shown_agent_tabs().is_empty());
+        assert!(runtime.snapshot().terminal.pane_id.is_none());
+    } else {
+        assert_eq!(published(&runtime).active_area, area);
+        assert_eq!(geometry(&published(&runtime).root)["active"], created);
+        assert_eq!(
+            runtime.snapshot().terminal.pane_id.as_deref(),
+            Some(format!("{created}:p").as_str())
+        );
+    }
+}
+
+#[test]
 fn empty_group_preserves_the_old_split_and_shows_no_hidden_terminal() {
     let (mut runtime, checkout) = setup();
     dispatch(
