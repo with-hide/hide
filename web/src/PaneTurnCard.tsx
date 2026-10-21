@@ -42,6 +42,9 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const [pinned, setPinned] = useState(false);
+  // Closed from inside with the keyboard sent back to the trigger: the
+  // trigger's focus does not reopen it until the pointer or focus comes anew.
+  const [dismissed, setDismissed] = useState(false);
   const leave = useRef<number | null>(null);
   const anchor = useRef<HTMLSpanElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -51,10 +54,11 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
   const agent = agentsByPane(useShellStore((state) => allAgents(state.agents, state.rest?.status?.remote))).get(paneId);
   const header = useShellStore((state) => state.rest?.terminal?.headers?.[paneId]);
   const localId = useShellStore((state) => localDeviceId(state.rest));
-  const open = pinned || hovered || focused;
+  const open = !dismissed && (pinned || hovered || focused);
   const enter = () => {
     if (leave.current !== null) window.clearTimeout(leave.current);
     leave.current = null;
+    setDismissed(false);
     setHovered(true);
   };
   const exit = () => {
@@ -71,10 +75,21 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
   // pointer never takes the terminal's keyboard.
   const inside = (node: EventTarget | null) => node instanceof Node && (anchor.current?.contains(node) || content.current?.contains(node)) === true;
   const blur = (event: FocusEvent) => {
-    if (!inside(event.relatedTarget)) setFocused(false);
+    if (inside(event.relatedTarget)) return;
+    setFocused(false);
+    setDismissed(false);
   };
   const focusable = () => [...(content.current?.querySelectorAll<HTMLElement>("button, a[href]") ?? [])];
   const toTrigger = () => anchor.current?.querySelector<HTMLElement>("button")?.focus();
+  // Closing with the keyboard in the card hands it back to the trigger, which
+  // keeps the card closed; any other close leaves the keyboard where it is.
+  const dismiss = () => {
+    const returns = content.current?.contains(document.activeElement) === true;
+    close();
+    if (!returns) return;
+    setDismissed(true);
+    toTrigger();
+  };
   const state: TurnCardTrigger = {
     open,
     pinned,
@@ -88,12 +103,18 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
       event.preventDefault();
       first.focus();
     },
-    onToggle: pinnable ? () => (pinned ? close() : setPinned(true)) : undefined,
+    onToggle: pinnable ? () => {
+      setDismissed(false);
+      if (pinned) close();
+      else setPinned(true);
+    } : undefined,
     close,
   };
   const session = agent ? sessionOfAgentOn(agent, localId) : null;
   return (
-    <Popover open={open && agent !== undefined} onOpenChange={(next) => (next ? undefined : close())} modal={false}>
+    // Esc reaches the card through the shell's layer only while it is pinned
+    // or focused; a card the pointer only shows leaves Esc to the terminal.
+    <Popover open={open && agent !== undefined} onOpenChange={(next) => (next ? undefined : dismiss())} modal={false} escape={pinned || focused}>
       <PopoverAnchor asChild>
         <span ref={anchor} className="flex min-w-0 items-center">{trigger(state)}</span>
       </PopoverAnchor>
@@ -109,16 +130,22 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
           onCloseAutoFocus={(event) => event.preventDefault()}
           onPointerEnter={enter}
           onPointerLeave={exit}
-          onFocus={() => setFocused(true)}
+          // A click on the card's text focuses the card itself, which is
+          // not the keyboard moving in.
+          onFocus={(event) => {
+            if (event.target !== content.current) setFocused(true);
+          }}
           onBlur={blur}
           onKeyDown={(event) => {
-            // The card sits at the end of the page, so Tab past its last
-            // control and Shift+Tab before its first go back to the trigger.
+            // The card sits at the end of the page, so Shift+Tab before its
+            // first control goes back to the trigger with the card open, and
+            // Tab past its last closes it there, so the next Tab moves on.
             const items = focusable();
             const edge = event.shiftKey ? items[0] : items[items.length - 1];
             if (event.key !== "Tab" || document.activeElement !== edge) return;
             event.preventDefault();
-            toTrigger();
+            if (event.shiftKey) toTrigger();
+            else dismiss();
           }}
           // The trigger is outside the card, so its own press would dismiss
           // the card before its click toggles the pin; the click alone decides.
@@ -131,9 +158,7 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
             // card the pointer only shows leaves Esc to the terminal.
             if (!pinned && !focused) return event.preventDefault();
             event.stopPropagation();
-            const returns = content.current?.contains(document.activeElement) === true;
-            close();
-            if (returns) toTrigger();
+            dismiss();
           }}
         >
           <TurnCard agent={agent} header={header} head={head} onRecord={session ? () => {

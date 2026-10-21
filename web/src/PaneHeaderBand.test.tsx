@@ -631,7 +631,10 @@ it("opens the turn card from the request and pins it on a press until Esc", asyn
 
 // PRD pane-last-request B6, B9: the keyboard reaches the card's 기록 열기
 // with Tab from the focused request, the card stays open while focus is in
-// it, Shift+Tab goes back, and Esc in the card closes it and returns focus.
+// it, Shift+Tab goes back, Tab past its end closes it on the request, and
+// the shell's Esc (its innermost layer) closes it and returns focus without
+// reopening it. A card the pointer only shows is no Esc layer, so Esc stays
+// the terminal's.
 it("moves the keyboard into the turn card with Tab and back", async () => {
   const value: PaneHeader = { working: false, notice: null, band: { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 }, request: { text: "Proceed as proposed + check unclear states", images: 0 } };
   const { container, unmount } = await mount(value, [turnAgent()], { paneId: "solo", rest: { status: { pane_focus_request: null }, terminal: { headers: { solo: value } } } as SnapshotRest });
@@ -639,9 +642,15 @@ it("moves the keyboard into the turn card with Tab and back", async () => {
   const button = () => container.querySelector<HTMLButtonElement>("[data-pane-turn-request=solo]")!;
   const record = () => card()?.querySelector<HTMLButtonElement>("[data-turn-card-record]") ?? null;
   const key = (target: Element, init: KeyboardEventInit) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
+  const layers = () => useUiStore.getState().escapeLayers;
   try {
+    await act(async () => button().dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    expect(card()).not.toBeNull();
+    expect(layers(), "a hover card leaves Esc to the terminal").toHaveLength(0);
+    await act(async () => { button().dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })); vi.advanceTimersByTime(200); });
     await act(async () => button().focus());
     expect(card()).not.toBeNull();
+    expect(layers()).toHaveLength(1);
     await key(button(), { key: "Tab" });
     expect(document.activeElement).toBe(record());
     expect(card(), "focus inside the card keeps it open").not.toBeNull();
@@ -649,9 +658,16 @@ it("moves the keyboard into the turn card with Tab and back", async () => {
     expect(document.activeElement).toBe(button());
     expect(card()).not.toBeNull();
     await key(button(), { key: "Tab" });
-    await key(record()!, { key: "Escape" });
+    await key(record()!, { key: "Tab" });
+    expect(card(), "Tab past the end closes the card").toBeNull();
+    expect(document.activeElement).toBe(button());
+    await act(async () => { button().blur(); button().focus(); });
+    await key(button(), { key: "Tab" });
+    expect(document.activeElement).toBe(record());
+    await act(async () => layers().at(-1)!());
     expect(card()).toBeNull();
     expect(document.activeElement).toBe(button());
+    expect(layers()).toHaveLength(0);
   } finally { await unmount(); }
 });
 

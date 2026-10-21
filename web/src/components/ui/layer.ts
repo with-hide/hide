@@ -23,10 +23,10 @@ export function useEscapeLayer(open: boolean, close: () => void, base = false) {
 
 /**
  * A Radix root's open state, controlled or not, that also registers the
- * Escape layer. A controlled caller keeps its own state; an uncontrolled one
- * gets it here.
+ * Escape layer while `escape` holds. A controlled caller keeps its own state;
+ * an uncontrolled one gets it here.
  */
-export function useLayerOpen(open: boolean | undefined, defaultOpen: boolean | undefined, onOpenChange: ((open: boolean) => void) | undefined, base = false) {
+export function useLayerOpen(open: boolean | undefined, defaultOpen: boolean | undefined, onOpenChange: ((open: boolean) => void) | undefined, base = false, escape = true) {
   const [own, setOwn] = useState(defaultOpen ?? false);
   const current = open ?? own;
   const change = useCallback(
@@ -36,7 +36,7 @@ export function useLayerOpen(open: boolean | undefined, defaultOpen: boolean | u
     },
     [open, onOpenChange],
   );
-  useEscapeLayer(current, () => change(false), base);
+  useEscapeLayer(current && escape, () => change(false), base);
   return [current, change] as const;
 }
 
