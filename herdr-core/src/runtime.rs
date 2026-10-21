@@ -47,6 +47,8 @@ mod op_timing;
 mod operations;
 pub(crate) mod output_language;
 mod overview_graph;
+pub(crate) mod pane_move;
+mod pane_move_preview;
 mod pane_prediction;
 mod pane_reopen;
 pub(crate) mod project_memory;
@@ -1657,6 +1659,9 @@ pub struct Runtime {
     group_start: Option<group_starts::ActiveStart>,
     task_start_focus: Option<group_starts::TaskStartFocus>,
     group_start_saves: Vec<group_starts::SaveWaiter>,
+    pane_moves: BTreeMap<String, pane_move::Operation>,
+    pane_move_saves: Vec<pane_move::SaveWaiter>,
+    pane_move_preview: pane_move_preview::Preview,
     /// How the pane a task created says its shell has finished starting,
     /// by task id, for that task's agent start.
     task_pane_shell: Option<(u64, crate::agent_start::ShellStart)>,
@@ -2288,6 +2293,9 @@ impl Runtime {
             group_start: None,
             task_start_focus: None,
             group_start_saves: Vec::new(),
+            pane_moves: BTreeMap::new(),
+            pane_move_saves: Vec::new(),
+            pane_move_preview: Default::default(),
             task_pane_shell: None,
             home_links: HashMap::new(),
             last_accepted_catalog: None,

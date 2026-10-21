@@ -1,3 +1,5 @@
+import { usePaneMove } from "./PaneMoveControls";
+import { movingTab } from "./paneMove";
 import { PanelsTopLeftIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
@@ -40,6 +42,8 @@ export function AgentTab({ number, entry, checkout, interaction, actions, renami
   const { t } = useInterfaceTranslation();
   const operations = useShellStore((s) => s.rest?.status?.async_operations) ?? NONE;
   const tab = checkout.tabs.find((row) => row.id === entry.source_id);
+  const move = usePaneMove();
+  const moving = movingTab(operations, entry.source_id) || !!tab?.panes.some(pane => move?.mutationBlocked(pane.id));
   const agent = tab?.agent;
   const rows = agentsByPane(usePaneAgents());
   const focusedAgent = tab?.sidebar?.focused_pane_id ? rows.get(tab.sidebar.focused_pane_id) : undefined;
@@ -48,7 +52,7 @@ export function AgentTab({ number, entry, checkout, interaction, actions, renami
   // Native subagents live inside that pane and are not additional panes.
   const agentPaneCount = tab?.panes.reduce((count, pane) => count + Number(pane.identity_label !== null), 0) ?? 0;
   const identity = `${agent ? t("panes.agent.tabIdentityAgent", { kind: agentProductName(agent.agent_kind), label: entry.label }) : t("panes.agent.tabIdentityTerminal", { label: entry.label })}${agent ? ` · ${markWords(t, agent)}` : ""}${agentPaneCount > 0 ? ` · ${t("panes.agent.tabPaneCount", { count: agentPaneCount })}` : ""}`;
-  return <TabButton recordAgent={recordAgent} entry={entry} editor={renaming ? <TabRenameInput key={entry.source_id} entry={entry} actions={actions} onCancel={onCancelRename} /> : null} identity={[identity, recordAgent && recordWords(t, recordAgent)].filter(Boolean).join(" · ")} agentPaneCount={agentPaneCount} mark={<TabMark agent={agent} />} number={number} active={interaction.selected} areaActive={interaction.areaActive} closing={closingSuffix(entry.source_id, "tab.close", operations)} closeLabel={t("shell.closeTab", { title: entry.label })} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(entry.source_id)} onPointerDown={interaction.press} />;
+  return <TabButton recordAgent={recordAgent} entry={entry} editor={renaming ? <TabRenameInput key={entry.source_id} entry={entry} actions={actions} onCancel={onCancelRename} /> : null} identity={[identity, recordAgent && recordWords(t, recordAgent)].filter(Boolean).join(" · ")} agentPaneCount={agentPaneCount} mark={<TabMark agent={agent} />} number={number} active={interaction.selected} areaActive={interaction.areaActive} closeDisabled={moving} closing={closingSuffix(entry.source_id, "tab.close", operations)} closeLabel={t("shell.closeTab", { title: entry.label })} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(entry.source_id)} onPointerDown={event => { if (!moving) interaction.press(event); }} />;
 }
 
 /**
@@ -132,6 +136,7 @@ const TabButton = memo(function TabButton({
   number,
   closing,
   closeLabel,
+  closeDisabled = false,
   fit: slotFit,
   dragging,
   areaActive,
@@ -150,6 +155,7 @@ const TabButton = memo(function TabButton({
   number: number | null;
   closing: boolean;
   closeLabel: string;
+  closeDisabled?: boolean;
   /** How the tab draws its contents in its slot (`AreaTabInteraction.fit`). */
   fit: TabFit;
   dragging: boolean;
@@ -202,6 +208,7 @@ const TabButton = memo(function TabButton({
           size="icon-sm"
           className={`shrink-0 hover:bg-popover hover:text-foreground ${fit.close} ${number !== null ? "invisible" : `focus-visible:visible group-hover:visible ${active ? "visible" : "invisible"}`}`}
           aria-label={closeLabel}
+          disabled={closeDisabled}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => {
             event.stopPropagation();

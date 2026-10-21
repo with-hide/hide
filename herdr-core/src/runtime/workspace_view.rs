@@ -1315,6 +1315,7 @@ impl Runtime {
             let views = store.views.clone();
             let result = workspace_views::save(&store.path, &views);
             self.acknowledge_group_start_save(&views, &result);
+            self.acknowledge_pane_move_save(&views, &result);
             if let Err(message) = result {
                 self.set_error("workspace_views.save_failed", message, true);
             }
@@ -1349,6 +1350,10 @@ impl Runtime {
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .acknowledge_group_start_save(&views, &result);
+                    runtime
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .acknowledge_pane_move_save(&views, &result);
                     if let Err(message) = result {
                         runtime.lock().unwrap_or_else(|e| e.into_inner()).set_error(
                             "workspace_views.save_failed",

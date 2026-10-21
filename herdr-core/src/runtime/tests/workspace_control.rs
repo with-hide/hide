@@ -1825,6 +1825,7 @@ fn hide_memory_reads_a_person_only_in_a_pane_no_agent_runs_in() {
             session: None,
         },
         ended: false,
+        terminal_id: None,
         forked: false,
     });
     runtime.delivery_ledger = Ok(Arc::new(ledger.clone()));

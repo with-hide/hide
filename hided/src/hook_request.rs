@@ -197,7 +197,7 @@ pub(crate) fn delivery(
         &cap.context.device_id,
         &cap.pane_id,
         &cap.context,
-        hint,
+        cap.canonical_hint(hint),
         command,
     )
     .and_then(|prepared| prepared.run(Duration::from_secs(5)))

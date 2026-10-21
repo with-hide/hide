@@ -71,6 +71,24 @@ impl Runtime {
             );
             return true;
         }
+        let touched = match &payload.action {
+            Action::Move { tab_id }
+            | Action::Create {
+                tab_id: Some(tab_id),
+                ..
+            } => self.pane_move_holds_tab(tab_id),
+            Action::Dissolve | Action::Undo => self.pane_move_holds_workspace(&key),
+            _ => false,
+        };
+        if touched {
+            self.set_request_error(
+                "pane.move_pending",
+                "Check the pending pane move before changing its group",
+                false,
+                Some(&payload.request_id),
+            );
+            return true;
+        }
         let request = format!("group:{}", payload.request_id);
         if self.split_request_seen(&key, &request) {
             return false;

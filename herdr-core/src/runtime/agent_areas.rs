@@ -309,7 +309,7 @@ impl Runtime {
             .iter()
             .filter(|(id, (scope, _, _, _))| scope == key && view.agent_tab_group(id).is_none())
             .count();
-        let pending = store.agent_admissions.get(key).map_or(0, HashSet::len);
+        let pending = self.pending_agent_admissions(key);
         if placed + arriving + pending < Tab::LIMITS.items {
             return true;
         }
@@ -326,6 +326,7 @@ impl Runtime {
             .as_ref()
             .and_then(|store| store.agent_admissions.get(key))
             .map_or(0, HashSet::len)
+            + self.pending_pane_move_tabs(key)
     }
 
     pub(super) fn has_agent_effect(&self, path: &str, claim: &str) -> bool {
@@ -510,6 +511,17 @@ impl Runtime {
             self.set_error(
                 "agent_layout.unsupported",
                 "SSH devices support one Agent area per group",
+                false,
+            );
+            return true;
+        }
+        if let AgentLayoutAction::Move { tab_id, .. } | AgentLayoutAction::Split { tab_id, .. } =
+            &payload.action
+            && self.pane_move_holds_tab(tab_id)
+        {
+            self.set_error(
+                "pane.move_pending",
+                "Check the pending pane move before rearranging this tab",
                 false,
             );
             return true;

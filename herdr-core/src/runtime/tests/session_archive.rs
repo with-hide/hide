@@ -383,6 +383,7 @@ fn with_registrations(runtime: &mut Runtime) -> String {
             project: None,
             actor: runtime.delivery_observations[pane].actor.clone(),
             ended: false,
+            terminal_id: None,
             forked: false,
         });
     }

@@ -966,6 +966,20 @@ The lens adds three reads to the five-minute generation (the login, the review-r
 Its other reads are a pull request's body and feedback when 맡기기 or 새 이슈 만들기 opens (one `pr_feedback_read`, `gh pr view` on a worker), and its only writes follow a confirmation; hover, focus, unfolding and the half-second cards are screen state.
 
 
+### Pane movement cost contract
+
+Header dragging and menu navigation remain page-local until a committed move or an unattached-tab hover read.
+Pointer updates render only when the candidate destination changes; one 450 ms hover timer requests text, and Escape or a changed scope cancels that preview.
+The core admits at most sixteen active moves or unsettled publication barriers, reserves both participating tabs and shares the ordinary 64-tab admission count for a new destination.
+It retains at most 128 move receipts in the existing Workspace view journal, saves before mutation off Runtime, and uses finite workers with a weak runtime owner rather than adding a resident timer or subprocess.
+Each native operation has a five-second API deadline and journal acknowledgement a fifteen-second deadline; a recovery check reads actual topology and never resends the original mutation.
+The final publication barrier overlays only the participating tabs until a newly started coordinator bootstrap can replace it, adding one authoritative refresh per settled move and no per-key work.
+Hover reads have one active worker and one latest pending request, at most 64 panes, 4,096 characters per pane, a 64 KiB API response cap, a two-second per-read deadline and a five-second batch deadline.
+Cancellation is checked between reads; an already admitted read can finish, and a stale answer cannot replace the current preview.
+The page indexes terminal identities once per changed catalog and readdresses an existing xterm instance without recreating its input, scroll or selection state.
+Unchanged input callbacks add no catalog scan, subprocess or notifier fan-out, and terminal retention still follows the existing attached-tab limit.
+Regression owners are `runtime::tests::pane_move`, delivery continuity tests, `web/e2e/pane-move.spec.ts` and `desktop/e2e/pane-move.spec.ts`; controlled measurement remains separate from these functional claims.
+
 ### Terminal path links
 
 `web/src/terminalLinks.ts` reads at most three rows on either side of the hovered row and retains the existing maximum of sixteen joined spellings per token.

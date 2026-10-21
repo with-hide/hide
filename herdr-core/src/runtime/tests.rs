@@ -80,6 +80,7 @@ mod node_issues;
 #[path = "tests/operator_focus.rs"]
 mod operator_focus;
 mod pane_geometry;
+pub(super) mod pane_move;
 #[path = "tests/project_settings.rs"]
 mod project_settings;
 #[path = "tests/projects.rs"]

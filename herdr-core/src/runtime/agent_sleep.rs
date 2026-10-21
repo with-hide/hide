@@ -571,6 +571,9 @@ impl Runtime {
     }
 
     fn begin_agent_sleep(&mut self, pane_id: &str, trigger: &str, now_unix_ms: u64) -> bool {
+        if self.pane_move_holds_pane(pane_id) {
+            return false;
+        }
         let Some(context) = self.sleep_target(pane_id) else {
             return false;
         };

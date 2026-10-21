@@ -1017,6 +1017,14 @@ impl Runtime {
             );
             return true;
         };
+        if self.pane_move_holds_tab(&scope_id) {
+            self.set_error(
+                "pane.move_pending",
+                "Check the pending pane move before changing this tab",
+                false,
+            );
+            return true;
+        }
         let Some(baseline_signature) = self.pane_operation_baseline(&target_id) else {
             self.set_error(
                 "pane.operation_scope_unavailable",
@@ -1271,29 +1279,33 @@ impl Runtime {
     /// next one has to wait its turn. A result that became unknown does not
     /// hold the line (D-09, D-12).
     fn geometry_in_flight(&self, scope_id: &str) -> bool {
-        self.pane_operations.values().any(|operation| {
-            operation.scope_id == scope_id
-                && matches!(
-                    operation.phase.as_str(),
-                    "transmitting" | "awaiting_topology"
-                )
-        }) || self.close_operations.values().any(|operation| {
-            operation.scope_id == scope_id
-                && matches!(
-                    operation.phase.as_str(),
-                    "preparing" | "transmitting" | "awaiting_topology"
-                )
-        }) || self.remote_operations.values().any(|operation| {
-            operation.scope_id == scope_id
-                && matches!(
-                    operation.phase.as_str(),
-                    "transmitting" | "awaiting_topology" | "unknown"
-                )
-        })
+        self.pane_move_holds_tab(scope_id)
+            || self.pane_operations.values().any(|operation| {
+                operation.scope_id == scope_id
+                    && matches!(
+                        operation.phase.as_str(),
+                        "transmitting" | "awaiting_topology"
+                    )
+            })
+            || self.close_operations.values().any(|operation| {
+                operation.scope_id == scope_id
+                    && matches!(
+                        operation.phase.as_str(),
+                        "preparing" | "transmitting" | "awaiting_topology"
+                    )
+            })
+            || self.remote_operations.values().any(|operation| {
+                operation.scope_id == scope_id
+                    && matches!(
+                        operation.phase.as_str(),
+                        "transmitting" | "awaiting_topology" | "unknown"
+                    )
+            })
     }
 
     pub(super) fn geometry_tab_busy(&self, scope_id: &str) -> bool {
-        self.geometry_in_flight(scope_id)
+        self.pane_move_holds_tab(scope_id)
+            || self.geometry_in_flight(scope_id)
             || self
                 .pane_operations
                 .values()
@@ -2108,6 +2120,7 @@ impl Runtime {
                     .map(|operation| (key, operation))
             })
             .map(|(_key, operation)| crate::model::AsyncOperationSnapshot {
+                related_scope_ids: Vec::new(),
                 id: operation.request.key.clone(),
                 kind: Self::close_operation_kind(&operation.request.target).to_owned(),
                 target_id: operation.target_id.clone(),
@@ -2122,6 +2135,7 @@ impl Runtime {
             .collect::<Vec<_>>();
         operations.extend(self.pane_operations.values().map(|operation| {
             crate::model::AsyncOperationSnapshot {
+                related_scope_ids: Vec::new(),
                 id: operation.id.clone(),
                 kind: operation.kind.clone(),
                 target_id: operation.target_id.clone(),
@@ -2139,6 +2153,7 @@ impl Runtime {
                 .iter()
                 .map(
                     |(checkout_id, operation)| crate::model::AsyncOperationSnapshot {
+                        related_scope_ids: Vec::new(),
                         id: format!("tab.move:{checkout_id}:{}", operation.generation),
                         kind: "tab.move".to_owned(),
                         target_id: operation.target_id.clone(),
@@ -2152,9 +2167,11 @@ impl Runtime {
                     },
                 ),
         );
+        operations.extend(self.pane_move_operations());
         operations.extend(self.tree_close_operations());
         operations.extend(self.remote_operations.values().map(|operation| {
             crate::model::AsyncOperationSnapshot {
+                related_scope_ids: Vec::new(),
                 id: operation.id.clone(),
                 kind: operation.kind.clone(),
                 target_id: operation.target_id.clone(),

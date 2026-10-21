@@ -1441,6 +1441,10 @@ pub(super) enum Event {
     WorkspaceView(WorkspaceViewPayload),
     ViewLayout(ViewLayoutPayload),
     AgentLayout(AgentLayoutPayload),
+    PaneMove(super::pane_move::Request),
+    PaneMoveCheck(super::pane_move::Check),
+    PaneMovePreview(super::pane_move_preview::Request),
+    PaneMovePreviewCancel(super::pane_move_preview::Cancel),
     AgentGroup(AgentGroupPayload),
     BrowserOpen(BrowserOpenPayload),
     BrowserState(BrowserStatePayload),
@@ -1911,6 +1915,12 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "pet_shortcut_update" => decode!(PetShortcutPayload, PetShortcutUpdate),
         "workspace_view" => decode!(WorkspaceViewPayload, WorkspaceView),
         "agent_layout" => decode!(AgentLayoutPayload, AgentLayout),
+        "pane_move" => decode!(super::pane_move::Request, PaneMove),
+        "pane_move_check" => decode!(super::pane_move::Check, PaneMoveCheck),
+        "pane_move_preview" => decode!(super::pane_move_preview::Request, PaneMovePreview),
+        "pane_move_preview_cancel" => {
+            decode!(super::pane_move_preview::Cancel, PaneMovePreviewCancel)
+        }
         "agent_group" => decode!(AgentGroupPayload, AgentGroup),
         "view_layout" => decode!(ViewLayoutPayload, ViewLayout),
         "browser_open" => decode!(BrowserOpenPayload, BrowserOpen),
@@ -2033,6 +2043,10 @@ impl Runtime {
         match event {
             Event::WorkspaceView(payload) => self.apply_workspace_view(payload),
             Event::AgentLayout(payload) => self.apply_agent_layout(payload),
+            Event::PaneMove(payload) => self.apply_pane_move(payload),
+            Event::PaneMoveCheck(payload) => self.check_pane_move(payload),
+            Event::PaneMovePreview(payload) => self.request_pane_move_preview(payload),
+            Event::PaneMovePreviewCancel(payload) => self.cancel_pane_move_preview(payload),
             Event::AgentGroup(payload) => self.apply_agent_group(payload),
             Event::ViewLayout(payload) => self.apply_view_layout(payload),
             Event::BrowserOpen(payload) => self.open_browser(payload),
@@ -3141,6 +3155,14 @@ impl Runtime {
             Event::ReopenClosed => self.reopen_closed(),
             Event::ForkPane(payload) => {
                 let pane_id = payload.pane_id;
+                if self.pane_move_holds_pane(&pane_id) {
+                    self.set_error(
+                        "pane.move_pending",
+                        "Check the pending pane move before forking this pane",
+                        false,
+                    );
+                    return true;
+                }
                 let Some(agent) = self
                     .snapshot
                     .navigator
