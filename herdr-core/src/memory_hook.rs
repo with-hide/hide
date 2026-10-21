@@ -100,27 +100,34 @@ pub fn answer(scope: &Scope, ask: &Ask, deadline: Instant) -> HookContext {
         return without(HookOutcome::Deadline);
     }
     let prompt = hide_memory::hook::prompt_prefix(ask.prompt.as_deref().unwrap_or_default());
-    // Native hooks provide text, not a continuation flag. A brief line (at
-    // most 80 characters) may use the confirmed task as ranking context.
-    // Longer requests carry their own task; no language-specific words decide it.
-    let ranked_prompt = if !prompt.trim().is_empty() && prompt.chars().count() <= 80 {
-        scope.task_context.as_deref().map(|context| {
-            hide_memory::hook::prompt_prefix(&format!("{prompt}\n{context}")).to_owned()
-        })
-    } else {
-        None
+    let ask_with = |prompt: &str| {
+        hide_memory::hook::context_for(
+            &scope.store,
+            &scope.project,
+            HookRequest {
+                runtime_id: &ask.runtime,
+                event: ask.event,
+                session_id: &ask.session,
+                prompt: Some(prompt),
+            },
+            move || Instant::now() >= deadline,
+        )
     };
-    hide_memory::hook::context_for(
-        &scope.store,
-        &scope.project,
-        HookRequest {
-            runtime_id: &ask.runtime,
-            event: ask.event,
-            session_id: &ask.session,
-            prompt: Some(ranked_prompt.as_deref().unwrap_or(prompt)),
-        },
-        move || Instant::now() >= deadline,
-    )
+    let own = ask_with(prompt);
+    // Native hooks provide text, not a continuation flag. A prompt that finds
+    // its own Memory has its own topic and keeps it; only a brief line (at
+    // most 80 characters) that finds nothing, such as "go on", is read as
+    // continuing the confirmed task and ranked with it. No language-specific
+    // words decide it.
+    let continues = own.outcome == HookOutcome::Empty
+        && !prompt.trim().is_empty()
+        && prompt.chars().count() <= 80;
+    match scope.task_context.as_deref().filter(|_| continues) {
+        Some(context) => ask_with(hide_memory::hook::prompt_prefix(&format!(
+            "{prompt}\n{context}"
+        ))),
+        None => own,
+    }
 }
 
 /// The Project that holds `checkout_path`, as the node that holds it reads
@@ -174,19 +181,34 @@ mod tests {
                     content_hash: "seed".into(),
                     created_at_unix_ms: 1,
                 },
-                &[hide_memory::Candidate {
-                    text: "Use nextest for test execution".into(),
-                    title: "Repository test runner".into(),
-                    aliases: vec!["테스트 실행기".into()],
-                    kind: hide_memory::CandidateKind::Rule,
-                    confidence: 0.9,
-                    salience: 0.9,
-                    source_offsets: vec![1],
-                    human_offsets: vec![1],
-                    source_times: Default::default(),
-                    cited_paths: vec![],
-                    relation: hide_memory::CandidateRelation::New,
-                }],
+                &[
+                    hide_memory::Candidate {
+                        text: "Use nextest for test execution".into(),
+                        title: "Repository test runner".into(),
+                        aliases: vec!["테스트 실행기".into()],
+                        kind: hide_memory::CandidateKind::Rule,
+                        confidence: 0.9,
+                        salience: 0.9,
+                        source_offsets: vec![1],
+                        human_offsets: vec![1],
+                        source_times: Default::default(),
+                        cited_paths: vec![],
+                        relation: hide_memory::CandidateRelation::New,
+                    },
+                    hide_memory::Candidate {
+                        text: "Granite slabs are catalogued by quarry".into(),
+                        title: "Granite catalogue".into(),
+                        aliases: vec!["화강암".into()],
+                        kind: hide_memory::CandidateKind::Rule,
+                        confidence: 0.9,
+                        salience: 0.9,
+                        source_offsets: vec![2],
+                        human_offsets: vec![2],
+                        source_times: Default::default(),
+                        cited_paths: vec![],
+                        relation: hide_memory::CandidateRelation::New,
+                    },
+                ],
             )
             .unwrap();
         drop(store);
@@ -206,6 +228,15 @@ mod tests {
             answer(&scope, &unrelated, Instant::now() + WITHIN).outcome,
             HookOutcome::Empty
         );
+
+        let own_topic = Ask::from_wire(&json!({"event":"UserPromptSubmit","runtime":"claude","session":"short-own-topic","prompt":"granite 목록 정리해줘"})).unwrap();
+        let result = answer(&scope, &own_topic, Instant::now() + WITHIN);
+        assert_eq!(
+            result.outcome,
+            HookOutcome::Provided { count: 1 },
+            "a short prompt that finds its own card spends nothing on the task's"
+        );
+        assert!(result.context.unwrap().contains("Granite slabs"));
 
         let result = answer(&scope, &ask, Instant::now() + WITHIN);
         assert_eq!(result.outcome, HookOutcome::Provided { count: 1 });
