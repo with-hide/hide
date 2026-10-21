@@ -67,7 +67,9 @@ jobs:
   # the rest of the suite is the same code on every system, which the pull
   # request and the `verify` job below already run whole on
   # Linux, so Linux has no web job here. What this run adds is the desktop app
-  # on Linux and Windows, the packages, and a runner image that changed.
+  # on Linux, the packages, and a runner image that changed. `verify` owns
+  # Windows web/desktop and macOS desktop on a scheduled or `all` run; the
+  # direct calls below retain OS-only dispatch without running those twice.
   web-e2e-macos:
     name: web e2e (macOS @platform)
     if: ${{ inputs.lane != 'linux' && inputs.lane != 'windows' && inputs.lane != 'agy' }}
@@ -84,7 +86,7 @@ jobs:
 
   web-e2e-windows:
     name: web e2e (Windows @platform)
-    if: ${{ inputs.lane != 'linux' && inputs.lane != 'macos' && inputs.lane != 'agy' }}
+    if: ${{ inputs.lane == 'windows' }}
     uses: ./.github/workflows/web-e2e.yml
     permissions:
       contents: read
@@ -175,9 +177,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # One system by hand, all three otherwise; the runner and the Herdr
-        # platform follow from the system.
-        system: ${{ fromJSON(inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]') }}
+        # Only Linux here for a full run: `verify` already runs the whole
+        # macOS suite and Windows @platform, with its screenshots. An OS-only
+        # dispatch still runs its one system directly, without `verify`.
+        system: ${{ fromJSON(inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux"]') }}
     uses: ./.github/workflows/desktop-e2e.yml
     permissions:
       contents: read

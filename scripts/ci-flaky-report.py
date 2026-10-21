@@ -118,6 +118,15 @@ PAGES = 10
 # Jobs that only report on the others: this job, and `verify`'s gate, which
 # fails whenever a lane it waits for did and so names no failure of its own.
 REPORT_JOBS = ("nightly report", "verify / verify")
+# Full nightly runs moved these duplicate calls under verify. Keep old issue
+# keys and green history attached to the identical suite, including build
+# failures; OS-only dispatch still uses the former job names.
+LANE_MOVES = {
+    "web e2e (Windows @platform) / build hided nightly-windows": "verify / windows e2e / build hided windows",
+    "web e2e (Windows @platform) / web e2e nightly-windows": "verify / windows e2e / web e2e windows",
+    "desktop e2e (macos full) / desktop e2e nightly-macos": "verify / desktop e2e / desktop e2e macos",
+    "desktop e2e (windows @platform) / desktop e2e nightly-windows": "verify / windows desktop / desktop e2e windows",
+}
 SHARD = re.compile(r" \d+/\d+$")
 # Steps that prepare the runner rather than check the code: a failure there is
 # the runner's or a download's. Anything else, a build included, is not.
@@ -328,9 +337,7 @@ def gh(args, body=None, raw=False):
 
 
 def open_issues(repo, call=gh):
-    issues = call([f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=100"])
-    if len(issues) == 100:
-        print("::warning::100 open quarantine issues; later ones are not searched for a duplicate")
+    issues = listing(call, f"repos/{repo}/issues?labels={LABEL}&state=open")
     return [issue for issue in issues if "pull_request" not in issue]
 
 
@@ -350,7 +357,7 @@ def report(tests, system, env, call=gh, today=None):
             lines.append(f"- filed {created['html_url']}: {label_of(test)}")
             continue
         number = issue["number"]
-        comments = call([f"repos/{repo}/issues/{number}/comments?per_page=100"])
+        comments = listing(call, f"repos/{repo}/issues/{number}/comments")
         lines.append(f"- #{number}: {label_of(test)}")
         if any(facts["marker"] in (item.get("body") or "") for item in comments):
             continue
@@ -385,6 +392,12 @@ def listing(call, path, key=None):
 def lane_of(job_name):
     """A job's lane: its name without the shard, so a test is the same failure in whichever shard it ran."""
     return SHARD.sub("", job_name).replace(":", "-")
+
+
+def canonical_key(key):
+    """Resolve a moved suite's lane while retaining its test or step identity."""
+    lane, separator, subject = key.partition(":")
+    return LANE_MOVES.get(lane, lane) + separator + subject
 
 
 def marker_text(text):
@@ -522,7 +535,7 @@ class Nightly:
 
     def green(self, jobs, lane):
         """Whether `lane` ran in `jobs`, every job of it passed, and none passed without measuring."""
-        mine = [job for job in jobs if lane_of(job["name"]) == lane]
+        mine = [job for job in jobs if canonical_key(lane_of(job["name"])) == canonical_key(lane)]
         return bool(mine) and all(job["conclusion"] == "success" for job in mine) and not self.unmeasured(mine)
 
     def failures(self):
@@ -677,11 +690,11 @@ class Nightly:
             issue for issue in listing(self.call, f"repos/{self.repo}/issues?labels={NIGHTLY_LABEL}&state=open")
             if "pull_request" not in issue
         ]
-        open_by_key = {key_of(issue): issue for issue in issues if key_of(issue)}
+        open_by_key = {canonical_key(key_of(issue)): issue for issue in issues if key_of(issue)}
         failures, unannotated = self.failures()
         actions, opened, over = [], 0, []
         for failure in failures:
-            issue = open_by_key.get(failure["key"])
+            issue = open_by_key.get(canonical_key(failure["key"]))
             if issue is not None:
                 if not self.commented(issue):
                     actions.append(("comment", issue["number"], self.recurrence(failure)))
