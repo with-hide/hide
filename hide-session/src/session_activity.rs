@@ -81,10 +81,14 @@ pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActi
         }
         return Ok(activity);
     }
-    let metadata =
-        std::fs::metadata(&path).map_err(|_| "session_activity_stat_failed".to_owned())?;
-    let identity = FileIdentity::from_metadata(&metadata);
-    let sampled_incarnation = format!("{}:{}", identity.first, identity.second);
+    let file =
+        crate::open_session_file(&path).map_err(|_| "session_activity_open_failed".to_owned())?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| "session_activity_stat_failed".to_owned())?;
+    let identity = FileIdentity::from_file(&file)
+        .map_err(|_| "session_activity_identity_unavailable".to_owned())?;
+    let sampled_incarnation = identity.incarnation();
     let modified_at_unix_ms = metadata
         .modified()
         .map_err(|_| "session_activity_mtime_unavailable".to_owned())?

@@ -22,7 +22,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::fs::{self, File, Metadata};
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -66,12 +66,6 @@ pub use catalog::{
     ProjectSession, ProjectSessions, SESSION_DISCOVERY_LIMIT, SessionAvailability, SessionCatalog,
     SessionCatalogError, SessionFilter, SessionStoreRefusal,
 };
-
-#[cfg(not(unix))]
-use std::time::SystemTime;
-
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 
 /// Number of recent day directories used when Herdr has not reported a Codex
 /// session identity yet.
@@ -717,6 +711,9 @@ pub type Result<T> = std::result::Result<T, SessionError>;
 struct FileIdentity {
     first: u64,
     second: u64,
+    /// Windows keeps a 128-bit file index. Old Unix checkpoints omit this.
+    #[serde(default)]
+    high: u64,
 }
 
 /// Durable state for resuming one append-only session file after relaunch.
@@ -736,26 +733,18 @@ pub struct CursorCheckpoint {
 }
 
 impl FileIdentity {
-    fn from_metadata(metadata: &Metadata) -> Self {
-        #[cfg(unix)]
-        {
-            Self {
-                first: metadata.dev(),
-                second: metadata.ino(),
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            let modified = metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
-                .map_or(0, |duration| duration.as_nanos() as u64);
-            Self {
-                first: metadata.len(),
-                second: modified,
-            }
-        }
+    fn from_file(file: &File) -> io::Result<Self> {
+        let id = hide_platform::fs::identity::file_id_of(file)?;
+        Ok(Self {
+            first: id.volume(),
+            second: id.index() as u64,
+            high: (id.index() >> 64) as u64,
+        })
+    }
+
+    fn incarnation(self) -> String {
+        let index = (u128::from(self.high) << 64) | u128::from(self.second);
+        format!("{}:{index}", self.first)
     }
 }
 
@@ -2194,6 +2183,16 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn checkpoints_without_the_high_file_index_remain_readable() {
+        let checkpoint: CursorCheckpoint = serde_json::from_value(serde_json::json!({
+            "offset": 42, "identity": {"first": 1, "second": 2}
+        }))
+        .unwrap();
+        let cursor = SessionCursor::restore(checkpoint);
+        assert_eq!(cursor.checkpoint().offset, 42);
+    }
 
     #[test]
     fn parses_rfc3339_with_fraction_and_offset() {

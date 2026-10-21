@@ -12,9 +12,10 @@ what goes into a package plans. No lane takes a macOS runner for anything but
 what only macOS proves (`os-contract-macos`, `desktop-e2e`, and `package`'s
 packaged app); the rest of the macOS checks are jobs of `nightly.yml`.
 
-A pull request whose last green run still stands plans `policy` alone: what
-it adds to main differs from what that run checked only in paths no lane but
-`policy` reads, and main has changed none of the paths it adds that a lane
+A pull request whose last green run still stands plans `policy` alone, or
+also the unit checks when only registered desktop unit tests changed: what
+it adds to main differs from what that run checked only in policy paths or
+registered desktop unit tests, and main has changed none of the paths it adds that a lane
 reads. Each pull request run keeps a plan record for the next one to read; a
 missing run or record, or a lookup, fetch or comparison that fails, leaves
 the plan as it is.
@@ -171,7 +172,8 @@ READERS = (
 
 def reader_entries(name):
     """The READERS entries that read the changed path `name`."""
-    return [entry for entry in READERS if name == entry[0] or (entry[0].endswith("/") and name.startswith(entry[0]))]
+    return [entry for entry in READERS
+            if name == entry[0] or (entry[0].endswith("/") and name.startswith(entry[0]))]
 
 
 # The paths that change what goes into a package: the package scripts and
@@ -234,6 +236,21 @@ POLICY_ONLY = (
 # check`, so neither is web-only or desktop-only.
 WEB_E2E_LANES = {"checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"}
 DESKTOP_E2E_LANES = {"checks", "desktop-e2e", "windows-desktop", "windows-check"}
+# Desktop Vitest inputs, outside the app's explicit esbuild entry graphs:
+# `checks` and `windows-check` run them. Web tests are deliberately absent:
+# sidebar.rs scans every web/src TypeScript file, and Tailwind's web-root
+# scanner reads web tests as CSS inputs. Their existing app lanes must stay.
+# An unregistered convention keeps its folder's existing plan.
+UNIT_TEST_PATHS = (
+    "desktop/src/*.test.ts",
+    "desktop/e2e/fixture-cleanup.unit.ts", "desktop/e2e/windows-processes.unit.ts",
+)
+
+
+def is_unit_test(name):
+    return any(fnmatchcase(name, pattern) for pattern in UNIT_TEST_PATHS)
+
+
 # The agent journey's keyless lane runs its code on the compiled stand-ins
 # (`agent-journey.yml`); the stand-ins' sources are also the e2e's.
 JOURNEY_LANES = {"agent-journey"}
@@ -381,6 +398,8 @@ def classify(path, status, crates, root):
     if parts[0] == "design":
         # design-contract.yml checks the library; no pr.yml lane reads it.
         return set(), f"design library: {path}", set()
+    if is_unit_test(path.as_posix()):
+        return {"checks", "windows-check"}, f"registered desktop unit test: {path}", set()
     crate = crates.get(parts[0])
     if crate is not None:
         packages = reverse_closure(crates, crate["name"])
@@ -463,7 +482,9 @@ def select(entries, crates, root=ROOT, full_reason=None):
         path = PurePosixPath(name)
         if not name or path.is_absolute() or ".." in path.parts:
             raise ValueError(f"invalid changed path: {name!r}")
-        if any(fnmatchcase(name, pattern) for pattern in PACKAGE_PATHS):
+        # A broad package input (updater*) can name its unit test too, but a
+        # registered desktop unit test is not built into the package.
+        if not is_unit_test(name) and any(fnmatchcase(name, pattern) for pattern in PACKAGE_PATHS):
             reasons["package"].append(f"package input: {name}")
         lanes, reason, reached = classify(path, status, crates, root)
         if lanes is None:
@@ -600,10 +621,10 @@ def fetch_history(root, *commits):
 
 
 def still_stands(verified, base, head, entries, crates, root=ROOT):
-    """Why the run in `verified` stands for base..head; NotReused says why it does not.
+    """Why the run stands and the unit-test delta to recheck, or NotReused.
 
     It stands when the pull request adds to main what that run's head added,
-    but for paths no lane but `policy` reads, and main has changed none of the
+    but for policy paths and registered desktop unit tests, and main has changed none of the
     paths the pull request changes that a lane reads since that run's main.
     """
     run, old_base, old_head = verified["run"], verified["base"], verified["head"]
@@ -615,16 +636,18 @@ def still_stands(verified, base, head, entries, crates, root=ROOT):
     )
     if merged.returncode not in (0, 1) or not merged.stdout.split():
         raise NotReused(f"`git merge-tree` failed: {merged.stderr.strip()}")
-    changed = [name for status, name in changed_entries(merged.stdout.split()[0], head, root)
-               if not reads_no_lane(status, name, crates, root)]
+    delta = [(status, name) for status, name in changed_entries(merged.stdout.split()[0], head, root)
+             if not reads_no_lane(status, name, crates, root)]
+    changed = [name for status, name in delta if status not in ("A", "M", "D") or not is_unit_test(name)]
     if changed:
         raise NotReused(f"since run {run} the pull request changed {listing(changed)}, which a lane reads")
     main_changed = {name for _, name in changed_entries(old_base, base, root)}
     overlap = [name for status, name in entries if name in main_changed and not reads_no_lane(status, name, crates, root)]
     if overlap:
         raise NotReused(f"since run {run} main changed {listing(overlap)}, which the pull request changes too")
-    return (f"run {run} checked head {old_head[:9]} on main {old_base[:9]}; since then the pull request changed only "
-            "paths no lane but policy reads, and main none of the paths it changes that a lane reads")
+    why = (f"run {run} checked head {old_head[:9]} on main {old_base[:9]}; since then the pull request changed only "
+           "policy paths or registered desktop unit tests, and main none of the paths it changes that a lane reads")
+    return why, delta
 
 
 def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None):
@@ -662,16 +685,21 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
         return result
     try:
         verified = last_green()
-        why = still_stands(verified, base, head, entries, crates, root)
+        why, delta = still_stands(verified, base, head, entries, crates, root)
     except (NotReused, subprocess.CalledProcessError, OSError, ValueError) as error:
         # Every failure keeps the plan the change itself needs.
         result["reuse"] = {"run": None, "why": error_detail(error)}
         return result
+    # Never call select with an empty delta: an empty comparison deliberately
+    # plans every lane. Preserve the original green anchor even after these
+    # checks succeed, so a later run compares with the app code actually tested.
+    rerun = select(delta, crates, root) if delta else {"lanes": ["policy"], "rust_packages": [], "reasons": {"policy": []}}
+    rerun["reasons"]["policy"].append(f"reuses run {verified['run']}: {why}")
     return {
         "full": False,
-        "lanes": ["policy"],
-        "rust_packages": [],
-        "reasons": {"policy": [f"reuses run {verified['run']}: {why}"]},
+        "lanes": rerun["lanes"],
+        "rust_packages": rerun["rust_packages"],
+        "reasons": rerun["reasons"],
         "commits": result["commits"],
         "reuse": {"run": verified["run"], "why": why},
         "verified": verified,
@@ -679,7 +707,7 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
 
 
 def plan_record(result, number, run_id):
-    """What the next run of this pull request reads: the commits this run's lanes checked."""
+    """The app-tested anchor, preserved across policy and unit-only reruns."""
     commits = result.get("commits")
     verified = result.get("verified") or (commits and {"run": run_id, **commits})
     return {"version": RECORD_VERSION, "pr": number, "head": commits and commits["head"], "verified": verified}
@@ -728,7 +756,7 @@ def summary(result, runs_url=None):
             lines.append(f"No earlier green run stands for this one: {reuse['why']}.")
         else:
             run = f"[run {reuse['run']}]({runs_url}{reuse['run']})" if runs_url else f"run {reuse['run']}"
-            lines.append(f"Reuses {run} for every lane but policy: {reuse['why']}.")
+            lines.append(f"Reuses {run} for unchanged lanes; this run checks {', '.join(result['lanes'])}: {reuse['why']}.")
     return "\n".join(lines) + "\n"
 
 

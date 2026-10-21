@@ -157,6 +157,8 @@ fn confirm_metadata(
     {
         return Err(anyhow!("label_session_linked"));
     }
+    let physical = FileIdentity::from_file(&file)
+        .map_err(|_| anyhow!("label_session_identity_unavailable"))?;
     let mut reader = BufReader::new(file.take(SESSION_INCREMENT_READ_LIMIT_BYTES));
     let mut native_id = None;
     if agent.requires_native_file_proof() {
@@ -232,7 +234,6 @@ fn confirm_metadata(
     }
     let owner =
         reference_token(agent, "id", &id).ok_or_else(|| anyhow!("label_session_id_invalid"))?;
-    let physical = FileIdentity::from_metadata(&metadata);
     Ok(ConfirmedLabelSession {
         owner,
         native_session_id: Some(id),
@@ -245,7 +246,7 @@ fn confirm_metadata(
                     .ok_or_else(|| anyhow!("label_session_path_invalid"))
             })
             .transpose()?,
-        incarnation: format!("{}:{}", physical.first, physical.second),
+        incarnation: physical.incarnation(),
         bytes: metadata.len(),
     })
 }
@@ -379,6 +380,43 @@ mod tests {
         let replaced = confirm_label_session(Agent::Codex, &path, None).unwrap();
         assert_eq!(before.owner, replaced.owner);
         assert_ne!(before.incarnation, replaced.incarnation);
+    }
+
+    #[test]
+    fn appending_a_turn_keeps_the_incarnation_and_reads_only_the_new_turn() {
+        use std::io::Write;
+
+        let root = tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let human = |text, timestamp| {
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "type": "user", "sessionId": "native-a", "timestamp": timestamp,
+                    "message": {"role": "user", "content": text}
+                })
+            )
+        };
+        fs::write(&path, human("First", "2026-10-21T00:00:00Z")).unwrap();
+        let before = confirm_label_session(Agent::Claude, &path, None).unwrap();
+        let mut cursor = crate::ConversationCursor::new();
+        assert_eq!(cursor.read(Agent::Claude, &path).unwrap().events.len(), 1);
+        let saved = serde_json::to_vec(&cursor.checkpoint()).unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(human("Next", "2026-10-21T00:01:00Z").as_bytes())
+            .unwrap();
+        let after = confirm_label_session(Agent::Claude, &path, None).unwrap();
+        assert!(after.bytes > before.bytes);
+        assert_eq!(after.incarnation, before.incarnation);
+        let mut resumed =
+            crate::ConversationCursor::restore(serde_json::from_slice(&saved).unwrap());
+        let appended = resumed.read(Agent::Claude, &path).unwrap();
+        assert!(appended.rescan_reason.is_none());
+        assert_eq!(appended.events.len(), 1);
+        assert_eq!(appended.events[0].text, "Next");
     }
 
     #[test]
