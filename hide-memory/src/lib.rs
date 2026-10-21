@@ -95,12 +95,11 @@ pub const PROMOTION_PULLED_SESSIONS: u64 = 3;
 pub const PROMOTION_WINDOW_MS: u64 = 14 * 86_400_000;
 /// The most suggestions open at once (B29).
 pub const PROMOTION_OPEN_LIMIT: usize = 3;
-/// New cards one analyzed session may make (PRD memory-card-quality D-02);
-/// a card that is the same, a correction or a conflict does not count.
-pub const NEW_CARDS_PER_SESSION: usize = 2;
-/// A session with fewer of the operator's own events than this makes no new
-/// card (D-03).
-pub const OPERATOR_EVENTS_MINIMUM: u64 = 3;
+/// Significant new cards one extraction group may admit. Later groups have
+/// their own opportunity; corrections do not consume this allowance.
+pub const NEW_CARDS_PER_GROUP: usize = 8;
+/// Extraction groups one session may process in a background pass.
+pub const ANALYSIS_GROUP_QUANTUM: usize = 4;
 /// The most characters of the reason an agent gives when it calls a card
 /// outdated.
 pub const OUTDATED_REASON_LIMIT_CHARS: usize = 500;

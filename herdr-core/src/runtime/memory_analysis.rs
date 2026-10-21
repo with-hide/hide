@@ -860,6 +860,10 @@ struct PassInput {
     failed_reads: FailedReads,
 }
 
+// At most eight maintenance admissions and one four-group extraction quantum
+// (each group may add one document comparison): sixteen calls across all Projects.
+const MAINTENANCE_CALLS_PER_PASS: usize = 8;
+
 fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcome {
     let mut outcome = PassOutcome {
         failed_reads: input.failed_reads.clone(),
@@ -912,6 +916,8 @@ fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcom
             .enabled_projects(node.as_str())
             .map_or(true, |enabled| !enabled.is_empty())
     });
+    let mut pending = Vec::new();
+    let mut maintenance_calls = 0;
     for (node, link, project_id, root) in projects {
         if input.cancel.is_cancelled() {
             walked_all = false;
@@ -928,6 +934,8 @@ fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcom
             &mut tally,
             &mut outcome,
             &mut reached,
+            &mut pending,
+            &mut maintenance_calls,
             report,
         );
         if let Err(message) = walked {
@@ -971,6 +979,14 @@ fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcom
             });
         }
     }
+    run_analysis_turn(
+        input,
+        &mut store,
+        pending,
+        &mut deferred,
+        &mut outcome,
+        report,
+    );
     if walked_all {
         outcome
             .settled
@@ -1003,6 +1019,134 @@ struct ProjectTally {
     error: Option<AiError>,
 }
 
+struct PendingAnalysis {
+    node: NodeId,
+    project_id: String,
+    root: String,
+    session: ProjectSession,
+    stat: hide_node_link::sessions::SessionStat,
+}
+
+/// One admitted session quantum per pass, at most four extraction and four
+/// creation-comparison calls. Discovery and maintenance keep their existing
+/// owners; new arrivals cannot replace the persisted FIFO opportunity.
+fn run_analysis_turn(
+    input: &PassInput,
+    store: &mut MemoryStore,
+    pending: Vec<PendingAnalysis>,
+    deferred: &mut Option<&'static str>,
+    outcome: &mut PassOutcome,
+    report: &mut dyn FnMut(PassReport),
+) {
+    let Some(router) = input.router.as_ref() else {
+        return;
+    };
+    if deferred.is_some() || input.cancel.is_cancelled() {
+        return;
+    }
+    let ordered = match store.analysis_order() {
+        Ok(ordered) => ordered,
+        Err(error) => {
+            crate::diagnostic!(
+                json!({"component":"memory","kind":"analysis.queue_unavailable","message":error.to_string()})
+            );
+            return;
+        }
+    };
+    let Some(task) = ordered.iter().find_map(|(project, provider, session)| {
+        pending.iter().find(|task| {
+            task.project_id == *project
+                && task.session.agent.as_str() == provider
+                && task.session.id == *session
+        })
+    }) else {
+        return;
+    };
+    let Some((_, link)) = input.nodes.iter().find(|(node, _)| *node == task.node) else {
+        return;
+    };
+    let project_id = &task.project_id;
+    let mut analyzing = false;
+    let mut admit = |store: &MemoryStore| {
+        admit_call(store)?;
+        if !analyzing {
+            analyzing = true;
+            report(PassReport::Analyzing {
+                project_id: project_id.clone(),
+            });
+        }
+        Ok(())
+    };
+    let result = analyze_session(
+        store,
+        link.as_ref(),
+        router,
+        input.language,
+        project_id,
+        &task.root,
+        &task.session,
+        input.delegated.contains(&task.session.id),
+        &task.stat,
+        &input.cancel,
+        &mut admit,
+    );
+    let (learned, error, rotate) = match result {
+        Ok(learned) => {
+            outcome.read_succeeded(ANALYSIS_FAILED, &task.session);
+            (learned, None, true)
+        }
+        Err(AnalysisFailure::Provider(error)) => (0, Some(error), false),
+        Err(AnalysisFailure::Deferred(reason)) => {
+            *deferred = Some(reason);
+            (0, None, false)
+        }
+        Err(AnalysisFailure::Cancelled | AnalysisFailure::Disabled) => (0, None, false),
+        Err(AnalysisFailure::Local(message)) => {
+            outcome.read_failed(
+                ANALYSIS_FAILED,
+                project_id,
+                &task.session,
+                (task.stat.size, task.stat.modified_unix_ms),
+                &message,
+            );
+            (0, None, false)
+        }
+    };
+    if analyzing || error.is_some() {
+        report(PassReport::Analyzed {
+            project_id: project_id.clone(),
+            learned,
+            error,
+        });
+    }
+    if rotate {
+        let result =
+            analysis_pending(store, project_id, &task.session, &task.stat).and_then(|pending| {
+                store
+                    .finish_analysis_turn(
+                        project_id,
+                        task.session.agent.as_str(),
+                        &task.session.id,
+                        pending,
+                    )
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(message) = result {
+            crate::diagnostic!(
+                json!({"component":"memory","kind":"analysis.queue_checkpoint_failed","project_id":project_id,"message":message})
+            );
+        }
+    }
+    if let Some(state) = deferred.and_then(visible_deferral) {
+        outcome.check_budget_exhausted.insert(project_id.clone());
+        report(PassReport::CheckState {
+            project_id: project_id.clone(),
+            state,
+            card: None,
+        });
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk_project(
     input: &PassInput,
@@ -1014,6 +1158,8 @@ fn walk_project(
     tally: &mut ProjectTally,
     outcome: &mut PassOutcome,
     reached: &mut BTreeSet<MemorySession>,
+    analysis: &mut Vec<PendingAnalysis>,
+    maintenance_calls: &mut usize,
     report: &mut dyn FnMut(PassReport),
 ) -> Result<(), String> {
     let identity = project_identity(sessions_node, node, root)?;
@@ -1116,9 +1262,6 @@ fn walk_project(
         if closed && !pending {
             outcome.settled.insert(key.clone());
         }
-        let Some(router) = input.router.as_ref() else {
-            continue;
-        };
         if deferred.is_some() || input.held.contains(project_id) || tally.error.is_some() {
             continue;
         }
@@ -1135,44 +1278,21 @@ fn walk_project(
             *deferred = Some(reason);
             continue;
         }
-        // The Project turns "analyzing" at the session's first provider call,
-        // so a session that asks nothing (too short, an agent's) never does.
-        let mut admit = |store: &MemoryStore| {
-            admit_call(store)?;
-            if !tally.analyzing {
-                tally.analyzing = true;
-                report(PassReport::Analyzing {
-                    project_id: project_id.to_owned(),
-                });
-            }
-            Ok(())
-        };
-        match analyze_session(
-            store,
-            sessions_node,
-            router,
-            input.language,
-            project_id,
-            root,
-            &session,
-            input.delegated.contains(&session.id),
-            &stat,
-            &input.cancel,
-            &mut admit,
-        ) {
-            Ok(learned) => {
-                tally.learned += learned;
-                outcome.read_succeeded(ANALYSIS_FAILED, &session);
-            }
-            // One provider failure stops this Project's analysis for the pass;
-            // its receipts are still walked.
-            Err(AnalysisFailure::Provider(error)) => tally.error = Some(error),
-            Err(AnalysisFailure::Deferred(reason)) => *deferred = Some(reason),
-            Err(AnalysisFailure::Cancelled | AnalysisFailure::Disabled) => break,
-            Err(AnalysisFailure::Local(message)) => {
-                outcome.read_failed(ANALYSIS_FAILED, project_id, &session, version, &message);
-            }
-        }
+        store
+            .enqueue_analysis(
+                project_id,
+                session.agent.as_str(),
+                &session.id,
+                session.updated_at_unix_ms,
+            )
+            .map_err(|error| error.to_string())?;
+        analysis.push(PendingAnalysis {
+            node: node.clone(),
+            project_id: project_id.into(),
+            root: root.into(),
+            session,
+            stat,
+        });
     }
     // The operator's own instruction files are this machine's.
     let home = input
@@ -1191,6 +1311,7 @@ fn walk_project(
         deferred,
         tally,
         outcome,
+        maintenance_calls,
         report,
     );
     Ok(())
@@ -1212,6 +1333,7 @@ fn maintain_cards(
     deferred: &mut Option<&'static str>,
     tally: &mut ProjectTally,
     outcome: &mut PassOutcome,
+    maintenance_calls: &mut usize,
     report: &mut dyn FnMut(PassReport),
 ) {
     let Some(router) = input.router.as_ref() else {
@@ -1245,7 +1367,14 @@ fn maintain_cards(
         return;
     }
     outcome.wants_usage = true;
-    let mut admit = |store: &MemoryStore| admit_budget(store, hide_memory::MemoryCallKind::Check);
+    let mut admit = |store: &MemoryStore| {
+        if *maintenance_calls >= MAINTENANCE_CALLS_PER_PASS {
+            return Err(AnalysisFailure::Deferred("pass_quantum"));
+        }
+        admit_budget(store, hide_memory::MemoryCallKind::Check)?;
+        *maintenance_calls += 1;
+        Ok(())
+    };
     let mut progress = |card: Option<u64>| {
         if card.is_none() {
             report(PassReport::Checked {
@@ -1667,23 +1796,48 @@ fn analyze_session(
         .collect::<Vec<_>>();
     let checkout = session.checkout_path.to_string_lossy().into_owned();
     let mut learned = 0;
-    let mut left_out = BTreeMap::new();
-    let (mut last_hash, earlier) = saved.map_or((None, 0), |record| {
-        (record.last_content_hash, record.operator_events)
-    });
+    let base_offset = if read.rescanned {
+        0
+    } else {
+        saved.as_ref().map_or(0, |cursor| cursor.byte_offset)
+    };
+    if read.rescanned {
+        store
+            .clear_analysis_progress(project_id, provider, &session.id)
+            .map_err(|error| local(error.to_string()))?;
+    }
+    let (next_group, unsent) = store
+        .analysis_progress(project_id, provider, &session.id, base_offset)
+        .map_err(|error| local(error.to_string()))?;
+    let mut left_out = unsent
+        .into_iter()
+        .map(|id| (id, 0))
+        .collect::<BTreeMap<_, _>>();
+    let (mut last_hash, earlier) = saved
+        .filter(|_| !read.rescanned)
+        .map_or((None, 0), |record| {
+            (record.last_content_hash, record.operator_events)
+        });
     let operator_events = earlier
         + events
             .iter()
             .filter(|event| event["kind"] == EventKind::Human.as_str())
             .count() as u64;
-    // A session with fewer than three operator words makes no new card; its
-    // receipts are read apart from this (D-03).
-    let groups = if operator_events < hide_memory::OPERATOR_EVENTS_MINIMUM {
+    // Delegated instructions never count as human evidence. A single human
+    // exchange is eligible; significance is judged by extraction.
+    let groups = if operator_events == 0 {
         Vec::new()
     } else {
         event_groups(&events).map_err(local)?
     };
-    for group in groups {
+    let total_groups = groups.len();
+    let mut completed = next_group;
+    for (index, group) in groups
+        .into_iter()
+        .enumerate()
+        .skip(next_group)
+        .take(hide_memory::ANALYSIS_GROUP_QUANTUM)
+    {
         if cancel.is_cancelled() {
             return Err(AnalysisFailure::Cancelled);
         }
@@ -1698,7 +1852,7 @@ fn analyze_session(
                 session_id: &session.id,
                 checkout_path: &checkout,
                 evidence_root: root,
-                new_card_limit: Some(hide_memory::NEW_CARDS_PER_SESSION),
+                new_card_limit: Some(hide_memory::NEW_CARDS_PER_GROUP),
                 deadline: None,
             },
             &group,
@@ -1712,6 +1866,20 @@ fn analyze_session(
         if !written.summary.duplicate_batch {
             learned += written.summary.created + written.summary.superseded;
         }
+        completed = index + 1;
+        store
+            .save_analysis_progress(
+                project_id,
+                provider,
+                &session.id,
+                base_offset,
+                completed,
+                &left_out.keys().cloned().collect::<Vec<_>>(),
+            )
+            .map_err(|error| local(error.to_string()))?;
+    }
+    if completed < total_groups {
+        return Ok(learned);
     }
     for number in left_out.values() {
         crate::diagnostic!(json!({
@@ -1742,6 +1910,9 @@ fn analyze_session(
     for ended in &settled {
         log_ended_hold(project_id, ended, "analyzed");
     }
+    store
+        .clear_analysis_progress(project_id, provider, &session.id)
+        .map_err(|error| local(error.to_string()))?;
     log_skipped("analysis.records_skipped", project_id, session, &read);
     Ok(learned)
 }
@@ -1860,208 +2031,245 @@ pub(crate) fn write_cards(
             language,
         )
         .map_err(|error| local(error.to_string()))?;
-    admit(store)?;
-    let answer = router
-        .execute(&request, cancel)
-        .map_err(|error| match error {
-            AiError::Cancelled => AnalysisFailure::Cancelled,
-            error => AnalysisFailure::Provider(error),
-        })?;
-    let output = analyzer
-        .parse(answer.value, &similar)
-        .map_err(|error| AnalysisFailure::Provider(AiError::InvalidOutput(format!("{error:?}"))))?;
-    let mut candidates = output.candidates;
-    let unsourced = validate_candidates(&mut candidates, group);
-    if unsourced + output.secret_rejected > 0 {
-        crate::diagnostic!(json!({
-            "component": "memory",
-            "kind": "analysis.candidates_left_out",
-            "project_id": source.project_id,
-            "provider": source.provider,
-            "unsourced": unsourced,
-            "secret": output.secret_rejected,
-        }));
-    }
-    keep_cited_paths(sessions_node, source.checkout_path, &mut candidates);
-    let mut facts = CheckoutFacts::new(sessions_node, source.evidence_root);
-    let documents =
-        super::memory_verify::repository_sources(sessions_node, &facts, source.evidence_root);
-    let matches = candidates
-        .iter()
-        .enumerate()
-        .filter(|(_, candidate)| {
-            candidate.relation == CandidateRelation::New
-                && candidate.kind != hide_memory::CandidateKind::Preference
-        })
-        .filter_map(|(index, candidate)| {
-            let words = hide_memory::query_words(&[
-                &candidate.title,
-                &candidate.text,
-                &candidate.aliases.join(" "),
-            ]);
-            let document = documents
-                .iter()
-                .map(|document| {
-                    let lower = document.text.to_lowercase();
-                    let score = words
-                        .iter()
-                        .filter(|word| lower.contains(word.as_str()))
-                        .count();
-                    (score, document)
-                })
-                .filter(|(score, _)| *score >= 2)
-                .max_by_key(|(score, _)| *score)?
-                .1;
-            Some((
-                index,
-                candidate.text.clone(),
-                hide_memory::relevant_excerpt(
-                    &document.path,
-                    &document.text,
-                    document.truncated,
-                    &words,
-                    hide_memory::COMPARISON_EXCERPT_BYTES,
-                ),
-            ))
-        })
-        .take(hide_memory::NEW_CARDS_PER_SESSION)
-        .collect::<Vec<_>>();
+    let cached = store
+        .analysis_proposal(&batch_id)
+        .map_err(|error| local(error.to_string()))?;
+    let (analysis_provider, output) = match cached {
+        Some(cached) => cached,
+        None => {
+            admit(store)?;
+            let answer = router
+                .execute(&request, cancel)
+                .map_err(|error| match error {
+                    AiError::Cancelled => AnalysisFailure::Cancelled,
+                    error => AnalysisFailure::Provider(error),
+                })?;
+            let output = analyzer.parse(answer.value, &similar).map_err(|error| {
+                AnalysisFailure::Provider(AiError::InvalidOutput(format!("{error:?}")))
+            })?;
+            let provider = answer.provider.as_str().to_owned();
+            store
+                .save_analysis_proposal(&batch_id, source.project_id, &provider, &output)
+                .map_err(|error| local(error.to_string()))?;
+            (provider, output)
+        }
+    };
     let mut document_input = 0;
     let mut duplicates = 0;
-    let mut document_comparisons = vec![None; candidates.len()];
-    if let Some(check) = hide_memory::creation_docs_request(
-        digest(&["creation-docs", &batch_id]),
-        source.project_id,
-        &matches,
-        request.input.chars().count().min(request.input.len()),
-        language,
-    ) {
-        admit(store)?;
-        document_input = check.input.chars().count();
-        let answer = router
-            .execute(&check, cancel)
-            .map_err(AnalysisFailure::Provider)?;
-        let results = answer.value["results"].as_array().ok_or_else(|| {
-            AnalysisFailure::Provider(AiError::InvalidOutput("creation_docs_results".into()))
-        })?;
-        let sent: Value =
-            serde_json::from_str(&check.input).map_err(|error| local(error.to_string()))?;
-        let expected = sent["candidates"]
-            .as_array()
-            .ok_or_else(|| local("creation_docs_input".into()))?;
-        let mut seen = BTreeSet::new();
-        for result in results {
-            let index = result["candidate"].as_u64().ok_or_else(|| {
-                AnalysisFailure::Provider(AiError::InvalidOutput("creation_docs_candidate".into()))
-            })? as usize;
-            if !seen.insert(index)
-                || !expected
-                    .iter()
-                    .any(|entry| entry["candidate"].as_u64() == Some(index as u64))
-            {
-                return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
-                    "creation_docs_unknown_candidate".into(),
-                )));
+    let (candidates, options) = match store
+        .prepared_analysis(&batch_id)
+        .map_err(|error| local(error.to_string()))?
+    {
+        Some(prepared) => prepared,
+        None => {
+            let mut candidates = output.candidates;
+            let unsourced = validate_candidates(&mut candidates, group);
+            if unsourced + output.secret_rejected > 0 {
+                crate::diagnostic!(json!({
+                    "component": "memory",
+                    "kind": "analysis.candidates_left_out",
+                    "project_id": source.project_id,
+                    "provider": source.provider,
+                    "unsourced": unsourced,
+                    "secret": output.secret_rejected,
+                }));
             }
-            let entry = expected
+            keep_cited_paths(sessions_node, source.checkout_path, &mut candidates);
+            let mut facts = CheckoutFacts::new(sessions_node, source.evidence_root);
+            let documents = super::memory_verify::repository_sources(
+                sessions_node,
+                &facts,
+                source.evidence_root,
+            );
+            let matches = candidates
                 .iter()
-                .find(|entry| entry["candidate"].as_u64() == Some(index as u64))
-                .expect("the candidate was validated against the sent input");
-            match result["verdict"].as_str() {
-                Some("same") => {
-                    candidates[index].relation = CandidateRelation::Discard;
-                    duplicates += 1;
-                }
-                Some("unrelated") => {}
-                Some("differs") => {
-                    let quote = result["quote"]
-                        .as_str()
-                        .filter(|quote| {
-                            !quote.trim().is_empty()
-                                && quote.len() <= hide_memory::COMPARISON_EXCERPT_BYTES
-                                && entry["excerpt"]
-                                    .as_str()
-                                    .is_some_and(|text| text.contains(*quote))
-                        })
-                        .ok_or_else(|| {
-                            AnalysisFailure::Provider(AiError::InvalidOutput(
-                                "creation_docs_unseen_quote".into(),
-                            ))
-                        })?;
-                    let candidate = &candidates[index];
-                    let human = candidate.human_offsets.iter().max_by_key(|offset| {
-                        candidate.source_times.get(offset).copied().unwrap_or(0)
-                    });
-                    let at = human.and_then(|offset| candidate.source_times.get(offset).copied());
-                    let words = human
-                        .and_then(|offset| {
-                            group
+                .enumerate()
+                .filter(|(_, candidate)| {
+                    candidate.relation == CandidateRelation::New
+                        && candidate.kind != hide_memory::CandidateKind::Preference
+                })
+                .filter_map(|(index, candidate)| {
+                    let words = hide_memory::query_words(&[
+                        &candidate.title,
+                        &candidate.text,
+                        &candidate.aliases.join(" "),
+                    ]);
+                    let document = documents
+                        .iter()
+                        .map(|document| {
+                            let lower = document.text.to_lowercase();
+                            let score = words
                                 .iter()
-                                .find(|event| event["offset"].as_u64() == Some(*offset))
+                                .filter(|word| lower.contains(word.as_str()))
+                                .count();
+                            (score, document)
                         })
-                        .and_then(|event| event["text"].as_str())
-                        .unwrap_or_default();
-                    let words = hide_memory::redact(words)
-                        .text
-                        .chars()
-                        .take(hide_memory::COMPARISON_EXCERPT_BYTES / 4)
-                        .collect();
-                    document_comparisons[index] = Some(super::memory_verify::compare_document(
-                        sessions_node,
-                        source.evidence_root,
-                        entry["document"]
-                            .as_str()
-                            .expect("the request carries a document path"),
-                        quote,
-                        at,
-                        words,
-                        human.map(|_| source.session_id.to_owned()),
-                    ));
+                        .filter(|(score, _)| *score >= 2)
+                        .max_by_key(|(score, _)| *score)?
+                        .1;
+                    Some((
+                        index,
+                        candidate.text.clone(),
+                        hide_memory::relevant_excerpt(
+                            &document.path,
+                            &document.text,
+                            document.truncated,
+                            &words,
+                            hide_memory::COMPARISON_EXCERPT_BYTES,
+                        ),
+                    ))
+                })
+                .take(hide_memory::NEW_CARDS_PER_GROUP)
+                .collect::<Vec<_>>();
+            document_input = 0;
+            duplicates = 0;
+            let mut document_comparisons = vec![None; candidates.len()];
+            if let Some(check) = hide_memory::creation_docs_request(
+                digest(&["creation-docs", &batch_id]),
+                source.project_id,
+                &matches,
+                request.input.chars().count().min(request.input.len()),
+                language,
+            ) {
+                admit(store)?;
+                document_input = check.input.chars().count();
+                let answer = router
+                    .execute(&check, cancel)
+                    .map_err(AnalysisFailure::Provider)?;
+                let results = answer.value["results"].as_array().ok_or_else(|| {
+                    AnalysisFailure::Provider(AiError::InvalidOutput(
+                        "creation_docs_results".into(),
+                    ))
+                })?;
+                let sent: Value =
+                    serde_json::from_str(&check.input).map_err(|error| local(error.to_string()))?;
+                let expected = sent["candidates"]
+                    .as_array()
+                    .ok_or_else(|| local("creation_docs_input".into()))?;
+                let mut seen = BTreeSet::new();
+                for result in results {
+                    let index = result["candidate"].as_u64().ok_or_else(|| {
+                        AnalysisFailure::Provider(AiError::InvalidOutput(
+                            "creation_docs_candidate".into(),
+                        ))
+                    })? as usize;
+                    if !seen.insert(index)
+                        || !expected
+                            .iter()
+                            .any(|entry| entry["candidate"].as_u64() == Some(index as u64))
+                    {
+                        return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
+                            "creation_docs_unknown_candidate".into(),
+                        )));
+                    }
+                    let entry = expected
+                        .iter()
+                        .find(|entry| entry["candidate"].as_u64() == Some(index as u64))
+                        .expect("the candidate was validated against the sent input");
+                    match result["verdict"].as_str() {
+                        Some("same") => {
+                            candidates[index].relation = CandidateRelation::Discard;
+                            duplicates += 1;
+                        }
+                        Some("unrelated") => {}
+                        Some("differs") => {
+                            let quote = result["quote"]
+                                .as_str()
+                                .filter(|quote| {
+                                    !quote.trim().is_empty()
+                                        && quote.len() <= hide_memory::COMPARISON_EXCERPT_BYTES
+                                        && entry["excerpt"]
+                                            .as_str()
+                                            .is_some_and(|text| text.contains(*quote))
+                                })
+                                .ok_or_else(|| {
+                                    AnalysisFailure::Provider(AiError::InvalidOutput(
+                                        "creation_docs_unseen_quote".into(),
+                                    ))
+                                })?;
+                            let candidate = &candidates[index];
+                            let human = candidate.human_offsets.iter().max_by_key(|offset| {
+                                candidate.source_times.get(offset).copied().unwrap_or(0)
+                            });
+                            let at = human
+                                .and_then(|offset| candidate.source_times.get(offset).copied());
+                            let words = human
+                                .and_then(|offset| {
+                                    group
+                                        .iter()
+                                        .find(|event| event["offset"].as_u64() == Some(*offset))
+                                })
+                                .and_then(|event| event["text"].as_str())
+                                .unwrap_or_default();
+                            let words = hide_memory::redact(words)
+                                .text
+                                .chars()
+                                .take(hide_memory::COMPARISON_EXCERPT_BYTES / 4)
+                                .collect();
+                            document_comparisons[index] =
+                                Some(super::memory_verify::compare_document(
+                                    sessions_node,
+                                    source.evidence_root,
+                                    entry["document"]
+                                        .as_str()
+                                        .expect("the request carries a document path"),
+                                    quote,
+                                    at,
+                                    words,
+                                    human.map(|_| source.session_id.to_owned()),
+                                ));
+                        }
+                        _ => {
+                            return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
+                                "creation_docs_verdict".into(),
+                            )));
+                        }
+                    }
                 }
-                _ => {
+                if results.len() != expected.len() {
                     return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
-                        "creation_docs_verdict".into(),
+                        "creation_docs_incomplete".into(),
                     )));
                 }
             }
+            let evidence = candidates
+                .iter()
+                .map(|candidate| match candidate.relation {
+                    CandidateRelation::Same { .. } | CandidateRelation::Discard => Vec::new(),
+                    _ => facts.gather(&candidate.text, &candidate.cited_paths),
+                })
+                .collect();
+            if source
+                .deadline
+                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            {
+                return Err(AnalysisFailure::Cancelled);
+            }
+            let options = ApplyOptions {
+                new_card_limit: source.new_card_limit,
+                evidence,
+                document_comparisons,
+                reverify_superseded: !documents.is_empty(),
+            };
+            store
+                .prepare_analysis(&batch_id, &candidates, &options)
+                .map_err(|error| local(error.to_string()))?;
+            (candidates, options)
         }
-        if results.len() != expected.len() {
-            return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
-                "creation_docs_incomplete".into(),
-            )));
-        }
-    }
-    let evidence = candidates
-        .iter()
-        .map(|candidate| match candidate.relation {
-            CandidateRelation::Same { .. } | CandidateRelation::Discard => Vec::new(),
-            _ => facts.gather(&candidate.text, &candidate.cited_paths),
-        })
-        .collect();
-    if source
-        .deadline
-        .is_some_and(|deadline| std::time::Instant::now() >= deadline)
-    {
-        return Err(AnalysisFailure::Cancelled);
-    }
+    };
     let summary = store
         .apply_candidates_with(
             &AnalysisBatch {
                 id: batch_id.clone(),
                 project_id: source.project_id.to_owned(),
                 provider: source.provider.to_owned(),
-                analysis_provider: answer.provider.as_str().to_owned(),
+                analysis_provider,
                 session_id: source.session_id.to_owned(),
                 content_hash: content_hash.clone(),
                 created_at_unix_ms: now_ms(),
             },
             &candidates,
-            &ApplyOptions {
-                new_card_limit: source.new_card_limit,
-                evidence,
-                document_comparisons,
-                reverify_superseded: !documents.is_empty(),
-            },
+            &options,
         )
         .map_err(|error| match error {
             hide_memory::MemoryError::Disabled => AnalysisFailure::Disabled,
@@ -2071,6 +2279,9 @@ pub(crate) fn write_cards(
         json!({"component":"memory", "kind":"analysis.session_cards", "project_id":source.project_id, "session_id":source.session_id, "batch_id":batch_id,
         "created":summary.created, "superseded":summary.superseded, "duplicates_in_docs":duplicates, "extraction_input_chars":request.input.chars().count(), "document_input_chars":document_input })
     );
+    if summary.capacity_rejections > 0 {
+        return Err(AnalysisFailure::Deferred("card_capacity"));
+    }
     for backfill in output.backfill {
         if let Err(error) = store.fill_aliases(
             source.project_id,
@@ -2086,6 +2297,9 @@ pub(crate) fn write_cards(
             }));
         }
     }
+    store
+        .clear_analysis_proposal(&batch_id)
+        .map_err(|error| local(error.to_string()))?;
     Ok(WrittenCards {
         summary,
         batch_id,
@@ -2279,9 +2493,6 @@ pub(crate) fn paths_inside(
 }
 
 /// The new events cut into groups, each sent in one provider call.
-/// The most text of one event analysis reads.
-const EVENT_TEXT_LIMIT_BYTES: usize = 48 * 1024;
-
 pub(super) fn event_groups(events: &[Value]) -> Result<Vec<Vec<Value>>, String> {
     const EVENT_BUDGET: usize = 36 * 1024;
     let mut groups = Vec::new();
@@ -2319,12 +2530,8 @@ fn bounded_event_chunks(event: &Value, budget: usize) -> Result<Vec<Value>, Stri
         .get("text")
         .and_then(Value::as_str)
         .ok_or_else(|| "Oversized Memory event has no text to split".to_owned())?;
-    // A message far past one request, a paste or a dump, keeps its start:
-    // a few requests' worth, never one call per slice of it.
-    let text = split_utf8(text, EVENT_TEXT_LIMIT_BYTES)
-        .into_iter()
-        .next()
-        .unwrap_or_default();
+    // Preserve the entire source event. Durable group progress and the
+    // per-session quantum bound provider work, rather than discarding tails.
     let mut base = object.clone();
     base.remove("text");
     let base_size = serde_json::to_vec(&base)
@@ -4153,7 +4360,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_with_fewer_than_three_operator_words_or_started_by_an_agent_makes_no_card() {
+    fn one_human_exchange_is_analyzed_but_a_delegated_instruction_is_not() {
         // B2, B4: no provider call, and the session is settled all the same.
         let fixture = Fixture::new();
         fixture.answer(&[]);
@@ -4165,8 +4372,15 @@ mod tests {
             .to_owned();
         std::fs::write(&fixture.locator, format!("{first_line}\n")).unwrap();
 
-        assert!(closed_pass(&fixture, &[], true).is_empty());
-        assert_eq!(fixture.calls(), 0, "one operator word is too few");
+        assert_eq!(
+            closed_pass(&fixture, &[], true),
+            ["analyzing", "learned one"]
+        );
+        assert_eq!(
+            fixture.calls(),
+            1,
+            "one significant human exchange is eligible"
+        );
 
         // The same three words in a session an agent started are that
         // agent's, not the operator's.

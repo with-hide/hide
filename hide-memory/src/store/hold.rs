@@ -25,8 +25,7 @@ BEGIN DELETE FROM card_holds WHERE item_id=NEW.id; END;
 
 /// What a test runs to take a current store back to schema 15's tables.
 #[cfg(test)]
-pub(crate) const DROP_TABLES: &str =
-    "DROP TRIGGER card_holds_follow_card; DROP TABLE card_holds; DROP TABLE stale_reports;";
+pub(crate) const DROP_TABLES: &str = "DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals; DROP TABLE analysis_schedule; DROP TRIGGER card_holds_follow_card; DROP TABLE card_holds; DROP TABLE stale_reports;";
 
 /// Schema 16 adds the hold. The writer runs it after keeping the v15 store
 /// as a backup; a read-only hook refuses the store until it has run.
@@ -1078,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn a_version_fifteen_store_is_backed_up_moved_to_sixteen_and_its_backup_scrubbed() {
+    fn a_version_fifteen_store_is_backed_up_upgraded_and_its_backup_scrubbed() {
         // B14, D-13.
         let fixture = fixture(&["Write commit messages in Korean"]);
         let Fixture {
@@ -1117,7 +1116,7 @@ mod tests {
             .unwrap();
 
         let mut store = MemoryStore::open(&path).unwrap();
-        assert_eq!(version(&path), 16);
+        assert_eq!(version(&path), super::super::SCHEMA_VERSION);
         assert_eq!(store.list_memories(&project).unwrap().len(), 1);
         let count = |path: &Path| -> i64 {
             Connection::open(path)

@@ -18,8 +18,9 @@ use crate::{
 };
 
 pub(crate) mod hold;
+mod progress;
 
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any
 /// agent the operator added under its fallback list (PRD settings-cleanup
 /// D-26), which now includes vendors other than the two it was limited to.
@@ -92,7 +93,7 @@ impl CandidateKind {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CandidateRelation {
     New,
     Same { target_id: String },
@@ -101,7 +102,7 @@ pub enum CandidateRelation {
     Discard,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Candidate {
     pub text: String,
     /// The card's one line in the session-start index; the body's first
@@ -205,11 +206,10 @@ pub struct ApplySummary {
 }
 
 /// What a write of analyzed cards adds to the candidates themselves.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ApplyOptions {
-    /// At most this many new cards come from the batch's session, counting
-    /// those it made earlier; `None` for `hide memory add`, which the
-    /// operator asked for (D-02).
+    /// At most this many significant new cards come from this batch.
+    /// Earlier batches never consume a later decision's admission.
     pub new_card_limit: Option<usize>,
     /// The evidence of each candidate, by its index; a candidate with none
     /// is verified when written and rests on nothing the node can check.
@@ -474,9 +474,8 @@ pub struct SessionCursorRecord {
     pub checkpoint: Vec<u8>,
     pub last_content_hash: Option<String>,
     pub updated_at_unix_ms: u64,
-    /// The operator's own events analysis has read in the session so far; a
-    /// session with fewer than [`crate::OPERATOR_EVENTS_MINIMUM`] writes no
-    /// new card (D-03). Only the analysis reader keeps it.
+    /// The operator's own events analysis has read in the session so far.
+    /// This is provenance accounting, never an extraction eligibility bar.
     pub operator_events: u64,
 }
 
@@ -1406,7 +1405,7 @@ impl MemoryStore {
         limit: usize,
     ) -> Result<Option<Vec<String>>, MemoryError> {
         let mut statement = self.connection.prepare(
-            "SELECT DISTINCT rii.item_id FROM injection_receipts ir LEFT JOIN injection_receipt_items rii ON ir.id=rii.receipt_id WHERE ir.project_id=?1 AND ir.runtime=?2 AND ir.session_id=?3",
+            "SELECT DISTINCT CASE WHEN i.current_revision=rii.revision THEN rii.item_id END FROM injection_receipts ir LEFT JOIN injection_receipt_items rii ON ir.id=rii.receipt_id LEFT JOIN memory_items i ON i.id=rii.item_id WHERE ir.project_id=?1 AND ir.runtime=?2 AND ir.session_id=?3",
         )?;
         let rows = statement
             .query_map(params![project_id, runtime, session_id], |row| {
@@ -1616,18 +1615,21 @@ impl MemoryStore {
         }
         let mut summary = ApplySummary::default();
         let mut live_count = count_live(&transaction, &batch.project_id)?;
-        // New cards this session already made, forgotten ones included, so
-        // forgetting a card never makes room for the session to make another.
-        let session_made = match options.new_card_limit {
-            Some(_) => transaction.query_row(
-                "SELECT COUNT(*) FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=1 \
-                 JOIN analysis_batches b ON b.id=r.batch_id \
-                 WHERE i.project_id=?1 AND b.provider=?2 AND b.session_id=?3",
-                params![batch.project_id, batch.provider, batch.session_id],
-                |row| row.get::<_, u64>(0),
-            )? as usize,
-            None => 0,
-        };
+        let mut ranked = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| candidate.relation == CandidateRelation::New)
+            .collect::<Vec<_>>();
+        ranked.sort_by(|(_, a), (_, b)| {
+            b.salience
+                .total_cmp(&a.salience)
+                .then_with(|| b.confidence.total_cmp(&a.confidence))
+        });
+        let admitted = ranked
+            .into_iter()
+            .take(options.new_card_limit.unwrap_or(candidates.len()))
+            .map(|(index, _)| index)
+            .collect::<HashSet<_>>();
         for (index, candidate) in candidates.iter().enumerate() {
             let redacted = redact(candidate.text.trim());
             if redacted.contains_secret_candidate {
@@ -1645,10 +1647,7 @@ impl MemoryStore {
                 .citing(&candidate.cited_paths);
             let outcome = match &candidate.relation {
                 CandidateRelation::New => {
-                    if options
-                        .new_card_limit
-                        .is_some_and(|limit| session_made + summary.created >= limit)
-                    {
+                    if !admitted.contains(&index) {
                         summary.session_limited += 1;
                         summary.outcomes.push(CandidateOutcome::SessionLimit);
                         continue;
@@ -1760,6 +1759,12 @@ impl MemoryStore {
                 CandidateRelation::Discard => unreachable!(),
             };
             summary.outcomes.push(outcome);
+        }
+        if summary.capacity_rejections > 0 {
+            return Ok(ApplySummary {
+                capacity_rejections: summary.capacity_rejections,
+                ..ApplySummary::default()
+            });
         }
         transaction.commit()?;
         Ok(summary)
@@ -3048,6 +3053,9 @@ impl MemoryStore {
         query: &RetrievalQuery,
         expired: impl Fn() -> bool,
     ) -> Result<Injection, MemoryError> {
+        let started = Instant::now();
+        let caller_expired = expired;
+        let expired = || caller_expired() || started.elapsed() >= query.deadline;
         let empty = |outcome| Injection {
             outcome,
             kind: query.kind,
@@ -3461,6 +3469,7 @@ fn migrate(
         if let Err(error) = connection
             .execute_batch(SCHEMA)
             .and_then(|_| connection.execute_batch(hold::TABLES))
+            .and_then(|_| connection.execute_batch(progress::TABLES))
             .and_then(|_| enable_fts_secure_delete(connection))
             .and_then(|_| connection.pragma_update(None, "user_version", SCHEMA_VERSION))
         {
@@ -3562,6 +3571,17 @@ COMMIT;"#,
         back_up(connection, path, version)?;
         hold::migrate_version_fifteen(connection)?;
         version = 16;
+    }
+    if version == 16 {
+        back_up(connection, path, version)?;
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(progress::TABLES)?;
+        // Only recover the old minimum-event skip: sessions with human
+        // evidence whose cursor advanced without a single analysis batch.
+        // Unrelated completed history and receipt cursors remain untouched.
+        transaction.execute_batch("DELETE FROM session_cursors AS c WHERE operator_events BETWEEN 1 AND 2 AND NOT EXISTS(SELECT 1 FROM analysis_batches b WHERE b.project_id=c.project_id AND b.provider=c.provider AND b.session_id=c.session_id); PRAGMA user_version=17;")?;
+        transaction.commit()?;
+        version = 17;
     }
     if version != SCHEMA_VERSION {
         return Err(MemoryError::WrongSchema {
@@ -4086,7 +4106,7 @@ fn backup_path(path: &Path, version: i64) -> std::path::PathBuf {
 }
 
 /// The schema versions a migration keeps a backup of.
-const BACKUP_VERSIONS: [i64; 3] = [7, 8, 15];
+const BACKUP_VERSIONS: [i64; 4] = [7, 8, 15, 16];
 
 /// Removes a deleted Project from every backup copy, so its cards do not
 /// outlive the delete there.
@@ -6521,7 +6541,95 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
     }
 
     #[test]
-    fn a_session_makes_two_new_cards_in_all_and_forgetting_one_makes_no_room() {
+    fn fair_analysis_survives_reopen_and_new_arrivals_across_projects() {
+        let (temp, mut store, first) = store();
+        let second = "project:other";
+        store
+            .ensure_project(second, &temp.path().join("other"), "local")
+            .unwrap();
+        store.set_enabled(second, true, true).unwrap();
+        let stable = [
+            (first.as_str(), "old-a"),
+            (second, "old-b"),
+            (first.as_str(), "old-c"),
+        ];
+        for (project, session) in stable {
+            store
+                .enqueue_analysis(project, "claude", session, 1)
+                .unwrap();
+        }
+        store
+            .save_analysis_progress(&first, "claude", "old-a", 10, 4, &["held-card".into()])
+            .unwrap();
+        drop(store);
+        let mut store = MemoryStore::open(&temp.path().join("memory.sqlite3")).unwrap();
+        assert_eq!(
+            store
+                .analysis_progress(&first, "claude", "old-a", 10)
+                .unwrap(),
+            (4, vec!["held-card".into()])
+        );
+        assert_eq!(
+            store
+                .analysis_progress(&first, "claude", "old-a", 11)
+                .unwrap(),
+            (0, vec![])
+        );
+        let mut seen = HashSet::new();
+        for turn in 0..6 {
+            store
+                .enqueue_analysis(second, "codex", &format!("arrival-{turn}"), 100 + turn)
+                .unwrap();
+            let (project, provider, session) = store.analysis_order().unwrap().remove(0);
+            // A paused pass is a read and cannot advance the persistent round.
+            assert_eq!(
+                store.analysis_order().unwrap()[0],
+                (project.clone(), provider.clone(), session.clone())
+            );
+            if session.starts_with("old-") {
+                seen.insert(session.clone());
+            }
+            store
+                .finish_analysis_turn(&project, &provider, &session, true)
+                .unwrap();
+        }
+        assert_eq!(
+            seen,
+            ["old-a".into(), "old-b".into(), "old-c".into()].into()
+        );
+    }
+
+    #[test]
+    fn a_capacity_refusal_leaves_the_entire_batch_retryable() {
+        let (_temp, mut store, project) = store();
+        let batch = batch(&project, "capacity-retry", "content");
+        let cards = [
+            candidate("Keep the first significant choice", CandidateRelation::New),
+            candidate("Keep the later significant choice", CandidateRelation::New),
+        ];
+        let refused = store
+            .apply_candidates_with_limit(&batch, &cards, 1)
+            .unwrap();
+        assert_eq!(refused.capacity_rejections, 1);
+        assert!(!store.has_batch(&batch.id).unwrap());
+        assert!(store.list_memories(&project).unwrap().is_empty());
+        assert_eq!(
+            store
+                .apply_candidates_with_limit(&batch, &cards, 2)
+                .unwrap()
+                .created,
+            2
+        );
+        assert!(
+            store
+                .apply_candidates_with_limit(&batch, &cards, 2)
+                .unwrap()
+                .duplicate_batch
+        );
+    }
+
+    #[test]
+    fn later_groups_remain_eligible_after_the_per_group_significance_limit() {
         // D-02, B1; `hide memory add` is not limited.
         let (_temp, mut store, project) = store();
         let limited = ApplyOptions {
@@ -6547,7 +6655,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             .unwrap();
         assert_eq!((first.created, first.session_limited), (2, 1));
         assert_eq!(first.outcomes[2], CandidateOutcome::SessionLimit);
-        // A later group of the same session is held to the same two.
+        // Later decisions in the same conversation have their own admission.
         let later = store
             .apply_candidates_with(
                 &sourced_batch(&project, "b2", "s1"),
@@ -6555,8 +6663,8 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
                 &limited,
             )
             .unwrap();
-        assert_eq!((later.created, later.session_limited), (0, 2));
-        // Forgetting a card does not give the session another.
+        assert_eq!((later.created, later.session_limited), (2, 0));
+        // Forgetting preserves history without blocking later decisions.
         let card = store.item_by_number(&project, 1).unwrap().unwrap();
         store.forget(&project, &card.id).unwrap();
         let after = store
@@ -6566,7 +6674,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
                 &limited,
             )
             .unwrap();
-        assert_eq!(after.created, 0);
+        assert_eq!(after.created, 2);
         // Another session, and an unlimited write, are not held.
         let other = store
             .apply_candidates_with(
