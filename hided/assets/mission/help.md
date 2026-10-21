@@ -32,7 +32,7 @@ Running a command again changes nothing more, so after a timeout read `hide miss
 
 - Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope and the worker candidates.
 - Run `hide agent catalog` for the agents installed here, their models, their efforts and their weekly usage.
-  A model list Hide could not read comes with `models_unavailable_reason` instead of models (a device's models are read on the core's machine only); start such an agent with the CLI's default or a model the operator named.
+  A model list Hide could not read comes with `models_unavailable_reason` instead of models (a device's models are read on the core's machine only); start such an agent with the model its candidate fixes, or the CLI's default where none is fixed or there are no candidates.
 - Run `gh auth status` and note the account; the plan names it (`GitHub: <account> (gh)`), and approving the plan approves that account.
   Check the account can do what the scope needs: push and open pull requests for `pr`, and merge as well for `merge`; `gh api repos/<owner>/<repo> --jq .permissions` answers it (`push` for `pr`, `push` and `maintain` or `admin`, or a merge the branch rules allow, for `merge`).
   If `gh` is not signed in or lacks a permission, ask the operator now and do no GitHub work.

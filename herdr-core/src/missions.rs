@@ -273,6 +273,11 @@ pub struct Mission {
     pub status: MissionStatus,
     pub scope: MissionScope,
     pub cap: u8,
+    /// Settings › Conductor's worker candidates when the mission was
+    /// created (D-34, B48); a book written before them has none, which
+    /// admits any agent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<Candidate>,
     #[serde(default)]
     pub nodes: Vec<MissionNode>,
     /// The order the plan merges in, by node key (D-09).
@@ -1282,6 +1287,7 @@ mod tests {
             status: MissionStatus::Planning,
             scope: MissionScope::Pr,
             cap: 4,
+            candidates: Vec::new(),
             nodes: Vec::new(),
             merge_order: Vec::new(),
             check: None,

@@ -885,6 +885,7 @@ pub(crate) fn apply(
                     .spawns
                     .iter()
                     .find(|record| &record.parent == parent && &record.intent == intent)
+                && record.mission.as_deref() == Some(admission.mission.as_str())
                 && record.child.is_none()
                 && !record.completed
                 && now.saturating_sub(record.reserved_at_unix_ms) >= MISSION_RESERVATION_HOLD_MS

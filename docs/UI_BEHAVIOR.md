@@ -2526,7 +2526,7 @@ Settings › Conductor, in the machine group after Hide AI, keeps what a Conduct
 `동시 실행 상한` is how many agents one mission runs at once, reviewers and verifiers included and the Conductor not counted, from 1 to 16; `기본 범위` is how far a mission goes when the operator does not say, up to ready pull requests or through the merge.
 `작업자 후보` lists the agents a Conductor chooses workers from, at most 16: each row's agent, its model from the start panel's list (disabled with why when that list cannot be read), its effort automatic or fixed, and what it is for; an agent this machine has not installed is dimmed with `설치 안 됨`.
 With no candidates the Conductor chooses among the installed agents; with some, Hide refuses a worker that is none of them (`mission_candidate_refused`, [delivery.md: Missions](delivery.md#missions)).
-Every edit sends only the field it changes and the core checks the result; a refusal shows inline, and a mission already planned keeps the cap and scope it was planned with.
+Every edit sends only the field it changes and the core checks the result; a refusal shows inline, and a mission already created keeps the cap, scope and candidates it was created with.
 
 ### Hide AI
 

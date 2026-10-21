@@ -803,7 +803,7 @@ fn a_merge_wait_mission_closes_when_its_whole_stack_is_merged() {
     )
     .unwrap();
     // The Conductor is gone.
-    runtime.delivery_observations.remove("sender");
+    let present = runtime.delivery_observations.remove("sender").unwrap();
     let status = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().status;
 
     runtime.note_mission_pulls(
@@ -816,6 +816,20 @@ fn a_merge_wait_mission_closes_when_its_whole_stack_is_merged() {
         &open(PullRequestBadge::Merged, PullRequestBadge::Merged),
     );
     assert_eq!(status(&runtime), MissionStatus::Done);
+
+    // A stack already merged when the Conductor says it waits has nothing
+    // to wait on: the close is done at once.
+    runtime.missions.book.get_mut("mission-1").unwrap().status = MissionStatus::Running;
+    runtime
+        .delivery_observations
+        .insert("sender".into(), present);
+    let (closed, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    assert_eq!(closed["mission"]["status"], "done");
     assert!(
         runtime
             .missions
@@ -856,7 +870,7 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
     // No candidates: any agent the machine has.
     assert_eq!(admit(&runtime, "codex", launch(None, None)), Ok(true));
 
-    runtime.snapshot.ui_state.conductor_settings.candidates = vec![
+    let candidates = vec![
         crate::missions::Candidate {
             agent: "claude".into(),
             model: None,
@@ -870,6 +884,21 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
             purpose: "review".into(),
         },
     ];
+    // A Settings edit applies from the next mission (B48): this one was
+    // created with none and keeps admitting any agent.
+    runtime.snapshot.ui_state.conductor_settings.candidates = candidates.clone();
+    assert_eq!(admit(&runtime, "opencode", launch(None, None)), Ok(true));
+    // A mission created with candidates is held to them.
+    runtime.missions.book.missions.clear();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    assert_eq!(runtime.missions.book.missions[0].candidates, candidates);
     let refused = Err("mission_candidate_refused".to_owned());
     assert_eq!(admit(&runtime, "claude", launch(None, None)), Ok(true));
     assert_eq!(
@@ -895,12 +924,7 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
     );
     assert_eq!(admit(&runtime, "opencode", launch(None, None)), refused);
     // The spawn command itself is refused, before the ledger reserves it.
-    runtime
-        .snapshot
-        .ui_state
-        .conductor_settings
-        .candidates
-        .truncate(1);
+    runtime.missions.book.missions[0].candidates.truncate(1);
     assert_eq!(
         prepare_spawn(&mut runtime, &conductor, None).unwrap_err(),
         "mission_candidate_refused"

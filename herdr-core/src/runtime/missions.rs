@@ -171,7 +171,11 @@ fn wake_intent(mission: &Mission, wake: &PendingWake) -> String {
         wake.node,
         wake.pr,
         wake.event.as_str(),
-        wake.head.as_deref().unwrap_or("-"),
+        // `seq` makes the intent unique; a short head keeps it readable
+        // and under the intent's length limit.
+        wake.head
+            .as_deref()
+            .map_or("-", |head| head.get(..12).unwrap_or(head)),
         wake.seq,
         conductor
             .agent_id
@@ -319,6 +323,7 @@ impl Runtime {
                     status: MissionStatus::Planning,
                     scope: scope.unwrap_or(settings.default_scope),
                     cap,
+                    candidates: settings.candidates.clone(),
                     nodes: Vec::new(),
                     merge_order: Vec::new(),
                     check: None,
@@ -434,6 +439,8 @@ impl Runtime {
                         return Err("mission_not_started".into());
                     }
                     (_, MissionEnd::Done) => MissionStatus::Done,
+                    // A stack already merged has nothing to wait on (B41).
+                    (_, MissionEnd::MergeWait) if stack_merged(target) => MissionStatus::Done,
                     (_, MissionEnd::MergeWait) => MissionStatus::MergeWait,
                     (_, MissionEnd::Cancelled) => MissionStatus::Cancelled,
                 };
@@ -719,7 +726,9 @@ impl Runtime {
         if worker_machine != mission.device_id {
             return Err("mission_machine_refused".into());
         }
-        let candidates = &self.snapshot.ui_state.conductor_settings.candidates;
+        // The candidates the mission was created with: a Settings edit
+        // applies from the next mission (B48).
+        let candidates = &mission.candidates;
         if !candidates.is_empty()
             && !candidates
                 .iter()
@@ -849,7 +858,12 @@ impl Runtime {
                     seen_updates.push((node_index, now_seen));
                 }
             }
-            if seen_updates.is_empty() && events.is_empty() {
+            // With nothing new from GitHub, the last answers still decide a
+            // waiting stack, as when it was merged before the wait began.
+            if seen_updates.is_empty()
+                && events.is_empty()
+                && !(mission.status == MissionStatus::MergeWait && stack_merged(mission))
+            {
                 continue;
             }
             changed = true;
