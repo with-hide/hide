@@ -554,3 +554,21 @@ fn conductor_settings_out_of_range_are_not_kept() {
         "the same settings change nothing"
     );
 }
+
+#[test]
+fn a_mission_asked_for_before_the_projects_are_read_says_so_rather_than_unknown() {
+    let fixture = conducting();
+    let mut guard = fixture.runtime.lock().unwrap();
+    guard.worktree_catalog.projects.clear();
+    guard.snapshot.git_worktrees_loading = true;
+    let create = json!({"op": "create", "title": "Early"});
+    assert_eq!(
+        command(&mut guard, &fixture.conductor.pane_id, create.clone()).unwrap_err(),
+        "mission_projects_loading"
+    );
+    guard.snapshot.git_worktrees_loading = false;
+    assert_eq!(
+        command(&mut guard, &fixture.conductor.pane_id, create).unwrap_err(),
+        "mission_project_unknown"
+    );
+}

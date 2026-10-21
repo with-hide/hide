@@ -2138,6 +2138,7 @@
             "refusals": [
                 "mission_already_conducting",
                 "mission_full",
+                "mission_projects_loading",
                 "mission_project_unknown",
                 "mission_cap_out_of_range"
             ],
@@ -2624,7 +2625,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:14446af538972747d968003b1721c03c39ff8d69ee386974c86f2a9731cbfaa4",
+    "digest": "sha256:1206c71e8bf00650a2a42aff33d110e6c49375a3c3a00126a493056e0917fb60",
     "envelopes": {
         "agent": {
             "answer": "value",

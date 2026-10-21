@@ -987,6 +987,7 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_cap_reached" => {
             "Wait for a worker to finish (end its registration with hide agent end <id>) and retry"
         }
+        "mission_projects_loading" => "Retry in a few seconds; Hide is still reading this machine's projects",
         "mission_project_unknown" => {
             "Run the command from a pane in a checkout of a registered project"
         }

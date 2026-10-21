@@ -224,7 +224,12 @@ impl Runtime {
                 if self.missions.book.missions.len() >= MISSION_LIMIT {
                     return Err("mission_full".into());
                 }
-                let project = project.ok_or("mission_project_unknown")?;
+                let project = match project {
+                    Some(project) => project,
+                    // Before the machine's projects are first read, an unknown checkout says nothing yet.
+                    None if self.projects_loading(device) => return Err("mission_projects_loading".into()),
+                    None => return Err("mission_project_unknown".into()),
+                };
                 let settings = self.snapshot.ui_state.conductor_settings.clone();
                 let cap = cap.unwrap_or(settings.concurrency);
                 if !(1..=crate::missions::CAP_LIMIT).contains(&cap) {
@@ -530,6 +535,16 @@ impl Runtime {
                 Ok(true)
             }
             MissionStatus::Planning | MissionStatus::Running => Ok(false),
+        }
+    }
+
+    /// Whether `device`'s project catalog is still being read: this machine's
+    /// until its Git read answers, a device's until its first list arrives.
+    fn projects_loading(&self, device: &str) -> bool {
+        if device == self.node.as_str() {
+            self.snapshot.git_worktrees_loading
+        } else {
+            !self.device_worktrees.contains_key(device)
         }
     }
 

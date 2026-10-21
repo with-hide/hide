@@ -371,6 +371,7 @@ pub const COMMANDS: &[Spec] = &[
         refusals: &[
             "mission_already_conducting",
             "mission_full",
+            "mission_projects_loading",
             "mission_project_unknown",
             "mission_cap_out_of_range",
         ],

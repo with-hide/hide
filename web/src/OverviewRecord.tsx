@@ -1,6 +1,7 @@
 import { XIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Actions } from "./actions";
+import { MissionChip } from "./components/mission-chip";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected, frontDeviceId } from "./devices";
@@ -58,6 +59,8 @@ export function TaskRecordPanel({ panel, rows, actions }: { panel: Extract<Overv
       <Hint label={t("record.close")}>
         <Button variant="ghost" size="icon-sm" aria-label={t("record.close")} onClick={close} data-record-close="true"><XIcon /></Button>
       </Hint>
+      {/* A Conductor's record leads to its mission's map, also once the session has closed (PRD software-factory-conductor B46). */}
+      <MissionChip agent={{ session }} onOpen={(mission) => actions.openMission(mission)} />
       <span className="flex-1" />
       {project && checkout && agent && deviceConnected(rest,session.device_id) ? (
         elsewhere ? (
