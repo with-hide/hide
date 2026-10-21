@@ -34,7 +34,10 @@ BACKSPACE = b"\x7f"
 # when the composer is empty, not a count.
 BACKSPACES_PER_READ = 8
 MAX_BACKSPACES = 400
-# How long a step waits for the verdict it expects.
+# How long a step waits for the verdict it expects after the last key it
+# sent: an erase is still typing while it sends, and a pane read slower than
+# another system's sends fewer Backspaces in the same time (macOS, 2026-10-22:
+# 248 in 30 s, short of the 275 characters of a paste Codex keeps as text).
 STEP_SECONDS = 30
 POLL_SECONDS = 0.5
 # Each step and the verdict the operator would see after it.
@@ -71,29 +74,33 @@ def send(journey, data):
 
 
 class Backspaces:
-    """Sends a few Backspaces each time it is called, up to the cap."""
+    """Sends a few Backspaces each time it is called, up to the cap, and
+    says whether it sent any."""
 
     def __init__(self, journey):
         self.journey, self.sent = journey, 0
 
     def __call__(self):
-        if self.sent < MAX_BACKSPACES:
-            send(self.journey, BACKSPACE * BACKSPACES_PER_READ)
-            self.sent += BACKSPACES_PER_READ
+        if self.sent >= MAX_BACKSPACES:
+            return False
+        send(self.journey, BACKSPACE * BACKSPACES_PER_READ)
+        self.sent += BACKSPACES_PER_READ
+        return True
 
 
 def wait_for(journey, expected, before_read=None):
-    """Reads until the verdict is `expected` or STEP_SECONDS pass; returns
-    (last verdict, reads, seconds)."""
-    start, reads = time.monotonic(), 0
+    """Reads until the verdict is `expected` or STEP_SECONDS pass after the
+    last key `before_read` sent; returns (last verdict, reads, seconds)."""
+    start = last_key = time.monotonic()
+    reads = 0
     while True:
-        if before_read:
-            before_read()
+        if before_read and before_read():
+            last_key = time.monotonic()
         verdict = read(journey)
         reads += 1
-        seconds = time.monotonic() - start
-        if verdict == expected or seconds > STEP_SECONDS:
-            return verdict, reads, round(seconds, 1)
+        now = time.monotonic()
+        if verdict == expected or now - last_key > STEP_SECONDS:
+            return verdict, reads, round(now - start, 1)
         if journey.runtime.owner.cancelled.wait(POLL_SECONDS):
             raise ProcessError("run_cancelled")
 

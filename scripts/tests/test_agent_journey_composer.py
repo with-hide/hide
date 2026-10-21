@@ -75,6 +75,21 @@ class Measure(unittest.TestCase):
         steps = {step["name"]: step for step in journey.record["composer"]["steps"]}
         self.assertGreater(steps["cleared"]["backspaces"], steps["erased"]["backspaces"])
 
+    def test_a_slow_screen_read_leaves_a_long_erase_its_whole_wait_after_the_last_key(self):
+        # Codex and agy keep the pasted lines as text, 275 characters: 35
+        # reads of 8 Backspaces, which a read of a second each made 35 s.
+        pane, clock = Pane(), [0.0]
+
+        def slow(_journey, _screen):
+            clock[0] += 1
+            return Pane.verdict(pane, _journey, _screen)
+        pane.verdict = slow
+        with mock.patch.object(composer.time, "monotonic", lambda: clock[0]):
+            journey, settled = self.run_cell(pane)
+        self.assertEqual(settled[0][1][0], cells.PASS, settled)
+        cleared = journey.record["composer"]["steps"][-1]
+        self.assertGreater(cleared["seconds"], composer.STEP_SECONDS)
+
     def test_a_composer_that_never_empties_fails_naming_the_step_it_stopped_at(self):
         pane = Pane()
         pane.verdict = lambda _journey, _screen: "not_found"
