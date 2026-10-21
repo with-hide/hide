@@ -39,6 +39,31 @@ fn lines(path: &Path) -> Vec<Value> {
         .collect()
 }
 
+/// A recorded child, named while it runs by its pid and its start. A pid
+/// alone names nothing once its process has ended: Windows gives it to the
+/// next process as soon as the last handle closes, and `is_alive` counts
+/// another account's process there (issue 1495).
+struct Running {
+    pid: u32,
+    started: u64,
+}
+
+impl Running {
+    /// The last child the fixture recorded, which must be running now.
+    fn last(record: &Path) -> Self {
+        let pid = lines(record).pop().unwrap()["pid"].as_u64().unwrap() as u32;
+        Self {
+            pid,
+            started: hide_platform::process::start_time(pid).unwrap(),
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        hide_platform::process::is_alive(self.pid)
+            && hide_platform::process::start_time(self.pid).ok() == Some(self.started)
+    }
+}
+
 /// The entire test holds FAKE_ENV, and nextest isolates each test process.
 /// Drop restores every variable even on a failed assertion.
 struct Home(Vec<(String, Option<std::ffi::OsString>)>);
@@ -372,8 +397,11 @@ fn real_sdk_preserves_the_background_provider_boundary() {
             .unwrap()
             .contains("hang")
     );
+    let children = folder.path().join("children.jsonl");
+    let hung = Running::last(&children);
     cancel.cancel();
     assert_eq!(task.join().unwrap().unwrap_err(), AiError::Cancelled);
+    assert!(!hung.is_running(), "a cancelled call ends its child first");
     // Expiry after confirmed submission also ends the child, without replay.
     let mut short = request("hang");
     short.deadline = Duration::from_secs(3);
@@ -385,7 +413,9 @@ fn real_sdk_preserves_the_background_provider_boundary() {
             .unwrap()
             .contains("hang")
     );
+    let hung = Running::last(&children);
     assert_eq!(task.join().unwrap().unwrap_err(), AiError::Timeout);
+    assert!(!hung.is_running(), "an expired call ends its child first");
 
     // End only the immediate owner, bypassing Drop and tree cleanup. Bun's
     // Unix parent watch / Windows kill-on-close job must end the real bridge.
@@ -407,18 +437,15 @@ fn real_sdk_preserves_the_background_provider_boundary() {
             .unwrap()
             .contains("hang")
     );
-    let abrupt = lines(&folder.path().join("children.jsonl")).pop().unwrap();
-    let bridge_pid = abrupt["pid"].as_u64().unwrap() as u32;
+    let abrupt = lines(&children).pop().unwrap();
+    let bridge = Running::last(&children);
     hide_platform::process::terminate(owner.id()).unwrap();
     assert!(!owner.wait().unwrap().success());
     let until = Instant::now() + Duration::from_secs(5);
-    while hide_platform::process::is_alive(bridge_pid) && Instant::now() < until {
+    while bridge.is_running() && Instant::now() < until {
         std::thread::park_timeout(Duration::from_millis(10));
     }
-    assert!(
-        !hide_platform::process::is_alive(bridge_pid),
-        "bridge must die with its owner"
-    );
+    assert!(!bridge.is_running(), "bridge must die with its owner");
     // Abrupt owner death skips private-file destructors too. Remove this
     // synthetic owner's files explicitly; normal returns are checked below.
     let argv = abrupt["argv"].as_array().unwrap();
@@ -523,10 +550,9 @@ fn real_sdk_preserves_the_background_provider_boundary() {
         !home.join(".omp/logs/http-400-requests").exists(),
         "no SDK request dumps under real auth home"
     );
-    for child in lines(&folder.path().join("children.jsonl")) {
-        assert!(!hide_platform::process::is_alive(
-            child["pid"].as_u64().unwrap() as u32
-        ));
+    // Whether each child ended is checked above, where it was named while it
+    // ran; a call that returned on its own had already waited for its child.
+    for child in lines(&children) {
         assert!(
             !Path::new(child["cwd"].as_str().unwrap()).exists(),
             "private request directory removed"
