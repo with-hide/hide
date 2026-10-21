@@ -26,6 +26,19 @@ pub struct Resolution {
     pub activity: String,
 }
 
+/// Why the operator cannot resolve the row now: work that still runs or
+/// waits, or an approval prompt that holds the agent, would rest a task
+/// whose mark says it is not at rest.
+pub(crate) fn resolve_refusal(agent: &SidebarAgentSnapshot) -> Option<&'static str> {
+    if super::has_work_in_progress(agent) {
+        Some("This agent is working")
+    } else if agent.blocked {
+        Some("This agent waits for an approval")
+    } else {
+        None
+    }
+}
+
 /// A merged pull request settles the session only once the row is at rest
 /// with nothing left to see: an unread finish stays under 읽을 것 and a wait
 /// under 대기, rather than resting with a mark that says otherwise.

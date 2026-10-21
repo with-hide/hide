@@ -286,6 +286,7 @@ Each of the four groups above is then a group of the rows the operator's lists e
 Done is deliberately separate from Needs You: a stop to read is "look when you have a moment", an unread demand is "act now".
 
 An archived session (PRD session-archive) is in no group and draws no mark: nothing of it runs, so it has no turn, no progress and nothing to read, and it is counted on no badge.
+A resolved row rests in every list, so its mark is counted on no checkout badge either (`sync_checkout_agent_summaries`), as the 태스크 list's Needs You, the raised lists and the phone's list already leave it out.
 It stands only in the 태스크 list's `보관됨` fold and its record, with its archive state (archiving, resuming, could not resume, deleting, unknown) as words; a member that came back is an ordinary row again, and a member still archived while its root is live is listed in that root's record, not as a row.
 While a member is archived, its delivery registration and the watches on it are held as a sleeping session's are (`docs/delivery.md`), so its pane's absence does not end its work's ownership; resuming continues them.
 
@@ -966,6 +967,7 @@ A Hide AI row for a home is a task only while it is in Needs You, where it draws
 Resolve records `resolved_sessions` in core UI state and publishes the hidden row only after the existing coalesced writer acknowledges that exact save.
 Failure keeps it visible with the existing actionable save error; input, activity, session replacement or pane closure invalidates a pending acknowledgement.
 New operator input, a received letter or renewed working activity restores the session.
+The operator cannot resolve a row whose agent works or waits, or one an approval prompt holds: the 태스크 menu does not offer it, and the core refuses it with a `session.resolve.refused` diagnostic (`sessions::resolve_refusal`).
 Automatic resolution requires a stopped agent whose row is Seen (nothing unread and nothing it waits on), no demand and every assigned PR merged or closed; settlements before restored input cannot resolve it again.
 An unread finish therefore stays under the 태스크 list's 읽을 것 and a wait under 대기 though the pull request merged, and resolves once it is read and nothing is left to wait on; an operator's Resolve reads the row as well, so no row rests with a mark that says otherwise.
 A resolved task rests, folded under the 태스크 list's `쉬는 중`; resolutions older than 24 hours (`RESOLVED_WINDOW_MS`) leave the Resolved group and stay among the resting tasks.

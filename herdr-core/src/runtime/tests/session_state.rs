@@ -3,11 +3,45 @@ use crate::agent_state::sessions::ResolveSource;
 use serde_json::json;
 
 fn with_session() -> Runtime {
+    with_status("done")
+}
+
+fn with_status(status: &str) -> Runtime {
     let mut runtime = runtime();
     runtime.snapshot.navigator.agents = project_agents(serde_json::from_value(json!({
-        "agents": [{"pane_id":"session", "agent":"codex", "agent_status":"done", "state_change_seq":1}]
+        "agents": [{"pane_id":"session", "agent":"codex", "agent_status":status, "state_change_seq":1}]
     })).unwrap()).agents;
     runtime
+}
+
+#[test]
+fn work_that_runs_or_waits_and_an_approval_prompt_cannot_be_resolved() {
+    let waiting = || {
+        let mut runtime = with_status("idle");
+        let row = &mut runtime.snapshot.navigator.agents[0];
+        row.wait = Some(crate::model::AgentWait::Children);
+        crate::agent_state::rederive(row);
+        runtime
+    };
+    for (case, mut runtime) in [
+        ("working", with_status("working")),
+        ("waiting", waiting()),
+        ("approval", with_status("blocked")),
+    ] {
+        let _dirs = hold_dirs(&mut runtime);
+        assert!(
+            !runtime.resolve_session("session", ResolveSource::Operator),
+            "{case}"
+        );
+        assert!(
+            runtime.snapshot.navigator.agents[0].resolved.is_none(),
+            "{case}"
+        );
+        assert!(
+            runtime.snapshot.ui_state.resolved_sessions.is_empty(),
+            "{case}"
+        );
+    }
 }
 
 #[test]
