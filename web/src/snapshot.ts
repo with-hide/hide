@@ -199,12 +199,25 @@ export type AgentRequest = {
   end?: LabelEnd;
   /** The operator's last request, else the last one another agent sent. */
   request: { text: string; cut: boolean; images: number; at_unix_ms: number; sender: RequestSender } | null;
+  /** The shown request in one line: the label's summary of it, or its own first line until there is one (PRD pane-last-request D-16). */
+  request_summary?: string | null;
+  /** Up to two turns before the shown request, newest first, for the turn card. */
+  recent_turns?: AgentTurn[];
   /** Who sent a request after the operator's last one (B4). */
   later_by: RequestSender | null;
   /** The agent's last words. */
   reply: { text: string; cut: boolean; at_unix_ms: number } | null;
   /** The chip first (D-46), then the other live ones, then settled ones. */
   pull_requests: AgentPullRequest[];
+};
+
+/** A turn before the shown request (`TurnSnapshot`): the label's summary of its request and how it ended. */
+export type AgentTurn = {
+  request: string | null;
+  sender: RequestSender | null;
+  end: LabelEnd | null;
+  line: string | null;
+  at_unix_ms: number;
 };
 
 /** One of a row's pull requests (`AgentPullRequestSnapshot`). */
@@ -965,9 +978,15 @@ export type PaneHeader = {
   notice: PaneNotice | null;
   /** What waits on the operator in this pane, drawn on its second row. */
   band: PaneBand | null;
-  /** The current pane agent's own live working sentence, selected by the core. */
+  /** The current pane agent's own live working sentence, or a finished turn's result sentence, selected by the core. */
   progress?: string | null;
+  /** The request the second row leads with, present only while the row shows the turn (PRD pane-last-request B1). */
+  request?: PaneTurnRequest;
+  /** The turn finished and the operator has not looked at the pane since (B10). */
+  finished?: boolean;
 };
+/** The shown request in one line and its images, which the row counts. */
+export type PaneTurnRequest = {text: string | null; images: number};
 export type PaneNotice = {kind: string; tone: "muted" | "warning" | "error"; reason: string | null; since_unix_ms: number | null; exit_code: number | null};
 /** The pane's own approval, answer, block or stop, or a raised descendant's ask; `read` once the operator has looked. */
 export type PaneBand = {kind: "approval" | "answer" | "blocked" | "stopped" | "raised"; reason: string | null; since_unix_ms: number | null; read: boolean; action: {pane_id: string; label: string} | null; more: number; raised?: RaisedAsk};
