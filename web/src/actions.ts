@@ -1819,6 +1819,11 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "memory_expand", payload: { workspace_id: workspaceId, number } });
     },
 
+    /** The Memory tab said how many older cards were cleared, the newest at `throughUnixMs`. */
+    memoryEvictionsSeen(workspaceId: string, throughUnixMs: number) {
+      dispatch({ schema_version: 2, kind: "memory_evictions_seen", payload: { workspace_id: workspaceId, through_unix_ms: throughUnixMs } });
+    },
+
     /** Searches the opened Project's cards; empty words clear the search. */
     memorySearch(workspaceId: string, query: string) {
       dispatch({ schema_version: 2, kind: "memory_search", payload: { workspace_id: workspaceId, query } });

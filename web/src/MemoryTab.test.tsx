@@ -36,7 +36,7 @@ const row = (number: number, overrides: Partial<MemoryRow> = {}): MemoryRow => (
   pull_count: 3, updated_at_unix_ms: Date.now(), verifying: false, promotion: null, ...overrides,
 });
 const memory = (overrides: Partial<ProjectMemory> = {}): ProjectMemory => ({
-  workspace_id: "p", unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0,
+  workspace_id: "p", unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0, evicted_through_unix_ms: null,
   rows: [row(3), row(7)], questions: [], analysis: "idle", consent_required: false, usable_cards: 2, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null,
   expanded: null, search: null, ...overrides,
 });
@@ -383,12 +383,27 @@ describe("the Memory tab", () => {
     expect(sent("memory_action")).toEqual([{ workspace_id: "p", action: "delete", number: null }]);
   });
 
-  it("says how many older cards made room, and says full only when nothing can", async () => {
-    await render(memory({ evicted_cards: 2 }));
+  it("says once how many older cards made room, and says full only when nothing can", async () => {
+    await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 50 }));
     expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("2 older cards were cleared to make room for new ones.");
     expect(container.textContent).not.toContain("Memory is full");
+    expect(sent("memory_evictions_seen")).toEqual([{ workspace_id: "p", through_unix_ms: 50 }]);
 
-    await render(memory({ evicted_cards: 2, capacity_reached: true }));
+    // The core counts them seen; the open tab keeps its line and says nothing again.
+    await render(memory({ evicted_cards: 0, evicted_through_unix_ms: null }));
+    expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("2 older cards were cleared to make room for new ones.");
+    expect(sent("memory_evictions_seen")).toHaveLength(1);
+
+    // Opened again, the tab has nothing to say until another card is cleared.
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await render(memory({ evicted_cards: 0, evicted_through_unix_ms: null }));
+    expect(container.querySelector("[data-memory-evicted]")).toBeNull();
+    await render(memory({ evicted_cards: 1, evicted_through_unix_ms: 80 }));
+    expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("1 older card was cleared to make room for new ones.");
+    expect(sent("memory_evictions_seen")).toEqual([{ workspace_id: "p", through_unix_ms: 50 }, { workspace_id: "p", through_unix_ms: 80 }]);
+
+    await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 90, capacity_reached: true }));
     expect(container.querySelector("[data-memory-evicted]")).toBeNull();
     expect(container.textContent).toContain("This Project's Memory is full, so new cards are not kept.");
   });

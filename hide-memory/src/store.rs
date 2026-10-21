@@ -21,7 +21,7 @@ pub(crate) mod hold;
 mod progress;
 pub use progress::{CorrectionCheck, InputFailure};
 
-const SCHEMA_VERSION: i64 = 18;
+const SCHEMA_VERSION: i64 = 19;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any
 /// agent the operator added under its fallback list (PRD settings-cleanup
 /// D-26), which now includes vendors other than the two it was limited to.
@@ -243,8 +243,11 @@ pub struct ProjectMemoryState {
     /// At the card limit with no card left to make room: new cards are
     /// refused.
     pub capacity_reached: bool,
-    /// Cards forgotten to make room that are still forgotten.
+    /// Cards forgotten to make room, still forgotten, since the operator
+    /// last saw the Memory tab say so ([`MemoryStore::mark_evictions_seen`]).
     pub evicted_count: usize,
+    /// When the newest of those was forgotten.
+    pub evicted_through_unix_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1313,6 +1316,21 @@ impl MemoryStore {
         self.project_state_limited(project_id, ACTIVE_MEMORY_LIMIT)
     }
 
+    /// The Memory tab said how many cards were forgotten to make room, the
+    /// newest at `through_unix_ms`: those are no longer counted.
+    pub fn mark_evictions_seen(
+        &self,
+        project_id: &str,
+        through_unix_ms: u64,
+    ) -> Result<(), MemoryError> {
+        self.require_writer()?;
+        self.connection.execute(
+            "UPDATE projects SET evictions_seen_at_ms=MAX(COALESCE(evictions_seen_at_ms,0),?2) WHERE id=?1",
+            params![project_id, through_unix_ms],
+        )?;
+        Ok(())
+    }
+
     fn project_state_limited(
         &self,
         project_id: &str,
@@ -1329,6 +1347,12 @@ impl MemoryStore {
             .ok_or(MemoryError::ProjectMissing)?;
         let active_count = count_state(&self.connection, project_id, "active")?;
         let live_count = count_live(&self.connection, project_id)?;
+        let evicted: (u64, Option<u64>) = self.connection.query_row(
+            "SELECT COUNT(*),MAX(r.created_at_ms) FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision JOIN projects p ON p.id=i.project_id \
+             WHERE i.project_id=?1 AND i.lifecycle='tombstoned' AND r.batch_id LIKE 'evict:%' AND r.created_at_ms>COALESCE(p.evictions_seen_at_ms,-1)",
+            [project_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
         Ok(ProjectMemoryState {
             project_id: project_id.to_owned(),
             enabled: enabled != 0,
@@ -1340,11 +1364,8 @@ impl MemoryStore {
             active_count,
             capacity_reached: live_count >= item_limit
                 && evictable(&self.connection, project_id, "", &HashSet::new())?.is_none(),
-            evicted_count: self.connection.query_row(
-                "SELECT COUNT(*) FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE i.project_id=?1 AND i.lifecycle='tombstoned' AND r.batch_id LIKE 'evict:%'",
-                [project_id],
-                |row| row.get::<_, u64>(0),
-            )? as usize,
+            evicted_count: evicted.0 as usize,
+            evicted_through_unix_ms: evicted.1,
         })
     }
 
@@ -3745,6 +3766,22 @@ COMMIT;"#,
         transaction.commit()?;
         version = 18;
     }
+    if version == 18 {
+        // Adds one empty column, so no backup is kept.
+        let transaction = connection.unchecked_transaction()?;
+        let present: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name='evictions_seen_at_ms')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !present {
+            transaction
+                .execute_batch("ALTER TABLE projects ADD COLUMN evictions_seen_at_ms INTEGER;")?;
+        }
+        transaction.execute_batch("PRAGMA user_version=19;")?;
+        transaction.commit()?;
+        version = 19;
+    }
     if version != SCHEMA_VERSION {
         return Err(MemoryError::WrongSchema {
             found: version,
@@ -4445,7 +4482,7 @@ fn check_projection_integrity(connection: &Connection) -> Result<(), MemoryError
 
 /// A new store's tables.
 const SCHEMA: &str = r#"
-CREATE TABLE projects(id TEXT PRIMARY KEY,root TEXT NOT NULL,device_id TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 0,disclosure_accepted_at_ms INTEGER,created_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,disclosure_version INTEGER NOT NULL DEFAULT 0,next_number INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE projects(id TEXT PRIMARY KEY,root TEXT NOT NULL,device_id TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 0,disclosure_accepted_at_ms INTEGER,created_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,disclosure_version INTEGER NOT NULL DEFAULT 0,next_number INTEGER NOT NULL DEFAULT 1,evictions_seen_at_ms INTEGER);
 CREATE TABLE project_receipt_keys(project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,auth_key BLOB NOT NULL);
 CREATE TABLE session_sources(id TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,locator TEXT NOT NULL,checkout_path TEXT NOT NULL,started_at_ms INTEGER,updated_at_ms INTEGER NOT NULL,unavailable_reason TEXT,PRIMARY KEY(project_id,provider,id));
 CREATE TABLE session_cursors(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,session_id TEXT NOT NULL,byte_offset INTEGER NOT NULL,pending_bytes BLOB NOT NULL,last_content_hash TEXT,updated_at_ms INTEGER NOT NULL,operator_events INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(project_id,provider,session_id));
@@ -6222,6 +6259,77 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             [3],
             "a card the operator brought back counts as used, so it is not the next to go"
         );
+    }
+
+    #[test]
+    fn cleared_cards_are_counted_until_seen_and_again_only_when_more_are_cleared() {
+        let (_temp, mut store, project) = store();
+        for (name, text) in [("b1", "Card one"), ("b2", "Card two")] {
+            store
+                .apply_candidates(
+                    &batch(&project, name, name),
+                    &[candidate(text, CandidateRelation::New)],
+                )
+                .unwrap();
+        }
+        let grow = |store: &mut MemoryStore, name: &str| {
+            store
+                .apply_candidates_with_limit(
+                    &batch(&project, name, name),
+                    &[candidate(name, CandidateRelation::New)],
+                    2,
+                )
+                .unwrap()
+        };
+        grow(&mut store, "Card three");
+        // The first card was cleared a second ago, so the next one is newer.
+        store
+            .connection
+            .execute(
+                "UPDATE memory_revisions SET created_at_ms=created_at_ms-1000 WHERE batch_id LIKE 'evict:%'",
+                [],
+            )
+            .unwrap();
+        let state = store.project_state(&project).unwrap();
+        assert_eq!(state.evicted_count, 1);
+        let through = state.evicted_through_unix_ms.unwrap();
+        store.mark_evictions_seen(&project, through).unwrap();
+        let seen = store.project_state(&project).unwrap();
+        assert_eq!(
+            (seen.evicted_count, seen.evicted_through_unix_ms),
+            (0, None)
+        );
+        // A marker from before is never moved back.
+        store.mark_evictions_seen(&project, through - 1).unwrap();
+        assert_eq!(store.project_state(&project).unwrap().evicted_count, 0);
+
+        grow(&mut store, "Card four");
+        assert_eq!(
+            store.project_state(&project).unwrap().evicted_count,
+            1,
+            "only the card cleared after the operator saw the line is counted"
+        );
+    }
+
+    #[test]
+    fn a_version_eighteen_store_gains_the_cleared_cards_marker() {
+        let (temp, store, project) = store();
+        drop(store);
+        let path = temp.path().join("memory.sqlite3");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; PRAGMA user_version=18;",
+            )
+            .unwrap();
+        let store = MemoryStore::open(&path).unwrap();
+        let version: i64 = store
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        store.mark_evictions_seen(&project, 5).unwrap();
+        assert_eq!(store.project_state(&project).unwrap().evicted_count, 0);
     }
 
     #[test]

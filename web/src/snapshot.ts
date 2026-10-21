@@ -1813,8 +1813,10 @@ export type ProjectMemory = {
   loading: boolean;
   enabled: boolean;
   capacity_reached: boolean;
-  /** Cards forgotten automatically to make room for new ones. */
+  /** Cards forgotten automatically to make room for new ones since the tab last said so. */
   evicted_cards: number;
+  /** When the newest of those was forgotten; the tab names it back once it said so. */
+  evicted_through_unix_ms: number | null;
   rows: MemoryRow[];
   questions: MemoryQuestion[];
   /** `memory_analysis_state`. */

@@ -81,11 +81,35 @@ export function useMemoryProject(actions: Actions, requested?: string | null) {
   }, [actions, live, projectId]);
 }
 
+/**
+ * How many older cards the line says were cleared to make room. The line
+ * is shown once: drawing it tells the core they are seen, and it stays
+ * while this tab is open although the core then counts none, so it is gone
+ * the next time the tab opens unless more are cleared.
+ */
+function useEvictedCards(project: ProjectMemory, actions: Actions): number {
+  const id = project.workspace_id;
+  const shown = project.enabled && !project.capacity_reached && project.evicted_cards > 0;
+  const [said, setSaid] = useState<{ id: string; count: number }>({ id, count: 0 });
+  const sent = useRef<{ id: string; through: number } | null>(null);
+  const through = project.evicted_through_unix_ms;
+  useEffect(() => {
+    if (!shown || through === null) return;
+    setSaid({ id, count: project.evicted_cards });
+    if (sent.current?.id === id && sent.current.through >= through) return;
+    sent.current = { id, through };
+    actions.memoryEvictionsSeen(id, through);
+  }, [actions, id, shown, through, project.evicted_cards]);
+  if (shown) return project.evicted_cards;
+  return said.id === id ? said.count : 0;
+}
+
 function MemoryBody({ project, actions }: { project: ProjectMemory; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const id = project.workspace_id;
   const busy = project.pending_action !== null;
   const [deleting, setDeleting] = useState(false);
+  const evicted = useEvictedCards(project, actions);
   const label = useShellStore((state) => catalogWorkspaces(state.rest).find((row) => row.id === id)?.label ?? id);
   // Every agent is past the usage limit: Hide AI is on but asks nothing until one is under it (D-06).
   const pastLimit = useShellStore((state) => {
@@ -131,7 +155,7 @@ function MemoryBody({ project, actions }: { project: ProjectMemory; actions: Act
           </div>
         ) : null}
         {project.enabled && project.capacity_reached ? <p className="-mt-sm break-keep text-caption text-warning">{t("memory.capacity")}</p> : null}
-        {project.enabled && !project.capacity_reached && project.evicted_cards > 0 ? <p className="-mt-sm break-keep text-caption text-subtle-foreground" data-memory-evicted={project.evicted_cards}>{t("memory.evicted", { count: project.evicted_cards })}</p> : null}
+        {project.enabled && !project.capacity_reached && evicted > 0 ? <p className="-mt-sm break-keep text-caption text-subtle-foreground" data-memory-evicted={evicted}>{t("memory.evicted", { count: evicted })}</p> : null}
         {project.enabled && (project.questions.length > 0 || memoryProgress(project).length > 0) ? <Questions project={project} actions={actions} busy={busy} /> : null}
         {project.enabled ? <Cards project={project} actions={actions} busy={busy} onDelete={() => setDeleting(true)} /> : null}
       </div>

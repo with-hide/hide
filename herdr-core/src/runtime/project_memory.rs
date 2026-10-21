@@ -461,6 +461,54 @@ impl Runtime {
         true
     }
 
+    /// The Memory tab said how many older cards were cleared to make room,
+    /// the newest at `through_unix_ms`: they are seen, so the tab opened
+    /// again says nothing until another is cleared. Written off the lock.
+    pub(super) fn memory_evictions_seen(
+        &mut self,
+        workspace_id: &str,
+        through_unix_ms: u64,
+    ) -> bool {
+        if !self.memory_opened(workspace_id) {
+            return false;
+        }
+        let (Some(project_id), Some(context)) = (
+            self.project_memory.project_id.clone(),
+            self.worker_context.clone(),
+        ) else {
+            return false;
+        };
+        let database = self.memory_database_path();
+        let spawn = thread::Builder::new()
+            .name("hide-project-memory-seen".to_owned())
+            .spawn(move || {
+                let marked = super::memory::open_memory_store(&database)
+                    .and_then(|store| store.mark_evictions_seen(&project_id, through_unix_ms));
+                if let Err(error) = marked {
+                    crate::diagnostic!(json!({
+                        "component": "memory",
+                        "kind": "memory.evictions_seen_failed",
+                        "project_id": project_id,
+                        "message": error.to_string(),
+                    }));
+                    return;
+                }
+                let Some(runtime) = context.runtime.upgrade() else {
+                    return;
+                };
+                if let Ok(mut guard) = runtime.lock() {
+                    guard.refresh_project_memory();
+                };
+            });
+        if let Err(error) = spawn {
+            self.push_diagnostic(
+                "memory.evictions_seen_not_started",
+                format!("Project Memory could not record the cleared cards as seen: {error}"),
+            );
+        }
+        false
+    }
+
     fn memory_opened(&self, workspace_id: &str) -> bool {
         self.snapshot
             .memory
@@ -575,6 +623,10 @@ impl Runtime {
             .as_ref()
             .is_some_and(|state| state.capacity_reached);
         project.evicted_cards = load.state.as_ref().map_or(0, |state| state.evicted_count);
+        project.evicted_through_unix_ms = load
+            .state
+            .as_ref()
+            .and_then(|state| state.evicted_through_unix_ms);
         let project_id = self.project_memory.project_id.clone().unwrap_or_default();
         let mut rows = load.rows;
         let mut questions = Vec::new();
