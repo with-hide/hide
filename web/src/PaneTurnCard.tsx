@@ -8,7 +8,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { agentsByPane, allAgents } from "./paneAgents";
 import { sessionOfAgentOn } from "./sessionWork";
-import { localDeviceId, type AgentRow, type PaneHeader, type PaneTurnRequest, type RequestSender } from "./snapshot";
+import { localDeviceId, type AgentRow, type LabelEnd, type PaneHeader, type PaneTurnRequest, type RequestSender } from "./snapshot";
 import { useShellStore } from "./store";
 
 /** How long the pointer may cross the gap between a trigger and its card before the card closes. */
@@ -197,11 +197,54 @@ export function turnResponse(t: TFunction<"translation">, header: PaneHeader | u
   return { verb: t(`requests.end.${end}`), asks: end === "question" || end === "blocked", text: agent.request?.line ?? null };
 }
 
+/** A turn's place on the card's rail: a ring in its end's colour, filled for the shown turn's two halves. */
+type RailDot = "past" | "past-asks" | "past-done" | "request" | Tone;
+
+/** How the agent stands on the shown turn: waiting on the operator, working, finished or quiet. */
+type Tone = "asks" | "working" | "done" | "quiet";
+
+const DOT: Record<RailDot, string> = {
+  past: "border-muted-foreground bg-popover",
+  "past-asks": "border-warning bg-popover",
+  "past-done": "border-success bg-popover",
+  request: "border-foreground bg-foreground",
+  asks: "border-warning bg-warning ring-3 ring-warning/25",
+  working: "border-agent-working bg-agent-working ring-3 ring-agent-working/25",
+  done: "border-success bg-success",
+  quiet: "border-muted-foreground bg-muted-foreground",
+};
+
+/** The verb's pill in its tone's colour, so the state reads before its words. */
+const TONE: Record<Tone, string> = {
+  asks: "bg-warning/15 text-warning",
+  working: "bg-agent-working/15 text-agent-working",
+  done: "bg-success/15 text-success",
+  quiet: "bg-secondary text-foreground",
+};
+
+/** One stop on the rail: its dot sits on the line at the left, its words to the right. */
+function RailItem({ dot, className, children, ...rest }: { dot: RailDot; className?: string; children: ReactNode } & { [data: `data-${string}`]: string | number | undefined }) {
+  return (
+    <li className={cn("relative min-w-0", className)} {...rest}>
+      <span aria-hidden="true" className={cn("absolute top-xs -left-lg size-(--size-rail-mark) rounded-full border-2", DOT[dot])} />
+      {children}
+    </li>
+  );
+}
+
+function pastDot(end: LabelEnd | null): RailDot {
+  if (end === "question" || end === "blocked") return "past-asks";
+  return end === "done" ? "past-done" : "past";
+}
+
 /**
- * The card's body: the head the title's hint carried, the request (its
- * summary and its own first two lines), what the agent does about it, its
- * last words, who asked after, the turns before and `기록 열기`. A part with
- * nothing to say is not drawn (B7).
+ * The card's body: the head the title's hint carried, then the session as one
+ * conversation read top to bottom on a rail: the turns before (oldest first,
+ * dimmed, each ringed in how it ended), the shown request in a bubble under
+ * who sent it (its summary and its own first two lines, who asked after), and
+ * the agent's half: what it does about it as a coloured verb with its words,
+ * and its last words. `기록 열기` closes it. A part with nothing to say is not
+ * drawn (B7).
  */
 function TurnCard({ agent, header, head, onRecord }: { agent: AgentRow; header: PaneHeader | undefined; head?: { title: string; product: string; words: string | null }; onRecord: (() => void) | null }) {
   const { t } = useInterfaceTranslation();
@@ -210,8 +253,11 @@ function TurnCard({ agent, header, head, onRecord }: { agent: AgentRow; header: 
   const summary = view?.request_summary ?? null;
   const response = turnResponse(t, header, agent);
   const reply = view?.reply?.text.trim() || null;
-  const earlier = view?.recent_turns ?? [];
+  // The core sends the turns before newest first; the rail reads in time order.
+  const earlier = [...(view?.recent_turns ?? [])].reverse();
   const original = raw?.text.trim() || null;
+  const tone: Tone = response?.asks ? "asks" : header?.working ? "working" : header?.finished ? "done" : "quiet";
+  const rail = raw !== null || response !== null || reply !== null || earlier.length > 0;
   return (
     <div className="flex min-w-0 flex-col [word-break:keep-all]" data-turn-card="true">
       <div className="flex flex-col gap-sm px-sm pt-sm">
@@ -221,39 +267,49 @@ function TurnCard({ agent, header, head, onRecord }: { agent: AgentRow; header: 
             <span className="truncate text-micro text-muted-foreground">{[head.product, head.words].filter(Boolean).join(" · ")}</span>
           </div>
         ) : null}
-        {raw ? (
-          <section className="flex min-w-0 flex-col gap-xxs" data-turn-card-request="true">
-            <h3 className="text-micro font-medium text-muted-foreground">{t("paneTurn.request")}</h3>
-            <p className="whitespace-normal text-foreground [overflow-wrap:anywhere]">{requestWords(t, { text: summary, images: raw.images })}</p>
-            {original && original !== summary ? <p className="line-clamp-2 whitespace-pre-line text-muted-foreground [overflow-wrap:anywhere]" data-turn-card-original="true">{original}</p> : null}
-            {view?.later_by ? <p className="text-micro text-muted-foreground" data-turn-card-later="true">{t("paneTurn.laterBy", { name: senderName(t, view.later_by) })}</p> : null}
-          </section>
-        ) : null}
-        {response ? (
-          <p className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" data-turn-card-response="true">
-            <span className={cn("mr-xs font-semibold", response.asks ? "text-warning" : "text-foreground")}>{response.verb}</span>
-            {response.text ? <span className={response.asks ? "text-warning" : "text-muted-foreground"}>{response.text}</span> : null}
-          </p>
-        ) : null}
-        {reply ? (
-          <section className="flex min-w-0 flex-col gap-xxs" data-turn-card-reply="true">
-            <h3 className="text-micro font-medium text-muted-foreground">{t("paneTurn.reply")}</h3>
-            <p className="line-clamp-3 whitespace-pre-line text-muted-foreground [overflow-wrap:anywhere]">{reply}</p>
-          </section>
-        ) : null}
-        {earlier.length > 0 ? (
-          <section className="flex min-w-0 flex-col gap-xxs" data-turn-card-earlier={earlier.length}>
-            <h3 className="text-micro font-medium text-muted-foreground">{t("paneTurn.earlier")}</h3>
-            <ul className="flex flex-col gap-xxs">
-              {earlier.map((turn, index) => (
-                <li key={index} className="min-w-0 truncate text-muted-foreground" data-turn-card-earlier-item="true">
-                  <span className="text-foreground">{turn.request ?? t("paneTurn.unsummarized")}</span>
-                  {turn.end ? <span> · {t(`requests.end.${turn.end}`)}</span> : null}
-                  {turn.line ? <span> · {turn.line}</span> : null}
-                </li>
-              ))}
-            </ul>
-          </section>
+        {rail ? (
+          <ol className="relative flex min-w-0 flex-col gap-sm pl-lg before:absolute before:top-sm before:bottom-sm before:left-xs before:w-px before:bg-muted-foreground/40">
+            {earlier.length > 0 ? (
+              <li className="min-w-0" data-turn-card-earlier={earlier.length}>
+                <h3 className="sr-only">{t("paneTurn.earlier")}</h3>
+                <ol className="flex flex-col gap-xs">
+                  {earlier.map((turn, index) => (
+                    <RailItem key={index} dot={pastDot(turn.end)} className="opacity-(--opacity-dimmed)" data-turn-card-earlier-item="true">
+                      <p className="truncate text-foreground">{turn.request ?? t("paneTurn.unsummarized")}</p>
+                      {turn.end || turn.line ? <p className="truncate text-muted-foreground">{[turn.end ? t(`requests.end.${turn.end}`) : null, turn.line].filter(Boolean).join(" · ")}</p> : null}
+                    </RailItem>
+                  ))}
+                </ol>
+              </li>
+            ) : null}
+            {raw ? (
+              <RailItem dot="request" data-turn-card-request="true">
+                <h3 className="sr-only">{t("paneTurn.request")}</h3>
+                <p className="text-micro text-muted-foreground" data-turn-card-sender="true">{senderName(t, raw.sender)}</p>
+                <div className="mt-xxs flex min-w-0 flex-col gap-xxs rounded-md rounded-bl-xs bg-secondary px-sm py-xs">
+                  <p className="whitespace-normal font-semibold text-foreground [overflow-wrap:anywhere]" data-turn-card-summary="true">{requestWords(t, { text: summary, images: raw.images })}</p>
+                  {original && original !== summary ? <p className="line-clamp-2 whitespace-pre-line text-muted-foreground [overflow-wrap:anywhere]" data-turn-card-original="true">{original}</p> : null}
+                </div>
+                {view?.later_by ? <p className="mt-xxs text-micro text-muted-foreground" data-turn-card-later="true">{t("paneTurn.laterBy", { name: senderName(t, view.later_by) })}</p> : null}
+              </RailItem>
+            ) : null}
+            {response || reply ? (
+              <RailItem dot={tone} className="flex flex-col gap-xxs">
+                {response ? (
+                  <p className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" data-turn-card-response="true">
+                    <span className={cn("mr-xs inline-flex items-center rounded-full px-xs font-semibold", TONE[tone])}>{response.verb}</span>
+                    {response.text ? <span className={response.asks ? "text-warning" : "text-foreground"}>{response.text}</span> : null}
+                  </p>
+                ) : null}
+                {reply ? (
+                  <div data-turn-card-reply="true">
+                    <h3 className="sr-only">{t("paneTurn.reply")}</h3>
+                    <p className="line-clamp-3 whitespace-pre-line text-subtle-foreground [overflow-wrap:anywhere]">{reply}</p>
+                  </div>
+                ) : null}
+              </RailItem>
+            ) : null}
+          </ol>
         ) : null}
       </div>
       {onRecord ? (

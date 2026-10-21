@@ -599,14 +599,16 @@ it("opens the turn card from the request and pins it on a press until Esc", asyn
   try {
     expect(card()).toBeNull();
     await act(async () => button().dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
-    expect(card()?.querySelector("[data-turn-card-request] p")?.textContent).toBe("Proceed as proposed + check unclear states");
+    expect(card()?.querySelector("[data-turn-card-summary]")?.textContent).toBe("Proceed as proposed + check unclear states");
     expect(card()?.querySelector("[data-turn-card-original]")?.textContent).toContain("ok do that.");
     expect(card()?.querySelector("[data-turn-card-later]")?.textContent).toBe("Next request from lead");
     expect(card()?.querySelector("[data-turn-card-response]")?.textContent).toBe("QuestionBundle questions 1-3 into one PR?");
     expect(card()?.querySelector("[data-turn-card-reply]")?.textContent).toContain("Found three unclear states");
-    expect([...card()!.querySelectorAll("[data-turn-card-earlier-item]")].map((item) => item.textContent)).toEqual([
-      "Proposal for the white ring after finishing · Done · Two options drafted",
-      "Why unread states stick",
+    expect(card()?.querySelector("[data-turn-card-sender]")?.textContent).toBe("Me");
+    // The rail reads in time order, so the older of the two turns before comes first.
+    expect([...card()!.querySelectorAll("[data-turn-card-earlier-item]")].map((item) => [...item.querySelectorAll("p")].map((line) => line.textContent))).toEqual([
+      ["Why unread states stick"],
+      ["Proposal for the white ring after finishing", "Done · Two options drafted"],
     ]);
     expect(card()?.querySelector("[data-turn-card-record]")?.textContent).toBe("Open record");
     // A card the pointer only shows leaves Esc to the terminal.
@@ -688,7 +690,7 @@ it("shows the turn card on the record button's hover, headed by the title", asyn
     await act(async () => button.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
     const card = document.querySelector<HTMLElement>("[data-pane-turn-card=solo]")!;
     expect(card.querySelector("[data-turn-card-head]")?.textContent).toMatch(/^Unread-state marksClaude Code/);
-    expect(card.querySelector("[data-turn-card-request] p")?.textContent).toBe("Proceed as proposed + check unclear states");
+    expect(card.querySelector("[data-turn-card-summary]")?.textContent).toBe("Proceed as proposed + check unclear states");
     expect(document.querySelector("[role=tooltip]")).toBeNull();
   } finally { await act(async () => root.unmount()); }
 });
