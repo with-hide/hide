@@ -1123,12 +1123,10 @@ The core owns the lens, the view option and the slot (`herdr-core/src/runtime/de
 
 
 A session title restored from saved conversation history carries the core's connection state on the shared Project, Task and agent-tree rows, the Overview graph/list/preview and project home, live-agent popovers, archive confirmations, feedback recipient menus and PR list heads.
-While checking it is only dimmed, because every restored row checks at launch; an unsuccessful or uncertain check keeps it dimmed beside `연결 미확인`, and the worker retries without a new message or a retry button.
-The hint and the accessible name carry `연결 확인 중` or `연결 미확인` in both states.
-A confirmed binding drops both the dimming and those words.
+While checking, and after an unsuccessful or uncertain check, the title is only dimmed with no words beside it: every restored row checks at launch and the worker retries without a new message or a retry button, so there is nothing for the operator to do.
+The hint and the accessible name carry `연결 확인 중` or `연결 미확인`.
+A confirmed binding drops the dimming and those words.
 The same state names and dims its PR mark without changing GitHub read-stale status, keyboard access or the existing PR card/link actions.
-The connection words keep one line while the title gives up width.
-A pane head, tab or graph node places them below the title within its existing height or two-line title budget, so both retain width.
 Accessible row names include the connection state and saved summary.
 Saved questions, approvals and work state do not become the current row's status through this display restoration.
 A new hook reference removes the old title and PR display before its own read completes.
