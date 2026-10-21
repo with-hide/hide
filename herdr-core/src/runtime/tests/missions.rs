@@ -572,3 +572,31 @@ fn a_mission_asked_for_before_the_projects_are_read_says_so_rather_than_unknown(
         "mission_project_unknown"
     );
 }
+
+#[test]
+fn a_mission_book_that_cannot_be_read_is_never_written_over() {
+    let fixture = conducting();
+    let path = fixture._root.path().join("missions.json");
+    std::fs::write(&path, b"not a mission book").unwrap();
+    {
+        let mut guard = fixture.runtime.lock().unwrap();
+        let store = crate::missions::MissionStore::new(path.clone());
+        let restored = store.restore();
+        guard.install_mission_store(store, restored);
+        assert_eq!(
+            command(
+                &mut guard,
+                &fixture.conductor.pane_id,
+                json!({"op": "create", "title": "Lost"})
+            )
+            .unwrap_err(),
+            "mission_unavailable"
+        );
+        // An archive delete and a pull request read both save the book when it changes.
+        guard.drop_missions_of(&[(crate::node::TEST_NODE.to_owned(), "session".to_owned())]);
+        guard.save_missions();
+        // Dropping the store waits for any save it queued.
+        drop(guard.missions.store.take());
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), b"not a mission book");
+}

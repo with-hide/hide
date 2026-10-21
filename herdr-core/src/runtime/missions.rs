@@ -164,7 +164,12 @@ impl Runtime {
         self.missions.store = Some(store);
     }
 
-    fn save_missions(&self) {
+    pub(super) fn save_missions(&self) {
+        // A book that could not be read is kept as it is on disk: the empty
+        // one in memory is not the operator's missions.
+        if self.missions.unreadable.is_some() {
+            return;
+        }
         if let Some(store) = &self.missions.store {
             store.save(&self.missions.book);
         }
@@ -227,7 +232,9 @@ impl Runtime {
                 let project = match project {
                     Some(project) => project,
                     // Before the machine's projects are first read, an unknown checkout says nothing yet.
-                    None if self.projects_loading(device) => return Err("mission_projects_loading".into()),
+                    None if self.projects_loading(device) => {
+                        return Err("mission_projects_loading".into());
+                    }
                     None => return Err("mission_project_unknown".into()),
                 };
                 let settings = self.snapshot.ui_state.conductor_settings.clone();
