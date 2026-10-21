@@ -3772,8 +3772,11 @@ COMMIT;"#,
         version = 17;
     }
     if version == 17 {
-        // Adds one empty table, so no backup is kept.
+        // An earlier build of 17 made the table with another shape; its
+        // counts are disposable, so it is made again empty and no backup is
+        // kept.
         let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch("DROP TABLE IF EXISTS input_failures;")?;
         transaction.execute_batch(progress::FAILURE_TABLES)?;
         transaction.execute_batch("PRAGMA user_version=18;")?;
         transaction.commit()?;
@@ -6321,6 +6324,27 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             store.project_state(&project).unwrap().evicted_count,
             1,
             "only the card cleared after the operator saw the line is counted"
+        );
+    }
+
+    #[test]
+    fn a_version_seventeen_store_with_the_earlier_failure_table_counts_again() {
+        // The first build of schema 17 made `input_failures` with one count.
+        let (temp, store, project) = store();
+        drop(store);
+        let path = temp.path().join("memory.sqlite3");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE input_failures; CREATE TABLE input_failures(project_id TEXT NOT NULL,subject TEXT NOT NULL,input TEXT NOT NULL,attempts INTEGER NOT NULL,failed_at_ms INTEGER NOT NULL,PRIMARY KEY(project_id,subject)); PRAGMA user_version=17;",
+            )
+            .unwrap();
+        let store = MemoryStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .record_input_failure(&project, "s", "a", InputFailure::Unusable, 10)
+                .unwrap(),
+            Some(1)
         );
     }
 
