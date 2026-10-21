@@ -39,7 +39,7 @@ const PLAN = {
   ],
 };
 
-test("the Conductor's commands draw the mission map once, the map follows the record, and Settings › Conductor keeps the cap", async ({ page }) => {
+test("the Conductor's commands draw the mission map once, the map follows the record, and the Conductor settings keep the cap", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | null = null;
