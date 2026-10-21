@@ -1889,7 +1889,9 @@ impl Runtime {
         // TEMPORARY #1515: time each part of Runtime::new.
         let mut __at = std::time::Instant::now();
         let __t = |at: &mut std::time::Instant, part: &str| {
-            crate::diagnostic!(serde_json::json!({"component":"core","kind":"runtime_new.part","part":part,"ms":at.elapsed().as_millis() as u64}));
+            crate::diagnostic!(
+                serde_json::json!({"component":"core","kind":"runtime_new.part","part":part,"ms":at.elapsed().as_millis() as u64})
+            );
             *at = std::time::Instant::now();
         };
         let state_path = PathBuf::from(&options.app_state_path);

@@ -734,8 +734,14 @@ pub fn recover(path: &Path) -> Result<Ledger, SaveError> {
     // TEMPORARY #1515: time the parts of recovery.
     let mut __at = std::time::Instant::now();
     let __t = |at: &mut std::time::Instant, part: &str| {
-        let flushes = std::mem::take(&mut *hide_platform::fs::atomic::FLUSH_TIMES.lock().unwrap_or_else(|e| e.into_inner()));
-        crate::diagnostic!(serde_json::json!({"component":"core","kind":"recover.part","part":part,"ms":at.elapsed().as_millis() as u64,"flushes":flushes}));
+        let flushes = std::mem::take(
+            &mut *hide_platform::fs::atomic::FLUSH_TIMES
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        crate::diagnostic!(
+            serde_json::json!({"component":"core","kind":"recover.part","part":part,"ms":at.elapsed().as_millis() as u64,"flushes":flushes})
+        );
         *at = std::time::Instant::now();
     };
     __t(&mut __at, "checks");

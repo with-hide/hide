@@ -761,7 +761,9 @@ fn owner_loop(
             }
         }
     });
-    herdr_core::diagnostic!(serde_json::json!({"component":"hided","kind":"owner.before_create","ms":owner_began.elapsed().as_millis() as u64})); // TEMPORARY #1515
+    herdr_core::diagnostic!(
+        serde_json::json!({"component":"hided","kind":"owner.before_create","ms":owner_began.elapsed().as_millis() as u64})
+    ); // TEMPORARY #1515
     let Some(core) = Core::create_with_product_analytics(
         options,
         std::sync::Arc::new(own_node),

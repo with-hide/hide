@@ -133,6 +133,40 @@ fn an_ancestor_is_passed_over_only_when_the_account_neither_owns_nor_may_add_to_
     assert!(names(&anchor).is_empty());
 }
 
+/// Windows flushes an ancestor only to keep the chain's next folder in it,
+/// and only when the account made that folder: one the system made, as
+/// `Users` in a drive's root, is not flushed for, since a drive root's flush
+/// writes out all the drive holds unwritten. The account owns `closed` but
+/// may not flush it, and the folder the chain goes through in it is the
+/// system's, so the chain stands; the account's own folder there would make
+/// the refused flush the answer, as the test above shows.
+#[cfg(windows)]
+#[test]
+fn an_ancestor_is_flushed_only_to_keep_a_folder_the_account_made() {
+    let outer = folder();
+    let closed = outer.path().join("closed");
+    fs::create_dir(&closed).unwrap();
+    let system = closed.join("system");
+    fs::create_dir(&system).unwrap();
+    let anchor = system.join("anchor");
+    private::create_dir(&anchor).unwrap();
+    // Every signed-in account may change it, and it stays that way when its
+    // owner is the system and `closed` above it is closed.
+    set_access(&system, "D:P(A;OICI;FA;;;AU)");
+    icacls(&system, &["/setowner", "*S-1-5-18"]);
+    assert!(!private::owned_by_current_user(&system).unwrap());
+    let _closed = Closed::own(&closed);
+    assert!(!may_add_to(&closed), "{}", access_list(&closed));
+
+    let canonical = private::establish_dir_durability(&anchor).unwrap();
+
+    assert_eq!(
+        identity::file_id(&canonical).unwrap(),
+        identity::file_id(&anchor).unwrap()
+    );
+    assert!(names(&anchor).is_empty());
+}
+
 /// A standard account is how most people run Hide, and the Windows runner's
 /// account is an administrator, so the chain is made again on a thread that
 /// acts with the account's token filtered the way UAC filters a standard

@@ -234,7 +234,9 @@ impl Core {
         // TEMPORARY #1515: time each part of core creation.
         let mut __at = std::time::Instant::now();
         let __t = |at: &mut std::time::Instant, part: &str| {
-            crate::diagnostic!(serde_json::json!({"component":"core","kind":"create.part","part":part,"ms":at.elapsed().as_millis() as u64}));
+            crate::diagnostic!(
+                serde_json::json!({"component":"core","kind":"create.part","part":part,"ms":at.elapsed().as_millis() as u64})
+            );
             *at = std::time::Instant::now();
         };
         if validate_options(&options).is_err()

@@ -166,11 +166,12 @@ impl std::error::Error for DirectoryDurabilityError {
 ///
 /// The existing chain is synced from the filesystem root ([`sync_dir`] on
 /// each folder), with at most 64 components below the root. No directory is
-/// created or removed, including on failure. On Windows an ancestor this
-/// account neither owns nor may add an entry to, such as `C:\Users` for a
-/// standard account, is passed over: a flush needs that right, and without
-/// it no entry there can be one this account made. Every other folder, the
-/// leaf always among them, is flushed, and a failed flush is an error.
+/// created or removed, including on failure. On Windows an ancestor is
+/// flushed only for its entry on the chain, and only when that entry is
+/// this account's and the account owns or may add an entry to the ancestor
+/// (`sys::flushes_entry`): `C:\` is passed over for its `Users`, which
+/// the system made, and `C:\Users` for a standard account, which may not
+/// flush it. The leaf is always flushed, and a failed flush is an error.
 ///
 /// [`sync_dir`]: super::atomic::sync_dir
 pub fn establish_dir_durability(path: &Path) -> Result<PathBuf, DirectoryDurabilityError> {
@@ -219,7 +220,7 @@ pub fn establish_dir_durability(path: &Path) -> Result<PathBuf, DirectoryDurabil
             chain_barrier(&child, index + 1 < parts.len())?;
             #[cfg(test)]
             bootstrap_faults::fail(bootstrap_faults::Point::ParentSync)?;
-            chain_barrier(&parent, true)?;
+            entry_barrier(&parent, &child)?;
             Ok(child)
         })();
         parent = step.map_err(|source| DirectoryDurabilityError::Uncertain {
@@ -249,14 +250,23 @@ pub fn establish_dir_durability(path: &Path) -> Result<PathBuf, DirectoryDurabil
     Ok(canonical)
 }
 
-/// One barrier of an existing chain: an ancestor is passed over only when
-/// [`sys::flushes_ancestor`] says no entry in it can be this account's, which
-/// is read from the folder before any flush, never from a refused one.
+/// One folder's own barrier on an existing chain: the leaf's always, an
+/// ancestor's only where [`sys::flushes_ancestor`] says so.
 fn chain_barrier(dir: &fs::File, ancestor: bool) -> io::Result<()> {
     if ancestor && !sys::flushes_ancestor(dir)? {
         return Ok(());
     }
     super::atomic::sync_dir(dir)
+}
+
+/// The barrier that keeps `entry`, the chain's next folder, in `folder`:
+/// passed over only when [`sys::flushes_entry`] says, which is read from
+/// the two folders before any flush, never from a refused one.
+fn entry_barrier(folder: &fs::File, entry: &fs::File) -> io::Result<()> {
+    if !sys::flushes_entry(folder, entry)? {
+        return Ok(());
+    }
+    super::atomic::sync_dir(folder)
 }
 
 /// Creates at most 64 private descendant directories and checks their
@@ -663,8 +673,13 @@ mod sys {
         folder.set_permissions(fs::Permissions::from_mode(0o700))
     }
 
-    /// Unix syncs every folder it can open, whoever may write to it.
+    /// Unix syncs every folder of a chain it can open, whoever may write
+    /// to it or made the entry the chain goes through.
     pub(super) fn flushes_ancestor(_: &fs::File) -> io::Result<bool> {
+        Ok(true)
+    }
+
+    pub(super) fn flushes_entry(_: &fs::File, _: &fs::File) -> io::Result<bool> {
         Ok(true)
     }
 
@@ -1160,13 +1175,29 @@ mod sys {
         Ok(())
     }
 
+    /// An ancestor is flushed for its entry on the chain alone
+    /// ([`flushes_entry`]), by the step that opens that entry.
+    pub(super) fn flushes_ancestor(_: &fs::File) -> io::Result<bool> {
+        Ok(false)
+    }
+
+    /// Whether `folder` is flushed to keep `entry`, the chain's next folder
+    /// in it: only when this account made `entry` (it owns it), since one the
+    /// system made, such as `Users` in a drive's root, is not left unwritten
+    /// by anything this account did, and a drive root's flush writes out all
+    /// the drive holds unwritten, seconds after an install; and only when
+    /// the account may flush `folder` ([`may_flush`]).
+    pub(super) fn flushes_entry(folder: &fs::File, entry: &fs::File) -> io::Result<bool> {
+        Ok(handle_owned_by_current_user(entry)? && may_flush(folder)?)
+    }
+
     /// Whether this account owns the open folder or may add a file or a
     /// folder to it, which a flush of its entries needs: an ancestor that
     /// holds neither holds no entry the account made. The right is what the
     /// system's own access check answers for the process's token against
     /// the folder's owner, group and access list (`AccessCheck`, asked for
     /// the most the folder allows).
-    pub(super) fn flushes_ancestor(folder: &fs::File) -> io::Result<bool> {
+    fn may_flush(folder: &fs::File) -> io::Result<bool> {
         if handle_owned_by_current_user(folder)? {
             return Ok(true);
         }
