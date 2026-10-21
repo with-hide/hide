@@ -19,12 +19,23 @@ pub const PROMPT_LIMIT_BYTES: usize = 8 * 1024;
 pub const RENDERED_TOKEN_LIMIT: usize = 1_200;
 
 pub fn estimated_tokens(text: &str) -> usize {
-    // Keep the English estimate, but reserve byte-fallback space for
-    // non-ASCII scripts instead of treating four CJK characters as one token.
-    let ascii = text.bytes().filter(u8::is_ascii).count();
-    text.split_whitespace()
-        .count()
-        .max(ascii.div_ceil(4) + text.len() - ascii)
+    // Per character class, never per byte: ASCII runs about four characters
+    // a token (and never fewer tokens than words); a Hangul syllable, a Han
+    // or kana character, or any other non-ASCII character counts as one
+    // token, which is at or above what current tokenizers spend on Korean,
+    // Chinese and Japanese without charging their three UTF-8 bytes each.
+    let (ascii, other) = text.chars().fold((0, 0), |(ascii, other), ch| {
+        if ch.is_ascii() {
+            (ascii + 1, other)
+        } else {
+            (ascii, other + 1)
+        }
+    });
+    let ascii_words = text
+        .split(|ch: char| !ch.is_ascii() || ch.is_ascii_whitespace())
+        .filter(|word| !word.is_empty())
+        .count();
+    ascii_words.max(usize::div_ceil(ascii, 4)) + other
 }
 
 /// `prompt`'s first [`PROMPT_LIMIT_BYTES`] bytes at most, cut on a character
@@ -362,6 +373,53 @@ mod tests {
         for text in ["한글".repeat(700), "漢字".repeat(700), "かな".repeat(700)] {
             assert!(estimated_tokens(&text) >= text.chars().count());
         }
+    }
+
+    #[test]
+    fn a_realistic_korean_card_is_delivered_within_the_budget() {
+        // The operator writes mostly Korean: a card of 350 to 600 Hangul
+        // characters, a few paragraphs of a rule, is one prompt's Memory.
+        let sentence = "훅 응답은 백 밀리초 안에 끝나야 하고 느린 작업은 워커 스레드로 넘긴다. ";
+        for sentences in [9, 12, 14] {
+            let body = sentence.repeat(sentences);
+            let characters = body.trim().chars().count();
+            assert!((350..=600).contains(&characters), "{characters}");
+            let temp = tempfile::tempdir().unwrap();
+            let (path, project) = enabled_store(
+                temp.path(),
+                &temp.path().join("project"),
+                &[rule(body.trim(), 0.9)],
+            );
+            let answer = context_for(
+                &path,
+                &project,
+                ask(
+                    HookEvent::UserPromptSubmit,
+                    "s",
+                    Some("훅 응답 시간을 줄여줘"),
+                ),
+                frozen(),
+            );
+            assert_eq!(
+                answer.outcome,
+                HookOutcome::Provided { count: 1 },
+                "{characters} Hangul characters"
+            );
+        }
+    }
+
+    #[test]
+    fn non_ascii_punctuation_in_english_costs_a_token_per_character_not_per_byte() {
+        let plain = "Don't merge before \"the tests\" pass - ask first.";
+        let typographic = "Don’t merge before “the tests” pass — ask first.";
+        let extra = typographic.chars().filter(|ch| !ch.is_ascii()).count();
+        assert_eq!(extra, 4);
+        assert!(
+            estimated_tokens(typographic) <= estimated_tokens(plain) + extra,
+            "{} against {}",
+            estimated_tokens(typographic),
+            estimated_tokens(plain)
+        );
     }
 
     #[test]
