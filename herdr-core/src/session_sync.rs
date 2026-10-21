@@ -28,6 +28,7 @@ use crate::workspace;
 use hide_herdr_client::{self, ApiConnector, ApiError};
 
 const SYNC_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+const REMOTE_SYNC_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long after the bootstrap snapshot arrives an event read off the
 /// stream is still reconciled against it rather than applied strictly
 /// (`ApplyMode`). A line the reader thread had already pulled off the
@@ -219,6 +220,13 @@ impl SessionSyncContext {
 
     fn is_local(&self) -> bool {
         matches!(self.target, SessionSyncTarget::Local { .. })
+    }
+
+    fn request_timeout(&self) -> Duration {
+        match self.target {
+            SessionSyncTarget::Local { .. } => SYNC_REQUEST_TIMEOUT,
+            SessionSyncTarget::Remote { .. } => REMOTE_SYNC_REQUEST_TIMEOUT,
+        }
     }
 
     /// The target the runtime keeps this connection's read view under:
