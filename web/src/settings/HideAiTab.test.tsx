@@ -248,3 +248,16 @@ it("sends the limit as a percent or none, one event for one choice", () => {
     { schema_version: 2, kind: "ai_settings", payload: { usage_limit: "none" } },
   ]);
 });
+
+// The explanation follows the configured list, including its empty state (issue 1035).
+it("shows the waiting guidance only for an empty fallback list", async () => {
+  for (const fallback of [[], [{ provider: "codex", model: "" }]]) {
+    const view = await mount(snapshot({ fallback }));
+    try {
+      const text = view.q('[data-settings-group="hide-ai-fallback"]')?.textContent ?? "";
+      expect(text).toContain("past your usage limit");
+      expect(text).toContain("out of usage");
+      expect(text.includes("None added: Hide AI waits for Claude Code.")).toBe(fallback.length === 0);
+    } finally { await view.unmount(); }
+  }
+});
