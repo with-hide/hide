@@ -557,6 +557,109 @@ pub(super) fn check_before_suggestion(
     Ok(checked)
 }
 
+/// Reconcile a confirmed correction when its owning document changes, including
+/// edits made directly by a terminal agent. The existing writer owns the pointer.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn reconcile_corrections(
+    store: &mut MemoryStore,
+    node: &dyn NodeLink,
+    router: &AiRouter,
+    language: hide_ai::OutputLanguage,
+    project: &str,
+    root: &str,
+    cancel: &CancelToken,
+    admit: Admit<'_>,
+) -> Result<Checked, AnalysisFailure> {
+    let local = |error: hide_memory::MemoryError| AnalysisFailure::Local(error.to_string());
+    let mut checked = Checked::default();
+    for (number, revision, comparison, previous) in
+        store.correction_checks(project, 4).map_err(local)?
+    {
+        if cancel.is_cancelled() {
+            return Err(AnalysisFailure::Cancelled);
+        }
+        let Some(document) = source(node, root, &comparison.document) else {
+            store
+                .record_correction_check(project, number, revision, "unavailable", now_ms())
+                .map_err(local)?;
+            continue;
+        };
+        let fingerprint = digest(&[
+            &document.text,
+            if document.truncated {
+                "truncated"
+            } else {
+                "whole"
+            },
+        ]);
+        if previous.as_deref() == Some(&fingerprint) {
+            store
+                .record_correction_check(project, number, revision, &fingerprint, now_ms())
+                .map_err(local)?;
+            continue;
+        }
+        let Some(item) = store.item_by_number(project, number).map_err(local)? else {
+            continue;
+        };
+        let words = query_words(&[&item.title, &item.body]);
+        let excerpt = relevant_excerpt(
+            &document.path,
+            &document.text,
+            document.truncated,
+            &words,
+            DOCUMENT_EXCERPT_BYTES,
+        );
+        let claim =
+            json!({"claim":item.body,"human_evidence":comparison.operator_text}).to_string();
+        let Some(request) = hide_memory::creation_docs_request(
+            digest(&["reconcile", &item.id, &revision.to_string(), &fingerprint]),
+            project,
+            &[(0, claim, excerpt)],
+            hide_memory::ANALYSIS_INPUT_LIMIT_BYTES,
+            language,
+        ) else {
+            store
+                .record_correction_check(project, number, revision, &fingerprint, now_ms())
+                .map_err(local)?;
+            continue;
+        };
+        admit(store)?;
+        let answer = router.execute(&request, cancel).map_err(provider_failure)?;
+        let results = answer.value["results"]
+            .as_array()
+            .filter(|rows| rows.len() == 1)
+            .ok_or_else(|| {
+                AnalysisFailure::Provider(AiError::InvalidOutput(
+                    "correction_reconcile_shape".into(),
+                ))
+            })?;
+        if results[0]["candidate"] != 0
+            || !matches!(
+                results[0]["verdict"].as_str(),
+                Some("same" | "differs" | "correction" | "unrelated" | "exception")
+            )
+        {
+            return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
+                "correction_reconcile_verdict".into(),
+            )));
+        }
+        checked.answered += 1;
+        if results[0]["verdict"] == "same"
+            && store
+                .item_by_number(project, number)
+                .map_err(local)?
+                .is_some_and(|current| current.revision == revision)
+        {
+            point_at(store, project, &item, &comparison.document).map_err(local)?;
+            checked.changed += 1;
+        }
+        store
+            .record_correction_check(project, number, revision, &fingerprint, now_ms())
+            .map_err(local)?;
+    }
+    Ok(checked)
+}
+
 /// The card becomes a line pointing at the document that already says it:
 /// the merged state without a pull request, left out of every prompt.
 fn point_at(
@@ -615,6 +718,14 @@ fn apply_disagreement(
     if item.revision != revision || item.kind == hide_memory::CandidateKind::Preference {
         return Ok(false);
     }
+    // A settled correction is revision-bound. A later unrelated file commit
+    // cannot reopen its authority; reconciliation may only reflect its meaning.
+    if store
+        .document_comparison(project_id, number)?
+        .is_some_and(|comparison| comparison.authority == hide_memory::DocumentAuthority::CardNewer)
+    {
+        return Ok(false);
+    }
     let human_source = store.current_human_source(project_id, number)?;
     let human = human_source.as_ref();
     let operator_at = human.and_then(|source| source.at_unix_ms);
@@ -663,7 +774,7 @@ pub(super) fn compare_document(
     .and_then(|date| date.trim().parse::<u64>().ok())
     .and_then(|date| date.checked_mul(1000));
     hide_memory::DocumentComparison {
-        authority: hide_memory::DocumentAuthority::by_dates(operator_at, document_at),
+        authority: hide_memory::DocumentAuthority::Ask,
         document: document.into(),
         document_text: quote.into(),
         document_at_unix_ms: document_at,

@@ -952,6 +952,7 @@ impl MemoryStore {
         };
         store.check_integrity()?;
         check_projection_integrity(&store.connection)?;
+        certify_projection(&store.connection)?;
         Ok(store)
     }
 
@@ -1027,10 +1028,14 @@ impl MemoryStore {
             mode: StoreMode::ReadOnly,
             path: path.to_path_buf(),
         };
-        // The progress handler makes this fail open for the caller once the
-        // hook's absolute deadline is reached, while still refusing a stale
-        // projection instead of injecting results from an incomplete index.
-        check_projection_integrity(&store.connection)?;
+        let ready: bool = store.connection.query_row(
+            "SELECT generation=validated FROM memory_projection_state WHERE id=1",
+            [],
+            |row| row.get(0),
+        )?;
+        if !ready {
+            return Err(MemoryError::Integrity("memory_projection_stale".into()));
+        }
         Ok(store)
     }
 
@@ -1156,6 +1161,7 @@ impl MemoryStore {
             });
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         check_projection_integrity(&self.connection)?;
         Ok(moved)
     }
@@ -1217,6 +1223,7 @@ impl MemoryStore {
             [project_id],
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(())
     }
 
@@ -1366,6 +1373,7 @@ impl MemoryStore {
             CursorReader::Receipts => Vec::new(),
         };
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(ended)
     }
 
@@ -1405,12 +1413,14 @@ impl MemoryStore {
         limit: usize,
     ) -> Result<Option<Vec<String>>, MemoryError> {
         let mut statement = self.connection.prepare(
-            "SELECT DISTINCT CASE WHEN i.current_revision=rii.revision THEN rii.item_id END FROM injection_receipts ir LEFT JOIN injection_receipt_items rii ON ir.id=rii.receipt_id LEFT JOIN memory_items i ON i.id=rii.item_id WHERE ir.project_id=?1 AND ir.runtime=?2 AND ir.session_id=?3",
+            "SELECT DISTINCT CASE WHEN i.current_revision=rii.revision THEN rii.item_id END FROM injection_receipts ir LEFT JOIN injection_receipt_items rii ON ir.id=rii.receipt_id LEFT JOIN memory_items i ON i.id=rii.item_id WHERE ir.project_id=?1 AND ir.runtime=?2 AND ir.session_id=?3 AND COALESCE((SELECT generation FROM receipt_contexts rc WHERE rc.receipt_id=ir.id),0)=?4",
         )?;
+        let generation = self.context_generation(project_id, runtime, session_id)?;
         let rows = statement
-            .query_map(params![project_id, runtime, session_id], |row| {
-                row.get::<_, Option<String>>(0)
-            })?
+            .query_map(
+                params![project_id, runtime, session_id, generation],
+                |row| row.get::<_, Option<String>>(0),
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if rows.is_empty() && count_receipts(&self.connection, project_id)? >= limit {
             return Ok(None);
@@ -1506,6 +1516,7 @@ impl MemoryStore {
             [day.saturating_sub(7)],
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(None)
     }
 
@@ -1540,7 +1551,7 @@ impl MemoryStore {
              AND NOT EXISTS(SELECT 1 FROM card_comparisons d WHERE d.item_id=i.id AND d.revision=i.current_revision) \
              AND i.lifecycle='active' AND NOT {} AND (i.reverify_at_ms IS NULL OR i.reverify_at_ms<=?3) \
              AND (((r.verified_at_ms IS NULL OR r.docs_compared=0) AND (c.item_id IS NULL OR c.state!='merged')) \
-               OR (r.verified_at_ms IS NOT NULL AND r.kind IN ('rule','lesson') \
+               OR (r.verified_at_ms IS NOT NULL AND r.kind IN ('rule','lesson','decision') \
                  AND i.promotion_ok_revision IS NOT i.current_revision \
                  AND (c.item_id IS NULL OR c.state='outdated' OR (c.state='dismissed' AND c.revision!=i.current_revision)) \
                  AND ((SELECT COUNT(DISTINCT s.provider||':'||s.session_id) FROM memory_sources s WHERE s.item_id=i.id AND s.human=1)>=?5 \
@@ -1750,6 +1761,21 @@ impl MemoryStore {
                     if options.reverify_superseded && candidate.kind != CandidateKind::Preference {
                         transaction.execute("UPDATE memory_revisions SET verified_at_ms=NULL WHERE item_id=?1 AND revision=?2", params![target_id,revision])?;
                     }
+                    if let Some(comparison) = options
+                        .document_comparisons
+                        .get(index)
+                        .and_then(Option::as_ref)
+                    {
+                        let data = serde_json::to_string(comparison)
+                            .map_err(|error| MemoryError::InvalidState(error.to_string()))?;
+                        transaction.execute(
+                            "INSERT INTO card_comparisons(item_id,revision,data) VALUES(?1,?2,?3) ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,data=excluded.data",
+                            params![target_id,revision,data],
+                        )?;
+                        if comparison.authority == crate::DocumentAuthority::CardNewer {
+                            transaction.execute("UPDATE memory_revisions SET verified_at_ms=?3,docs_compared=1 WHERE item_id=?1 AND revision=?2",params![target_id,revision,batch.created_at_unix_ms])?;
+                        }
+                    }
                     reindex(&transaction, &batch.project_id, target_id, &card)?;
                     summary.superseded += 1;
                     CandidateOutcome::Superseded {
@@ -1767,6 +1793,7 @@ impl MemoryStore {
             });
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(summary)
     }
 
@@ -1838,6 +1865,7 @@ impl MemoryStore {
             reindex(&transaction, project_id, item_id, &card)?;
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(true)
     }
 
@@ -2058,6 +2086,7 @@ impl MemoryStore {
             &batch_id,
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(true)
     }
 
@@ -2074,6 +2103,7 @@ impl MemoryStore {
             &batch_id,
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(batch_id)
     }
 
@@ -2106,6 +2136,7 @@ impl MemoryStore {
             }
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(restored)
     }
 
@@ -2153,6 +2184,7 @@ impl MemoryStore {
             params![batch_id, item.id],
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         self.item_by_number(project_id, number)
     }
 
@@ -2458,6 +2490,7 @@ impl MemoryStore {
         transaction.execute("INSERT INTO promotion_batches(branch,project_id,numbers) VALUES(?1,?2,?3) ON CONFLICT(project_id,branch) DO UPDATE SET numbers=excluded.numbers", params![branch, project_id, data])?;
         transaction.execute("DELETE FROM promotion_batches WHERE NOT EXISTS(SELECT 1 FROM card_promotions c JOIN memory_items i ON i.id=c.item_id WHERE c.branch=promotion_batches.branch AND i.project_id=promotion_batches.project_id)", [])?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(())
     }
 
@@ -2608,7 +2641,7 @@ impl MemoryStore {
               WHERE rii.item_id=i.id AND ir.turn_id='show' AND ir.created_at_ms>=?2) AS pulled \
              FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
              LEFT JOIN card_promotions p ON p.item_id=i.id AND (p.revision=i.current_revision OR p.state IN ('running','pr_open','building')) \
-             WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','lesson') AND r.verified_at_ms IS NOT NULL AND NOT {} \
+             WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','lesson','decision') AND r.verified_at_ms IS NOT NULL AND NOT {} \
              AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision) AND ((i.promotion_ok_revision IS i.current_revision)=?6) \
              AND (?6 OR i.reverify_at_ms IS NULL OR i.reverify_at_ms<=?7) \
              AND (p.item_id IS NULL OR p.state='outdated' OR (p.state='dismissed' AND p.revision!=i.current_revision))) \
@@ -2670,12 +2703,16 @@ impl MemoryStore {
             "INSERT INTO card_comparisons(item_id,revision,data) SELECT id,current_revision,?4 FROM memory_items WHERE project_id=?1 AND number=?2 AND current_revision=?3 AND lifecycle='active' ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,data=excluded.data",
             params![project_id, number, revision, data])?;
         if changed == 1 {
+            if comparison.authority == crate::DocumentAuthority::CardNewer {
+                transaction.execute("UPDATE memory_revisions SET verified_at_ms=COALESCE(verified_at_ms,?4) WHERE item_id=(SELECT id FROM memory_items WHERE project_id=?1 AND number=?2) AND revision=?3", params![project_id,number,revision,now_ms()])?;
+            }
             transaction.execute(
                 "UPDATE memory_revisions SET docs_compared=1 WHERE item_id=(SELECT id FROM memory_items WHERE project_id=?1 AND number=?2) AND revision=?3",
                 params![project_id, number, revision],
             )?;
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(changed == 1)
     }
 
@@ -2729,6 +2766,7 @@ impl MemoryStore {
              JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
              WHERE i.project_id=?1 AND i.lifecycle='active' AND r.verified_at_ms IS NOT NULL AND NOT {} \
              AND EXISTS(SELECT 1 FROM memory_evidence e WHERE e.item_id=i.id AND e.revision=i.current_revision) \
+             AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer') \
              AND (i.evidence_checked_at_ms IS NULL OR i.evidence_checked_at_ms<?3) \
              ORDER BY COALESCE(i.evidence_checked_at_ms,0),i.number LIMIT ?2",
             hold::held(4)
@@ -2773,6 +2811,7 @@ impl MemoryStore {
             )?;
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(())
     }
 
@@ -2919,6 +2958,7 @@ impl MemoryStore {
             [item_id],
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(true)
     }
 
@@ -2983,6 +3023,7 @@ impl MemoryStore {
         write_evidence(&transaction, item_id, revision, evidence, now_unix_ms)?;
         reindex(&transaction, project_id, item_id, &card)?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(true)
     }
 
@@ -3038,6 +3079,7 @@ impl MemoryStore {
             ],
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(true)
     }
 
@@ -3107,7 +3149,7 @@ impl MemoryStore {
         let mut statement = self.connection.prepare(&format!(
             "SELECT i.id,i.number,r.revision,r.title,p.target_path,p.pr_number,p.repository FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
              LEFT JOIN card_promotions p ON p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged' \
-             WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','decision','lesson','preference') AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND p.item_id IS NULL) AND (r.verified_at_ms IS NOT NULL OR p.item_id IS NOT NULL) ORDER BY i.salience DESC,i.confidence DESC,i.updated_at_ms DESC,i.id LIMIT ?2",
+             WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','decision','lesson','preference') AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND p.item_id IS NULL AND json_extract(c.data,'$.authority')!='card_newer') AND (r.verified_at_ms IS NOT NULL OR p.item_id IS NOT NULL) ORDER BY i.salience DESC,i.confidence DESC,i.updated_at_ms DESC,i.id LIMIT ?2",
             hold::held(3)
         ))?;
         Ok(statement
@@ -3181,6 +3223,7 @@ impl MemoryStore {
         let transaction = self.connection.transaction()?;
         prune_stale_receipts(&transaction, project_id, now_unix_ms, limit)?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(())
     }
 
@@ -3258,6 +3301,7 @@ impl MemoryStore {
             )?;
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(ReceiptRecord::Recorded)
     }
 
@@ -3278,6 +3322,7 @@ impl MemoryStore {
         transaction.execute("DELETE FROM memory_fts WHERE project_id=?1", [project_id])?;
         transaction.execute("DELETE FROM projects WHERE id=?1", [project_id])?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         let warnings = [
             cleanup(&self.connection).err(),
             scrub_backups(&self.path, project_id).err(),
@@ -3318,7 +3363,7 @@ impl MemoryStore {
         if query.is_empty() {
             return Ok(Vec::new());
         }
-        let mut statement = self.connection.prepare(&format!("SELECT i.id,i.number,r.revision,r.title,r.aliases,r.body,COALESCE((SELECT s.provider||':'||s.session_id FROM memory_sources s WHERE s.item_id=i.id ORDER BY s.provider,s.session_id,s.event_offset LIMIT 1),''),i.confidence,i.salience,i.updated_at_ms,r.kind FROM memory_fts f JOIN memory_items i ON i.id=f.item_id JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE f.project_id=?1 AND i.lifecycle='active' AND memory_fts MATCH ?2 AND (?4=0 OR (r.verified_at_ms IS NOT NULL AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision) AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged'))) ORDER BY bm25(memory_fts),i.updated_at_ms DESC,i.id LIMIT ?3", hold::held(5)))?;
+        let mut statement = self.connection.prepare(&format!("SELECT i.id,i.number,r.revision,r.title,r.aliases,r.body||COALESCE((SELECT '\nPending document update: '||json_extract(c.data,'$.document') FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer'),''),COALESCE((SELECT s.provider||':'||s.session_id FROM memory_sources s WHERE s.item_id=i.id ORDER BY s.provider,s.session_id,s.event_offset LIMIT 1),''),i.confidence,i.salience,i.updated_at_ms,r.kind FROM memory_fts f JOIN memory_items i ON i.id=f.item_id JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE f.project_id=?1 AND i.lifecycle='active' AND memory_fts MATCH ?2 AND (?4=0 OR (r.verified_at_ms IS NOT NULL AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')!='card_newer') AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged'))) ORDER BY bm25(memory_fts),i.updated_at_ms DESC,i.id LIMIT ?3", hold::held(5)))?;
         let mut candidates = statement
             .query_map(
                 params![
@@ -3470,6 +3515,7 @@ fn migrate(
             .execute_batch(SCHEMA)
             .and_then(|_| connection.execute_batch(hold::TABLES))
             .and_then(|_| connection.execute_batch(progress::TABLES))
+            .and_then(|_| progress::install_projection_tracking(connection))
             .and_then(|_| enable_fts_secure_delete(connection))
             .and_then(|_| connection.pragma_update(None, "user_version", SCHEMA_VERSION))
         {
@@ -3576,6 +3622,7 @@ COMMIT;"#,
         back_up(connection, path, version)?;
         let transaction = connection.unchecked_transaction()?;
         transaction.execute_batch(progress::TABLES)?;
+        progress::install_projection_tracking(&transaction)?;
         // Only recover the old minimum-event skip: sessions with human
         // evidence whose cursor advanced without a single analysis batch.
         // Unrelated completed history and receipt cursors remain untouched.
@@ -4232,6 +4279,27 @@ fn require_schema(connection: &Connection) -> Result<(), MemoryError> {
             expected: SCHEMA_VERSION,
         })
     }
+}
+
+/// Preparation belongs to existing writers, never the submitting prompt.
+/// Content-table triggers also invalidate externally changed FTS bodies.
+fn certify_projection(connection: &Connection) -> Result<(), MemoryError> {
+    let ready: bool = connection.query_row(
+        "SELECT generation=validated FROM memory_projection_state WHERE id=1",
+        [],
+        |row| row.get(0),
+    )?;
+    if ready {
+        return Ok(());
+    }
+    let tx = connection.unchecked_transaction()?;
+    check_projection_integrity(&tx)?;
+    tx.execute(
+        "UPDATE memory_projection_state SET validated=generation WHERE id=1",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(())
 }
 
 fn check_projection_integrity(connection: &Connection) -> Result<(), MemoryError> {
@@ -5680,7 +5748,10 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
                 RetrievalQuery::session_start(&project),
                 RetrievalQuery::prompt(&project, "run lint before tests", vec![]),
             ] {
-                assert!(store.retrieve(&query).unwrap().items.is_empty());
+                assert_eq!(
+                    store.retrieve(&query).unwrap().items.is_empty(),
+                    authority != crate::DocumentAuthority::CardNewer
+                );
             }
         }
         store
@@ -6117,7 +6188,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
     #[test]
     fn a_rule_is_suggested_for_the_repository_by_sessions_not_by_repeats_and_only_once_checked() {
         // D-09, D-10, D-11, B12-B14: the operator's words in two different
-        // sessions, or reads from three in 14 days; rules and lessons only; a
+        // sessions, or reads from three in 14 days; rules, lessons and decisions; a
         // dismissal holds until the card's text moves.
         let (_temp, mut store, project) = store();
         let now = 30 * 86_400_000;
@@ -6191,11 +6262,11 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
         assert_eq!(
             suggested(&store),
             [1],
-            "a decision and a fact are never suggested"
+            "a decision without enough provenance and a fact are not suggested"
         );
 
-        // Reads from three sessions, one of them older than the window; a
-        // decision is never suggested however often it is read.
+        // Reads from three recent sessions qualify a durable decision too;
+        // it still passes the same background promotion check first.
         for (session, at) in [
             ("a", now),
             ("b", now - 1),
@@ -6206,7 +6277,29 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
                 .record_receipt(&project, "codex", session, "show", "m2@1", at)
                 .unwrap();
         }
-        assert_eq!(suggested(&store), [1]);
+        assert_eq!(unchecked(&store), [2]);
+        assert!(store.mark_promotion_checked(&project, 2, 1).unwrap());
+        assert_eq!(suggested(&store), [1, 2]);
+        store
+            .set_promotion(
+                &project,
+                2,
+                &Promotion {
+                    state: PromotionState::Dismissed,
+                    revision: 1,
+                    attempt: 0,
+                    agent_id: None,
+                    branch: None,
+                    pr_number: None,
+                    repository: None,
+                    target_path: None,
+                    started_at_unix_ms: now,
+                    updated_at_unix_ms: now,
+                    failure: None,
+                    building_branch: None,
+                },
+            )
+            .unwrap();
 
         let dismissed = |revision| Promotion {
             state: PromotionState::Dismissed,
@@ -6279,6 +6372,70 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             .into_iter()
             .map(|item| item.text)
             .collect()
+    }
+
+    #[test]
+    fn an_enduring_correction_revises_the_card_and_keeps_authority_when_document_evidence_moves() {
+        let (temp, mut store, project) = store();
+        store
+            .apply_candidates(
+                &batch(&project, "before", "before"),
+                &[candidate(
+                    "Run tests with the ordinary runner",
+                    CandidateRelation::New,
+                )],
+            )
+            .unwrap();
+        let old = store.item_by_number(&project, 1).unwrap().unwrap();
+        let comparison = crate::DocumentComparison {
+            authority: crate::DocumentAuthority::CardNewer,
+            document: "AGENTS.md".into(),
+            document_text: "Run tests with the ordinary runner".into(),
+            document_at_unix_ms: Some(100),
+            operator_at_unix_ms: Some(10),
+            operator_text: "앞으로 테스트는 nextest로 실행해 주세요.".into(),
+            source_session: Some("human".into()),
+        };
+        store
+            .apply_candidates_with(
+                &batch(&project, "correction", "correction"),
+                &[candidate(
+                    "Run tests with nextest",
+                    CandidateRelation::Supersedes { target_id: old.id },
+                )],
+                &ApplyOptions {
+                    reverify_superseded: true,
+                    evidence: vec![vec![evidence(
+                        EvidenceKind::File,
+                        "AGENTS.md",
+                        Some("old-file-hash"),
+                        true,
+                    )]],
+                    document_comparisons: vec![Some(comparison.clone())],
+                    ..ApplyOptions::default()
+                },
+            )
+            .unwrap();
+        drop(store);
+        let store = MemoryStore::open(&temp.path().join("memory.sqlite3")).unwrap();
+        assert_eq!(
+            store.item_by_number(&project, 1).unwrap().unwrap().revision,
+            2
+        );
+        assert_eq!(
+            store.document_comparison(&project, 1).unwrap(),
+            Some(comparison)
+        );
+        assert!(
+            store
+                .cards_to_check(&project, i64::MAX as u64, 8)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(given(&store, &project, "nextest")[0].contains("Run tests with nextest"));
+        assert!(
+            given(&store, &project, "nextest")[0].contains("Pending document update: AGENTS.md")
+        );
     }
 
     #[test]
@@ -6542,7 +6699,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
 
     #[test]
     fn fair_analysis_survives_reopen_and_new_arrivals_across_projects() {
-        let (temp, mut store, first) = store();
+        let (temp, store, first) = store();
         let second = "project:other";
         store
             .ensure_project(second, &temp.path().join("other"), "local")

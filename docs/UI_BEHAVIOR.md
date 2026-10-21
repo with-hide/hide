@@ -807,13 +807,17 @@ When the pull request merges or closes, its agent ends and its worktree goes wit
 A card that was not processed returns with `Card was not processed · Ended without a PR` in warning text and the agent's reason behind the row; every failed row offers Retry, continuing the shared branch and PR, and `Don't promote`, which leaves an ordinary card.
 A card whose decision the code does not have yet, which another branch builds, stays in To ask as a progress row, `Goes in with the PR that builds it`, with `Agent ↗` to that branch's agent and `PR <number>` once its pull request is open; it asks nothing, puts no dot on the tab and is still given to agents, and that pull request's merge makes it a document pointer like any merged promotion.
 When nothing builds it, one row says `Not built yet · nothing builds it` with a clock mark in the checkbox slot and the agent's reason behind the row, and offers only `Keep as is`, which leaves an ordinary card that is not asked about again, its document disagreement included, until its text changes.
-A new rule or lesson suggestion keeps its source-session counts and dismissal until its revision changes; at most three new suggestions are open.
+A new rule, lesson or decision suggestion keeps its source-session counts and dismissal until its revision changes; at most three new suggestions are open.
 `카드 N` lists the other cards, two lines each: the number and title, then the kind, how many sessions it was given to, how many times it was pulled, how many of its sources are the operator's words, and when it changed.
 The first five show, the rest fold under `그 외 N`, and a card shown in full is never folded; the search above them shows every match, best first, and is the Project's, so every window shows the same query and only the one typed into sends it.
 A searched promotion card also shows its running status and the name that opens its pane, with no name before the session appears; expanding a progress row does not duplicate it in Cards.
 Once merged, its ordinary card dims and shows the file it went into, or the merged pull request's mark when no file was named, with `파일로 올라감 · 주입 안 함`.
 A personal preference carries `Personal`, remains available to agents and never appears as a document suggestion.
 Fact disagreements remain withheld and readable in ordinary card detail, with no unsupported document correction action; rule, lesson and decision disagreements are eligible for correction.
+A confirmed enduring correction says `Correction confirmed · document update pending` in the existing comparison row and remains available to agents as untrusted reference data.
+It retains the original human source and document quote; unrelated document commits do not ask the same authority question again.
+When the owning document incorporates it, background reconciliation turns the card into the existing document pointer without another promotion.
+Turning Memory off retains cards and analysis progress; its setting explains that enabling it again catches up on unprocessed conversations, including conversations from the disabled period.
 An Outdated comparison dims its card and names the document and its date, asks nothing and is excluded from injection.
 Document references in card metadata and Compare headers show a single-line filename, truncated when needed, with the full path on hover and the date alongside.
 An unverified card waiting to be checked against the repository again is dimmed; only the card the worker is checking shows `확인 중` in its existing status line, and a promotion keeps priority there.

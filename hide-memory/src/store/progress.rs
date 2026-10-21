@@ -9,11 +9,131 @@ pub(super) const TABLES: &str = "
 CREATE TABLE analysis_progress(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,session_id TEXT NOT NULL,base_offset INTEGER NOT NULL,next_group INTEGER NOT NULL,unsent TEXT NOT NULL DEFAULT '[]',PRIMARY KEY(project_id,provider,session_id));
 CREATE TABLE analysis_queue(position INTEGER PRIMARY KEY AUTOINCREMENT,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,session_id TEXT NOT NULL,activity_ms INTEGER NOT NULL,UNIQUE(project_id,provider,session_id));
 CREATE TABLE analysis_proposals(batch_id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,output TEXT NOT NULL,prepared TEXT);
+CREATE TABLE memory_projection_state(id INTEGER PRIMARY KEY CHECK(id=1),generation INTEGER NOT NULL,validated INTEGER NOT NULL);
+INSERT INTO memory_projection_state VALUES(1,0,0);
+CREATE TABLE correction_checks(item_id TEXT PRIMARY KEY REFERENCES memory_items(id) ON DELETE CASCADE,revision INTEGER NOT NULL,fingerprint TEXT NOT NULL,checked_at_ms INTEGER NOT NULL);
+CREATE TABLE memory_contexts(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,runtime TEXT NOT NULL,session_id TEXT NOT NULL,generation INTEGER NOT NULL,PRIMARY KEY(project_id,runtime,session_id));
+CREATE TABLE receipt_contexts(receipt_id TEXT PRIMARY KEY REFERENCES injection_receipts(id) ON DELETE CASCADE,generation INTEGER NOT NULL);
 CREATE TABLE analysis_schedule(id INTEGER PRIMARY KEY CHECK(id=1),turn INTEGER NOT NULL);
 INSERT INTO analysis_schedule VALUES(1,0);
 ";
 
+pub(super) fn install_projection_tracking(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(r#"CREATE TRIGGER memory_projection_memory_items_insert AFTER INSERT ON memory_items BEGIN UPDATE memory_projection_state SET generation=generation+1 WHERE id=1; END;
+CREATE TRIGGER memory_projection_memory_items_update AFTER UPDATE OF lifecycle,current_revision,project_id ON memory_items BEGIN UPDATE memory_projection_state SET generation=generation+1 WHERE id=1; END;
+CREATE TRIGGER memory_projection_memory_items_delete AFTER DELETE ON memory_items BEGIN UPDATE memory_projection_state SET generation=generation+1 WHERE id=1; END;
+CREATE TRIGGER memory_projection_memory_revisions_insert AFTER INSERT ON memory_revisions BEGIN UPDATE memory_projection_state SET generation=generation+1 WHERE id=1; END;
+CREATE TRIGGER memory_projection_memory_revisions_update AFTER UPDATE OF body,item_id,revision ON memory_revisions BEGIN UPDATE memory_projection_state SET generation=generation+1 WHERE id=1; END;
+CREATE TRIGGER memory_projection_memory_revisions_delete AFTER DELETE ON memory_revisions BEGIN UPDATE memory_projection_state SET generation=generation+1 WHERE id=1; END;
+CREATE TRIGGER memory_projection_memory_fts_content_insert AFTER INSERT ON memory_fts_content BEGIN UPDATE memory_projection_state SET generation=generation+1 WHERE id=1; END;
+CREATE TRIGGER memory_projection_memory_fts_content_update AFTER UPDATE ON memory_fts_content BEGIN UPDATE memory_projection_state SET generation=generation+1 WHERE id=1; END;
+CREATE TRIGGER memory_projection_memory_fts_content_delete AFTER DELETE ON memory_fts_content BEGIN UPDATE memory_projection_state SET generation=generation+1 WHERE id=1; END;"#)
+}
+
 impl MemoryStore {
+    /// Latest native context boundary observed by the existing receipt reader.
+    pub fn context_generation(
+        &self,
+        project: &str,
+        runtime: &str,
+        session: &str,
+    ) -> Result<u64, MemoryError> {
+        Ok(self.connection.query_row("SELECT generation FROM memory_contexts WHERE project_id=?1 AND runtime=?2 AND session_id=?3", params![project,runtime,session], |row| row.get(0)).optional()?.unwrap_or(0))
+    }
+
+    /// Native record offsets make replay idempotent. A full rescan cannot reset
+    /// a later boundary, and user or assistant text never calls this method.
+    pub fn observe_context_reset(
+        &self,
+        project: &str,
+        runtime: &str,
+        session: &str,
+        offset: u64,
+    ) -> Result<(), MemoryError> {
+        self.require_writer()?;
+        let existing = self.context_generation(project, runtime, session)?;
+        if existing == 0 {
+            let count: u64 = self.connection.query_row(
+                "SELECT COUNT(*) FROM memory_contexts WHERE project_id=?1",
+                [project],
+                |row| row.get(0),
+            )?;
+            if count >= crate::RECEIPT_LIMIT as u64 {
+                return Err(MemoryError::InvalidState("memory_context_capacity".into()));
+            }
+        }
+        let generation = offset
+            .checked_add(1)
+            .filter(|value| *value <= i64::MAX as u64)
+            .ok_or_else(|| MemoryError::InvalidState("memory_context_offset".into()))?;
+        self.connection.execute("INSERT INTO memory_contexts VALUES(?1,?2,?3,?4) ON CONFLICT(project_id,runtime,session_id) DO UPDATE SET generation=MAX(generation,excluded.generation)", params![project,runtime,session,generation])?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_receipt_context(
+        &self,
+        project: &str,
+        runtime: &str,
+        session: &str,
+        turn: &str,
+        generation: u64,
+    ) -> Result<(), MemoryError> {
+        self.require_writer()?;
+        self.connection.execute("INSERT OR IGNORE INTO receipt_contexts SELECT id,?5 FROM injection_receipts WHERE project_id=?1 AND runtime=?2 AND session_id=?3 AND turn_id=?4",params![project,runtime,session,turn,generation])?;
+        Ok(())
+    }
+
+    pub fn context_receipt_event(event: &str, generation: u64) -> String {
+        if generation == 0 {
+            event.into()
+        } else {
+            format!("{event}:context:{generation}")
+        }
+    }
+
+    pub fn correction_checks(
+        &self,
+        project: &str,
+        limit: usize,
+    ) -> Result<Vec<(u64, u64, crate::DocumentComparison, Option<String>)>, MemoryError> {
+        let mut statement = self.connection.prepare("SELECT i.number,i.current_revision,c.data,k.fingerprint FROM card_comparisons c JOIN memory_items i ON i.id=c.item_id AND i.current_revision=c.revision LEFT JOIN correction_checks k ON k.item_id=i.id AND k.revision=i.current_revision WHERE i.project_id=?1 AND i.lifecycle='active' AND json_extract(c.data,'$.authority')='card_newer' AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state IN ('merged','running','pr_open','building')) ORDER BY COALESCE(k.checked_at_ms,0),i.number LIMIT ?2")?;
+        let rows = statement
+            .query_map(params![project, limit.min(4) as u64], |row| {
+                Ok((
+                    row.get::<_, u64>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter()
+            .map(|(number, revision, json, fingerprint)| {
+                Ok((
+                    number,
+                    revision,
+                    serde_json::from_str(&json)
+                        .map_err(|error| MemoryError::InvalidState(error.to_string()))?,
+                    fingerprint,
+                ))
+            })
+            .collect()
+    }
+
+    pub fn record_correction_check(
+        &self,
+        project: &str,
+        number: u64,
+        revision: u64,
+        fingerprint: &str,
+        now: u64,
+    ) -> Result<(), MemoryError> {
+        self.require_writer()?;
+        self.connection.execute("INSERT INTO correction_checks SELECT id,current_revision,?4,?5 FROM memory_items WHERE project_id=?1 AND number=?2 AND current_revision=?3 ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,fingerprint=excluded.fingerprint,checked_at_ms=excluded.checked_at_ms",params![project,number,revision,fingerprint,now])?;
+        Ok(())
+    }
+
     /// Reuse a successfully validated extraction after a later local failure.
     pub fn analysis_proposal(
         &self,

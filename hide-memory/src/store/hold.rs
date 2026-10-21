@@ -25,7 +25,12 @@ BEGIN DELETE FROM card_holds WHERE item_id=NEW.id; END;
 
 /// What a test runs to take a current store back to schema 15's tables.
 #[cfg(test)]
-pub(crate) const DROP_TABLES: &str = "DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals; DROP TABLE analysis_schedule; DROP TRIGGER card_holds_follow_card; DROP TABLE card_holds; DROP TABLE stale_reports;";
+pub(crate) const DROP_TABLES: &str = "DROP TRIGGER IF EXISTS memory_projection_memory_items_insert; DROP TRIGGER IF EXISTS memory_projection_memory_items_update; DROP TRIGGER IF EXISTS memory_projection_memory_items_delete; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_insert; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_update; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_delete; DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_insert;
+DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_update;
+DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_delete;
+DROP TABLE IF EXISTS receipt_contexts;
+DROP TABLE IF EXISTS memory_contexts;
+DROP TABLE correction_checks; DROP TABLE memory_projection_state; DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals; DROP TABLE analysis_schedule; DROP TRIGGER card_holds_follow_card; DROP TABLE card_holds; DROP TABLE stale_reports;";
 
 /// Schema 16 adds the hold. The writer runs it after keeping the v15 store
 /// as a backup; a read-only hook refuses the store until it has run.

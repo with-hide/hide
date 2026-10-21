@@ -14,6 +14,15 @@ use crate::{Injection, InjectionKind, InjectionOutcome, MemoryStore, RetrievalQu
 /// which names the task, and few enough bytes that the request stays one
 /// small message whichever machine the core runs on.
 pub const PROMPT_LIMIT_BYTES: usize = 8 * 1024;
+/// Estimated rendered tokens, including escaping, wrappers and receipts.
+/// This is a local estimate, not provider billing.
+pub const RENDERED_TOKEN_LIMIT: usize = 1_200;
+
+pub fn estimated_tokens(text: &str) -> usize {
+    text.split_whitespace()
+        .count()
+        .max(text.chars().count().div_ceil(4))
+}
 
 /// `prompt`'s first [`PROMPT_LIMIT_BYTES`] bytes at most, cut on a character
 /// boundary.
@@ -131,12 +140,40 @@ where
     if expired() {
         return deadline();
     }
-    let Ok(injection) = store.retrieve_with_expiry(&query, &expired) else {
+    let Ok(mut injection) = store.retrieve_with_expiry(&query, &expired) else {
         if expired() {
             return deadline();
         }
         return base();
     };
+    let Ok(generation) =
+        store.context_generation(&project.id, request.runtime_id, request.session_id)
+    else {
+        return base();
+    };
+    // Budget the exact escaped envelope and a fixed-width authentication tag
+    // before signing; removed items can never appear in its receipt.
+    while !injection.items.is_empty() {
+        let preview = render(
+            request.event,
+            injection.clone(),
+            (injection.kind == InjectionKind::Bodies)
+                .then_some("0000000000000000000000000000000000000000000000000000000000000000"),
+            generation,
+            &expired,
+        );
+        if preview
+            .context
+            .as_deref()
+            .is_some_and(|text| estimated_tokens(text) <= RENDERED_TOKEN_LIMIT)
+        {
+            break;
+        }
+        injection.items.pop();
+    }
+    if injection.items.is_empty() && injection.outcome == InjectionOutcome::Provided {
+        injection.outcome = InjectionOutcome::Empty;
+    }
     // The index is not a delivery and leaves no receipt; only cards given in
     // full are recorded, so a session's prompts do not repeat them (B12).
     let receipt_auth = match injection.kind {
@@ -145,20 +182,27 @@ where
             &project.id,
             request.runtime_id,
             request.session_id,
-            request.event.name(),
+            &MemoryStore::context_receipt_event(request.event.name(), generation),
             &injection.item_key(),
         ) {
             Ok(tag) => Some(tag),
             Err(_) => return base(),
         },
     };
-    render(request.event, injection, receipt_auth.as_deref(), &expired)
+    render(
+        request.event,
+        injection,
+        receipt_auth.as_deref(),
+        generation,
+        &expired,
+    )
 }
 
 fn render(
     event: HookEvent,
     injection: Injection,
     receipt_auth: Option<&str>,
+    generation: u64,
     expired: &impl Fn() -> bool,
 ) -> HookContext {
     if expired() {
@@ -177,12 +221,18 @@ fn render(
         return HookContext::without(outcome);
     };
     if let Some(auth) = receipt_auth {
+        let generation_attribute = if generation == 0 {
+            String::new()
+        } else {
+            format!(" generation=\"{generation}\"")
+        };
         context.push_str(&format!(
-            "<hide-memory-receipt event=\"{}\" count=\"{}\" items=\"{}\" auth=\"{}\" />\n",
+            "<hide-memory-receipt event=\"{}\" count=\"{}\" items=\"{}\" auth=\"{}\"{} />\n",
             event.name(),
             injection.items.len(),
             injection.item_key(),
             auth,
+            generation_attribute,
         ));
     }
     HookContext {
@@ -452,6 +502,135 @@ mod tests {
     }
 
     #[test]
+    fn receipt_suppression_follows_revisions_and_native_context_boundaries() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, project) = enabled_store(
+            temp.path(),
+            &temp.path().join("project"),
+            &[rule("Keep durable hooks bounded", 0.9)],
+        );
+        let mut writer = MemoryStore::open(&path).unwrap();
+        let provided = || {
+            context_for(
+                &path,
+                &project,
+                ask(HookEvent::UserPromptSubmit, "s", Some("durable hooks")),
+                frozen(),
+            )
+        };
+        assert_eq!(provided().outcome, HookOutcome::Provided { count: 1 });
+        writer
+            .record_receipt(&project.id, "codex", "s", "event:1", "m1@1", 2)
+            .unwrap();
+        assert_eq!(provided().outcome, HookOutcome::Empty);
+        let item = writer.item_by_number(&project.id, 1).unwrap().unwrap();
+        writer
+            .apply_candidates(
+                &AnalysisBatch {
+                    id: "revision".into(),
+                    project_id: project.id.clone(),
+                    provider: "codex".into(),
+                    analysis_provider: "codex".into(),
+                    session_id: "source-session".into(),
+                    content_hash: "revision".into(),
+                    created_at_unix_ms: 3,
+                },
+                &[Candidate {
+                    relation: CandidateRelation::Supersedes { target_id: item.id },
+                    ..rule("Keep durable hooks bounded after restart", 0.9)
+                }],
+            )
+            .unwrap();
+        assert_eq!(provided().outcome, HookOutcome::Provided { count: 1 });
+        writer
+            .record_receipt(&project.id, "codex", "s", "event:2", "m1@2", 4)
+            .unwrap();
+        assert_eq!(provided().outcome, HookOutcome::Empty);
+        writer
+            .observe_context_reset(&project.id, "codex", "s", 50)
+            .unwrap();
+        writer
+            .observe_context_reset(&project.id, "codex", "s", 10)
+            .unwrap();
+        assert_eq!(
+            writer
+                .context_generation(&project.id, "codex", "s")
+                .unwrap(),
+            51
+        );
+        let context = provided().context.unwrap();
+        assert!(context.contains("generation=\"51\""));
+        let auth = context
+            .split("auth=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        assert!(
+            writer
+                .verify_receipt_auth(
+                    &project.id,
+                    "codex",
+                    "s",
+                    &MemoryStore::context_receipt_event("UserPromptSubmit", 51),
+                    "m1@2",
+                    auth
+                )
+                .unwrap()
+        );
+        assert!(
+            !writer
+                .verify_receipt_auth(&project.id, "codex", "s", "UserPromptSubmit", "m1@2", auth)
+                .unwrap()
+        );
+        writer
+            .record_receipt(&project.id, "codex", "s", "event:52", "m1@2", 5)
+            .unwrap();
+        writer
+            .record_receipt_context(&project.id, "codex", "s", "event:52", 51)
+            .unwrap();
+        assert_eq!(provided().outcome, HookOutcome::Empty);
+        assert_eq!(
+            context_for(
+                &path,
+                &project,
+                ask(HookEvent::UserPromptSubmit, "other", Some("durable hooks")),
+                frozen()
+            )
+            .outcome,
+            HookOutcome::Provided { count: 1 }
+        );
+    }
+
+    #[test]
+    fn escaped_index_and_bodies_include_the_envelope_in_the_shared_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let cards = (0..22)
+            .map(|index| Candidate {
+                title: format!("{index} {}", "<durable&hooks>".repeat(25)),
+                ..rule(&format!("durable hooks {}", "<&>".repeat(180)), 0.9)
+            })
+            .collect::<Vec<_>>();
+        let (path, project) = enabled_store(temp.path(), &temp.path().join("project"), &cards);
+        for event in [HookEvent::SessionStart, HookEvent::UserPromptSubmit] {
+            let answer = context_for(
+                &path,
+                &project,
+                ask(event, "s", Some("durable hooks")),
+                frozen(),
+            );
+            let text = answer.context.expect("actual Provided context");
+            assert!(
+                estimated_tokens(&text) <= RENDERED_TOKEN_LIMIT,
+                "{}",
+                estimated_tokens(&text)
+            );
+            assert!(matches!(answer.outcome,HookOutcome::Provided{count} if count>0));
+        }
+    }
+
+    #[test]
     fn an_empty_session_start_adds_nothing() {
         // B10: no card for the index, no index.
         let result = render(
@@ -463,6 +642,7 @@ mod tests {
                 token_count: 0,
             },
             None,
+            0,
             &frozen(),
         );
 
@@ -541,6 +721,7 @@ mod tests {
             HookEvent::UserPromptSubmit,
             injection,
             Some(&auth),
+            0,
             &expired,
         );
 

@@ -265,7 +265,7 @@ Schema 13 repairs the destructive v12 upgrade atomically: current unverified rev
 The backup is opened read-only and retained unchanged; if absent or unreadable, dates remain unchanged and the writer records one `migration.verification_restore_unavailable` diagnostic after committing the migration.
 Schema 11 counts checks separately from total calls in `analysis_calls.checks`, with atomic admission in `MemoryStore::admit_memory_call` and policy in `hide-memory/src/budget.rs`.
 Checks can use at most 500 of the total 1,000 calls per UTC day, including failed calls; analysis reserves the smaller of the currently due, enabled and consented checks and the unspent check share.
-`MemoryStore::due_checks` is the pass and reservation's shared predicate, covering unverified cards, verified revisions awaiting their first document comparison and verified rule or lesson cards whose promotion check is due.
+`MemoryStore::due_checks` is the pass and reservation's shared predicate, covering unverified cards, verified revisions awaiting their first document comparison and verified rule, lesson or decision cards whose promotion check is due.
 With no due cards, nothing is reserved; explicit `add` shares the same analysis admission.
 Migration preserves the earlier total and starts the new check count at zero, since earlier calls had no category, so the migration day can never exceed its remaining total.
 Each accepted card returns to injection as soon as its answer is stored; a later call's failure retains that progress.
@@ -277,17 +277,24 @@ The provider (`project_memory_verify`, `hide-memory/src/verify.rs`) gets the car
 A rule or lesson about to be suggested gets one more question (`project_memory_promote_check`, at most three a pass, once per text): the repository's `AGENTS.md`, `CLAUDE.md` and the documents they point to (at most five, 8 KiB each, chosen the same way) and the operator's own global instruction files (at most three, read as the account this process runs as, logged by name only) are put beside the card, and the answer is `propose`, `outdated` (handled as above) or `in_docs`, which turns the card into a pointer at that repository file, the merged promotion state with no pull request, and forgets it when only a global file says it.
 Schema 12 keeps one revision-bound repository comparison per card and one membership row per promotion batch, backing up schema 11 and queuing its non-pointer cards for the existing re-verification pass.
 The same re-verification and promotion-check calls additionally answer `docs_disagree`, with a repository path and an exact conflicting excerpt; re-verification can also answer `in_docs`.
-The worker compares the current revision's operator-source time with that file's last commit time through the typed node `GitCommand::DocumentTime`, off the lock.
-A changed or untracked file, a missing time or equal times asks the operator; a later document makes the card Outdated, and a later operator decision proposes correcting the document.
-Every unresolved comparison, including an accepted correction waiting for merge, is excluded from both injection paths and further automatic checks; changing the card revision invalidates that comparison.
+The worker retains original human words, their time and source session, the conflicting document quote and its last commit time as provenance.
+Whole-file commit times never decide authority: an unsettled contradiction asks the operator, while a semantic creation comparison can confirm an explicit enduring human correction on its first occurrence.
+One-task exceptions are discarded as standing rules, and direct save-to-file requests stay with the terminal agent.
+An unsettled or outdated comparison is withheld from injection; a confirmed correction remains a scoped untrusted reference marked as awaiting its document update.
+An unrelated document commit cannot reopen that settled authority, and a changed card revision invalidates its old comparison.
+The existing maintenance worker checks at most four confirmed corrections a Project per pass, within the shared eight-check pass cap and daily maintenance share.
+It fingerprints the bounded owning document and asks again only when its contents change; when the correction is reflected, including after a terminal-agent edit, the existing promotion pointer records the document without spawning another promotion.
+Missing documents retain the correction and rotate the check position; no new poller or automatic document writer exists.
 Preferences stay injectable but never become repository pointers or promotion candidates.
 An Undo of any of these verdicts restores the old text as verified and drops the evidence rows of that revision, so the evidence walk does not unverify it again at once.
 An `in_docs` answer naming a file the request did not carry is refused.
 
 Before writing new non-preference candidates, the worker searches the same bounded repository documents without a model and groups lexical matches into one comparison call (`project_memory_creation_docs`).
-Each candidate carries one excerpt of at most 3 KiB; the complete request is trimmed or omitted to stay within 15% of that extraction request's input characters and bytes.
+Each candidate carries one document excerpt of at most 3 KiB and bounded excerpts of its actual human-source offsets.
+The complete comparison input is trimmed or omitted within 15% of the 64 KiB extraction input ceiling, including for short conversations; it is an admitted request under the existing usage policy, not a billing-token estimate.
 A candidate already said in a document is discarded and counted in the diagnostic log.
-That same creation answer classifies each sent candidate as same, differs or unrelated; a differing claim is written atomically with its comparison, with dates read from the node and no initial re-verification call.
+That creation answer classifies each sent candidate as a duplicate, an enduring correction, a task exception, an unsettled contradiction or unrelated.
+A differing claim is written atomically with its revision-bound comparison and provenance, with no initial re-verification call.
 An unrelated claim remains ordinary; an existing claim whose revision changes uses the established re-verification queue.
 Merged pointers apply only to the revision they describe, so a changed claim is checked instead of inheriting its older pointer.
 One meaningful human exchange is eligible for analysis; instructions from a delegating agent are never human evidence.

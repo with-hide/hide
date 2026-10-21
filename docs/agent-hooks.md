@@ -145,14 +145,21 @@ The request's stream carries its deadline ([ARCHITECTURE.md](ARCHITECTURE.md#the
 Each step that can fail answers its own reason, which the hook records under a cause of its own ([What a hook records when it fails](#what-a-hook-records-when-it-fails)).
 Requests and responses are capped at 16 KiB and 64 KiB, and the existing bootstrap and node proof worker caps still apply.
 The letter and Memory children run independently and in parallel under their existing caller deadlines and fail-open outcomes.
-The core takes the Project from the caller's attested checkout, read by that checkout's own node, never from anything the hook sends.
+The core takes the Project from the caller's attested checkout and already-prepared catalog facts, never from anything the hook sends.
+Only an explicit checkout purpose or branch description contributes bounded task context; absent facts fail open without discovery.
 The lookup performs no provider or embedding call, transcript scan, child-process launch, or database write, and runs off the core's runtime lock.
 Missing, locked, corrupt, stale, over-limit, unresolved-Project, and over-deadline stores return no Memory context, and the hook still exits zero.
 Memory waits for its answer until 1,250 ms after the inner hook starts; the 1,650 ms intake budget reserves its last 400 ms for letter confirmation after a successful stdout flush.
 The prompt supervisor bounds the inner helper at 1,850 ms from the outer helper's start, so the Memory read budget is not the entire prompt hook duration.
 SessionStart has the same Memory read budget, a separate two-second Workspace CLI probe asked beside it when its thread starts, and later count-report calls with their own two-second timeouts; its installed runtime entry has an eight-second timeout.
-The core sets a one-second Memory answer deadline, but owner-scope reply waiting has no receive timeout and a remote call applies its timeout separately to admission, write and answer.
-That deadline is not an enforced end-to-end execution cutoff: the caller can continue without Memory while an admitted daemon job still runs.
+The core sets a one-second Memory answer deadline: owner-scope reply waiting uses the remaining expiry and remote admission, write and answer share an absolute deadline.
+Retrieval expires at the earlier of that invocation expiry and its own 100 ms allowance.
+The escaped index or body envelope, including receipts, shares a 1200 estimated rendered-token cap; this is not a provider billing count.
+Receipts suppress only a current revision delivered in the same Project/runtime/session/context generation.
+The existing background receipt reader advances context generation from Claude Code's native `SessionStart:resume`, `SessionStart:clear` and `SessionStart:compact` hook attachments, and Pi/omp native compaction records.
+Other runtimes retain revision-aware delivery but have no proven context-reset signal here; prompt text never implies compaction, and delivery history does not prove present model context.
+Generation-bound tags preserve old generation-zero receipt authentication and never assign old deliveries to a new context.
+Native evidence becomes usable after the existing reader observes it; the submitting prompt does not scan a transcript.
 Candidate, item and token counts remain hard bounded; [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#project-memory-cost-contract) owns the measurement conditions and this limit.
 A node whose link to the core is down refuses at once with `hide_unavailable`; the hook then records `memory.unavailable`, or `memory.deadline` for an answer that did not come in time, at most once per ten minutes in its private diagnostics, and the turn goes on without Memory.
 A panic on the thread that asks is recorded the same way as `memory.panicked`.

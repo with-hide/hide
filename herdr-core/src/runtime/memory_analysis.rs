@@ -1346,6 +1346,45 @@ fn maintain_cards(
     {
         return;
     }
+    let mut admit = |store: &MemoryStore| {
+        if *maintenance_calls >= MAINTENANCE_CALLS_PER_PASS {
+            return Err(AnalysisFailure::Deferred("pass_quantum"));
+        }
+        admit_budget(store, hide_memory::MemoryCallKind::Check)?;
+        *maintenance_calls += 1;
+        Ok(())
+    };
+    match super::memory_verify::reconcile_corrections(
+        store,
+        sessions_node,
+        router,
+        input.language,
+        project_id,
+        root,
+        &input.cancel,
+        &mut admit,
+    ) {
+        Ok(checked) => {
+            tally.checked |= checked.changed > 0;
+            tally.answered |= checked.answered > 0;
+            outcome.wants_usage |= checked.answered > 0;
+        }
+        Err(AnalysisFailure::Provider(error)) => {
+            tally.error = Some(error);
+            return;
+        }
+        Err(AnalysisFailure::Deferred(reason)) => {
+            tally.waiting = visible_deferral(reason);
+            return;
+        }
+        Err(AnalysisFailure::Cancelled | AnalysisFailure::Disabled) => return,
+        Err(AnalysisFailure::Local(message)) => {
+            crate::diagnostic!(
+                json!({"component":"memory","kind":"correction.reconcile_failed","project_id":project_id,"message":message})
+            );
+            return;
+        }
+    }
     // The usage reader runs for a pass only when there is a card to ask
     // about, as it does for a session.
     let due = store.due_checks(Some(project_id), now_ms(), 1);
@@ -1367,14 +1406,6 @@ fn maintain_cards(
         return;
     }
     outcome.wants_usage = true;
-    let mut admit = |store: &MemoryStore| {
-        if *maintenance_calls >= MAINTENANCE_CALLS_PER_PASS {
-            return Err(AnalysisFailure::Deferred("pass_quantum"));
-        }
-        admit_budget(store, hide_memory::MemoryCallKind::Check)?;
-        *maintenance_calls += 1;
-        Ok(())
-    };
     let mut progress = |card: Option<u64>| {
         if card.is_none() {
             report(PassReport::Checked {
@@ -1547,6 +1578,11 @@ fn read_receipts(
     let read = session_conversation(sessions_node, session, saved.as_ref())?;
     let checkpoint = serde_json::to_vec(&read.checkpoint).map_err(|error| error.to_string())?;
     for (event, offset) in read.events.iter().zip(&read.event_offsets) {
+        if event.context_reset {
+            store
+                .observe_context_reset(project_id, provider, &session.id, *offset)
+                .map_err(|error| error.to_string())?;
+        }
         if event.kind != EventKind::Injected {
             continue;
         }
@@ -1654,7 +1690,17 @@ fn record_receipt(
         receipt.item_key(),
         now_ms(),
     ) {
-        Ok(ReceiptRecord::Recorded) => {}
+        Ok(ReceiptRecord::Recorded) => {
+            store
+                .record_receipt_context(
+                    project_id,
+                    provider,
+                    session_id,
+                    &MemoryReceipt::turn_id(offset),
+                    receipt.generation,
+                )
+                .map_err(|error| error.to_string())?;
+        }
         Ok(ReceiptRecord::Capped) => crate::diagnostic!(json!({
             "component": "memory",
             "kind": "receipts.project_capped",
@@ -1720,6 +1766,18 @@ fn record_sighted_receipts(
             refused += 1;
             continue;
         };
+        if sighted.context_reset {
+            match store.observe_context_reset(
+                &identity.id,
+                sighted.provider,
+                &sighted.session_id,
+                sighted.offset,
+            ) {
+                Ok(()) => recorded += 1,
+                Err(_) => refused += 1,
+            }
+            continue;
+        }
         if matches!(
             record_receipt(
                 &mut store,
@@ -2003,6 +2061,9 @@ pub(crate) fn write_cards(
         .has_batch(&batch_id)
         .map_err(|error| local(error.to_string()))?
     {
+        store
+            .clear_analysis_proposal(&batch_id)
+            .map_err(|error| local(error.to_string()))?;
         return Ok(WrittenCards {
             summary: ApplySummary {
                 duplicate_batch: true,
@@ -2085,7 +2146,7 @@ pub(crate) fn write_cards(
                 .iter()
                 .enumerate()
                 .filter(|(_, candidate)| {
-                    candidate.relation == CandidateRelation::New
+                    matches!(candidate.relation, CandidateRelation::New | CandidateRelation::Supersedes { .. } | CandidateRelation::Conflicts { .. })
                         && candidate.kind != hide_memory::CandidateKind::Preference
                 })
                 .filter_map(|(index, candidate)| {
@@ -2109,7 +2170,7 @@ pub(crate) fn write_cards(
                         .1;
                     Some((
                         index,
-                        candidate.text.clone(),
+                        json!({"claim": candidate.text, "human_evidence": comparison_human_evidence(candidate,group)}).to_string(),
                         hide_memory::relevant_excerpt(
                             &document.path,
                             &document.text,
@@ -2128,7 +2189,7 @@ pub(crate) fn write_cards(
                 digest(&["creation-docs", &batch_id]),
                 source.project_id,
                 &matches,
-                request.input.chars().count().min(request.input.len()),
+                hide_memory::ANALYSIS_INPUT_LIMIT_BYTES,
                 language,
             ) {
                 admit(store)?;
@@ -2167,12 +2228,15 @@ pub(crate) fn write_cards(
                         .find(|entry| entry["candidate"].as_u64() == Some(index as u64))
                         .expect("the candidate was validated against the sent input");
                     match result["verdict"].as_str() {
-                        Some("same") => {
+                        Some("same") if candidates[index].relation == CandidateRelation::New => {
                             candidates[index].relation = CandidateRelation::Discard;
                             duplicates += 1;
                         }
-                        Some("unrelated") => {}
-                        Some("differs") => {
+                        Some("exception") => {
+                            candidates[index].relation = CandidateRelation::Discard;
+                        }
+                        Some("same" | "unrelated") => {}
+                        Some("differs" | "correction") => {
                             let quote = result["quote"]
                                 .as_str()
                                 .filter(|quote| {
@@ -2206,18 +2270,24 @@ pub(crate) fn write_cards(
                                 .chars()
                                 .take(hide_memory::COMPARISON_EXCERPT_BYTES / 4)
                                 .collect();
-                            document_comparisons[index] =
-                                Some(super::memory_verify::compare_document(
-                                    sessions_node,
-                                    source.evidence_root,
-                                    entry["document"]
-                                        .as_str()
-                                        .expect("the request carries a document path"),
-                                    quote,
-                                    at,
-                                    words,
-                                    human.map(|_| source.session_id.to_owned()),
-                                ));
+                            let mut comparison = super::memory_verify::compare_document(
+                                sessions_node,
+                                source.evidence_root,
+                                entry["document"]
+                                    .as_str()
+                                    .expect("the request carries a document path"),
+                                quote,
+                                at,
+                                words,
+                                human.map(|_| source.session_id.to_owned()),
+                            );
+                            if result["verdict"] == "correction"
+                                && candidate.direct_human_source()
+                                && !comparison.operator_text.is_empty()
+                            {
+                                comparison.authority = hide_memory::DocumentAuthority::CardNewer;
+                            }
+                            document_comparisons[index] = Some(comparison);
                         }
                         _ => {
                             return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
@@ -2306,6 +2376,37 @@ pub(crate) fn write_cards(
         content_hash,
         left_out,
     })
+}
+
+/// Extraction saw the whole group. A comparison carries bounded excerpts of
+/// those same native human offsets; full source/provenance remains local.
+fn comparison_human_evidence(candidate: &hide_memory::Candidate, group: &[Value]) -> Vec<Value> {
+    let events = group
+        .iter()
+        .filter(|event| {
+            candidate
+                .human_offsets
+                .contains(&event["offset"].as_u64().unwrap_or(u64::MAX))
+        })
+        .collect::<Vec<_>>();
+    let per_event = 800 / events.len().max(1);
+    events
+        .into_iter()
+        .map(|event| {
+            let text = event["text"].as_str().unwrap_or_default();
+            let chars = text.chars().collect::<Vec<_>>();
+            let truncated = chars.len() > per_event;
+            let excerpt = if truncated {
+                chars[..per_event / 2]
+                    .iter()
+                    .chain(chars[chars.len() - per_event / 2..].iter())
+                    .collect::<String>()
+            } else {
+                text.into()
+            };
+            json!({"offset":event["offset"],"text":excerpt,"truncated":truncated})
+        })
+        .collect()
 }
 
 /// The cards one group is compared against, and the reported cards that did
@@ -2896,15 +2997,17 @@ mod tests {
 
     #[test]
     fn creation_classifies_new_decision_conflicts_with_no_initial_reverification() {
-        for (date, authority) in [
-            (None, hide_memory::DocumentAuthority::Ask),
+        for (date, verdict, authority) in [
+            (None, "differs", hide_memory::DocumentAuthority::Ask),
             (
                 Some("2026-10-10T00:00:00Z"),
+                "correction",
                 hide_memory::DocumentAuthority::CardNewer,
             ),
             (
                 Some("2026-10-12T00:00:00Z"),
-                hide_memory::DocumentAuthority::Outdated,
+                "correction",
+                hide_memory::DocumentAuthority::CardNewer,
             ),
         ] {
             let mut fixture = Fixture::new();
@@ -2943,7 +3046,7 @@ mod tests {
                 }
             }
             fixture.backend.answers.lock().unwrap().push(json!({"results":[{
-                "candidate":0,"verdict":"differs", "quote":"Run tests with the ordinary runner before a merge."
+                "candidate":0,"verdict":verdict, "quote":"Run tests with the ordinary runner before a merge."
             }]}));
             fixture.answer(&[]);
             fixture.backend.answers.lock().unwrap().last_mut().unwrap()["candidates"][0]["kind"] =
@@ -2966,7 +3069,7 @@ mod tests {
                     .contains("Always run tests with nextest")
             );
             assert!(
-                !store
+                store
                     .retrieve(&hide_memory::RetrievalQuery::session_start(
                         &fixture.project_id
                     ))
@@ -2974,6 +3077,7 @@ mod tests {
                     .items
                     .iter()
                     .any(|card| card.number == 2)
+                    == (authority == hide_memory::DocumentAuthority::CardNewer)
             );
             assert_eq!(
                 fixture.calls(),
@@ -2981,19 +3085,94 @@ mod tests {
                 "one extraction and one creation comparison, no initial reverify"
             );
             let inputs = fixture.backend.inputs.lock().unwrap();
-            assert!(inputs[1].chars().count() * 100 <= inputs[0].chars().count() * 15);
+            assert!(inputs[1].len() * 100 <= hide_memory::ANALYSIS_INPUT_LIMIT_BYTES * 15);
             println!(
                 "memory-fixture-inputs extraction={} creation_docs={} authority={authority:?} calls=2",
                 inputs[0].chars().count(),
                 inputs[1].chars().count()
             );
             drop(inputs);
+            if authority == hide_memory::DocumentAuthority::CardNewer {
+                fixture.backend.answers.lock().unwrap().push(json!({"results":[{"candidate":0,"verdict":"differs","quote":"Run tests with the ordinary runner before a merge."}]}));
+            }
+            let _ = fixture.pass(false, false);
+            let after = fixture.calls();
             let _ = fixture.pass(false, false);
             assert_eq!(
                 fixture.calls(),
-                2,
-                "an unresolved comparison spends no further call"
+                after,
+                "an unchanged document does not reopen settled authority"
             );
+            assert_eq!(
+                fixture
+                    .store()
+                    .document_comparison(&fixture.project_id, 2)
+                    .unwrap()
+                    .unwrap()
+                    .authority,
+                authority
+            );
+            if authority == hide_memory::DocumentAuthority::CardNewer {
+                // A different edit in the same file must not revoke the correction.
+                std::fs::write(
+                    fixture.root.join("AGENTS.md"),
+                    "Run tests with the ordinary runner before a merge.\nUse small commits.\n",
+                )
+                .unwrap();
+                fixture.age_evidence_checks();
+                fixture.backend.answers.lock().unwrap().push(json!({"results":[{"candidate":0,"verdict":"differs","quote":"Run tests with the ordinary runner before a merge."}]}));
+                fixture.pass(false, false);
+                let store = fixture.store();
+                assert_eq!(
+                    store
+                        .document_comparison(&fixture.project_id, 2)
+                        .unwrap()
+                        .unwrap()
+                        .authority,
+                    authority
+                );
+                assert!(
+                    store
+                        .retrieve(&hide_memory::RetrievalQuery::session_start(
+                            &fixture.project_id
+                        ))
+                        .unwrap()
+                        .items
+                        .iter()
+                        .any(|card| card.number == 2)
+                );
+                drop(store);
+                // A terminal agent can incorporate it without spawning a promotion.
+                std::fs::write(
+                    fixture.root.join("AGENTS.md"),
+                    "Run tests with nextest before a merge.\nUse small commits.\n",
+                )
+                .unwrap();
+                fixture
+                    .backend
+                    .answers
+                    .lock()
+                    .unwrap()
+                    .push(json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}));
+                fixture.pass(false, false);
+                let store = fixture.store();
+                assert!(
+                    store
+                        .document_comparison(&fixture.project_id, 2)
+                        .unwrap()
+                        .is_none()
+                );
+                let promotion = store
+                    .promotions(&fixture.project_id)
+                    .unwrap()
+                    .into_iter()
+                    .find(|(number, _)| *number == 2)
+                    .unwrap()
+                    .1;
+                assert_eq!(promotion.state, hide_memory::PromotionState::Merged);
+                assert_eq!(promotion.target_path.as_deref(), Some("AGENTS.md"));
+                assert!(promotion.pr_number.is_none());
+            }
         }
     }
 
@@ -3027,7 +3206,7 @@ mod tests {
         );
         assert_eq!(fixture.calls(), 2);
         let inputs = fixture.backend.inputs.lock().unwrap();
-        assert!(inputs[1].chars().count() * 100 <= inputs[0].chars().count() * 15);
+        assert!(inputs[1].len() * 100 <= hide_memory::ANALYSIS_INPUT_LIMIT_BYTES * 15);
         println!(
             "memory-fixture-inputs extraction={} creation_docs={} created=0",
             inputs[0].chars().count(),
@@ -3218,6 +3397,15 @@ mod tests {
                         helper_path: None,
                     },
                 },
+            );
+            let prepared = runtime
+                .device_facts
+                .entry(crate::node::TEST_NODE.into())
+                .or_default();
+            prepared.reread = false;
+            prepared.facts.insert(
+                context.checkout_path.clone(),
+                crate::device_catalog::Fact::Known(hide_project::facts(&fixture.root).unwrap()),
             );
             let scope = runtime
                 .memory_scope(&context)
@@ -3917,6 +4105,112 @@ mod tests {
         });
         assert!(runtime.memory_reads_usage());
         assert!(runtime.usage_activity().window_visible);
+    }
+
+    #[test]
+    fn oversized_human_work_resumes_four_groups_at_a_time_across_off_on_and_reopen() {
+        let mut fixture = Fixture::new();
+        fixture.lines.truncate(1);
+        let text = format!("{} retain_tail_nextest", "한글 context ".repeat(15_000));
+        fixture.lines[0]["message"]["content"] = json!(text);
+        fixture.write(&fixture.lines);
+        let key = ("claude", SESSION.to_owned());
+        for _ in 0..4 {
+            fixture
+                .backend
+                .answers
+                .lock()
+                .unwrap()
+                .push(json!({"candidates":[],"alias_backfill":[]}));
+        }
+        let (_, first) = fixture.pass_for(key.clone(), false, true);
+        assert_eq!(fixture.calls(), 4);
+        assert!(!first.settled.contains(&key));
+        let store = fixture.store();
+        assert!(
+            store
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION
+                )
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .analysis_progress(&fixture.project_id, "claude", SESSION, 0)
+                .unwrap()
+                .0,
+            4
+        );
+        store
+            .set_enabled(&fixture.project_id, false, false)
+            .unwrap();
+        drop(store);
+        fixture.pass(false, true);
+        assert_eq!(fixture.calls(), 4);
+        fixture
+            .store()
+            .set_enabled(&fixture.project_id, true, true)
+            .unwrap();
+        for _ in 0..40 {
+            fixture
+                .backend
+                .answers
+                .lock()
+                .unwrap()
+                .push(json!({"candidates":[],"alias_backfill":[]}));
+        }
+        for _ in 0..10 {
+            let before = fixture.calls();
+            let (_, outcome) = fixture.pass_for(key.clone(), false, true);
+            assert!(fixture.calls() - before <= 4);
+            if outcome.settled.contains(&key) {
+                break;
+            }
+        }
+        let store = fixture.store();
+        assert!(
+            store
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION
+                )
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            store
+                .analysis_progress(&fixture.project_id, "claude", SESSION, 0)
+                .unwrap()
+                .0,
+            0
+        );
+        let inputs = fixture.backend.inputs.lock().unwrap();
+        assert_eq!(
+            inputs
+                .iter()
+                .filter(|input| input.contains("retain_tail_nextest"))
+                .count(),
+            1
+        );
+        assert!(
+            inputs
+                .iter()
+                .all(|input| input.len() <= hide_memory::ANALYSIS_INPUT_LIMIT_BYTES)
+        );
+        drop(inputs);
+        let calls = fixture.calls();
+        fixture.pass(false, true);
+        assert_eq!(
+            fixture.calls(),
+            calls,
+            "completed groups never ask the provider again"
+        );
     }
 
     #[test]

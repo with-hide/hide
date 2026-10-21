@@ -645,6 +645,15 @@ pub(crate) fn parse_line(agent: Agent, item: &Value) -> LineResult {
                 LineResult::Title(name.to_owned())
             });
         }
+        Some("compaction") => {
+            return match crate::timestamp_ms(item.get("timestamp")) {
+                Ok(at) => LineResult::Event(
+                    ConversationEvent::new("system", EventKind::Injected, at, "")
+                        .with_context_reset(true),
+                ),
+                Err(reason) => LineResult::Skip(reason),
+            };
+        }
         Some("message") => (),
         // Hide's own extension writes its hidden message (guidance, letters,
         // Memory) as a custom message the host stores beside the prompt; it is

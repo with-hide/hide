@@ -409,6 +409,9 @@ pub struct ConversationEvent {
     /// context. Text prefixes can classify display semantics but never set
     /// this trust bit.
     provider_injected: bool,
+    /// A native adapter's explicit context-loss boundary, never inferred from text.
+    #[serde(default)]
+    pub context_reset: bool,
     pub at_unix_ms: u64,
     pub text: String,
     /// Images attached to the message; their bytes never enter `text`, and
@@ -425,6 +428,8 @@ struct OwnedConversationEvent {
     role: String,
     kind: EventKind,
     provider_injected: bool,
+    #[serde(default)]
+    context_reset: bool,
     at_unix_ms: u64,
     text: String,
     images: u32,
@@ -444,6 +449,7 @@ impl TryFrom<OwnedConversationEvent> for ConversationEvent {
             role,
             kind: event.kind,
             provider_injected: event.provider_injected,
+            context_reset: event.context_reset,
             at_unix_ms: event.at_unix_ms,
             text: event.text,
             images: event.images,
@@ -473,11 +479,17 @@ impl ConversationEvent {
             role,
             kind,
             provider_injected: false,
+            context_reset: false,
             at_unix_ms,
             text: text.into(),
             images: 0,
             part: None,
         }
+    }
+
+    fn with_context_reset(mut self, reset: bool) -> Self {
+        self.context_reset = reset;
+        self
     }
 
     fn with_images(mut self, images: u32) -> Self {
@@ -1731,10 +1743,20 @@ fn parse_claude_line(item: &Value, reply: &dyn Fn() -> CommandReply) -> LineResu
 /// Memory receipt in it is the hook's; the operator's words are never in an
 /// attachment. Any other kind of attachment is not conversation.
 fn claude_hook_context(item: &Value) -> LineResult {
-    let Some(claude_attachment::Attachment::HookContext { content }) =
-        claude_attachment::Attachment::of(item)
-    else {
-        return LineResult::Ignore;
+    let content = match claude_attachment::Attachment::of(item) {
+        Some(claude_attachment::Attachment::HookSuccess {
+            hook_name: Some("SessionStart:resume" | "SessionStart:clear" | "SessionStart:compact"),
+        }) => {
+            return match timestamp_ms(item.get("timestamp")) {
+                Ok(at) => LineResult::Event(
+                    ConversationEvent::new("system", EventKind::Injected, at, "")
+                        .with_context_reset(true),
+                ),
+                Err(reason) => LineResult::Skip(reason),
+            };
+        }
+        Some(claude_attachment::Attachment::HookContext { content }) => content,
+        _ => return LineResult::Ignore,
     };
     let Some(text) = claude_attachment::hook_context_text(content) else {
         return LineResult::Ignore;

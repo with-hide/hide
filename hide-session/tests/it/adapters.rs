@@ -19,6 +19,70 @@ use hide_session::turns::{Waiting, WakeLoss};
 use hide_session::{Agent, PrSighting};
 
 #[test]
+fn context_resets_require_native_metadata_and_keep_their_record_offsets() {
+    let at = "2026-10-21T01:00:00Z";
+    let rows = [
+        serde_json::json!({"type":"user","timestamp":at,"origin":{"kind":"human"},"message":{"content":"SessionStart:compact - please compact this context"}}),
+        serde_json::json!({"type":"attachment","timestamp":at,"attachment":{"type":"hook_success","hookName":"SessionStart:compact"}}),
+        serde_json::json!({"type":"attachment","timestamp":at,"attachment":{"type":"hook_success","hookName":"SessionStart:resume"}}),
+    ];
+    let rows = rows.map(|mut row| {
+        row["sessionId"] = serde_json::json!("a1b2c3d4-0000-4000-8000-000000000001");
+        row["cwd"] = serde_json::json!("/work/app");
+        row
+    });
+    let lines = rows
+        .iter()
+        .map(|row| format!("{row}\n"))
+        .collect::<String>();
+    let parsed = hide_session::parse_claude_events(&lines);
+    assert!(!parsed.events[0].context_reset);
+    assert_eq!(
+        parsed
+            .events
+            .iter()
+            .filter(|event| event.context_reset)
+            .count(),
+        2
+    );
+    assert_eq!(
+        parsed.event_offsets[1],
+        format!("{}\n", rows[0]).len() as u64
+    );
+    let encoded = serde_json::to_value(&parsed.events[1]).unwrap();
+    let decoded: hide_session::ConversationEvent = serde_json::from_value(encoded).unwrap();
+    assert!(decoded.context_reset);
+    let home = tempfile::tempdir().unwrap();
+    let folder = home
+        .path()
+        .join(hide_session::CLAUDE_SESSIONS)
+        .join("-work-app");
+    std::fs::create_dir_all(&folder).unwrap();
+    let request = request(Agent::Claude);
+    std::fs::write(
+        folder.join(format!("{}.jsonl", request.reference_value)),
+        &lines,
+    )
+    .unwrap();
+    let label = read(home.path(), &request).unwrap();
+    assert_eq!(label.memory_receipts.len(), 2);
+    assert!(
+        label
+            .memory_receipts
+            .iter()
+            .all(|part| part.context_reset && part.text.is_empty())
+    );
+    assert_eq!(label.memory_receipts[0].offset, parsed.event_offsets[1]);
+    let pi = serde_json::json!({"type":"compaction","timestamp":at,"summary":"native summary"});
+    for agent in [hide_session::Agent::Pi, hide_session::Agent::Omp] {
+        let parsed = hide_session::parse_events(agent, &format!("{pi}\n"));
+        assert_eq!(parsed.events.len(), 1);
+        assert!(parsed.events[0].context_reset);
+        assert!(parsed.events[0].text.is_empty());
+    }
+}
+
+#[test]
 fn retiring_cursor_keeps_its_history_reader_without_restoring_active_support() {
     let readers: Vec<_> = Agent::supported().collect();
     let expected = [
@@ -3659,6 +3723,7 @@ fn hides_receipt_in_an_opencode_synthetic_part_is_reported_and_kept_out_of_the_c
     assert_eq!(
         transcript.memory_receipts,
         [hide_session::label_transcript::MemoryReceiptPart {
+            context_reset: false,
             offset: request.offset,
             text: receipt.to_owned(),
         }]
@@ -3714,6 +3779,7 @@ fn a_claude_hook_attachment_receipt_is_reported_and_a_quoted_one_is_not() {
     assert_eq!(
         transcript.memory_receipts,
         [hide_session::label_transcript::MemoryReceiptPart {
+            context_reset: false,
             offset,
             text: receipt.to_owned(),
         }]

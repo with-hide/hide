@@ -10,7 +10,7 @@ import { useShellStore } from "../store";
 import { Lane } from "../Tools";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 
-export const MEMORY_SCENE_STATES = ["workspace", "off", "ai_not_ready", "analyzing", "empty", "unreadable", "promote", "writing", "writing_batch", "failed", "start_failed", "not_processed", "building", "unbuilt", "forgotten", "verifying", "reconsent", "checking", "check_budget_exhausted"] as const;
+export const MEMORY_SCENE_STATES = ["workspace", "correction", "off", "ai_not_ready", "analyzing", "empty", "unreadable", "promote", "writing", "writing_batch", "failed", "start_failed", "not_processed", "building", "unbuilt", "forgotten", "verifying", "reconsent", "checking", "check_budget_exhausted"] as const;
 export type MemorySceneState = (typeof MEMORY_SCENE_STATES)[number];
 export type MemorySceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type MemorySceneParams = { theme: "light" | "dark"; state: MemorySceneState; width: number; language: MemorySceneLanguage };
@@ -64,6 +64,7 @@ export function memorySceneProject(state: MemorySceneState): ProjectMemory {
         { kind: "promote", number: 3, title: ROWS[5]!.title, human_session_count: 3, pulled_session_count: 9 },
         { kind: "promote", number: 5, title: ROWS[6]!.title, human_session_count: 2, pulled_session_count: 6 },
       ] };
+    case "correction": return { ...base, rows: [{ ...ROWS[6]!, title: "Use the repository verification script", body_preview: "Use the verification script so local checks and CI use the same toolchain." }], questions: [{ kind: "docs_disagree", number: ROWS[6]!.number, title: "Use the repository verification script", document: { authority: "card_newer", document: "docs/TESTING.md", document_at_unix_ms: Date.now(), operator_at_unix_ms: Date.now() - 1440 * MINUTE } }] };
     case "off": return { ...base, enabled: false, usable_cards: 0 };
     case "ai_not_ready": return { ...base, analysis: "ai_not_ready" };
     case "analyzing": return { ...base, analysis: "analyzing" };

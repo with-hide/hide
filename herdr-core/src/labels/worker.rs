@@ -148,6 +148,7 @@ pub(crate) struct SightedPullRequest {
 /// `Runtime::take_memory_handoff`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SightedMemoryReceipt {
+    pub(crate) context_reset: bool,
     /// Memory's provider id: the agent's Herdr kind.
     pub(crate) provider: &'static str,
     pub(crate) session_id: String,
@@ -750,6 +751,7 @@ impl LabelWorker {
         let provider = pane.agent.as_str();
         self.receipts
             .extend(receipts.iter().map(|receipt| SightedMemoryReceipt {
+                context_reset: receipt.context_reset,
                 provider,
                 session_id: session_id.clone(),
                 cwd: cwd.clone(),
