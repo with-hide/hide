@@ -106,7 +106,7 @@ describe("current sessions in the Overview graph", () => {
     expect(overviewGraphModel([a, b], { ...facts, sessions: [] }, new Set(), null).communication).toEqual([]);
   });
 
-  it("keeps folded endpoint kinds and directions, then reveals any selected session without moving representatives", () => {
+  it("keeps folded endpoint kinds and directions while hiding every session until expansion", () => {
     const a = project("one", Array.from({ length: 10 }, (_, i) => agent(`a${i}`)));
     const b = project("two", [agent("b")]);
     const facts = metadata([...a.agents.map((row) => party(row.pane_id)), party("b")], [letter("1", party("a8"), party("b")), letter("2", party("a9"), party("b"), "progress", 20), letter("3", party("b"), party("a8"), "report", 30)]);
@@ -116,10 +116,12 @@ describe("current sessions in the Overview graph", () => {
     expect(folded.communication[0]?.directions.map((row) => row.count).sort()).toEqual([1, 2]);
     const selected = folded.agents.find((row) => row.agent.pane_id === "a8")!.id;
     const revealed = overviewGraphModel([a, b], facts, new Set(), null, { focus: "all", includeResting: false, selected });
-    expect(revealed.visible.some((row) => row.id === selected)).toBe(true);
+    expect(revealed.visible).toHaveLength(0);
     expect(revealed.projects[0]?.shown.map((row) => row.id)).toEqual(folded.projects[0]?.shown.map((row) => row.id));
     expect(revealed.structure).toBe(folded.structure);
-    expect(revealed.communication).toHaveLength(2);
+    expect(revealed.communication).toHaveLength(1);
+    const opened = overviewGraphModel([a, b], facts, new Set([graphProjectId(a)]), null);
+    expect(opened.visible).toHaveLength(10);
   });
 
   it("keeps topology stable when status, labels, correspondence or activity order refresh", () => {
@@ -139,12 +141,12 @@ describe("current sessions in the Overview graph", () => {
     expect(graph.limited).toBe(true);
     // B8 retains representative sessions when an oversized expansion is refused.
     expect(graph.visible).toHaveLength(6);
-    expect(graph.projects[0]?.expanded).toBe(false);
+    expect(graph.projects[0]?.expanded).toBe(true);
     expect(graph.agents).toHaveLength(400);
     const many = Array.from({ length: 401 }, (_, i) => project(`project${i}`, [agent(`pane${i}`)]));
     const bounded = overviewGraphModel(many, undefined, new Set(), null);
     // Every admitted center retains one member/access position within 400 nodes.
-    expect(bounded.projects).toHaveLength(200);
+    expect(bounded.projects).toHaveLength(400);
     expect(bounded.agents).toHaveLength(401);
     expect(bounded.limited).toBe(true);
     const counts = overviewProjectGraphCounts(many, undefined);
@@ -158,7 +160,8 @@ describe("current sessions in the Overview graph", () => {
     const all = overviewGraphModel([a, b], undefined, new Set([graphProjectId(a)]), null);
     const selected = all.agents.find((row) => row.agent.pane_id === "b39")!.id;
     const chosen = overviewGraphModel([a, b], undefined, new Set([graphProjectId(a)]), null, { focus: "all", includeResting: false, selected });
-    expect(chosen.visible.some((row) => row.id === selected)).toBe(true);
+    expect(chosen.visible.some((row) => row.id === selected)).toBe(false);
+    expect(chosen.agents.some((row) => row.id === selected)).toBe(true);
     expect(chosen.structure).toBe(all.structure);
     expect(chosen.projects.length + chosen.visible.length).toBeLessThanOrEqual(400);
   });
@@ -168,7 +171,8 @@ describe("current sessions in the Overview graph", () => {
     const all = overviewGraphModel(projects, undefined, new Set(), null);
     const current = all.allAgents.find((row) => row.agent.pane_id === "pane400")!;
     const protectedGraph = overviewGraphModel(projects, undefined, new Set(), null, { focus: "all", includeResting: false, pinned: [current.id] });
-    expect(protectedGraph.visible.map((row) => row.id)).toContain(current.id);
+    expect(protectedGraph.projects.map((row) => row.id)).toContain(current.projectId);
+    expect(protectedGraph.visible).toHaveLength(0);
     expect(protectedGraph.visible.length + protectedGraph.projects.length).toBeLessThanOrEqual(400);
     expect(protectedGraph.agents).toHaveLength(401);
   });
@@ -180,12 +184,47 @@ describe("current sessions in the Overview graph", () => {
     const current = all.allAgents.find((row) => row.agent.pane_id === "current0")!.id;
     const selected = all.allAgents.find((row) => row.agent.pane_id === "selected0")!.id;
     const options = { focus: "all" as const, includeResting: false, pinned: [current] };
-    const before = overviewGraphModel(projects, undefined, new Set(), null, options);
-    const after = overviewGraphModel(projects, undefined, new Set(), null, { ...options, selected });
+    const open = new Set([graphProjectId(projects[0]!)]);
+    const before = overviewGraphModel(projects, undefined, open, null, options);
+    const after = overviewGraphModel(projects, undefined, open, null, { ...options, selected });
     expect(after.visible.map((row) => row.id)).toEqual(expect.arrayContaining([current, selected]));
     expect(after.structure).toBe(before.structure);
     expect(after.projects.length + after.visible.length).toBeLessThanOrEqual(400);
     expect(after.agents).toHaveLength(401);
+  });
+
+  it("retains a selected project when expanding the last admitted collapsed heading at the cap", () => {
+    const projects = Array.from({ length: 401 }, (_, index) => project(`p${String(index).padStart(3, "0")}`, [agent(`a${index}`)]));
+    const collapsed = overviewGraphModel(projects, undefined, new Set(), null);
+    const target = collapsed.projects.at(-1)!;
+    const selected = target.agents[0]!.id;
+    const expanded = overviewGraphModel(projects, undefined, new Set([target.id]), null);
+    expect(expanded.projects.some((group) => group.id === target.id)).toBe(true);
+    expect(expanded.visible.map((row) => row.id)).toContain(selected);
+    const opened = overviewGraphModel(projects, undefined, new Set([target.id]), null, { focus: "all", includeResting: false, selected });
+    expect(opened.projects.some((group) => group.id === target.id)).toBe(true);
+    expect(opened.visible.map((row) => row.id)).toContain(selected);
+    expect(opened.projects.length + opened.visible.length).toBeLessThanOrEqual(400);
+    expect(opened.agents).toHaveLength(401);
+  });
+
+  it("protects the latest heading expansion beside other expanded projects at the cap", () => {
+    const current = project("p000", [agent("current"), agent("child")]);
+    const others = Array.from({ length: 199 }, (_, index) => project(`p${String(index + 1).padStart(3, "0")}`, [agent(`a${index}`)]));
+    const projects = [current, ...others];
+    const target = graphProjectId(others.at(-1)!);
+    const all = overviewGraphModel(projects, undefined, new Set(), null);
+    const pinned = [all.agents.find((row) => row.agent.pane_id === "current")!.id];
+    const expanded = new Set(projects.slice(0, -1).map(graphProjectId));
+    const before = overviewGraphModel(projects, undefined, expanded, null, { focus: "all", includeResting: false, pinned });
+    expect(before.projects.length + before.visible.length).toBe(400);
+    expanded.add(target);
+    const after = overviewGraphModel(projects, undefined, expanded, null, { focus: "all", includeResting: false, pinned, preferredProject: target });
+    expect(after.projects.some((group) => group.id === target && group.expanded)).toBe(true);
+    expect(after.visible.some((row) => row.projectId === target)).toBe(true);
+    expect(after.visible.some((row) => row.id === pinned[0])).toBe(true);
+    expect(after.projects.length + after.visible.length).toBeLessThanOrEqual(400);
+    expect(after.agents).toHaveLength(201);
   });
 
   it("opens the chosen project, then the recent checkout, without using device display labels as identity", () => {

@@ -6,7 +6,7 @@ const spacing = { betweenLayers: 24, betweenNodes: 24, padding: 24, header: 110,
 const group = (id: string, children: string[] = []): CompoundGroup => ({ id, width: 360, height: 170, children: children.map((node) => ({ id: node, width: 188, height: 184 })), edges: [] });
 
 describe("project compounds", () => {
-  it("places sessions around the project center without overlapping labels or another project", async () => {
+  it("places sessions below the project heading without overlapping labels or another project", async () => {
     const open = group("open", ["root-a", "root-b", "child"]);
     open.edges.push({ from: "root-a", to: "child" });
     const placed = await placeCompoundGraph(new ELK(), [open, group("closed-a"), group("closed-b")], spacing);
@@ -15,7 +15,7 @@ describe("project compounds", () => {
     const box = placed.groups.get("open")!;
     for (const point of placed.nodes.values()) {
       expect(point.x).toBeGreaterThanOrEqual(spacing.padding);
-      expect(point.y).toBeGreaterThanOrEqual(spacing.padding);
+      expect(point.y).toBeGreaterThanOrEqual(spacing.padding + open.height + spacing.betweenNodes);
       expect(point.x + 188).toBeLessThanOrEqual(box.width - spacing.padding);
       expect(point.y + 184).toBeLessThanOrEqual(box.height - spacing.padding);
     }
@@ -32,12 +32,12 @@ describe("project compounds", () => {
     await expect(placeCompoundGraph(new ELK(), [group("too-large", Array.from({ length: 400 }, (_, i) => `p${i}`))], spacing)).rejects.toThrow(/over the layout limit/);
   });
 
-  it.each([11, 48])("keeps all %i session rectangles clear of each other and the project center", async (count) => {
+  it.each([11, 48])("keeps all %i session rectangles clear of each other and the top project heading", async (count) => {
     const input = group("project", Array.from({ length: count }, (_, index) => `session${index}`));
     const placed = await placeCompoundGraph(new ELK(), [input], spacing);
     const box = placed.groups.get(input.id)!;
     const rectangles = [...placed.nodes.values()].map((point) => ({ x: point.x, y: point.y, width: 188, height: 184 }));
-    rectangles.push({ x: (box.width - input.width) / 2, y: (box.height - input.height) / 2, width: input.width, height: input.height });
+    rectangles.push({ x: (box.width - input.width) / 2, y: spacing.padding, width: input.width, height: input.height });
     for (const a of rectangles) for (const b of rectangles) if (a !== b) expect(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y).toBe(true);
   });
 });

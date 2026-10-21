@@ -6,7 +6,7 @@ import type { AgentRow, OverviewGraphMetadata, OverviewGraphParty } from "./snap
 export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null };
 export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; expanded: boolean; roots: number; matches: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null };
 export type GraphFocus = "all" | "turn" | "working" | "results";
-export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; folded?: ReadonlySet<string>; pinned?: readonly string[]; selected?: string | null };
+export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; folded?: ReadonlySet<string>; pinned?: readonly string[]; selected?: string | null; preferredProject?: string | null };
 export type GraphActivity = Exclude<GraphFocus, "all"> | "unknown" | "idle" | "resting";
 export const GRAPH_FOCUS_DEFAULTS: GraphFocusOptions = { focus: "all", includeResting: false };
 
@@ -178,14 +178,15 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     .sort((a, b) => a.id.localeCompare(b.id));
   // Centers share the 400-node budget with their representatives. Counts/list stay uncapped.
   const pinned = new Set(options.pinned ?? []);
-  const priority = [...all].sort((a, b) => Number(b.agents.some((row) => pinned.has(row.id))) - Number(a.agents.some((row) => pinned.has(row.id))) || a.id.localeCompare(b.id));
+  const admissionPriority = new Map(all.map((group) => [group.id, Number(group.id === options.preferredProject) * 8 + Number(group.agents.some((row) => row.id === options.selected)) * 4 + Number(group.agents.some((row) => pinned.has(row.id))) * 2 + Number(group.expanded)]));
+  const priority = [...all].sort((a, b) => admissionPriority.get(b.id)! - admissionPriority.get(a.id)! || a.id.localeCompare(b.id));
   // Admit complete center + access-slot pairs first. A greedy expanded project
   // must not consume the one position another summarized project needs.
   const groups: GraphProject[] = [];
   let minimum = 0;
   for (const group of priority) {
     const protectedCount = group.agents.filter((row) => pinned.has(row.id)).length;
-    const access = Math.min(group.agents.length, protectedCount + 1);
+    const access = group.expanded ? Math.min(group.agents.length, protectedCount + 1) : 0;
     if (minimum + 1 + access > LAYOUT_NODE_LIMIT) break;
     groups.push({ ...group, shown: [], revealSlot: null, revealed: null });
     minimum += 1 + access;
@@ -197,11 +198,11 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     group.roots = group.agents.filter((row) => !projectedParents.has(row.id)).length;
     const protectedRows = group.agents.filter((row) => pinned.has(row.id));
     const ordered = [...protectedRows, ...group.agents.filter((row) => !pinned.has(row.id))];
+    if (!group.expanded) continue;
     const reserved = Math.min(group.agents.length, protectedRows.length + 1);
     // One admission position is already reserved above. An open project needs
     // no reveal slot, while every summary can reveal any of its list rows.
-    if (group.expanded && group.agents.length > room + reserved) group.expanded = false;
-    if (group.expanded || group.agents.length <= 1) {
+    if (group.agents.length <= room + reserved) {
       group.shown = ordered.slice(0, room + reserved);
       room -= group.shown.length - reserved;
     } else {
@@ -211,7 +212,7 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
       group.revealed = group.agents.find((row) => row.id === options.selected && !group.shown.some((shown) => shown.id === row.id))
         ?? protectedRows.find((row) => !group.shown.some((shown) => shown.id === row.id)) ?? null;
     }
-    if (expanded.has(group.id) && !group.expanded) hidden += group.agents.length - group.shown.length;
+    hidden += group.agents.length - group.shown.length - Number(group.revealed !== null);
   }
   groups.sort((a, b) => a.id.localeCompare(b.id));
   const agents = matches.sort((a, b) => PRIORITY[graphActivity(a.agent)] - PRIORITY[graphActivity(b.agent)] || a.id.localeCompare(b.id));
