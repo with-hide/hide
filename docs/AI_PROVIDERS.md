@@ -52,6 +52,8 @@ A confirmed enduring correction remains available as untrusted context with its 
 Reconciliation records each admitted attempt before asking and certifies a document fingerprint only after a usable answer.
 An intent-local failure rotates the correction and lets remaining card verification and suggestion checks continue within the same maintenance quantum; the runtime retains the failure for its normal Project backoff.
 Authentication, account usage and resource-cap refusals still stop provider work.
+Completed check changes and observed failures survive a later admission, local or cancellation stop.
+A Project with an observed maintenance failure leaves its discovered extraction pending for runtime backoff, so a same-pass success cannot clear the failure.
 
 Conflicting quotes must appear in the exact excerpt sent, and direct operator evidence is required to confirm correction authority.
 The call uses the existing analysis admission and router usage limit; `analysis.session_cards` reports Project/session IDs, counts and both input sizes without content.

@@ -222,6 +222,20 @@ pub(crate) enum AnalysisFailure {
     Disabled,
 }
 
+/// Failures owned by one intent may yield to a peer. Account/provider pauses
+/// retain the durable next position until readiness or budget recovers.
+pub(super) fn intent_local_failure(error: &AiError) -> bool {
+    matches!(
+        error,
+        AiError::InvalidOutput(_)
+            | AiError::Rejected(_)
+            | AiError::Timeout
+            | AiError::CompletionUnknown(_)
+            | AiError::Transient(_)
+            | AiError::Internal(_)
+    )
+}
+
 impl Runtime {
     /// Takes what the label reads of `device`'s panes found for Memory:
     /// receipts to record off the lock, and the sessions its live panes hold
@@ -956,6 +970,12 @@ fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcom
         // A failure with no session analyzed (a check's call failed) is
         // reported too: the hold and backoff throttle the next pass, which
         // would otherwise ask again at once.
+        if tally.error.is_some() {
+            // A Project's observed maintenance failure owns this pass's outcome.
+            // Its already-discovered extraction waits for runtime backoff rather
+            // than emitting a later success that clears that failure.
+            pending.retain(|task: &PendingAnalysis| task.project_id != project_id);
+        }
         if tally.analyzing || tally.error.is_some() {
             report(PassReport::Analyzed {
                 project_id: project_id.clone(),
@@ -1098,9 +1118,12 @@ fn run_analysis_turn(
             outcome.read_succeeded(ANALYSIS_FAILED, &task.session);
             (learned, None, true)
         }
-        // The failed intent remains pending, but owns no future turn. The
-        // runtime records the provider failure and applies its existing backoff.
-        Err(AnalysisFailure::Provider(error)) => (0, Some(error), true),
+        // Intent-local failures yield to peers; account/provider pauses keep
+        // their durable position. Both retain unfinished work and runtime backoff.
+        Err(AnalysisFailure::Provider(error)) => {
+            let rotate = intent_local_failure(&error);
+            (0, Some(error), rotate)
+        }
         Err(AnalysisFailure::Deferred(reason)) => {
             *deferred = Some(reason);
             (0, None, false)
@@ -1363,7 +1386,7 @@ fn maintain_cards(
         *maintenance_calls += 1;
         Ok(())
     };
-    match super::memory_verify::reconcile_corrections(
+    let reconciled = super::memory_verify::reconcile_corrections(
         store,
         sessions_node,
         router,
@@ -1372,23 +1395,23 @@ fn maintain_cards(
         root,
         &input.cancel,
         &mut admit,
-    ) {
-        Ok(checked) => {
-            tally.checked |= checked.changed > 0;
-            tally.answered |= checked.answered > 0;
-            outcome.wants_usage |= checked.answered > 0;
-            tally.error = checked.error;
-        }
-        Err(AnalysisFailure::Provider(error)) => {
+    );
+    tally.checked |= reconciled.checked.changed > 0;
+    tally.answered |= reconciled.checked.answered > 0;
+    outcome.wants_usage |= reconciled.checked.answered > 0;
+    tally.error = reconciled.error;
+    match reconciled.stopped {
+        None => {}
+        Some(AnalysisFailure::Provider(error)) => {
             tally.error = Some(error);
             return;
         }
-        Err(AnalysisFailure::Deferred(reason)) => {
+        Some(AnalysisFailure::Deferred(reason)) => {
             tally.waiting = visible_deferral(reason);
             return;
         }
-        Err(AnalysisFailure::Cancelled | AnalysisFailure::Disabled) => return,
-        Err(AnalysisFailure::Local(message)) => {
+        Some(AnalysisFailure::Cancelled | AnalysisFailure::Disabled) => return,
+        Some(AnalysisFailure::Local(message)) => {
             crate::diagnostic!(
                 json!({"component":"memory","kind":"correction.reconcile_failed","project_id":project_id,"message":message})
             );
@@ -4235,6 +4258,127 @@ mod tests {
         );
     }
 
+    fn confirm_fixture_correction(fixture: &Fixture, number: u64) {
+        std::fs::write(
+            fixture.root.join("AGENTS.md"),
+            "Keep the old hook budget.\n",
+        )
+        .unwrap();
+        fixture
+            .store()
+            .set_document_comparison(
+                &fixture.project_id,
+                number,
+                1,
+                &hide_memory::DocumentComparison {
+                    authority: hide_memory::DocumentAuthority::CardNewer,
+                    document: "AGENTS.md".into(),
+                    document_text: "Keep the old hook budget.".into(),
+                    document_at_unix_ms: None,
+                    operator_text: "Keep the hook under 100 ms".into(),
+                    operator_at_unix_ms: Some(20),
+                    source_session: Some("seed".into()),
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn correction_failure_survives_the_next_maintenance_admission_stop() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        confirm_fixture_correction(&fixture, 1);
+        confirm_fixture_correction(&fixture, 2);
+        fixture
+            .backend
+            .answers
+            .lock()
+            .unwrap()
+            .push(json!({"results":[]}));
+        let input = PassInput {
+            nodes: vec![],
+            unreached: vec![],
+            database: fixture.database.clone(),
+            router: Some(AiRouter::new(
+                vec![fixture.backend.clone()],
+                RouterConfig {
+                    priority: vec![ProviderId::CLAUDE],
+                    max_invalid_output_attempts: 1,
+                    ..RouterConfig::default()
+                },
+                Arc::new(NoopLogSink),
+            )),
+            live: BTreeSet::new(),
+            closed: BTreeSet::new(),
+            held: HashSet::new(),
+            home: None,
+            delegated: HashSet::new(),
+            language: hide_ai::OutputLanguage::English,
+            cancel: CancelToken::new(),
+            failed_reads: Default::default(),
+        };
+        let mut store = fixture.store();
+        let root = fixture.root.to_string_lossy();
+        let mut facts = CheckoutFacts::new(fixture.node.as_ref(), &root);
+        let mut tally = ProjectTally::default();
+        let mut outcome = PassOutcome::default();
+        let mut calls = 7;
+        maintain_cards(
+            &input,
+            fixture.node.as_ref(),
+            None,
+            &mut store,
+            &mut facts,
+            &fixture.project_id,
+            &fixture.root.to_string_lossy(),
+            &mut None,
+            &mut tally,
+            &mut outcome,
+            &mut calls,
+            &mut |_| {},
+        );
+        assert_eq!(calls, 8);
+        assert!(
+            matches!(tally.error, Some(AiError::InvalidOutput(_))),
+            "the failed eighth attempt must still reach runtime backoff when the ninth is held"
+        );
+        assert!(tally.answered && outcome.wants_usage);
+    }
+
+    #[test]
+    fn correction_failure_keeps_same_pass_extraction_pending_for_backoff() {
+        let fixture = Fixture::new();
+        confirm_fixture_correction(&fixture, 1);
+        fixture.answer(&[]);
+        fixture
+            .backend
+            .answers
+            .lock()
+            .unwrap()
+            .extend([json!({"results":[]}), json!({"results":[]})]);
+        let reports = fixture.pass(false, true);
+        assert_eq!(
+            reports.last(),
+            Some(&"failed"),
+            "a successful extraction must not erase a correction failure in the same pass"
+        );
+        let store = fixture.store();
+        assert!(
+            store
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION
+                )
+                .unwrap()
+                .is_none(),
+            "failed Project waits for its runtime backoff before extraction"
+        );
+        assert_eq!(store.analysis_order().unwrap()[0].0, fixture.project_id);
+    }
+
     #[test]
     fn failed_correction_reconciliation_records_the_attempt_and_continues_card_checks() {
         let fixture = Fixture::new();
@@ -4418,6 +4562,137 @@ mod tests {
         );
         assert_eq!(store.list_memories(&peer.project_id).unwrap().len(), 1);
         assert_eq!(full.calls(), 2);
+    }
+
+    #[test]
+    fn router_admission_pause_preserves_the_durable_turn() {
+        for pause in 0..3 {
+            let full = Fixture::new();
+            let peer = Fixture::new();
+            let mut store = full.store();
+            store
+                .ensure_project(&peer.project_id, &peer.root, crate::node::TEST_NODE)
+                .unwrap();
+            store.set_enabled(&peer.project_id, true, true).unwrap();
+            let peer_node = NodeId::parse("node-peer").unwrap();
+            let limits = Arc::new(hide_ai::UsageLimits::new());
+            limits.set(
+                hide_ai::UsageLimit::Percent(90),
+                &std::collections::BTreeMap::from([(
+                    ProviderId::CLAUDE,
+                    hide_ai::UsageReading {
+                        used_percent: 93.0,
+                        resets_at_unix_ms: Some(now_ms() + 3_600_000),
+                    },
+                )]),
+            );
+            let input = PassInput {
+                nodes: vec![
+                    (crate::node::test_node(), full.node.clone()),
+                    (peer_node.clone(), peer.node.clone()),
+                ],
+                unreached: vec![],
+                database: full.database.clone(),
+                router: Some(AiRouter::new(
+                    if pause == 1 {
+                        vec![]
+                    } else {
+                        vec![full.backend.clone()]
+                    },
+                    RouterConfig {
+                        priority: vec![ProviderId::CLAUDE],
+                        max_transient_attempts: 1,
+                        max_invalid_output_attempts: 1,
+                        max_per_minute: if pause == 0 { 0 } else { 30 },
+                        usage_gate: (pause == 2).then_some(limits),
+                        ..RouterConfig::default()
+                    },
+                    Arc::new(NoopLogSink),
+                )),
+                live: BTreeSet::new(),
+                closed: BTreeSet::new(),
+                held: HashSet::new(),
+                home: None,
+                delegated: HashSet::new(),
+                language: hide_ai::OutputLanguage::English,
+                cancel: CancelToken::new(),
+                failed_reads: Default::default(),
+            };
+            let tasks = || {
+                [&full, &peer]
+                    .into_iter()
+                    .zip([crate::node::test_node(), peer_node.clone()])
+                    .map(|(fixture, node)| {
+                        let identity = project_identity(
+                            fixture.node.as_ref(),
+                            &crate::node::test_node(),
+                            &fixture.root.to_string_lossy(),
+                        )
+                        .unwrap();
+                        let session = project_sessions(
+                            fixture.node.as_ref(),
+                            &identity,
+                            SESSION_CALL_TIMEOUT,
+                        )
+                        .unwrap()
+                        .remove(0);
+                        let stat =
+                            session_stat(fixture.node.as_ref(), &session, SESSION_CALL_TIMEOUT)
+                                .unwrap();
+                        PendingAnalysis {
+                            node,
+                            project_id: fixture.project_id.clone(),
+                            root: fixture.root.to_string_lossy().into_owned(),
+                            session,
+                            stat,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+            store
+                .enqueue_analysis(&full.project_id, "claude", SESSION, 1)
+                .unwrap();
+            store
+                .enqueue_analysis(&peer.project_id, "claude", SESSION, 2)
+                .unwrap();
+            full.backend
+                .answers
+                .lock()
+                .unwrap()
+                .push(json!({"invalid":true}));
+            let previous_order = store.analysis_order().unwrap();
+            let mut failure = None;
+            let mut deferred = None;
+            run_analysis_turn(
+                &input,
+                &mut store,
+                tasks(),
+                &mut deferred,
+                &mut PassOutcome::default(),
+                &mut |report| {
+                    if let PassReport::Analyzed { error, .. } = report {
+                        failure = error;
+                    }
+                },
+            );
+            assert!(
+                deferred.is_none(),
+                "an intent failure does not pause other Projects"
+            );
+            assert_eq!(full.calls(), 0);
+            assert!(
+                matches!(
+                    (pause, failure),
+                    (0, Some(AiError::OverBudget { .. }))
+                        | (1, Some(AiError::NoProvider(_)))
+                        | (2, Some(AiError::UsageLimited { .. }))
+                ),
+                "the fixture must reach the intended router pause"
+            );
+            drop(store);
+            let store = full.store();
+            assert_eq!(store.analysis_order().unwrap(), previous_order);
+        }
     }
 
     #[test]

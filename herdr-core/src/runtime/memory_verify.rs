@@ -33,8 +33,14 @@ pub(super) struct Checked {
     pub(super) changed: usize,
     /// Calls the provider answered, usably or not.
     pub(super) answered: usize,
-    /// An intent-local failure, retained for the runtime's existing backoff.
+}
+
+/// Completed reconciliation work survives every later stop in the same pass.
+#[derive(Default)]
+pub(super) struct Reconciled {
+    pub(super) checked: Checked,
     pub(super) error: Option<AiError>,
+    pub(super) stopped: Option<AnalysisFailure>,
 }
 
 type Admit<'a> = &'a mut dyn FnMut(&MemoryStore) -> Result<(), AnalysisFailure>;
@@ -571,138 +577,134 @@ pub(super) fn reconcile_corrections(
     root: &str,
     cancel: &CancelToken,
     admit: Admit<'_>,
-) -> Result<Checked, AnalysisFailure> {
+) -> Reconciled {
     let local = |error: hide_memory::MemoryError| AnalysisFailure::Local(error.to_string());
-    let mut checked = Checked::default();
-    for hide_memory::CorrectionCheck {
-        number,
-        revision,
-        comparison,
-        fingerprint: previous,
-    } in store.correction_checks(project, 4).map_err(local)?
-    {
-        if cancel.is_cancelled() {
-            return Err(AnalysisFailure::Cancelled);
-        }
-        let Some(document) = source(node, root, &comparison.document) else {
-            store
-                .record_correction_check(project, number, revision, "unavailable", now_ms())
-                .map_err(local)?;
-            continue;
-        };
-        let fingerprint = digest(&[
-            &document.text,
-            if document.truncated {
-                "truncated"
-            } else {
-                "whole"
-            },
-        ]);
-        if previous.as_deref() == Some(&fingerprint) {
-            store
-                .record_correction_check(project, number, revision, &fingerprint, now_ms())
-                .map_err(local)?;
-            continue;
-        }
-        let Some(item) = store.item_by_number(project, number).map_err(local)? else {
-            continue;
-        };
-        let words = query_words(&[&item.title, &item.body]);
-        let excerpt = relevant_excerpt(
-            &document.path,
-            &document.text,
-            document.truncated,
-            &words,
-            DOCUMENT_EXCERPT_BYTES,
-        );
-        let claim =
-            json!({"claim":item.body,"human_evidence":comparison.operator_text}).to_string();
-        let Some(request) = hide_memory::creation_docs_request(
-            digest(&["reconcile", &item.id, &revision.to_string(), &fingerprint]),
-            project,
-            &[(0, claim, excerpt)],
-            hide_memory::ANALYSIS_INPUT_LIMIT_BYTES,
-            language,
-        ) else {
-            store
-                .record_correction_check(project, number, revision, &fingerprint, now_ms())
-                .map_err(local)?;
-            continue;
-        };
-        admit(store)?;
-        // A failed attempt rotates this card without certifying an unseen
-        // document fingerprint. It remains eligible on the next retry.
-        store
-            .record_correction_check(
-                project,
-                number,
-                revision,
-                previous.as_deref().unwrap_or(""),
-                now_ms(),
-            )
-            .map_err(local)?;
-        let verdict = (|| {
-            let answer = router.execute(&request, cancel).map_err(provider_failure)?;
-            let results = answer.value["results"]
-                .as_array()
-                .filter(|rows| rows.len() == 1)
-                .ok_or_else(|| {
-                    AnalysisFailure::Provider(AiError::InvalidOutput(
-                        "correction_reconcile_shape".into(),
-                    ))
-                })?;
-            if results[0]["candidate"] != 0
-                || !matches!(
-                    results[0]["verdict"].as_str(),
-                    Some("same" | "differs" | "correction" | "unrelated" | "exception")
-                )
-            {
-                return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
-                    "correction_reconcile_verdict".into(),
-                )));
+    let mut result = Reconciled::default();
+    let stopped = (|| {
+        for hide_memory::CorrectionCheck {
+            number,
+            revision,
+            comparison,
+            fingerprint: previous,
+        } in store.correction_checks(project, 4).map_err(local)?
+        {
+            if cancel.is_cancelled() {
+                return Err(AnalysisFailure::Cancelled);
             }
-            Ok(results[0]["verdict"]
-                .as_str()
-                .expect("validated verdict")
-                .to_owned())
-        })();
-        let verdict = match verdict {
-            Ok(verdict) => verdict,
-            Err(AnalysisFailure::Provider(error))
-                if matches!(
-                    error,
-                    AiError::InvalidOutput(_)
-                        | AiError::Rejected(_)
-                        | AiError::Timeout
-                        | AiError::CompletionUnknown(_)
-                        | AiError::Transient(_)
-                        | AiError::Internal(_)
-                ) =>
-            {
-                crate::diagnostic!(
-                    json!({"component":"memory","kind":"correction.reconcile_failed","project_id":project,"card":number,"error_class":error.class()})
-                );
-                checked.answered += 1;
-                checked.error = Some(error);
+            let Some(document) = source(node, root, &comparison.document) else {
+                store
+                    .record_correction_check(project, number, revision, "unavailable", now_ms())
+                    .map_err(local)?;
+                continue;
+            };
+            let fingerprint = digest(&[
+                &document.text,
+                if document.truncated {
+                    "truncated"
+                } else {
+                    "whole"
+                },
+            ]);
+            if previous.as_deref() == Some(&fingerprint) {
+                store
+                    .record_correction_check(project, number, revision, &fingerprint, now_ms())
+                    .map_err(local)?;
                 continue;
             }
-            Err(error) => return Err(error),
-        };
-        checked.answered += 1;
-        if verdict == "same"
-            && store
-                .item_by_number(project, number)
-                .map_err(local)?
-                .is_some_and(|current| current.revision == revision)
-        {
-            point_at(store, project, &item, &comparison.document).map_err(local)?;
-            checked.changed += 1;
+            let Some(item) = store.item_by_number(project, number).map_err(local)? else {
+                continue;
+            };
+            let words = query_words(&[&item.title, &item.body]);
+            let excerpt = relevant_excerpt(
+                &document.path,
+                &document.text,
+                document.truncated,
+                &words,
+                DOCUMENT_EXCERPT_BYTES,
+            );
+            let claim =
+                json!({"claim":item.body,"human_evidence":comparison.operator_text}).to_string();
+            let Some(request) = hide_memory::creation_docs_request(
+                digest(&["reconcile", &item.id, &revision.to_string(), &fingerprint]),
+                project,
+                &[(0, claim, excerpt)],
+                hide_memory::ANALYSIS_INPUT_LIMIT_BYTES,
+                language,
+            ) else {
+                store
+                    .record_correction_check(project, number, revision, &fingerprint, now_ms())
+                    .map_err(local)?;
+                continue;
+            };
+            admit(store)?;
+            // A failed attempt rotates this card without certifying an unseen
+            // document fingerprint. It remains eligible on the next retry.
+            store
+                .record_correction_check(
+                    project,
+                    number,
+                    revision,
+                    previous.as_deref().unwrap_or(""),
+                    now_ms(),
+                )
+                .map_err(local)?;
+            let verdict = (|| {
+                let answer = router.execute(&request, cancel).map_err(provider_failure)?;
+                let results = answer.value["results"]
+                    .as_array()
+                    .filter(|rows| rows.len() == 1)
+                    .ok_or_else(|| {
+                        AnalysisFailure::Provider(AiError::InvalidOutput(
+                            "correction_reconcile_shape".into(),
+                        ))
+                    })?;
+                if results[0]["candidate"] != 0
+                    || !matches!(
+                        results[0]["verdict"].as_str(),
+                        Some("same" | "differs" | "correction" | "unrelated" | "exception")
+                    )
+                {
+                    return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
+                        "correction_reconcile_verdict".into(),
+                    )));
+                }
+                Ok(results[0]["verdict"]
+                    .as_str()
+                    .expect("validated verdict")
+                    .to_owned())
+            })();
+            let verdict = match verdict {
+                Ok(verdict) => verdict,
+                Err(AnalysisFailure::Provider(error))
+                    if super::memory_analysis::intent_local_failure(&error) =>
+                {
+                    crate::diagnostic!(
+                        json!({"component":"memory","kind":"correction.reconcile_failed","project_id":project,"card":number,"error_class":error.class()})
+                    );
+                    result.checked.answered += 1;
+                    result.error = Some(error);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            result.checked.answered += 1;
+            if verdict == "same"
+                && store
+                    .item_by_number(project, number)
+                    .map_err(local)?
+                    .is_some_and(|current| current.revision == revision)
+            {
+                point_at(store, project, &item, &comparison.document).map_err(local)?;
+                result.checked.changed += 1;
+            }
+            store
+                .record_correction_check(project, number, revision, &fingerprint, now_ms())
+                .map_err(local)?;
         }
-        store
-            .record_correction_check(project, number, revision, &fingerprint, now_ms())
-            .map_err(local)?;
-    }
-    Ok(checked)
+        Ok(())
+    })();
+    result.stopped = stopped.err();
+    result
 }
 
 /// The card becomes a line pointing at the document that already says it:

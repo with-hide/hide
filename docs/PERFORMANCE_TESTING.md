@@ -852,7 +852,8 @@ That query can scan more existing rows than the matches it returns; its cost dep
 Checking start, completion and an actionable deferral publish only a changed core state; each of the existing four re-verifications and three promotion checks per Project can request one coalesced open-Memory refresh as its answer lands.
 Cancellation and worker completion clear the active card, while budget holds clear when work resumes or no check is due, and provider holds also clear when settings change.
 The daily cap counts a call when it is admitted, so a failing provider spends it too; that is the runaway bound, and the provider's backoff keeps failures to a few dozen a day.
-A failed session keeps its unfinished cursor but rotates its durable queue turn; the existing Project failure record and backoff throttle retry without keeping other Projects behind that session.
+An intent-local session failure keeps its unfinished cursor but rotates its durable queue turn; the existing Project failure record and backoff throttle retry without keeping other Projects behind that session.
+Account/provider readiness, usage and resource-cap pauses preserve the durable next position; intent-local failures yield to peers.
 Hide AI off still permits receipt and evidence reads, but creates no analysis queue entry and requests no usage refresh for analysis.
 A reader-rejected native record is diagnosed and skipped while valid later records and the source checkpoint continue.
 Normalized event text is capped at 256 KiB before chunk allocation; an event past it records its Project/session/offset, measured bytes and limit without content, and is skipped rather than retried forever.

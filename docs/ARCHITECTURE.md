@@ -290,6 +290,8 @@ The existing maintenance worker checks at most four confirmed corrections a Proj
 It fingerprints the bounded owning document and, after a usable answer, asks again only when its contents change; when the correction is reflected, including after a terminal-agent edit, the existing promotion pointer records the document without spawning another promotion.
 A failed attempt records its time without certifying a new fingerprint; an intent-local failure rotates the card and continues other maintenance stages, while account-level refusals stop provider work.
 Missing documents retain the correction and rotate the check position; no new poller or automatic document writer exists.
+Completed checks, observed intent failures and a later stopping reason are retained separately.
+A maintenance failure leaves that Project's discovered extraction pending until its existing runtime backoff, while peer Projects remain eligible.
 Preferences stay injectable but never become repository pointers or promotion candidates.
 An Undo of any of these verdicts restores the old text as verified and drops the evidence rows of that revision, so the evidence walk does not unverify it again at once.
 An `in_docs` answer naming a file the request did not carry is refused.
@@ -306,7 +308,7 @@ One meaningful human exchange is eligible for analysis; instructions from a dele
 Each extraction group admits at most eight new cards ranked by significance and confidence, so earlier groups cannot exhaust a conversation's lifetime admission.
 The worker stores completed group progress separately from its source cursor and handles at most four groups from one session in a pass.
 A persisted machine-wide queue alternates FIFO and recent opportunities across Projects; every stable eligible member receives an opportunity within twice the number of pending sessions, even with new arrivals.
-A spending deferral preserves the queue position; a failed admitted request rotates its session and retains unfinished work for the existing Project backoff.
+A spending or account/provider-readiness pause preserves the queue position; an intent-local failure rotates its session and retains unfinished work for the existing Project backoff.
 At most eight maintenance calls and eight extraction/document-comparison calls are admitted per pass across all Projects, within the unchanged daily and maintenance reservations.
 Validated redacted extraction proposals and prepared document verdicts survive local retries.
 At the Project card cap, a batch rejects only new growth, commits accepted merges and corrections, reports its rejection count and advances its source cursor.
