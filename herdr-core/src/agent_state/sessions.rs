@@ -26,8 +26,15 @@ pub struct Resolution {
     pub activity: String,
 }
 
+/// A merged pull request settles the session only once the row is at rest
+/// with nothing left to see: an unread finish stays under 읽을 것 and a wait
+/// under 대기, rather than resting with a mark that says otherwise.
 pub(crate) fn auto_resolvable(agent: &SidebarAgentSnapshot, input_after: Option<u64>) -> bool {
-    if agent.activity != "stopped" || agent.blocked || agent.demand != "none" {
+    if agent.activity != "stopped"
+        || agent.blocked
+        || agent.demand != "none"
+        || agent.group != "seen"
+    {
         return false;
     }
     let mut assigned = agent

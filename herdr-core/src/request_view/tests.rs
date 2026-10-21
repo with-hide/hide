@@ -437,6 +437,35 @@ fn automatic_resolution_waits_for_every_assigned_pr_and_newer_settlement_after_i
 }
 
 #[test]
+fn a_merged_pull_request_resolves_an_unread_finish_only_once_it_is_read() {
+    use crate::agent_state::sessions::auto_resolvable;
+    let mut agent = rows(&[("maker", "done")]);
+    agent[0].row_facts.as_mut().unwrap().created_prs = vec![("acme/app".into(), 1, 1)];
+    let mut merged = pull_request(
+        1,
+        "one",
+        PullRequestBadge::Merged,
+        PullRequestChecks::Passing,
+    );
+    merged.merged_at_unix_ms = Some(ASKED + 10);
+    run(&mut agent, &[("maker", "main")], &github(vec![merged]));
+    assert!(agent[0].unread, "Herdr's done is an unread finish");
+    assert!(
+        !auto_resolvable(&agent[0], None),
+        "an unread finish stays under 읽을 것 though its pull request merged"
+    );
+    agent[0].unread = false;
+    crate::agent_state::rederive(&mut agent[0]);
+    assert!(auto_resolvable(&agent[0], None));
+    agent[0].wait = Some(crate::model::AgentWait::Background);
+    crate::agent_state::rederive(&mut agent[0]);
+    assert!(
+        !auto_resolvable(&agent[0], None),
+        "a row still waiting on its background task stays under 대기"
+    );
+}
+
+#[test]
 fn a_session_that_made_pull_requests_on_main_shows_the_one_to_look_at_first() {
     let mut rows = rows(&[("main-agent", "idle")]);
     rows[0].row_facts.as_mut().unwrap().created_prs = vec![

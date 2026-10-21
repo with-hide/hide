@@ -38,6 +38,20 @@ fn session_resolution_survives_restart_and_new_input_restores_the_live_pane() {
 }
 
 #[test]
+fn resolving_an_unread_finish_reads_it_so_it_rests_without_its_dot() {
+    let mut runtime = with_session();
+    let _dirs = hold_dirs(&mut runtime);
+    let row = &runtime.snapshot.navigator.agents[0];
+    assert!(row.unread, "Herdr's done is an unread finish");
+    assert_eq!(row.group, "done");
+    assert!(runtime.resolve_session("session", ResolveSource::Operator));
+    let row = &runtime.snapshot.navigator.agents[0];
+    assert!(row.resolved.is_some());
+    assert!(!row.unread);
+    assert_eq!(row.mark, crate::agent_state::RowMark::Quiet);
+}
+
+#[test]
 fn session_resolution_save_failure_keeps_the_row_visible() {
     let mut runtime = with_session();
     let occupied = runtime.state_path.with_file_name("occupied");

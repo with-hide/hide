@@ -966,7 +966,8 @@ A Hide AI row for a home is a task only while it is in Needs You, where it draws
 Resolve records `resolved_sessions` in core UI state and publishes the hidden row only after the existing coalesced writer acknowledges that exact save.
 Failure keeps it visible with the existing actionable save error; input, activity, session replacement or pane closure invalidates a pending acknowledgement.
 New operator input, a received letter or renewed working activity restores the session.
-Automatic resolution requires a stopped agent, no demand and every assigned PR merged or closed; settlements before restored input cannot resolve it again.
+Automatic resolution requires a stopped agent whose row is Seen (nothing unread and nothing it waits on), no demand and every assigned PR merged or closed; settlements before restored input cannot resolve it again.
+An unread finish therefore stays under the 태스크 list's 읽을 것 and a wait under 대기 though the pull request merged, and resolves once it is read and nothing is left to wait on; an operator's Resolve reads the row as well, so no row rests with a mark that says otherwise.
 A resolved task rests, folded under the 태스크 list's `쉬는 중`; resolutions older than 24 hours (`RESOLVED_WINDOW_MS`) leave the Resolved group and stay among the resting tasks.
 The existing runtime tick advances that window without adding a timer or per-snapshot clock read.
 Closing a pane prunes its resolution and input record.
