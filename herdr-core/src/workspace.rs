@@ -284,39 +284,36 @@ pub struct PathIndex {
     notes: BTreeMap<String, Result<BTreeMap<String, BranchNote>, String>>,
     /// Each repository's remotes, by main root (`PathFacts::remotes`).
     remotes: BTreeMap<String, Vec<String>>,
+    /// The asked paths whose Project the node could not read, with why.
+    unread: BTreeMap<String, String>,
 }
 
 /// How long the core's own node may take to read the paths of one rebuild.
 const PATH_FACTS_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The paths whose Project the node could not read, with the reason, as
-/// last logged: every catalog build reads the same answer, and only a
-/// change is logged. Past the cap a new one is logged on every build.
-static UNREAD_PROJECTS_LOGGED: std::sync::Mutex<BTreeMap<String, String>> =
-    std::sync::Mutex::new(BTreeMap::new());
-const UNREAD_PROJECTS_LOGGED_LIMIT: usize = 512;
+/// The Projects one node could not read, as its path reader last logged
+/// them: that reader asks the same paths again and again, so only a change
+/// reaches the log. It keeps only the latest answer's, so it is as large as
+/// one request.
+#[derive(Debug, Default)]
+pub(crate) struct UnreadProjects(BTreeMap<String, String>);
 
-fn log_unread_projects(facts: &PathFacts) {
-    let Ok(mut logged) = UNREAD_PROJECTS_LOGGED.lock() else {
-        return;
-    };
-    for (path, fact) in &facts.paths {
-        let Some(reason) = fact.project_unread.as_ref() else {
-            logged.remove(path);
-            continue;
-        };
-        if logged.get(path) == Some(reason) {
-            continue;
+impl UnreadProjects {
+    /// Logs each path of `index` whose Project became unreadable, or
+    /// unreadable for another reason, and forgets every path `index` does
+    /// not carry as unread.
+    pub(crate) fn record(&mut self, index: &PathIndex) {
+        for (path, reason) in &index.unread {
+            if self.0.get(path) != Some(reason) {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "workspace_catalog",
+                    "kind": "project_facts.read_failed",
+                    "path": path,
+                    "message": reason,
+                }));
+            }
         }
-        crate::diagnostic!(serde_json::json!({
-            "component": "workspace_catalog",
-            "kind": "project_facts.read_failed",
-            "path": path,
-            "message": reason,
-        }));
-        if logged.contains_key(path) || logged.len() < UNREAD_PROJECTS_LOGGED_LIMIT {
-            logged.insert(path.clone(), reason.clone());
-        }
+        self.0.clone_from(&index.unread);
     }
 }
 
@@ -326,10 +323,15 @@ impl PathIndex {
         paths: BTreeMap::new(),
         notes: BTreeMap::new(),
         remotes: BTreeMap::new(),
+        unread: BTreeMap::new(),
     };
 
     pub fn new(facts: PathFacts) -> Self {
-        log_unread_projects(&facts);
+        let unread = facts
+            .paths
+            .iter()
+            .filter_map(|(path, fact)| Some((path.clone(), fact.project_unread.clone()?)))
+            .collect();
         let mut paths = facts.paths;
         let aliases = paths
             .values()
@@ -377,6 +379,7 @@ impl PathIndex {
             paths,
             notes: facts.repositories,
             remotes: facts.remotes,
+            unread,
         }
     }
 
@@ -1139,50 +1142,64 @@ mod tests {
 
     #[test]
     fn a_project_its_node_could_not_read_reaches_the_cores_log_once_per_change() {
-        // Paths of this test alone: the record of what was logged is the
-        // process's.
-        let fact = |unread: Option<&str>| PathFact {
-            comparison: "/unread-once".into(),
-            exists: true,
-            project: None,
-            project_unread: unread.map(str::to_owned),
-            repository: None,
-        };
-        let facts = |unread: Option<&str>| PathFacts {
-            paths: BTreeMap::from([
-                ("/unread-once".to_owned(), fact(unread)),
-                ("/unread-once-fine".to_owned(), fact(None)),
-            ]),
+        let facts = |paths: &[(&str, Option<&str>)]| PathFacts {
+            paths: paths
+                .iter()
+                .map(|(path, unread)| {
+                    let fact = PathFact {
+                        comparison: (*path).into(),
+                        exists: true,
+                        project: None,
+                        project_unread: unread.map(str::to_owned),
+                        repository: None,
+                    };
+                    ((*path).to_owned(), fact)
+                })
+                .collect(),
             ..PathFacts::default()
         };
-        let logged = |unread: Option<&str>| {
-            let (_, records) = crate::diagnostics::capture(|| PathIndex::new(facts(unread)));
+        let logged = |log: &mut UnreadProjects, paths: &[(&str, Option<&str>)]| {
+            let index = PathIndex::new(facts(paths));
+            let (_, records) = crate::diagnostics::capture(|| log.record(&index));
             records
                 .iter()
                 .filter(|record| record["kind"] == "project_facts.read_failed")
                 .map(|record| (record["path"].clone(), record["message"].clone()))
                 .collect::<Vec<_>>()
         };
-        let said =
-            |reason: &str| vec![(serde_json::json!("/unread-once"), serde_json::json!(reason))];
+        let said = |reason: &str| vec![(serde_json::json!("/p"), serde_json::json!(reason))];
+        let (mut one, mut other) = (UnreadProjects::default(), UnreadProjects::default());
         assert_eq!(
-            logged(Some("project_path_not_utf8")),
+            logged(
+                &mut one,
+                &[("/p", Some("project_path_not_utf8")), ("/q", None)]
+            ),
             said("project_path_not_utf8")
         );
         assert_eq!(
-            logged(Some("project_path_not_utf8")),
+            logged(&mut one, &[("/p", Some("project_path_not_utf8"))]),
             [],
             "the same answer again"
         );
         assert_eq!(
-            logged(Some("project_git_link_invalid")),
+            logged(&mut other, &[("/p", None)]),
+            [],
+            "another node reads its own /p"
+        );
+        assert_eq!(
+            logged(&mut one, &[("/p", Some("project_path_not_utf8"))]),
+            [],
+            "and leaves this node's record as it was"
+        );
+        assert_eq!(
+            logged(&mut one, &[("/p", Some("project_git_link_invalid"))]),
             said("project_git_link_invalid")
         );
-        assert_eq!(logged(None), []);
+        assert_eq!(logged(&mut one, &[("/q", None)]), []);
         assert_eq!(
-            logged(Some("project_git_link_invalid")),
+            logged(&mut one, &[("/p", Some("project_git_link_invalid"))]),
             said("project_git_link_invalid"),
-            "read once and then not again is a change"
+            "a path no longer asked is forgotten, so asking it again is a change"
         );
     }
 
