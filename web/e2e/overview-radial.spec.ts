@@ -1,4 +1,4 @@
-// Approved radial-map B4-B11/B17/B24 and PRD overview-main-map B1, B13, B14, B17:
+// Approved radial-map B4-B11/B17/B24 and PRD overview-main-map B1, B13, B14, B17, B22:
 // the private runtime supplies identity and topology; camera, drags and hiding
 // stay local to the mounted graph and never move another circle.
 import { expect, test, type Locator, type Page } from "@playwright/test";
@@ -41,8 +41,8 @@ test("@platform Overview restores its exact current session and keeps map moveme
     // B1: the operator sits at the centre and the project's name is drawn.
     await expect(graph.locator(".og-operator")).toHaveCount(1);
     await expect(graph.locator("[data-graph-project]")).toHaveCount(1);
-    // Team outlines follow their members; every other node keeps its own place.
-    const positions = () => graph.locator(".react-flow__node").evaluateAll(nodes => nodes.filter(node => !node.getAttribute("data-id")?.startsWith("team:")).map(node => [node.getAttribute("data-id"), (node as HTMLElement).style.transform]));
+    // A project's band follows its sessions, as a team's outline does; each session keeps its own place.
+    const positions = () => graph.locator(".react-flow__node-session").evaluateAll(nodes => nodes.map(node => [node.getAttribute("data-id"), (node as HTMLElement).style.transform]));
     const before = await positions();
     // B13/B14: hiding the project removes its sessions; showing it again restores the same places.
     const row = graph.locator("[data-graph-project-row]").first();
@@ -67,16 +67,14 @@ test("@platform Overview restores its exact current session and keeps map moveme
     await graph.getByRole("button", { name: "Reset layout", exact: true }).click();
     await expect.poll(positions).toEqual(before);
     // React Flow renders absolute transforms even though our node data is relative.
-    // Dragging a project's name moves exactly that name and its sessions.
+    // B22: dragging a project's name moves its band and every one of its sessions.
     const group = graph.locator(".react-flow__node-project").first();
-    const projectId = await group.getAttribute("data-id");
-    const members = await graph.locator(".react-flow__node-session").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-id")));
-    expect(members).toHaveLength(2);
+    expect(before).toHaveLength(2);
     const originalGroup = await group.getAttribute("style");
-    await drag(page, group.locator(".og-project-drag"), 40, 24);
+    await drag(page, group.locator(".og-project-name"), 40, 24);
     await expect.poll(() => group.getAttribute("style")).not.toBe(originalGroup);
     const afterGroup = await positions();
-    expect(afterGroup.filter((row, i) => JSON.stringify(row) !== JSON.stringify(before[i])).map(row => row[0]).sort()).toEqual([projectId, ...members].sort());
+    expect(afterGroup.filter((row, i) => JSON.stringify(row) !== JSON.stringify(before[i]))).toHaveLength(2);
     await graph.getByRole("button", { name: "Reset layout", exact: true }).click();
     await expect.poll(positions).toEqual(before);
   } finally { daemon?.stop(); herdr.stop(); }

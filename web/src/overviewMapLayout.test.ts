@@ -6,9 +6,8 @@ import { placeOverviewMap, type MapInput, type MapSession } from "./overviewMapL
 
 const root = { width: 140, height: 112, orb: 44 };
 const child = { width: 120, height: 92, orb: 28 };
-const label = { width: 140, height: 24 };
 const session = (id: string, projectId: string, parent: string | null = null): MapSession => ({ id, projectId, parent, box: parent ? child : root });
-const input = (sessions: MapSession[], projects = [...new Set(sessions.map((row) => row.projectId))]): MapInput => ({ projects: projects.map((id) => ({ id, label })), sessions, operator: 44, gap: 12, projectGap: 40 });
+const input = (sessions: MapSession[], projects = [...new Set(sessions.map((row) => row.projectId))]): MapInput => ({ projects: projects.map((id) => ({ id })), sessions, operator: 44, gap: 12, projectGap: 40 });
 
 function rectangles(map: ReturnType<typeof placeOverviewMap>, sessions: readonly MapSession[]) {
   const boxes = sessions.map((row) => { const point = map.nodes.get(row.id)!; return { id: row.id, left: point.x - row.box.width / 2, right: point.x + row.box.width / 2, top: point.y - row.box.orb / 2, bottom: point.y - row.box.orb / 2 + row.box.height }; });
@@ -34,16 +33,10 @@ describe("operator-centered map", () => {
     expect(distance(map.nodes.get("a1")!)).toBeGreaterThan(ring[0]!);
     expect(distance(map.nodes.get("g")!)).toBeGreaterThan(distance(map.nodes.get("a1")!));
     expect(map.nodes.get("g")!.team).toBe("a");
-    // A child sits within its root's angle, nearer to it than any other root.
-    const a = map.nodes.get("a")!;
-    for (const id of ["b", "c", "d"]) expect(Math.abs(map.nodes.get("a1")!.angle - a.angle)).toBeLessThan(Math.abs(map.nodes.get(id)!.angle - a.angle));
-    // Each project's name is outside its own sessions and clear of every session.
-    for (const id of ["hide", "billing", "site"]) {
-      const own = Math.max(...sessions.filter((row) => row.projectId === id).map((row) => distance(map.nodes.get(row.id)!)));
-      expect(distance(map.labels.get(id)!)).toBeGreaterThan(own);
-      const point = map.labels.get(id)!;
-      const name = { left: point.x - label.width / 2, right: point.x + label.width / 2, top: point.y - label.height / 2, bottom: point.y + label.height / 2 };
-      for (const box of rectangles(map, sessions)) expect(name.right <= box.left || box.right <= name.left || name.bottom <= box.top || box.bottom <= name.top, `${id} touches ${box.id}`).toBe(true);
+    // A team gathers at its root: each member is nearer its own root than any other root.
+    const apartFrom = (id: string, other: string) => Math.hypot(map.nodes.get(id)!.x - map.nodes.get(other)!.x, map.nodes.get(id)!.y - map.nodes.get(other)!.y);
+    for (const id of ["a1", "a2", "g"]) {
+      for (const other of ["b", "c", "d"]) expect(apartFrom(id, "a")).toBeLessThan(apartFrom(id, other));
     }
   });
 
@@ -84,6 +77,5 @@ describe("operator-centered map", () => {
   it("draws only the operator when nothing is placed", () => {
     const map = placeOverviewMap(input([]));
     expect(map.nodes.size).toBe(0);
-    expect(map.labels.size).toBe(0);
   });
 });

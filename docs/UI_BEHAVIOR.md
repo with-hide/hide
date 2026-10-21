@@ -932,7 +932,7 @@ The Overview reads the same tasks for the Projects tab's `지금` counts and the
 
 ### Work
 
-Web owners are `web/src/overviewGraphModel.ts`, `web/src/overviewMapLayout.ts`, `web/src/overviewGraphLayout.ts`, `web/src/OverviewGraph.tsx` and `web/src/overviewGraphNodes.tsx` (PRD overview-main-map).
+Web owners are `web/src/overviewGraphModel.ts`, `web/src/overviewMapLayout.ts`, `web/src/overviewGraphLayout.ts`, `web/src/overviewGraphLines.ts` (which lines are drawn, the team outline and the project band), `web/src/overviewGraphDrag.ts` (the drag units), `web/src/OverviewGraph.tsx` and `web/src/overviewGraphNodes.tsx` (PRD overview-main-map).
 Work offers graph and list views over real live agents, grouped by project and explicit parentage.
 Both views share All, My turn, Working and Unread results, with counts from canonical marks: `turn`, `going|waiting` and `done|unread`.
 Include sleeping starts off and excludes only `asleep`; idle sessions marked `quiet`, Seen demands and sleeping raised asks still marked `turn`, and `unknown`, remain available.
@@ -941,10 +941,10 @@ A filter dims the sessions it does not match instead of removing them, so a filt
 A filter with no match shows Show all sessions, distinct from no current sessions and layout failure.
 Only branches whose every descendant sleeps offer a reversible subtree fold; a descendant becoming idle or active releases that fold.
 
-The graph is a map centred on the operator: a `나` circle sits at the centre, and every session without a lineage parent (a root) stands on the ring around it, grouped by project in project order.
-Each project's name sits small just outside its own sessions.
-Delegated descendants sit just outside their root, inside the root's angle, a smaller circle one ring further out per generation, and the root and all its descendants share one dashed team outline.
-Placement is a deterministic radial tree computed in the web shell: the same sessions get the same places, and status, labels, letters, filters, selection and hiding never enter the layout key.
+The graph is a map centred on the operator: a `나` circle sits at the centre, and every session without a lineage parent (a root) stands on one round ring around it, grouped by project in project order.
+A root's children sit as smaller circles on a fan just outside it, facing away from the operator, and each child's own children sit just outside that child the same way, so a team stays gathered at its root; the root and all its descendants share one dashed outline drawn around their circles and words.
+Each project is a faint band of the ring under its roots and teams, whose outer edge steps out only where a session reaches further, and its name sits in bold, larger than a session's title, just outside the band at the middle of its angles.
+Placement is computed in the web shell: the same sessions get the same places, and status, labels, letters, filters, selection and hiding never enter the layout key.
 No two session label rectangles, or a session and the operator, overlap; a layout that cannot separate them fails into the existing Retry and session list.
 A root's circle shows its title and its sidebar second line (what it is doing, what it asks, what it waits for); a descendant shows only its title, plus what it asks in amber while it is the operator's turn.
 Provider, proved launch model, state words and judged tasks are not drawn under circles; the accessible name still reads title, state, provider and proved launch model.
@@ -974,10 +974,10 @@ Project names share the 400-node budget with sessions; admission prioritises the
 An oversized project retains stable-ID representatives and a reserved access slot, where a chosen hidden member appears without moving another member; the paged list searches every matching session, and selecting one outside the graph budget opens its project scope with that session selected.
 One-project scope offers All projects to return.
 When the confirmed focused device, pane and native session have a graph proof at entry, that exact session is highlighted without opening details; pane reuse cannot inherit the initial selection.
-The first camera fits the whole map when it is readable at that zoom, and otherwise centres the current session (or the operator) at a readable zoom.
+The first camera, and Fit graph, put the operator at the centre of the view at the zoom that shows the whole map; when that zoom is too small to read, the first camera instead centres the current session (or the operator) at a readable zoom.
 Fit graph, Current pane and Reset layout remain explicit keyboard-accessible controls.
-Dragging a session's circle moves only that session, without opening details; clicking the same circle opens details, and the text below it remains a selection target without becoming a drag handle.
-Dragging a project's name moves all its sessions; team outlines and lines follow the moved circles.
+Three things drag, none opening details: a project's name or band moves the whole project; a root's circle or its team's outline moves the root and every descendant; a descendant's circle moves only that circle.
+Clicking a circle opens details, and the text below it remains a selection target without becoming a drag handle; outlines, bands and lines follow the moved circles.
 Offsets live only in this mounted view, and Reset layout clears offsets and restores the initial camera without dispatching pane moves.
 The map has no decorative animation; there is nothing for reduced motion to remove.
 Graph filters, hiding, selection, pan, zoom and folding stay local to the mounted view; filters and hiding survive graph/list and scope changes while Work remains mounted, and closing the view ends its listeners.

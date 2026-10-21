@@ -4,11 +4,10 @@ import { placeOverviewMap, type MapBox } from "./overviewMapLayout";
 import { useShellStore } from "./store";
 
 type Dimensions = { root: MapBox; child: MapBox; operator: number; label: { width: number; height: number }; gap: number; projectGap: number };
-/** Label and operator boxes are absolute; a session's box is relative to its project's label, its React Flow parent.
- * `ring` sessions take the root box and stand on the first ring, `team` names the first-ring session they belong to. */
+/** Boxes' top left corners with the operator's center at the origin. `ring` sessions take the root box and
+ * stand on the ring, `team` names the ring session they belong to. */
 export type GraphPlacement = {
   operator: { x: number; y: number };
-  groups: Map<string, { x: number; y: number; width: number; height: number }>;
   nodes: Map<string, { x: number; y: number; ring: boolean; team: string }>;
 };
 export type GraphLayout = { key: string; phase: "loading" | "ready" | "failed"; placement: GraphPlacement | null; size: Dimensions | null };
@@ -25,7 +24,7 @@ function dimensions(element: HTMLElement, scale: number): Dimensions {
   return {
     root: { width: read("root-width"), height: read("root-height"), orb: read("root-orb") },
     child: { width: read("child-width"), height: read("child-height"), orb: read("child-orb") },
-    operator: read("root-orb"), label: { width: read("root-width"), height: gap * 2 }, gap, projectGap: read("project-gap"),
+    operator: read("root-orb"), label: { width: read("root-width") * 2, height: gap * 2 }, gap, projectGap: read("project-gap"),
   };
 }
 
@@ -55,26 +54,24 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
       const size = dimensions(host.current, scale);
       const input = latest.current;
       const map = placeOverviewMap({
-        projects: input.projects.map((group) => ({ id: group.id, label: size.label })),
+        projects: input.projects.map((group) => ({ id: group.id })),
         sessions: input.projects.flatMap((group) => [
           ...group.shown.map((row) => ({ id: row.id, projectId: group.id, parent: input.layoutParents.get(row.id) ?? null, box: input.layoutParents.get(row.id) == null ? size.root : size.child })),
           ...(group.revealSlot ? [{ id: group.revealSlot, projectId: group.id, parent: null, box: size.root }] : []),
         ]),
         operator: size.operator, gap: size.gap, projectGap: size.projectGap,
       });
-      const groups = new Map([...map.labels].map(([id, point]) => [id, { x: point.x - size.label.width / 2, y: point.y - size.label.height / 2, ...size.label }]));
       const nodes: GraphPlacement["nodes"] = new Map();
       for (const group of input.projects) {
-        const label = groups.get(group.id);
         for (const id of [...group.shown.map((row) => row.id), ...(group.revealSlot ? [group.revealSlot] : [])]) {
           const point = map.nodes.get(id);
-          if (!point || !label) throw new Error("layout omitted a project or session");
+          if (!point) throw new Error("layout omitted a session");
           const ring = id === group.revealSlot || input.layoutParents.get(id) == null;
           const box = ring ? size.root : size.child;
-          nodes.set(id, { x: point.x - box.width / 2 - label.x, y: point.y - box.orb / 2 - label.y, ring, team: point.team });
+          nodes.set(id, { x: point.x - box.width / 2, y: point.y - box.orb / 2, ring, team: point.team });
         }
       }
-      setLayout({ key, phase: "ready", placement: { operator: { x: -size.operator / 2, y: -size.operator / 2 }, groups, nodes }, size });
+      setLayout({ key, phase: "ready", placement: { operator: { x: -size.operator / 2, y: -size.operator / 2 }, nodes }, size });
     } catch (error: unknown) {
       useShellStore.getState().noteDiagnostic(`overview_graph.layout_failed projects=${latest.current.projects.length} visible=${latest.current.visible.length} cause=${error instanceof Error ? error.message : String(error)}`);
       setLayout({ key, phase: "failed", placement: null, size: null });

@@ -25,8 +25,9 @@ function useRevealNode(id: string) {
 }
 
 export type OperatorNode = Node<{ label: string }, "operator">;
-export type ProjectNode = Node<{ group: GraphProject; current: boolean; highlighted: boolean }, "project">;
-export type TeamNode = Node<{ path: string; width: number; height: number; selected: boolean }, "team">;
+/** `base` is where the node stands before the operator drags it; `area` and `label` are relative to the node. */
+export type ProjectNode = Node<{ group: GraphProject; area: string; label: { x: number; y: number }; labelWidth: number; base: { x: number; y: number }; current: boolean; highlighted: boolean }, "project">;
+export type TeamNode = Node<{ path: string; width: number; height: number; selected: boolean; base: { x: number; y: number } }, "team">;
 export type SessionNode = Node<{ row: GraphAgent; ring: boolean; context: boolean; muted: boolean; highlighted: boolean; current: boolean; quietCount: number; folded: boolean; fold: (id: string) => void; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
 /** A straight relationship between two orbs, already trimmed to their edges; it carries no words. */
 export type LineEdge = Edge<{ x1: number; y1: number; x2: number; y2: number }, "line">;
@@ -60,12 +61,14 @@ export function OperatorGraphNode({ data }: NodeProps<OperatorNode>) {
   return <div className="og-operator" role="img" aria-label={data.label}><Ports /><span aria-hidden="true">{data.label}</span></div>;
 }
 
-/** A project's name outside its sessions; dragging it moves every session of the project. */
-export function ProjectGraphNode({ data }: NodeProps<ProjectNode>) {
+/** A project's band around the operator and its name just outside it; dragging either moves every session of the project. */
+export function ProjectGraphNode({ data, width, height }: NodeProps<ProjectNode>) {
   const { t } = useInterfaceTranslation();
   const { group } = data;
-  return <div className="og-project og-project-drag" data-graph-project={group.project.workspace.id} data-current={data.current} data-highlighted={data.highlighted} title={t("overviewGraph.dragProject", { project: group.project.workspace.label })}>
-    <span>{group.project.workspace.label}</span>
+  const title = t("overviewGraph.dragProject", { project: group.project.workspace.label });
+  return <div className="og-project" data-graph-project={group.project.workspace.id} data-current={data.current} data-highlighted={data.highlighted}>
+    <svg className="og-project-area" width={width} height={height} aria-hidden="true"><path className="og-project-drag" d={data.area} /></svg>
+    <span className="og-project-name og-project-drag" style={{ left: data.label.x, top: data.label.y, maxWidth: data.labelWidth }} title={title}>{group.project.workspace.label}</span>
   </div>;
 }
 
