@@ -502,7 +502,7 @@ function ProjectList({ actions }: { actions: Actions }) {
       <ul ref={list} className="min-h-0 flex-1 overflow-auto px-sm" data-project-list="true">
         {/* Each section is its own box, so its header sticks to the list's top only while its rows pass under it, and the next section's header pushes it away (D-05). */}
         {sections.map((section, index) => (
-          <li key={`section:${section.header.section}`} data-project-section={section.header.section}>
+          <li key={`section:${section.header.section}`} data-project-section={section.header.section} className={index > 0 ? "mt-sm border-t border-border" : undefined}>
             <ul>
               <SectionHeader row={section.header} />
               {section.rows.map((row, index) => (
