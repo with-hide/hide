@@ -1786,8 +1786,6 @@ impl MemoryStore {
                         )?;
                         summary.evicted.push(number);
                         live_count -= 1;
-                        summary.evictions_purged +=
-                            purge_evicted(&transaction, &batch.project_id, evicted_limit)?;
                     }
                     let item_id =
                         stable_id("memory", &[&batch.id, &index.to_string(), &redacted.text]);
@@ -1906,6 +1904,10 @@ impl MemoryStore {
                 CandidateRelation::Discard => unreachable!(),
             };
             summary.outcomes.push(outcome);
+        }
+        if !summary.evicted.is_empty() {
+            summary.evictions_purged =
+                purge_evicted(&transaction, &batch.project_id, evicted_limit)?;
         }
         transaction.commit()?;
         certify_projection(&self.connection)?;
