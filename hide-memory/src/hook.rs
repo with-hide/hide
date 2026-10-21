@@ -108,8 +108,23 @@ where
 {
     let started = std::time::Instant::now();
     let caller_expired = expired;
-    let expired =
-        move || caller_expired() || started.elapsed() >= std::time::Duration::from_millis(100);
+    let expired = move || {
+        caller_expired()
+            || started.elapsed() >= std::time::Duration::from_millis(crate::HOOK_DEADLINE_MS)
+    };
+    context_until(store_path, project, request, expired)
+}
+
+/// One absolute invocation expiry owns opening, SQL work and rendering.
+fn context_until<E>(
+    store_path: &Path,
+    project: &hide_project::ProjectIdentity,
+    request: HookRequest<'_>,
+    expired: E,
+) -> HookContext
+where
+    E: Fn() -> bool + Clone + Send + 'static,
+{
     let base = || HookContext::without(HookOutcome::Unavailable);
     let deadline = || HookContext::without(HookOutcome::Deadline);
     let Ok(store) = MemoryStore::open_hook_read_only_with_expiry(store_path, expired.clone())
@@ -125,7 +140,7 @@ where
     if request.session_id.is_empty() {
         return base();
     }
-    let query = match request.event {
+    let mut query = match request.event {
         HookEvent::SessionStart => RetrievalQuery::session_start(&project.id),
         HookEvent::UserPromptSubmit => {
             let excluded = match store.session_given_ids(
@@ -141,6 +156,10 @@ where
             RetrievalQuery::prompt(&project.id, request.prompt.unwrap_or_default(), excluded)
         }
     };
+    // The public entry already composed the caller and 100 ms budgets before
+    // opening. Keep that absolute expiry through retrieval rather than starting
+    // a second wall clock; tests can own the same boundary with a logical clock.
+    query.deadline = std::time::Duration::MAX;
     if expired() {
         return deadline();
     }
@@ -248,6 +267,9 @@ fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Policy checks own a logical invocation clock. The real SQL interruption
+    // test below explicitly exercises the public wall-clock entry instead.
+    use super::context_until as context_for;
     use crate::{AnalysisBatch, Candidate, CandidateKind, CandidateRelation};
     use std::fs;
     use std::path::PathBuf;
@@ -745,7 +767,7 @@ mod tests {
         connection.execute_batch("ALTER TABLE projects RENAME TO projects_base; CREATE VIEW projects AS SELECT * FROM projects_base WHERE (WITH RECURSIVE slow(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM slow WHERE n<100000000) SELECT sum(n) FROM slow)>0;").unwrap();
         drop(connection);
         let outer = std::time::Instant::now() + std::time::Duration::from_secs(1);
-        let result = context_for(
+        let result = super::context_for(
             &path,
             &project,
             ask(HookEvent::SessionStart, "slow-sql", None),
