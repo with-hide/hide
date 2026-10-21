@@ -1,5 +1,5 @@
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { memo, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { memo, useRef, type KeyboardEvent } from "react";
 import { AgentRowMark } from "../AgentRowMark";
 import { agentProductName } from "../agentAdapters";
 import { agentClosing } from "../close";
@@ -17,15 +17,12 @@ import { cn } from "../lib/utils";
 import type { AgentRow } from "../snapshot";
 import type { AgentMenuItem } from "../workspaceManage";
 import { AskLine, DescendantMark, TreeChevron, TreeRails, type TreePlace } from "./agent-tree";
-import { AgentPrHover, PrHoverList, useAgentStaleness, type MarkPulls } from "./pr-mark";
-import { ownPulls, type PrStaleness, type SessionPull } from "../prMark";
+import { AgentPrHover, PrHoverCard, useAgentStaleness } from "./pr-mark";
+import { ownPulls, type SessionPull } from "../prMark";
 import { AgentTreePopover } from "./agent-tree-popover";
 import { Elapsed } from "./elapsed";
 import { EntryContextMenu, type MenuEntry } from "./entry-menu";
 import { DeviceChip } from "./device-chip";
-import { CheckoutCardHint } from "./pr-card";
-import { pullRequestCard } from "../projects";
-import { catalogWorkspaces } from "../snapshot";
 import { StatusMark } from "./status-mark";
 import { Badge } from "./ui/badge";
 import { Keycap } from "./ui/keycap";
@@ -225,7 +222,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
             {device ? (
               <DeviceChip label={device} className="pointer-events-none max-w-2/5" />
             ) : null}
-            {ask ? null : <AgentPrHover agent={agent} family={family} staleness={staleness} card={(icon) => <PrHoverCard agent={agent} pulls={family ?? ownPulls(agent)} icon={icon} staleness={staleness} onOpenPullRequest={onOpenPullRequest} />} />}
+            {ask ? null : <AgentPrHover agent={agent} family={family} staleness={staleness} card={(icon) => <PrHoverCard agent={agent} pulls={family ?? ownPulls(agent)} staleness={staleness} onOpenPullRequest={onOpenPullRequest}>{icon}</PrHoverCard>} />}
             {ask || !folded ? null : <span className="pointer-events-none flex shrink-0"><DescendantMark agent={agent} /></span>}
             {agent.letters_waiting ? <RowLetterMark /> : null}
             {/* A time the core never measured draws nothing, and nothing stands in for it. */}
@@ -297,24 +294,4 @@ function RowChevron({ agent, tree, returnFocus }: { agent: AgentRow; tree: Sideb
       />
     </span>
   );
-}
-
-/**
- * Under the pointer, the sidebar PR mark shows the existing PR card for one
- * PR, and each PR with its state and title for several (B23), a root's
- * family naming who holds each.
- */
-function PrHoverCard({ agent, pulls, icon, staleness, onOpenPullRequest }: { agent: AgentRow; pulls: MarkPulls; icon: ReactNode; staleness?: PrStaleness; onOpenPullRequest: (url: string, external: boolean) => void }) {
-  const { t } = useInterfaceTranslation();
-  const trigger = <span className="relative z-10 flex shrink-0" data-pr-hover={agent.pane_id}>{icon}</span>;
-  const single = pulls.length === 1 ? pulls[0]!.pull : null;
-  const pr = useShellStore((s) => (single ? catalogWorkspaces(s.rest).flatMap((project) => project.pull_requests ?? []).find((row) => row.url === single.url) : undefined));
-  if (pr && !staleness?.stale) {
-    return (
-      <CheckoutCardHint card={pullRequestCard(pr, t)} description={`#${pr.number} ${pr.title}`} onOpenPullRequest={onOpenPullRequest}>
-        {trigger}
-      </CheckoutCardHint>
-    );
-  }
-  return <PrHoverList agent={agent} pulls={pulls} staleness={staleness} onOpen={(pull) => onOpenPullRequest(pull.url, false)}>{trigger}</PrHoverList>;
 }
