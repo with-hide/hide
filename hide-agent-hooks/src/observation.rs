@@ -935,6 +935,7 @@ mod tests {
             "false || { echo x; herdr agent prompt peer x; }",
             "true && {\n herdr agent prompt peer x\n}",
             "f() { r=$(herdr agent prompt peer x); }",
+            "test -f done && echo y |& herdr agent prompt peer x",
         ] {
             let fact = one(observe(call(command, &hidden), 1, &|_| None).unwrap());
             assert!(fact.target.is_none(), "{command}");

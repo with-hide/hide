@@ -401,7 +401,8 @@ impl Lexer {
                     self.at += 1;
                     // `&&`-style doubling of the same character is one operator.
                     let doubled = matches!(c, ';' | '|') && self.peek(0) == Some(c);
-                    if doubled {
+                    // `|&` is a pipe that carries stderr too, not a background job.
+                    if doubled || (c == '|' && self.peek(0) == Some('&')) {
                         self.at += 1;
                     }
                     self.operator_open = c == '|';
