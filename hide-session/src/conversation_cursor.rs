@@ -50,7 +50,10 @@ impl ConversationCheckpoint {
         }
         Ok(crate::CursorCheckpoint {
             offset,
-            identity: Some(crate::FileIdentity::from_metadata(&metadata)),
+            identity: Some(
+                crate::FileIdentity::from_file(&file)
+                    .map_err(|error| SessionError::io("identity", path, error))?,
+            ),
             pending: Vec::new(),
         }
         .into())
@@ -66,6 +69,7 @@ impl ConversationCheckpoint {
                 identity: last.map(|last| crate::FileIdentity {
                     first: created,
                     second: last,
+                    high: 0,
                 }),
                 pending: Vec::new(),
             },
@@ -601,7 +605,8 @@ fn read_appended_file(
     let metadata = file
         .metadata()
         .map_err(|e| SessionError::io("stat", path, e))?;
-    let identity = crate::FileIdentity::from_metadata(&metadata);
+    let identity = crate::FileIdentity::from_file(&file)
+        .map_err(|error| SessionError::io("identity", path, error))?;
     let rescan_reason = match cursor.identity {
         Some(old) if old != identity => Some(crate::RescanReason::Replaced),
         Some(_) if metadata.len() < cursor.offset => Some(crate::RescanReason::Truncated),

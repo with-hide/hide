@@ -1334,6 +1334,8 @@ An already-created failed fork child is still cleaned up through its original co
 Search, archive detail and Memory reads carry the catalog row's expected native ID and checkout, and refuse a replacement rather than deriving their requested owner from the new file.
 Labels, activity, project catalog, content search, archive detail, link sightings and local phone pages use the same before/after native proof; a phone idle poll and a cloned older-page reader cannot retain a replaced owner's history.
 Same-length reads compare the physical file stamp, failed native-file label reads revoke cached native identity and turn authority, and link identity comes only from the proven first header even across incremental chunks.
+Append cursors, label proofs and activity reads identify the open file through `hide-platform` by its volume and full file index, including all 128 index bits on Windows; appending changes its size and write time, never its physical incarnation.
+Older checkpoints remain readable: Unix identities keep their device/inode values, while a Windows checkpoint made from size and write time is rescanned once against the physical identity.
 The parser reads raw recorded history, including messages on earlier branches, without reconstructing active model context or following a fork's `parentSession` file.
 Pi `session_info.name` has no manual/automatic source and is read as an automatic title; an explicit empty name clears it, while absence on an incremental read preserves the prior name.
 omp's physical first title-v1 slot, or its legacy first session header, supplies the current title and auto/user source.
