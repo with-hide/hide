@@ -3087,6 +3087,17 @@ impl MemoryStore {
             "UPDATE memory_revisions SET verified_at_ms=NULL WHERE item_id=?1 AND revision=?2",
             params![item_id, revision],
         )?;
+        // An accepted claim starts a fresh verification of this revision.
+        // Its settled comparison and cached document check cannot hold it out
+        // of the pending queue or short-circuit that new check.
+        transaction.execute(
+            "DELETE FROM card_comparisons WHERE item_id=?1 AND revision=?2",
+            params![item_id, revision],
+        )?;
+        transaction.execute(
+            "DELETE FROM correction_checks WHERE item_id=?1 AND revision=?2",
+            params![item_id, revision],
+        )?;
         transaction.execute(
             "UPDATE memory_items SET reverify_at_ms=NULL,promotion_ok_revision=NULL,outdated_reason=?2 WHERE id=?1",
             params![
@@ -7125,6 +7136,23 @@ PRAGMA user_version=14;"#,
                 )],
             )
             .unwrap();
+        let before = store.detail(&project, &card.id).unwrap();
+        assert_eq!(before.sources.len(), 2);
+        let comparison = crate::DocumentComparison {
+            authority: crate::DocumentAuthority::CardNewer,
+            document: "AGENTS.md".into(),
+            document_text: "Run tests before lint".into(),
+            document_at_unix_ms: None,
+            operator_text: "Run the linter first".into(),
+            operator_at_unix_ms: Some(20),
+            source_session: Some("other-session".into()),
+        };
+        store
+            .set_document_comparison(&project, 1, 1, &comparison)
+            .unwrap();
+        store
+            .record_correction_check(&project, 1, 1, "unchanged-doc", 30)
+            .unwrap();
         let attempt = running(1, "agent-7");
         store.set_promotion(&project, 1, &attempt).unwrap();
         store.mark_promotion_checked(&project, 1, 1).unwrap();
@@ -7137,6 +7165,11 @@ PRAGMA user_version=14;"#,
             !store
                 .mark_outdated(&project, 1, &running(2, "agent-7"), "stale", 50)
                 .unwrap()
+        );
+        assert_eq!(
+            store.document_comparison(&project, 1).unwrap(),
+            Some(comparison.clone()),
+            "a refused report cannot revoke the confirmed comparison"
         );
         assert!(
             !store
@@ -7176,8 +7209,16 @@ PRAGMA user_version=14;"#,
             given(&store, &project, "linter first"),
             Vec::<String>::new()
         );
+        assert!(
+            store.document_comparison(&project, 1).unwrap().is_none(),
+            "the accepted outdated claim must allow fresh verification"
+        );
         let waiting = store.pending_cards(&project, 100_000_000, 8).unwrap();
         assert_eq!(waiting[0].outdated_reason.as_deref(), Some("stale"));
+        assert_eq!(waiting[0].body, "Run the linter first");
+        let after = store.detail(&project, &card.id).unwrap();
+        assert_eq!(after.sources, before.sources);
+        assert_eq!(after.evidence, before.evidence);
         // Verified again, the card is checked again before it is suggested.
         // A claim made after the check read the card was never judged.
         assert!(
@@ -7212,6 +7253,14 @@ PRAGMA user_version=14;"#,
                 .promotion_unchecked(&project, 70, 3)
                 .unwrap()
                 .is_empty()
+        );
+        store
+            .set_document_comparison(&project, 1, 1, &comparison)
+            .unwrap();
+        assert_eq!(
+            store.correction_checks(&project, 4).unwrap()[0].fingerprint,
+            None,
+            "a fresh comparison must not inherit the prior document check"
         );
     }
 
