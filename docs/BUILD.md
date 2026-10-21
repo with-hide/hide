@@ -176,7 +176,7 @@ An acquisition failure blocks the suite at that prerequisite and retains the ups
 | `pnpm --dir desktop dev` | Bundles `desktop/dist/` with esbuild and launches the app unpackaged; it finds this worktree's `target/{debug,release}/hide` itself |
 | `pnpm --dir desktop typecheck`, `lint`, `test` | The desktop CI lane |
 | `pnpm --dir desktop e2e` | Playwright `_electron` against a private hided and pinned Herdr; needs `web/dist`, `target/debug/hide` and `hided`, and the pinned `herdr` as the web e2e does |
-| `pnpm --dir desktop package` | `desktop/scripts/package.mjs`: builds the release binaries and fetches the pinned Herdr, bundles `hided`, `hide`, `hide-agent-hooks` and `herdr` into `Contents/Resources` and the notification permission helper into `Contents/MacOS/hide-notification-status`, signed under the app's identifier, signs `desktop/out/hide-darwin-<arch>/hide.app` (bundle id `me.grab.hide.desktop`), writes the release version into the app's own `package.json` (the version the app and its updater report) and puts `desktop/resources/app-update.yml`, the updater's download folder name, in its resources; `desktop/scripts/installers.mjs` then wraps the finished app with electron-builder (`--prepackaged`, so the app and its signature are what was checked) into `desktop/out/release`: `hide-v<version>-macos-<arch>.dmg` and the `.zip` the updater installs, `latest-mac.yml` and the zip's `.blockmap`, each installer beside a `.sha256` checksum; nothing is installed. The signature is ad-hoc unless `HIDE_MACOS_SIGNING=developer-id`, which a release's `package.yml` run sets: every executable in the bundle, Herdr included, is then signed with the Developer ID certificate under the hardened runtime with the exceptions in `desktop/resources/entitlements/`, Apple notarizes the app and the ticket is stapled, and the run fails unless Gatekeeper accepts the app expanded from the zip as notarized; the dmg is signed, notarized and stapled too, and must pass `spctl -t open`. That mode needs `HIDE_SIGN_IDENTITY`, `HIDE_NOTARY_KEY_PATH`, `HIDE_NOTARY_KEY_ID` and `HIDE_NOTARY_ISSUER`, which `desktop/scripts/macos-signing.mjs` defines and checks together before the build. On Windows x64 and Linux x64 the same command builds that system's package, unsigned: the folder `desktop/out/hide-win32-x64/` or `hide-linux-x64/` with the same binaries (`.exe` on Windows, with Herdr's `conpty/` beside `herdr.exe`) in its `resources/`, wrapped into `desktop/out/release` as the per-user NSIS installer `hide-v<version>-windows-x64-setup.exe` with `latest.yml` and its `.blockmap` (`desktop/resources/windows/installer.nsh` stops the daemon on uninstall), or as `hide-v<version>-linux-x64.deb` and `.rpm` into `/opt/hide` with one `latest-linux.yml` (`desktop/resources/linux/` holds the package scripts that link `/usr/bin/hide` to the CLI and set up the sandbox), each installer beside a `.sha256`. `node desktop/scripts/installers.mjs <app folder> <version> <out>` wraps an already packaged Windows or Linux app again under another version, which the CI update test uses for its two builds. Each system packages only itself, and a machine of another architecture than its pinned Herdr asset is refused |
+| `pnpm --dir desktop package` | `desktop/scripts/package.mjs`: builds the release binaries and fetches the pinned Herdr, bundles `hided`, `hide`, `hide-agent-hooks` and `herdr` into `Contents/Resources` and the notification permission helper into `Contents/MacOS/hide-notification-status`, signed under the app's identifier, signs `desktop/out/hide-darwin-<arch>/hide.app` (bundle id `me.grab.hide.desktop`), writes the release version into the app's own `package.json` (the version the app and its updater report) and puts `desktop/resources/app-update.yml`, the updater's download folder name, in its resources; `desktop/scripts/installers.mjs` then wraps the finished app with electron-builder (`--prepackaged`, so the app and its signature are what was checked) into `desktop/out/release`: `hide-v<version>-macos-<arch>.dmg` and the `.zip` the updater installs, `latest-mac.yml` and the zip's `.blockmap`, each installer beside a `.sha256` checksum; nothing is installed. The signature is ad-hoc unless `HIDE_MACOS_SIGNING=developer-id`, which the official macOS publisher sets: every executable in the bundle, Herdr included, is then signed with the Developer ID certificate under the hardened runtime with the exceptions in `desktop/resources/entitlements/`, Apple notarizes the app and the ticket is stapled, and the run fails unless Gatekeeper accepts the app expanded from the zip as notarized; the dmg is signed, notarized and stapled too, and must pass `spctl -t open`. That mode needs `HIDE_SIGN_IDENTITY`, `HIDE_NOTARY_KEY_PATH`, `HIDE_NOTARY_KEY_ID` and `HIDE_NOTARY_ISSUER`, which `desktop/scripts/macos-signing.mjs` defines and checks together before the build. On Windows x64 and Linux x64 the same command builds that system's package, unsigned: the folder `desktop/out/hide-win32-x64/` or `hide-linux-x64/` with the same binaries (`.exe` on Windows, with Herdr's `conpty/` beside `herdr.exe`) in its `resources/`, wrapped into `desktop/out/release` as the per-user NSIS installer `hide-v<version>-windows-x64-setup.exe` with `latest.yml` and its `.blockmap` (`desktop/resources/windows/installer.nsh` stops the daemon on uninstall), or as `hide-v<version>-linux-x64.deb` and `.rpm` into `/opt/hide` with one `latest-linux.yml` (`desktop/resources/linux/` holds the package scripts that link `/usr/bin/hide` to the CLI and set up the sandbox), each installer beside a `.sha256`. `node desktop/scripts/installers.mjs <app folder> <version> <out>` wraps an already packaged Windows or Linux app again under another version, which the CI update test uses for its two builds. Each system packages only itself, and a machine of another architecture than its pinned Herdr asset is refused |
 | `node desktop/scripts/smoke-package.mjs <installed app folder>` | On Windows or Linux only: takes the folder the system's installer put the app in, prepares its runtime (on Windows the copy under the private home that `hide runtime prepare` makes), and with a private home (stand-in `claude` and `codex` programs in `~/.local/bin`, so both agents are installed) and state folder runs the bundled `herdr --version`, the device helper, `hide-agent-hooks doctor`, and `hide connect`, `/health`, the embedded shell, first-launch CLI and hooks, a command from a fresh shell, the completed retirement row, replacement by a second package fixture, refreshed paths, same-build reuse, standalone refusal and `hide stop`, then waits for each daemon pid it started to end (ten seconds, a named failure beyond that); on Windows it also checks that the next prepare removed the first build's runtime copy; `.github/workflows/package.yml` runs it after installing each package, and `desktop/scripts/smoke-windows-installer.mjs` checks the Windows installer's install, reinstall while a Herdr server runs, and uninstall. It refuses macOS, where first-launch kit behavior is covered by the isolated desktop suite |
 
 Every build of `hide` carries the version and commit `hide version` reports (`hided/build.rs`): `HIDE_VERSION` if it was set for the build, else the crate's version, and `HIDE_COMMIT`, else for a release build the checkout's `HEAD`.
@@ -201,37 +201,9 @@ The suite runs the focus tests after every other one (`desktop/playwright.config
 
 A release's macOS app is signed with the team's Developer ID Application certificate and notarized with an App Store Connect team API key.
 Both belong to the Apple Developer Program membership of the team that owns the certificate.
-The account holder keeps the private key, the `.p12` export and the `.p8` key outside the repository, with a backup; the five `release` environment secrets that carry them to CI are listed in [CONTRIBUTING.md](../CONTRIBUTING.md#releases).
-`release.yml` passes the five secrets to `package.yml` by name: a called workflow sees an environment secret only when its caller passes it, even though its macOS job names the `release` environment, and one not passed arrives empty without an error ([GitHub, Reuse workflows](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)).
-That job first refuses, naming each one, any of the five that arrived empty, then imports the `.p12` into a keychain of its own, requires exactly one `Developer ID Application` identity in it, writes the `.p8` to a temporary file, and deletes both when the job ends.
-
-### What expires
-
-- The membership renews every year.
-  If it lapses, Apple stops notarizing, so a release fails at the macOS package; apps already released keep installing and opening.
-- The certificate is valid for about five years; `security find-certificate -c "Developer ID Application" -p | openssl x509 -noout -enddate` on the account holder's Mac prints when it ends.
-  An app signed while the certificate was valid keeps opening after it expires; only new builds need the new one.
-- The API key does not expire; it ends when it is revoked in App Store Connect.
-
-Never revoke a certificate that signed a release unless its private key leaked: Apple then refuses every app signed with it, including copies already installed.
-Let a replaced certificate expire instead; Apple lets a team create up to five Developer ID Application certificates.
-
-### Replacing the certificate
-
-Do this before the certificate expires, or at once if its private key may have leaked.
-
-1. `openssl req -new -newkey rsa:2048 -nodes -keyout developer-id.key -out developer-id.csr -subj "/emailAddress=<account email>/CN=<team name>/C=<country>"` makes a new private key and its signing request.
-2. In Certificates, Identifiers & Profiles, with the team selected, create a Developer ID Application certificate on the G2 Sub-CA from `developer-id.csr`, and download it as `developer-id.cer`; download the Developer ID G2 intermediate, `DeveloperIDG2CA.cer`, from Apple's certificate authority page.
-3. Convert both to PEM with `openssl x509 -inform DER -in <name>.cer -out <name>.pem`, then bundle the key with them under a new password: `openssl pkcs12 -export -inkey developer-id.key -in developer-id.pem -certfile DeveloperIDG2CA.pem -name "Developer ID Application: <team name> (<team id>)" -out developer-id.p12`.
-4. From the checkout, `base64 -i developer-id.p12 | gh secret set MACOS_DEVELOPER_ID_P12 --env release`, then `gh secret set MACOS_DEVELOPER_ID_P12_PASSWORD --env release` and paste the password at its prompt, so it never reaches shell history.
-5. Import the `.p12` into a keychain on the search list and prove the pair with [a local Developer ID build](#a-local-developer-id-build) before the next tag.
-6. Back up the new key, `.p12` and password with the old ones.
-
-### Replacing the notary key
-
-1. In App Store Connect, Users and Access, Integrations, App Store Connect API, Team Keys, generate a key with the Developer role and download its `.p8`; Apple offers that download once.
-2. `gh secret set APPLE_NOTARY_KEY_P8 --env release < AuthKey_<key id>.p8`, then the key ID into `APPLE_NOTARY_KEY_ID`; the issuer ID on the same page goes into `APPLE_NOTARY_ISSUER_ID` and changes only with the team.
-3. Revoke the old key once a local Developer ID build has notarized with the new one.
+The account holder keeps the private key, certificate export and notary key outside the public repository.
+Official signing credentials, their rotation and the CI environment that reads them are maintained privately.
+Public CI prepares unsigned packages without those signing credentials.
 
 ### A local Developer ID build
 
@@ -265,6 +237,7 @@ It runs the existing `agent-journey.yml` on the same source, with stand-ins on L
 With `live_agents=true`, it also requests signed-in lanes on all three systems and agy signed in on Linux only, under the journey's existing missing-key and quota policy.
 With `live_agents=false`, signed-in checks are **not measured**, as recorded in the receipt and workflow summary; package, stand-in and fake-model failures still block the receipt.
 The selection never changes an earlier failure into a pass, and a successful candidate does not establish that every provider answered.
+Rerunning only the failed jobs does not make a selectable candidate: the receipt keeps the first attempt and the earlier attempt's artifacts stay beside the new ones, so a failed candidate is dispatched again with the same inputs.
 The reusable workflows' optional `source-sha` defaults to the caller commit, and `package.yml`'s optional `build-order` defaults to its existing history-based ordering, so existing callers keep their behavior.
 An explicit order allows separately prepared packages of one numeric version to share one build identity.
 The operator assigns a strictly increasing order within that numeric version, including release-candidate to stable transitions; a private-only change takes a new patch version.
@@ -282,15 +255,15 @@ Consumers retaining schema 1 support must treat its missing selection as the ori
 A consumer verifies the successful manual main run, its trusted workflow revision, current attempt, matching receipt and artifact inventory before consuming it; a receipt alone proves neither GitHub origin nor that a package is signed.
 Run evidence and reports remain workflow artifacts, separate from distributable files.
 Release approval must disclose deferred or otherwise unmeasured provider coverage; this option does not waive signing, installation, update checks or version approval.
-This preparation path does not change the active tag-triggered publisher or release approval procedure below.
+Candidate preparation creates no public tag or Release; only the official publisher creates the approved release tag and publishes the final assets.
 
 ## Release asset gate
 
-The release workflow accepts only a `vX.Y.Z` or `vX.Y.Z-rc.N` tag (`N` at least 1, no leading zeros) whose commit is already an ancestor of protected `main`.
+Official release assets use a `vX.Y.Z` or `vX.Y.Z-rc.N` tag (`N` at least 1, no leading zeros) whose source commit is already an ancestor of protected `main`.
 The tag is the one source of the release's kind: `releaseKind` in `scripts/check-release-assets.mjs` reads it for the workflow's tag check, the asset names, the draft's `prerelease` flag, every check of the draft, and the publish call, so no second input can disagree with it.
 A `vX.Y.Z` tag is a stable release, published with `make_latest: "true"`; a `vX.Y.Z-rc.N` tag runs the same gates, the signed and notarized macOS build included, and is published as a pre-release with `make_latest: "false"`, which withhide.dev's download links ignore.
 Its packages report the version without the `v`, such as `0.4.0-rc.1`, and are named for it, such as `hide-v0.4.0-rc.1-macos-arm64.zip`; the macOS bundle version and the Windows file version are the numeric prefix, `0.4.0`.
-It serializes runs of the same tag and waits for all three packaging jobs before `node scripts/release-draft.mjs <tag> <event-commit-sha> <directory>` prepares the draft.
+The publisher assembles all three systems' packages before `node scripts/release-draft.mjs <tag> <event-commit-sha> <directory>` prepares the matching draft.
 The file-only entrypoint is `node scripts/check-release-assets.mjs <tag> <directory> [release-pages.json]`.
 The directory must contain exactly that tag's fifteen files (`expectedAssetNames`): the macOS ARM64 dmg and zip, the Windows x64 `setup.exe`, the Linux x64 deb and rpm, one SHA-256 sidecar per installer, `latest-mac.yml`, `latest.yml`, `latest-linux.yml`, and the zip's and the setup's `.blockmap`.
 The gate rejects a missing target, extra or mixed-version files, symbolic links, empty files, an incorrectly named sidecar, and a mismatched digest, and reads each update file strictly: its version must be the tag's, and every file it names must be in the release with the SHA-512 digest and size it states, since the app's updater refuses a download that differs; hashing streams bytes rather than retaining each package in memory.
@@ -298,7 +271,7 @@ Before any release write, the writer checks that the current tag still resolves 
 A missing credential, moved tag, or failed initial API read blocks preparation before writes; package workflow artifacts remain available.
 An API failure after an append may leave a partial or complete draft, including an upload whose success response was lost.
 The writer stops further preparation and preserves accepted assets; a retry validates those bytes before skipping them.
-The operator keeps immutable releases turned on in the repository's Settings; the workflow does not check it.
+The file and draft helpers do not establish whether repository immutability is enabled; the official publisher separately requires that setting before publication.
 
 The authenticated release and asset inventories are fully paginated, with a 100-page and 16 MiB limit; a tag lookup alone cannot establish that a draft is absent.
 Multiple releases for the same tag, an invalid inventory, a published release, or a draft of the other kind (a pre-release draft for a stable tag, or the reverse) block the run.
@@ -313,7 +286,7 @@ The final read must still show the complete unpublished draft and matching bytes
 [GitHub immutability](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases) supplies, once the operator setting is on, the server protection if publication happens between a read and upload; a GET alone is not an atomic draft-state condition.
 The operational contract excludes concurrent owner-policy disabling, manual changes to the draft, and tag moves during preparation and publication.
 Repeated tag reads do not make prepublication provenance atomic; the writer reads the tag and the draft's source record again right before it publishes.
-Each request has a 30-second bound, JSON responses are limited to 8 MiB, and the workflow job has a ten-minute bound.
+Each writer request has a 30-second bound and JSON responses are limited to 8 MiB.
 
 This gate proves the asset set and digests, not installation, terminal input/output, native first launch, signing or notarization.
 The Windows and Linux package smoke checks cover bundled tools, daemon startup, the embedded shell and daemon shutdown; the macOS packaged-app specs and the Windows packaged window open the app itself, and the tagged commit's main `verify` run covers the end-to-end suites.
