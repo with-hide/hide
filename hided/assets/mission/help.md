@@ -91,6 +91,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
 - At most the mission's cap of workers run at once, reviewers and verifiers included and you not counted; Hide refuses one more (`mission_cap_reached`).
   Start every reviewer and verifier yourself, as a worker of the mission, so the cap counts it; tell a worker not to start agents of its own.
   End a finished worker with `hide agent end <id>` to free its place, and start the next node then.
+- When a `hide mission` command answers `mission_unavailable`, Hide could not read its mission record: start no worker and tell the operator, since nothing then counts your workers against the cap.
 - When the usage `hide agent catalog` reports is close to a limit, start nothing new, say why with `hide mission delay --line <why>`, and tell the operator in conversation if it holds for long. Clear it when you go on.
 
 ## 4. While it runs

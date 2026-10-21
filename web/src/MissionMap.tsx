@@ -28,8 +28,8 @@ import { useShellStore } from "./store";
 // top only when the operator has something to decide or no Conductor holds
 // it. Every value is the core's (`MissionView`); the map words and draws it.
 
-/** The card that stands for the report every node ends in. */
-const REPORT = "__report";
+/** The card that stands for the report every node ends in; a node key is letters, digits, `-`, `_` and `.`, so none is this. */
+const REPORT = "#report";
 
 /** The left band's colour on a card with a pull request (D-42 A): the PR mark's own state colour. */
 const BAND: Record<PrState, string> = {

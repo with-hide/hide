@@ -43,6 +43,9 @@ const LINE_LIMIT: usize = 600;
 const REPORT_LIMIT: usize = 16 * 1024;
 const KEY_LIMIT: usize = 40;
 const READ_CAP: u64 = 8 * 1024 * 1024;
+/// The size a change may bring the saved book to: under the read cap with
+/// room for the file's own framing, so what is written is always read back.
+const WRITE_BUDGET: usize = 7 * 1024 * 1024;
 
 /// Where a mission stands. A cancelled mission is an end that nothing
 /// reopens (D-51); a done one reopens on a further instruction or a change
@@ -152,6 +155,45 @@ pub struct PrSeen {
     pub changes_requested: bool,
 }
 
+/// One change of a node's pull request the Conductor is still to be told
+/// about. It stays in the record until its letter is in the Conductor's
+/// inbox, so a failed send, a crash or no Conductor present delays the wake
+/// and never loses it (D-39, engineering #11).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PendingWake {
+    /// The mission's count of wakes, so the same event twice (changes
+    /// asked for again on one head) is two letters, not one.
+    pub seq: u64,
+    pub node: String,
+    pub pr: u32,
+    pub event: WakeEvent,
+    #[serde(default)]
+    pub head: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WakeEvent {
+    Merged,
+    ChangesRequested,
+    NewHead,
+}
+
+impl WakeEvent {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Merged => "merged",
+            Self::ChangesRequested => "changes_requested",
+            Self::NewHead => "new_head",
+        }
+    }
+}
+
+/// Wakes a mission keeps unsent; past this the oldest is dropped and
+/// logged, and the Conductor's own `hide mission show` still reads the
+/// pull request as it is.
+pub const PENDING_WAKE_LIMIT: usize = 32;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MissionNode {
     pub key: String,
@@ -256,6 +298,12 @@ pub struct Mission {
     /// The map opened itself for the first plan already (D-43).
     #[serde(default)]
     pub opened: bool,
+    /// The wakes not yet in the Conductor's inbox, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wakes: Vec<PendingWake>,
+    /// How many wakes this mission has had; the next one's `seq`.
+    #[serde(default)]
+    pub wake_seq: u64,
 }
 
 impl Mission {
@@ -472,14 +520,18 @@ pub enum MissionCommand {
     Decide {
         #[serde(default)]
         mission: Option<String>,
-        #[serde(default)]
+        /// Named every time: `null` clears, so a request that leaves it
+        /// out is refused rather than read as a clear.
+        #[serde(deserialize_with = "present")]
         line: Option<String>,
     },
     /// Sets or clears why new nodes wait on usage (B13).
     Delay {
         #[serde(default)]
         mission: Option<String>,
-        #[serde(default)]
+        /// Named every time: `null` clears, so a request that leaves it
+        /// out is refused rather than read as a clear.
+        #[serde(deserialize_with = "present")]
         line: Option<String>,
     },
     Close {
@@ -649,6 +701,12 @@ pub struct NodePatch {
     pub worker: Option<Option<Worker>>,
 }
 
+fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    Option::<T>::deserialize(deserializer)
+}
+
 fn double<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     deserializer: D,
 ) -> Result<Option<Option<T>>, D::Error> {
@@ -734,10 +792,12 @@ pub(crate) fn apply_plan(
             return Err("mission_dependency_unknown".into());
         }
     }
+    // Each node at most once, so the order is never longer than the plan.
+    let mut ordered = BTreeSet::new();
     if input
         .merge_order
         .iter()
-        .any(|key| !keys.contains(key.as_str()))
+        .any(|key| !keys.contains(key.as_str()) || !ordered.insert(key.as_str()))
     {
         return Err("mission_dependency_unknown".into());
     }
@@ -919,7 +979,12 @@ pub(crate) fn apply_patch(
 pub(crate) fn overlaps(book: &MissionBook, mission: &Mission) -> Vec<Overlap> {
     let mut out = Vec::new();
     for other in &book.missions {
-        if other.id == mission.id || !other.status.open() || other.project != mission.project {
+        // A path names a project on one machine only.
+        if other.id == mission.id
+            || !other.status.open()
+            || other.project != mission.project
+            || other.device_id != mission.device_id
+        {
             continue;
         }
         let issues: BTreeSet<u32> = other
@@ -1005,7 +1070,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Drop the node with hide mission node <key> --status dropped before removing it from the plan"
         }
         "mission_dependency_unknown" | "mission_dependency_cycle" => {
-            "Check depends_on and merge_order: they must name other nodes of the plan without a cycle"
+            "Check depends_on and merge_order: they must name other nodes of the plan, merge_order each at most once, without a cycle"
         }
         "mission_delivery_required" | "mission_delivery_invalid" => {
             "Give each change node a delivery (pr or direct) and no other node one"
@@ -1018,7 +1083,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Check the command's text and JSON and retry"
         }
         "mission_cap_reached" => {
-            "Wait for a worker to finish (end its registration with hide agent end <id>) and retry"
+            "Wait for a worker to finish (end its registration with hide agent end <id>) and retry; a start that failed stops counting after 10 minutes"
         }
         "mission_projects_loading" => {
             "Retry in a few seconds; Hide is still reading this machine's projects"
@@ -1026,8 +1091,8 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_project_unknown" => {
             "Run the command from a pane in a checkout of a registered project"
         }
-        "mission_save_failed" | "mission_unavailable" => {
-            "Retry; the reason is in Hide's diagnostic log"
+        "mission_unavailable" => {
+            "Stop and tell the operator: Hide could not read its mission record (the reason is in Hide's diagnostic log); it is kept as it is, and Hide reads it again when it restarts"
         }
         "agent_pane_required" => "Run the command from an agent's pane",
         "native_identity_required" => "Retry after the agent's session is observed",
@@ -1070,6 +1135,26 @@ fn decode(bytes: &[u8]) -> Result<MissionBook, String> {
         return Err("holds more missions or nodes than the limits allow".to_owned());
     }
     Ok(stored.book)
+}
+
+/// Whether the book, as it would be saved, stays within what a start reads
+/// back. Counted without keeping the bytes and stopped at the budget, so a
+/// check costs at most one budget's worth of encoding.
+pub(crate) fn fits(book: &MissionBook) -> bool {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            if self.0 > WRITE_BUDGET {
+                return Err(std::io::Error::other("over budget"));
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer(&mut Counter(0), book).is_ok()
 }
 
 /// Where a restored book came from: a file this build cannot use is kept
@@ -1161,7 +1246,23 @@ mod tests {
             started_at_unix_ms: None,
             closed_at_unix_ms: None,
             opened: false,
+            wakes: Vec::new(),
+            wake_seq: 0,
         }
+    }
+
+    /// A book is only kept when its save stays under what a start reads
+    /// back, so the file Hide writes never comes back unreadable.
+    #[test]
+    fn a_book_past_what_a_start_reads_back_does_not_fit() {
+        let mut large = mission();
+        large.report = Some("x".repeat(WRITE_BUDGET / 2));
+        let mut book = MissionBook::default();
+        book.missions.push(large.clone());
+        assert!(fits(&book));
+        book.missions.push(large);
+        assert!(!fits(&book));
+        assert!((WRITE_BUDGET as u64) < READ_CAP);
     }
 
     fn node(key: &str, kind: NodeKind, depends: &[&str]) -> NodeInput {
@@ -1204,6 +1305,12 @@ mod tests {
         let unknown = plan(vec![node("a", NodeKind::Change, &["z"])]);
         assert_eq!(
             apply_plan(&mission(), &unknown, 2).unwrap_err(),
+            "mission_dependency_unknown"
+        );
+        let mut repeated = plan(vec![node("a", NodeKind::Change, &[])]);
+        repeated.merge_order = vec!["a".into(), "a".into()];
+        assert_eq!(
+            apply_plan(&mission(), &repeated, 2).unwrap_err(),
             "mission_dependency_unknown"
         );
     }
@@ -1285,6 +1392,21 @@ mod tests {
     }
 
     #[test]
+    fn a_decision_or_delay_without_its_line_is_refused_and_null_clears() {
+        for op in ["decide", "delay"] {
+            assert!(
+                serde_json::from_value::<MissionCommand>(serde_json::json!({"op": op})).is_err()
+            );
+            assert!(
+                serde_json::from_value::<MissionCommand>(
+                    serde_json::json!({"op": op, "line": null})
+                )
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
     fn a_patch_null_clears_and_an_absent_field_is_kept() {
         let m = apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
         let set: NodePatch =
@@ -1359,6 +1481,10 @@ mod tests {
         let found = overlaps(&book, &m);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].paths, vec!["web/src/App.tsx".to_owned()]);
+        // The same path on another machine is another folder.
+        let mut elsewhere = m.clone();
+        elsewhere.device_id = "node-b".into();
+        assert!(overlaps(&book, &elsewhere).is_empty());
         let mut unrelated = node("z", NodeKind::Change, &[]);
         unrelated.paths = vec!["web/srcs".into()];
         let m = apply_plan(&mission(), &plan(vec![unrelated]), 2).unwrap();

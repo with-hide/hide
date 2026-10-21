@@ -15,7 +15,7 @@ use crate::delivery::Actor;
 use crate::missions::{
     Blocked, Conductor, ConductorSettings, Delivery, MISSION_LIMIT, Mission, MissionBook,
     MissionCommand, MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus,
-    PrSeen, Restored, Worker,
+    PENDING_WAKE_LIMIT, PendingWake, PrSeen, Restored, WakeEvent, Worker,
 };
 use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -23,8 +23,7 @@ use crate::workspace_control::{Caller, Context, Query};
 /// The role Hide wakes a mission's Conductor as (D-39). Like the memory
 /// role it is constructed only by the core; unlike it, it sends letters.
 pub(crate) const CONDUCTOR_ROLE: &str = "conductor";
-/// Wakes waiting to be sent at once; more than this many changes in one read
-/// are left for the Conductor's own `hide mission show`, and logged.
+/// Wakes one sending takes at once; the rest wait for the next.
 const WAKE_QUEUE_LIMIT: usize = 256;
 const WAKE_CALL: Duration = Duration::from_secs(10);
 
@@ -126,6 +125,8 @@ pub struct MissionAdmission {
 
 /// One wake for a Conductor, made under the lock and sent off it.
 struct Wake {
+    mission: String,
+    seq: u64,
     target: super::delivery::Observation,
     intent: String,
     body: String,
@@ -138,8 +139,24 @@ pub(crate) struct MissionRuntime {
     /// Why the stored record was not used; commands are refused while it
     /// stands so the file is not replaced by an empty book.
     pub(crate) unreadable: Option<String>,
-    wakes: Vec<Wake>,
+    /// A sending thread is running; it is the only one.
     waking: bool,
+    /// A wake was recorded or a Conductor arrived while it ran, so it looks
+    /// again before it ends.
+    rewake: bool,
+}
+
+/// The letter intent of one recorded wake: the same wake re-sent after a
+/// restart is the same letter (engineering #11), and two wakes are two.
+fn wake_intent(mission: &str, wake: &PendingWake) -> String {
+    format!(
+        "mission:{mission}:{}:{}:{}:{}:{}",
+        wake.node,
+        wake.pr,
+        wake.event.as_str(),
+        wake.head.as_deref().unwrap_or("-"),
+        wake.seq
+    )
 }
 
 impl Runtime {
@@ -178,6 +195,28 @@ impl Runtime {
     /// Runs a `hide mission` command from `caller`'s pane on `device`.
     /// Returns the answer and whether anything changed.
     pub(crate) fn mission_command(
+        &mut self,
+        device: &str,
+        caller: &str,
+        expected: &Context,
+        command: MissionCommand,
+    ) -> Result<(Value, bool), String> {
+        let before = self.missions.book.clone();
+        let answer = self.apply_mission_command(device, caller, expected, command)?;
+        // A change that would make the saved book larger than a start reads
+        // back is refused whole, like a full book (engineering #15).
+        if answer.1 && !crate::missions::fits(&self.missions.book) {
+            self.missions.book = before;
+            self.save_missions();
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "missions.record_full",
+            }));
+            return Err("mission_full".into());
+        }
+        Ok(answer)
+    }
+
+    fn apply_mission_command(
         &mut self,
         device: &str,
         caller: &str,
@@ -266,6 +305,8 @@ impl Runtime {
                     started_at_unix_ms: None,
                     closed_at_unix_ms: None,
                     opened: false,
+                    wakes: Vec::new(),
+                    wake_seq: 0,
                 };
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.created",
@@ -432,6 +473,8 @@ impl Runtime {
                     "mission": mission, "pane": pane,
                 }));
                 self.save_missions();
+                // What waited for a Conductor goes to the one that took it.
+                self.flush_mission_wakes();
                 Ok((json!({"mission": self.mission_view_of(&mission)}), true))
             }
             MissionCommand::Show { mission } => {
@@ -569,6 +612,18 @@ impl Runtime {
                         .to_owned(),
                     session_id: agent.session_id.clone()?,
                 })
+            })
+            // The pane's row can lag its session; the caller's own native
+            // identity, which every mission command requires, names it too,
+            // so the mission always has the session it is deleted with.
+            .or_else(|| {
+                Some(crate::links::ledger::SessionIdentity {
+                    device_id: device.to_owned(),
+                    agent: hide_session::Agent::from_kind(&actor.kind)?
+                        .as_str()
+                        .to_owned(),
+                    session_id: actor.session.clone()?,
+                })
             });
         let agent_id = self.delivery_state().ok().and_then(|ledger| {
             ledger
@@ -680,18 +735,19 @@ impl Runtime {
     }
 
     /// Compares a new GitHub answer with the facts each mission's pull
-    /// request was last seen with, and wakes the Conductor of every change
-    /// that is its to act on (D-39, B36): a merge, a review asking for
-    /// changes, a new head. A done mission reopens with the wake; a
+    /// request was last seen with, and records a wake for every change that
+    /// is its Conductor's to act on (D-39, B36): a merge, a review asking
+    /// for changes, a new head. A done mission reopens with the wake; a
     /// cancelled one is not woken (D-51). A stale read wakes nothing.
-    /// Returns the intents of the wakes it sends.
+    /// Returns the intents of the wakes it records; each is sent as soon as
+    /// the Conductor is there and stays recorded until it is.
     pub(crate) fn note_mission_pulls(
         &mut self,
         device: &str,
         github: &crate::model::GithubSnapshot,
     ) -> Vec<String> {
         let now = super::memory::now_ms();
-        let mut wakes = Vec::new();
+        let mut recorded = Vec::new();
         let mut reopened = Vec::new();
         let mut changed = false;
         for index in 0..self.missions.book.missions.len() {
@@ -727,13 +783,13 @@ impl Runtime {
                     None => {}
                     Some(before) => {
                         if now_seen.merged && !before.merged {
-                            events.push((node.key.clone(), number, "merged", None));
+                            events.push((node.key.clone(), number, WakeEvent::Merged, None));
                         } else if !now_seen.merged {
                             if now_seen.changes_requested && !before.changes_requested {
                                 events.push((
                                     node.key.clone(),
                                     number,
-                                    "changes_requested",
+                                    WakeEvent::ChangesRequested,
                                     now_seen.head.clone(),
                                 ));
                             }
@@ -741,7 +797,7 @@ impl Runtime {
                                 events.push((
                                     node.key.clone(),
                                     number,
-                                    "new_head",
+                                    WakeEvent::NewHead,
                                     now_seen.head.clone(),
                                 ));
                             }
@@ -756,9 +812,6 @@ impl Runtime {
                 continue;
             }
             changed = true;
-            let id = mission.id.clone();
-            let conductor = mission.conductor.actor.clone();
-            let title = mission.title.clone();
             let done = mission.status == MissionStatus::Done;
             let mission = &mut self.missions.book.missions[index];
             for (node_index, seen) in seen_updates {
@@ -768,40 +821,27 @@ impl Runtime {
                 continue;
             }
             if done {
-                reopened.push(id.clone());
+                reopened.push(mission.id.clone());
             }
-            let Some(target) = self
-                .delivery_observations
-                .get(&conductor.pane_id)
-                .filter(|observation| observation.actor.same_identity(&conductor))
-                .cloned()
-            else {
-                // No Conductor to wake: the change stays in what the next
-                // one reads with `hide mission show` (B44).
-                crate::diagnostic!(json!({
-                    "component": "missions", "kind": "mission.wake_no_conductor",
-                    "mission": id, "events": events.len(),
-                }));
-                continue;
-            };
-            for (node, number, event, head) in events {
-                let what = match event {
-                    "merged" => format!("PR #{number} was merged"),
-                    "changes_requested" => {
-                        format!("PR #{number} received a review asking for changes")
-                    }
-                    _ => format!("PR #{number} has a new commit"),
+            for (node, pr, event, head) in events {
+                mission.wake_seq += 1;
+                let wake = PendingWake {
+                    seq: mission.wake_seq,
+                    node,
+                    pr,
+                    event,
+                    head,
                 };
-                wakes.push(Wake {
-                    target: target.clone(),
-                    intent: format!(
-                        "mission:{id}:{node}:{number}:{event}:{}",
-                        head.as_deref().unwrap_or("-")
-                    ),
-                    body: format!(
-                        "{what} (mission {id} \"{title}\", node {node}).\nRead the mission with `hide mission show {id}` and act on it: move a stacked PR above it onto the change, answer the review, or check the new commit."
-                    ),
-                });
+                recorded.push(wake_intent(&mission.id, &wake));
+                mission.wakes.push(wake);
+            }
+            if mission.wakes.len() > PENDING_WAKE_LIMIT {
+                let dropped = mission.wakes.len() - PENDING_WAKE_LIMIT;
+                mission.wakes.drain(..dropped);
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.wake_dropped",
+                    "mission": mission.id, "count": dropped, "cap": PENDING_WAKE_LIMIT,
+                }));
             }
         }
         for id in reopened {
@@ -813,46 +853,97 @@ impl Runtime {
         if changed {
             self.save_missions();
         }
-        let intents = wakes.iter().map(|wake| wake.intent.clone()).collect();
-        if !wakes.is_empty() {
-            self.send_wakes(wakes);
-        }
-        intents
+        self.flush_mission_wakes();
+        recorded
     }
 
-    /// Hands the wakes to one sending thread at a time; a burst past the
-    /// queue's cap is logged, not sent.
-    fn send_wakes(&mut self, wakes: Vec<Wake>) {
-        for wake in wakes {
-            if self.missions.wakes.len() >= WAKE_QUEUE_LIMIT {
-                crate::diagnostic!(json!({
-                    "component": "missions", "kind": "mission.wake_dropped",
-                    "intent": wake.intent, "cap": WAKE_QUEUE_LIMIT,
-                }));
+    /// The recorded wakes whose Conductor is there to read them, at most
+    /// one queue's worth, leaving out those this sending already tried.
+    fn ready_wakes(&self, tried: &[String]) -> Vec<Wake> {
+        let mut out = Vec::new();
+        for mission in &self.missions.book.missions {
+            if mission.status == MissionStatus::Cancelled || mission.wakes.is_empty() {
                 continue;
             }
-            self.missions.wakes.push(wake);
+            let Some(target) = self
+                .delivery_observations
+                .get(&mission.conductor.actor.pane_id)
+                .filter(|observation| observation.actor.same_identity(&mission.conductor.actor))
+            else {
+                // No Conductor to wake: the wakes wait for the next one, and
+                // the change is in what it reads with `hide mission show`
+                // (B44).
+                continue;
+            };
+            for wake in &mission.wakes {
+                let intent = wake_intent(&mission.id, wake);
+                if tried.contains(&intent) {
+                    continue;
+                }
+                if out.len() >= WAKE_QUEUE_LIMIT {
+                    return out;
+                }
+                let number = wake.pr;
+                let what = match wake.event {
+                    WakeEvent::Merged => format!("PR #{number} was merged"),
+                    WakeEvent::ChangesRequested => {
+                        format!("PR #{number} received a review asking for changes")
+                    }
+                    WakeEvent::NewHead => format!("PR #{number} has a new commit"),
+                };
+                out.push(Wake {
+                    mission: mission.id.clone(),
+                    seq: wake.seq,
+                    target: target.clone(),
+                    intent,
+                    body: format!(
+                        "{what} (mission {} \"{}\", node {}).\nRead the mission with `hide mission show {}` and act on it: move a stacked PR above it onto the change, answer the review, or check the new commit.",
+                        mission.id, mission.title, wake.node, mission.id
+                    ),
+                });
+            }
         }
+        out
+    }
+
+    /// Sends the recorded wakes whose Conductor is there, from one thread
+    /// at a time; a wake leaves the record only once its letter is in the
+    /// Conductor's inbox, so one that fails is tried again on the next
+    /// GitHub read or takeover.
+    pub(super) fn flush_mission_wakes(&mut self) {
         if self.missions.waking {
+            self.missions.rewake = true;
             return;
         }
         let Some(context) = self.worker_context.clone() else {
             // A runtime without a worker (a test) sends nothing.
-            self.missions.wakes.clear();
             return;
         };
-        let Ok((client, authority, actor)) = self.hide_delivery(CONDUCTOR_ROLE) else {
-            self.missions.wakes.clear();
+        let batch = self.ready_wakes(&[]);
+        if batch.is_empty() {
             return;
+        }
+        let (client, authority, actor) = match self.hide_delivery(CONDUCTOR_ROLE) {
+            Ok(delivery) => delivery,
+            Err(code) => {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.wake_failed",
+                    "count": batch.len(), "code": code,
+                }));
+                return;
+            }
         };
-        let batch = std::mem::take(&mut self.missions.wakes);
         self.missions.waking = true;
+        self.missions.rewake = false;
         let spawned = std::thread::Builder::new()
             .name("hide-mission-wakes".to_owned())
             .spawn(move || {
                 let mut batch = batch;
+                let mut tried = Vec::new();
                 loop {
+                    let mut sent = Vec::new();
                     for wake in batch.drain(..) {
+                        tried.push(wake.intent.clone());
                         let prepared = crate::delivery::worker::Prepared::new(
                             client.clone(),
                             crate::delivery::worker::Authority {
@@ -869,22 +960,27 @@ impl Runtime {
                                 now: false,
                             },
                         );
-                        if let Err(code) = prepared.run(WAKE_CALL) {
-                            crate::diagnostic!(json!({
+                        match prepared.run(WAKE_CALL) {
+                            Ok(_) => sent.push((wake.mission, wake.seq)),
+                            Err(code) => crate::diagnostic!(json!({
                                 "component": "missions", "kind": "mission.wake_failed",
                                 "intent": wake.intent, "code": code,
-                            }));
+                            })),
                         }
                     }
                     let Some(runtime) = context.runtime.upgrade() else {
                         return;
                     };
                     let mut guard = runtime.lock().unwrap_or_else(|poison| poison.into_inner());
-                    if guard.missions.wakes.is_empty() {
+                    guard.mission_wakes_sent(&sent);
+                    if guard.missions.rewake {
+                        guard.missions.rewake = false;
+                        batch = guard.ready_wakes(&tried);
+                    }
+                    if batch.is_empty() {
                         guard.missions.waking = false;
                         return;
                     }
-                    batch = std::mem::take(&mut guard.missions.wakes);
                 }
             });
         if let Err(error) = spawned {
@@ -893,6 +989,22 @@ impl Runtime {
                 "component": "missions", "kind": "mission.wake_not_started",
                 "message": error.to_string(),
             }));
+        }
+    }
+
+    /// Takes the wakes whose letters are in their Conductor's inbox out of
+    /// the record.
+    pub(crate) fn mission_wakes_sent(&mut self, sent: &[(String, u64)]) {
+        let mut changed = false;
+        for (id, seq) in sent {
+            if let Some(mission) = self.missions.book.get_mut(id) {
+                let before = mission.wakes.len();
+                mission.wakes.retain(|wake| wake.seq != *seq);
+                changed |= mission.wakes.len() != before;
+            }
+        }
+        if changed {
+            self.save_missions();
         }
     }
 
@@ -985,7 +1097,11 @@ impl Runtime {
             })
             .collect();
         let running = ledger.map_or(0, |ledger| {
-            crate::coordination::mission_workers(ledger, &mission.id)
+            crate::coordination::mission_workers(
+                ledger,
+                &mission.id,
+                crate::delivery::worker::now(),
+            )
         });
         MissionView {
             id: mission.id.clone(),

@@ -426,7 +426,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     );
     assert_eq!(
         runtime.note_mission_pulls(node, &pushed),
-        vec!["mission:mission-1:fix:7:new_head:b2"]
+        vec!["mission:mission-1:fix:7:new_head:b2:1"]
     );
     assert!(runtime.note_mission_pulls(node, &pushed).is_empty());
 
@@ -441,7 +441,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     );
     assert_eq!(
         runtime.note_mission_pulls(node, &reviewed),
-        vec!["mission:mission-1:fix:7:changes_requested:b2"]
+        vec!["mission:mission-1:fix:7:changes_requested:b2:2"]
     );
 
     // A merge of a done mission's pull request reopens it with the wake.
@@ -460,12 +460,78 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     let merged = github(vec![pull(7, "b2", PullRequestBadge::Merged, None)], false);
     assert_eq!(
         runtime.note_mission_pulls(node, &merged),
-        vec!["mission:mission-1:fix:7:merged:-"]
+        vec!["mission:mission-1:fix:7:merged:-:3"]
     );
     assert_eq!(
         runtime.missions.book.get("mission-1").unwrap().status,
         MissionStatus::Running
     );
+}
+
+/// A wake is kept in the record until its letter is in the Conductor's
+/// inbox: with no sending here, each change is still waiting, a restart
+/// reads them back, and only a delivered one leaves. The same change asked
+/// for twice on one head is two wakes, not one swallowed by the first's
+/// letter.
+#[test]
+fn a_missions_wake_waits_in_the_record_until_its_letter_is_delivered() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
+    )
+    .unwrap();
+    let node = crate::node::TEST_NODE;
+    let open = github(vec![pull(7, "a1", PullRequestBadge::Open, None)], false);
+    let asked = github(
+        vec![pull(
+            7,
+            "a1",
+            PullRequestBadge::Open,
+            Some(ReviewDecision::ChangesRequested),
+        )],
+        false,
+    );
+    runtime.note_mission_pulls(node, &open);
+    let first = runtime.note_mission_pulls(node, &asked);
+    runtime.note_mission_pulls(node, &open);
+    let second = runtime.note_mission_pulls(node, &asked);
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+    assert_ne!(first, second, "a second ask is its own letter");
+
+    let waiting = |runtime: &Runtime| {
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .wakes
+            .iter()
+            .map(|wake| wake.seq)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(waiting(&runtime), [1, 2]);
+    let stored: crate::missions::MissionBook =
+        serde_json::from_value(serde_json::to_value(&runtime.missions.book).unwrap()).unwrap();
+    assert_eq!(
+        stored.get("mission-1").unwrap().wakes.len(),
+        2,
+        "a restart reads them back"
+    );
+
+    runtime.mission_wakes_sent(&[("mission-1".to_owned(), 1)]);
+    assert_eq!(waiting(&runtime), [2]);
 }
 
 #[test]
@@ -520,16 +586,25 @@ fn a_mission_goes_with_its_conductors_deleted_session() {
     )
     .unwrap();
     command(&mut runtime, "sender", plan()).unwrap();
-    runtime.missions.book.missions[0].conductor.session =
-        Some(crate::links::ledger::SessionIdentity {
-            device_id: crate::node::TEST_NODE.into(),
-            agent: "codex".into(),
-            session_id: "native-1".into(),
-        });
+    // The pane's row has no session id here; the Conductor's own native
+    // identity names the session the mission goes with.
+    let native = runtime.delivery_observations["sender"]
+        .actor
+        .session
+        .clone()
+        .unwrap();
+    assert_eq!(
+        runtime.missions.book.missions[0]
+            .conductor
+            .session
+            .as_ref()
+            .map(|session| session.session_id.as_str()),
+        Some(native.as_str())
+    );
     assert_eq!(mission_slot_items(&runtime), 1);
 
-    assert!(!runtime.drop_missions_of(&[(crate::node::TEST_NODE.into(), "native-2".into())]));
-    assert!(runtime.drop_missions_of(&[(crate::node::TEST_NODE.into(), "native-1".into())]));
+    assert!(!runtime.drop_missions_of(&[(crate::node::TEST_NODE.into(), "another".into())]));
+    assert!(runtime.drop_missions_of(&[(crate::node::TEST_NODE.into(), native)]));
     assert!(runtime.missions.book.missions.is_empty());
     assert_eq!(
         mission_slot_items(&runtime),
@@ -553,6 +628,25 @@ fn conductor_settings_out_of_range_are_not_kept() {
         !runtime.set_conductor_settings(settings),
         "the same settings change nothing"
     );
+}
+
+/// Each edit in Settings › Conductor sends only what it changes, so a second
+/// edit sent before the first one's echo keeps the first.
+#[test]
+fn conductor_settings_change_only_what_an_edit_sends() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let event = |payload: Value| {
+        serde_json::to_vec(
+            &json!({"schema_version": 2, "kind": "conductor_settings_set", "payload": payload}),
+        )
+        .unwrap()
+    };
+    assert!(runtime.dispatch_json(&event(json!({"concurrency": 6}))));
+    assert!(runtime.dispatch_json(&event(json!({"default_scope": "merge"}))));
+    let settings = &runtime.snapshot.ui_state.conductor_settings;
+    assert_eq!(settings.concurrency, 6);
+    assert_eq!(settings.default_scope, crate::missions::MissionScope::Merge);
 }
 
 #[test]

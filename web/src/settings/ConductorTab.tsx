@@ -21,8 +21,8 @@ import { useErrorSince } from "./useErrorSince";
 // Settings › Conductor (PRD software-factory-conductor D-31, B48, B49): how
 // many agents a mission runs at once, how far a mission goes when it does not
 // say, and the candidates a Conductor chooses its workers from. Every edit
-// sends the whole value; the core checks it and keeps it, and a mission
-// already planned keeps its own.
+// sends the field it changes; the core checks the result and keeps it, and a
+// mission already planned keeps its own.
 
 /** Radix items cannot carry an empty value; this stands for the CLI's own default model. */
 const DEFAULT_MODEL = "__cli_default";
@@ -35,15 +35,15 @@ export function ConductorTab({ actions }: { actions: Actions }) {
   const live = useShellStore((s) => s.connection === "live");
   // The model menus are the start panel's lists, read while this page shows.
   useEffect(() => (live ? actions.observeCatalog() : undefined), [actions, live]);
-  const send = (next: ConductorSettings) => {
+  const send = (patch: Partial<ConductorSettings>) => {
     setSentAt(Date.now());
-    actions.setConductorSettings(next);
+    actions.setConductorSettings(patch);
   };
   return (
     <div data-settings-conductor="true">
       <Group>
         <Row label={<RowLabel title={t("conductor.cap")} hint={t("conductor.capHint")} />}>
-          <Select value={String(settings.concurrency)} onValueChange={(value) => send({ ...settings, concurrency: Number(value) })}>
+          <Select value={String(settings.concurrency)} onValueChange={(value) => send({ concurrency: Number(value) })}>
             <SelectTrigger aria-label={t("conductor.cap")} className="w-auto" data-conductor-cap={settings.concurrency}>
               <SelectValue />
             </SelectTrigger>
@@ -53,7 +53,7 @@ export function ConductorTab({ actions }: { actions: Actions }) {
           </Select>
         </Row>
         <Row label={<RowLabel title={t("conductor.scope")} hint={t("conductor.scopeHint")} />}>
-          <RadioGroup value={settings.default_scope} onValueChange={(value) => send({ ...settings, default_scope: value as MissionScope })} aria-label={t("conductor.scope")} className="flex flex-wrap gap-md" data-conductor-scope={settings.default_scope}>
+          <RadioGroup value={settings.default_scope} onValueChange={(value) => send({ default_scope: value as MissionScope })} aria-label={t("conductor.scope")} className="flex flex-wrap gap-md" data-conductor-scope={settings.default_scope}>
             {(["pr", "merge"] as const).map((scope) => (
               <label key={scope} className="flex items-center gap-xs text-subhead">
                 <RadioGroupItem value={scope} data-conductor-scope-option={scope} />
@@ -69,7 +69,7 @@ export function ConductorTab({ actions }: { actions: Actions }) {
         action={
           <Hint label={settings.candidates.length >= CANDIDATE_LIMIT ? t("conductor.limit", { count: CANDIDATE_LIMIT }) : t("conductor.add")}>
             <span>
-              <Button size="sm" variant="ghost" disabled={settings.candidates.length >= CANDIDATE_LIMIT} onClick={() => send(addCandidate(settings))} data-conductor-add="true">
+              <Button size="sm" variant="ghost" disabled={settings.candidates.length >= CANDIDATE_LIMIT} onClick={() => send({ candidates: addCandidate(settings).candidates })} data-conductor-add="true">
                 <PlusIcon />{t("conductor.add")}
               </Button>
             </span>
@@ -88,7 +88,7 @@ export function ConductorTab({ actions }: { actions: Actions }) {
           </div>
         ) : null}
         {settings.candidates.map((candidate, index) => (
-          <CandidateRow key={index} candidate={candidate} onChange={(next) => send(replaceCandidate(settings, index, next))} />
+          <CandidateRow key={index} candidate={candidate} onChange={(next) => send({ candidates: replaceCandidate(settings, index, next).candidates })} />
         ))}
       </Group>
     </div>

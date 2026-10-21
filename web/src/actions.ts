@@ -1684,8 +1684,9 @@ export function createActions(send: DispatchFn) {
     },
 
     /** Settings › Conductor (D-31, B48): the whole value, checked by the core before it is kept. */
-    setConductorSettings(settings: import("./snapshot").ConductorSettings) {
-      dispatch({ schema_version: 2, kind: "conductor_settings_set", payload: { settings } });
+    /** The fields of Settings › Conductor one edit changes; the core keeps the rest. */
+    setConductorSettings(patch: Partial<import("./snapshot").ConductorSettings>) {
+      dispatch({ schema_version: 2, kind: "conductor_settings_set", payload: patch });
     },
 
     /** The PRs tool, for a list that is not tied to one pull request (`이슈 없는 PR N`). */

@@ -101,15 +101,24 @@ pub enum Command {
     },
 }
 
+/// How long a mission's spawn with no child yet counts as a worker being
+/// made. A start takes seconds to a minute or two; one still childless past
+/// this failed and was left (a retry under a new intent is its own spawn),
+/// so it stops holding a place under the cap.
+pub(crate) const MISSION_RESERVATION_HOLD_MS: u64 = 10 * 60 * 1000;
+
 /// The workers a mission has now (D-29): spawns made for it whose child has
 /// not ended, and those still being made, which will be one.
-pub(crate) fn mission_workers(ledger: &Ledger, mission: &str) -> usize {
+pub(crate) fn mission_workers(ledger: &Ledger, mission: &str, now: u64) -> usize {
     ledger
         .spawns
         .iter()
         .filter(|spawn| spawn.mission.as_deref() == Some(mission))
         .filter(|spawn| match &spawn.child {
-            None => !spawn.completed,
+            None => {
+                !spawn.completed
+                    && now.saturating_sub(spawn.reserved_at_unix_ms) < MISSION_RESERVATION_HOLD_MS
+            }
             Some(child) => ledger
                 .agents
                 .iter()
@@ -384,6 +393,14 @@ pub struct SpawnRecord {
     /// The mission the child is a worker of, counted against its cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mission: Option<String>,
+    /// When the spawn was reserved; a record written before it existed has
+    /// 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub reserved_at_unix_ms: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 pub(crate) enum Mutation {
@@ -885,7 +902,7 @@ pub(crate) fn apply(
             // A new worker past its mission's cap waits for one to end; the
             // same intent asked again above still answers the spawn it made.
             if let Some(admission) = mission
-                && mission_workers(ledger, &admission.mission) >= usize::from(admission.cap)
+                && mission_workers(ledger, &admission.mission, now) >= usize::from(admission.cap)
             {
                 return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
             }
@@ -917,6 +934,7 @@ pub(crate) fn apply(
                 auto_watch_id: None,
                 task: task.clone(),
                 mission: mission.as_ref().map(|admission| admission.mission.clone()),
+                reserved_at_unix_ms: now,
             };
             ledger.spawns.push(record.clone());
             Ok(json!(record))
@@ -1835,7 +1853,7 @@ mod tests {
         };
         let first = apply(&mut ledger, &caller, &worker("mission-1:a"), 2).unwrap();
         assert_eq!(first["mission"], "mission-1");
-        assert_eq!(mission_workers(&ledger, "mission-1"), 1);
+        assert_eq!(mission_workers(&ledger, "mission-1", 6), 1);
         let refused = apply(&mut ledger, &caller, &worker("mission-1:b"), 3).unwrap_err();
         assert_eq!(split_refusal(&refused), ("mission_cap_reached", Some("1")));
         assert_eq!(
@@ -1843,7 +1861,7 @@ mod tests {
             first["id"]
         );
         // Another mission and an ordinary spawn are not counted here.
-        assert_eq!(mission_workers(&ledger, "mission-2"), 0);
+        assert_eq!(mission_workers(&ledger, "mission-2", 6), 0);
         apply(
             &mut ledger,
             &caller,
@@ -1854,7 +1872,7 @@ mod tests {
             5,
         )
         .unwrap();
-        assert_eq!(mission_workers(&ledger, "mission-1"), 1);
+        assert_eq!(mission_workers(&ledger, "mission-1", 6), 1);
         // The worker came up and then ended: its place is free again.
         let child = register(
             &mut ledger,
@@ -1868,15 +1886,21 @@ mod tests {
             .unwrap();
         spawn.child = Some(child.clone());
         spawn.completed = true;
-        assert_eq!(mission_workers(&ledger, "mission-1"), 1);
+        assert_eq!(mission_workers(&ledger, "mission-1", 6), 1);
         ledger
             .agents
             .iter_mut()
             .find(|agent| agent.id == child)
             .unwrap()
             .ended = true;
-        assert_eq!(mission_workers(&ledger, "mission-1"), 0);
+        assert_eq!(mission_workers(&ledger, "mission-1", 6), 0);
         apply(&mut ledger, &caller, &worker("mission-1:b"), 6).unwrap();
+        // A start that never produced its worker stops holding the place
+        // once it is long past, so a retry under a new intent can start.
+        let later = 6 + MISSION_RESERVATION_HOLD_MS;
+        assert_eq!(mission_workers(&ledger, "mission-1", later - 1), 1);
+        assert_eq!(mission_workers(&ledger, "mission-1", later), 0);
+        apply(&mut ledger, &caller, &worker("mission-1:c"), later).unwrap();
     }
     #[test]
     fn a_parent_intent_has_one_durable_child_and_other_parents_have_their_own() {
