@@ -898,6 +898,28 @@ struct PassInput {
 // (each group may add one document comparison): sixteen calls across all Projects.
 const MAINTENANCE_CALLS_PER_PASS: usize = 8;
 const EVENT_TEXT_LIMIT_BYTES: usize = 256 * 1024;
+/// What an event past [`EVENT_TEXT_LIMIT_BYTES`] keeps from each end: a
+/// pasted log rarely hides the operator's own words in its middle, and the
+/// two ends fit one extraction group.
+const EVENT_KEPT_END_BYTES: usize = 16 * 1024;
+
+/// `text` whole up to the cap, else its first and last
+/// [`EVENT_KEPT_END_BYTES`] around a line saying how much was left out, so
+/// an instruction beside a pasted log is still read while the paste costs
+/// one bounded group.
+fn bounded_event_text(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.len() <= EVENT_TEXT_LIMIT_BYTES {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let head = hide_memory::hook::prefix(text, EVENT_KEPT_END_BYTES);
+    let mut start = text.len() - EVENT_KEPT_END_BYTES;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    let tail = &text[start..];
+    let omitted = text.len() - head.len() - tail.len();
+    std::borrow::Cow::Owned(format!("{head}\n[{omitted} bytes left out]\n{tail}"))
+}
 
 fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcome {
     let mut outcome = PassOutcome {
@@ -1896,16 +1918,19 @@ fn analyze_session(
         .iter()
         .zip(&read.event_offsets)
         .filter(|(event, _)| matches!(event.kind, EventKind::Human | EventKind::Assistant))
-        .filter(|(event, offset)| {
-            if event.text.len() <= EVENT_TEXT_LIMIT_BYTES {
-                return true;
-            }
-            crate::diagnostic!(json!({"component":"memory","kind":"analysis.event_skipped",
-                "project_id":project_id,"session_id":session.id,"offset":offset,
-                "reason":"event_text_capacity","bytes":event.text.len(),"limit":EVENT_TEXT_LIMIT_BYTES}));
-            false
-        })
         .map(|(event, offset)| {
+            let text = bounded_event_text(&event.text);
+            if text.len() < event.text.len() {
+                crate::diagnostic!(
+                    json!({"component":"memory","kind":"analysis.event_shortened",
+                    "project_id":project_id,"session_id":session.id,"offset":offset,
+                    "reason":"event_text_capacity","bytes":event.text.len(),"kept":text.len(),
+                    "limit":EVENT_TEXT_LIMIT_BYTES})
+                );
+            }
+            (event, offset, text)
+        })
+        .map(|(event, offset, text)| {
             // What another agent sent a session it started is that agent's
             // instruction, not the operator's word (D-04).
             let kind = match event.kind {
@@ -1917,7 +1942,7 @@ fn analyze_session(
                 "role": event.role,
                 "kind": kind,
                 "at_unix_ms": event.at_unix_ms,
-                "text": event.text,
+                "text": text,
             })
         })
         .collect::<Vec<_>>();
@@ -5230,6 +5255,34 @@ mod tests {
                 .unwrap()
                 .len(),
             2
+        );
+    }
+
+    #[test]
+    fn an_oversized_event_keeps_its_two_ends_and_the_instruction_beside_a_paste() {
+        // A JSONL line past the reader's cap never becomes an event; an
+        // OpenCode message read from its database can.
+        let paste = format!(
+            "Always run tests with nextest before a merge. Here is the log:\n{}\n끝까지 한글",
+            "log line ".repeat(40 * 1024)
+        );
+        assert!(paste.len() > EVENT_TEXT_LIMIT_BYTES);
+        let kept = bounded_event_text(&paste);
+        assert!(kept.starts_with("Always run tests with nextest before a merge."));
+        assert!(kept.ends_with("끝까지 한글"), "cut on a character boundary");
+        assert!(kept.contains(" bytes left out]"));
+        assert!(kept.len() <= 2 * EVENT_KEPT_END_BYTES + 64);
+        let event = json!({"offset":0,"kind":"human","text":kept});
+        assert_eq!(
+            event_groups(&[event]).unwrap().len(),
+            1,
+            "one bounded group"
+        );
+        let whole = "a".repeat(EVENT_TEXT_LIMIT_BYTES);
+        assert_eq!(
+            bounded_event_text(&whole),
+            whole.as_str(),
+            "the cap itself is kept whole"
         );
     }
 
