@@ -345,38 +345,6 @@ fn bounded_memory_capsule(index: &str, bodies: &str) -> (Option<String>, bool) {
     }
 }
 
-#[cfg(test)]
-mod memory_budget_tests {
-    use super::bounded_memory_capsule;
-
-    #[test]
-    fn a_first_prompt_keeps_its_whole_signed_body_within_the_shared_quota() {
-        let index = format!(
-            "<hide-memory-index>{}</hide-memory-index>",
-            "index ".repeat(600)
-        );
-        let bodies = format!(
-            "<hide-memory-context>{}</hide-memory-context><hide-memory-receipt items=\"m1@2\" auth=\"synthetic\" />",
-            "body ".repeat(600)
-        );
-        let (capsule, index_kept) = bounded_memory_capsule(&index, &bodies);
-        let capsule = capsule.unwrap();
-        assert!(!index_kept);
-        assert_eq!(capsule, bodies);
-        assert!(hide_memory::hook::estimated_tokens(&capsule) <= 1200);
-        let (capsule, index_kept) = bounded_memory_capsule(
-            "<hide-memory-index>one</hide-memory-index>",
-            "<hide-memory-context>two</hide-memory-context>",
-        );
-        assert!(index_kept);
-        assert!(
-            capsule
-                .unwrap()
-                .contains("one</hide-memory-index><hide-memory-context>two")
-        );
-    }
-}
-
 /// The letters due while the pane's agent works, asked at one of its tool
 /// results (PRD letters-to-busy-agents D-02): the script writes them with
 /// the result and confirms them, as it does a prompt's, once the host stored
@@ -504,4 +472,36 @@ fn subagents(home: &Path, agent: &Agent, input: Input) -> Value {
     let socket_path = socket_path.unwrap_or_default();
     let _ = report::record_outcome(home, &pane, "subagent count", &socket_path, &outcome);
     json!({ "reported": outcome.is_ok() })
+}
+
+#[cfg(test)]
+mod memory_budget_tests {
+    use super::bounded_memory_capsule;
+
+    #[test]
+    fn a_first_prompt_keeps_its_whole_signed_body_within_the_shared_quota() {
+        let index = format!(
+            "<hide-memory-index>{}</hide-memory-index>",
+            "index ".repeat(600)
+        );
+        let bodies = format!(
+            "<hide-memory-context>{}</hide-memory-context><hide-memory-receipt items=\"m1@2\" auth=\"synthetic\" />",
+            "body ".repeat(600)
+        );
+        let (capsule, index_kept) = bounded_memory_capsule(&index, &bodies);
+        let capsule = capsule.unwrap();
+        assert!(!index_kept);
+        assert_eq!(capsule, bodies);
+        assert!(hide_memory::hook::estimated_tokens(&capsule) <= 1200);
+        let (capsule, index_kept) = bounded_memory_capsule(
+            "<hide-memory-index>one</hide-memory-index>",
+            "<hide-memory-context>two</hide-memory-context>",
+        );
+        assert!(index_kept);
+        assert!(
+            capsule
+                .unwrap()
+                .contains("one</hide-memory-index><hide-memory-context>two")
+        );
+    }
 }
