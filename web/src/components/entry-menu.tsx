@@ -37,6 +37,8 @@ export type MenuEntry<Id extends string = string> = MenuPresentation & {
   destructive?: boolean;
   /** The chord that does the same, drawn at the item's end; "" or absent draws none. */
   shortcut?: string;
+  /** Nested destination actions, rendered with the same menu and keyboard behavior. */
+  children?: MenuEntry<Id>[];
   /** One choice out of several: the entry opens a submenu of radio items and picking one selects that choice's id. */
   choices?: { id: Id; label: string; checked: boolean }[];
 };
@@ -52,7 +54,9 @@ function FlatEntryItems<Id extends string>({ items, onSelect, parts, withIcons =
       {items.map((item) => (
         <Fragment key={item.id}>
           {item.separated ? <Separator /> : null}
-          {item.choices ? (
+          {item.children ? (
+            <NestedEntryMenu item={item} onSelect={onSelect} parts={parts} withIcons={withIcons} />
+          ) : item.choices ? (
             <DropdownMenuSub>
               <DropdownMenuSubTrigger disabled={item.unavailable !== null} data-menu-item={item.id}>
                 <MenuSymbolSlot name={item.icon} reserved={withIcons} destructive={item.destructive} />
@@ -82,6 +86,25 @@ function FlatEntryItems<Id extends string>({ items, onSelect, parts, withIcons =
       ))}
     </>
   );
+}
+
+/** Each destination level owns Escape and returns focus to its own trigger. */
+function NestedEntryMenu<Id extends string>({ item, onSelect, parts, withIcons }: { item: MenuEntry<Id>; onSelect: (id: Id) => void; parts: Parts; withIcons: boolean }) {
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const close = () => { setOpen(false); trigger.current?.focus(); };
+  useLayoutEffect(() => {
+    if (open && item.unavailable !== null) { setOpen(false); trigger.current?.focus(); }
+  }, [open, item.unavailable]);
+  useEscapeLayer(open && item.unavailable === null, close);
+  return <DropdownMenuSub open={open && item.unavailable === null} onOpenChange={setOpen}>
+    <DropdownMenuSubTrigger ref={trigger} disabled={item.unavailable !== null} data-menu-item={item.id} textValue={item.label} onPointerLeave={event => { if (event.relatedTarget instanceof Node && content.current?.contains(event.relatedTarget)) event.preventDefault(); }}>
+      <MenuSymbolSlot name={item.icon} reserved={withIcons} />
+      <span className="flex min-w-0 flex-1 flex-col"><span className="truncate" data-menu-label="">{item.menuLabel ?? item.label}</span>{item.unavailable ? <span className="text-caption text-muted-foreground" data-menu-reason="">{item.unavailable}</span> : null}</span>
+    </DropdownMenuSubTrigger>
+    <MenuPrimitive.Portal><DropdownMenuSubContent ref={content} className={entryBounds} aria-label={item.label} onEscapeKeyDown={event => { event.preventDefault(); close(); }}><FlatEntryItems items={item.children ?? []} onSelect={onSelect} parts={parts} /></DropdownMenuSubContent></MenuPrimitive.Portal>
+  </DropdownMenuSub>;
 }
 
 function MenuSymbolSlot({ name, reserved, destructive }: { name?: MenuPresentation["icon"]; reserved: boolean; destructive?: boolean }) {

@@ -1,13 +1,17 @@
-import { BaseEdge, EdgeLabelRenderer, Handle, Position, getBezierPath, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
-import { ChevronDownIcon, ChevronRightIcon, FolderIcon } from "lucide-react";
-import type { TFunction } from "i18next";
+import { BaseEdge, Handle, Position, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
+import { ChevronsDownUpIcon } from "lucide-react";
+import { useId } from "react";
 import { AgentMark } from "./AgentMark";
-import { agentProductName } from "./agentAdapters";
-import { badgeParts, markName, markWords } from "./agentRow";
+import { badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
+import { AgentRecordTitle } from "./components/agent-record-title";
+import { AskLine } from "./components/agent-tree";
+import { RevisitStar, starred } from "./components/revisit-mark";
+import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
 import { useInterfaceTranslation } from "./i18n/client";
-import type { Communication, GraphAgent, GraphProject } from "./overviewGraphModel";
-import type { WorkProgress } from "./snapshot";
+import type { GraphAgent, GraphProject, ProjectSummary } from "./overviewGraphModel";
+import type { ProjectAccent } from "./overviewGraphLines";
+import type { AgentRow } from "./snapshot";
 
 /** Custom button focus follows the same viewport rule as React Flow's node focus. */
 function useRevealNode(id: string) {
@@ -23,78 +27,117 @@ function useRevealNode(id: string) {
   };
 }
 
-export type ProjectNode = Node<{ group: GraphProject; frameless: boolean; highlight: (id: string | null, focus: boolean) => void; toggle: (id: string) => void }, "project">;
-export type SessionNode = Node<{ row: GraphAgent; root: boolean; progress: WorkProgress | null; context: boolean; highlighted: boolean; quietCount: number; folded: boolean; fold: (id: string) => void; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
-export type LetterEdge = Edge<{ bundle: Communication; label: string; emphasized: boolean; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target?: HTMLElement) => void }, "letters">;
+export type OperatorNode = Node<{ label: string }, "operator">;
+/** A project's name above its sessions, in the project's color; dragging it moves the whole project. */
+export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; current: boolean; emphasized: boolean; fold: (id: string) => void; point: (id: string | null) => void }, "project">;
+/** The soft light behind a project's sessions, fading to nothing at its edge. */
+export type GlowNode = Node<{ accent: ProjectAccent; emphasized: boolean }, "glow">;
+/** A folded project: one circle with its name and counts. */
+export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent; orb: number; emphasized: boolean; unfold: (id: string) => void; point: (id: string | null) => void }, "cluster">;
+export type TeamNode = Node<{ path: string; width: number; height: number; selected: boolean }, "team">;
+/** A team root's fold: how many descendants, their states, and whether they are folded away. */
+export type TeamFold = { count: number; turn: number; going: number; done: number; folded: boolean; toggle: () => void };
+export type SessionNode = Node<{ row: GraphAgent; root: boolean; context: boolean; muted: boolean; highlighted: boolean; current: boolean; team: TeamFold | null; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
+/** A straight relationship between two orbs, already trimmed to their edges; it carries no words. */
+export type LineEdge = Edge<{ x1: number; y1: number; x2: number; y2: number }, "line">;
 
 /** Handles are invisible routing anchors; no connection can be edited. */
 function Ports() {
-  return <><Handle id="target-left" type="target" position={Position.Left} /><Handle id="target-right" type="target" position={Position.Right} /><Handle id="source-left" type="source" position={Position.Left} /><Handle id="source-right" type="source" position={Position.Right} /></>;
+  return <><Handle id="target" type="target" position={Position.Left} /><Handle id="source" type="source" position={Position.Right} /></>;
 }
 
-export function GraphStateCounts({ agents }: { agents: readonly GraphAgent[] }) {
+/** A mark and count for each nonzero state a project's sessions are in: 내 차례, 진행 중, 읽을 것. */
+export function GraphStateCounts({ summary }: { summary: Pick<ProjectSummary, "turn" | "working" | "results"> }) {
   const { t } = useInterfaceTranslation();
-  const counts = { turn: 0, going: 0, done: 0, unread: 0 };
-  for (const { agent } of agents) {
-    if (agent.mark === "waiting") counts.going += 1;
-    else if (agent.mark in counts) counts[agent.mark as keyof typeof counts] += 1;
-  }
-  return <span className="og-state-counts">{badgeParts(counts).map((part) => <span key={part.state}><StatusMark mark={part.mark} /><span>{markName(t, part.mark as "turn" | "going" | "done" | "unread")} <b>{part.count}</b></span></span>)}</span>;
+  return <span className="og-state-counts">{badgeParts({ turn: summary.turn, going: summary.working, done: summary.results }).map((part) => <span key={part.state} data-state={part.state}><StatusMark mark={part.mark} /><span>{markName(t, part.mark as "turn" | "going" | "done")} <b>{part.count}</b></span></span>)}</span>;
 }
 
-export function ProjectGraphNode({ id, data }: NodeProps<ProjectNode>) {
+/** The line a session's second row reads from: its sidebar line, or its quiet sentence. */
+const graphRowLine = (agent: AgentRow) => sidebarLine(agent) ?? rowLine(agent);
+
+/** Whether a session has anything to say on its second row. */
+export const hasGraphLine = (agent: AgentRow) => Boolean(agent.state.ask || graphRowLine(agent));
+
+/** What a session does now, as its sidebar row says it, or what it asks the operator. */
+export function GraphLine({ agent, className }: { agent: AgentRow; className?: string }) {
   const { t } = useInterfaceTranslation();
-  const { group, toggle, frameless, highlight } = data;
-  const reveal = useRevealNode(id);
-  if (frameless) return <div className="og-project og-project-frameless" data-graph-project={group.project.workspace.id}><Ports /></div>;
-  return <div className="og-project" data-graph-project={group.project.workspace.id} data-expanded={group.expanded}>
-    <Ports />
-    <button type="button" className="og-project-heading nodrag nopan" aria-expanded={group.expanded} aria-label={t(group.expanded ? "overviewGraph.collapse" : "overviewGraph.expand", { project: group.project.workspace.label })} onPointerEnter={() => highlight(id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(id, true); }} onBlur={() => highlight(null, true)} onClick={() => toggle(group.id)}>
-      {group.expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}<FolderIcon />
-      <strong>{group.project.workspace.label}</strong><span className="og-count">{group.matches}</span>
-    </button>
-    <div className="og-project-summary"><GraphStateCounts agents={group.agents} /></div>
-    {!group.expanded ? <div className="og-project-footer"><span>{t("overviewGraph.roots", { roots: group.roots, children: group.agents.length - group.roots })}</span><span>{t("overviewGraph.expandShort")} ↘</span></div> : null}
-    {group.agents.length === 0 ? <span className="og-empty-project">{t("overviewGraph.emptyProject")}</span> : null}
+  if (agent.state.ask) return <AskLine ask={agent.state.ask} className={className} />;
+  const line = graphRowLine(agent);
+  return line ? <RowLineText data-agent-line={line.mode} parts={lineParts(t, agent, line)} className={className} /> : null;
+}
+
+export function OperatorGraphNode({ data }: NodeProps<OperatorNode>) {
+  return <div className="og-operator" role="img" aria-label={data.label}><Ports /><span aria-hidden="true">{data.label}</span></div>;
+}
+
+export function ProjectGraphNode({ data }: NodeProps<ProjectNode>) {
+  const { t } = useInterfaceTranslation();
+  const label = data.group.project.workspace.label;
+  const id = data.group.id;
+  // The name drags the project; the fold button beside it is not part of the drag handle. Folding
+  // replaces this node under the pointer, so no pointer leave arrives and the emphasis ends with the fold.
+  return <div className="og-project" data-graph-project={data.group.project.workspace.id} data-current={data.current} data-emphasized={data.emphasized} data-accent={data.accent} onPointerEnter={() => data.point(id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(id)} onBlur={() => data.point(null)}>
+    <span className="og-project-name og-project-drag" title={t("overviewGraph.dragProject", { project: label })}>{label}</span>
+    <button type="button" className="og-project-fold nodrag nopan" aria-label={t("overviewGraph.foldProject", { project: label })} title={t("overviewGraph.foldProject", { project: label })} onClick={() => { data.point(null); data.fold(id); }}><ChevronsDownUpIcon aria-hidden="true" /></button>
   </div>;
+}
+
+export function GlowGraphNode({ id, data, width, height }: NodeProps<GlowNode>) {
+  const gradient = `og-glow-${useId().replace(/:/g, "")}`;
+  return <svg className="og-glow" width={width} height={height} aria-hidden="true" data-glow={id} data-accent={data.accent} data-emphasized={data.emphasized}>
+    <defs><radialGradient id={gradient}><stop offset="0%" className="og-glow-core" /><stop offset="100%" className="og-glow-edge" /></radialGradient></defs>
+    <circle cx={(width ?? 0) / 2} cy={(height ?? 0) / 2} r={(width ?? 0) / 2} fill={`url(#${gradient})`} />
+  </svg>;
+}
+
+/** A folded project stands as one circle in its project's colour, with its glow and its name at the
+ * expanded size; the operator's turn inside is a badge on the circle, so the border keeps the colour.
+ * Choosing it unfolds the project, dragging it moves the project. */
+export function ClusterGraphNode({ data }: NodeProps<ClusterNode>) {
+  const { t } = useInterfaceTranslation();
+  const { summary } = data;
+  const label = summary.project.workspace.label;
+  return <div className="og-cluster" data-graph-cluster={summary.project.workspace.id} data-accent={data.accent} data-emphasized={data.emphasized} onPointerEnter={() => data.point(summary.id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(summary.id)} onBlur={() => data.point(null)}>
+    <Ports />
+    <button type="button" className="og-cluster-orb og-cluster-drag nopan" style={{ width: data.orb, height: data.orb }} aria-label={t("overviewGraph.unfoldProject", { project: label, count: summary.sessions })} onClick={() => { data.point(null); data.unfold(summary.id); }}>{summary.sessions}{summary.turn > 0 ? <span className="og-orb-state"><StatusMark mark="turn" /></span> : null}</button>
+    <strong>{label}</strong>
+    <GraphStateCounts summary={summary} />
+  </div>;
+}
+
+/** The dashed outline around a chosen team: its root and every delegated descendant. */
+export function TeamGraphNode({ data }: NodeProps<TeamNode>) {
+  return <svg className="og-team" data-selected={data.selected} width={data.width} height={data.height} aria-hidden="true"><path d={data.path} /></svg>;
 }
 
 export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>) {
   const { t } = useInterfaceTranslation();
-  const { row, root, progress, choose, highlight } = data;
+  const { row, root, choose, highlight, team } = data;
   const reveal = useRevealNode(id);
-  return <div className="og-session" data-root={root} data-state={row.bucket} data-selected={selected} data-context={data.context} data-highlighted={data.highlighted} data-graph-session={row.agent.pane_id}>
+  const asking = row.agent.mark === "turn";
+  return <div className="og-session" data-root={root} data-mark={row.agent.mark} data-selected={selected} data-current={data.current} data-context={data.context} data-muted={data.muted} data-highlighted={data.highlighted} data-folded-turn={team?.folded === true && team.turn > 0} data-graph-session={row.agent.pane_id}>
     <Ports />
-    <button type="button" className="og-session-target nodrag nopan" aria-label={[row.agent.identity_label, data.context ? t("overviewGraph.context") : null, agentProductName(row.agent.agent_kind), markWords(t, row.agent), row.launchModel ? t("overviewGraph.launchModel", { model: row.launchModel }) : null].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
-      <span className="og-orb"><AgentMark kind={row.agent.agent_kind} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} /></span></span>
-      <strong className="og-session-title">{row.agent.identity_label}</strong>
-      <span className="og-model">{agentProductName(row.agent.agent_kind)}{row.launchModel ? <><br />{t("overviewGraph.launchModel", { model: row.launchModel })}</> : null}</span>
-      <span className="og-session-status">{markWords(t, row.agent)}</span>
-      {data.context ? <span className="og-session-status">{t("overviewGraph.context")}</span> : null}
-      {progress && progress.total > 0 ? <span className="og-progress">{t("overviewGraph.progress", { done: progress.done, total: progress.total })}</span> : null}
+    <button type="button" className="og-session-target nopan" aria-label={[rowAccessibleName(t, row.agent, row.device), starred(row.agent) ? t("taskLens.revisit.starred") : null, data.current ? t("overviewGraph.currentPane") : null, data.context ? t("overviewGraph.context") : null, row.launchModel ? t("overviewGraph.launchModel", { model: row.launchModel }) : null].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
+      {root
+        ? <span className="og-orb og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })}><AgentMark kind={row.agent.agent_kind} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} /></span></span>
+        // A delegated session is a small dot in its state's color.
+        : <span className="og-dot og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })} />}
+      <strong className="og-session-title"><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong>
+      {root || asking ? <GraphLine agent={row.agent} className={asking ? "og-session-line og-asking" : "og-session-line"} /> : null}
     </button>
-    {data.quietCount > 0 ? <button type="button" className="og-fold nodrag nopan" aria-expanded={!data.folded} onClick={() => data.fold(row.id)}>{t(data.folded ? "overviewGraph.unfoldQuiet" : "overviewGraph.foldQuiet", { count: data.quietCount })}</button> : null}
+    {team ? <button type="button" className="og-team-chip nodrag nopan" data-folded={team.folded} data-turn={team.turn > 0} aria-expanded={!team.folded} aria-label={t(team.folded ? "overviewGraph.unfoldTeam" : "overviewGraph.foldTeam", { count: team.count })} onClick={team.toggle}>
+      <span>{team.folded ? `+${team.count}` : team.count}</span>
+      {team.folded ? <span className="og-team-states">{badgeParts({ turn: team.turn, going: team.going, done: team.done }).map((part) => <StatusMark key={part.state} mark={part.mark} />)}</span> : null}
+    </button> : null}
   </div>;
 }
 
-export function CommunicationGraphEdge(props: EdgeProps<LetterEdge>) {
-  const { t } = useInterfaceTranslation();
-  const [path, x, y] = getBezierPath(props);
-  const bundle = props.data?.bundle;
-  if (!bundle) return null;
+export function LineGraphEdge(props: EdgeProps<LineEdge>) {
+  if (!props.data) return null;
+  const { x1, y1, x2, y2 } = props.data;
+  const path = `M ${x1},${y1} L ${x2},${y2}`;
   return <>
-    <BaseEdge id={props.id} path={path} interactionWidth={20} style={props.style} markerEnd={props.markerEnd} markerStart={props.markerStart} />
-    <EdgeLabelRenderer><button type="button" className="og-letter-label nodrag nopan" data-emphasized={props.data?.emphasized} onPointerEnter={() => props.data?.highlight(props.id, false)} onPointerLeave={() => props.data?.highlight(null, false)} onFocus={() => props.data?.highlight(props.id, true)} onBlur={() => props.data?.highlight(null, true)} style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }} aria-pressed={props.selected} aria-label={props.data?.label} onClick={(event) => props.data?.choose(bundle.id, event.currentTarget)}>{bundle.directions.length > 1 ? "↔" : "→"} {t("overviewGraph.letters", { count: bundle.count })}</button></EdgeLabelRenderer>
+    <path className="og-edge-underlay" d={path} fill="none" />
+    <BaseEdge id={props.id} path={path} interactionWidth={0} style={props.style} markerEnd={props.markerEnd} markerStart={props.markerStart} />
   </>;
-}
-
-export function letterKind(t: TFunction<"translation">, kind: string): string {
-  switch (kind) {
-    case "request": return t("overviewGraph.kind.request");
-    case "block": return t("overviewGraph.kind.block");
-    case "report": return t("overviewGraph.kind.report");
-    case "progress": return t("overviewGraph.kind.progress");
-    case "reply": return t("overviewGraph.kind.reply");
-    default: return t("overviewGraph.kind.other");
-  }
 }

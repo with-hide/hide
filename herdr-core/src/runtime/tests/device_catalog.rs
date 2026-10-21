@@ -587,6 +587,7 @@ fn retrying_a_device_keeps_its_panes_in_their_checkouts() {
                 ssh_alias: TARGET.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     runtime
@@ -652,6 +653,7 @@ fn catalog_device_runtime(workspaces: Vec<WorkspaceSnapshot>) -> (Runtime, tempf
                 ssh_alias: TARGET.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     runtime
@@ -1141,6 +1143,7 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
             report_pane_focus_outcome: false,
             focus_device: false,
             request: RemoteControlRequest::CreateTab {
+                area_id: None,
                 workspace_id: workspace_id.to_owned(),
                 checkout_id: Some(device_catalog::checkout_id(TARGET, &t.other)),
                 cwd: "/elsewhere".to_owned(),
@@ -1361,6 +1364,7 @@ fn removing_a_device_forgets_its_projects_tabs_and_folders_and_keeps_this_machin
                 ssh_alias: TARGET.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     let registration = |id: &str, device: &str| crate::model::WorkspaceRegistration {
@@ -1905,6 +1909,7 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
                 ssh_alias: TARGET.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: Some(consent),
         });
     // Allowed, but the first read of its kit failed: the cause is unknown,
@@ -2081,6 +2086,7 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
         &mut runtime,
         "new-tab",
         RemoteControlRequest::CreateTab {
+            area_id: None,
             workspace_id: project.clone(),
             checkout_id: Some(id.clone()),
             cwd: t.main.clone(),
@@ -2155,6 +2161,7 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
             report_pane_focus_outcome: false,
             focus_device: false,
             request: RemoteControlRequest::CreateTab {
+                area_id: None,
                 workspace_id: project,
                 checkout_id: Some(device_catalog::checkout_id(TARGET, &t.main)),
                 cwd: t.main.clone(),
@@ -2275,6 +2282,7 @@ fn a_device_tab_hide_created_stays_in_its_folder_while_its_pane_reports_the_birt
                 cwd: t.main.clone(),
                 label: "new".to_owned(),
                 area_id: None,
+                group_id: None,
                 admission_id: None,
             },
             Ok(RemoteControlOutcome::Acknowledged {
@@ -2673,6 +2681,7 @@ fn acknowledge_device_tab(runtime: &mut Runtime, cwd: &str) {
             cwd: cwd.to_owned(),
             label: "new".to_owned(),
             area_id: None,
+            group_id: None,
             admission_id: None,
         },
         Ok(RemoteControlOutcome::Acknowledged {
@@ -2876,6 +2885,7 @@ fn a_second_device_acknowledgment_does_not_settle_the_first_tab() {
                 cwd: t.main.clone(),
                 label: "new".to_owned(),
                 area_id: None,
+                group_id: None,
                 admission_id: None,
             },
             Ok(RemoteControlOutcome::Acknowledged {

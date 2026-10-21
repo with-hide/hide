@@ -26,8 +26,94 @@ pub struct Resolution {
     pub activity: String,
 }
 
+/// How many tasks may carry the operator's ★ at once (PRD revisit-group D-15).
+pub const MAX_STARRED_SESSIONS: usize = 256;
+
+/// The operator's 다시 볼 것 decisions about one root session (PRD
+/// revisit-group D-03, D-05): the ★ and the read ask 다 봤음 put away. Bound
+/// to the session the pane hosted when it was written, like a resolution.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct RevisitMark {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starred_at_unix_ms: Option<u64>,
+    /// The state stamp (`changed_at_unix_ms`) of the read ask 다 봤음
+    /// dismissed: reading leaves it alone and a later ask has another, which
+    /// stands again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dismissed_ask_since: Option<u64>,
+    pub session: Option<String>,
+}
+
+impl RevisitMark {
+    pub fn is_empty(&self) -> bool {
+        self.starred_at_unix_ms.is_none() && self.dismissed_ask_since.is_none()
+    }
+}
+
+/// What a row carries for 다시 볼 것 (PRD revisit-group D-02, D-03): the
+/// operator's ★, an ask the operator read and has not answered, and since
+/// when it waits, the older of the two.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct Revisit {
+    pub starred: bool,
+    pub read_ask: bool,
+    pub since_unix_ms: u64,
+}
+
+/// An ask the operator read and has not answered: a question or an approval
+/// that no longer holds the row in Needs You (a block holds it there, D-12),
+/// on a root that is not working or resolved (해결 puts it away, D-14), and
+/// not the one 다 봤음 put away. The ask is known by the stamp of the state it
+/// stands in, which the operator reading it does not move.
+pub(crate) fn revisit_of(
+    agent: &SidebarAgentSnapshot,
+    mark: Option<&RevisitMark>,
+) -> Option<Revisit> {
+    let read_ask = agent.lineage_parent_pane_id.is_none()
+        && matches!(agent.demand.as_str(), "question" | "approval")
+        && !agent.blocked
+        && !agent.unread
+        && agent.activity != "working"
+        && agent.resolved.is_none()
+        && agent.changed_at_unix_ms.is_some()
+        && mark.and_then(|m| m.dismissed_ask_since) != agent.changed_at_unix_ms;
+    let starred_at = mark.and_then(|m| m.starred_at_unix_ms);
+    let since = [
+        read_ask.then_some(agent.changed_at_unix_ms).flatten(),
+        starred_at,
+    ]
+    .into_iter()
+    .flatten()
+    .min()?;
+    Some(Revisit {
+        starred: starred_at.is_some(),
+        read_ask,
+        since_unix_ms: since,
+    })
+}
+
+/// Why the operator cannot resolve the row now: work that still runs or
+/// waits, or an approval prompt that holds the agent, would rest a task
+/// whose mark says it is not at rest.
+pub(crate) fn resolve_refusal(agent: &SidebarAgentSnapshot) -> Option<&'static str> {
+    if super::has_work_in_progress(agent) {
+        Some("This agent is working")
+    } else if agent.blocked {
+        Some("This agent waits for an approval")
+    } else {
+        None
+    }
+}
+
+/// A merged pull request settles the session only once the row is at rest
+/// with nothing left to see: an unread finish stays under 읽을 것 and a wait
+/// under 대기, rather than resting with a mark that says otherwise.
 pub(crate) fn auto_resolvable(agent: &SidebarAgentSnapshot, input_after: Option<u64>) -> bool {
-    if agent.activity != "stopped" || agent.blocked || agent.demand != "none" {
+    if agent.activity != "stopped"
+        || agent.blocked
+        || agent.demand != "none"
+        || agent.group != "seen"
+    {
         return false;
     }
     let mut assigned = agent
@@ -122,7 +208,8 @@ pub(crate) fn row(agent: &SidebarAgentSnapshot) -> Row {
     }
 }
 
-/// The PRs this row holds the duty of, never its descendants' (PRD D-18,
+/// The PRs this row holds the duty of, plus its provisional history for
+/// display only, never its descendants' (PRD D-18,
 /// D-39): how many, the worst state, and each PR as an
 /// index into `request.pull_requests`, worst first, each in the one PR state
 /// ([`PrState::of`]). Closed PRs are not counted.
@@ -144,7 +231,7 @@ pub(crate) fn own_prs(agent: &SidebarAgentSnapshot) -> Option<PrSummary> {
         .request
         .iter()
         .flat_map(|request| request.pull_requests.iter().enumerate())
-        .filter(|(_, pull)| pull.duty && pull.live)
+        .filter(|(_, pull)| (pull.duty || pull.provisional) && pull.live)
         .map(|(index, pull)| OwnPr {
             index,
             state: pull.state(),

@@ -341,6 +341,31 @@ fn checkout_header_reads_file_edits_unborn_head_and_tracking_ref_changes() {
     git(root, &["checkout", "--detach", "-q"]);
     assert_eq!(read().upstream_state, "none");
 
+    // The approved header history shows five newest commits, never a sixth.
+    let mut expected = Vec::new();
+    for index in 0..6 {
+        let subject = format!("history {index} 한글");
+        git(root, &["commit", "--allow-empty", "-qm", &subject]);
+        expected.insert(0, subject);
+    }
+    let history = read();
+    assert_eq!(history.recent_commits.len(), 5);
+    assert_eq!(
+        history
+            .recent_commits
+            .iter()
+            .map(|commit| commit.subject.clone())
+            .collect::<Vec<_>>(),
+        expected[..5]
+    );
+    assert_eq!(history.recent_commits[0].sha, history.head_sha.unwrap());
+    assert!(
+        history
+            .recent_commits
+            .iter()
+            .all(|commit| commit.commit_unix_seconds > 0)
+    );
+
     let unborn = tempfile::tempdir().unwrap();
     git(unborn.path(), &["init", "-q"]);
     std::fs::write(unborn.path().join("first.txt"), "first\n").unwrap();

@@ -3,7 +3,8 @@
 Each step asks the product to act the way an operator or a parent agent does
 (`hide agent spawn`, `hide request send`, the daemon's Sleep, Wake and terminal
 input) and judges only what Hide then reports. A step that cannot run settles
-its cell with the reason; nothing here types into a screen it read.
+its cell with the reason; nothing here types into a screen it read, but the
+composer cell, which reads the pane's screen only to judge it.
 """
 
 import base64
@@ -17,7 +18,7 @@ from agent_live_check.processes import ProcessError
 from agent_live_check.protection import write_private
 from agent_live_check.system import git, same_path
 
-from . import cells, fork, kit, memory, title, usage
+from . import cells, composer, fork, kit, memory, title, usage
 from .ci import redact
 from .quota import model_requests, refusal_records, spent_quota
 
@@ -44,11 +45,11 @@ TOOL_LETTER = ("this agent takes a letter only at a tool call its model makes wh
 LETTER_BODY = "Reply with exactly the token on the next line of this letter.\n"
 LETTER_PROMPT = "Reply with exactly the token on the second line of the letter attached to this prompt."
 # The cells each measured by a module of its own, judging what Hide shows.
-MEASURES = {module.CELL: module.measure for module in (kit, memory, fork, title, usage)}
+MEASURES = {module.CELL: module.measure for module in (kit, memory, composer, fork, title, usage)}
 # The steps of one agent's journey in order, each from the state the last
 # left: the cells that only read what Hide shows come where that state is,
 # the fork before Sleep so its source still runs the session it copies.
-STEPS = ("start", "integration", "guidance_memory", "letter", "fork", "sleep_wake", "resume", "title", "usage")
+STEPS = ("start", "integration", "guidance_memory", "letter", "composer", "fork", "sleep_wake", "resume", "title", "usage")
 
 
 def created_branch(runtime, repository, branch, worktree):
@@ -73,10 +74,12 @@ def prompt(value):
 
 class Journey:
     def __init__(self, runtime, daemon, controller, table, contract_row, repository, record, reader, *,
-                 branch, created, sessions, route, model=None, quota=None):
+                 branch, created, sessions, route, composer_judge, model=None, quota=None):
         self.runtime, self.daemon, self.controller = runtime, daemon, controller
         self.table, self.row, self.repository = table, contract_row, repository
         self.record, self.reader = record, reader
+        # `journey_composer`, which judges a screen by the adapter's composer declaration.
+        self.composer_judge = composer_judge
         # The HOME the agent writes its sessions under, which Hide's reader searches.
         self.sessions = sessions
         # The session files Hide's reader read, for the request count and,
@@ -97,8 +100,7 @@ class Journey:
         self.pane = self.agent = self.session = self.reference = self.checkout = None
         # Every pane this journey's spawns and fork opened, which close() ends.
         self.opened = []
-        # A model reaches the agent only through the product's own model flag.
-        self.model_args = [part.replace("{}", model) for part in contract_row["model_flag"]] if model else []
+        self.model = model
 
     # Evidence -----------------------------------------------------------
 
@@ -226,11 +228,14 @@ class Journey:
         CLI's own wait running out while the spawn continues, so the same intent
         is asked again until it answers (it converges on one agent)."""
         flag = self.row["prompt_flag"]
-        # The route's arguments are the wrapper's, on every start of the agent.
-        native = [*self.model_args, flag, prompt_text]
         args = ["agent", "spawn", "--parent", "here", "--name", name, "--intent", name,
                 "--kind", self.kind, "--repo", str(repository),
-                "--branch", branch, "--path", str(path), "--", *native]
+                "--branch", branch, "--path", str(path)]
+        # The product retains its launch choice for Wake, Fork and reopen;
+        # native arguments after -- reach only this first start.
+        if self.model:
+            args.extend(["--model", self.model])
+        args.extend(["--", flag, prompt_text])
         attempts = []
         end = time.monotonic() + SPAWN_SECONDS
         while True:
@@ -264,6 +269,8 @@ class Journey:
         if spawned[0] != cells.PASS:
             self.pane = self.pane or self.pane_of(answer)
             self.record["spawn"]["herdr"] = self.herdr_view(worktree)
+            if self.pane:
+                self.record["spawn"]["shell_children"] = self.shell_children(self.pane)
             evidence = self.evidence("spawn", self.record["spawn"])
             self.settle("start", spawned, evidence)
             return
@@ -538,12 +545,13 @@ class Journey:
         reply = cells.with_turn(cells.reply_verdict(read, self.session, value, events), turn)
         self.settle("resume", cells.resume_verdict(before, after, reply), self.evidence("resume", record))
 
-    def type_prompt(self, record, text):
-        """Types `text` and Return as the operator does: opening the agent puts
-        its tab on screen, which attaches its terminal; the screen gives the
-        terminal its grid once it exists and waits for a size, as the shell's
-        terminal view does, and they type once it takes this screen's keys.
-        Whether it did is left in `record`."""
+    def take_keys(self, record):
+        """Opens the agent as the operator does: opening it puts its tab on
+        screen, which attaches its terminal; the screen gives the terminal
+        its grid once it exists and waits for a size, as the shell's terminal
+        view does, and the keys go once it takes this screen's keys and
+        Herdr reads the agent ready. Whether it took them is left in
+        `record`."""
         self.daemon.dispatch("focus_pane", {"pane_id": self.pane, "origin": "operator", "focus_device": False})
         states = record["terminal"] = []
 
@@ -564,6 +572,13 @@ class Journey:
             record["attach_wait"] = str(error)
             return False
         self.wait_ready()
+        return True
+
+    def type_prompt(self, record, text):
+        """Types `text` and Return as the operator does, once the terminal
+        takes this screen's keys (`take_keys`)."""
+        if not self.take_keys(record):
+            return False
         self.daemon.dispatch("key", {"pane_id": self.pane, "bytes_base64": base64.b64encode(text.encode()).decode()})
         self.runtime.owner.cancelled.wait(1)
         self.daemon.dispatch("key", {"pane_id": self.pane, "bytes_base64": base64.b64encode(b"\r").decode()})
@@ -663,6 +678,39 @@ class Journey:
             view[name] = out[:20000] if not code else {"exit": code, "stderr": err[:500], "stdout": out[:2000]}
         view["worktree_exists"] = worktree.exists()
         return view
+
+    def shell_children(self, pane):
+        """The processes under a refused spawn's pane shell, by pid, parent
+        and name only: Herdr refuses `agent.start` on Windows while the shell
+        has any child, and its `pane.process_info` names none that is not an
+        agent, so this is the one record of what held the pane."""
+        try:
+            info = self.runtime.json(["pane", "process-info", pane])["process_info"]
+            shell = int(info["shell_pid"])
+        except (ProcessError, KeyError, TypeError, ValueError) as error:
+            return {"error": str(error)[:200]}
+        if os.name == "nt":
+            argv = ["powershell.exe", "-NoProfile", "-Command",
+                    "Get-CimInstance Win32_Process | ForEach-Object { '{0} {1} {2}' -f "
+                    "$_.ProcessId, $_.ParentProcessId, $_.Name }"]
+        else:
+            argv = ["ps", "-A", "-o", "pid=,ppid=,comm="]
+        code, out, err = self.runtime.owner.run(argv, env={**self.runtime.env}, check=False, seconds=15)
+        if code:
+            return {"shell_pid": shell, "error": (err.strip() or f"exit {code}")[:200]}
+        parents = {}
+        for line in out.splitlines():
+            fields = line.split(None, 2)
+            if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
+                parents[int(fields[0])] = (int(fields[1]), os.path.basename(fields[2].strip()))
+        below, queue = [], [shell]
+        while queue and len(below) < 64:
+            parent = queue.pop(0)
+            for pid, (ppid, name) in sorted(parents.items()):
+                if ppid == parent and pid != shell and all(pid != seen["pid"] for seen in below):
+                    below.append({"pid": pid, "parent": ppid, "name": name})
+                    queue.append(pid)
+        return {"shell_pid": shell, "children": below}
 
     def pane_of(self, answer):
         """A refused spawn may still have opened its pane: the newest pane that

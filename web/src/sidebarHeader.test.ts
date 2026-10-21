@@ -48,6 +48,16 @@ describe("the device title in the window's top row (PRD sidebar-titlebar-refresh
   });
 });
 
+describe("the sidebar's Add project row (B51)", () => {
+  const withAdd = (chord: string | null) =>
+    renderToStaticMarkup(createElement(TooltipProvider, null, createElement(SidebarHeader, { searchChord: "⌘K", onSearch: () => undefined, addProject: { chord, onOpen: () => undefined } })));
+
+  it("is one row with the word and its chord, drawn only where the host can pick a folder", () => {
+    expect(texts(withAdd("⇧⌘N"), "data-sidebar-new-workspace")).toEqual(["Add project⇧⌘N"]);
+    expect(header()).not.toContain("data-sidebar-new-workspace");
+  });
+});
+
 describe("the sidebar's Search row (B12)", () => {
   it("is a visible row with the word Search and the chord as bound, and takes no text", () => {
     const html = header("⌃⇧K");

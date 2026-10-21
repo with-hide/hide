@@ -161,6 +161,64 @@ fn a_task_is_its_root_and_every_descendant_with_their_projects_and_devices() {
 }
 
 #[test]
+fn revisit_tasks_stand_oldest_first_and_the_current_state_wins() {
+    // PRD revisit-group B6, B7, B13: a quiet ★ or read ask stands in
+    // 다시 볼 것, oldest first; a working ★ stays in 일하는 중.
+    use crate::agent_state::sessions::Revisit;
+    let mut runtime = runtime();
+    let mut base = rows().remove(1);
+    base.lineage_parent_pane_id = None;
+    let agent = |id: &str, group: &str, activity: &str, since: Option<u64>| {
+        let mut agent = base.clone();
+        agent.pane_id = id.into();
+        agent.group = group.into();
+        agent.demand = "none".into();
+        agent.activity = activity.into();
+        agent.revisit = since.map(|since_unix_ms| Revisit {
+            starred: true,
+            read_ask: false,
+            since_unix_ms,
+        });
+        agent
+    };
+    runtime.snapshot.navigator.agents = vec![
+        agent("newer", "seen", "stopped", Some(20)),
+        agent("older", "seen", "stopped", Some(10)),
+        agent("busy", "working", "working", Some(5)),
+        agent("plain", "seen", "stopped", None),
+    ];
+    let names = ["newer", "older", "busy", "plain"];
+    let checkouts: Vec<_> = names
+        .iter()
+        .map(|name| {
+            checkout(
+                "project",
+                name,
+                &format!("/{name}"),
+                Some(pane(name, &format!("/{name}"))),
+            )
+        })
+        .collect();
+    runtime.snapshot.navigator.workspaces =
+        vec![workspace("project", "Project", "/fixture", checkouts)];
+    assert!(runtime.refresh_agent_scopes());
+    let tasks = &runtime.snapshot.navigator.workspaces[0].agent_scope.tasks;
+    assert_eq!(
+        tasks
+            .cards
+            .iter()
+            .map(|c| (c.root.as_str(), c.state))
+            .collect::<Vec<_>>(),
+        [
+            ("busy", TaskState::Working),
+            ("older", TaskState::Revisit),
+            ("newer", TaskState::Revisit),
+            ("plain", TaskState::Resting),
+        ]
+    );
+}
+
+#[test]
 fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
     // B7, B9: Needs You, blocked, working, waiting, done, then resting and
     // the cleanup fold; the stage bar follows the task's PRs and worktrees.
@@ -219,6 +277,7 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
         closing_issues: vec![],
         live: true,
         duty: true,
+        provisional: false,
         created: true,
         settled_at_unix_ms: None,
     };
@@ -229,6 +288,8 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
         line: None,
         end: None,
         request: None,
+        request_summary: None,
+        recent_turns: Vec::new(),
         later_by: None,
         reply: None,
         pull_requests: vec![pull],
@@ -260,6 +321,39 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
         None,
         "a conversation in the primary checkout has no bar"
     );
+    let row = &mut runtime.snapshot.navigator.agents[1];
+    let mut provisional = row.request.as_ref().unwrap().pull_requests[0].clone();
+    provisional.number = 8;
+    provisional.url = "https://github.com/acme/ide/pull/8".into();
+    provisional.badge = crate::model::PullRequestBadge::Open;
+    provisional.provisional = true;
+    provisional.duty = false;
+    provisional.created = false;
+    row.request
+        .as_mut()
+        .unwrap()
+        .pull_requests
+        .push(provisional);
+    row.state.pr = crate::agent_state::sessions::own_prs(row);
+    assert_eq!(
+        row.state.pr.as_ref().unwrap().count,
+        2,
+        "history is displayed"
+    );
+    runtime.refresh_agent_scopes();
+    let card = runtime.snapshot.navigator.workspaces[0]
+        .agent_scope
+        .tasks
+        .cards
+        .iter()
+        .find(|c| c.root == "merged")
+        .unwrap();
+    assert_eq!(
+        card.stage,
+        Some(4),
+        "history cannot change current task progress"
+    );
+    assert_eq!(card.state, TaskState::Cleanup);
     runtime.snapshot.navigator.workspaces[0].checkouts[1].exists = false;
     assert!(
         runtime.refresh_agent_scopes(),

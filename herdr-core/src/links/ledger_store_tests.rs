@@ -9,6 +9,120 @@ fn session() -> SessionIdentity {
     }
 }
 
+#[test]
+fn saved_display_metadata_survives_reopen_and_never_crosses_device_or_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("links.sqlite3");
+    let (mut store, _) = LinkStore::open(&path).unwrap();
+    origin_native(&mut store, &session(), "/repo", 1_000);
+    let update = |at, goal: &str| LedgerUpdate::Metadata {
+        session: session(),
+        native_title: Some("native title".into()),
+        manual_title: None,
+        goal: Some(goal.into()),
+        summary: "저장한 진행 요약".into(),
+        created_prs: vec![("acme/project".into(), 7, 1_000)],
+        at_unix_ms: at,
+        analysed_start: Some(u64::MAX),
+        analysed_end: Some(8),
+    };
+    store
+        .apply_ledger_update(&update(2_000, "복원할 작업"))
+        .unwrap();
+    store
+        .apply_ledger_update(&update(2_000, "복원할 작업"))
+        .unwrap();
+    store
+        .apply_ledger_update(&update(1_000, "늦게 도착한 구형 라벨"))
+        .unwrap();
+    drop(store);
+    let (mut store, _) = LinkStore::open(&path).unwrap();
+    let LedgerAnswer::Metadata(Some(saved)) =
+        store.ledger_call(LedgerCall::Metadata(session())).unwrap()
+    else {
+        panic!("saved history missing")
+    };
+    assert_eq!(saved.goal.as_deref(), Some("복원할 작업"));
+    assert_eq!(saved.summary, "저장한 진행 요약");
+    assert_eq!(saved.native_title.as_deref(), Some("native title"));
+    assert_eq!(saved.analysed_start, Some(u64::MAX));
+    assert_eq!(saved.created_prs, [("acme/project".into(), 7, 1_000)]);
+    for other in [
+        SessionIdentity {
+            device_id: "device-b".into(),
+            ..session()
+        },
+        SessionIdentity {
+            agent: "claude".into(),
+            ..session()
+        },
+    ] {
+        assert!(matches!(
+            store.ledger_call(LedgerCall::Metadata(other)).unwrap(),
+            LedgerAnswer::Metadata(None)
+        ));
+    }
+    store
+        .remove_sessions(&[super::super::SessionKey {
+            device: session().device_id,
+            agent: session().agent,
+            id: session().session_id,
+        }])
+        .unwrap();
+    assert!(
+        matches!(
+            store.ledger_call(LedgerCall::Metadata(session())).unwrap(),
+            LedgerAnswer::Metadata(None)
+        ),
+        "existing retention owns metadata too"
+    );
+}
+
+#[test]
+fn acknowledged_metadata_retries_only_after_index_and_keeps_new_title_clears() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("links.sqlite3");
+    let (mut store, _) = LinkStore::open(&path).unwrap();
+    let metadata = SessionMetadata {
+        manual_title: Some("old name".into()),
+        ..Default::default()
+    };
+    let save = |value: SessionMetadata, at| LedgerCall::SaveMetadata {
+        session: session(),
+        metadata: Box::new(value),
+        at_unix_ms: at,
+    };
+    assert_eq!(
+        store.ledger_call(save(metadata.clone(), 100)).unwrap_err(),
+        "ledger_metadata_session_not_indexed"
+    );
+    origin_native(&mut store, &session(), "/repo", 1_000);
+    assert!(matches!(
+        store.ledger_call(save(metadata.clone(), 100)).unwrap(),
+        LedgerAnswer::Metadata(Some(_))
+    ));
+    let renamed = SessionMetadata {
+        manual_title: Some("new name".into()),
+        ..Default::default()
+    };
+    store.ledger_call(save(renamed, 200)).unwrap();
+    store
+        .ledger_call(save(SessionMetadata::default(), 300))
+        .unwrap();
+    store.ledger_call(save(metadata, 100)).unwrap();
+    drop(store);
+    let (mut store, _) = LinkStore::open(&path).unwrap();
+    let LedgerAnswer::Metadata(Some(value)) =
+        store.ledger_call(LedgerCall::Metadata(session())).unwrap()
+    else {
+        panic!("missing committed metadata")
+    };
+    assert!(
+        value.manual_title.is_none(),
+        "explicit clear survives reopen and late legacy import"
+    );
+}
+
 fn origin_project(device: &str, repository: &str, epoch: u64) -> crate::links::ProjectFacts {
     crate::links::ProjectFacts {
         key: hide_project::project_id(device, std::path::Path::new("/repo")),
@@ -2934,7 +3048,7 @@ mod continuation {
         store
             .connection
             .execute(
-                "INSERT INTO ledger_titles VALUES(?1,?2,?3,NULL,NULL,?4) ON CONFLICT(device,agent,id) DO UPDATE SET state=excluded.state",
+                "INSERT INTO ledger_titles(device,agent,id,native_title,manual_title,state) VALUES(?1,?2,?3,NULL,NULL,?4) ON CONFLICT(device,agent,id) DO UPDATE SET state=excluded.state",
                 params![owner.device_id, owner.agent, owner.session_id, state],
             )
             .unwrap();

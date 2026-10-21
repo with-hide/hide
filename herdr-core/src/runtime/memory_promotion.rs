@@ -43,7 +43,12 @@ fn branch(number: u64, started_at_unix_ms: u64) -> String {
 
 fn retry_branch(previous: Option<&Promotion>, number: u64, started: u64) -> String {
     previous
-        .filter(|promotion| promotion.state == PromotionState::Failed)
+        .filter(|promotion| {
+            matches!(
+                promotion.state,
+                PromotionState::Failed | PromotionState::Outdated
+            )
+        })
         .and_then(|promotion| promotion.branch.clone())
         .unwrap_or_else(|| branch(number, started))
 }
@@ -85,6 +90,8 @@ fn prompt(numbers: &[u64], evidence: &[String], language: hide_ai::OutputLanguag
 
 /// What Hide starts a promotion's agent with, taken under the lock.
 pub(super) struct PromotionStart {
+    /// Serializes reservation/spawn with retirement, outside the runtime lock.
+    effects: Arc<Mutex<()>>,
     client: crate::delivery::worker::Client,
     authority: crate::delivery::worker::Authority,
     actor: crate::delivery::Actor,
@@ -112,6 +119,7 @@ pub(super) struct PromotionStart {
 /// The tracker's single flight and its schedule.
 #[derive(Default)]
 pub(super) struct PromotionTracking {
+    effects: Arc<Mutex<()>>,
     in_flight: bool,
     again: bool,
     /// Whether any promotion is followed (running or its pull request open);
@@ -164,6 +172,8 @@ pub(super) enum Tried {
 pub(super) struct RetireNote {
     tried: Tried,
     agents: BTreeSet<String>,
+    /// An outdated attempt may discard only an empty branch, never committed work.
+    empty_only: bool,
 }
 
 /// A settled attempt's branch, to retire its agent and worktree (D-18).
@@ -295,6 +305,7 @@ impl Runtime {
             effort: None,
         };
         Ok(PromotionStart {
+            effects: Arc::clone(&self.project_memory.promotions.effects),
             numbers: Vec::new(),
             evidence: Vec::new(),
             language: self.output_language(),
@@ -403,6 +414,11 @@ impl Runtime {
         self.track_memory_promotions();
     }
 
+    pub(crate) fn outdated_promotion_moved(&mut self) {
+        self.project_memory.promotions.converged = false;
+        self.promotions_moved();
+    }
+
     /// A promotion may have started or moved: follow it now.
     pub(super) fn promotions_moved(&mut self) {
         self.project_memory.promotions.mark_open();
@@ -506,7 +522,7 @@ impl Runtime {
         if let Some((retiring, converged)) = retiring {
             let tracking = &mut self.project_memory.promotions;
             tracking.retiring = retiring;
-            tracking.converged |= converged;
+            tracking.converged |= converged && !again;
         }
         if let Some(homes) = homes {
             self.apply_homes(homes);
@@ -817,6 +833,25 @@ fn track_promotions(
         retiring: None,
         unseen: Vec::new(),
     };
+    // A retry reserves its old branch before spawning. Do not act on an
+    // earlier store read while that reservation or its spawn is in progress.
+    // This guard is never acquired while holding Mutex<Runtime>.
+    let effects = {
+        let runtime = context.runtime.upgrade().ok_or("runtime_gone")?;
+        let guard = runtime.lock().map_err(|_| "runtime_poisoned")?;
+        Arc::clone(&guard.project_memory.promotions.effects)
+    };
+    let _permit = match effects.try_lock() {
+        Ok(permit) => permit,
+        Err(std::sync::TryLockError::WouldBlock) => {
+            outcome.followed = true;
+            outcome.running = true;
+            return Ok(outcome);
+        }
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            return Err("promotion_effects_poisoned".into());
+        }
+    };
     if !MemoryStore::exists(database) {
         // No store holds no attempt, so no row keeps a turn from an earlier one.
         outcome.homes = Some(HashMap::new());
@@ -845,10 +880,10 @@ fn track_promotions(
         for node in nodes {
             settled.extend(
                 store
-                    .settled_branches(node.as_str())
+                    .retirement_branches(node.as_str())
                     .map_err(|error| error.to_string())?
                     .into_iter()
-                    .map(|(project_id, root, branch, agents)| {
+                    .map(|(project_id, root, branch, agents, empty_only)| {
                         (
                             Retire {
                                 node: node.clone(),
@@ -857,6 +892,7 @@ fn track_promotions(
                                 branch,
                             },
                             agents,
+                            empty_only,
                         )
                     }),
             );
@@ -996,7 +1032,7 @@ fn track_promotions(
             .filter(|((.., promotion, _), next)| {
                 matches!(
                     next.map_or(promotion.state, |(state, _)| state),
-                    PromotionState::Running | PromotionState::PrOpen
+                    PromotionState::Running | PromotionState::PrOpen | PromotionState::Building
                 )
             })
             .filter_map(|((project_id, _, _, promotion, _), _)| {
@@ -1099,12 +1135,16 @@ fn track_promotions(
                                     branch: branch.clone(),
                                 },
                                 promotion.agent_id.iter().cloned().collect::<Vec<_>>(),
+                                store
+                                    .branch_has_outdated_promotion(project_id, branch)
+                                    .map_err(|error| error.to_string())?,
                             ));
                         }
                         if state == PromotionState::Failed
                             && pr_number.is_none()
                             && let (Some((connector, link)), Some(branch)) =
                                 (reach.get(*node), &promotion.branch)
+                            && !held.contains(&(project_id.clone(), branch.clone()))
                             && released.insert((project_id.clone(), branch.clone()))
                         {
                             release_attempt(
@@ -1113,7 +1153,7 @@ fn track_promotions(
                                 root,
                                 branch,
                                 project_id,
-                                *number,
+                                Some(*number),
                             );
                         }
                         state
@@ -1141,7 +1181,7 @@ fn track_promotions(
         outcome.running |= state == PromotionState::Running;
     }
     let mut retiring = retire_plan(carried, settled.into_iter().chain(converging), &held);
-    let due = retire_due(&mut retiring, |node| reach.contains_key(node));
+    let due = retire_due(&mut retiring, &held, |node| reach.contains_key(node));
     for retire in due {
         let (connector, link) = &reach[&retire.node];
         let note = &retiring[&retire];
@@ -1154,7 +1194,19 @@ fn track_promotions(
             .iter()
             .filter_map(|agent| panes.get(agent).cloned())
             .collect::<Vec<_>>();
-        match retire_attempt(connector.as_ref(), link.as_ref(), &retire, &own, noticed) {
+        let result = if note.empty_only {
+            release_attempt(
+                connector.as_ref(),
+                link.as_ref(),
+                &retire.root,
+                &retire.branch,
+                &retire.project_id,
+                None,
+            )
+        } else {
+            retire_attempt(connector.as_ref(), link.as_ref(), &retire, &own, noticed)
+        };
+        match result {
             Retired::Failed => {
                 if let Some(note) = retiring.get_mut(&retire) {
                     note.tried = Tried::Failed;
@@ -1166,6 +1218,7 @@ fn track_promotions(
         }
     }
     outcome.followed |= !retiring.is_empty();
+    outcome.running |= !retiring.is_empty();
     outcome.retiring = Some((retiring, true));
     if let Some(store) = store.as_mut() {
         for (key, promotion, start) in asks.drain(..) {
@@ -1305,7 +1358,14 @@ fn fail_start(
         &promotion.branch,
     ) {
         (Some(connector), Some(node), Some(branch)) => {
-            release_attempt(connector, node, &start.repo, branch, project_id, number)
+            release_attempt(
+                connector,
+                node,
+                &start.repo,
+                branch,
+                project_id,
+                Some(number),
+            );
         }
         _ => crate::diagnostic!(json!({
             "component": "memory",
@@ -1348,8 +1408,8 @@ fn release_attempt(
     repo: &str,
     branch: &str,
     project_id: &str,
-    number: u64,
-) {
+    number: Option<u64>,
+) -> Retired {
     use hide_node_link::git::GitCommand;
     use hide_node_link::protocol::Call;
     const NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -1399,7 +1459,7 @@ fn release_attempt(
             crate::wire::agents_response(listed).map_err(|_| "agent.list is malformed".into())
         })?;
         if agents.iter().any(|agent| panes.contains(&agent.pane_id)) {
-            return Ok("kept");
+            return Ok("active");
         }
         crate::live::close_checkout_panes(
             connector,
@@ -1431,11 +1491,16 @@ fn release_attempt(
         "component": "memory",
         "kind": "promotion.worktree_released",
         "project_id": project_id,
-        "card": hide_memory::card_name(number),
+        "card": number.map(hide_memory::card_name),
         "branch": branch,
         "outcome": released.as_ref().ok(),
-        "reason": released.err(),
+        "reason": released.as_ref().err(),
     }));
+    match released {
+        Ok("gone" | "removed") => Retired::Done,
+        Ok("kept") => Retired::Kept,
+        _ => Retired::Failed,
+    }
 }
 
 /// The settled attempts to retire: those carried from earlier checks, those
@@ -1444,14 +1509,27 @@ fn release_attempt(
 /// attempt's branch, and a batch shares one).
 fn retire_plan(
     carried: HashMap<Retire, RetireNote>,
-    found: impl IntoIterator<Item = (Retire, Vec<String>)>,
+    found: impl IntoIterator<Item = (Retire, Vec<String>, bool)>,
     held: &HashSet<(String, String)>,
 ) -> HashMap<Retire, RetireNote> {
     let mut plan = carried;
-    for (retire, agents) in found {
-        plan.entry(retire).or_default().agents.extend(agents);
+    let mut current = HashMap::<Retire, RetireNote>::new();
+    for (retire, agents, empty_only) in found {
+        let note = current.entry(retire).or_default();
+        note.agents.extend(agents);
+        note.empty_only |= empty_only;
     }
-    plan.retain(|retire, _| !held.contains(&(retire.project_id.clone(), retire.branch.clone())));
+    for (retire, current) in current {
+        let note = plan.entry(retire).or_default();
+        note.agents.extend(current.agents);
+        // A retry replaces its outdated row; only current outdated siblings
+        // keep the empty-only policy once that retry settles.
+        note.empty_only = current.empty_only;
+    }
+    // An outdated card in a shared batch waits for its siblings to settle.
+    plan.retain(|retire, note| {
+        note.empty_only || !held.contains(&(retire.project_id.clone(), retire.branch.clone()))
+    });
     plan
 }
 
@@ -1461,10 +1539,14 @@ fn retire_plan(
 /// the rest (engineering principle 15). The absence is written once.
 fn retire_due(
     retiring: &mut HashMap<Retire, RetireNote>,
+    held: &HashSet<(String, String)>,
     reachable: impl Fn(&NodeId) -> bool,
 ) -> Vec<Retire> {
     let mut due = Vec::new();
     for (retire, note) in retiring.iter_mut() {
+        if held.contains(&(retire.project_id.clone(), retire.branch.clone())) {
+            continue;
+        }
         if reachable(&retire.node) {
             due.push(retire.clone());
         } else if std::mem::replace(&mut note.tried, Tried::Away) == Tried::Fresh {
@@ -1778,6 +1860,10 @@ pub(super) fn start_promotion(
     numbers: &[u64],
     mut start: PromotionStart,
 ) -> Result<Option<(u32, PromotionStart)>, String> {
+    let effects = Arc::clone(&start.effects);
+    let _permit = effects.try_lock().map_err(|_| {
+        "Memory promotion work is still being checked; try again when it finishes".to_owned()
+    })?;
     let repository = start.repository.as_deref().ok_or("The promotion repository has not been confirmed; check the project connection before starting")?;
     crate::issues::IssueReference::parse(&format!("{repository}#1"), None)?;
     start.repository = Some(repository.to_ascii_lowercase());
@@ -1812,7 +1898,11 @@ pub(super) fn start_promotion(
             previous
                 .iter()
                 .find(|(card, promotion)| {
-                    card == number && promotion.state == PromotionState::Failed
+                    card == number
+                        && matches!(
+                            promotion.state,
+                            PromotionState::Failed | PromotionState::Outdated
+                        )
                 })
                 .and_then(|(_, promotion)| promotion.branch.clone())
         })
@@ -1825,8 +1915,17 @@ pub(super) fn start_promotion(
     } else {
         retry_branch(None, numbers[0], started)
     };
+    let outdated_retry = previous.iter().any(|(number, promotion)| {
+        numbers.contains(number) && promotion.state == PromotionState::Outdated
+    });
     if previous.iter().any(|(_, promotion)| {
-        promotion.branch.as_ref() == Some(&branch) && promotion.state == PromotionState::Running
+        promotion.branch.as_ref() == Some(&branch)
+            && (promotion.state == PromotionState::Running
+                || (outdated_retry
+                    && matches!(
+                        promotion.state,
+                        PromotionState::PrOpen | PromotionState::Building
+                    )))
     }) {
         return Err("This PR batch is still running".into());
     }
@@ -1836,7 +1935,7 @@ pub(super) fn start_promotion(
             promotion.branch.as_ref() == Some(&branch)
                 && matches!(
                     promotion.state,
-                    PromotionState::PrOpen | PromotionState::Failed
+                    PromotionState::PrOpen | PromotionState::Failed | PromotionState::Outdated
                 )
         })
         .find_map(|(_, promotion)| promotion.pr_number);
@@ -1871,8 +1970,7 @@ pub(super) fn start_promotion(
         if matches!(
             item.kind,
             hide_memory::CandidateKind::Fact | hide_memory::CandidateKind::Preference
-        ) || (item.kind == hide_memory::CandidateKind::Decision && comparison.is_none())
-        {
+        ) {
             return Err(format!(
                 "m{number} is not eligible for repository documents"
             ));
@@ -2769,7 +2867,7 @@ mod tests {
                 },
                 &[
                     card("Run lint before tests", CandidateKind::Rule),
-                    card("Bound worker queues", CandidateKind::Rule),
+                    card("Bound worker queues", CandidateKind::Decision),
                     card("The service listens on port 8080", CandidateKind::Fact),
                 ],
             )
@@ -2782,6 +2880,32 @@ mod tests {
                 .find(|(number, _)| *number == 1)
                 .map(|(_, promotion)| promotion)
         };
+
+        // A cleanup owns the branch until its final empty check and removal.
+        // A retry must leave the durable attempt untouched during that work.
+        let effects = Arc::clone(&start().effects);
+        let permit = effects.lock().unwrap();
+        assert!(
+            start_promotion(&mut store, "p", &[1, 2], start())
+                .err()
+                .unwrap()
+                .contains("still being checked")
+        );
+        assert!(promotion(&store).is_none());
+        let context = RuntimeWorkerContext {
+            runtime: Arc::downgrade(&runtime),
+            notifier: ChangeNotifier::noop(),
+        };
+        let deferred = track_promotions(
+            &context,
+            &[crate::node::test_node()],
+            &root.path().join("memory.sqlite3"),
+            false,
+        )
+        .unwrap();
+        assert!(deferred.followed && deferred.running);
+        assert!(deferred.retiring.is_none());
+        drop(permit);
 
         assert!(
             start_promotion(&mut store, "p", &[3], start()).is_err(),
@@ -2861,8 +2985,44 @@ mod tests {
         );
         assert!(dismiss_promotion(&mut store, "p", 1).is_err());
 
-        store.set_promotion("p", 1, &failed).unwrap();
+        let outdated = Promotion {
+            state: PromotionState::Outdated,
+            ..failed.clone()
+        };
+        store.set_promotion("p", 1, &outdated).unwrap();
+        for state in [
+            PromotionState::Running,
+            PromotionState::PrOpen,
+            PromotionState::Building,
+        ] {
+            store
+                .set_promotion(
+                    "p",
+                    2,
+                    &Promotion {
+                        state,
+                        ..peer.clone()
+                    },
+                )
+                .unwrap();
+            assert!(
+                start_promotion(&mut store, "p", &[1], start())
+                    .err()
+                    .unwrap()
+                    .contains("still running"),
+                "{state:?}"
+            );
+            assert_eq!(promotion(&store).unwrap(), outdated);
+        }
+        let mut wrong_target = start();
+        wrong_target.repository = Some("acme/other".into());
         store.set_promotion("p", 2, &peer).unwrap();
+        assert!(
+            start_promotion(&mut store, "p", &[1], wrong_target)
+                .err()
+                .unwrap()
+                .contains("original promotion repository")
+        );
         start_promotion(&mut store, "p", &[1, 2], start()).unwrap();
         assert_eq!(promotion(&store).unwrap().branch, failed.branch);
         assert_eq!(
@@ -3049,7 +3209,7 @@ mod tests {
             "/r",
             &first,
             "p",
-            7,
+            Some(7),
         );
         assert!(repository.lock().unwrap().worktrees.is_empty());
         assert_eq!(
@@ -3061,6 +3221,11 @@ mod tests {
             repository.lock().unwrap().panes.is_empty(),
             "its pane closed first"
         );
+        let outdated = Promotion {
+            state: PromotionState::Outdated,
+            ..failed.clone()
+        };
+        assert_eq!(retry_branch(Some(&outdated), 7, 2), first);
         let retry = retry_branch(Some(&failed), 7, 2);
         assert_eq!(
             retry, first,
@@ -3073,7 +3238,7 @@ mod tests {
             "/r",
             &first,
             "p",
-            7,
+            Some(7),
         );
     }
 
@@ -3102,9 +3267,14 @@ mod tests {
                 "/r",
                 &first,
                 "p",
-                7,
+                Some(7),
             );
             assert_eq!(repository.lock().unwrap().worktrees.len(), 1);
+            let outdated = Promotion {
+                state: PromotionState::Outdated,
+                ..failed.clone()
+            };
+            assert_eq!(retry_branch(Some(&outdated), 7, 2), first);
             assert_eq!(
                 retry_branch(Some(&failed), 7, 2),
                 first,
@@ -3151,7 +3321,7 @@ mod tests {
                 "/r",
                 &first,
                 "p",
-                7,
+                Some(7),
             );
             assert_eq!(repository.lock().unwrap().worktrees.len(), 1, "{case}");
             if case != "a commit while its panes closed" {
@@ -3360,7 +3530,7 @@ mod tests {
             },
         );
         retiring.insert(at("here", "b", "fresh"), RetireNote::default());
-        let due = retire_due(&mut retiring, |node| {
+        let due = retire_due(&mut retiring, &HashSet::new(), |node| {
             node == &NodeId::parse("here").unwrap()
         });
         assert_eq!(
@@ -3376,6 +3546,52 @@ mod tests {
                 .all(|(_, note)| note.tried == Tried::Away),
             "the absence is noticed once"
         );
+    }
+
+    #[test]
+    fn outdated_cleanup_waits_for_a_shared_batch_and_retries_an_active_agent() {
+        let retire = retire_of(&branch(7, 1));
+        let held = HashSet::from([("p".to_owned(), retire.branch.clone())]);
+        let mut plan = retire_plan(HashMap::new(), [(retire.clone(), vec![], true)], &held);
+        assert!(retire_due(&mut plan, &held, |_| true).is_empty());
+        assert_eq!(
+            plan.len(),
+            1,
+            "the outdated sibling must not lose its deferred cleanup"
+        );
+        assert_eq!(
+            retire_due(&mut plan, &HashSet::new(), |_| true).as_slice(),
+            std::slice::from_ref(&retire)
+        );
+        let repository = settled_repository(|repository| {
+            repository.commits = 0;
+            repository.agents.push("w2:p1".into());
+        });
+        let herdr = herdr(&repository);
+        let release = || {
+            release_attempt(
+                &herdr.connector(),
+                &Machine(Arc::clone(&repository)),
+                "/r",
+                &retire.branch,
+                "p",
+                None,
+            )
+        };
+        assert_eq!(
+            release(),
+            Retired::Failed,
+            "an active attempt waits without closing its pane"
+        );
+        assert!(repository.lock().unwrap().removals.is_empty());
+        repository.lock().unwrap().agents.clear();
+        repository.lock().unwrap().attempt_agents.clear();
+        assert_eq!(release(), Retired::Done);
+        assert_eq!(
+            repository.lock().unwrap().removals,
+            [(retire.branch.clone(), true)]
+        );
+        assert_eq!(release(), Retired::Done, "a repeated cleanup is harmless");
     }
 
     /// B19: a worktree already gone is a finished retire, so one asked again
@@ -3452,6 +3668,7 @@ mod tests {
         let failed = RetireNote {
             tried: Tried::Failed,
             agents: BTreeSet::from(["agent-1".to_owned()]),
+            empty_only: false,
         };
         let carried = HashMap::from([
             (a.clone(), failed.clone()),
@@ -3461,9 +3678,9 @@ mod tests {
         let plan = retire_plan(
             carried,
             [
-                (a.clone(), vec!["agent-2".to_owned()]),
-                (b.clone(), vec![]),
-                (b.clone(), vec![]),
+                (a.clone(), vec!["agent-2".to_owned()], false),
+                (b.clone(), vec![], false),
+                (b.clone(), vec![], false),
             ],
             &held,
         );
@@ -3475,12 +3692,38 @@ mod tests {
                     RetireNote {
                         tried: Tried::Failed,
                         agents: BTreeSet::from(["agent-1".to_owned(), "agent-2".to_owned()]),
+                        empty_only: false,
                     }
                 ),
                 (b, RetireNote::default())
             ]),
             "a keeps its note and gains the agent found, b is added once, c is held by a followed attempt"
         );
+    }
+
+    #[test]
+    fn a_settled_retry_replaces_the_carried_outdated_policy_but_spares_outdated_siblings() {
+        let retire = retire_of("retry");
+        let held = HashSet::from([("p".to_owned(), "retry".to_owned())]);
+        let queued = retire_plan(HashMap::new(), [(retire.clone(), vec![], true)], &held);
+        let running = retire_plan(queued, [], &held);
+        assert!(running[&retire].empty_only);
+        let merged = retire_plan(
+            running,
+            [(retire.clone(), vec!["retry-agent".to_owned()], false)],
+            &HashSet::new(),
+        );
+        assert!(!merged[&retire].empty_only);
+        assert!(merged[&retire].agents.contains("retry-agent"));
+        let shared = retire_plan(
+            merged,
+            [
+                (retire.clone(), vec![], false),
+                (retire.clone(), vec![], true),
+            ],
+            &HashSet::new(),
+        );
+        assert!(shared[&retire].empty_only);
     }
 
     /// D-14 and B8-B10: whose turn a followed attempt's pull request is.

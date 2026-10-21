@@ -28,6 +28,7 @@ use crate::workspace;
 use hide_herdr_client::{self, ApiConnector, ApiError};
 
 const SYNC_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+const REMOTE_SYNC_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long after the bootstrap snapshot arrives an event read off the
 /// stream is still reconciled against it rather than applied strictly
 /// (`ApplyMode`). A line the reader thread had already pulled off the
@@ -221,6 +222,13 @@ impl SessionSyncContext {
         matches!(self.target, SessionSyncTarget::Local { .. })
     }
 
+    fn request_timeout(&self) -> Duration {
+        match self.target {
+            SessionSyncTarget::Local { .. } => SYNC_REQUEST_TIMEOUT,
+            SessionSyncTarget::Remote { .. } => REMOTE_SYNC_REQUEST_TIMEOUT,
+        }
+    }
+
     /// The target the runtime keeps this connection's read view under:
     /// none for this machine's server, the device's id for a device's.
     fn read_target(&self) -> Option<&str> {
@@ -284,6 +292,10 @@ struct CatalogState {
     /// to publish even when it changes no cwd; a publish that ran clears it
     /// (PRD grid-ahead-of-herdr D-12).
     held_for_cwd: bool,
+    /// One last accepted topology per coordinator. A new pane's cwd must
+    /// not hold freshness invalidation of panes already on screen.
+    accepted: Option<ProjectionState>,
+    accepted_stale: bool,
     /// The cwd the last publish showed for each pane whose own cwd Herdr
     /// had not confirmed, a sibling's standing in. An answer that leaves the
     /// pane at a different cwd than the screen shows has to publish even
@@ -348,6 +360,8 @@ pub(crate) enum CoordinatorMessage {
     /// The runtime drew something ahead of Herdr, or took it back, and the
     /// session has to be read again with it (`RepublishWaker`).
     Republish,
+    /// Rebootstrap the event replica after a multi-step topology transaction.
+    RefreshTopology,
     /// A socket read the sync-read worker made for the subscription of
     /// `generation` (`sync_reads.rs`).
     SyncRead {
@@ -369,6 +383,11 @@ pub(crate) struct RepublishWaker {
 }
 
 impl RepublishWaker {
+    pub(crate) fn refresh_topology(&self) -> bool {
+        self.sender
+            .send(CoordinatorMessage::RefreshTopology)
+            .is_ok()
+    }
     pub(crate) fn wake(&self) {
         if !self.pending.swap(true, Ordering::AcqRel) {
             let _ = self.sender.send(CoordinatorMessage::Republish);
@@ -425,3 +444,15 @@ pub(crate) use subscription::{
     fetch_workspace_active_tab, log_sync_failure, stop_subscription,
 };
 use sync_reads::{SyncRead, SyncReadAnswer, SyncReader};
+
+/// A worker's authoritative read uses the same device projection as the replica.
+pub(crate) fn project_remote_read(
+    value: Value,
+    device: &str,
+) -> Result<(SessionSnapshotPayload, RemoteSessionSnapshot), SessionFetchError> {
+    let state = wire::snapshot_response(value)?;
+    let payload = state.project();
+    let (remote, _) =
+        replica::SessionReplica::project_remote_state(&state, device, payload.clone())?;
+    Ok((payload, remote))
+}

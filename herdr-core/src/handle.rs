@@ -329,6 +329,11 @@ impl Core {
             );
             let marks = composers.restore(crate::links::now_ms());
             lock_recover(&runtime).install_composer_store(composers, marks);
+            let checks = crate::composer_checks::ComposerChecks::new(
+                hide_kit::layout::composer_checks(directory),
+            );
+            let restored = checks.restore();
+            lock_recover(&runtime).install_composer_checks(checks, restored);
         }
         // Before any coordinator starts, because each builds its label worker
         // on these, and before the kit runs, because the plugin state the
@@ -511,6 +516,35 @@ impl Core {
             return Err("memory_unavailable".into());
         }
         lock_recover(&self.runtime).prepare_memory(device, caller, expected, command)
+    }
+
+    #[allow(clippy::too_many_arguments)] // identity facts and deadline cross the authenticated boundary intact
+    pub fn prepare_direct_observation(
+        &self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+        terminal: &str,
+        observation: hide_agent_hooks::observation::DirectObservation,
+        start: bool,
+        deadline: std::time::Instant,
+    ) -> Result<crate::direct_observation::PreparedObservation, String> {
+        if !check_owner_thread(self, "observation.prepare") || std::time::Instant::now() >= deadline
+        {
+            return Err("observation_expired".into());
+        }
+        let runtime = self.runtime.try_lock().map_err(|_| "observation_busy")?;
+        let mut prepared = runtime.prepare_direct_observation(
+            device,
+            caller,
+            expected,
+            terminal,
+            observation,
+            start,
+            deadline,
+        )?;
+        prepared.runtime = std::sync::Arc::downgrade(&self.runtime);
+        Ok(prepared)
     }
 
     pub fn prepare_delivery_human(&self) -> Result<crate::delivery::worker::PreparedHuman, String> {

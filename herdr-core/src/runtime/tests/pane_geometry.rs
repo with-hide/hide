@@ -788,6 +788,7 @@ fn a_created_tab_is_drawn_at_its_answer_until_herdr_lays_it_out() {
         cwd: CHECKOUT.to_owned(),
         label: "9".to_owned(),
         area_id: None,
+        group_id: None,
         admission_id: Some(7),
     };
     runtime.complete_lane_tab(

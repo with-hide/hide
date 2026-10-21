@@ -198,8 +198,8 @@ function LaneMenu({ actions }: { actions: Actions }) {
 }
 
 /**
- * The lane (B2, B4, B5, B8, B9-B14): its header names the tool and its
- * scope, with the pin, expand and close at its right; its body is the tool.
+ * The lane (B2, B4, B5, B8, B9-B14): Files starts with Explorer; other
+ * headers name their tool and scope. Pin, expand and close stay at the right.
  * The files tool stays mounted under another tool, so its documents, tabs,
  * scroll and previews are as they were when it comes back (B2), laid out out
  * of sight at its own width (`files`) rather than the other tool's; its tree
@@ -230,7 +230,7 @@ export function Lane({ view, tool: drawn, frame, files, sizes, checkout, actions
   return (
     <aside className="flex h-full min-h-0 min-w-0 flex-1 flex-col text-foreground" aria-label={t("panes.lane.aria")} data-lane={tool}>
       <div className="flex h-[var(--size-tab-strip)] shrink-0 items-center gap-xxs border-b border-border pl-md pr-xs text-caption" data-lane-header="true">
-        <span className="min-w-0 flex-1 truncate" data-lane-scope={scope(tool)} data-lane-scope-kind={TOOL_SCOPES[tool]}>
+        {filesShown ? <><TreeButton actions={actions} /><span className="flex-1" /></> : <span className="min-w-0 flex-1 truncate" data-lane-scope={scope(tool)} data-lane-scope-kind={TOOL_SCOPES[tool]}>
           <span className="font-semibold text-foreground">{t(TOOL_NAMES[tool])}</span>
           {/* The icon replaces the dot to the eye; the dot stays for a reader, so the text still says `name · scope` (B54). */}
           <span className="sr-only"> · </span>
@@ -238,8 +238,7 @@ export function Lane({ view, tool: drawn, frame, files, sizes, checkout, actions
             {TOOL_SCOPES[tool] === "project" ? <FolderIcon aria-hidden="true" className="mr-xs inline size-(--size-icon-sm) align-middle" /> : <GitBranchIcon aria-hidden="true" className="mr-xs inline size-(--size-icon-sm) align-middle" />}
             {scope(tool)}
           </span>
-        </span>
-        {tool === "files" ? <TreeButton actions={actions} /> : null}
+        </span>}
         <Hint label={pinHint}>
           <Button variant={view.pinned ? "secondary" : "ghost"} size="icon-sm" className={view.pinned ? "text-primary" : "text-muted-foreground"} aria-pressed={view.pinned} aria-label={t("panes.lane.pin")} data-lane-pin={view.pinned ? (frame.narrowPin ? "narrow" : "on") : "off"} onClick={() => actions.setLanePinned(!view.pinned)}>
             <PinIcon className={view.pinned ? "fill-current" : undefined} />

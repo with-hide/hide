@@ -56,7 +56,7 @@ fn duplicate_inflight_remote_tab_creation_is_observable_and_ignored() {
         "mini".to_owned(),
         "w1".to_owned(),
         "/tmp/hide-remote-tab".to_owned(),
-        "New tab".to_owned(),
+        RemoteTabCreationIdentity::Label("New tab".to_owned()),
     ));
 
     assert!(runtime.request_remote_control(RemoteControlPayload {
@@ -65,6 +65,7 @@ fn duplicate_inflight_remote_tab_creation_is_observable_and_ignored() {
         report_pane_focus_outcome: false,
         focus_device: false,
         request: RemoteControlRequest::CreateTab {
+            area_id: None,
             workspace_id: projected_workspace_id.to_owned(),
             checkout_id: None,
             cwd: "/tmp/hide-remote-tab".to_owned(),
@@ -591,11 +592,10 @@ fn the_snapshot_carries_the_choice_the_providers_and_their_models() {
         vec![
             "claude",
             "codex",
-            "gemini-cli",
             "grok",
             "opencode",
             "pi",
-            "cursor",
+            "omp",
             "antigravity"
         ],
         "every registered provider is a row, in the registry order"
@@ -699,9 +699,23 @@ fn an_agent_that_cannot_be_chosen_is_refused_as_runs_on_and_as_a_fallback() {
     assert!(runtime.dispatch_json(&ai_event(serde_json::json!({"provider": "claude"}))));
     runtime.take_ai_settings_save();
 
-    for payload in [
-        serde_json::json!({"provider": "cursor"}),
-        serde_json::json!({"fallback_add": "cursor"}),
+    for (payload, expected) in [
+        (
+            serde_json::json!({"provider": "opencode"}),
+            "ai_settings.provider_not_selectable",
+        ),
+        (
+            serde_json::json!({"fallback_add": "opencode"}),
+            "ai_settings.provider_not_selectable",
+        ),
+        (
+            serde_json::json!({"provider": "cursor"}),
+            "ai_settings.unknown_provider",
+        ),
+        (
+            serde_json::json!({"fallback_add": "cursor"}),
+            "ai_settings.unknown_provider",
+        ),
     ] {
         assert!(runtime.dispatch_json(&ai_event(payload)));
         assert_eq!(
@@ -712,7 +726,7 @@ fn an_agent_that_cannot_be_chosen_is_refused_as_runs_on_and_as_a_fallback() {
                 .as_ref()
                 .expect("the refusal is visible")
                 .kind,
-            "ai_settings.provider_not_selectable"
+            expected
         );
     }
     assert!(runtime.take_ai_settings_save().is_none());
@@ -881,11 +895,11 @@ fn use_hide_ai_off_stops_every_model_use_and_keeps_the_choice() {
 fn the_first_signed_in_agent_that_is_switched_on_is_chosen_by_itself() {
     let mut runtime = runtime();
     runtime.ingest_ai_settings(hide_ai::AiSettings::default(), None);
-    switch_on(&mut runtime, &["codex", "cursor"]);
+    switch_on(&mut runtime, &["codex", "opencode"]);
     let asked = runtime.ai_request();
     assert_eq!(
         asked.selecting.iter().copied().collect::<Vec<_>>(),
-        vec![hide_ai::ProviderId::CODEX, hide_ai::ProviderId::CURSOR],
+        vec![hide_ai::ProviderId::CODEX, hide_ai::ProviderId::OPENCODE],
         "only agents that are on are asked, while nobody has chosen"
     );
 
@@ -895,7 +909,7 @@ fn the_first_signed_in_agent_that_is_switched_on_is_chosen_by_itself() {
     assert!(runtime.take_ai_settings_save().is_none());
 
     // Login is noticed later with no setting touched (B47).
-    assert!(runtime.ingest_background_ai(ready_read(&["codex", "cursor"])));
+    assert!(runtime.ingest_background_ai(ready_read(&["codex", "opencode"])));
     assert_eq!(
         runtime.snapshot.status.background_ai.provider.as_deref(),
         Some("codex"),

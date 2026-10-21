@@ -81,11 +81,71 @@ export function useMemoryProject(actions: Actions, requested?: string | null) {
   }, [actions, live, projectId]);
 }
 
+/**
+ * How many older cards the line says were cleared to make room, with the
+ * ref its line takes. The line is said once: when it is in view on a
+ * visible page the tab tells the core the cards are seen, and once the core
+ * counts none, the open tab keeps saying it, so it is gone only the next
+ * time the tab opens unless more are cleared. A mark that was not sent is
+ * sent again when the line is next in view.
+ */
+function useEvictedCards(project: ProjectMemory, actions: Actions): { count: number; lineRef: (line: HTMLElement | null) => void } {
+  const id = project.workspace_id;
+  const shown = project.enabled && !project.capacity_reached && project.evicted_cards > 0;
+  const through = project.evicted_through_unix_ms;
+  const [line, lineRef] = useState<HTMLElement | null>(null);
+  const visible = useLineVisible(line);
+  const [said, setSaid] = useState<{ id: string; count: number } | null>(null);
+  const pending = useRef<{ id: string; through: number; count: number } | null>(null);
+  useEffect(() => {
+    if (shown) {
+      if (!visible || through === null) return;
+      if (pending.current?.id === id && pending.current.through >= through) return;
+      if (actions.memoryEvictionsSeen(id, through)) pending.current = { id, through, count: project.evicted_cards };
+      return;
+    }
+    if (pending.current?.id !== id) return;
+    // The core counts none now: it took the mark this tab sent. A line gone
+    // while cards are still counted (the Memory filled, or was turned off)
+    // says nothing of the mark, so it is sent again when the line returns.
+    if (project.evicted_cards === 0) setSaid({ id, count: pending.current.count });
+    pending.current = null;
+  }, [actions, id, shown, visible, through, project.evicted_cards]);
+  const count = shown ? project.evicted_cards : said?.id === id ? said.count : 0;
+  return { count, lineRef };
+}
+
+/** Whether `line` is in view on a visible page. */
+function useLineVisible(line: HTMLElement | null): boolean {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!line) {
+      setVisible(false);
+      return;
+    }
+    let inView = typeof IntersectionObserver === "undefined";
+    const update = () => setVisible(inView && document.visibilityState === "visible");
+    const observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver((entries) => {
+      inView = entries.some((entry) => entry.isIntersecting);
+      update();
+    });
+    observer?.observe(line);
+    document.addEventListener("visibilitychange", update);
+    update();
+    return () => {
+      observer?.disconnect();
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [line]);
+  return visible;
+}
+
 function MemoryBody({ project, actions }: { project: ProjectMemory; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const id = project.workspace_id;
   const busy = project.pending_action !== null;
   const [deleting, setDeleting] = useState(false);
+  const { count: evicted, lineRef: evictedLine } = useEvictedCards(project, actions);
   const label = useShellStore((state) => catalogWorkspaces(state.rest).find((row) => row.id === id)?.label ?? id);
   // Every agent is past the usage limit: Hide AI is on but asks nothing until one is under it (D-06).
   const pastLimit = useShellStore((state) => {
@@ -131,6 +191,7 @@ function MemoryBody({ project, actions }: { project: ProjectMemory; actions: Act
           </div>
         ) : null}
         {project.enabled && project.capacity_reached ? <p className="-mt-sm break-keep text-caption text-warning">{t("memory.capacity")}</p> : null}
+        {project.enabled && !project.capacity_reached && evicted > 0 ? <p ref={evictedLine} className="-mt-sm break-keep text-caption text-subtle-foreground" data-memory-evicted={evicted}>{t("memory.evicted", { count: evicted })}</p> : null}
         {project.enabled && (project.questions.length > 0 || memoryProgress(project).length > 0) ? <Questions project={project} actions={actions} busy={busy} /> : null}
         {project.enabled ? <Cards project={project} actions={actions} busy={busy} onDelete={() => setDeleting(true)} /> : null}
       </div>

@@ -49,12 +49,8 @@ impl Runtime {
         key: &WorkspaceKey,
         topology: &[(String, bool)],
     ) -> Result<bool, LayoutError> {
-        // Only this machine's tabs are created with a claim on their place.
-        let reserved = if key.0 == self.node.as_str() {
-            self.pending_agent_admissions(&key.1)
-        } else {
-            0
-        };
+        let reserved = self.pending_agent_admissions(key);
+        let terminal_focus = self.pending_terminal_focus();
         // Drawn-ahead tabs may already be in this catalog. They occupy their
         // reserved slot but cannot confirm their own first real appearance.
         let unconfirmed = self
@@ -71,12 +67,90 @@ impl Runtime {
             .filter(|(_, (scope, _, _, _))| scope == key)
             .map(|(id, _)| id.clone())
             .collect();
-        let changed = store.views.entry(&key.0, &key.1).reconcile_agent_groups(
+        let mut changed = store.views.entry(&key.0, &key.1).reconcile_agent_groups(
             topology,
             reserved,
             &admitted,
             &unconfirmed,
         )?;
+        // The same bounded placement receipt applies on this machine and devices.
+        let mut placement_changed = false;
+        let mut errors = Vec::new();
+        let view = store.views.entry(&key.0, &key.1);
+        let placements = store
+            .agent_placements
+            .iter()
+            .filter(|(id, (scope, _, _, _))| scope == key && view.agent_tab_group(id).is_some())
+            .map(|(id, (_, group, area, index))| (id.clone(), group.clone(), area.clone(), *index))
+            .collect::<Vec<_>>();
+        for (id, group, area, index) in placements {
+            let group = group.filter(|id| view.group_layout(Some(id)).is_some());
+            let selected = view.agent_groups.selected.clone();
+            let preserve_focus = key.0 != self.node.as_str()
+                && terminal_focus
+                    .as_ref()
+                    .is_none_or(|(scope, tab)| scope != key || tab != &id);
+            let previous = preserve_focus.then(|| {
+                let layout = view
+                    .group_layout(group.as_deref())
+                    .expect("placement group checked");
+                (
+                    layout.tree.active_area.clone(),
+                    layout
+                        .tree
+                        .areas()
+                        .iter()
+                        .map(|area| (area.id.clone(), area.active.clone()))
+                        .collect::<Vec<_>>(),
+                )
+            });
+            if let Err(error) = view.move_agent_to_group(&id, group.as_deref(), unix_milliseconds())
+            {
+                errors.push(format!("Created tab {id}: {error:?}"));
+                continue;
+            }
+            placement_changed = true;
+            view.agent_groups.selected = selected;
+            let layout = view
+                .group_layout_mut(group.as_deref())
+                .expect("placement group checked");
+            let target = layout
+                .tree
+                .area(&area)
+                .unwrap_or_else(|| layout.tree.active_area());
+            let area = target.id.clone();
+            let index = index.unwrap_or(target.displays.len());
+            match layout.tree.move_display(
+                &id,
+                &area,
+                index,
+                layout.tree.next_stamp(unix_milliseconds()),
+            ) {
+                Ok(changed) => {
+                    placement_changed |= changed;
+                    store.agent_placements.remove(&id);
+                }
+                Err(error) => errors.push(format!("Created tab {id}: {error:?}")),
+            }
+            if let Some((active_area, fronts)) = previous {
+                for (area, tab) in fronts {
+                    if let Some(area) = layout.tree.area_mut(&area)
+                        && tab
+                            .as_ref()
+                            .is_some_and(|id| area.displays.iter().any(|tab| &tab.id == id))
+                    {
+                        area.active = tab;
+                    }
+                }
+                if layout.tree.area(&active_area).is_some() {
+                    layout.tree.active_area = active_area;
+                }
+            }
+        }
+        changed |= placement_changed;
+        for error in errors {
+            self.push_diagnostic("agent_layout.placement_refused", error);
+        }
         // A tab that left Herdr takes its View bookmark with it (D-11).
         let listed: Vec<&str> = topology.iter().map(|(id, _)| id.as_str()).collect();
         // Not `||`: the prune must run whether or not the layout changed.
@@ -235,7 +309,7 @@ impl Runtime {
             .iter()
             .filter(|(id, (scope, _, _, _))| scope == key && view.agent_tab_group(id).is_none())
             .count();
-        let pending = store.agent_admissions.get(key).map_or(0, HashSet::len);
+        let pending = self.pending_agent_admissions(key);
         if placed + arriving + pending < Tab::LIMITS.items {
             return true;
         }
@@ -247,12 +321,12 @@ impl Runtime {
         false
     }
 
-    pub(super) fn pending_agent_admissions(&self, path: &str) -> usize {
-        let key = (self.node.as_str().to_owned(), path.to_owned());
+    pub(super) fn pending_agent_admissions(&self, key: &WorkspaceKey) -> usize {
         self.workspace_views
             .as_ref()
-            .and_then(|store| store.agent_admissions.get(&key))
+            .and_then(|store| store.agent_admissions.get(key))
             .map_or(0, HashSet::len)
+            + self.pending_pane_move_tabs(key)
     }
 
     pub(super) fn has_agent_effect(&self, path: &str, claim: &str) -> bool {
@@ -276,7 +350,7 @@ impl Runtime {
         {
             return true;
         }
-        if !self.admit_agent_tab(path) {
+        if !self.admit_agent_tab(path) || !self.admit_agent_placement() {
             return false;
         }
         if let Some(store) = self.workspace_views.as_mut() {
@@ -338,7 +412,72 @@ impl Runtime {
     }
 
     pub(super) fn finish_agent_admission(&mut self, path: &str, id: u64) {
-        self.finish_agent_effect(path, &format!("create:{id}"));
+        self.finish_agent_creation(&(self.node.as_str().to_owned(), path.to_owned()), id);
+    }
+
+    /// A receipt cannot consume capacity already promised to another effect.
+    pub(super) fn agent_placement_capacity(&self, owned: Option<(&WorkspaceKey, &str)>) -> bool {
+        self.workspace_views.as_ref().is_none_or(|store| {
+            let own = owned.is_some_and(|(key, claim)| {
+                store
+                    .agent_admissions
+                    .get(key)
+                    .is_some_and(|claims| claims.contains(claim))
+            }) as usize;
+            store.agent_placements.len()
+                + store
+                    .agent_admissions
+                    .values()
+                    .map(HashSet::len)
+                    .sum::<usize>()
+                - own
+                < 64
+        })
+    }
+
+    fn admit_agent_placement(&mut self) -> bool {
+        if self.agent_placement_capacity(None) {
+            return true;
+        }
+        self.set_error(
+            "agent_layout.placement_limit",
+            "64 Agent tabs are opening. Wait for them to finish before opening another.",
+            false,
+        );
+        false
+    }
+
+    pub(super) fn reserve_agent_creation(&mut self, key: &WorkspaceKey) -> Option<u64> {
+        if !self.admit_agent_tab_for_workspace(key) {
+            return None;
+        }
+        if !self.admit_agent_placement() {
+            return None;
+        }
+        self.next_async_operation_id = self
+            .next_async_operation_id
+            .saturating_add(1)
+            .max(unix_milliseconds());
+        let id = self.next_async_operation_id;
+        if let Some(store) = self.workspace_views.as_mut() {
+            store
+                .agent_admissions
+                .entry(key.clone())
+                .or_default()
+                .insert(format!("create:{id}"));
+        }
+        Some(id)
+    }
+
+    pub(super) fn finish_agent_creation(&mut self, key: &WorkspaceKey, id: u64) {
+        if let Some(store) = self.workspace_views.as_mut()
+            && let Some(pending) = store.agent_admissions.get_mut(key)
+        {
+            pending.remove(&format!("create:{id}"));
+            if pending.is_empty() {
+                store.agent_admissions.remove(key);
+            }
+        }
     }
 
     pub(super) fn finish_agent_effect(&mut self, path: &str, claim: &str) {
@@ -372,6 +511,17 @@ impl Runtime {
             self.set_error(
                 "agent_layout.unsupported",
                 "SSH devices support one Agent area per group",
+                false,
+            );
+            return true;
+        }
+        if let AgentLayoutAction::Move { tab_id, .. } | AgentLayoutAction::Split { tab_id, .. } =
+            &payload.action
+            && self.pane_move_holds_tab(tab_id)
+        {
+            self.set_error(
+                "pane.move_pending",
+                "Check the pending pane move before rearranging this tab",
                 false,
             );
             return true;

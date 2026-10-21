@@ -312,9 +312,7 @@ impl AiSettings {
 
     /// The agent a first run should start on: the first of the fixed order
     /// that can answer, `None` when none can (D-18). `availability` is what
-    /// the router reported; an agent missing from it cannot answer. An agent
-    /// whose sign-in cannot be checked is `ready` only because its program was
-    /// found, so it is never picked here: the operator can still choose it.
+    /// the router reported; an agent missing from it cannot answer.
     ///
     /// This is only consulted while nobody has chosen. Once the operator has
     /// chosen, their choice stands even while it is degraded, because the
@@ -324,10 +322,9 @@ impl AiSettings {
         availability: &[(ProviderId, Availability)],
     ) -> Option<ProviderId> {
         PROVIDERS.iter().copied().find(|provider| {
-            provider.login_probe()
-                && availability
-                    .iter()
-                    .any(|(id, state)| id == provider && state.is_ready())
+            availability
+                .iter()
+                .any(|(id, state)| id == provider && state.is_ready())
         })
     }
 }
@@ -534,6 +531,45 @@ mod tests {
             serde_json::from_slice(&std::fs::read(settings_path(&home)).unwrap()).unwrap();
         assert_eq!(rewritten["models"]["some-future-agent"], "x-1");
         std::fs::remove_dir_all(home).expect("the temporary home is removable");
+    }
+
+    /// B38/D-15: a retired Gemini choice uses the same policy as any unknown
+    /// provider, without silently enabling requests on the internal default.
+    #[test]
+    fn retired_gemini_choices_cannot_run_or_fall_back_and_keep_their_model_data() {
+        for retired in ["gemini-cli", "gemini"] {
+            let home = home("retired-gemini");
+            write_settings(
+                &home,
+                &serde_json::json!({
+                    "provider": retired,
+                    "models": {(retired): "saved-model", "antigravity": "gemini-3.8-flash-high"},
+                    "fallback": [{"provider": retired}, {"provider": "codex", "model": "saved-codex"}]
+                })
+                .to_string(),
+            );
+            let settings = load(&home).expect("retired settings remain readable");
+            assert_eq!(settings.provider, ProviderId::CLAUDE);
+            assert!(!settings.chosen);
+            assert!(!settings.router_config().enabled);
+            assert_eq!(
+                settings.router_config().priority,
+                [ProviderId::CLAUDE, ProviderId::CODEX]
+            );
+            assert_eq!(settings.fallback.len(), 1);
+            assert_eq!(settings.fallback[0].provider, ProviderId::CODEX);
+            assert_eq!(settings.models[retired], "saved-model");
+            assert_eq!(settings.models["antigravity"], "gemini-3.8-flash-high");
+            save(&home, &settings).expect("the file is writable");
+            let rewritten: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(settings_path(&home)).unwrap()).unwrap();
+            assert!(rewritten.get("provider").is_none());
+            assert_eq!(rewritten["models"][retired], "saved-model");
+            assert_eq!(rewritten["fallback"][0]["provider"], "codex");
+            assert_eq!(rewritten["fallback"].as_array().unwrap().len(), 1);
+            assert!(!load(&home).unwrap().chosen);
+            std::fs::remove_dir_all(home).expect("the temporary home is removable");
+        }
     }
 
     /// B1, B7: a file with no limit reads 90, an explicit limit survives a
@@ -768,27 +804,6 @@ mod tests {
             (ProviderId::CLAUDE, Availability::NeedsLogin),
         ];
         assert_eq!(AiSettings::provider_for_first_run(&neither), None);
-    }
-
-    /// Gemini CLI answers `ready` only because its program was found, so a
-    /// first run never picks it, ahead of or instead of an agent that is
-    /// really signed in.
-    #[test]
-    fn the_first_run_never_picks_an_agent_whose_sign_in_cannot_be_checked() {
-        let gemini_and_grok = [
-            (ProviderId::GEMINI, Availability::Ready),
-            (ProviderId::GROK, Availability::Ready),
-        ];
-        assert_eq!(
-            AiSettings::provider_for_first_run(&gemini_and_grok),
-            Some(ProviderId::GROK),
-            "Gemini is ahead of Grok in the order and still passed over"
-        );
-        assert_eq!(
-            AiSettings::provider_for_first_run(&[(ProviderId::GEMINI, Availability::Ready)]),
-            None,
-            "a lone program that was merely found chooses nothing"
-        );
     }
 
     #[test]

@@ -41,6 +41,7 @@ fn registration(id: &str, label: &str, alias: &str) -> DeviceRegistration {
             ssh_alias: alias.to_owned(),
         },
         herdr_socket_path: None,
+        herdr_session: None,
         host_consent: None,
     }
 }

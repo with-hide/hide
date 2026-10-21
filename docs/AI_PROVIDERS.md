@@ -29,7 +29,9 @@ The answer is checked against its schema only: an answer in another language is 
 `hide-ai` owns everything about providers: which are installed and logged in, the child process and its protocol, timeouts and cancellation, the retry policy, fallback between providers, duplicate suppression, and the structured error a caller branches on.
 No feature type lives in the crate, and no provider detail leaks out of it.
 
-The session label requests use `context_label.v18`, retaining nullable goals at both boundaries, with the goal and line lengths of the request's language (8 to 30 and 40 characters in Korean, Simplified Chinese and Japanese, 8 to 60 and 80 in English); the existing END request adds a work judgment: new work as one to six task names, one per independent deliverable the operator's request asked for, continued work (from the open tasks and from the three newest finished requests, each with all its tasks, so an order to redo finished work reopens that request instead of being judged no work; one ID continues every task of its request) an answer, approval or choice replying to what the agent asked or proposed continuing the task that turn worked on, or no assigned work, at most three short missed items (a problem found outside the assigned task or a proposed follow-up nobody has taken), resolved item ids and one output-task choice.
+The session label requests use `context_label.v19`, retaining nullable goals at both boundaries, with the goal and line lengths of the request's language (8 to 30 and 40 characters in Korean, Simplified Chinese and Japanese, 8 to 60 and 80 in English).
+Both boundaries also return `request`, the message that began the turn in one line, its references resolved against the earlier events, its typos fixed and written as a noun phrase, held to the line's length and cut between words past it, refused with a control character and allowed empty (PRD pane-last-request D-03, D-08); it adds a few dozen output tokens per turn and no call.
+The existing END request adds a work judgment: new work as one to six task names, one per independent deliverable the operator's request asked for, continued work (from the open tasks and from the three newest finished requests, each with all its tasks, so an order to redo finished work reopens that request instead of being judged no work; one ID continues every task of its request) an answer, approval or choice replying to what the agent asked or proposed continuing the task that turn worked on, or no assigned work, at most three short missed items (a problem found outside the assigned task or a proposed follow-up nobody has taken), resolved item ids and one output-task choice.
 The fixed instructions consolidate repeated goal, line, stop-state and work-judgment rules; the output schema, model effort, request boundaries and context limits are unchanged.
 There is no additional call per turn, and requests from periods with summaries Off or failed judgments are never backfilled by the provider.
 END waits for a known ledger context instead of treating missing parent authority or open work as empty.
@@ -46,10 +48,18 @@ The comparison set is bounded by cards and serialized bytes so it and one event 
 Background analysis counts against a machine-wide 1,000 calls a UTC day and is asked only of an agent under the operator's usage limit (see [The usage limit](#the-usage-limit)); `hide memory add` counts against the daily cap only, and its provider tries end within 50 s.
 The feature layer verifies the relation and provenance before the single-writer store changes anything; provider output never has direct write authority.
 The `preference` kind records personal choices without proposing repository changes.
-`project_memory_creation_docs` is one comparison batch call for lexically matched new candidates: one repository excerpt per candidate, at most 3 KiB each, with the complete input capped at 15% of extraction input characters and bytes.
-Its same/differs/unrelated verdict suppresses duplicates, withholds differing claims before injection and leaves unrelated claims ordinary, without an extra initial check; conflicting quotes must appear in the exact excerpt sent.
+`project_memory_creation_docs` is one comparison batch call for lexically matched new or superseding candidates: one repository excerpt per candidate, at most 3 KiB each, with the complete input capped at 15% of the 64 KiB extraction-input ceiling in characters and bytes.
+Its same/differs/correction/exception/unrelated verdict distinguishes duplicate documentation, an unresolved disagreement, an enduring operator correction and a task-local exception.
+A confirmed enduring correction remains available as untrusted context with its pending document update, while unresolved disagreements are withheld and task exceptions do not revise standing rules.
+Reconciliation records each admitted attempt before asking and certifies a document fingerprint only after a usable answer.
+An intent-local failure rotates the correction and lets remaining card verification and suggestion checks continue within the same maintenance quantum; the runtime retains the failure for its normal Project backoff.
+Authentication, account usage and resource-cap refusals still stop provider work.
+Completed check changes and observed failures survive a later admission, local or cancellation stop.
+A Project with an observed maintenance failure leaves its discovered extraction pending for runtime backoff, so a same-pass success cannot clear the failure.
+
+Conflicting quotes must appear in the exact excerpt sent, and direct operator evidence is required to confirm correction authority.
 The call uses the existing analysis admission and router usage limit; `analysis.session_cards` reports Project/session IDs, counts and both input sizes without content.
-Two more features use the same boundary and the same call cap and usage limit (PRD memory-card-quality D-07, D-08, D-11): `project_memory_verify` asks whether a card whose evidence moved still holds, and `project_memory_promote_check` asks whether a rule or lesson about to be suggested for the repository's documents is already said there (`hide-memory/src/verify.rs`).
+Two more features use the same boundary and the same call cap and usage limit (PRD memory-card-quality D-07, D-08, D-11): `project_memory_verify` asks whether a card whose evidence moved still holds, and `project_memory_promote_check` asks whether a rule, lesson or durable decision about to be suggested for the repository's documents is already said there (`hide-memory/src/verify.rs`).
 Each sends the card, what the repository answers now for its evidence, and bounded excerpts (at most five cited files of 8 KiB for the first; at most five instruction documents of 8 KiB and three of the operator's own global instruction files of 5 KiB for the second), each a whole file when it fits and otherwise the sections (a heading and what follows) that share the most words with the card, read from at most the first 96 KiB of the file, all passed through the local redactor, within the 64 KiB request input (the last excerpts are dropped before a request is refused); a file named for credentials (`.env*`, keys and certificates, names containing `secret` or `credential`) is never read into a request, whatever a card cites; an answer that arrives but cannot be used (not the schema, a correction with no text, a document never shown) spends the card's day and the pass goes on to the next card, while a provider failure spends nothing and holds the Project; the answer is a strict-schema verdict and a corrected card when it is outdated, and a document named by an `in_docs` verdict must be one the request carried.
 A card is asked about at most once a day.
 The logs carry card numbers and verdicts, never card text, file text or a path.
@@ -60,17 +70,18 @@ Not-authenticated, unavailable, usage-limited, and exhausted outcomes pause new 
 Logs retain request, feature, provider, Project/session subject IDs, counts, duration, and outcome, but never transcript text, prompt text, Memory body, file path, credential, or provider thread ID.
 
 The existing verification and promotion-check answers include `docs_disagree` with a shown repository path and exact conflicting quote; no extra conflict call is made.
-Authority is decided outside the provider from operator-source and file commit times, and an unknown or equal time needs an operator answer.
+Authority is decided from direct operator evidence and semantic scope; source and file times are provenance and never select the winner.
+An unresolved disagreement needs an operator answer.
 
 ## Providers
 
 The user's installed and logged-in CLIs are the only credentials for background AI requests.
-The background AI boundary reads no token file: the codex backend references the user's `auth.json` only through a symlink in the private `CODEX_HOME` it sets (see the codex bullet below), and never opens the file itself.
+Hide's integration code reads no token file: the codex backend references the user's `auth.json` only through a symlink in the private `CODEX_HOME` it sets, and OMP delegates credential discovery and use to its public SDK (see [Oh My Pi](#oh-my-pi)).
 It sets two environment variables: that `CODEX_HOME`, pointing the app-server at the private directory, and `MAX_THINKING_TOKENS=0` on a claude model turn (see the claude bullet).
 `hide-ai` is also the only code that starts a background AI child of any agent: the Weekly Usage reader below asks the same `ClaudeCliBackend` for its `/usage` text rather than running the CLI itself.
 
-The providers are a registry (`hide-ai/src/registry.rs`), in this fixed order: `claude`, `codex`, `gemini-cli`, `grok`, `opencode`, `pi`, `cursor`, `antigravity`.
-`ProviderId` is a copyable name for one entry, written in `ai.json` as its id; `PROVIDERS` lists them, `ProviderId::descriptor()` gives the label, the program names looked up on the login `PATH`, the default model and `agent`, the id of the same agent in the install kit (`claude-code`, `codex`, `grok`, `opencode`, `pi`, `cursor`) or `gemini-cli` for Gemini CLI, which the kit no longer lists and whose id only names its logo, and `build_backend` makes the backend of one entry.
+The providers are a registry (`hide-ai/src/registry.rs`), in this fixed order: `claude`, `codex`, `grok`, `opencode`, `pi`, `omp`, `antigravity`.
+`ProviderId` is a copyable name for one entry, written in `ai.json` as its id; `PROVIDERS` lists them, `ProviderId::descriptor()` gives the label, the program names looked up on the login `PATH`, the default model and `agent`, the id of the same agent in the install kit (`claude-code`, `codex`, `grok`, `opencode`, `pi`, `antigravity`), and `build_backend` makes the backend of one entry.
 An empty model means the CLI's own default: no `--model` flag is sent.
 There is one place that finds a CLI and says what it is run with (`hide-ai/src/program.rs`): a program is looked for on the account's search (`hide_platform::programs`: the login shell's folders, the daemon's own `PATH`, the usual install folders), and the child is started with that same value as its `PATH`.
 That covers every child, the availability and model-list probes and the Weekly Usage read as much as a request, and the Codex app-server, because a CLI installed as a script (pnpm's `codex`, a Node CLI under nvm) starts its interpreter by name from its environment, and a CLI found on the shell's folders and run with the daemon's would be reported ready and then fail.
@@ -149,12 +160,12 @@ A request reports progress once a second while it runs, and a cancel in the core
   The same response carries the logged-in account, which the parser never reads and nothing logs, stores or snapshots.
   The list is held for ten minutes (a menu opening is not a child start) and the child is bounded at twenty seconds; a list the CLI could not give is `ModelCatalog::Unknown` with `claude_models_unreadable:<stage>`, never a guess.
   The shape was observed on 2026-10-06 against the installed, logged-in CLI; the observed values (`opus`, `fable`, `sonnet`, `haiku` and full names) are the account's, not a contract, which is why they are read each time.
-- `gemini-cli`, `grok`, `pi` and `antigravity` answer in text through one shared one-shot runner (`hide-ai/src/runner.rs`, `text_cli.rs`), and `opencode` and `cursor` are registered but unsupported.
+- `grok`, `pi` and `antigravity` answer in text through one shared one-shot runner (`hide-ai/src/runner.rs`, `text_cli.rs`), and `opencode` is registered but unsupported.
   See [The text-mode CLIs](#the-text-mode-clis).
 
 ## The text-mode CLIs
 
-Gemini CLI, Grok, Pi and Antigravity have no output-schema surface the way Claude Code and Codex do (agy's `--json-schema` cannot be used; see [Antigravity](#antigravity)).
+Grok, Pi and Antigravity have no output-schema surface the way Claude Code and Codex do (agy's `--json-schema` cannot be used; see [Antigravity](#antigravity)).
 Each is asked, in its system prompt, for exactly one JSON object matching the feature's schema, and the object is read back from the text it printed: the whole text, the body of a code fence, or the span from the first `{` to the last `}`, in that order.
 The router validates every answer against the feature's schema, so a wrong shape is `InvalidOutput` whatever the CLI said.
 A failure is classified from the CLI's documented exit codes and what it printed to stderr: an authentication word or HTTP 401 or 403 is `NotAuthenticated`, a rate or quota word or 429 is `UsageLimited`, an overload word or 5xx is `Transient`, and anything else is `CompletionUnknown`, because the child ran and the prompt may have been submitted.
@@ -167,18 +178,72 @@ The transcript never reaches an argument vector.
 
 | Agent | Command | Prompt, system prompt | Read-only by | Models | Login |
 | --- | --- | --- | --- | --- | --- |
-| `gemini-cli` | `gemini -p <instruction> --output-format json --approval-mode plan [--model <m>]`, in the private file's folder | transcript on stdin, system prompt in a `0600` file named by `GEMINI_SYSTEM_MD` | `--approval-mode plan`, the CLI's read-only mode | a fixed list the CLI documents (`auto`, `pro`, `flash`, `flash-lite`), reported as `Fixed` because it cannot be asked | not probed; learned from a request failure, so an installed CLI reads `Ready` |
 | `grok` | `grok --prompt-file <f> --output-format json --json-schema <s> --system-prompt-override <sys> --tools "" --no-subagents --disable-web-search --max-turns 1 [--model <m>]` with `GROK_MEMORY=0` and `GROK_DISABLE_AUTOUPDATER=1` | transcript in a `0600` prompt file | no tool, no sub-agent, no web search, one turn | `grok models`: the `* default` line and `- <id>` lines | `grok models` printing "not authenticated" is `NeedsLogin` |
 | `pi` | `pi -p --no-tools --no-session --no-extensions --no-mcp --no-skills --no-prompt-templates --no-context-files --thinking off --system-prompt <sys+schema> [--model <m>] <instruction>` | transcript on stdin | no tool, no extension, no MCP, no session | `pi --list-models`, read tolerantly | `pi auth check --provider <p>` when the model is `provider/id` (exit 0 ready, 1 or 2 not), otherwise a non-empty model list |
 
-Gemini exit 42 (input error) is `Rejected`, so it adds no unknown call; exit 53 (turn limit) is `InvalidOutput`, because a model turn may have run.
 Grok's answer is `structured_output` when present and its `text` otherwise.
 Each CLI's own flags are the contract; a flag one of them stops accepting is a failed request that names the exit status, not a silent change of behaviour.
 
-`opencode` and `cursor` are `UnprovenReadOnlyBackend`s.
-Neither CLI documents a mode that guarantees a one-shot, tool-free, read-only run from a script, and a background feature must never be the reason an agent edits a file, so they are listed and never asked: availability is `NotInstalled` when no program is found and otherwise `Unsupported { reason: "cannot_guarantee_read_only" }`, `models()` is `Unknown` with the same reason, and `execute` returns `Unsupported`.
-Settings shows them as installed and not selectable, with that reason.
-Making either selectable is a change to its backend and to this table, with a documented read-only mode cited, not a setting.
+`opencode` uses `UnprovenReadOnlyBackend`.
+The CLI documents no mode that guarantees a one-shot, tool-free, read-only run from a script, and a background feature must never be the reason an agent edits a file, so it is listed and never asked: availability is `NotInstalled` when no program is found and otherwise `Unsupported { reason: "cannot_guarantee_read_only" }`, `models()` is `Unknown` with the same reason, and `execute` returns `Unsupported`.
+Settings shows it as installed and not selectable, with that reason.
+Making it selectable is a change to its backend and to this table, with a documented read-only mode cited, not a setting.
+
+### Oh My Pi
+
+`omp` background AI requires the user's **npm SDK installation** of `@oh-my-pi/pi-coding-agent` and a compatible Bun on the account's PATH.
+Hide neither installs nor bundles either dependency.
+Homebrew and official standalone binaries alone are not supported: they contain no importable SDK, and the CLI's prompt flags do not disable every ambient instruction, MCP and executable extension path.
+That gap closes with an upstream CLI contract that guarantees complete isolation, or an officially supported importable SDK distribution beside those binaries.
+An existing interactive OMP installation is not evidence that background AI can run.
+
+The supported exact SDK versions are `18.7.0` and `18.12.2`; an unverified version fails before authentication or inference.
+Each official package declares `engines.bun >=1.3.14`; the bridge checks the installed manifest's requirement against the running Bun, rather than inferring compatibility from a successful probe.
+The bounded locator follows Unix npm executable symlinks and Windows npm's sibling `node_modules`; an SDK or Bun installed elsewhere must be made visible beside `omp` or on PATH respectively.
+The Rust API also accepts explicit package and runtime paths.
+Missing SDK/runtime, package identity, mismatched dependency versions, inaccessible public exports and incompatible runtime all return actionable `ProviderUnavailable` reasons.
+
+`hide-ai/src/omp.rs` starts the private `omp_bridge.mjs` through the existing owned runner for each probe or turn.
+It imports the installation's public `@oh-my-pi/pi-ai`, `@oh-my-pi/pi-ai/auth-broker/discover`, `@oh-my-pi/pi-catalog/models` and `@oh-my-pi/pi-utils/{logger,env,dirs}` exports after checking their package identities and matching versions.
+It never imports the coding-agent harness, a user model module, settings loader or extension registry.
+`discoverAuthStorage` and `storage.keys.getWithCredential` own login discovery, refresh and authorization; Hide does not parse, export, copy or log credentials.
+The child receives the platform's restricted login environment, so this boundary supports OMP's default profile and stored login, not inherited API-key or custom-profile environment variables.
+Auth config values beginning with `!` are refused rather than executed; custom credential commands, model aliases, extension providers and `models.yml` overrides are outside this contract.
+The public SDK's native addon loader remains part of the trusted user installation, not an operating-system sandbox.
+Compiled-mode and native-directory dotenv overrides are refused before the eager native root import; normal official native loading and its platform cache remain SDK-owned.
+SDK usage/ranking probes and file/console logging are disabled.
+Raw SDK request debugging is forced off before imports, including when home/profile dotenv files enable it.
+After the SDK resolves the initial opaque credential, its public directory API moves diagnostic state to an existing private file root, so the OS refuses request-dump writes, including HTTP 200 streams containing 400/413 errors.
+The opened auth store retains its own source; no credential is repacked or exported.
+The private root makes the SDK's installation-ID lookup use its in-memory random fallback; ordinary protocol session identifiers and OS/CPU headers remain SDK-owned.
+Synthetic fixtures do not establish paid-service acceptance of those changing installation identifiers or broker-backed refresh behavior.
+The bridge fails before inference if the private SDK root cannot resolve to that file, for example when Windows home and temporary files are on different volumes.
+The SDK may maintain its own credential state; Hide writes no OMP conversation or session.
+
+Model discovery uses the bundled chat/tiny catalog for providers with a concrete configured credential source, filtered to `anthropic-messages`, `openai-completions`, `openai-responses` and `openai-codex-responses`.
+Other transports are excluded because the single-request fetch boundary does not cover them.
+The list is `Fixed`, not an assertion of the account's model entitlements; `Ready` means usable SDK/runtime and configured credentials, with service authentication checked only on a turn.
+No credential means `NeedsLogin` and no model request.
+The default model is `anthropic/claude-haiku-4-5`; choose a listed model for a different provider's login.
+
+The feature supplies its system prompt and input unchanged, with only the shared JSON-schema instruction added to the system prompt.
+The official transport's fixed protocol framing is preserved; it is not an agent harness or permission to add ambient instructions.
+For Anthropic OAuth, upstream `buildAnthropicSystemBlocks` prepends the fixed Claude Code identity and a billing header before the feature system block.
+The billing version fingerprint uses SDK constants and characters of the already supplied user input, and its attestation hashes the outgoing request body.
+The bridge removes the ambient version override before inference and never overrides the catalog's `injectClaudeCodeInstruction` compatibility setting.
+The sources are the pinned [Anthropic transport](https://github.com/can1357/oh-my-pi/blob/v18.12.2/packages/ai/src/providers/anthropic.ts) and [fingerprint constants](https://github.com/can1357/oh-my-pi/blob/v18.12.2/packages/ai/src/providers/claude-code-fingerprint.ts); the contract permits only this transport framing and unchanged feature content, with no user/project instructions, context, personal data or tools added.
+The bridge submits one message and an empty tool list directly to `completeSimple`, with no project/personal context discovery, MCP, tools, session harness or auxiliary model work.
+WebSocket transport and hidden inference retries are disabled; the fetch boundary aborts after the first HTTP refusal or transport error and refuses a second send.
+HTTP 401/403, 429, other 4xx and 5xx become the existing authentication, quota, rejection and transient variants; a lost response after submission is `CompletionUnknown`, never silently replayed.
+The existing router alone owns any visible retry/fallback and validates the JSON against the feature's schema.
+Usage remains one unknown call, never totals counted from duplicate stream events.
+
+System and input travel in a private temporary request file, never process arguments.
+The runner owns cancellation, deadline, process-tree cleanup and bounded stdout/stderr; request files are removed on every return.
+Bun's Unix parent-death watch and the platform's Windows kill-on-close job end the bridge if its owner crashes.
+An abrupt owner exit skips temporary-file destructors; private files can remain until the system cleans its temporary directory.
+Requests are capped at 1 MiB and inference response bytes at 8 MiB.
+The `omp-contract` CI lane runs both real SDK versions, synthetic stored credentials and a substituted localhost catalog on macOS, Linux and Windows; it proves the SDK boundary, not a paid service login or the operator's installation.
 
 ### Antigravity
 
@@ -207,7 +272,7 @@ The default model is the CLI's own, so no `--model` is sent until the operator p
 The result's `usage.input_tokens` and `output_tokens` are the call's counts; no model is attributed here, because the request's conversation is also in agy's history, where the session usage reader counts it under no project.
 Each request leaves a conversation in agy's history, because agy has no flag that skips it; it is filed under the read-only folder, which no checkout reads, so no project's Sessions, labels or usage page shows it.
 
-Proof level, as of 2026-10-16: Claude, Codex and Antigravity have been run live (Antigravity's tool-free turn, above, and its `/usage` read); Gemini CLI, Grok and Pi are proven by scripted stand-ins (`hide-ai/tests/it/text_clis.rs`, which records the argument vector, the standard input, the working directory, the environment and the file contents the child received) because none is installed on the machine that built this, so their flags, exit codes, output shapes and login probes follow the CLIs' published documentation and are not yet observed.
+Proof level, as of 2026-10-16: Claude, Codex and Antigravity have been run live (Antigravity's tool-free turn, above, and its `/usage` read); Grok and Pi are proven by scripted stand-ins (`hide-ai/tests/it/text_clis.rs`, which records the argument vector, the standard input, the working directory, the environment and the file contents the child received) because none is installed on the machine that built this, so their flags, exit codes, output shapes and login probes follow the CLIs' published documentation and are not yet observed.
 Grok's `--tools ""` giving a tool-free run, where the validated object sits in Grok's JSON output, and the format of `pi --list-models` are the unobserved parts; the parsers accept more than one shape and an unreadable list is `Unknown`, not empty.
 
 ## The operator's choice
@@ -240,6 +305,8 @@ The file names a provider, a model per provider, whether Hide AI is on, an order
 Off, `AiRouter::execute` returns `AiError::Disabled` at once and asks no provider anything, and a feature treats it as nothing to do, never as a failure.
 `fallback` is the list of providers a request may move to, in order, each with the model it is asked with (absent means that provider's own default); it is empty when the field is absent.
 A provider the registry does not know is ignored wherever it appears, so a file written by a newer Hide still reads, and `models` keeps the keys it does not know.
+This includes retired `gemini-cli`, `gemini` and `cursor` ids: a saved retired choice becomes unchosen, with the internal default `claude` but request routing disabled until a supported agent is selected through the existing first-run or operator choice.
+Retired fallback entries are ignored, their raw per-provider model entries survive rewrites, and neither their program nor a replacement provider is asked a model request before that selection.
 `AiSettings` is the one owner of the rules: `set_provider` removes the chosen provider from `fallback` and adopts the model it had there, `add_fallback` refuses the chosen provider and a duplicate (`FallbackRefusal`), `remove_fallback` and `set_fallback_model` edit one entry, and `models_by_provider()` is the model of every provider for building backends.
 
 `agent_summary` is the Settings › Hide AI › Features Agent summaries switch (PRD overview-request-view D-11), on when the field is absent.
@@ -262,7 +329,7 @@ A session with no home directory to write to reports that on the tab for the sam
 Choosing a provider changes which provider is asked first and nothing else.
 Every feature, Project Memory included, asks the chosen provider and then the fallback list under the policy below, while the router's retry, cooldown, cancellation, duplicate-suppression, process, and budget rules apply to all of them.
 
-The Hide AI tab reads `status.background_ai`, one section the core publishes (`herdr-core/src/model.rs`, `BackgroundAiSnapshot`): `enabled`, `provider` (null until one is chosen), `chosen`, `agent_summary`, one `providers` row per registered agent in the fixed order (`agent` is the shared agent adapter id, or `gemini-cli` for Gemini CLI, which names only its logo; `state` one of `ready`, `needs_login`, `usage_limited`, `not_installed`, `unavailable`, `unsupported`, `unread`, `installed`, `login_checked`, `selectable`, `retry_at_ms`, `model`, `models`, `models_fixed`, `cli_default`, and `models_unavailable_reason`), the ordered `fallback` list, and `refusal`.
+The Hide AI tab reads `status.background_ai`, one section the core publishes (`herdr-core/src/model.rs`, `BackgroundAiSnapshot`): `enabled`, `provider` (null until one is chosen), `chosen`, `agent_summary`, one `providers` row per registered agent in the fixed order (`agent` is the shared agent adapter id; `state` one of `ready`, `needs_login`, `usage_limited`, `not_installed`, `unavailable`, `unsupported`, `unread`, `installed`, `login_checked`, `selectable`, `retry_at_ms`, `model`, `models`, `models_fixed`, `cli_default`, and `models_unavailable_reason`), the ordered `fallback` list, and `refusal`.
 Every reason in it is a code the shell turns into words, never prose, an account, a path or a conversation, and the cause of a failed model-list read stays in the diagnostic log (B68) as an `ai.models.unavailable` record with the agent and a `reason=` code, written when the reason first appears or changes and not on every read.
 `ai_settings` carries `enabled`, `provider` (Runs on), `model` (for Runs on, or for an agent in the fallback list, which keeps its own), `fallback_add`, `fallback_remove`, `agent_summary` and the two observation hints; the core refuses an agent that the last read did not find selectable (`ai_settings.provider_not_selectable`), an unknown one (`ai_settings.unknown_provider`), the Runs on agent as its own fallback (`ai_settings.fallback_is_runs_on`) and a listed one twice (`ai_settings.fallback_listed`).
 `refusal` is how the label analyzer last found the chosen agent (`AiStanding`, written on the analyzer's thread after each job): its reason class, the end of a usage limit when the agent said, and the listed agent a request made now would run on (`using`), or none when no listed agent can answer, which is the Runs on row's reason (B41, B42).
@@ -327,8 +394,8 @@ The label worker treats `OverBudget` as an environmental failure: it keeps the g
 `hide-agent-adapter/src/usage.rs` declares all nine usage cells for every adapter: four limit scopes, tokens, cost, model breakdown, session attribution and project attribution.
 Every unsupported cell names its reason and the condition that would change it; `NotBuilt { layer }` is refused by the contract test once that layer ships.
 `UsageDeclaration::cells()` destructures every field exhaustively and is the source of `contracts/usage-coverage.json`; `export_usage_coverage` regenerates that contract, while `export_web_contract` includes the same declaration in the shell's adapter catalog.
-The independent `hide-agent-adapter/tests/fixtures/support.json` matrix pins the expected support for all eight agents.
-Layer 4 includes the six historical token and cost readers, with model and source attribution retained from each native usage record; Cursor stays excluded.
+The independent `hide-agent-adapter/tests/fixtures/support.json` matrix pins the expected support for all seven agents.
+Layer 4 includes the six historical token and cost readers, with model and source attribution retained from each native usage record; Cursor is retired from the supported adapter list.
 The table is generated by `export_usage_coverage --markdown`; the adapter contract test compares it byte for byte.
 
 <!-- usage-coverage:start -->
@@ -340,7 +407,6 @@ The table is generated by `export_usage_coverage --markdown`; the adapter contra
 | OpenCode | Excluded | Excluded | Excluded | Excluded | Supported | Supported | Supported | Supported | Supported |
 | Pi | No such data | No such data | No such data | No such data | Supported | Supported | Supported | Supported | Supported |
 | omp | No such data | No such data | No such data | No such data | Supported | Supported | Supported | Supported | Supported |
-| Cursor | Excluded | Excluded | Excluded | Excluded | No such data | No such data | No such data | No such data | No such data |
 | Antigravity | No such data | Supported | Supported | No such data | Supported | No such data | No such data | Supported | Supported |
 <!-- usage-coverage:end -->
 
@@ -463,8 +529,8 @@ What counts is the attempt, not the request:
   A Codex turn that reports `interrupted` is `Cancelled`, and `responseStreamDisconnected` is `CompletionUnknown` regardless of its optional HTTP status: both may follow model work, count once, and are never retried automatically.
   After `turn/start`, a failed turn with missing or unfamiliar `codexErrorInfo` is also `CompletionUnknown`; only a typed refusal or a failure to establish the HTTP/response-stream connection can remain retryable without an unknown call.
   The one exception is an `other` failure whose `message` is the Responses API's own error body as JSON with a 4xx `status` (codex-cli 0.163.0 forwards it that way): the API refused the request before any model work, so it is `Rejected(codex_request_refused:http_<status>[:<code>])`, with the body's `error.code` kept only when it is a short identifier such as `invalid_json_schema`; a 401, 403 or 429 there is `NotAuthenticated` or `UsageLimited` as a typed one is, and the body's prose is never read.
-- A response that arrives without usage (Gemini CLI, Pi, Grok today) is also an unknown call.
-- A refusal before the prompt went out (`ProviderUnavailable`, `NotAuthenticated`, `UsageLimited`, `Unsupported`, `Transient`, `OverBudget`) and a `Rejected` request (the provider refused the request itself: an HTTP 4xx, a prompt that does not fit, a Gemini input error, a Codex bad request, full context window or API-refused request) are not told: they did no model work.
+- A response that arrives without usage (Pi and Grok today) is also an unknown call.
+- A refusal before the prompt went out (`ProviderUnavailable`, `NotAuthenticated`, `UsageLimited`, `Unsupported`, `Transient`, `OverBudget`) and a `Rejected` request (the provider refused the request itself: an HTTP 4xx, a prompt that does not fit, a Codex bad request, full context window or API-refused request) are not told: they did no model work.
   Neither is a cancel that returns before a backend is asked, nor a caller joined onto another's flight that gives up, since neither dispatched anything.
 - A schema failure of an answer that did arrive is the answer's own attempt, told once with its usage; the failure adds nothing.
 
@@ -518,7 +584,7 @@ Setting `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is documented to write at 1.25 times i
 
 A request is asked of the chosen provider and then of each provider in the `fallback` list, in that order, once each, and of nothing else (`RouterConfig::priority` is exactly that list).
 A provider that is registered and not on it is inspected for Settings and never asked, so a login the operator never meant to use is not spent.
-Nobody having chosen means the default provider, `claude`, with no fallback.
+While nobody has chosen, the internal default is `claude` and request routing is disabled until the existing selection rule or the operator chooses a supported provider.
 
 One request has one overall deadline: its own deadline times `overall_deadline_factor` (2), capped at `overall_deadline_cap` (90 seconds) and never less than its own deadline.
 Every provider and every retry gets what remains of it, and once nothing remains the request ends with the refusal it last saw (`ai.fallback` is not logged for a hop that was never taken).
@@ -538,7 +604,7 @@ A completion-unknown outcome (`Timeout`, `Cancelled`, `CompletionUnknown`) means
 The codex backend draws that line at the `turn/start` write: a lost child before it is `ProviderUnavailable`, a lost or unanswered `turn/start` and anything after it is `CompletionUnknown`.
 
 A request moves to the next provider only on `ProviderUnavailable`, `NotAuthenticated`, `UsageLimited` or `Unsupported`, and the move is written to the log as `ai.fallback` with `from` and `to`.
-`Unsupported` is what `opencode` and `cursor` answer, so a fallback list naming one moves on to the next entry.
+`Unsupported` is what `opencode` answers, so a fallback list naming it moves on to the next entry.
 A text-mode CLI's failure it cannot classify is `CompletionUnknown` and ends the request: moving it on could ask two agents the same question.
 `Disabled` is neither a refusal nor a completion-unknown outcome; nothing was asked.
 
@@ -602,15 +668,14 @@ A backend's events are produced on the node; the node holds at most 256 of them 
   Closing this properly needs a structured reset field in the result frame, not a parser for that sentence.
 - The Claude backend does not check that the configured model is one the account offers; the codex backend checks `model/list`.
   A model the account cannot use is therefore discovered as a request failure rather than as an availability state.
-  The list `models()` offers is the CLI's own, read through `initialize`, so no model list is written into the code except Gemini CLI's documented aliases, which its CLI cannot be asked for.
+  The list `models()` offers is the CLI's own, read through `initialize`, so no model list is written into the code.
   The Settings model control always offers the configured model even when it is not on the provider's list, so reaching the screen never silently changes the operator's choice.
 - While nobody has chosen a Hide AI agent, each agent switched on in the kit is asked whether it is signed in every five minutes (see [The operator's choice](#the-operators-choice)), and one that answers `needs_login` is asked again on the same timer, though nothing on that timer says its login changed.
   For an agent whose check starts its CLI (`claude auth status`, Codex's app-server, `grok models`, `pi auth check` or `pi --list-models`, and `agy models`, which starts agy's runtime for about 5.5 s) that is one process every five minutes for as long as it stays signed out.
   It has not been seen on a machine where an agent is chosen, since the timer asks nothing then.
   It closes when a `needs_login` answer is asked again only on a sign of a new login (Settings opened, or that agent's own login files changing), which needs each agent's login files measured, and Grok and Pi have not been run on the machine that would measure them.
-- Gemini CLI, Grok and Pi have not been run live by this repository's checks; see the proof level under [The text-mode CLIs](#the-text-mode-clis).
-  Gemini's login is learned only from a failed request: its row says `login_checked: false` (so `ready` there means only that the program was found), the first-run choice never picks it, and a sign-in failure is kept for the router's cooldown instead of being tried again every availability window.
-- Cursor and OpenCode cannot be selected until a read-only one-shot mode is documented for them.
+- Grok and Pi have not been run live by this repository's checks; see the proof level under [The text-mode CLIs](#the-text-mode-clis).
+- OpenCode cannot be selected until a read-only one-shot mode is documented for it.
 - Antigravity's read-only rule rests on Hide's own folder and its trust in the operator's agy settings, not on a flag of agy's: if the operator takes that trust out, the provider dims until the kit's next pass puts it back, and a future agy that loads a folder's hooks differently would show as tool steps refused by the second check rather than as a silent tool run.
   Each request also leaves a conversation in agy's history under that folder; this closes when agy offers a print mode without tools or without history.
 - A Claude usage limit has not been observed against the live account.
@@ -618,7 +683,7 @@ A backend's events are produced on the node; the node holds at most 256 of them 
 - Hide AI's counting is partial by design.
   An `InvalidOutput` or `Cancelled` attempt that did spend tokens (for example a result with no structured output or `error_max_structured_output_retries`, a Codex turn that completed with no JSON message) is counted as an unknown call, not with its tokens, because the error path carries no usage; an error frame's usage is not read.
   A `PlainJson` answer that holds no JSON (`claude_result_not_json`) is the same case, and the router's two attempts for it are two full-price processes where `Schema` mode retried inside one.
-  Gemini CLI, Pi and Grok report no usage the code reads, so their calls are only counts of unknown calls.
+  Pi and Grok report no usage the code reads, so their calls are only counts of unknown calls.
   Unreleased experimental rows written before the separate `attempts` field keep their original per-model call count when read or extended; the original attempt boundaries cannot be reconstructed, so their historical count can exceed actual attempts.
   New attempts add exactly one known call regardless of model count; no migration guesses a correction to older experiment data, and a downgrade to that experimental writer can discard this new count when it rewrites a row.
   Calls before this feature are not backfilled.

@@ -33,7 +33,8 @@ class PrivateCLI(unittest.TestCase):
         shutil.copyfile(SOURCE / 'contracts/agent-journey.json', contracts / 'agent-journey.json')
         # These executable fixtures would fail if reached: watch refusal must happen first.
         program = b'#!/bin/sh\necho unexpected_execution >&2\nexit 99\n'
-        for name in ('hided', 'hide', 'herdr', 'examples/journey_conversation', 'examples/journey_memory'):
+        for name in ('hided', 'hide', 'herdr', 'examples/journey_conversation', 'examples/journey_memory',
+                     'examples/journey_composer'):
             path = self.checkout / 'target/debug' / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(program)

@@ -950,7 +950,7 @@ export function createActions(send: DispatchFn) {
   const createTab = (areaId?: string) => {
       const view = workspaceViewOf(rest());
       if (view?.agent_layout?.groups) {
-        agentGroup({ device_id: view.device_id, path: view.path }, view.agent_layout.group_id ?? null, { action: "new_tab", ...(areaId ? { area_id: areaId } : {}) });
+        agentGroup({ device_id: view.device_id, path: view.path }, view.agent_layout.group_id ?? null, { action: "new_tab", terminal: true, ...(areaId ? { area_id: areaId } : {}) });
         return;
       }
       if (remoteContext(rest())) {
@@ -1001,6 +1001,7 @@ export function createActions(send: DispatchFn) {
     }
     useGroupFeedback.setState({ request: { workspace, id: requestId } });
     dispatch({ schema_version: 2, kind: "agent_group", payload: { workspace, group_id: groupId, request_id: requestId, ...action } });
+    if (action.action === "new_tab" && action.terminal === true && workspace.device_id === localDeviceId(rest())) armKeyTarget(requestId);
     return requestId;
   };
   const agentLayout = (action: { action: string } & Record<string, unknown>) => {
@@ -1282,8 +1283,20 @@ export function createActions(send: DispatchFn) {
      * off for Not now (B21), absent to leave it as it is. The agent step leaves this way only while this Mac's pass is refused: the
      * wizard closes with the question unanswered.
      */
-    advanceFirstRun(from: "agents" | "notifications" | "project", notifications?: boolean) {
+    advanceFirstRun(from: "agents" | "devices" | "notifications" | "project", notifications?: boolean) {
       dispatch({ schema_version: 2, kind: "first_run_advance", payload: notifications === undefined ? { from } : { from, notifications } });
+    },
+    backFirstRun(from: "devices" | "notifications" | "project") {
+      dispatch({ schema_version: 2, kind: "first_run_back", payload: { from } });
+    },
+    saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_path?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
+      dispatch({ schema_version: 2, kind: "first_run_draft", payload: draft });
+    },
+    listHerdrProfiles() {
+      dispatch({ schema_version: 2, kind: "herdr_profiles_list", payload: {} });
+    },
+    connectHerdrProfile(profileId: string) {
+      dispatch({ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: profileId, host_consent: true } });
     },
 
     /** Needs You, with an optional Done choice for the reopened wizard's Not now. */
@@ -1806,6 +1819,11 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "memory_expand", payload: { workspace_id: workspaceId, number } });
     },
 
+    /** The Memory tab showed how many older cards were cleared, the newest at `throughUnixMs`; false when it was not sent. */
+    memoryEvictionsSeen(workspaceId: string, throughUnixMs: number): boolean {
+      return dispatch({ schema_version: 2, kind: "memory_evictions_seen", payload: { workspace_id: workspaceId, through_unix_ms: throughUnixMs } }) !== false;
+    },
+
     /** Searches the opened Project's cards; empty words clear the search. */
     memorySearch(workspaceId: string, query: string) {
       dispatch({ schema_version: 2, kind: "memory_search", payload: { workspace_id: workspaceId, query } });
@@ -1839,6 +1857,16 @@ export function createActions(send: DispatchFn) {
     /** An agent chosen on an Overview or in the Agents list: its Workspace and pane (B12). */
     resolveSession(paneId: string) {
       dispatch({ schema_version: 2, kind: "resolve_session", payload: { pane_id: paneId } });
+    },
+
+    /** ★ a task so it waits in 다시 볼 것 while quiet (PRD revisit-group D-03). */
+    starSession(paneId: string) {
+      dispatch({ schema_version: 2, kind: "revisit_star", payload: { pane_id: paneId } });
+    },
+
+    /** 다 봤음: the ★ goes and the read ask standing now is put away (D-05). */
+    finishRevisit(paneId: string) {
+      dispatch({ schema_version: 2, kind: "revisit_done", payload: { pane_id: paneId } });
     },
 
     /**
@@ -1890,7 +1918,7 @@ export function createActions(send: DispatchFn) {
     newTabIn(deviceId: string, checkout: Checkout) {
       beginOpening({ checkoutId: checkout.id, deviceId, path: checkout.path, workspaceId: checkout.workspace_id });
       if (checkout.agent_groups) {
-        agentGroup({ device_id: deviceId, path: checkout.path }, checkout.agent_groups.selected, { action: "new_tab" });
+        agentGroup({ device_id: deviceId, path: checkout.path }, checkout.agent_groups.selected, { action: "new_tab", terminal: true });
         return;
       }
       if (deviceId !== localDeviceId(rest())) {
@@ -2015,6 +2043,18 @@ export function createActions(send: DispatchFn) {
     createTab,
     agentGroup,
     agentLayout,
+    movePane(intent: import("./paneMove").PaneMoveIntent) {
+      dispatch({ schema_version: 2, kind: "pane_move", payload: intent });
+    },
+    previewPaneMove(payload: { request_id: string; workspace: { device_id: string; checkout_path: string }; group_id: string | null; tab_id: string }) {
+      dispatch({ schema_version: 2, kind: "pane_move_preview", payload });
+    },
+    cancelPaneMovePreview(requestId: string) {
+      dispatch({ schema_version: 2, kind: "pane_move_preview_cancel", payload: { request_id: requestId } });
+    },
+    checkPaneMove(requestId: string) {
+      dispatch({ schema_version: 2, kind: "pane_move_check", payload: { request_id: requestId } });
+    },
     runAgentCommand,
 
     focusTab(tabId: string) {

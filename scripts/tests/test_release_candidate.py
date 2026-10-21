@@ -48,11 +48,43 @@ class ReleaseCandidate(unittest.TestCase):
                         self.assertEqual(result.returncode, 0, result.stderr)
                         self.assertEqual(output.read_text(), expected)
 
+    def test_candidate_refuses_a_source_whose_called_workflows_differ_from_main(self):
+        steps = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]["validate"]["steps"]
+        command = next(step["run"] for step in steps if step.get("name") == "Require the build steps the source was verified with")
+        runs = ROOT / "agents/runs/release-candidate-tests"
+        runs.mkdir(parents=True, exist_ok=True)
+        for changed, refused in [("README.md", False), (".github/workflows/agent-journey.yml", True),
+                                 (".github/workflows/package.yml", True)]:
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory(dir=runs) as temp:
+                repo = Path(temp)
+                git = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                                                   cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+                git("init", "-q")
+                for name in ("README.md", ".github/workflows/agent-journey.yml", ".github/workflows/package.yml"):
+                    (repo / name).parent.mkdir(parents=True, exist_ok=True)
+                    (repo / name).write_text("first\n")
+                git("add", "-A")
+                git("commit", "-q", "-m", "source")
+                source = git("rev-parse", "HEAD")
+                (repo / changed).write_text("second\n")
+                git("commit", "-q", "-am", "main")
+                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", command], cwd=repo,
+                                        env={**os.environ, "PUBLIC_SHA": source},
+                                        capture_output=True, text=True, timeout=10)
+                if refused:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("choose a newer public_sha", result.stdout)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_candidate_is_manual_read_only_and_has_no_signing_secrets(self):
         workflow = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())
         self.assertEqual(set(workflow[True]), {"workflow_dispatch"})
         self.assertEqual(set(workflow[True]["workflow_dispatch"]["inputs"]),
-                         {"public_sha", "tag", "verification_run_id", "build_order"})
+                         {"public_sha", "tag", "verification_run_id", "build_order", "live_agents"})
+        live = workflow[True]["workflow_dispatch"]["inputs"]["live_agents"]
+        self.assertEqual(live["type"], "boolean")
+        self.assertIs(live["default"], True)
         for permissions in [workflow["permissions"], *[
             job["permissions"] for job in workflow["jobs"].values() if "permissions" in job
         ]]:
@@ -63,7 +95,7 @@ class ReleaseCandidate(unittest.TestCase):
         self.assertEqual(packages["with"]["macos-signing"], "adhoc")
         self.assertNotIn("secrets", packages)
 
-    def test_receipt_waits_for_packages_and_full_journey_of_the_same_commit(self):
+    def test_receipt_waits_for_packages_and_selected_journey_of_the_same_commit(self):
         jobs = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]
         receipt = jobs["receipt"]
         self.assertEqual(set(receipt["needs"]), {"validate", "packages", "agent-journey"})
@@ -74,7 +106,7 @@ class ReleaseCandidate(unittest.TestCase):
         self.assertEqual(jobs["packages"]["with"]["build-order"], "${{ inputs.build_order }}")
         journey = jobs["agent-journey"]["with"]
         self.assertEqual(journey["systems"], '["linux","macos","windows"]')
-        self.assertTrue(journey["live"])
+        self.assertEqual(journey["live"], "${{ inputs.live_agents }}")
         self.assertTrue(journey["fake"])
         self.assertEqual(journey["agy"], "linux")
         for filename in ["package.yml", "agent-journey.yml"]:

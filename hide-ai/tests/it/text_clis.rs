@@ -1,4 +1,4 @@
-//! Drives the Gemini CLI, Grok and Pi backends against scripted stand-ins for
+//! Drives the Grok, Pi and Antigravity backends against scripted stand-ins for
 //! the real CLIs, so each contract is exercised end to end without a login, a
 //! network or a paid request. None of those CLIs is installed where this is
 //! built: what these tests prove is what the backend sends and how it reads the
@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use hide_ai::{
-    AiBackend, AiError, AiRequest, Availability, CancelToken, GeminiCliBackend, GrokCliBackend,
-    ModelCatalog, OutputLanguage, PiCliBackend, RequestId, TextCliConfig,
+    AiBackend, AiError, AiRequest, Availability, CancelToken, GrokCliBackend, ModelCatalog,
+    OutputLanguage, PiCliBackend, RequestId, TextCliConfig,
 };
 use serde_json::{Value, json};
 
@@ -37,11 +37,6 @@ for flag in SCRIPT.get("append_args", []):
     if flag in argv:
         with open(argv[argv.index(flag) + 1], "a", encoding="utf-8") as handle:
             handle.write(" ".join(argv) + "\n")
-for name in SCRIPT.get("file_env", []):
-    path = os.environ.get(name)
-    if path:
-        with open(path, encoding="utf-8") as handle:
-            files[name] = {"text": handle.read(), "path": path}
 record = {
     "argv": argv,
     "stdin": stdin,
@@ -170,129 +165,6 @@ fn missing(config: TextCliConfig) -> TextCliConfig {
     TextCliConfig {
         binary: Some(PathBuf::from("/nonexistent/hide-ai-no-such-cli")),
         ..config
-    }
-}
-
-// ---- Gemini CLI ----
-
-fn gemini_fake(rules: Value) -> Fake {
-    Fake::new(
-        "gemini",
-        json!({"rules": rules, "file_env": ["GEMINI_SYSTEM_MD"]}),
-    )
-}
-
-#[test]
-fn gemini_asks_in_plan_mode_with_the_transcript_on_stdin_and_the_system_prompt_in_a_private_file() {
-    let fake = gemini_fake(json!([{
-        "stdout": json!({"response": "{\"summary\":\"ok\"}", "stats": {}}).to_string()
-    }]));
-    let backend = GeminiCliBackend::new(fake.config("flash"));
-    let response = backend.execute(&request(), &CancelToken::new()).unwrap();
-    assert_eq!(response.value, json!({"summary": "ok"}));
-
-    let start = fake.last();
-    let args = argv(&start);
-    assert!(
-        args.windows(2).any(|p| p == ["--approval-mode", "plan"]),
-        "{args:?}"
-    );
-    assert!(
-        args.windows(2).any(|p| p == ["--output-format", "json"]),
-        "{args:?}"
-    );
-    assert!(
-        args.windows(2).any(|p| p == ["--model", "flash"]),
-        "{args:?}"
-    );
-    assert_transcript_not_in_argv(&start);
-    assert_eq!(start["stdin"], TRANSCRIPT);
-
-    let system = start["files"]["GEMINI_SYSTEM_MD"]["text"].as_str().unwrap();
-    assert!(system.starts_with("Summarise the transcript."), "{system}");
-    assert_names_the_language(system);
-    assert!(
-        system.contains("\"required\":[\"summary\"]"),
-        "the schema is in the system prompt"
-    );
-    let system_path = Path::new(start["files"]["GEMINI_SYSTEM_MD"]["path"].as_str().unwrap());
-    assert!(
-        !system_path.exists(),
-        "the system prompt file is gone once the request ended"
-    );
-    // The folder is gone with the file, so the two are compared by name: the
-    // child reports its real path, the backend the one it created.
-    assert_eq!(
-        Path::new(start["cwd"].as_str().unwrap()).file_name(),
-        system_path.parent().unwrap().file_name(),
-        "the request runs in the folder of its own, not in a project"
-    );
-}
-
-#[test]
-fn gemini_default_model_sends_no_model_flag() {
-    let fake =
-        gemini_fake(json!([{"stdout": json!({"response": "{\"summary\":\"ok\"}"}).to_string()}]));
-    GeminiCliBackend::new(fake.config(""))
-        .execute(&request(), &CancelToken::new())
-        .unwrap();
-    assert!(!argv(&fake.last()).iter().any(|arg| arg == "--model"));
-}
-
-#[test]
-fn gemini_reports_a_fixed_model_list_and_login_is_known_only_by_trying() {
-    let fake = gemini_fake(json!([]));
-    let backend = GeminiCliBackend::new(fake.config(""));
-    assert_eq!(backend.availability(), Availability::Ready);
-    let catalog = backend.models();
-    assert!(
-        catalog.is_fixed(),
-        "a list the CLI cannot be asked for says so"
-    );
-    assert_eq!(catalog.offered(), ["auto", "pro", "flash", "flash-lite"]);
-    assert!(
-        fake.starts().is_empty(),
-        "neither read asked the CLI anything"
-    );
-
-    let absent = GeminiCliBackend::new(missing(fake.config("")));
-    assert_eq!(absent.availability(), Availability::NotInstalled);
-    assert!(matches!(absent.models(), ModelCatalog::Unknown { .. }));
-}
-
-#[test]
-fn gemini_failures_map_from_the_documented_exit_codes_and_errors() {
-    for (rule, expected) in [
-        (
-            json!({"exit": 42, "stderr": "bad input"}),
-            AiError::Rejected("gemini_input_error".into()),
-        ),
-        (
-            json!({"exit": 53, "stderr": "turn limit"}),
-            AiError::InvalidOutput("gemini_turn_limit".into()),
-        ),
-        (
-            json!({"exit": 1, "stderr": "401 Unauthorized"}),
-            AiError::NotAuthenticated,
-        ),
-        (
-            json!({"exit": 1, "stderr": "429 quota exceeded"}),
-            AiError::UsageLimited { retry_after: None },
-        ),
-        (
-            json!({"exit": 1, "stderr": "503 unavailable"}),
-            AiError::Transient("gemini_upstream".into()),
-        ),
-        (
-            json!({"exit": 7, "stderr": "boom"}),
-            AiError::CompletionUnknown("gemini_failed:exit=7".into()),
-        ),
-    ] {
-        let fake = gemini_fake(json!([rule]));
-        let error = GeminiCliBackend::new(fake.config(""))
-            .execute(&request(), &CancelToken::new())
-            .unwrap_err();
-        assert_eq!(error, expected);
     }
 }
 

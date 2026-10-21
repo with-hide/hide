@@ -84,7 +84,13 @@ fn install_update_and_remove_keep_unrelated_source_spans_and_repeat_without_writ
         assert_eq!(read(runtime, home.path()), updated);
 
         let outcome = remove(runtime, home.path()).unwrap();
-        assert_eq!(outcome.removed_entries, 6);
+        // The active hook contract includes passive observations: Claude
+        // has Post and Failure, while Codex reports failures through Post.
+        let expected = match runtime {
+            AgentRuntime::ClaudeCode => 8,
+            AgentRuntime::Codex => 7,
+        };
+        assert_eq!(outcome.removed_entries, expected);
         let removed = read(runtime, home.path());
         literal_survives(&removed, GROUP);
         literal_survives(&removed, SETTING);
@@ -276,19 +282,15 @@ fn shape_refusals_and_nesting_limit_leave_the_original_bytes() {
 fn guidance_uses_the_same_source_preserving_writer() {
     use hide_agent_hooks::guidance::{self, GuidanceAgent};
     let home = tempfile::tempdir().unwrap();
-    let path = home.path().join(".cursor/hooks.json");
+    let path = home.path().join(".grok/hooks/hide.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let source = format!(r#" {{"version":1,{SETTING},"hooks":{{"sessionStart":[{HANDLER}]}}}} "#);
+    let source = format!(r#" {{{SETTING},"hooks":{{"SessionStart":[{{"hooks":[{HANDLER}]}}]}}}} "#);
     fs::write(&path, &source).unwrap();
     let helper = home.path().join(hide_agent_hooks::HELPER_BINARY_NAME);
     fs::write(&helper, b"helper").unwrap();
-    // Cursor guidance is deliberately not installed on Windows.
-    if cfg!(windows) {
-        return;
-    }
     assert!(
         guidance::install(
-            GuidanceAgent::Cursor,
+            GuidanceAgent::Grok,
             home.path(),
             crate::hook_target(&helper)
         )
@@ -300,7 +302,7 @@ fn guidance_uses_the_same_source_preserving_writer() {
     literal_survives(&installed, HANDLER);
     assert!(
         !guidance::install(
-            GuidanceAgent::Cursor,
+            GuidanceAgent::Grok,
             home.path(),
             crate::hook_target(&helper)
         )
@@ -309,7 +311,7 @@ fn guidance_uses_the_same_source_preserving_writer() {
     );
     assert_eq!(fs::read_to_string(&path).unwrap(), installed);
     assert!(
-        guidance::remove(GuidanceAgent::Cursor, home.path())
+        guidance::remove(GuidanceAgent::Grok, home.path())
             .unwrap()
             .changed
     );
@@ -331,6 +333,17 @@ fn guidance_removal_retains_surviving_operator_event_spans_and_order() {
         r#" {{"version":1,{SETTING},"hooks":{{"sessionStart":[{owned}],{first},{second}}}}} "#
     );
     fs::write(&path, &source).unwrap();
+    let helper = home.path().join(hide_agent_hooks::HELPER_BINARY_NAME);
+    fs::write(&helper, b"helper").unwrap();
+    assert!(matches!(
+        guidance::install(
+            GuidanceAgent::Cursor,
+            home.path(),
+            crate::hook_target(&helper)
+        ),
+        Err(InstallFailure::UnexpectedShape { .. })
+    ));
+    assert_eq!(fs::read_to_string(&path).unwrap(), source);
     let outcome = guidance::remove(GuidanceAgent::Cursor, home.path()).unwrap();
     assert_eq!(outcome.removed_entries, 1);
     let removed = fs::read_to_string(&path).unwrap();

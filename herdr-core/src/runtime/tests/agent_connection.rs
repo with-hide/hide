@@ -185,7 +185,7 @@ fn the_counts_follow_the_sessions_open_now_and_never_accumulate() {
 }
 
 #[test]
-fn a_readable_cursor_session_counts_without_claiming_a_hook_connection() {
+fn a_retired_cursor_session_does_not_create_a_supported_agent_or_hook_connection() {
     let mut runtime = runtime();
     kit_rows(&mut runtime, None);
     runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
@@ -194,7 +194,13 @@ fn a_readable_cursor_session_counts_without_claiming_a_hook_connection() {
         &[("w1:p1", "cursor", false), ("w1:p2", "claude", true)],
     );
 
-    assert_eq!(sessions_of(&runtime, "cursor"), Some(1));
+    assert!(
+        runtime.snapshot.navigator.devices[0]
+            .kit
+            .agents
+            .iter()
+            .all(|agent| agent.id != "cursor")
+    );
     assert_eq!(connection_of(&runtime, "w1:p1"), None);
     // An on agent with no session is "Ready": a count of zero, not an absent one.
     assert_eq!(sessions_of(&runtime, "codex"), Some(0));

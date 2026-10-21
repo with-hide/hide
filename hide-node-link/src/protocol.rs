@@ -196,7 +196,10 @@ use crate::error::HostError;
 /// 50: Memory worktree retirement is a regular machine operation.
 /// Factory operations are no longer part of the public protocol.
 /// An older helper cannot decode retirement and is upgraded at Hello.
-pub const PROTOCOL_VERSION: u32 = 50;
+/// 51: kit calls distinguish attaching to a saved Herdr session from server
+/// replacement consent, and pane proofs carry passive hook observations.
+/// Older helpers could replace the selected server or reject its observation.
+pub const PROTOCOL_VERSION: u32 = 51;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -464,6 +467,9 @@ pub enum Call {
         action: KitAction,
         cli_dir: String,
         herdr_socket: Option<String>,
+        /// A saved Herdr profile grants attachment, without server replacement.
+        #[serde(default)]
+        preserve_herdr_server: bool,
         /// Known registered checkout roots on this helper's device only.
         #[serde(default)]
         retirement_projects: Vec<String>,

@@ -3,6 +3,8 @@ import { useMemo } from "react";
 import type { Actions } from "./actions";
 import { agentProductName } from "./agentAdapters";
 import { statusText } from "./agentStatus";
+import { rowAccessibleName } from "./agentRow";
+import { AgentRecordTitle } from "./components/agent-record-title";
 import { AgentMark } from "./AgentMark";
 import { Button } from "./components/ui/button";
 import { StatusMark } from "./components/status-mark";
@@ -38,9 +40,9 @@ export function OverviewProjectHome({ project, deviceId, actions }: { project: B
             {sessions.map(({ agent, checkout }) => {
               const session = sessionOfAgentOn(agent, workspace.device_id);
               return <li key={agent.pane_id} className="border-b border-border py-sm">
-                <button type="button" disabled={!session} aria-label={`${agent.identity_label} · ${statusText(t, agent.status_code)}`} className="flex w-full min-w-0 items-start gap-sm rounded-xs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default" onClick={() => { if (session) useUiStore.getState().setOverview({ panel: { kind: "record", session } }); }} data-project-home-session={agent.pane_id}>
+                <button type="button" disabled={!session} aria-label={rowAccessibleName(t, agent, null)} className="flex w-full min-w-0 items-start gap-sm rounded-xs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default" onClick={() => { if (session) useUiStore.getState().setOverview({ panel: { kind: "record", session } }); }} data-project-home-session={agent.pane_id}>
                   <StatusMark mark={agent.mark} label={statusText(t, agent.status_code)} className="mt-xxs" /><AgentMark kind={agent.agent_kind} />
-                  <span className="min-w-0 flex-1"><span className="block break-words text-body">{agent.identity_label}</span><span className="text-micro text-muted-foreground">{agentProductName(agent.agent_kind)} · {checkout.label} · {statusText(t, agent.status_code)}</span></span>
+                  <span className="min-w-0 flex-1"><span className="block text-body"><AgentRecordTitle agent={agent} /></span><span className="text-micro text-muted-foreground">{agentProductName(agent.agent_kind)} · {checkout.label} · {statusText(t, agent.status_code)}</span></span>
                 </button>
               </li>;
             })}

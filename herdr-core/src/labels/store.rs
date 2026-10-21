@@ -32,6 +32,9 @@ use super::analysis::LabelEnd;
 use super::facts::SessionFacts;
 
 pub(crate) const LABELS_FILE: &str = "labels.json";
+/// The turns a pane keeps a request summary for: the current one and the two
+/// before it (PRD pane-last-request D-09). An older one is dropped.
+pub(crate) const RECENT_TURNS: usize = 3;
 const SCHEMA_VERSION: u32 = 1;
 /// The store key of the test core's own Herdr server: its node id.
 #[cfg(test)]
@@ -43,6 +46,11 @@ pub(crate) struct PaneRecord {
     /// (`label_reference_token(provider, "id", native id)`).
     #[serde(default)]
     pub(crate) owner: Option<String>,
+    /// Provider of the last native-proven display record. Old records can
+    /// still prove this with their explicit native id and owner digest.
+    /// DeviceMark deliberately keeps its existing hash-only format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) provider: Option<String>,
     /// Native metadata proven for `owner`; missing on prior helper answers.
     #[serde(default)]
     pub(crate) native_session_id: Option<String>,
@@ -125,6 +133,28 @@ pub(crate) struct PaneRecord {
     /// What the session says without any AI; see `facts`.
     #[serde(default)]
     pub(crate) facts: SessionFacts,
+    /// The label's one-line summary of each recent turn's request and how
+    /// that turn ended, oldest first, at most [`RECENT_TURNS`]. A record
+    /// written before it was kept reads it empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) recent_turns: Vec<RecentTurn>,
+}
+
+/// One turn the label analysis summarized, by the offset of the message that
+/// began it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct RecentTurn {
+    pub(crate) offset: u64,
+    /// The label's request summary; empty when it gave none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) request: String,
+    /// How the turn stood at its last judgment and its line; none once a
+    /// judgment of it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) end: Option<LabelEnd>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) line: String,
+    pub(crate) at_unix_ms: u64,
 }
 
 /// Whether `reference` names the session a label was made for: its owner,
@@ -199,6 +229,7 @@ impl PaneRecord {
         self.line.clear();
         self.end = None;
         self.facts = SessionFacts::default();
+        self.recent_turns.clear();
         self.reset_analysis();
     }
 
@@ -209,6 +240,70 @@ impl PaneRecord {
         self.analysis_turn_start = None;
         self.analysis_turn_end = None;
         self.facts.forget_offsets();
+        // Offsets of a rewritten conversation name other messages.
+        self.recent_turns.clear();
+    }
+
+    /// Keeps a judgment of the turn begun at `offset`: its request summary,
+    /// unless the turn already has one, and how it stood, when `outcome`
+    /// says. The first summary stays because the turn start reads the
+    /// request whole, while the turn end may see only the agent's last words
+    /// of a long turn. A turn older than every kept one, once the ring is
+    /// full, is not brought back. Returns whether the ring changed.
+    pub(crate) fn record_turn(
+        &mut self,
+        offset: u64,
+        request: &str,
+        outcome: Option<(LabelEnd, &str)>,
+        at_unix_ms: u64,
+    ) -> bool {
+        let before = self.recent_turns.clone();
+        let index = match self
+            .recent_turns
+            .binary_search_by_key(&offset, |turn| turn.offset)
+        {
+            Ok(index) => index,
+            Err(index) => {
+                self.recent_turns.insert(
+                    index,
+                    RecentTurn {
+                        offset,
+                        request: String::new(),
+                        end: None,
+                        line: String::new(),
+                        at_unix_ms,
+                    },
+                );
+                index
+            }
+        };
+        let turn = &mut self.recent_turns[index];
+        if turn.request.is_empty() && !request.trim().is_empty() {
+            request.clone_into(&mut turn.request);
+        }
+        if let Some((end, line)) = outcome {
+            turn.end = Some(end);
+            line.clone_into(&mut turn.line);
+        }
+        let over = self.recent_turns.len().saturating_sub(RECENT_TURNS);
+        self.recent_turns.drain(..over);
+        self.recent_turns != before
+    }
+
+    /// A judgment of the turn begun at `offset` failed: how it stood is
+    /// unknown again, while its request summary stays.
+    /// Returns whether it knew one.
+    pub(crate) fn forget_turn_outcome(&mut self, offset: u64) -> bool {
+        let Some(turn) = self
+            .recent_turns
+            .iter_mut()
+            .find(|turn| turn.offset == offset && turn.end.is_some())
+        else {
+            return false;
+        };
+        turn.end = None;
+        turn.line.clear();
+        true
     }
 
     pub(crate) fn forget_position(&mut self) {
@@ -252,8 +347,9 @@ const DEVICE_MARK_DEVICES: usize = 64;
 
 /// What a device pane keeps on disk, and nothing else: which session it ran
 /// (a hash token), which turns were analyzed (hashes), how the last one ended
-/// and the label the model wrote (its goal and line, capped). No request or
-/// reply of the conversation, no fact, no path. A restart restores these so a
+/// and the label the model wrote (its goal, line and recent request
+/// summaries, capped). No request or reply text of the conversation, no
+/// fact, no path; a request summary is the model's one line about it. A restart restores these so a
 /// turn that was already analyzed is not paid for again and its label is
 /// still there.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -271,6 +367,10 @@ struct DeviceMark {
     goal: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     line: String,
+    /// The label's summaries of the recent turns' requests, model text like
+    /// `goal` and `line` (PRD pane-last-request D-09).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    recent_turns: Vec<RecentTurn>,
     #[serde(default)]
     changed_unix_ms: u64,
 }
@@ -291,6 +391,7 @@ impl DeviceMark {
             end: record.end,
             goal: record.goal.clone(),
             line: record.line.clone(),
+            recent_turns: record.recent_turns.clone(),
             changed_unix_ms: record.changed_unix_ms,
         })
     }
@@ -307,6 +408,7 @@ impl DeviceMark {
             self.end,
             &self.goal,
             &self.line,
+            &self.recent_turns,
         )
     }
 
@@ -319,6 +421,7 @@ impl DeviceMark {
             end: self.end,
             goal: self.goal,
             line: self.line,
+            recent_turns: self.recent_turns,
             changed_unix_ms: self.changed_unix_ms,
             ..PaneRecord::default()
         }
@@ -439,10 +542,12 @@ impl LabelStore {
         let Some(path) = state_dir.map(|dir| dir.join(LABELS_FILE)) else {
             return Self::in_memory(node);
         };
+        let mut writable = true;
         let file = match std::fs::read(&path) {
             Ok(bytes) => match serde_json::from_slice::<LabelsFile>(&bytes) {
                 Ok(file) if file.version == SCHEMA_VERSION => file,
                 Ok(file) => {
+                    writable = false;
                     crate::diagnostic!(json!({
                         "component": "labels",
                         "kind": "store.version_unknown",
@@ -451,6 +556,7 @@ impl LabelStore {
                     LabelsFile::default()
                 }
                 Err(error) => {
+                    writable = false;
                     crate::diagnostic!(json!({
                         "component": "labels",
                         "kind": "store.unreadable",
@@ -475,6 +581,7 @@ impl LabelStore {
                 file
             }
             Err(error) => {
+                writable = false;
                 crate::diagnostic!(json!({
                     "component": "labels",
                     "kind": "store.unreadable",
@@ -553,7 +660,10 @@ impl LabelStore {
             record.upgrade_v3();
         }
         let store = Self {
-            path: Some(path),
+            // A future or broken file is preserved byte-for-byte. The
+            // current runtime can recover in memory; reopening a readable
+            // file restores persistence without overwriting unknown data.
+            path: writable.then_some(path),
             node: node.to_owned(),
             writing: Arc::new(Mutex::new(())),
             file: Arc::new(Mutex::new(LabelsFile {
@@ -817,6 +927,71 @@ mod tests {
         assert!(hide_platform::fs::private::is_private(&root.path().join(LABELS_FILE)).unwrap());
     }
 
+    /// D-09: a pane keeps the current turn and the two before it, oldest
+    /// dropped; a late answer about a turn already dropped does not come
+    /// back, and a later answer keeps the summary the turn already had.
+    #[test]
+    fn recent_turns_keep_three_by_offset_and_a_late_older_one_stays_out() {
+        let mut record = record("v1:owner");
+        for offset in [10, 20, 30, 40] {
+            record.record_turn(
+                offset,
+                &format!("요청 {offset}"),
+                Some((LabelEnd::Done, "끝")),
+                offset,
+            );
+        }
+        let kept = |record: &PaneRecord| {
+            record
+                .recent_turns
+                .iter()
+                .map(|turn| (turn.offset, turn.request.clone()))
+                .collect::<Vec<_>>()
+        };
+        let three = vec![
+            (20, "요청 20".to_owned()),
+            (30, "요청 30".to_owned()),
+            (40, "요청 40".to_owned()),
+        ];
+        assert_eq!(kept(&record), three);
+        assert!(!record.record_turn(10, "늦은 답", None, 10));
+        assert_eq!(kept(&record), three, "a dropped turn does not come back");
+        assert!(record.record_turn(40, " ", Some((LabelEnd::Question, "골라 주세요")), 40));
+        assert_eq!(kept(&record), three, "an empty summary keeps the old one");
+        record.record_turn(40, "끝에서 다시 쓴 요약", None, 40);
+        assert_eq!(kept(&record), three, "the turn start's summary stays");
+        assert_eq!(record.recent_turns[2].end, Some(LabelEnd::Question));
+        assert!(record.forget_turn_outcome(40));
+        assert_eq!(
+            (
+                record.recent_turns[2].end,
+                record.recent_turns[2].line.as_str()
+            ),
+            (None, "")
+        );
+        record.reset_session(Some("v1:other".to_owned()));
+        assert!(record.recent_turns.is_empty());
+    }
+
+    /// B13: a device pane's request summaries come back with its mark after a
+    /// restart, as its goal and line do.
+    #[test]
+    fn a_device_marks_recent_turns_survive_a_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let store = LabelStore::open(Some(root.path()), None, LOCAL_TARGET);
+        let mut device = record("remote-owner");
+        device.analysis_turn_end = Some(7);
+        device.record_turn(7, "원격 요청 요약", None, 1);
+        store.save_target(
+            "device:mini",
+            &BTreeMap::from([("w2:p1".to_owned(), device)]),
+        );
+        drop(store);
+        let reopened = LabelStore::open(Some(root.path()), None, LOCAL_TARGET);
+        let restored = &reopened.target("device:mini")["w2:p1"];
+        assert_eq!(restored.recent_turns[0].request, "원격 요청 요약");
+    }
+
     #[test]
     fn device_conversation_stays_in_memory_even_after_a_local_save() {
         let root = tempfile::tempdir().unwrap();
@@ -1043,6 +1218,26 @@ mod tests {
         std::fs::write(root.path().join(LABELS_FILE), b"{not json").unwrap();
         let store = LabelStore::open(Some(root.path()), None, LOCAL_TARGET);
         assert!(store.target(LOCAL_TARGET).is_empty());
+    }
+
+    #[test]
+    fn unreadable_and_future_files_are_never_replaced_by_an_empty_save() {
+        for original in [
+            b"{not json".as_slice(),
+            br#"{"version":999,"targets":{},"devices":{}}"#,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join(LABELS_FILE);
+            std::fs::write(&path, original).unwrap();
+            let store = LabelStore::open(Some(root.path()), None, LOCAL_TARGET);
+            store.save_target(
+                LOCAL_TARGET,
+                &BTreeMap::from([("w1:p1".into(), record("new-owner"))]),
+            );
+            store.flush();
+            drop(store);
+            assert_eq!(std::fs::read(path).unwrap(), original);
+        }
     }
 
     #[test]

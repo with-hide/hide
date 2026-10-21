@@ -35,6 +35,7 @@ if WINDOWS:
 
 from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, memory, opencode_service, quota
 from .controller import Controller
+from .contract import load_contract
 from .daemon import Daemon
 from .journey import STEPS, Journey, token
 from .local import (ROUTES, TRUST, allow_one_shot_references, claude_session_folders, disable_hide_ai,
@@ -93,13 +94,6 @@ def parser():
 
 def refuse(reason):
     raise ProtectionError(reason)
-
-
-def load_contract(checkout):
-    rows = json.loads((checkout / "contracts/agent-journey.json").read_text())
-    if not rows or any(set(row["cells"]) != set(cells.CELLS) for row in rows):
-        refuse("journey_contract_unreadable: regenerate contracts/agent-journey.json with export_journey_contract")
-    return rows
 
 
 def leftover_copies(checkout, run):
@@ -550,7 +544,7 @@ def main(argv=None):
     if fixture_bin:
         # The stand-ins imitate Claude Code and Codex only (web/e2e/shims/live-check.h).
         for key in selected:
-            if key in cells.BUILT_AGENTS and key not in ci.FIXTURE_AGENTS and key not in unmeasured:
+            if key not in ci.FIXTURE_AGENTS and key not in unmeasured:
                 if args.agents:
                     refuse(f"fixture_bin_imitates_claude_code_and_codex_only: {key}")
                 unmeasured[key] = ci.FIXTURE_ONLY
@@ -563,6 +557,9 @@ def main(argv=None):
     card_writer = checkout / "target/debug/examples" / exe("journey_memory")
     if not card_writer.is_file():
         refuse("build_the_memory_card_writer_first: bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory")
+    composer_judge = checkout / "target/debug/examples" / exe("journey_composer")
+    if not composer_judge.is_file():
+        refuse("build_the_composer_judge_first: bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer")
     slug = ("agent-journey-" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
             + "-" + os.urandom(3).hex())
     run = (args.run_dir or checkout / "agents/runs" / slug).absolute()
@@ -570,7 +567,7 @@ def main(argv=None):
         refuse("report_directory_must_be_new_and_local_only")
     commit = measured_source(checkout)
     run_id = slug.removeprefix("agent-journey-") if not args.run_dir else run.name
-    measured = [key for key in selected if key in cells.BUILT_AGENTS and key not in unmeasured]
+    measured = [key for key in selected if key not in unmeasured]
     private_directory(run)
     rows = {row["id"]: row for row in contract}
     table = cells.plan(contract, selected)
@@ -682,6 +679,7 @@ def main(argv=None):
                                           **({"fake_env": agent["fake_env"]} if fake else {})} if legacy
                                          else {"args": [], "env": ci.route_names(rows[key]["herdr_kind"], fixture_bin,
                                                                                  agent.get("fake_env"))}),
+                                  composer_judge=composer_judge,
                                   model=rows[key]["model_flag"] and models.get(key),
                                   quota=quota_rows)
                 for step in STEPS:

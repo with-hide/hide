@@ -2,7 +2,7 @@
 //!
 //! Every backend that starts a user-installed CLI goes through [`run`]: the
 //! claude print-mode turn, the model-list and login probes, and the text-mode
-//! CLIs (Gemini, Grok, Pi). A backend is its argument vector, its environment
+//! CLIs (Grok, Pi, Antigravity). A backend is its argument vector, its environment
 //! and its parsers; the child's ownership, the prompt on stdin, the
 //! cancellation poll, the deadline and the bounded capture live here once
 //! (resident-process practice: own what you start, end it on every path, cap

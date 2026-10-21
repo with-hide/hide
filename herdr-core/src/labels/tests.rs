@@ -24,6 +24,9 @@ use super::store::{LOCAL_TARGET, LabelStore};
 use super::worker::{LabelWorker, ObservedAgent, ReadFailure, TranscriptSource, WorkerConfig};
 use crate::sidebar::{AgentLabel, SessionSnapshotPayload};
 
+#[path = "record_tests.rs"]
+mod record_tests;
+
 /// A provider that answers from a queue and can hold an answer back.
 struct Scripted {
     answers: Mutex<VecDeque<Value>>,
@@ -61,7 +64,7 @@ impl Scripted {
             format!("{goal} 진행")
         };
         self.answers.lock().unwrap().push_back(json!({
-            "goal": goal, "goal_update": "replace", "line": line, "end": end,
+            "goal": goal, "goal_update": "replace", "request": format!("{goal} 요청"), "line": line, "end": end,
             "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
         }));
     }
@@ -69,7 +72,7 @@ impl Scripted {
     /// A turn start's answer, which says nothing of how the turn ends.
     fn begin(&self, goal: &str) {
         self.answers.lock().unwrap().push_back(json!({
-            "goal": goal, "goal_update": "replace", "line": format!("{goal} 진행"),
+            "goal": goal, "goal_update": "replace", "request": format!("{goal} 요청"), "line": format!("{goal} 진행"),
         }));
     }
 
@@ -133,6 +136,11 @@ impl AiBackend for Scripted {
             .unwrap()
             .pop_front()
             .ok_or_else(|| AiError::Transient("no scripted answer".to_owned()))?;
+        // Answers written before v19 asked for a request summary give none.
+        let mut value = value;
+        if let Some(answer) = value.as_object_mut() {
+            answer.entry("request").or_insert(json!(""));
+        }
         Ok(AiResponse {
             value,
             usage: Default::default(),
@@ -197,6 +205,10 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::with_usage_gate(None)
+    }
+
+    fn with_usage_gate(usage_gate: Option<Arc<hide_ai::UsageLimits>>) -> Self {
         let backend = Scripted::new();
         let router_backend: Arc<dyn AiBackend> = backend.clone();
         let analyzer = LabelAnalyzer::spawn_with(
@@ -210,6 +222,7 @@ impl Harness {
                     RouterConfig {
                         priority: vec![ProviderId::CLAUDE],
                         max_transient_attempts: 1,
+                        usage_gate: usage_gate.clone(),
                         ..RouterConfig::default()
                     },
                     Arc::new(NoopLogSink),
@@ -347,14 +360,13 @@ fn agent(path: &Path, status: &str, seq: u64) -> ObservedAgent {
 }
 
 fn observe(worker: &mut LabelWorker, agent: &ObservedAgent) {
+    observe_at(worker, agent, Instant::now());
+}
+
+fn observe_at(worker: &mut LabelWorker, agent: &ObservedAgent, now: Instant) {
     let live = HashSet::from([agent.pane_id.clone()]);
-    worker.observe(
-        std::slice::from_ref(agent),
-        Some(&live),
-        Instant::now(),
-        1_000,
-    );
-    worker.tick(Instant::now());
+    worker.observe(std::slice::from_ref(agent), Some(&live), now, 1_000);
+    worker.tick(now);
 }
 
 fn unix_now_ms() -> u64 {
@@ -366,13 +378,23 @@ fn unix_now_ms() -> u64 {
 
 /// Takes results until nothing is read or analyzed.
 fn settle(worker: &mut LabelWorker, woken: &Receiver<()>) {
+    settle_with_clock(worker, woken, Instant::now);
+}
+
+fn settle_with_clock(
+    worker: &mut LabelWorker,
+    woken: &Receiver<()>,
+    clock: impl Fn() -> Instant,
+) -> bool {
     let deadline = Instant::now() + Duration::from_secs(20);
+    let mut changed = false;
     while !worker.settled() {
         let left = deadline.saturating_duration_since(Instant::now());
         assert!(!left.is_zero(), "the worker did not settle");
         let _ = woken.recv_timeout(left.min(Duration::from_millis(200)));
-        worker.drain(Instant::now(), unix_now_ms());
+        changed |= worker.drain(clock(), unix_now_ms());
     }
+    changed
 }
 
 fn drain_until(
@@ -380,12 +402,22 @@ fn drain_until(
     woken: &Receiver<()>,
     ready: impl Fn(&LabelWorker) -> bool,
 ) {
+    drain_until_with_clock(worker, woken, Instant::now, "worker result", ready);
+}
+
+fn drain_until_with_clock(
+    worker: &mut LabelWorker,
+    woken: &Receiver<()>,
+    clock: impl Fn() -> Instant,
+    expected: &str,
+    ready: impl Fn(&LabelWorker) -> bool,
+) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !ready(worker) {
         let left = deadline.saturating_duration_since(Instant::now());
-        assert!(!left.is_zero(), "the expected worker result did not arrive");
+        assert!(!left.is_zero(), "the expected {expected} did not arrive");
         let _ = woken.recv_timeout(left.min(Duration::from_millis(200)));
-        worker.drain(Instant::now(), unix_now_ms());
+        worker.drain(clock(), unix_now_ms());
     }
 }
 
@@ -2011,10 +2043,11 @@ fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
     harness.start_delay = Duration::from_secs(15);
     let path = harness.session("a", "native-a", &[("user", "첫 요청")]);
     harness.backend.begin("첫 요청의 실제 작업");
-    let (mut worker, woken, source) = harness.worker(harness.store());
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    let first_at = Instant::now();
     let first = agent(&path, "working", 5);
-    observe(&mut worker, &first);
-    settle(&mut worker, &woken);
+    observe_at(&mut worker, &first, first_at);
+    settle_with_clock(&mut worker, &woken, || first_at);
     assert_eq!(
         shown(&worker, &first).unwrap().progress.as_deref(),
         Some("첫 요청의 실제 작업 진행")
@@ -2027,11 +2060,21 @@ fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
     );
     harness.backend.begin("둘째 요청의 실제 작업");
     harness.backend.hold();
+    let second_at = first_at + Duration::from_secs(1);
     let second = agent(&path, "working", 6);
-    observe(&mut worker, &second);
-    settle(&mut worker, &woken);
-    worker.tick(Instant::now() + Duration::from_secs(20));
-    drain_until(&mut worker, &woken, |_| harness.backend.calls() == 2);
+    observe_at(&mut worker, &second, second_at);
+    settle_with_clock(&mut worker, &woken, || second_at);
+    let second_due = second_at + harness.start_delay;
+    worker.tick(second_due);
+    // The tick also starts a periodic read. Finish that second-turn read
+    // before replacing its file, while its analysis remains held.
+    drain_until_with_clock(
+        &mut worker,
+        &woken,
+        || second_due,
+        "held second analysis and completed second-turn read",
+        |worker| harness.backend.calls() == 2 && worker.reader_idle(),
+    );
 
     harness.session(
         "a",
@@ -2043,18 +2086,33 @@ fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
         ],
     );
     harness.backend.begin("셋째 요청의 실제 작업");
+    let third_at = second_due + Duration::from_secs(1);
     let third = agent(&path, "working", 7);
-    observe(&mut worker, &third);
-    drain_until(&mut worker, &woken, |worker| {
-        source.completed.load(Ordering::SeqCst) >= 3 && worker.reader_idle()
-    });
+    observe_at(&mut worker, &third, third_at);
+    drain_until_with_clock(
+        &mut worker,
+        &woken,
+        || third_at,
+        "completed third-turn request read",
+        |worker| {
+            worker.reader_idle()
+                && shown_facts(worker, &third).is_some_and(|facts| {
+                    facts
+                        .operator_request
+                        .iter()
+                        .chain(facts.other_request.iter())
+                        .any(|request| request.text == "셋째 요청")
+                })
+        },
+    );
     assert_eq!(shown(&worker, &third).unwrap().progress, None);
 
     harness.backend.release();
-    settle(&mut worker, &woken);
+    settle_with_clock(&mut worker, &woken, || third_at);
     assert_eq!(shown(&worker, &third).unwrap().progress, None);
-    worker.tick(Instant::now() + Duration::from_secs(20));
-    settle(&mut worker, &woken);
+    let third_due = third_at + harness.start_delay;
+    worker.tick(third_due);
+    settle_with_clock(&mut worker, &woken, || third_due);
     assert_eq!(
         shown(&worker, &third).unwrap().progress.as_deref(),
         Some("셋째 요청의 실제 작업 진행")
@@ -2108,6 +2166,193 @@ fn a_new_turn_read_retires_an_old_done_result_that_arrived_first() {
     assert_eq!(
         shown(&worker, &next).unwrap().progress.as_deref(),
         Some("다음 요청의 실제 작업 진행")
+    );
+    // The late answer about the first turn never names the next request
+    // (PRD pane-last-request B12); this fixture rewrites the transcript, so
+    // the first turn's own summary went with its offsets.
+    let facts = shown_facts(&worker, &next).unwrap();
+    let shown_request = facts
+        .operator_request
+        .or(facts.other_request)
+        .expect("the next request is shown");
+    assert_eq!(shown_request.text, "다음 요청");
+    let turns: Vec<_> = facts
+        .recent_turns
+        .iter()
+        .map(|turn| {
+            (
+                Some(turn.offset) == shown_request.offset,
+                turn.request.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(turns, [(true, "다음 요청의 실제 작업 요청")]);
+}
+
+/// D-09, B12: each turn keeps its request summary by its message's offset,
+/// with how it ended; the turn start's summary stays when its end is judged,
+/// a new request shows its own once its start is judged, and the turn before
+/// it stays for the turn card.
+#[test]
+fn each_turn_keeps_its_own_request_summary_and_how_it_ended() {
+    let harness = Harness::new();
+    let path = harness.session("a", "native-a", &[("user", "첫 요청")]);
+    harness.backend.begin("첫 요청의 실제 작업");
+    let (mut worker, woken, _source) = harness.worker(harness.store());
+    observe(&mut worker, &agent(&path, "working", 5));
+    settle(&mut worker, &woken);
+    harness.backend.answer("첫 요청을 마침", "done", "");
+    harness.session(
+        "a",
+        "native-a",
+        &[("user", "첫 요청"), ("assistant", "첫 작업 완료")],
+    );
+    observe(&mut worker, &agent(&path, "idle", 6));
+    settle(&mut worker, &woken);
+    harness.backend.begin("다음 요청의 실제 작업");
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "첫 요청"),
+            ("assistant", "첫 작업 완료"),
+            ("user", "다음 요청"),
+        ],
+    );
+    let next = agent(&path, "working", 7);
+    observe(&mut worker, &next);
+    settle(&mut worker, &woken);
+    let facts = shown_facts(&worker, &next).unwrap();
+    let shown_request = facts.operator_request.or(facts.other_request).unwrap();
+    assert_eq!(shown_request.text, "다음 요청");
+    let turns: Vec<_> = facts
+        .recent_turns
+        .iter()
+        .map(|turn| {
+            (
+                Some(turn.offset) == shown_request.offset,
+                turn.request.as_str(),
+                turn.end,
+            )
+        })
+        .collect();
+    assert_eq!(
+        turns,
+        [
+            (
+                false,
+                "첫 요청의 실제 작업 요청",
+                Some(super::analysis::LabelEnd::Done)
+            ),
+            (
+                true,
+                "다음 요청의 실제 작업 요청",
+                Some(super::analysis::LabelEnd::Working)
+            ),
+        ]
+    );
+}
+
+/// D-09, D-10: the header shows the operator's request, so turns other
+/// agents' letters start are not kept beside it, and a lead pane's reports
+/// cannot push the operator's summary out of the three it keeps.
+#[test]
+fn letter_turns_do_not_push_the_operators_request_summary_out() {
+    let harness = Harness::new();
+    let mut messages = vec![("user".to_owned(), "요청 보기 만들어줘".to_owned())];
+    let write = |harness: &Harness, messages: &[(String, String)]| {
+        let borrowed: Vec<_> = messages
+            .iter()
+            .map(|(role, text)| (role.as_str(), text.as_str()))
+            .collect();
+        harness.session("a", "native-a", &borrowed)
+    };
+    let path = write(&harness, &messages);
+    harness.input.record("w1:p1", turn_at(0) - 300, false);
+    harness.backend.begin("요청 보기 화면 작업");
+    let (mut worker, woken, _source) = harness.worker(harness.store());
+    observe(&mut worker, &agent(&path, "working", 5));
+    settle(&mut worker, &woken);
+    let mut sequence = 6;
+    for index in 0..4 {
+        messages.push(("assistant".to_owned(), format!("답 {index}")));
+        write(&harness, &messages);
+        harness
+            .backend
+            .answer(&format!("요청 보기 단계 {index}"), "done", "");
+        observe(&mut worker, &agent(&path, "idle", sequence));
+        settle(&mut worker, &woken);
+        if index == 3 {
+            break;
+        }
+        messages.push((
+            "user".to_owned(),
+            format!("Hide letter r{index} from child (agent-{index}) [report]\n결과 {index}"),
+        ));
+        write(&harness, &messages);
+        harness.backend.begin(&format!("자식 보고 확인 {index}"));
+        observe(&mut worker, &agent(&path, "working", sequence + 1));
+        settle(&mut worker, &woken);
+        sequence += 2;
+    }
+    let last = agent(&path, "idle", sequence);
+    let facts = shown_facts(&worker, &last).unwrap();
+    let operator = facts.operator_request.as_ref().unwrap();
+    assert_eq!(operator.text, "요청 보기 만들어줘");
+    let summaries: Vec<_> = facts
+        .recent_turns
+        .iter()
+        .map(|turn| (Some(turn.offset) == operator.offset, turn.request.as_str()))
+        .collect();
+    assert_eq!(summaries, [(true, "요청 보기 화면 작업 요청")]);
+}
+
+/// D-09: a delegated child's header shows its newest request, so its
+/// parent's follow-up keeps a summary beside its first request.
+#[test]
+fn a_delegated_childs_follow_up_from_its_parent_keeps_its_summary() {
+    use crate::links::ledger::LedgerContext;
+    let harness = Harness::new();
+    let (mut worker, woken, _store, client) = cold_ledger_worker(&harness);
+    client.prime_context_for_test(
+        claude_session("native-a"),
+        LedgerContext {
+            parent_name: Some("ci-lead".into()),
+            ..Default::default()
+        },
+    );
+    let mut turns = vec![("user", "CI 확인해줘")];
+    let path = harness.session("a", "native-a", &turns);
+    // The child's first request counts as the operator's, as a spawned
+    // child's does before Hide watched its input.
+    harness.input.record("w1:p1", turn_at(0) - 300, false);
+    harness.backend.begin("지속적 통합 확인 작업");
+    observe(&mut worker, &agent(&path, "working", 3));
+    settle(&mut worker, &woken);
+    turns.push(("assistant", "확인했습니다"));
+    harness.session("a", "native-a", &turns);
+    harness.backend.answer("지속적 통합 확인 작업", "done", "");
+    observe(&mut worker, &agent(&path, "idle", 4));
+    settle(&mut worker, &woken);
+    turns.push((
+        "user",
+        "Hide letter r1 from ci-lead (claude) [request]\nCI 다시 봐줘",
+    ));
+    harness.session("a", "native-a", &turns);
+    harness.backend.begin("지속적 통합 재확인 작업");
+    let next = agent(&path, "working", 5);
+    observe(&mut worker, &next);
+    settle(&mut worker, &woken);
+    let facts = shown_facts(&worker, &next).unwrap();
+    assert!(facts.operator_request.is_some());
+    let summaries: Vec<_> = facts
+        .recent_turns
+        .iter()
+        .map(|turn| turn.request.as_str())
+        .collect();
+    assert_eq!(
+        summaries,
+        ["지속적 통합 확인 작업 요청", "지속적 통합 재확인 작업 요청"]
     );
 }
 
@@ -2174,6 +2419,7 @@ fn a_second_daemon_on_the_same_server_stands_by_and_shows_no_labels() {
     let (mut second, second_woken, source) = harness.worker(harness.store());
     observe(&mut second, &idle);
     assert_eq!(shown(&second, &idle), None);
+    assert!(record_tests::projection(&second, &idle).record.is_none());
     assert_eq!(source.reads.load(Ordering::SeqCst), 0);
     assert_eq!(harness.backend.calls(), 1);
 
@@ -2221,7 +2467,7 @@ fn a_null_goal_is_valid_but_an_absent_or_invalid_goal_is_not() {
     use super::analysis::{AnalysisPhase, LabelEnd};
     use super::context_label::{parse, request};
     for phase in [AnalysisPhase::TurnStart, AnalysisPhase::TurnEnd] {
-        let mut answer = json!({"goal": null, "goal_update": "keep", "line": ""});
+        let mut answer = json!({"goal": null, "goal_update": "keep", "request": "", "line": ""});
         if phase == AnalysisPhase::TurnEnd {
             answer["end"] = json!("done");
             answer["work"] =
@@ -2427,7 +2673,7 @@ fn a_long_line_is_cut_between_words_and_a_question_stays_a_question() {
             AnalysisPhase::TurnEnd,
             language,
             json!({
-                "goal": null, "goal_update": "keep", "line": line, "end": end,
+                "goal": null, "goal_update": "keep", "request": "", "line": line, "end": end,
                 "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
             }),
         )
@@ -2584,11 +2830,14 @@ fn a_label_request_carries_its_language_and_that_languages_lengths() {
         let mut answer = json!({
             "goal": "w".repeat(goal + 5),
             "goal_update": "replace",
+            "request": "r".repeat(line + 5),
             "line": "l".repeat(line + 5),
         });
         let parsed = parse(AnalysisPhase::TurnStart, language, answer.clone()).unwrap();
         assert_eq!(parsed.goal.unwrap().chars().count(), goal);
         assert_eq!(parsed.line.chars().count(), line);
+        // The request summary is drawn in the same one line (D-08).
+        assert_eq!(parsed.request.chars().count(), line);
         answer["goal"] = json!("w".repeat(goal));
         let parsed = parse(AnalysisPhase::TurnStart, language, answer).unwrap();
         assert_eq!(parsed.goal.unwrap(), "w".repeat(goal));
@@ -3162,6 +3411,158 @@ fn a_blocked_turn_ends_when_the_agent_works_again() {
     assert!(!shown(&worker, &working).is_some_and(|label| label.blocked));
 }
 
+/// task-line-restoration B6/B8: quota clears the current judgment, then the
+/// existing provider deadline can restore that same turn on every projection.
+#[test]
+fn a_usage_limited_turn_clears_its_line_and_recovers_when_the_provider_wait_ends() {
+    fn request_row(
+        worker: &LabelWorker,
+        agent: &ObservedAgent,
+    ) -> crate::model::SidebarAgentSnapshot {
+        let mut rows = [shown_row(worker, agent)];
+        crate::request_view::apply(
+            &mut rows,
+            |_| None,
+            &crate::model::GithubSnapshot::default(),
+            &mut Default::default(),
+            1_000,
+        );
+        crate::agent_state::turn::rederive(&mut rows[0]);
+        rows.into_iter().next().unwrap()
+    }
+
+    let limits = Arc::new(hide_ai::UsageLimits::new());
+    let harness = Harness::with_usage_gate(Some(Arc::clone(&limits)));
+    let store = harness.store();
+    let (mut worker, woken, _) = harness.worker(Arc::clone(&store));
+    let path = harness.session("a", "native-a", &[("user", "검증 결과를 정리해줘")]);
+    harness.backend.begin("검증 결과 정리 작업");
+    let working = agent(&path, "working", 1);
+    observe(&mut worker, &working);
+    settle(&mut worker, &woken);
+    assert_eq!(
+        request_row(&worker, &working).state.session.line.as_deref(),
+        Some("검증 결과 정리 작업 진행")
+    );
+    store.flush();
+
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "검증 결과를 정리해줘"),
+            ("assistant", "검증을 마쳤습니다"),
+        ],
+    );
+    // With no reported reset, the existing recovery interval is ten minutes.
+    let wait = Duration::from_secs(600);
+    let reading = |used_percent| {
+        std::collections::BTreeMap::from([(
+            ProviderId::CLAUDE,
+            hide_ai::UsageReading {
+                used_percent,
+                resets_at_unix_ms: None,
+            },
+        )])
+    };
+    limits.set(hide_ai::UsageLimit::Percent(90), &reading(95.0));
+    let stopped = agent(&path, "done", 2);
+    let failed_at = Instant::now();
+    observe(&mut worker, &stopped);
+    assert!(
+        settle_with_clock(&mut worker, &woken, || failed_at),
+        "clearing a shown judgment must publish"
+    );
+    let failed = request_row(&worker, &stopped);
+    assert_eq!(failed.identity_label, "검증 결과 정리 작업");
+    assert_eq!(failed.progress, None);
+    assert_eq!(failed.request.as_ref().unwrap().line, None);
+    assert_eq!(failed.state.session.line, None);
+    assert_eq!(shown_facts(&worker, &stopped).unwrap().end, None);
+    let phone =
+        crate::agent_state::phone::project(&json!({"navigator":{"agents":[failed]}}), LOCAL_TARGET);
+    assert!(phone.agents().next().unwrap().line.is_none());
+    store.flush();
+    let saved = harness.store().target(LOCAL_TARGET);
+    assert_eq!(saved["w1:p1"].line, "");
+    assert_eq!(saved["w1:p1"].end, None);
+    assert!(
+        saved["w1:p1"].facts.reply.is_some(),
+        "native facts survive an unavailable judgment"
+    );
+
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": null, "goal_update": "keep", "line": "검증 결과를 정리했습니다", "end": "done",
+        "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
+    }));
+    // The account can answer again, but the worker still owes the deadline.
+    limits.set(hide_ai::UsageLimit::Percent(90), &reading(0.0));
+    let before_due = failed_at + wait - Duration::from_nanos(1);
+    worker.tick(before_due);
+    settle_with_clock(&mut worker, &woken, || before_due);
+    assert_eq!(
+        harness.backend.calls(),
+        1,
+        "no request before the provider's deadline"
+    );
+    assert_eq!(request_row(&worker, &stopped).state.session.line, None);
+
+    let due = failed_at + wait;
+    worker.tick(due);
+    assert!(
+        settle_with_clock(&mut worker, &woken, || due),
+        "the restored line must publish without a new turn"
+    );
+    let restored = request_row(&worker, &stopped);
+    assert_eq!(restored.identity_label, "검증 결과 정리 작업");
+    assert_eq!(
+        restored.request.as_ref().unwrap().line.as_deref(),
+        Some("검증 결과를 정리했습니다")
+    );
+    assert_eq!(
+        restored.state.session.line.as_deref(),
+        Some("검증 결과를 정리했습니다")
+    );
+    assert_eq!(
+        shown_facts(&worker, &stopped).unwrap().end,
+        Some(super::analysis::LabelEnd::Done)
+    );
+    let phone = crate::agent_state::phone::project(
+        &json!({"navigator":{"agents":[restored]}}),
+        LOCAL_TARGET,
+    );
+    assert_eq!(
+        phone.agents().next().unwrap().line.as_ref().unwrap().text,
+        "검증 결과를 정리했습니다"
+    );
+    worker.tick(due + wait);
+    settle_with_clock(&mut worker, &woken, || due + wait);
+    assert_eq!(
+        harness.backend.calls(),
+        2,
+        "a settled turn is not asked again"
+    );
+
+    drop(worker);
+    store.flush();
+    let (mut restarted, woken, _) = harness.worker(harness.store());
+    observe(&mut restarted, &stopped);
+    settle(&mut restarted, &woken);
+    assert_eq!(
+        request_row(&restarted, &stopped)
+            .state
+            .session
+            .line
+            .as_deref(),
+        Some("검증 결과를 정리했습니다")
+    );
+    assert_eq!(
+        harness.backend.calls(),
+        2,
+        "restart reuses the recovered judgment"
+    );
+}
+
 /// D-33, B20: a turn's end that ran out of time is asked once more; a second
 /// timeout leaves the row on its facts and asks nothing else.
 #[test]
@@ -3649,6 +4050,16 @@ fn an_omp_title_and_question_refresh_without_state_changes_or_repeated_analysis(
                 .as_deref(),
             expected
         );
+        let binding = record_tests::projection(&worker, &current).record;
+        assert_eq!(
+            binding
+                .as_ref()
+                .and_then(|b| b.metadata.manual_title.as_deref()),
+            expected
+        );
+        if expected.is_none() {
+            assert!(binding.is_none_or(|b| b.metadata.native_title.is_none()));
+        }
     }
     let mut file = std::fs::OpenOptions::new()
         .append(true)
@@ -4527,24 +4938,27 @@ fn a_session_file_that_never_appears_is_retried_a_bounded_number_of_times() {
     );
 }
 
-/// Only a file that is not there yet clears by itself: a refusal that waiting
-/// cannot change (a session outside the agent's own folder) is read again on
-/// the pane's next state change and on no timer.
+/// An unconfirmed binding retries automatically at the bounded cadence,
+/// without trusting even a permanently refused path or spending analysis.
 #[test]
-fn a_refusal_that_waiting_cannot_change_is_not_retried() {
+fn an_unconfirmed_refusal_retries_without_restoring_authority() {
     let harness = Harness::new();
     let (mut worker, woken, source) = harness.worker(harness.store());
     let outside = harness.home.path().join("elsewhere.jsonl");
     std::fs::write(&outside, "{}\n").unwrap();
     observe(&mut worker, &agent(&outside, "working", 1));
     settle(&mut worker, &woken);
-    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    let initial = source.reads.load(Ordering::SeqCst);
+    assert_eq!(initial, 1);
 
     for step in [16, 31, 61, 121, 10_000] {
         worker.tick(Instant::now() + Duration::from_secs(step));
         settle(&mut worker, &woken);
     }
-    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(source.reads.load(Ordering::SeqCst), initial + 5);
+    let refused = agent(&outside, "working", 1);
+    assert!(shown(&worker, &refused).is_none());
+    assert_eq!(harness.backend.calls(), 0);
 }
 
 /// A Claude Code session whose process started and whose turn launched a

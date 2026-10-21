@@ -2,7 +2,7 @@
 //! Two single-flight workers keep Git independent of a slow GitHub request.
 use std::time::Duration;
 
-use hide_node_link::gh::{ChecksList, GhAnswer, checks_summary_arguments};
+use hide_node_link::gh::{GhAnswer, checkout_checks_query};
 use hide_node_link::protocol::Call;
 use hide_node_link::worktrees::CheckoutGit;
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,7 @@ pub(crate) struct CiRequest {
     pub git: GitRequest,
     pub repository: String,
     pub sha: String,
+    pub commits: Vec<String>,
     pub channel: ChannelRef,
 }
 
@@ -33,6 +34,7 @@ pub(crate) struct Header {
     pub facts: Option<CheckoutGit>,
     pub reason: Option<String>,
     pub ci: Option<Ci>,
+    pub recent_ci: Vec<Ci>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -65,17 +67,8 @@ pub(crate) enum CiState {
     Stale,
 }
 
-impl CiState {
-    fn combine(a: Self, b: Self) -> Self {
-        [Self::Failed, Self::Pending, Self::Unknown, Self::Passing]
-            .into_iter()
-            .find(|state| *state == a || *state == b)
-            .unwrap_or(Self::None)
-    }
-}
-
 pub(crate) type GitAnswer = (GitRequest, Result<CheckoutGit, String>);
-pub(crate) type CiAnswer = (CiRequest, Ci);
+pub(crate) type CiAnswer = (CiRequest, Vec<Ci>);
 
 pub(crate) fn git_reader() -> BackgroundRead<Option<GitRequest>, Option<GitAnswer>> {
     BackgroundRead::new(
@@ -116,20 +109,87 @@ pub(crate) fn ci_reader() -> BackgroundRead<Option<CiRequest>, Option<CiAnswer>>
 }
 
 #[derive(Deserialize)]
-struct CheckSummary {
-    state: CiState,
-    url: Option<String>,
+struct CommitChecks {
+    oid: String,
+    url: String,
+    #[serde(rename = "statusCheckRollup")]
+    rollup: Option<CheckRollup>,
+}
+#[derive(Deserialize)]
+struct CheckRollup {
+    state: String,
+}
+#[derive(Deserialize)]
+struct ChecksData {
+    repository: Option<std::collections::HashMap<String, Option<CommitChecks>>>,
+}
+#[derive(Deserialize)]
+struct ChecksResponse {
+    data: Option<ChecksData>,
+    errors: Option<Vec<serde_json::Value>>,
 }
 
-fn read_ci(request: &CiRequest) -> Ci {
-    let read = |list| -> Result<CheckSummary, String> {
-        let args = checks_summary_arguments(&request.repository, &request.sha, list)
-            .ok_or("Invalid exact-SHA check target")?;
+fn parse_checks(
+    stdout: &str,
+    repository_name: &str,
+    commits: &[String],
+) -> Result<Vec<Ci>, String> {
+    let response: ChecksResponse =
+        serde_json::from_str(stdout).map_err(|error| error.to_string())?;
+    if response.errors.is_some_and(|errors| !errors.is_empty()) {
+        return Err("Provider returned check errors".into());
+    }
+    let mut repository = response
+        .data
+        .and_then(|data| data.repository)
+        .ok_or("Provider returned no repository")?;
+    commits
+        .iter()
+        .enumerate()
+        .map(|(index, sha)| {
+            let commit = repository
+                .remove(&format!("c{index}"))
+                .ok_or("Provider omitted a commit result")?;
+            let (state, url) = match commit {
+                None => (CiState::None, None), // A local commit may not have been pushed.
+                Some(commit) => {
+                    if commit.oid != *sha
+                        || !commit.url.eq_ignore_ascii_case(&format!(
+                            "https://github.com/{}/commit/{sha}",
+                            repository_name
+                        ))
+                    {
+                        return Err("Provider returned a different commit identity".into());
+                    }
+                    let state = match commit.rollup.map(|rollup| rollup.state).as_deref() {
+                        None => CiState::None,
+                        Some("SUCCESS") => CiState::Passing,
+                        Some("PENDING" | "EXPECTED") => CiState::Pending,
+                        Some("FAILURE" | "ERROR") => CiState::Failed,
+                        Some(_) => return Err("Provider returned an unknown check rollup".into()),
+                    };
+                    (state, Some(commit.url))
+                }
+            };
+            Ok(Ci {
+                sha: sha.clone(),
+                state,
+                checked_at_unix_ms: unix_ms(),
+                url,
+            })
+        })
+        .collect()
+}
+
+fn read_ci(request: &CiRequest) -> Vec<Ci> {
+    let read = || -> Result<Vec<Ci>, String> {
+        let query = checkout_checks_query(&request.repository, &request.commits)
+            .ok_or("Invalid exact-SHA check targets")?;
         let answer: GhAnswer = call_as(
             &*request.channel.0,
             Call::Gh {
                 cwd: None,
-                args,
+                args: vec!["api".into(), "graphql".into(), "-f".into(), query],
                 repository: Some(request.repository.clone()),
             },
             Duration::from_secs(20),
@@ -137,31 +197,28 @@ fn read_ci(request: &CiRequest) -> Ci {
         .map_err(|error| error.to_string())?;
         match answer {
             GhAnswer::Output { stdout } => {
-                serde_json::from_str(&stdout).map_err(|error| error.to_string())
+                parse_checks(&stdout, &request.repository, &request.commits)
             }
             GhAnswer::Failed { category, .. } => Err(category.english().to_owned()),
         }
     };
-    let result = read(ChecksList::CheckRuns)
-        .and_then(|runs| read(ChecksList::Status).map(|statuses| (runs, statuses)));
-    let (state, url) = match result {
-        Ok((runs, statuses)) => (
-            CiState::combine(runs.state, statuses.state),
-            runs.url.or(statuses.url),
-        ),
+    match read() {
+        Ok(checks) => checks,
         Err(reason) => {
             crate::diagnostic!(
                 serde_json::json!({"component":"checkout_git", "kind":"ci.read_failed", "sha":request.sha, "reason":reason})
             );
-            (CiState::Unavailable, None)
+            request
+                .commits
+                .iter()
+                .map(|sha| Ci {
+                    sha: sha.clone(),
+                    state: CiState::Unavailable,
+                    checked_at_unix_ms: unix_ms(),
+                    url: None,
+                })
+                .collect()
         }
-    };
-    Ci {
-        sha: request.sha.clone(),
-        state,
-        checked_at_unix_ms: unix_ms(),
-        // Only actual HTTP(S) provider URLs can reach Browser View.
-        url: url.filter(|url| url.starts_with("https://") || url.starts_with("http://")),
     }
 }
 
@@ -174,13 +231,57 @@ fn unix_ms() -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::CiState::{self, *};
+    use super::*;
     #[test]
-    fn a_commit_status_failure_or_pending_blocks_a_passing_check_run() {
-        assert_eq!(CiState::combine(Passing, Failed), Failed);
-        assert_eq!(CiState::combine(Passing, Pending), Pending);
-        assert_eq!(CiState::combine(Passing, Unknown), Unknown);
-        assert_eq!(CiState::combine(None, None), None);
-        assert_eq!(CiState::combine(None, Passing), Passing);
+    fn provider_rollups_keep_failures_pending_and_absent_ci_distinct() {
+        let commits: Vec<_> = ['a', 'b', 'c', 'd', 'e']
+            .into_iter()
+            .map(|name| name.to_string().repeat(40))
+            .collect();
+        let mut repository = serde_json::Map::new();
+        for (index, state) in [
+            Some("FAILURE"),
+            Some("PENDING"),
+            Some("SUCCESS"),
+            None,
+            Some("ERROR"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            repository.insert(format!("c{index}"), serde_json::json!({"oid": commits[index], "url": format!("https://github.com/example/fixture/commit/{}", commits[index]), "statusCheckRollup": state.map(|state| serde_json::json!({"state": state}))}));
+        }
+        let response = serde_json::json!({"data":{"repository": repository}});
+        let result = parse_checks(&response.to_string(), "example/fixture", &commits).unwrap();
+        assert_eq!(
+            result.iter().map(|ci| ci.state).collect::<Vec<_>>(),
+            [
+                CiState::Failed,
+                CiState::Pending,
+                CiState::Passing,
+                CiState::None,
+                CiState::Failed
+            ]
+        );
+        let mut absent = response.clone();
+        absent["data"]["repository"]["c0"] = serde_json::Value::Null;
+        assert_eq!(
+            parse_checks(&absent.to_string(), "example/fixture", &commits).unwrap()[0].state,
+            CiState::None
+        );
+        for field in ["oid", "url"] {
+            let mut wrong = response.clone();
+            wrong["data"]["repository"]["c0"][field] = "wrong-target".into();
+            assert!(parse_checks(&wrong.to_string(), "example/fixture", &commits).is_err());
+        }
+        let mut missing = response.clone();
+        missing["data"]["repository"]
+            .as_object_mut()
+            .unwrap()
+            .remove("c4");
+        assert!(parse_checks(&missing.to_string(), "example/fixture", &commits).is_err());
+        let mut partial = response;
+        partial["errors"] = serde_json::json!([{"message":"provider failure"}]);
+        assert!(parse_checks(&partial.to_string(), "example/fixture", &commits).is_err());
     }
 }

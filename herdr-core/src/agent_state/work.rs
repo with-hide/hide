@@ -10,6 +10,7 @@ pub(crate) struct Linked<'a> {
     /// When the session's tool printed it, for a pull request it made.
     sighted_at: Option<u64>,
     duty: bool,
+    provisional: bool,
 }
 
 impl<'a> Linked<'a> {
@@ -43,6 +44,7 @@ pub(crate) fn linked_pull_requests<'a>(
                 on_branch: true,
                 sighted_at: None,
                 duty: false,
+                provisional: false,
             }),
         );
     }
@@ -51,7 +53,18 @@ pub(crate) fn linked_pull_requests<'a>(
         .as_ref()
         .map(|facts| facts.created_prs.as_slice())
         .unwrap_or_default();
-    for (repository, number, sighted_at) in created {
+    let saved = row
+        .record_metadata
+        .as_ref()
+        .map(|m| m.created_prs.as_slice())
+        .unwrap_or_default();
+    let provisional =
+        row.record_connection != Some(crate::labels::record::RecordConnection::Confirmed);
+    for ((repository, number, sighted_at), provisional) in created
+        .iter()
+        .map(|pr| (pr, false))
+        .chain(saved.iter().map(|pr| (pr, provisional)))
+    {
         let found = github
             .projects
             .iter()
@@ -69,12 +82,18 @@ pub(crate) fn linked_pull_requests<'a>(
             .iter_mut()
             .find(|known| known.pull_request.url == pull_request.url)
         {
-            Some(known) => known.sighted_at = Some(*sighted_at),
+            Some(known) => {
+                if !provisional {
+                    known.sighted_at = Some(*sighted_at);
+                    known.provisional = false;
+                }
+            }
             None => linked.push(Linked {
                 pull_request,
                 on_branch: false,
                 sighted_at: Some(*sighted_at),
                 duty: false,
+                provisional,
             }),
         }
     }
@@ -95,6 +114,9 @@ pub(crate) fn assign_duty(rows: &[SidebarAgentSnapshot], linked: &mut [Vec<Linke
     for (row, links) in linked.iter().enumerate() {
         let agent = &rows[row];
         for (index, link) in links.iter().enumerate() {
+            if link.provisional {
+                continue;
+            }
             let rank = (
                 !link.on_branch,
                 if link.on_branch {
@@ -164,7 +186,8 @@ pub(crate) fn shown_pull_requests(
                     closing_issues: pull_request.closing_issues.clone(),
                     live,
                     duty: link.duty,
-                    created: link.sighted_at.is_some(),
+                    provisional: link.provisional,
+                    created: link.sighted_at.is_some() && !link.provisional,
                     settled_at_unix_ms: settled,
                 },
                 recency,

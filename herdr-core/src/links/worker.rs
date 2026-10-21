@@ -14,6 +14,7 @@ use super::ledger::{
     LedgerContext, LedgerUpdate, SessionIdentity, SessionRecord, SessionSearchOptions,
     SessionSearchPage, SessionSearchPresence, WorkProgress,
 };
+use super::observation::{self, DirectFact};
 use super::store::{ArchivedSession, IssueLinks, LinkStore, LocalFiles, Opened, PrLinks};
 use super::{
     BACKFILL_MS, PaneFact, ParentFact, ProjectFacts, ProjectLinkSummary, files_present, link_code,
@@ -60,6 +61,7 @@ pub(crate) const LISTED_AT: &str = "listed_at";
 
 /// What the worker hands back to the runtime.
 pub trait Sink: Send + 'static {
+    fn direct_observations(&self, _facts: Vec<DirectFact>) {}
     fn record(&self, _generation: u64, _answer: Result<SessionRecord, String>) {}
     fn session_search(&self, _generation: u64, _answer: Result<SessionSearchPage, String>) {}
     /// Each project's counts and chips, by workspace id, when one changed.
@@ -102,6 +104,7 @@ pub enum PanelAnswer {
 #[derive(Default)]
 struct Mailbox {
     stop: bool,
+    direct_shutdown_deadline: Option<Instant>,
     projects: Option<Arc<Vec<ProjectFacts>>>,
     panes: Option<Arc<Vec<PaneFact>>>,
     parents: Option<Arc<Vec<ParentFact>>>,
@@ -110,6 +113,8 @@ struct Mailbox {
     panel_closed: bool,
     ledger: VecDeque<LedgerUpdate>,
     ledger_pending: usize,
+    direct: VecDeque<PendingDirect>,
+    direct_pending: usize,
     contexts: VecDeque<SessionIdentity>,
     record: Option<(u64, SessionIdentity)>,
     record_closed: bool,
@@ -122,6 +127,11 @@ struct Mailbox {
     /// The sessions the archive holds, newest set only.
     archived: Option<Arc<Vec<ArchivedSession>>>,
     deletes: VecDeque<(String, Vec<SessionIdentity>)>,
+}
+
+struct PendingDirect {
+    fact: DirectFact,
+    queued: Instant,
 }
 
 struct SearchRequest {
@@ -150,6 +160,41 @@ struct ContextCache {
 }
 
 impl LinkClient {
+    fn request_stop(&self, now: Instant) {
+        self.post(|mailbox| {
+            mailbox.stop = true;
+            mailbox
+                .direct_shutdown_deadline
+                .get_or_insert(now + observation::SHUTDOWN_DRAIN);
+        });
+    }
+
+    fn stopping(&self) -> bool {
+        self.0.0.lock().map_or(true, |mailbox| mailbox.stop)
+    }
+
+    /// Admission is bounded in memory. SQLite and publication belong to the worker.
+    pub fn observe(&self, fact: DirectFact) -> Result<(), String> {
+        fact.validate(now_ms())?;
+        let (lock, wake) = &*self.0;
+        let mut mailbox = lock.lock().map_err(|_| "links_worker_closed")?;
+        if mailbox.stop {
+            return Err("links_worker_closed".into());
+        }
+        if mailbox.ledger_pending + mailbox.direct_pending >= LEDGER_QUEUE_LIMIT {
+            crate::diagnostic!(
+                serde_json::json!({"component":"links","kind":"direct_observation.queue_capacity","limit":LEDGER_QUEUE_LIMIT})
+            );
+            return Err("direct_observation_queue_capacity".into());
+        }
+        mailbox.direct_pending += 1;
+        mailbox.direct.push_back(PendingDirect {
+            fact,
+            queued: Instant::now(),
+        });
+        wake.notify_one();
+        Ok(())
+    }
     #[cfg(test)]
     pub(crate) fn take_project_facts_for_test(&self) -> Option<Arc<Vec<ProjectFacts>>> {
         self.0.0.lock().unwrap().projects.take()
@@ -195,6 +240,16 @@ impl LinkClient {
     /// Only a background worker may wait for a reply. Admission is bounded
     /// and every mutation is committed before its acknowledgement.
     pub fn call(&self, call: LedgerCall) -> Result<LedgerAnswer, String> {
+        // Metadata is a local read, never an external-effect acknowledgement.
+        // Its failure must not hold other panes' native reads for 15 seconds.
+        let timeout = if matches!(
+            &call,
+            LedgerCall::Metadata(_) | LedgerCall::SaveMetadata { .. }
+        ) {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_secs(15)
+        };
         let (send, receive) = std::sync::mpsc::sync_channel(1);
         {
             let (lock, wake) = &*self.0;
@@ -213,7 +268,7 @@ impl LinkClient {
             wake.notify_one();
         }
         receive
-            .recv_timeout(Duration::from_secs(15))
+            .recv_timeout(timeout)
             .map_err(|_| "links_worker_timeout".to_owned())?
     }
     pub fn ledger_started_at(&self) -> Option<u64> {
@@ -226,7 +281,7 @@ impl LinkClient {
         if mailbox.stop {
             return Err("links_worker_closed".to_owned());
         }
-        if mailbox.ledger_pending >= LEDGER_QUEUE_LIMIT {
+        if mailbox.ledger_pending + mailbox.direct_pending >= LEDGER_QUEUE_LIMIT {
             crate::diagnostic!(
                 serde_json::json!({"component":"links","kind":"ledger.queue_capacity","session_id":update.session().session_id})
             );
@@ -376,7 +431,7 @@ pub struct LinkWorker {
 
 impl Drop for LinkWorker {
     fn drop(&mut self) {
-        self.client.post(|mailbox| mailbox.stop = true);
+        self.client.request_stop(Instant::now());
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -408,6 +463,9 @@ impl LinkWorker {
 }
 
 struct State {
+    direct: VecDeque<PendingDirect>,
+    direct_facts: Option<Vec<DirectFact>>,
+    direct_dirty: bool,
     ledger: VecDeque<LedgerUpdate>,
     ledger_retry_at: Option<Instant>,
     record: Option<(u64, SessionIdentity)>,
@@ -452,6 +510,9 @@ struct State {
 impl State {
     fn new() -> Self {
         Self {
+            direct: VecDeque::new(),
+            direct_facts: None,
+            direct_dirty: true,
             ledger: VecDeque::new(),
             ledger_retry_at: None,
             record: None,
@@ -580,13 +641,47 @@ fn open_store(path: &Path) -> Result<LinkStore, String> {
     Ok(store)
 }
 
+/// Yield between SQLite operations, including when shutdown arrives during a write.
+/// The clock and write boundary let the regression order shutdown without waiting on a timer.
+fn direct_observation_turn(
+    client: &LinkClient,
+    state: &mut State,
+    mut now: impl FnMut() -> Instant,
+    mut write: impl FnMut(&DirectFact) -> Result<bool, String>,
+) -> bool {
+    let deadline = now() + TURN;
+    for _ in 0..16 {
+        if client.stopping() {
+            return true;
+        }
+        if now() >= deadline {
+            break;
+        }
+        let Some(pending) = state.direct.pop_front() else {
+            break;
+        };
+        if now().saturating_duration_since(pending.queued) >= observation::PENDING_DEADLINE {
+            log_direct("direct_observation_pending_expired", &pending.fact);
+        } else {
+            match write(&pending.fact) {
+                Ok(changed) => state.direct_dirty |= changed,
+                Err(code) => log_direct(&code, &pending.fact),
+            }
+        }
+        if let Ok(mut mailbox) = client.0.0.lock() {
+            mailbox.direct_pending = mailbox.direct_pending.saturating_sub(1);
+        }
+    }
+    client.stopping()
+}
+
 fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink) {
     // A store that cannot open (busy, a newer schema, a full disk) is tried
     // again every listing period; until then a panel says why.
     let mut store = open_store(&paths.store);
     let mut opened_at = Instant::now();
     let mut state = State::new();
-    loop {
+    'work: loop {
         let (lock, wake) = &*client.0;
         let Ok(mut mailbox) = lock.lock() else { return };
         let wait = if store.is_ok() {
@@ -601,6 +696,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             && mailbox.panel.is_none()
             && !mailbox.panel_closed
             && mailbox.ledger.is_empty()
+            && mailbox.direct.is_empty()
             && mailbox.record.is_none()
             && !mailbox.record_closed
             && mailbox.search.is_none()
@@ -615,6 +711,28 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             };
         }
         if mailbox.stop {
+            state.direct.extend(std::mem::take(&mut mailbox.direct));
+            let deadline = mailbox
+                .direct_shutdown_deadline
+                .expect("the worker owner sets a deadline when requesting stop");
+            drop(mailbox);
+            if let Ok(store) = store.as_mut() {
+                while Instant::now() < deadline {
+                    let Some(pending) = state.direct.pop_front() else {
+                        break;
+                    };
+                    if pending.queued.elapsed() >= observation::PENDING_DEADLINE {
+                        log_direct("direct_observation_pending_expired", &pending.fact);
+                    } else if let Err(code) =
+                        store.apply_direct_observation(&pending.fact, now_ms())
+                    {
+                        log_direct(&code, &pending.fact);
+                    }
+                }
+            }
+            for pending in state.direct {
+                log_direct("direct_observation_shutdown_undrained", &pending.fact);
+            }
             return;
         }
         let projects = mailbox.projects.take();
@@ -623,6 +741,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         let panel = mailbox.panel.take();
         let panel_closed = std::mem::take(&mut mailbox.panel_closed);
         let ledger = std::mem::take(&mut mailbox.ledger);
+        let direct = std::mem::take(&mut mailbox.direct);
         let record = mailbox.record.take();
         let record_closed = std::mem::take(&mut mailbox.record_closed);
         let search = mailbox.search.take();
@@ -640,6 +759,20 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         drop(mailbox);
         // Admission counts both mailbox and worker-owned pending updates.
         state.ledger.extend(ledger);
+        state.direct.extend(direct);
+        // Expire even while the store cannot open. Admission never leaves an
+        // unbounded lifetime behind a full disk or unavailable database.
+        while state
+            .direct
+            .front()
+            .is_some_and(|p| p.queued.elapsed() >= observation::PENDING_DEADLINE)
+        {
+            let pending = state.direct.pop_front().expect("front exists");
+            log_direct("direct_observation_pending_expired", &pending.fact);
+            if let Ok(mut mailbox) = client.0.0.lock() {
+                mailbox.direct_pending = mailbox.direct_pending.saturating_sub(1);
+            }
+        }
         if record_closed {
             state.record = None;
             state.record_answer = None;
@@ -718,6 +851,32 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 state.dirty_at.get_or_insert_with(Instant::now);
             }
             sink.deleted(request, result);
+        }
+        if direct_observation_turn(client, &mut state, Instant::now, |fact| {
+            store.apply_direct_observation(fact, now_ms())
+        }) {
+            continue 'work;
+        }
+        let now = now_ms();
+        let expired = state.direct_facts.as_ref().is_some_and(|facts| {
+            facts
+                .iter()
+                .any(|fact| now.saturating_sub(fact.at_unix_ms) >= observation::RETENTION_MS)
+        });
+        if state.direct_dirty || expired {
+            let result = store
+                .prune_direct_observations(now)
+                .and_then(|()| store.direct_observations(now));
+            match result {
+                Ok(facts) => {
+                    if state.direct_facts.as_ref() != Some(&facts) {
+                        sink.direct_observations(facts.clone());
+                        state.direct_facts = Some(facts);
+                    }
+                    state.direct_dirty = false;
+                }
+                Err(code) => log_write(&code, "direct_observations"),
+            }
         }
         for (call, answer) in calls {
             let result = store.ledger_call(call);
@@ -919,6 +1078,9 @@ fn list_every(state: &State) -> Duration {
 }
 
 fn next_wait(state: &State) -> Duration {
+    if !state.direct.is_empty() {
+        return REST;
+    }
     if !state.ledger.is_empty() && state.ledger_retry_at.is_none_or(|at| at <= Instant::now()) {
         return REST;
     }
@@ -968,6 +1130,12 @@ fn log_write(code: &str, what: &str) {
     crate::diagnostic!(serde_json::json!({
         "component": "links", "kind": "store.write_failed", "what": what, "code": code,
     }));
+}
+
+fn log_direct(code: &str, fact: &DirectFact) {
+    crate::diagnostic!(
+        serde_json::json!({"component":"links","kind":"direct_observation.rejected","code":code,"observation_id":fact.id(),"device_id":fact.sender.device_id,"pane_id":fact.sender.pane_id})
+    );
 }
 
 /// Lists one page of the session files changed since the last listing (the
@@ -1675,6 +1843,64 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     const CREATED: u64 = 1_790_000_000_000;
+
+    #[test]
+    fn observation_stop_during_commit_starts_no_second_write_or_new_drain_budget() {
+        use crate::links::observation::DirectOutcome;
+        use crate::model::GraphParty;
+        use std::cell::Cell;
+
+        let directory = tempfile::tempdir().unwrap();
+        let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+        let client = LinkClient::open_mailbox_for_test();
+        let at = now_ms();
+        for index in 0..16 {
+            client
+                .observe(DirectFact {
+                    source_server: "local-server".into(),
+                    call_key: format!("call-{index}"),
+                    sender: GraphParty {
+                        device_id: "local".into(),
+                        pane_id: "sender".into(),
+                        session: "a".repeat(64),
+                    },
+                    recipient: None,
+                    at_unix_ms: at,
+                    outcome: DirectOutcome::Unknown,
+                    reason: None,
+                })
+                .unwrap();
+        }
+        let mut state = State::new();
+        state.direct = std::mem::take(&mut client.0.0.lock().unwrap().direct);
+        let stopped_at = Instant::now();
+        let clock = Cell::new(stopped_at);
+        let mut writes = 0;
+        let stopped = direct_observation_turn(
+            &client,
+            &mut state,
+            || clock.get(),
+            |fact| {
+                let answer = store.apply_direct_observation(fact, at);
+                writes += 1;
+                // Order shutdown inside the real write boundary without a busy timeout or sleep.
+                client.request_stop(stopped_at);
+                clock.set(stopped_at + observation::SHUTDOWN_DRAIN);
+                answer
+            },
+        );
+        assert!(stopped);
+        assert_eq!(writes, 1);
+        assert_eq!(store.direct_observations(at).unwrap().len(), 1);
+        assert_eq!(state.direct.len(), 15);
+        client.request_stop(clock.get());
+        assert_eq!(
+            client.0.0.lock().unwrap().direct_shutdown_deadline,
+            Some(clock.get())
+        );
+        let pending = state.direct.front().unwrap().fact.clone();
+        assert_eq!(client.observe(pending), Err("links_worker_closed".into()));
+    }
 
     #[test]
     fn a_leaf_change_refreshes_the_cached_root_at_the_supported_depth_limit() {

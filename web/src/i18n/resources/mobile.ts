@@ -4,6 +4,7 @@ import type { Catalog, Catalogs } from "../schema";
 export const mobileEnglish = {
   "mobile.group.needs_you": "Needs You",
   "mobile.group.done": "Unread",
+  "mobile.group.revisit": "Revisit",
   "mobile.group.working": "Working",
   "mobile.group.seen": "Seen",
   "mobile.pair.title": "Connect to {{name}}",
@@ -89,6 +90,7 @@ export const mobileEnglish = {
 const ko = {
   "mobile.group.needs_you": "내 차례",
   "mobile.group.done": "읽을 것",
+  "mobile.group.revisit": "다시 볼 것",
   "mobile.group.working": "작업 중",
   "mobile.group.seen": "확인함",
   "mobile.pair.title": "{{name}}에 연결",
@@ -174,6 +176,7 @@ const ko = {
 const zhCN = {
   "mobile.group.needs_you": "轮到你",
   "mobile.group.done": "待读",
+  "mobile.group.revisit": "稍后再看",
   "mobile.group.working": "工作中",
   "mobile.group.seen": "已查看",
   "mobile.pair.title": "连接到 {{name}}",
@@ -259,6 +262,7 @@ const zhCN = {
 const ja = {
   "mobile.group.needs_you": "自分の番",
   "mobile.group.done": "未読",
+  "mobile.group.revisit": "あとで見る",
   "mobile.group.working": "作業中",
   "mobile.group.seen": "確認済み",
   "mobile.pair.title": "{{name}}に接続",

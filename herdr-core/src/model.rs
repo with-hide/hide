@@ -608,6 +608,8 @@ pub struct RecentClosedPendingSnapshot {
 /// server confirmation from the transport response alone.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AsyncOperationSnapshot {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub related_scope_ids: Vec<String>,
     pub id: String,
     pub kind: String,
     pub target_id: String,
@@ -1213,6 +1215,16 @@ fn is_zero_u32(value: &u32) -> bool {
 /// rule 4).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SidebarAgentSnapshot {
+    /// Display provenance only; independent of hook health and GitHub reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_connection: Option<crate::labels::record::RecordConnection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_summary: Option<String>,
+    #[serde(skip_serializing)]
+    pub(crate) record_metadata: Option<crate::links::ledger::SessionMetadata>,
+    /// A delayed telemetry read leaves the last confirmed read fingerprint intact.
+    #[serde(skip)]
+    pub(crate) telemetry_stale: bool,
     /// Raw Herdr session bound to destructive close approval, never a label fallback.
     #[serde(skip_serializing)]
     pub close_session: Option<crate::sidebar::SessionAgentSessionPayload>,
@@ -1220,6 +1232,9 @@ pub struct SidebarAgentSnapshot {
     pub resolved: Option<crate::agent_state::sessions::Resolution>,
     /// Resolved within the last 24 hours, so Sessions still lists it under Resolved.
     pub resolved_recent: bool,
+    /// The operator's ★ or a read, unanswered ask (PRD revisit-group).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revisit: Option<crate::agent_state::sessions::Revisit>,
     pub escalation: Option<crate::agent_state::escalation::Escalation>,
     /// How many letters wait on this pane because a draft may stand in its
     /// composer, once it has rested long enough for the operator to be shown
@@ -2001,11 +2016,13 @@ fn sidebar_tab_naming<S: serde::Serializer>(
 ) -> Result<S::Ok, S::Error> {
     #[derive(Serialize)]
     struct SidebarName<'a> {
+        focused_pane_id: &'a str,
         manual_name: Option<&'a str>,
         number: u32,
         named_by_operator: bool,
     }
     SidebarName {
+        focused_pane_id: &naming.focused_pane_id,
         manual_name: naming.manual_name(),
         number: naming.number,
         named_by_operator: naming.operator_name().is_some(),
@@ -2242,8 +2259,8 @@ pub struct PaneSnapshot {
     /// Exact creation descriptor used only for start reconciliation, never a title.
     #[serde(skip_serializing)]
     pub start_claim: Option<String>,
-    /// Internal incarnation used to bind a close approval to its terminal.
-    #[serde(skip_serializing)]
+    /// Stable terminal incarnation shared by close approval and pane relocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_id: Option<String>,
     /// Herdr could not restore this terminal. Never inferred from its cwd or agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2806,6 +2823,7 @@ pub struct FirstRun {
 #[serde(rename_all = "snake_case")]
 pub enum FirstRunStep {
     Agents,
+    Devices,
     Notifications,
     Project,
     Done,
@@ -2815,11 +2833,72 @@ impl FirstRunStep {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Agents => "agents",
+            Self::Devices => "devices",
             Self::Notifications => "notifications",
             Self::Project => "project",
             Self::Done => "done",
         }
     }
+}
+
+/// Choices are independent of navigation: Back, reload and Help never redo
+/// an effect or restore the initial installed-agent defaults.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FirstRunChoices {
+    pub agents: Option<Vec<String>>,
+    pub devices: Vec<String>,
+    pub project_device: Option<String>,
+    pub project_path: String,
+    pub project_form: FirstRunProjectForm,
+    pub notifications_answered: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FirstRunProjectForm {
+    pub view: String,
+    #[serde(
+        deserialize_with = "deserialize_first_run_url",
+        serialize_with = "serialize_first_run_url"
+    )]
+    pub url: String,
+    pub parent: String,
+    pub name: String,
+}
+
+/// Setup drafts are shared snapshots and durable preferences, never Git's
+/// credential-bearing input. Incomplete URLs stay local to the open form too.
+pub(crate) fn first_run_draft_url(raw: &str) -> String {
+    let value = raw.trim();
+    if value.len() > 4096
+        || value.contains(['?', '#'])
+        || hide_node_link::clone::CloneSource::parse(value).is_err()
+    {
+        return String::new();
+    }
+    let authority = if let Some((_, rest)) = value.split_once("://") {
+        rest.split('/').next().unwrap_or_default()
+    } else {
+        value.split(':').next().unwrap_or_default()
+    };
+    if authority.contains('@') {
+        return String::new();
+    }
+    value.to_owned()
+}
+
+fn deserialize_first_run_url<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    String::deserialize(deserializer).map(|value| first_run_draft_url(&value))
+}
+
+fn serialize_first_run_url<S: serde::Serializer>(
+    value: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&first_run_draft_url(value))
 }
 
 /// A screen whose one-line introduction shows on the first visit only
@@ -2975,8 +3054,14 @@ pub struct ProjectMemorySnapshot {
     pub consent_required: bool,
     /// Cards currently eligible for injection, excluding merged promotions.
     pub usable_cards: usize,
-    /// Live cards against the store's cap.
+    /// At the store's cap with no card it may forget: new cards are refused.
     pub capacity_reached: bool,
+    /// Older cards forgotten automatically to make room, still forgotten,
+    /// since the Memory tab last said so (`memory_evictions_seen`).
+    pub evicted_cards: usize,
+    /// When the newest of those was forgotten, which the tab names back
+    /// once it has said so.
+    pub evicted_through_unix_ms: Option<u64>,
     /// Live cards, the most recently changed first.
     #[serde(serialize_with = "serialize_memory_rows")]
     pub rows: Arc<Vec<MemoryRowSnapshot>>,
@@ -3535,6 +3620,9 @@ impl DetailSlot {
 pub struct UiStateSnapshot {
     #[serde(default)]
     pub resolved_sessions: BTreeMap<String, crate::agent_state::sessions::Resolution>,
+    /// The operator's 다시 볼 것 marks, by root pane (PRD revisit-group D-11).
+    #[serde(default)]
+    pub revisit_sessions: BTreeMap<String, crate::agent_state::sessions::RevisitMark>,
     /// A new input starts work beyond any PR that had already settled.
     #[serde(default)]
     pub session_resolution_inputs: BTreeMap<String, u64>,
@@ -3689,6 +3777,8 @@ pub struct UiStateSnapshot {
     /// The first-run wizard's progress; `None` on a Mac that was never asked.
     #[serde(default)]
     pub first_run: Option<FirstRun>,
+    #[serde(default)]
+    pub first_run_choices: FirstRunChoices,
     /// Whether the desktop app shows an OS notification when a root agent
     /// newly needs the operator (Settings > Notifications).
     #[serde(default)]
@@ -4455,6 +4545,7 @@ impl Default for UiStateSnapshot {
     fn default() -> Self {
         Self {
             resolved_sessions: BTreeMap::new(),
+            revisit_sessions: BTreeMap::new(),
             session_resolution_inputs: BTreeMap::new(),
             session_collapsed_checkout_ids: Vec::new(),
             session_open_folds: Vec::new(),
@@ -4502,6 +4593,7 @@ impl Default for UiStateSnapshot {
             agent_onboarding: None,
             agent_onboarding_agents: Vec::new(),
             first_run: None,
+            first_run_choices: FirstRunChoices::default(),
             desktop_notifications: false,
             product_analytics_enabled: true,
             desktop_notifications_done: false,
@@ -4563,6 +4655,9 @@ pub struct DeviceRegistration {
     /// The Herdr socket on the device, for a host whose server does not
     /// listen at its default path; absent reads the host's default server.
     pub herdr_socket_path: Option<String>,
+    /// A saved profile selects this named Herdr server, never an implicit
+    /// fallback to the account's default session.
+    pub herdr_session: Option<String>,
     /// The operator's one consent for Hide's helper on this device (PRD S5.5
     /// D-20, D-23). Absent until given; a device registered before consent
     /// existed asks before its first file or Git use.
@@ -4625,6 +4720,8 @@ struct StoredDeviceRegistration {
     ssh_alias: Option<String>,
     #[serde(default)]
     herdr_socket_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    herdr_session: Option<String>,
     #[serde(default)]
     host_consent: Option<HostConsent>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -4656,6 +4753,7 @@ impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
             label: stored.label,
             origin,
             herdr_socket_path: stored.herdr_socket_path,
+            herdr_session: stored.herdr_session,
             host_consent: stored.host_consent,
         })
     }
@@ -4669,6 +4767,7 @@ impl From<DeviceRegistration> for StoredDeviceRegistration {
             label: registration.label,
             ssh_alias: registration.origin.ssh_alias().map(str::to_owned),
             herdr_socket_path: registration.herdr_socket_path,
+            herdr_session: registration.herdr_session,
             host_consent: registration.host_consent,
             inbound,
         }
@@ -5608,6 +5707,20 @@ pub struct TextRangeSnapshot {
     pub length: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PaneMovePreviewPaneSnapshot {
+    pub pane_id: String,
+    pub text: String,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PaneMovePreviewSnapshot {
+    pub request_id: String,
+    pub tab_id: String,
+    pub phase: String,
+    pub panes: Vec<PaneMovePreviewPaneSnapshot>,
+    pub message: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StatusSnapshot {
     pub server_discovery: ServerDiscoverySnapshot,
@@ -5619,12 +5732,15 @@ pub struct StatusSnapshot {
     pub background_ai: BackgroundAiSnapshot,
     /// The Host entries Add device offers (Settings › Devices).
     pub ssh_hosts: SshHostsSnapshot,
+    pub herdr_profiles: HerdrProfilesSnapshot,
     pub diagnostics: Vec<DiagnosticSnapshot>,
     pub last_error: Option<LastErrorSnapshot>,
     /// Core-owned operations which are waiting for a transport result or an
     /// authoritative Herdr event. Keeping these beside status lets every
     /// surface show the same bounded, target-scoped state.
     pub async_operations: Vec<AsyncOperationSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_move_preview: Option<PaneMovePreviewSnapshot>,
     /// The core-owned outcome of the latest explicitly correlated pane-focus
     /// request. Ordinary focus events have no request id and do not replace
     /// this receipt, so a relationship control never mistakes another pane's
@@ -5671,6 +5787,39 @@ pub struct SshHostSnapshot {
     pub added_as: Option<String>,
     /// Why there is no address: `ssh_missing`, `ssh_failed` or `timed_out`.
     pub problem: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HerdrProfilesSnapshot {
+    pub state: String,
+    pub error: Option<String>,
+    pub profiles: Vec<HerdrProfileSnapshot>,
+    pub truncated: bool,
+}
+
+impl Default for HerdrProfilesSnapshot {
+    fn default() -> Self {
+        Self {
+            state: "idle".to_owned(),
+            error: None,
+            profiles: Vec::new(),
+            truncated: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HerdrProfileSnapshot {
+    pub id: String,
+    pub label: String,
+    pub target: String,
+    pub session: String,
+    pub enabled: bool,
+    pub added_as: Option<String>,
+    pub problem: Option<String>,
+    pub device_id: Option<String>,
+    pub connect_state: String,
+    pub connect_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -5766,8 +5915,7 @@ pub struct BackgroundAiProviderSnapshot {
     pub label: String,
     /// The id the Agents tab and the logos key the same agent by: the kit's
     /// adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`,
-    /// `cursor`), or `gemini-cli` for Gemini CLI, which Hide AI still uses
-    /// though the kit no longer lists it.
+    /// `antigravity`).
     pub agent: String,
     /// The availability class the provider layer reported: `ready`,
     /// `needs_login`, `not_installed`, `unavailable`, `unsupported`, or
@@ -5782,9 +5930,8 @@ pub struct BackgroundAiProviderSnapshot {
     /// Whether the agent's program was found; false only for
     /// `not_installed`.
     pub installed: bool,
-    /// Whether the agent's sign-in is checked without a request. False for
-    /// Gemini CLI, whose `ready` only means its program was found, so the
-    /// shell does not call it signed in and it is never chosen by itself.
+    /// Whether the agent's sign-in is checked without a request. Every
+    /// current provider checks it; older peers may report false.
     pub login_checked: bool,
     /// Whether Runs on and Add agent offer it: installed, signed in, a
     /// backend, and a call that cannot change files (D-15). Parked in a usage
@@ -5798,8 +5945,8 @@ pub struct BackgroundAiProviderSnapshot {
     /// The models this agent offers. Empty when they are not known, which
     /// `models_unavailable_reason` then says.
     pub models: Vec<String>,
-    /// The list is the CLI's documented one and cannot be asked for (Gemini
-    /// CLI), so the shell says so beside the menu (B36).
+    /// The list came from documented aliases rather than an account query,
+    /// as an older peer may report, so the shell labels it (B36).
     pub models_fixed: bool,
     /// Whether "CLI default" can be chosen: the agent is asked with no
     /// `--model` (B36). True for the agents measured against nothing yet.
@@ -5831,7 +5978,7 @@ impl BackgroundAiProviderSnapshot {
             state: "unread".to_owned(),
             headline: "Not checked yet".to_owned(),
             installed: true,
-            login_checked: provider.login_probe(),
+            login_checked: true,
             model: provider.default_model().to_owned(),
             cli_default: provider.default_model().is_empty(),
             ..Self::default()
@@ -6178,9 +6325,11 @@ impl Snapshot {
                 agent_hooks: AgentHooksSnapshot::default(),
                 background_ai: BackgroundAiSnapshot::unread(),
                 ssh_hosts: SshHostsSnapshot::default(),
+                herdr_profiles: HerdrProfilesSnapshot::default(),
                 diagnostics: Vec::new(),
                 last_error: None,
                 async_operations: Vec::new(),
+                pane_move_preview: None,
                 pane_focus_request: None,
                 browser_opens: Vec::new(),
                 server_discovery: ServerDiscoverySnapshot {
@@ -6230,7 +6379,7 @@ mod overview_graph;
 /// Owned copy retained by the runtime to stamp revisions by comparison, so
 /// no mutation site needs dirty-tracking discipline.
 mod rest;
-pub use overview_graph::{GraphSession, OverviewGraphSnapshot};
+pub use overview_graph::{GraphDirectInput, GraphParty, GraphSession, OverviewGraphSnapshot};
 pub use rest::{RestSections, RestWire};
 
 /// One delta response taken from the runtime, holding everything the wire
@@ -7154,6 +7303,7 @@ mod wire_enum_tests {
 
         let first_run = [
             FirstRunStep::Agents,
+            FirstRunStep::Devices,
             FirstRunStep::Notifications,
             FirstRunStep::Project,
             FirstRunStep::Done,
@@ -7161,6 +7311,7 @@ mod wire_enum_tests {
         for variant in first_run {
             match variant {
                 FirstRunStep::Agents
+                | FirstRunStep::Devices
                 | FirstRunStep::Notifications
                 | FirstRunStep::Project
                 | FirstRunStep::Done => {}
@@ -7379,6 +7530,7 @@ mod wire_enum_tests {
             OverviewTaskState::Working,
             OverviewTaskState::Waiting,
             OverviewTaskState::Done,
+            OverviewTaskState::Revisit,
             OverviewTaskState::Resting,
             OverviewTaskState::Cleanup,
         ];
@@ -7389,6 +7541,7 @@ mod wire_enum_tests {
                 | OverviewTaskState::Working
                 | OverviewTaskState::Waiting
                 | OverviewTaskState::Done
+                | OverviewTaskState::Revisit
                 | OverviewTaskState::Resting
                 | OverviewTaskState::Cleanup => {}
             }

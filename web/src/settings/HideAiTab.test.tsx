@@ -156,11 +156,11 @@ it("shows no fallback group before an agent is chosen, since there is nothing to
   await unmount();
 });
 
-it("does not call an agent with no sign-in check signed in: it says the check happens on the first request (B66)", async () => {
-  const gemini = provider("gemini", "Gemini CLI", { agent: "gemini-cli", login_checked: false });
-  const { q, unmount } = await mount(snapshot({ provider: "gemini", providers: [provider("claude", "Claude Code"), gemini] }));
-  expect(q("[data-ai-state='gemini:ready']")?.textContent).toContain("Sign-in is only checked on the first request");
-  expect(q("[data-ai-state='gemini:ready']")?.textContent).not.toContain("Signed in");
+it("does not call an older peer's unchecked agent signed in: it says the check happens on the first request (B66)", async () => {
+  const legacy = provider("legacy-provider", "Legacy provider", { login_checked: false });
+  const { q, unmount } = await mount(snapshot({ provider: "legacy-provider", providers: [provider("claude", "Claude Code"), legacy] }));
+  expect(q("[data-ai-state='legacy-provider:ready']")?.textContent).toContain("Sign-in is only checked on the first request");
+  expect(q("[data-ai-state='legacy-provider:ready']")?.textContent).not.toContain("Signed in");
   await unmount();
 
   // An agent that does check, and an older daemon that sends no field, still read Signed in.
@@ -247,4 +247,17 @@ it("sends the limit as a percent or none, one event for one choice", () => {
     { schema_version: 2, kind: "ai_settings", payload: { usage_limit: 95 } },
     { schema_version: 2, kind: "ai_settings", payload: { usage_limit: "none" } },
   ]);
+});
+
+// The explanation follows the configured list, including its empty state (issue 1035).
+it("shows the waiting guidance only for an empty fallback list", async () => {
+  for (const fallback of [[], [{ provider: "codex", model: "" }]]) {
+    const view = await mount(snapshot({ fallback }));
+    try {
+      const text = view.q('[data-settings-group="hide-ai-fallback"]')?.textContent ?? "";
+      expect(text).toContain("past your usage limit");
+      expect(text).toContain("out of usage");
+      expect(text.includes("None added: Hide AI waits for Claude Code.")).toBe(fallback.length === 0);
+    } finally { await view.unmount(); }
+  }
 });

@@ -54,6 +54,7 @@ impl NodeLink for KitDevice {
             cli_dir,
             herdr_socket,
             retirement_projects,
+            ..
         } = call
         else {
             return Err(LinkError::NotConnected("kit calls only".to_owned()));

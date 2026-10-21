@@ -1,3 +1,5 @@
+import { paneMoveStartTarget } from "./paneMove";
+import { usePaneMove } from "./PaneMoveControls";
 import { useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
 import { markWords } from "./agentRow";
@@ -5,13 +7,18 @@ import { CircleAlertIcon, EllipsisIcon, Maximize2Icon, MoonIcon, TerminalSquareI
 import { memo, useEffect, useRef } from "react";
 import type { Actions } from "./actions";
 import { refusalText, submitFiles } from "./attachments";
+import { explorerDrag } from "./explorerDrag";
+import { remoteTargetOfPane } from "./remote";
+import { localDeviceId } from "./snapshot";
+import { agentsByPane } from "./paneAgents";
+import { AgentRecordTitle } from "./components/agent-record-title";
 import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
 import { PaneLetterButton } from "./components/letter-mark";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
-import { PaneForkMark, PaneHeaderBand, PanePrChip, PaneRecordButton } from "./PaneHeaderBand";
+import { PaneForkMark, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
 import { PaneTaskChip } from "./PaneTaskChip";
 import { PaneViews } from "./ViewComments";
 import { PaneConnectionChip } from "./PaneConnection";
@@ -25,7 +32,7 @@ import type { AgentSleep, AgentStatusCode, PaneRow, RowMark, TerminalPane } from
 import { PaneNoticeBody } from "./PaneNotice";
 import { caughtUp } from "./operatorFocus";
 import { useShellStore } from "./store";
-import { attachTerminal, bracketedPaste, focusTerminal, requestView, setTextScale, terminalLinkAt, terminalSelectionText } from "./terminals";
+import { attachTerminal, bracketedPaste, focusTerminal, pasteExplorerCopy, pasteExplorerFile, requestView, setTextScale, terminalLinkAt, terminalSelectionText } from "./terminals";
 
 /**
  * Transport states with a live stream; anything else is drawn as a caption in
@@ -188,15 +195,36 @@ export const PaneView = memo(function PaneView({
   const input = owner.kind === "pane" && owner.paneId === paneId;
   const dispatch = actions.dispatch;
   const title = paneTitle(pane);
+  const recordAgent = agentsByPane(usePaneAgents()).get(paneId);
+  const move = usePaneMove();
+  const moving = move?.mutationBlocked(pane.id) ?? false;
+  const titleContent = <span data-pane-move-title="true" className="flex min-w-0 items-center">{recordAgent && recordAgent.identity_label === title ? <AgentRecordTitle agent={recordAgent} /> : <span className="min-w-0 truncate">{title}</span>}</span>;
   const paneMenu = usePaneMenu(pane, title, actions);
 
   // A dropped file or a pasted image stages through hided and reaches the
   // terminal as the core's own `terminal_attachment` (B14).
   const drop = (event: React.DragEvent) => {
+    const item = explorerDrag.current;
+    if (item) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!acceptsExplorerDrag()) return;
+      actions.focusPane(paneId);
+      focusTerminal(paneId);
+      pasteExplorerFile(paneId, item);
+      return;
+    }
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
     void submitFiles(paneId, files, false, bracketedPaste(paneId));
+  };
+
+  const acceptsExplorerDrag = () => {
+    const item = explorerDrag.current;
+    const rest = useShellStore.getState().rest;
+    const device = remoteTargetOfPane(rest, paneId) ?? localDeviceId(rest);
+    return item !== null && !item.directory && item.device === device;
   };
 
   // The terminal is shown here and parked on unmount, not disposed: the
@@ -260,6 +288,12 @@ export const PaneView = memo(function PaneView({
     const host = hostRef.current;
     if (!host) return undefined;
     const onPaste = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (text && pasteExplorerCopy(paneId, text)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       const items = Array.from(event.clipboardData?.items ?? []).filter((item) => item.type.startsWith("image/"));
       if (items.length === 0) return;
       const files = items.map((item) => item.getAsFile()).filter((file): file is File => file !== null);
@@ -297,6 +331,11 @@ export const PaneView = memo(function PaneView({
       data-menu-open={paneMenu.open ? "true" : "false"}
       data-transport={transport?.transport_state ?? ""}
       onDragOver={(event) => {
+        if (explorerDrag.current) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = acceptsExplorerDrag() ? "copy" : "none";
+          return;
+        }
         if (event.dataTransfer.types.includes("Files")) event.preventDefault();
       }}
       onDrop={drop}
@@ -305,6 +344,9 @@ export const PaneView = memo(function PaneView({
         className={`relative flex h-[var(--size-pane-header)] shrink-0 items-center gap-sm px-sm text-caption ${
           input ? "bg-primary/[var(--opacity-selected-fill)] text-foreground" : "bg-card text-muted-foreground"
         }`}
+        onPointerDown={(event) => {
+          if (paneMoveStartTarget(event.currentTarget, event.target)) move?.press(paneId, event);
+        }}
         onContextMenu={(event) => {
           event.preventDefault();
           paneMenu.openAt(event.clientX, event.clientY);
@@ -320,26 +362,24 @@ export const PaneView = memo(function PaneView({
             plain={
               <>
                 {markSymbol ? <StatusMark mark={markSymbol} label={markStatus ? markWords(t, { mark: markSymbol, status_code: markStatus }) : undefined} className={markTone} data-pane-status-mark={markSymbol} /> : null}
-                <Hint label={agentProductName(agentKind)}><span className="flex shrink-0"><AgentMark kind={agentKind} /></span></Hint>
+                <Hint label={agentProductName(agentKind)}><span data-pane-move-excluded="true" className="flex shrink-0"><AgentMark kind={agentKind} /></span></Hint>
                 <Hint label={`${title}\n${agentProductName(agentKind)}`} reveals>
-                  <span className="min-w-0 truncate">{title}<span className="sr-only">, {agentProductName(agentKind)}</span></span>
+                  <span data-pane-move-title="true" className="flex min-w-0 flex-1 items-center">{titleContent}<span className="sr-only">, {agentProductName(agentKind)}</span></span>
                 </Hint>
               </>
             }
           >
             {markSymbol ? <StatusMark mark={markSymbol} className={markTone} data-pane-status-mark={markSymbol} /> : null}
             {/* The logo names its product as the plain head's does (agent-mark-quiet B4, B6); the button's own name already says it. */}
-            <span className="flex shrink-0" role="img" aria-label={agentProductName(agentKind)}><AgentMark kind={agentKind} /></span>
-            <span className="min-w-0 truncate">
-              {title}
-              <span className="sr-only">, {agentProductName(agentKind)}</span>
-            </span>
+            <span data-pane-move-excluded="true" className="flex shrink-0" role="img" aria-label={agentProductName(agentKind)}><AgentMark kind={agentKind} /></span>
+            {titleContent}
+            <span className="sr-only">, {agentProductName(agentKind)}</span>
           </PaneRecordButton>
         ) : (
           <>
             <TerminalSquareIcon className="size-(--size-icon-sm) shrink-0" aria-label={t("agentSessions.shell")} />
             <Hint label={title} reveals>
-              <span className="min-w-0 truncate">{title}</span>
+              <span data-pane-move-title="true" className="min-w-0 truncate">{title}</span>
             </Hint>
           </>
         )}
@@ -348,7 +388,7 @@ export const PaneView = memo(function PaneView({
         {agentKind ? <PaneTaskChip paneId={paneId} actions={actions} /> : null}
         {agentKind ? <PanePrChip paneId={paneId} actions={actions} /> : null}
         {agentKind ? <PaneViews paneId={paneId} name={title} actions={actions} /> : null}
-        <span className="flex-1" />
+        <span data-pane-move-blank="true" className="h-full flex-1" />
         <PaneConnectionChip pane={pane} actions={actions} local={local} />
         {zoomed ? (
           <Hint label={zoomChord ? t("panes.unzoomChord", { chord: zoomChord }) : t("panes.unzoom")}>
@@ -357,6 +397,7 @@ export const PaneView = memo(function PaneView({
               size="sm"
               className="shrink-0 gap-xxs px-xs text-caption text-foreground hover:bg-popover"
               aria-label={hidden > 0 ? t("panes.unzoomHidden", { count: hidden }) : t("panes.unzoom")}
+              disabled={moving}
               data-pane-zoom={hidden}
               onClick={() => {
                 actions.toggleZoom(paneId);
@@ -369,7 +410,7 @@ export const PaneView = memo(function PaneView({
               {hidden > 0 ? <span>+{hidden}</span> : null}
             </Button>
           </Hint>
-        ) : paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className="shrink-0 text-subtle-foreground hover:bg-popover" aria-label={t("panes.menu.zoom")} data-pane-zoom="false" onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
+        ) : paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className="shrink-0 text-subtle-foreground hover:bg-popover" aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
         <Hint label={t("panes.actions", { name: title })}>
           <Button
             variant="ghost"
@@ -392,7 +433,7 @@ export const PaneView = memo(function PaneView({
           </Button>
         </Hint>
         <Hint label={t("panes.close", { name: title })}>
-          <Button variant="ghost" size="icon-sm" className="text-subtle-foreground hover:bg-popover hover:text-foreground" onClick={() => actions.closePane(paneId)}>
+          <Button variant="ghost" size="icon-sm" className="text-subtle-foreground hover:bg-popover hover:text-foreground" disabled={moving} onClick={() => actions.closePane(paneId)}>
             <XIcon />
           </Button>
         </Hint>

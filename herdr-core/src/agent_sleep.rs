@@ -292,6 +292,8 @@ impl SleepRecord {
             .then(|| self.last_activity.parse().ok())
             .flatten();
         SessionAgentPayload {
+            record: None,
+            telemetry_stale: false,
             id: Some(
                 self.agent_name
                     .clone()
@@ -664,10 +666,15 @@ mod tests {
 
     fn agent(pane_id: &str) -> SidebarAgentSnapshot {
         SidebarAgentSnapshot {
+            record_connection: None,
+            record_summary: None,
+            record_metadata: None,
+            telemetry_stale: false,
             close_session: None,
             state: Default::default(),
             resolved: None,
             resolved_recent: false,
+            revisit: None,
             escalation: None,
             letters_waiting: None,
             raised: Vec::new(),
@@ -869,10 +876,7 @@ mod tests {
             &HashMap::from([("w1:p9".to_owned(), 13 * HOUR)]),
             12 * HOUR,
         );
-        assert_eq!(
-            due,
-            ["w1:p1", "w1:p7", "w1:p11", "w1:p12", "w1:p13", "w1:p10"]
-        );
+        assert_eq!(due, ["w1:p1", "w1:p7", "w1:p11", "w1:p12", "w1:p10"]);
     }
 
     /// The sleeping row is drawn from the record, so the record has to carry

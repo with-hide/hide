@@ -18,8 +18,10 @@ use crate::{
 };
 
 pub(crate) mod hold;
+mod progress;
+pub use progress::{CorrectionCheck, InputFailure};
 
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 20;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any
 /// agent the operator added under its fallback list (PRD settings-cleanup
 /// D-26), which now includes vendors other than the two it was limited to.
@@ -92,7 +94,7 @@ impl CandidateKind {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CandidateRelation {
     New,
     Same { target_id: String },
@@ -101,7 +103,7 @@ pub enum CandidateRelation {
     Discard,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Candidate {
     pub text: String,
     /// The card's one line in the session-start index; the body's first
@@ -197,6 +199,12 @@ pub struct ApplySummary {
     pub discarded: usize,
     pub secret_candidates: usize,
     pub capacity_rejections: usize,
+    /// Cards forgotten to make room for this batch's new cards, by number:
+    /// the least recently used that no person confirmed.
+    pub evicted: Vec<u64>,
+    /// The oldest such cards removed for good past
+    /// [`crate::EVICTED_CARD_LIMIT`].
+    pub evictions_purged: usize,
     /// New cards left out because their session reached its limit (D-02).
     pub session_limited: usize,
     pub duplicate_batch: bool,
@@ -205,11 +213,10 @@ pub struct ApplySummary {
 }
 
 /// What a write of analyzed cards adds to the candidates themselves.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ApplyOptions {
-    /// At most this many new cards come from the batch's session, counting
-    /// those it made earlier; `None` for `hide memory add`, which the
-    /// operator asked for (D-02).
+    /// At most this many significant new cards come from this batch.
+    /// Earlier batches never consume a later decision's admission.
     pub new_card_limit: Option<usize>,
     /// The evidence of each candidate, by its index; a candidate with none
     /// is verified when written and rests on nothing the node can check.
@@ -236,7 +243,14 @@ pub struct ProjectMemoryState {
     pub consent_required: bool,
     pub disclosure_accepted_at_unix_ms: Option<u64>,
     pub active_count: usize,
+    /// At the card limit with no card left to make room: new cards are
+    /// refused.
     pub capacity_reached: bool,
+    /// Cards forgotten to make room, still forgotten, since the operator
+    /// last saw the Memory tab say so ([`MemoryStore::mark_evictions_seen`]).
+    pub evicted_count: usize,
+    /// When the newest of those was forgotten.
+    pub evicted_through_unix_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -354,7 +368,36 @@ impl PromotionState {
             _ => Err(MemoryError::InvalidState(value.to_owned())),
         }
     }
+
+    /// Whether a person made or settled the card through this promotion,
+    /// so a full Project never forgets it for a new one. Matched without a
+    /// wildcard, so a new state is decided here before it compiles.
+    const fn settles_card(self) -> bool {
+        match self {
+            Self::Dismissed | Self::ClosedUnmerged | Self::Failed | Self::Outdated => false,
+            Self::Running
+            | Self::PrOpen
+            | Self::Merged
+            | Self::Building
+            | Self::Unbuilt
+            | Self::Kept => true,
+        }
+    }
 }
+
+/// Every promotion state, which a test holds to the ones the store accepts.
+const PROMOTION_STATES: [PromotionState; 10] = [
+    PromotionState::Dismissed,
+    PromotionState::Running,
+    PromotionState::PrOpen,
+    PromotionState::Merged,
+    PromotionState::ClosedUnmerged,
+    PromotionState::Failed,
+    PromotionState::Outdated,
+    PromotionState::Building,
+    PromotionState::Unbuilt,
+    PromotionState::Kept,
+];
 
 /// One card's promotion as the core last decided it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -474,9 +517,8 @@ pub struct SessionCursorRecord {
     pub checkpoint: Vec<u8>,
     pub last_content_hash: Option<String>,
     pub updated_at_unix_ms: u64,
-    /// The operator's own events analysis has read in the session so far; a
-    /// session with fewer than [`crate::OPERATOR_EVENTS_MINIMUM`] writes no
-    /// new card (D-03). Only the analysis reader keeps it.
+    /// The operator's own events analysis has read in the session so far.
+    /// This is provenance accounting, never an extraction eligibility bar.
     pub operator_events: u64,
 }
 
@@ -594,6 +636,9 @@ pub struct Injection {
     pub kind: InjectionKind,
     pub items: Vec<InjectedItem>,
     pub token_count: usize,
+    /// Cards the query matched, counting those the session was already
+    /// given: zero says the text has no Memory of its own.
+    pub matched: usize,
 }
 
 /// A card's number as agents and the screen name it.
@@ -886,6 +931,9 @@ pub enum MemoryError {
     Integrity(String),
     /// The Project's Memory was turned off before the write committed.
     Disabled,
+    /// Bringing a forgotten card back would take the Project past its card
+    /// limit; another card has to be forgotten first.
+    Full,
 }
 
 impl Display for MemoryError {
@@ -902,6 +950,7 @@ impl Display for MemoryError {
             Self::CrossProjectTarget => formatter.write_str("memory_cross_project_target"),
             Self::Integrity(value) => write!(formatter, "memory_integrity:{value}"),
             Self::Disabled => formatter.write_str("memory_project_disabled"),
+            Self::Full => formatter.write_str("memory_project_full"),
         }
     }
 }
@@ -953,6 +1002,7 @@ impl MemoryStore {
         };
         store.check_integrity()?;
         check_projection_integrity(&store.connection)?;
+        certify_projection(&store.connection)?;
         Ok(store)
     }
 
@@ -1028,10 +1078,14 @@ impl MemoryStore {
             mode: StoreMode::ReadOnly,
             path: path.to_path_buf(),
         };
-        // The progress handler makes this fail open for the caller once the
-        // hook's absolute deadline is reached, while still refusing a stale
-        // projection instead of injecting results from an incomplete index.
-        check_projection_integrity(&store.connection)?;
+        let ready: bool = store.connection.query_row(
+            "SELECT generation=validated FROM memory_projection_state WHERE id=1",
+            [],
+            |row| row.get(0),
+        )?;
+        if !ready {
+            return Err(MemoryError::Integrity("memory_projection_stale".into()));
+        }
         Ok(store)
     }
 
@@ -1157,6 +1211,7 @@ impl MemoryStore {
             });
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         check_projection_integrity(&self.connection)?;
         Ok(moved)
     }
@@ -1218,6 +1273,7 @@ impl MemoryStore {
             [project_id],
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(())
     }
 
@@ -1289,6 +1345,45 @@ impl MemoryStore {
     }
 
     pub fn project_state(&self, project_id: &str) -> Result<ProjectMemoryState, MemoryError> {
+        self.project_state_limited(project_id, ACTIVE_MEMORY_LIMIT)
+    }
+
+    /// Whether the Project's Memory is on, read alone: the prompt hook and
+    /// the commands ask only this, never the Memory tab's counts.
+    pub fn project_enabled(&self, project_id: &str) -> Result<bool, MemoryError> {
+        self.connection
+            .query_row(
+                "SELECT enabled FROM projects WHERE id=?1",
+                [project_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|enabled| enabled != 0)
+            .ok_or(MemoryError::ProjectMissing)
+    }
+
+    /// The Memory tab said how many cards were forgotten to make room, the
+    /// newest at `through_unix_ms`: those are no longer counted. A time past
+    /// the Project's newest such card is read as that card's, so a later
+    /// one is never taken as seen.
+    pub fn mark_evictions_seen(
+        &self,
+        project_id: &str,
+        through_unix_ms: u64,
+    ) -> Result<(), MemoryError> {
+        self.require_writer()?;
+        self.connection.execute(
+            "UPDATE projects SET evictions_seen_at_ms=MAX(COALESCE(evictions_seen_at_ms,0),MIN(?2,COALESCE((SELECT MAX(r.created_at_ms) FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE i.project_id=?1 AND i.lifecycle='tombstoned' AND r.batch_id LIKE 'evict:%'),0))) WHERE id=?1",
+            params![project_id, through_unix_ms],
+        )?;
+        Ok(())
+    }
+
+    fn project_state_limited(
+        &self,
+        project_id: &str,
+        item_limit: usize,
+    ) -> Result<ProjectMemoryState, MemoryError> {
         let (enabled, disclosure, disclosure_version): (i64, Option<u64>, i64) = self
             .connection
             .query_row(
@@ -1300,6 +1395,12 @@ impl MemoryStore {
             .ok_or(MemoryError::ProjectMissing)?;
         let active_count = count_state(&self.connection, project_id, "active")?;
         let live_count = count_live(&self.connection, project_id)?;
+        let evicted: (u64, Option<u64>) = self.connection.query_row(
+            "SELECT COUNT(*),MAX(r.created_at_ms) FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision JOIN projects p ON p.id=i.project_id \
+             WHERE i.project_id=?1 AND i.lifecycle='tombstoned' AND r.batch_id LIKE 'evict:%' AND r.created_at_ms>COALESCE(p.evictions_seen_at_ms,-1)",
+            [project_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
         Ok(ProjectMemoryState {
             project_id: project_id.to_owned(),
             enabled: enabled != 0,
@@ -1309,7 +1410,10 @@ impl MemoryStore {
                 .then_some(disclosure)
                 .flatten(),
             active_count,
-            capacity_reached: live_count >= ACTIVE_MEMORY_LIMIT,
+            capacity_reached: live_count >= item_limit
+                && evictable(&self.connection, project_id, "", &HashSet::new())?.is_none(),
+            evicted_count: evicted.0 as usize,
+            evicted_through_unix_ms: evicted.1,
         })
     }
 
@@ -1367,6 +1471,7 @@ impl MemoryStore {
             CursorReader::Receipts => Vec::new(),
         };
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(ended)
     }
 
@@ -1406,12 +1511,14 @@ impl MemoryStore {
         limit: usize,
     ) -> Result<Option<Vec<String>>, MemoryError> {
         let mut statement = self.connection.prepare(
-            "SELECT DISTINCT rii.item_id FROM injection_receipts ir LEFT JOIN injection_receipt_items rii ON ir.id=rii.receipt_id WHERE ir.project_id=?1 AND ir.runtime=?2 AND ir.session_id=?3",
+            "SELECT DISTINCT CASE WHEN i.current_revision=rii.revision THEN rii.item_id END FROM injection_receipts ir LEFT JOIN injection_receipt_items rii ON ir.id=rii.receipt_id LEFT JOIN memory_items i ON i.id=rii.item_id WHERE ir.project_id=?1 AND ir.runtime=?2 AND ir.session_id=?3 AND COALESCE((SELECT generation FROM receipt_contexts rc WHERE rc.receipt_id=ir.id),0)=?4",
         )?;
+        let generation = self.context_generation(project_id, runtime, session_id)?;
         let rows = statement
-            .query_map(params![project_id, runtime, session_id], |row| {
-                row.get::<_, Option<String>>(0)
-            })?
+            .query_map(
+                params![project_id, runtime, session_id, generation],
+                |row| row.get::<_, Option<String>>(0),
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if rows.is_empty() && count_receipts(&self.connection, project_id)? >= limit {
             return Ok(None);
@@ -1507,6 +1614,7 @@ impl MemoryStore {
             [day.saturating_sub(7)],
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(None)
     }
 
@@ -1541,7 +1649,7 @@ impl MemoryStore {
              AND NOT EXISTS(SELECT 1 FROM card_comparisons d WHERE d.item_id=i.id AND d.revision=i.current_revision) \
              AND i.lifecycle='active' AND NOT {} AND (i.reverify_at_ms IS NULL OR i.reverify_at_ms<=?3) \
              AND (((r.verified_at_ms IS NULL OR r.docs_compared=0) AND (c.item_id IS NULL OR c.state!='merged')) \
-               OR (r.verified_at_ms IS NOT NULL AND r.kind IN ('rule','lesson') \
+               OR (r.verified_at_ms IS NOT NULL AND r.kind IN ('rule','lesson','decision') \
                  AND i.promotion_ok_revision IS NOT i.current_revision \
                  AND (c.item_id IS NULL OR c.state='outdated' OR (c.state='dismissed' AND c.revision!=i.current_revision)) \
                  AND ((SELECT COUNT(DISTINCT s.provider||':'||s.session_id) FROM memory_sources s WHERE s.item_id=i.id AND s.human=1)>=?5 \
@@ -1569,7 +1677,13 @@ impl MemoryStore {
         candidates: &[Candidate],
         options: &ApplyOptions,
     ) -> Result<ApplySummary, MemoryError> {
-        self.apply_candidates_limited(batch, candidates, options, ACTIVE_MEMORY_LIMIT)
+        self.apply_candidates_limited(
+            batch,
+            candidates,
+            options,
+            ACTIVE_MEMORY_LIMIT,
+            crate::EVICTED_CARD_LIMIT,
+        )
     }
 
     #[cfg(test)]
@@ -1579,7 +1693,24 @@ impl MemoryStore {
         candidates: &[Candidate],
         item_limit: usize,
     ) -> Result<ApplySummary, MemoryError> {
-        self.apply_candidates_limited(batch, candidates, &ApplyOptions::default(), item_limit)
+        self.apply_candidates_with_limits(batch, candidates, item_limit, crate::EVICTED_CARD_LIMIT)
+    }
+
+    #[cfg(test)]
+    fn apply_candidates_with_limits(
+        &mut self,
+        batch: &AnalysisBatch,
+        candidates: &[Candidate],
+        item_limit: usize,
+        evicted_limit: usize,
+    ) -> Result<ApplySummary, MemoryError> {
+        self.apply_candidates_limited(
+            batch,
+            candidates,
+            &ApplyOptions::default(),
+            item_limit,
+            evicted_limit,
+        )
     }
 
     fn apply_candidates_limited(
@@ -1588,6 +1719,7 @@ impl MemoryStore {
         candidates: &[Candidate],
         options: &ApplyOptions,
         item_limit: usize,
+        evicted_limit: usize,
     ) -> Result<ApplySummary, MemoryError> {
         self.require_writer()?;
         let transaction = self.connection.transaction()?;
@@ -1616,18 +1748,31 @@ impl MemoryStore {
         }
         let mut summary = ApplySummary::default();
         let mut live_count = count_live(&transaction, &batch.project_id)?;
-        // New cards this session already made, forgotten ones included, so
-        // forgetting a card never makes room for the session to make another.
-        let session_made = match options.new_card_limit {
-            Some(_) => transaction.query_row(
-                "SELECT COUNT(*) FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=1 \
-                 JOIN analysis_batches b ON b.id=r.batch_id \
-                 WHERE i.project_id=?1 AND b.provider=?2 AND b.session_id=?3",
-                params![batch.project_id, batch.provider, batch.session_id],
-                |row| row.get::<_, u64>(0),
-            )? as usize,
-            None => 0,
-        };
+        let mut ranked = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| candidate.relation == CandidateRelation::New)
+            .collect::<Vec<_>>();
+        ranked.sort_by(|(_, a), (_, b)| {
+            b.salience
+                .total_cmp(&a.salience)
+                .then_with(|| b.confidence.total_cmp(&a.confidence))
+        });
+        let admitted = ranked
+            .into_iter()
+            .take(options.new_card_limit.unwrap_or(candidates.len()))
+            .map(|(index, _)| index)
+            .collect::<HashSet<_>>();
+        // A card a later candidate of this batch names stays where it is.
+        let named = candidates
+            .iter()
+            .filter_map(|candidate| match &candidate.relation {
+                CandidateRelation::Same { target_id }
+                | CandidateRelation::Supersedes { target_id }
+                | CandidateRelation::Conflicts { target_id } => Some(target_id.clone()),
+                CandidateRelation::New | CandidateRelation::Discard => None,
+            })
+            .collect::<HashSet<_>>();
         for (index, candidate) in candidates.iter().enumerate() {
             let redacted = redact(candidate.text.trim());
             if redacted.contains_secret_candidate {
@@ -1645,18 +1790,31 @@ impl MemoryStore {
                 .citing(&candidate.cited_paths);
             let outcome = match &candidate.relation {
                 CandidateRelation::New => {
-                    if options
-                        .new_card_limit
-                        .is_some_and(|limit| session_made + summary.created >= limit)
-                    {
+                    if !admitted.contains(&index) {
                         summary.session_limited += 1;
                         summary.outcomes.push(CandidateOutcome::SessionLimit);
                         continue;
                     }
                     if live_count >= item_limit {
-                        summary.capacity_rejections += 1;
-                        summary.outcomes.push(CandidateOutcome::CapacityRejected);
-                        continue;
+                        // A full Project forgets its least recently used
+                        // card for the new one, undoable as any Forget; with
+                        // none it may forget, the new card is refused.
+                        let Some((evicted, number)) =
+                            evictable(&transaction, &batch.project_id, &batch.id, &named)?
+                        else {
+                            summary.capacity_rejections += 1;
+                            summary.outcomes.push(CandidateOutcome::CapacityRejected);
+                            continue;
+                        };
+                        append_lifecycle(
+                            &transaction,
+                            &batch.project_id,
+                            &evicted,
+                            MemoryLifecycle::Tombstoned,
+                            &stable_id("evict", &[&batch.id, &index.to_string()]),
+                        )?;
+                        summary.evicted.push(number);
+                        live_count -= 1;
                     }
                     let item_id =
                         stable_id("memory", &[&batch.id, &index.to_string(), &redacted.text]);
@@ -1751,6 +1909,21 @@ impl MemoryStore {
                     if options.reverify_superseded && candidate.kind != CandidateKind::Preference {
                         transaction.execute("UPDATE memory_revisions SET verified_at_ms=NULL WHERE item_id=?1 AND revision=?2", params![target_id,revision])?;
                     }
+                    if let Some(comparison) = options
+                        .document_comparisons
+                        .get(index)
+                        .and_then(Option::as_ref)
+                    {
+                        let data = serde_json::to_string(comparison)
+                            .map_err(|error| MemoryError::InvalidState(error.to_string()))?;
+                        transaction.execute(
+                            "INSERT INTO card_comparisons(item_id,revision,data) VALUES(?1,?2,?3) ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,data=excluded.data",
+                            params![target_id,revision,data],
+                        )?;
+                        if comparison.authority == crate::DocumentAuthority::CardNewer {
+                            transaction.execute("UPDATE memory_revisions SET verified_at_ms=?3,docs_compared=1 WHERE item_id=?1 AND revision=?2",params![target_id,revision,batch.created_at_unix_ms])?;
+                        }
+                    }
                     reindex(&transaction, &batch.project_id, target_id, &card)?;
                     summary.superseded += 1;
                     CandidateOutcome::Superseded {
@@ -1761,7 +1934,12 @@ impl MemoryStore {
             };
             summary.outcomes.push(outcome);
         }
+        if !summary.evicted.is_empty() {
+            summary.evictions_purged =
+                purge_evicted(&transaction, &batch.project_id, evicted_limit)?;
+        }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(summary)
     }
 
@@ -1833,6 +2011,7 @@ impl MemoryStore {
             reindex(&transaction, project_id, item_id, &card)?;
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(true)
     }
 
@@ -2053,6 +2232,7 @@ impl MemoryStore {
             &batch_id,
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(true)
     }
 
@@ -2069,6 +2249,7 @@ impl MemoryStore {
             &batch_id,
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(batch_id)
     }
 
@@ -2101,6 +2282,7 @@ impl MemoryStore {
             }
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(restored)
     }
 
@@ -2108,34 +2290,63 @@ impl MemoryStore {
     /// wrote its current revision did to it, whatever else that batch wrote.
     /// Answers the card as it is after, or `None` when it has no change Hide
     /// can undo.
+    /// A forgotten card is not brought back while the Project is at its card
+    /// limit ([`MemoryError::Full`]): the operator forgets another first.
     pub fn undo_card(
         &mut self,
         project_id: &str,
         number: u64,
     ) -> Result<Option<MemoryItem>, MemoryError> {
+        self.undo_card_limited(project_id, number, ACTIVE_MEMORY_LIMIT)
+    }
+
+    fn undo_card_limited(
+        &mut self,
+        project_id: &str,
+        number: u64,
+        item_limit: usize,
+    ) -> Result<Option<MemoryItem>, MemoryError> {
         self.require_writer()?;
-        let Some(item) = self.item_by_number(project_id, number)? else {
+        // Taken before the card is read, so no eviction lands between the
+        // check against the limit and the undo.
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let Some((item_id, lifecycle)) = transaction
+            .query_row(
+                "SELECT id,lifecycle FROM memory_items WHERE project_id=?1 AND number=?2",
+                params![project_id, number],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+        else {
             return Ok(None);
         };
-        let transaction = self.connection.transaction()?;
         let change: Option<(String, Option<String>, Option<u64>)> = transaction
             .query_row(
                 "SELECT c.batch_id,c.previous_lifecycle,c.previous_revision FROM memory_items i \
                  JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
                  JOIN batch_changes c ON c.batch_id=r.batch_id AND c.item_id=i.id \
                  WHERE i.id=?1 AND i.project_id=?2",
-                params![item.id, project_id],
+                params![item_id, project_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
         let Some((batch_id, previous_state, previous_revision)) = change else {
             return Ok(None);
         };
+        let returns = lifecycle == MemoryLifecycle::Tombstoned.as_str()
+            && previous_state
+                .as_deref()
+                .is_some_and(|state| state != MemoryLifecycle::Tombstoned.as_str());
+        if returns && count_live(&transaction, project_id)? >= item_limit {
+            return Err(MemoryError::Full);
+        }
         if !undo_item(
             &transaction,
             project_id,
             &batch_id,
-            &item.id,
+            &item_id,
             previous_state,
             previous_revision,
         )? {
@@ -2145,9 +2356,10 @@ impl MemoryStore {
         // undo finds nothing rather than repeating.
         transaction.execute(
             "DELETE FROM batch_changes WHERE batch_id=?1 AND item_id=?2",
-            params![batch_id, item.id],
+            params![batch_id, item_id],
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         self.item_by_number(project_id, number)
     }
 
@@ -2192,6 +2404,19 @@ impl MemoryStore {
             .collect()
     }
 
+    /// Whether an outdated sibling still protects this shared attempt branch.
+    pub fn branch_has_outdated_promotion(
+        &self,
+        project_id: &str,
+        branch: &str,
+    ) -> Result<bool, MemoryError> {
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM card_promotions p JOIN memory_items i ON i.id=p.item_id WHERE i.project_id=?1 AND p.branch=?2 AND p.state='outdated')",
+            params![project_id, branch],
+            |row| row.get(0),
+        )?)
+    }
+
     /// The promotions still waiting on an agent or a pull request, in every
     /// Project on `device`, with the Project's root.
     pub fn open_promotions(
@@ -2225,20 +2450,21 @@ impl MemoryStore {
         Ok(open)
     }
 
-    /// The branches whose pull request ended, merged or closed, in every
+    /// The branches whose pull request ended or whose attempt is outdated, in every
     /// Project on `device`, once each with the Project, its root and the
     /// coordination ids of the agents that attempted it. A batch's cards
     /// share one branch, and a card's row keeps its last attempt, so this is
     /// what an upgrade or a restart finds to retire.
+    /// The final flag requires preserving every commit when any card is outdated.
     #[allow(clippy::type_complexity)]
-    pub fn settled_branches(
+    pub fn retirement_branches(
         &self,
         device: &str,
-    ) -> Result<Vec<(String, String, String, Vec<String>)>, MemoryError> {
+    ) -> Result<Vec<(String, String, String, Vec<String>, bool)>, MemoryError> {
         let mut statement = self.connection.prepare(
-            "SELECT pr.id,pr.root,p.branch,p.agent_id FROM card_promotions p \
+            "SELECT pr.id,pr.root,p.branch,p.agent_id,p.state='outdated' FROM card_promotions p \
              JOIN memory_items i ON i.id=p.item_id JOIN projects pr ON pr.id=i.project_id \
-             WHERE pr.device_id=?1 AND p.state IN ('merged','closed_unmerged') \
+             WHERE pr.device_id=?1 AND p.state IN ('merged','closed_unmerged','outdated') \
              AND p.branch IS NOT NULL ORDER BY pr.id,p.branch,p.agent_id",
         )?;
         let rows = statement
@@ -2248,20 +2474,28 @@ impl MemoryStore {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
+                    row.get::<_, bool>(4)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut branches: Vec<(String, String, String, Vec<String>)> = Vec::new();
-        for (project, root, branch, agent) in rows {
+        let mut branches: Vec<(String, String, String, Vec<String>, bool)> = Vec::new();
+        for (project, root, branch, agent, empty_only) in rows {
             match branches.last_mut() {
                 Some(last) if last.0 == project && last.2 == branch => {
+                    last.4 |= empty_only;
                     if let Some(agent) = agent
                         && !last.3.contains(&agent)
                     {
                         last.3.push(agent);
                     }
                 }
-                _ => branches.push((project, root, branch, agent.into_iter().collect())),
+                _ => branches.push((
+                    project,
+                    root,
+                    branch,
+                    agent.into_iter().collect(),
+                    empty_only,
+                )),
             }
         }
         Ok(branches)
@@ -2453,6 +2687,7 @@ impl MemoryStore {
         transaction.execute("INSERT INTO promotion_batches(branch,project_id,numbers) VALUES(?1,?2,?3) ON CONFLICT(project_id,branch) DO UPDATE SET numbers=excluded.numbers", params![branch, project_id, data])?;
         transaction.execute("DELETE FROM promotion_batches WHERE NOT EXISTS(SELECT 1 FROM card_promotions c JOIN memory_items i ON i.id=c.item_id WHERE c.branch=promotion_batches.branch AND i.project_id=promotion_batches.project_id)", [])?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(())
     }
 
@@ -2603,7 +2838,7 @@ impl MemoryStore {
               WHERE rii.item_id=i.id AND ir.turn_id='show' AND ir.created_at_ms>=?2) AS pulled \
              FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
              LEFT JOIN card_promotions p ON p.item_id=i.id AND (p.revision=i.current_revision OR p.state IN ('running','pr_open','building')) \
-             WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','lesson') AND r.verified_at_ms IS NOT NULL AND NOT {} \
+             WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','lesson','decision') AND r.verified_at_ms IS NOT NULL AND NOT {} \
              AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision) AND ((i.promotion_ok_revision IS i.current_revision)=?6) \
              AND (?6 OR i.reverify_at_ms IS NULL OR i.reverify_at_ms<=?7) \
              AND (p.item_id IS NULL OR p.state='outdated' OR (p.state='dismissed' AND p.revision!=i.current_revision))) \
@@ -2665,12 +2900,16 @@ impl MemoryStore {
             "INSERT INTO card_comparisons(item_id,revision,data) SELECT id,current_revision,?4 FROM memory_items WHERE project_id=?1 AND number=?2 AND current_revision=?3 AND lifecycle='active' ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,data=excluded.data",
             params![project_id, number, revision, data])?;
         if changed == 1 {
+            if comparison.authority == crate::DocumentAuthority::CardNewer {
+                transaction.execute("UPDATE memory_revisions SET verified_at_ms=COALESCE(verified_at_ms,?4) WHERE item_id=(SELECT id FROM memory_items WHERE project_id=?1 AND number=?2) AND revision=?3", params![project_id,number,revision,now_ms()])?;
+            }
             transaction.execute(
                 "UPDATE memory_revisions SET docs_compared=1 WHERE item_id=(SELECT id FROM memory_items WHERE project_id=?1 AND number=?2) AND revision=?3",
                 params![project_id, number, revision],
             )?;
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(changed == 1)
     }
 
@@ -2724,6 +2963,7 @@ impl MemoryStore {
              JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
              WHERE i.project_id=?1 AND i.lifecycle='active' AND r.verified_at_ms IS NOT NULL AND NOT {} \
              AND EXISTS(SELECT 1 FROM memory_evidence e WHERE e.item_id=i.id AND e.revision=i.current_revision) \
+             AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer') \
              AND (i.evidence_checked_at_ms IS NULL OR i.evidence_checked_at_ms<?3) \
              ORDER BY COALESCE(i.evidence_checked_at_ms,0),i.number LIMIT ?2",
             hold::held(4)
@@ -2768,6 +3008,7 @@ impl MemoryStore {
             )?;
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(())
     }
 
@@ -2914,6 +3155,7 @@ impl MemoryStore {
             [item_id],
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(true)
     }
 
@@ -2978,6 +3220,7 @@ impl MemoryStore {
         write_evidence(&transaction, item_id, revision, evidence, now_unix_ms)?;
         reindex(&transaction, project_id, item_id, &card)?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(true)
     }
 
@@ -3018,6 +3261,17 @@ impl MemoryStore {
             "UPDATE memory_revisions SET verified_at_ms=NULL WHERE item_id=?1 AND revision=?2",
             params![item_id, revision],
         )?;
+        // An accepted claim starts a fresh verification of this revision.
+        // Its settled comparison and cached document check cannot hold it out
+        // of the pending queue or short-circuit that new check.
+        transaction.execute(
+            "DELETE FROM card_comparisons WHERE item_id=?1 AND revision=?2",
+            params![item_id, revision],
+        )?;
+        transaction.execute(
+            "DELETE FROM correction_checks WHERE item_id=?1 AND revision=?2",
+            params![item_id, revision],
+        )?;
         transaction.execute(
             "UPDATE memory_items SET reverify_at_ms=NULL,promotion_ok_revision=NULL,outdated_reason=?2 WHERE id=?1",
             params![
@@ -3033,12 +3287,14 @@ impl MemoryStore {
             ],
         )?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(true)
     }
 
     pub fn retrieve(&self, query: &RetrievalQuery) -> Result<Injection, MemoryError> {
         let started = Instant::now();
-        self.retrieve_with_expiry(query, || started.elapsed() >= query.deadline)
+        let deadline = query.deadline;
+        self.retrieve_with_expiry(query, move || started.elapsed() >= deadline)
     }
 
     /// Retrieves within a caller-owned invocation deadline instead of starting
@@ -3048,16 +3304,21 @@ impl MemoryStore {
         query: &RetrievalQuery,
         expired: impl Fn() -> bool,
     ) -> Result<Injection, MemoryError> {
+        let started = Instant::now();
+        let caller_expired = expired;
+        let duration = query.deadline;
+        let expired = move || caller_expired() || started.elapsed() >= duration;
         let empty = |outcome| Injection {
             outcome,
             kind: query.kind,
             items: Vec::new(),
             token_count: 0,
+            matched: 0,
         };
-        let state = self.project_state(&query.project_id)?;
-        if !state.enabled {
+        if !self.project_enabled(&query.project_id)? {
             return Ok(empty(InjectionOutcome::Disabled));
         }
+        let mut matched = 0;
         let selected = match query.kind {
             InjectionKind::Index => self.index(&query.project_id, query.maximum_items)?,
             InjectionKind::Bodies => {
@@ -3073,6 +3334,7 @@ impl MemoryStore {
                 if expired() {
                     return Ok(empty(InjectionOutcome::Deadline));
                 }
+                matched = candidates.len();
                 select_bodies(candidates, query)
             }
         };
@@ -3089,6 +3351,7 @@ impl MemoryStore {
             kind: query.kind,
             items: selected,
             token_count,
+            matched,
         })
     }
 
@@ -3099,7 +3362,7 @@ impl MemoryStore {
         let mut statement = self.connection.prepare(&format!(
             "SELECT i.id,i.number,r.revision,r.title,p.target_path,p.pr_number,p.repository FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
              LEFT JOIN card_promotions p ON p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged' \
-             WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','decision','lesson','preference') AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND p.item_id IS NULL) AND (r.verified_at_ms IS NOT NULL OR p.item_id IS NOT NULL) ORDER BY i.salience DESC,i.confidence DESC,i.updated_at_ms DESC,i.id LIMIT ?2",
+             WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','decision','lesson','preference') AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND p.item_id IS NULL AND json_extract(c.data,'$.authority')!='card_newer') AND (r.verified_at_ms IS NOT NULL OR p.item_id IS NOT NULL) ORDER BY i.salience DESC,i.confidence DESC,i.updated_at_ms DESC,i.id LIMIT ?2",
             hold::held(3)
         ))?;
         Ok(statement
@@ -3173,6 +3436,7 @@ impl MemoryStore {
         let transaction = self.connection.transaction()?;
         prune_stale_receipts(&transaction, project_id, now_unix_ms, limit)?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(())
     }
 
@@ -3250,6 +3514,7 @@ impl MemoryStore {
             )?;
         }
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         Ok(ReceiptRecord::Recorded)
     }
 
@@ -3270,6 +3535,7 @@ impl MemoryStore {
         transaction.execute("DELETE FROM memory_fts WHERE project_id=?1", [project_id])?;
         transaction.execute("DELETE FROM projects WHERE id=?1", [project_id])?;
         transaction.commit()?;
+        certify_projection(&self.connection)?;
         let warnings = [
             cleanup(&self.connection).err(),
             scrub_backups(&self.path, project_id).err(),
@@ -3310,7 +3576,7 @@ impl MemoryStore {
         if query.is_empty() {
             return Ok(Vec::new());
         }
-        let mut statement = self.connection.prepare(&format!("SELECT i.id,i.number,r.revision,r.title,r.aliases,r.body,COALESCE((SELECT s.provider||':'||s.session_id FROM memory_sources s WHERE s.item_id=i.id ORDER BY s.provider,s.session_id,s.event_offset LIMIT 1),''),i.confidence,i.salience,i.updated_at_ms,r.kind FROM memory_fts f JOIN memory_items i ON i.id=f.item_id JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE f.project_id=?1 AND i.lifecycle='active' AND memory_fts MATCH ?2 AND (?4=0 OR (r.verified_at_ms IS NOT NULL AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision) AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged'))) ORDER BY bm25(memory_fts),i.updated_at_ms DESC,i.id LIMIT ?3", hold::held(5)))?;
+        let mut statement = self.connection.prepare(&format!("SELECT i.id,i.number,r.revision,r.title,r.aliases,r.body||COALESCE((SELECT '\nPending document update: '||json_extract(c.data,'$.document') FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer'),''),COALESCE((SELECT s.provider||':'||s.session_id FROM memory_sources s WHERE s.item_id=i.id ORDER BY s.provider,s.session_id,s.event_offset LIMIT 1),''),i.confidence,i.salience,i.updated_at_ms,r.kind FROM memory_fts f JOIN memory_items i ON i.id=f.item_id JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE f.project_id=?1 AND i.lifecycle='active' AND memory_fts MATCH ?2 AND (?4=0 OR (r.verified_at_ms IS NOT NULL AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')!='card_newer') AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged'))) ORDER BY bm25(memory_fts),i.updated_at_ms DESC,i.id LIMIT ?3", hold::held(5)))?;
         let mut candidates = statement
             .query_map(
                 params![
@@ -3461,6 +3727,9 @@ fn migrate(
         if let Err(error) = connection
             .execute_batch(SCHEMA)
             .and_then(|_| connection.execute_batch(hold::TABLES))
+            .and_then(|_| connection.execute_batch(progress::TABLES))
+            .and_then(|_| connection.execute_batch(progress::FAILURE_TABLES))
+            .and_then(|_| progress::install_projection_tracking(connection))
             .and_then(|_| enable_fts_secure_delete(connection))
             .and_then(|_| connection.pragma_update(None, "user_version", SCHEMA_VERSION))
         {
@@ -3562,6 +3831,25 @@ COMMIT;"#,
         back_up(connection, path, version)?;
         hold::migrate_version_fifteen(connection)?;
         version = 16;
+    }
+    // Versions 17 to 19 were written only by unreleased builds, each with
+    // another shape, so this one step from 16 makes the final shape and a
+    // store at any of them is refused below.
+    if version == 16 {
+        back_up(connection, path, version)?;
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(progress::TABLES)?;
+        progress::install_projection_tracking(&transaction)?;
+        transaction.execute_batch(progress::FAILURE_TABLES)?;
+        transaction.execute_batch(
+            "ALTER TABLE projects ADD COLUMN evictions_seen_at_ms INTEGER; ALTER TABLE projects ADD COLUMN answered_at_ms INTEGER;",
+        )?;
+        // Only recover the old minimum-event skip: sessions with human
+        // evidence whose cursor advanced without a single analysis batch.
+        // Unrelated completed history and receipt cursors remain untouched.
+        transaction.execute_batch("DELETE FROM session_cursors AS c WHERE operator_events BETWEEN 1 AND 2 AND NOT EXISTS(SELECT 1 FROM analysis_batches b WHERE b.project_id=c.project_id AND b.provider=c.provider AND b.session_id=c.session_id); PRAGMA user_version=20;")?;
+        transaction.commit()?;
+        version = SCHEMA_VERSION;
     }
     if version != SCHEMA_VERSION {
         return Err(MemoryError::WrongSchema {
@@ -4086,7 +4374,7 @@ fn backup_path(path: &Path, version: i64) -> std::path::PathBuf {
 }
 
 /// The schema versions a migration keeps a backup of.
-const BACKUP_VERSIONS: [i64; 3] = [7, 8, 15];
+const BACKUP_VERSIONS: [i64; 4] = [7, 8, 15, 16];
 
 /// Removes a deleted Project from every backup copy, so its cards do not
 /// outlive the delete there.
@@ -4214,6 +4502,27 @@ fn require_schema(connection: &Connection) -> Result<(), MemoryError> {
     }
 }
 
+/// Preparation belongs to existing writers, never the submitting prompt.
+/// Content-table triggers also invalidate externally changed FTS bodies.
+fn certify_projection(connection: &Connection) -> Result<(), MemoryError> {
+    let ready: bool = connection.query_row(
+        "SELECT generation=validated FROM memory_projection_state WHERE id=1",
+        [],
+        |row| row.get(0),
+    )?;
+    if ready {
+        return Ok(());
+    }
+    let tx = connection.unchecked_transaction()?;
+    check_projection_integrity(&tx)?;
+    tx.execute(
+        "UPDATE memory_projection_state SET validated=generation WHERE id=1",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn check_projection_integrity(connection: &Connection) -> Result<(), MemoryError> {
     // `memory_fts.item_id` is UNINDEXED, so joining the index table directly
     // scans it once per active card; every hook's open paid that (174 ms at
@@ -4242,7 +4551,7 @@ fn check_projection_integrity(connection: &Connection) -> Result<(), MemoryError
 
 /// A new store's tables.
 const SCHEMA: &str = r#"
-CREATE TABLE projects(id TEXT PRIMARY KEY,root TEXT NOT NULL,device_id TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 0,disclosure_accepted_at_ms INTEGER,created_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,disclosure_version INTEGER NOT NULL DEFAULT 0,next_number INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE projects(id TEXT PRIMARY KEY,root TEXT NOT NULL,device_id TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 0,disclosure_accepted_at_ms INTEGER,created_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,disclosure_version INTEGER NOT NULL DEFAULT 0,next_number INTEGER NOT NULL DEFAULT 1,evictions_seen_at_ms INTEGER,answered_at_ms INTEGER);
 CREATE TABLE project_receipt_keys(project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,auth_key BLOB NOT NULL);
 CREATE TABLE session_sources(id TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,locator TEXT NOT NULL,checkout_path TEXT NOT NULL,started_at_ms INTEGER,updated_at_ms INTEGER NOT NULL,unavailable_reason TEXT,PRIMARY KEY(project_id,provider,id));
 CREATE TABLE session_cursors(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,session_id TEXT NOT NULL,byte_offset INTEGER NOT NULL,pending_bytes BLOB NOT NULL,last_content_hash TEXT,updated_at_ms INTEGER NOT NULL,operator_events INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(project_id,provider,session_id));
@@ -4403,6 +4712,14 @@ fn undo_item(
             )?;
             remove_index(transaction, item_id)?;
         }
+    }
+    // The operator brought back a card a full Project forgot for a new one:
+    // that counts as a use, or the next new card would forget it again.
+    if batch_id.starts_with("evict:") {
+        transaction.execute(
+            "UPDATE memory_items SET last_used_at_ms=?2 WHERE id=?1",
+            params![item_id, now_ms()],
+        )?;
     }
     // The operator took back a verdict the check gave on its own: the text it
     // restores stands as verified, or the next day's check would give the same
@@ -4804,6 +5121,62 @@ fn count_state(
         params![project_id, state],
         |row| row.get::<_, u64>(0),
     )? as usize)
+}
+
+/// The card a full Project forgets for a new one: never used first (oldest
+/// written first), then the least recently used, then by number. A card a
+/// person made or settled is never chosen: one added by hand
+/// ([`crate::HAND_ADDED_PROVIDER`]), a confirmed correction (its current
+/// revision's comparison says the card is newer), or one with a promotion
+/// that settles it ([`PromotionState::settles_card`]). Neither is a card this batch wrote to or one
+/// in `named`.
+fn evictable(
+    connection: &Connection,
+    project_id: &str,
+    batch_id: &str,
+    named: &HashSet<String>,
+) -> Result<Option<(String, u64)>, MemoryError> {
+    let unsettled = PROMOTION_STATES
+        .iter()
+        .filter(|state| !state.settles_card())
+        .map(|state| format!("'{}'", state.as_str()))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut statement = connection.prepare(&format!(
+        "SELECT i.id,i.number FROM memory_items i WHERE i.project_id=?1 AND i.lifecycle!='tombstoned' \
+         AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer') \
+         AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.state NOT IN({unsettled})) \
+         AND NOT EXISTS(SELECT 1 FROM memory_sources s WHERE s.item_id=i.id AND s.provider=?4) \
+         AND NOT EXISTS(SELECT 1 FROM memory_revisions r WHERE r.item_id=i.id AND r.batch_id=?2) \
+         ORDER BY i.last_used_at_ms IS NOT NULL,i.last_used_at_ms,i.created_at_ms,i.number LIMIT ?3",
+    ))?;
+    let rows = statement
+        .query_map(
+            params![
+                project_id,
+                batch_id,
+                named.len() as u64 + 1,
+                crate::HAND_ADDED_PROVIDER
+            ],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows.into_iter().find(|(id, _)| !named.contains(id)))
+}
+
+/// Removes the oldest cards forgotten to make room past `limit`, with their
+/// revisions, sources and evidence, so a full Project stays bounded; the
+/// newest stay for Undo. Answers how many went.
+fn purge_evicted(
+    connection: &Connection,
+    project_id: &str,
+    limit: usize,
+) -> Result<usize, MemoryError> {
+    Ok(connection.execute(
+        "DELETE FROM memory_items WHERE id IN (SELECT i.id FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
+         WHERE i.project_id=?1 AND i.lifecycle='tombstoned' AND r.batch_id LIKE 'evict:%' ORDER BY r.created_at_ms DESC,i.number DESC LIMIT -1 OFFSET ?2)",
+        params![project_id, limit as u64],
+    )?)
 }
 
 fn count_live(connection: &Connection, project_id: &str) -> Result<usize, MemoryError> {
@@ -5660,7 +6033,10 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
                 RetrievalQuery::session_start(&project),
                 RetrievalQuery::prompt(&project, "run lint before tests", vec![]),
             ] {
-                assert!(store.retrieve(&query).unwrap().items.is_empty());
+                assert_eq!(
+                    store.retrieve(&query).unwrap().items.is_empty(),
+                    authority != crate::DocumentAuthority::CardNewer
+                );
             }
         }
         store
@@ -5919,18 +6295,481 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             .unwrap();
         assert_eq!(superseded.superseded, 1);
 
-        let rejected = store
+        let grown = store
             .apply_candidates_with_limit(
                 &batch(&project, "b4", "h4"),
                 &[candidate("A second item", CandidateRelation::New)],
                 1,
             )
             .unwrap();
-        assert_eq!(rejected.capacity_rejections, 1);
-        assert_eq!(store.list_memories(&project).unwrap().len(), 1);
+        assert_eq!((grown.created, grown.evicted.as_slice()), (1, &[1][..]));
+        let live = store.list_memories(&project).unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].body, "A second item");
+    }
+
+    #[test]
+    fn a_full_project_forgets_its_least_recently_used_card_for_a_new_one_and_can_take_it_back() {
+        let (_temp, mut store, project) = store();
+        for (name, text) in [("b1", "Card one"), ("b2", "Card two"), ("b3", "Card three")] {
+            store
+                .apply_candidates(
+                    &batch(&project, name, name),
+                    &[candidate(text, CandidateRelation::New)],
+                )
+                .unwrap();
+        }
+        // m1 was given to a session; m2 and m3 never were, and m2 is older.
+        store.show(&project, 1, None, 50).unwrap();
+        let full = store
+            .apply_candidates_with_limit(
+                &batch(&project, "b4", "b4"),
+                &[candidate("Card four", CandidateRelation::New)],
+                3,
+            )
+            .unwrap();
+        assert_eq!((full.created, full.capacity_rejections), (1, 0));
+        assert_eq!(full.evicted, [2], "a card never used goes first");
+        let numbers = |store: &MemoryStore| {
+            store
+                .list_memories(&project)
+                .unwrap()
+                .iter()
+                .map(|item| item.number)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(numbers(&store), [1, 3, 4]);
+        let state = store.project_state_limited(&project, 3).unwrap();
+        assert_eq!((state.capacity_reached, state.evicted_count), (false, 1));
+
+        let back = store.undo_card(&project, 2).unwrap().unwrap();
+        assert_eq!(back.lifecycle, MemoryLifecycle::Active);
+        assert_eq!(store.project_state(&project).unwrap().evicted_count, 0);
+        let next = store
+            .apply_candidates_with_limit(
+                &batch(&project, "b5", "b5"),
+                &[candidate("Card five", CandidateRelation::New)],
+                4,
+            )
+            .unwrap();
         assert_eq!(
-            store.list_memories(&project).unwrap()[0].body,
-            "Keep the corrected bounded rule"
+            next.evicted,
+            [3],
+            "a card the operator brought back counts as used, so it is not the next to go"
+        );
+    }
+
+    #[test]
+    fn cleared_cards_are_counted_until_seen_and_again_only_when_more_are_cleared() {
+        let (_temp, mut store, project) = store();
+        for (name, text) in [("b1", "Card one"), ("b2", "Card two")] {
+            store
+                .apply_candidates(
+                    &batch(&project, name, name),
+                    &[candidate(text, CandidateRelation::New)],
+                )
+                .unwrap();
+        }
+        let grow = |store: &mut MemoryStore, name: &str| {
+            store
+                .apply_candidates_with_limit(
+                    &batch(&project, name, name),
+                    &[candidate(name, CandidateRelation::New)],
+                    2,
+                )
+                .unwrap()
+        };
+        grow(&mut store, "Card three");
+        // The first card was cleared a second ago, so the next one is newer.
+        store
+            .connection
+            .execute(
+                "UPDATE memory_revisions SET created_at_ms=created_at_ms-1000 WHERE batch_id LIKE 'evict:%'",
+                [],
+            )
+            .unwrap();
+        let state = store.project_state(&project).unwrap();
+        assert_eq!(state.evicted_count, 1);
+        let through = state.evicted_through_unix_ms.unwrap();
+        store.mark_evictions_seen(&project, through).unwrap();
+        let seen = store.project_state(&project).unwrap();
+        assert_eq!(
+            (seen.evicted_count, seen.evicted_through_unix_ms),
+            (0, None)
+        );
+        // A marker from before is never moved back, and one from the future
+        // is read as the newest card's, so a card cleared later still counts.
+        store.mark_evictions_seen(&project, through - 1).unwrap();
+        assert_eq!(store.project_state(&project).unwrap().evicted_count, 0);
+        store.mark_evictions_seen(&project, u64::MAX / 2).unwrap();
+
+        grow(&mut store, "Card four");
+        assert_eq!(
+            store.project_state(&project).unwrap().evicted_count,
+            1,
+            "only the card cleared after the operator saw the line is counted"
+        );
+    }
+
+    #[test]
+    fn a_version_sixteen_store_gains_failure_counts_and_eviction_marks_in_one_step() {
+        let (temp, store, project) = store();
+        drop(store);
+        let path = temp.path().join("memory.sqlite3");
+        let connection = Connection::open(&path).unwrap();
+        let triggers: Vec<String> = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'memory_projection_%'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        for trigger in triggers {
+            connection
+                .execute_batch(&format!("DROP TRIGGER {trigger};"))
+                .unwrap();
+        }
+        connection
+            .execute_batch(
+                "DROP TABLE input_failures; DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals; DROP TABLE memory_projection_state; DROP TABLE correction_checks; DROP TABLE memory_contexts; DROP TABLE receipt_contexts; DROP TABLE analysis_schedule; ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; ALTER TABLE projects DROP COLUMN answered_at_ms; PRAGMA user_version=16;",
+            )
+            .unwrap();
+        drop(connection);
+        let store = MemoryStore::open(&path).unwrap();
+        let version: i64 = store
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(
+            store
+                .record_input_failure(&project, "s", "a", InputFailure::Unanswered, 10)
+                .unwrap(),
+            Some(1)
+        );
+        store.input_answered(&project, "other", 20).unwrap();
+        store.mark_evictions_seen(&project, 5).unwrap();
+        assert_eq!(store.project_state(&project).unwrap().evicted_count, 0);
+    }
+
+    #[test]
+    fn a_store_an_earlier_build_of_this_schema_opened_is_refused() {
+        // Schemas 17 to 19 were only ever written by unreleased builds, each
+        // with another shape: such a store is refused, not misread.
+        for earlier in 17..=19 {
+            let (temp, store, _project) = store();
+            drop(store);
+            let path = temp.path().join("memory.sqlite3");
+            Connection::open(&path)
+                .unwrap()
+                .pragma_update(None, "user_version", earlier)
+                .unwrap();
+            assert!(
+                matches!(
+                    MemoryStore::open(&path),
+                    Err(MemoryError::WrongSchema { found, expected: SCHEMA_VERSION }) if found == earlier
+                ),
+                "schema {earlier}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_full_project_keeps_only_its_newest_cleared_cards() {
+        let (_temp, mut store, project) = store();
+        store
+            .apply_candidates(
+                &batch(&project, "b0", "b0"),
+                &[candidate("Card zero", CandidateRelation::New)],
+            )
+            .unwrap();
+        let mut purged = 0;
+        for index in 1..=4 {
+            let name = format!("Card {index}");
+            purged += store
+                .apply_candidates_with_limits(
+                    &batch(&project, &name, &name),
+                    &[candidate(&name, CandidateRelation::New)],
+                    1,
+                    2,
+                )
+                .unwrap()
+                .evictions_purged;
+        }
+        assert_eq!(purged, 2);
+        let kept: Vec<u64> = store
+            .connection
+            .prepare("SELECT number FROM memory_items ORDER BY number")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            kept,
+            [3, 4, 5],
+            "the two newest cleared cards and the live one"
+        );
+        assert!(
+            store.undo_card(&project, 1).unwrap().is_none(),
+            "a removed card has nothing to undo"
+        );
+        assert!(store.connection.query_row(
+            "SELECT NOT EXISTS(SELECT 1 FROM memory_revisions r LEFT JOIN memory_items i ON i.id=r.item_id WHERE i.id IS NULL)",
+            [],
+            |row| row.get::<_, bool>(0),
+        ).unwrap(), "its revisions go with it");
+    }
+
+    #[test]
+    fn a_card_added_by_hand_is_never_cleared_and_a_dismissed_promotion_protects_nothing() {
+        let (_temp, mut store, project) = store();
+        store
+            .apply_candidates(
+                &AnalysisBatch {
+                    provider: crate::HAND_ADDED_PROVIDER.to_owned(),
+                    ..batch(&project, "added", "added")
+                },
+                &[candidate("Card one, added by hand", CandidateRelation::New)],
+            )
+            .unwrap();
+        for (name, text) in [("b2", "Card two"), ("b3", "Card three")] {
+            store
+                .apply_candidates(
+                    &batch(&project, name, name),
+                    &[candidate(text, CandidateRelation::New)],
+                )
+                .unwrap();
+        }
+        store
+            .set_promotion(
+                &project,
+                2,
+                &Promotion {
+                    state: PromotionState::Dismissed,
+                    ..running(1, "agent-7")
+                },
+            )
+            .unwrap();
+        let evicted = |store: &mut MemoryStore, name: &str| {
+            store
+                .apply_candidates_with_limit(
+                    &batch(&project, name, name),
+                    &[candidate(name, CandidateRelation::New)],
+                    3,
+                )
+                .unwrap()
+                .evicted
+        };
+        assert_eq!(evicted(&mut store, "Card four"), [2]);
+        assert_eq!(evicted(&mut store, "Card five"), [3]);
+        assert_eq!(
+            evicted(&mut store, "Card six"),
+            [4],
+            "the oldest card is the one added by hand, and it stays"
+        );
+    }
+
+    #[test]
+    fn a_card_whose_promotion_waits_on_the_operator_is_never_cleared() {
+        let (_temp, mut store, project) = store();
+        for (name, text) in [("b1", "Card one"), ("b2", "Card two"), ("b3", "Card three")] {
+            store
+                .apply_candidates(
+                    &batch(&project, name, name),
+                    &[candidate(text, CandidateRelation::New)],
+                )
+                .unwrap();
+        }
+        store
+            .set_promotion(
+                &project,
+                1,
+                &Promotion {
+                    state: PromotionState::Unbuilt,
+                    ..running(1, "agent-7")
+                },
+            )
+            .unwrap();
+        let evicted = store
+            .apply_candidates_with_limit(
+                &batch(&project, "b4", "b4"),
+                &[candidate("Card four", CandidateRelation::New)],
+                3,
+            )
+            .unwrap()
+            .evicted;
+        assert_eq!(
+            evicted,
+            [2],
+            "the oldest card waits on the operator, so it stays"
+        );
+    }
+
+    #[test]
+    fn every_promotion_state_the_store_accepts_is_one_the_eviction_decides() {
+        let check = SCHEMA
+            .split("CREATE TABLE card_promotions(")
+            .nth(1)
+            .and_then(|table| table.split("CHECK(state IN(").nth(1))
+            .and_then(|states| states.split(')').next())
+            .unwrap();
+        let stored: Vec<_> = check
+            .split(',')
+            .map(|state| PromotionState::parse(state.trim_matches('\'')).unwrap())
+            .collect();
+        assert_eq!(stored, PROMOTION_STATES);
+        let unsettled: Vec<_> = PROMOTION_STATES
+            .into_iter()
+            .filter(|state| !state.settles_card())
+            .collect();
+        assert_eq!(
+            unsettled,
+            [
+                PromotionState::Dismissed,
+                PromotionState::ClosedUnmerged,
+                PromotionState::Failed,
+                PromotionState::Outdated
+            ]
+        );
+    }
+    #[test]
+    fn the_prompt_hook_reads_none_of_the_memory_tabs_counts() {
+        // A full Project stays full, so the hook must not sort its cards or
+        // scan its forgotten ones on every prompt: a read of what only the
+        // Memory tab's counts use refuses to prepare.
+        let (_temp, mut store, project) = store();
+        store
+            .apply_candidates(
+                &batch(&project, "b1", "b1"),
+                &[candidate(
+                    "Run the linter before a merge",
+                    CandidateRelation::New,
+                )],
+            )
+            .unwrap();
+        let card = store.list_memories(&project).unwrap().remove(0);
+        store
+            .confirm_card(&card.id, card.revision, None, &[], 1)
+            .unwrap();
+        store.connection.authorizer(Some(
+            |context: rusqlite::hooks::AuthContext<'_>| match context.action {
+                rusqlite::hooks::AuthAction::Read {
+                    table_name,
+                    column_name,
+                } if (table_name == "projects" && column_name == "evictions_seen_at_ms")
+                    || (table_name == "memory_items" && column_name == "last_used_at_ms")
+                    || (table_name == "memory_revisions" && column_name == "batch_id") =>
+                {
+                    rusqlite::hooks::Authorization::Deny
+                }
+                _ => rusqlite::hooks::Authorization::Allow,
+            },
+        ));
+        let injection = store
+            .retrieve_with_expiry(
+                &RetrievalQuery {
+                    project_id: project.clone(),
+                    kind: InjectionKind::Bodies,
+                    text: "linter merge".into(),
+                    excluded_memory_ids: Vec::new(),
+                    maximum_items: 3,
+                    maximum_tokens: 1_200,
+                    deadline: Duration::from_secs(5),
+                },
+                || false,
+            )
+            .unwrap();
+        assert_eq!(injection.items.len(), 1);
+        assert!(
+            store.project_state(&project).is_err(),
+            "the tab's counts do read them"
+        );
+    }
+
+    #[test]
+    fn a_forgotten_card_does_not_come_back_past_the_card_limit() {
+        let (_temp, mut store, project) = store();
+        for (name, text) in [("b1", "Card one"), ("b2", "Card two")] {
+            store
+                .apply_candidates(
+                    &batch(&project, name, name),
+                    &[candidate(text, CandidateRelation::New)],
+                )
+                .unwrap();
+        }
+        let full = store
+            .apply_candidates_with_limit(
+                &batch(&project, "b3", "b3"),
+                &[candidate("Card three", CandidateRelation::New)],
+                2,
+            )
+            .unwrap();
+        assert_eq!(full.evicted, [1]);
+        assert!(matches!(
+            store.undo_card_limited(&project, 1, 2),
+            Err(MemoryError::Full)
+        ));
+        let card = store.item_by_number(&project, 1).unwrap().unwrap();
+        assert_eq!(card.lifecycle, MemoryLifecycle::Tombstoned);
+        assert_eq!(store.list_memories(&project).unwrap().len(), 2);
+
+        let other = store.item_by_number(&project, 2).unwrap().unwrap();
+        store.forget(&project, &other.id).unwrap();
+        let back = store.undo_card_limited(&project, 1, 2).unwrap().unwrap();
+        assert_eq!(back.lifecycle, MemoryLifecycle::Active);
+        assert_eq!(
+            store
+                .undo_card_limited(&project, 3, 2)
+                .unwrap()
+                .unwrap()
+                .lifecycle,
+            MemoryLifecycle::Tombstoned,
+            "an undo that removes a card is never refused"
+        );
+    }
+
+    #[test]
+    fn a_full_project_never_forgets_a_card_a_person_settled_and_refuses_when_only_those_remain() {
+        let (_temp, mut store, project) = store();
+        for (name, text) in [("b1", "Card one"), ("b2", "Card two")] {
+            store
+                .apply_candidates(
+                    &batch(&project, name, name),
+                    &[candidate(text, CandidateRelation::New)],
+                )
+                .unwrap();
+        }
+        let comparison = crate::DocumentComparison {
+            authority: crate::DocumentAuthority::CardNewer,
+            document: "AGENTS.md".into(),
+            document_text: "Card zero".into(),
+            document_at_unix_ms: None,
+            operator_text: "Card one".into(),
+            operator_at_unix_ms: Some(20),
+            source_session: None,
+        };
+        store
+            .set_document_comparison(&project, 1, 1, &comparison)
+            .unwrap();
+        store
+            .set_promotion(&project, 2, &running(1, "agent-7"))
+            .unwrap();
+        let refused = store
+            .apply_candidates_with_limit(
+                &batch(&project, "b3", "b3"),
+                &[candidate("Card three", CandidateRelation::New)],
+                2,
+            )
+            .unwrap();
+        assert_eq!((refused.created, refused.capacity_rejections), (0, 1));
+        assert!(refused.evicted.is_empty());
+        assert_eq!(store.list_memories(&project).unwrap().len(), 2);
+        let state = store.project_state_limited(&project, 2).unwrap();
+        assert_eq!(
+            (state.capacity_reached, state.evicted_count),
+            (true, 0),
+            "the Memory tab says full only when nothing can make room"
         );
     }
 
@@ -6097,7 +6936,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
     #[test]
     fn a_rule_is_suggested_for_the_repository_by_sessions_not_by_repeats_and_only_once_checked() {
         // D-09, D-10, D-11, B12-B14: the operator's words in two different
-        // sessions, or reads from three in 14 days; rules and lessons only; a
+        // sessions, or reads from three in 14 days; rules, lessons and decisions; a
         // dismissal holds until the card's text moves.
         let (_temp, mut store, project) = store();
         let now = 30 * 86_400_000;
@@ -6171,11 +7010,11 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
         assert_eq!(
             suggested(&store),
             [1],
-            "a decision and a fact are never suggested"
+            "a decision without enough provenance and a fact are not suggested"
         );
 
-        // Reads from three sessions, one of them older than the window; a
-        // decision is never suggested however often it is read.
+        // Reads from three recent sessions qualify a durable decision too;
+        // it still passes the same background promotion check first.
         for (session, at) in [
             ("a", now),
             ("b", now - 1),
@@ -6186,7 +7025,29 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
                 .record_receipt(&project, "codex", session, "show", "m2@1", at)
                 .unwrap();
         }
-        assert_eq!(suggested(&store), [1]);
+        assert_eq!(unchecked(&store), [2]);
+        assert!(store.mark_promotion_checked(&project, 2, 1).unwrap());
+        assert_eq!(suggested(&store), [1, 2]);
+        store
+            .set_promotion(
+                &project,
+                2,
+                &Promotion {
+                    state: PromotionState::Dismissed,
+                    revision: 1,
+                    attempt: 0,
+                    agent_id: None,
+                    branch: None,
+                    pr_number: None,
+                    repository: None,
+                    target_path: None,
+                    started_at_unix_ms: now,
+                    updated_at_unix_ms: now,
+                    failure: None,
+                    building_branch: None,
+                },
+            )
+            .unwrap();
 
         let dismissed = |revision| Promotion {
             state: PromotionState::Dismissed,
@@ -6259,6 +7120,70 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             .into_iter()
             .map(|item| item.text)
             .collect()
+    }
+
+    #[test]
+    fn an_enduring_correction_revises_the_card_and_keeps_authority_when_document_evidence_moves() {
+        let (temp, mut store, project) = store();
+        store
+            .apply_candidates(
+                &batch(&project, "before", "before"),
+                &[candidate(
+                    "Run tests with the ordinary runner",
+                    CandidateRelation::New,
+                )],
+            )
+            .unwrap();
+        let old = store.item_by_number(&project, 1).unwrap().unwrap();
+        let comparison = crate::DocumentComparison {
+            authority: crate::DocumentAuthority::CardNewer,
+            document: "AGENTS.md".into(),
+            document_text: "Run tests with the ordinary runner".into(),
+            document_at_unix_ms: Some(100),
+            operator_at_unix_ms: Some(10),
+            operator_text: "앞으로 테스트는 nextest로 실행해 주세요.".into(),
+            source_session: Some("human".into()),
+        };
+        store
+            .apply_candidates_with(
+                &batch(&project, "correction", "correction"),
+                &[candidate(
+                    "Run tests with nextest",
+                    CandidateRelation::Supersedes { target_id: old.id },
+                )],
+                &ApplyOptions {
+                    reverify_superseded: true,
+                    evidence: vec![vec![evidence(
+                        EvidenceKind::File,
+                        "AGENTS.md",
+                        Some("old-file-hash"),
+                        true,
+                    )]],
+                    document_comparisons: vec![Some(comparison.clone())],
+                    ..ApplyOptions::default()
+                },
+            )
+            .unwrap();
+        drop(store);
+        let store = MemoryStore::open(&temp.path().join("memory.sqlite3")).unwrap();
+        assert_eq!(
+            store.item_by_number(&project, 1).unwrap().unwrap().revision,
+            2
+        );
+        assert_eq!(
+            store.document_comparison(&project, 1).unwrap(),
+            Some(comparison)
+        );
+        assert!(
+            store
+                .cards_to_check(&project, i64::MAX as u64, 8)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(given(&store, &project, "nextest")[0].contains("Run tests with nextest"));
+        assert!(
+            given(&store, &project, "nextest")[0].contains("Pending document update: AGENTS.md")
+        );
     }
 
     #[test]
@@ -6521,7 +7446,197 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
     }
 
     #[test]
-    fn a_session_makes_two_new_cards_in_all_and_forgetting_one_makes_no_room() {
+    fn fair_analysis_survives_reopen_and_new_arrivals_across_projects() {
+        let (temp, store, first) = store();
+        let second = "project:other";
+        store
+            .ensure_project(second, &temp.path().join("other"), "local")
+            .unwrap();
+        store.set_enabled(second, true, true).unwrap();
+        let stable = [
+            (first.as_str(), "old-a"),
+            (second, "old-b"),
+            (first.as_str(), "old-c"),
+        ];
+        for (project, session) in stable {
+            store
+                .enqueue_analysis(project, "claude", session, 1)
+                .unwrap();
+        }
+        store
+            .save_analysis_progress(&first, "claude", "old-a", 10, 4, &["held-card".into()])
+            .unwrap();
+        drop(store);
+        let mut store = MemoryStore::open(&temp.path().join("memory.sqlite3")).unwrap();
+        assert_eq!(
+            store
+                .analysis_progress(&first, "claude", "old-a", 10)
+                .unwrap(),
+            (4, vec!["held-card".into()])
+        );
+        assert_eq!(
+            store
+                .analysis_progress(&first, "claude", "old-a", 11)
+                .unwrap(),
+            (0, vec![])
+        );
+        let mut seen = HashSet::new();
+        for turn in 0..6 {
+            store
+                .enqueue_analysis(second, "codex", &format!("arrival-{turn}"), 100 + turn)
+                .unwrap();
+            let (project, provider, session) = store.analysis_order().unwrap().remove(0);
+            // A paused pass is a read and cannot advance the persistent round.
+            assert_eq!(
+                store.analysis_order().unwrap()[0],
+                (project.clone(), provider.clone(), session.clone())
+            );
+            if session.starts_with("old-") {
+                seen.insert(session.clone());
+            }
+            store
+                .finish_analysis_turn(&project, &provider, &session, true)
+                .unwrap();
+        }
+        assert_eq!(
+            seen,
+            ["old-a".into(), "old-b".into(), "old-c".into()].into()
+        );
+    }
+
+    #[test]
+    fn input_failures_count_in_a_row_per_kind_and_start_again_on_change_success_or_a_day() {
+        let (_temp, store, project) = store();
+        let record = |input: &str, kind, now| {
+            store
+                .record_input_failure(&project, "s", input, kind, now)
+                .unwrap()
+        };
+        assert_eq!(record("a", InputFailure::Unusable, 10), Some(1));
+        assert_eq!(record("a", InputFailure::Unusable, 15), Some(2));
+        assert_eq!(record("a", InputFailure::Unanswered, 20), Some(1));
+        assert_eq!(
+            record("a", InputFailure::Unusable, 30),
+            Some(1),
+            "a failure of the other kind breaks the row"
+        );
+        // The provider answers elsewhere, so an unanswered request would
+        // count on from an unbroken row.
+        store.input_answered(&project, "other", 31).unwrap();
+        assert_eq!(
+            record("a", InputFailure::Unanswered, 32),
+            Some(1),
+            "an unusable answer breaks a row of unanswered ones"
+        );
+        assert_eq!(
+            record("b", InputFailure::Unusable, 40),
+            Some(1),
+            "a changed input"
+        );
+        store.input_answered(&project, "s", 45).unwrap();
+        assert_eq!(
+            record("b", InputFailure::Unusable, 50),
+            Some(1),
+            "after a success"
+        );
+        let later = 50 + crate::INPUT_FAILURE_WINDOW_MS + 1;
+        assert_eq!(
+            record("b", InputFailure::Unusable, later),
+            Some(1),
+            "a day apart"
+        );
+    }
+
+    #[test]
+    fn a_request_never_answered_counts_again_only_after_the_provider_answered_the_project() {
+        let (_temp, store, project) = store();
+        let timeout = |now| {
+            store
+                .record_input_failure(&project, "s", "a", InputFailure::Unanswered, now)
+                .unwrap()
+        };
+        assert_eq!(timeout(10), Some(1));
+        assert_eq!(timeout(20), Some(1), "an outage: nothing answered since");
+        assert_eq!(timeout(30), Some(1));
+        store.input_answered(&project, "other", 35).unwrap();
+        assert_eq!(timeout(40), Some(2), "another input was answered between");
+        assert_eq!(timeout(50), Some(2));
+    }
+
+    #[test]
+    fn a_full_input_failure_table_counts_nothing_new_and_prunes_a_day_old_rows() {
+        let (_temp, store, project) = store();
+        store
+            .connection
+            .execute(
+                "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<19999) INSERT INTO input_failures SELECT ?1,'old'||i,'x',1,0,5 FROM n",
+                [&project],
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .record_input_failure(&project, "new", "x", InputFailure::Unusable, 10)
+                .unwrap(),
+            None,
+            "past the cap a failure is reported as uncounted, never an error"
+        );
+        let later = 5 + crate::INPUT_FAILURE_WINDOW_MS + 1;
+        assert_eq!(
+            store
+                .record_input_failure(&project, "new", "x", InputFailure::Unusable, later)
+                .unwrap(),
+            Some(1),
+            "rows a day old are pruned"
+        );
+    }
+
+    #[test]
+    fn a_full_project_never_forgets_a_card_its_batch_names_and_commits_the_rest() {
+        let (_temp, mut store, project) = store();
+        store
+            .apply_candidates(
+                &batch(&project, "seed", "seed"),
+                &[candidate(
+                    "Keep the first significant choice",
+                    CandidateRelation::New,
+                )],
+            )
+            .unwrap();
+        let id = store.list_memories(&project).unwrap()[0].id.clone();
+        let batch = batch(&project, "capacity-mixed", "content");
+        let cards = [
+            candidate("A new item beyond capacity", CandidateRelation::New),
+            candidate(
+                "Keep the first significant choice",
+                CandidateRelation::Same {
+                    target_id: id.clone(),
+                },
+            ),
+            candidate(
+                "Keep the corrected significant choice",
+                CandidateRelation::Supersedes { target_id: id },
+            ),
+        ];
+        let result = store
+            .apply_candidates_with_limit(&batch, &cards, 1)
+            .unwrap();
+        assert_eq!(result.capacity_rejections, 1);
+        assert_eq!(result.merged_sources, 1);
+        assert_eq!(result.superseded, 1);
+        assert!(store.has_batch(&batch.id).unwrap());
+        let items = store.list_memories(&project).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].body, "Keep the corrected significant choice");
+        assert!(
+            store
+                .apply_candidates_with_limit(&batch, &cards, 1)
+                .unwrap()
+                .duplicate_batch
+        );
+    }
+
+    #[test]
+    fn later_groups_remain_eligible_after_the_per_group_significance_limit() {
         // D-02, B1; `hide memory add` is not limited.
         let (_temp, mut store, project) = store();
         let limited = ApplyOptions {
@@ -6547,7 +7662,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             .unwrap();
         assert_eq!((first.created, first.session_limited), (2, 1));
         assert_eq!(first.outcomes[2], CandidateOutcome::SessionLimit);
-        // A later group of the same session is held to the same two.
+        // Later decisions in the same conversation have their own admission.
         let later = store
             .apply_candidates_with(
                 &sourced_batch(&project, "b2", "s1"),
@@ -6555,8 +7670,8 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
                 &limited,
             )
             .unwrap();
-        assert_eq!((later.created, later.session_limited), (0, 2));
-        // Forgetting a card does not give the session another.
+        assert_eq!((later.created, later.session_limited), (2, 0));
+        // Forgetting preserves history without blocking later decisions.
         let card = store.item_by_number(&project, 1).unwrap().unwrap();
         store.forget(&project, &card.id).unwrap();
         let after = store
@@ -6566,7 +7681,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
                 &limited,
             )
             .unwrap();
-        assert_eq!(after.created, 0);
+        assert_eq!(after.created, 2);
         // Another session, and an unlimited write, are not held.
         let other = store
             .apply_candidates_with(
@@ -6835,6 +7950,23 @@ PRAGMA user_version=14;"#,
                 )],
             )
             .unwrap();
+        let before = store.detail(&project, &card.id).unwrap();
+        assert_eq!(before.sources.len(), 2);
+        let comparison = crate::DocumentComparison {
+            authority: crate::DocumentAuthority::CardNewer,
+            document: "AGENTS.md".into(),
+            document_text: "Run tests before lint".into(),
+            document_at_unix_ms: None,
+            operator_text: "Run the linter first".into(),
+            operator_at_unix_ms: Some(20),
+            source_session: Some("other-session".into()),
+        };
+        store
+            .set_document_comparison(&project, 1, 1, &comparison)
+            .unwrap();
+        store
+            .record_correction_check(&project, 1, 1, "unchanged-doc", 30)
+            .unwrap();
         let attempt = running(1, "agent-7");
         store.set_promotion(&project, 1, &attempt).unwrap();
         store.mark_promotion_checked(&project, 1, 1).unwrap();
@@ -6847,6 +7979,11 @@ PRAGMA user_version=14;"#,
             !store
                 .mark_outdated(&project, 1, &running(2, "agent-7"), "stale", 50)
                 .unwrap()
+        );
+        assert_eq!(
+            store.document_comparison(&project, 1).unwrap(),
+            Some(comparison.clone()),
+            "a refused report cannot revoke the confirmed comparison"
         );
         assert!(
             !store
@@ -6886,8 +8023,16 @@ PRAGMA user_version=14;"#,
             given(&store, &project, "linter first"),
             Vec::<String>::new()
         );
+        assert!(
+            store.document_comparison(&project, 1).unwrap().is_none(),
+            "the accepted outdated claim must allow fresh verification"
+        );
         let waiting = store.pending_cards(&project, 100_000_000, 8).unwrap();
         assert_eq!(waiting[0].outdated_reason.as_deref(), Some("stale"));
+        assert_eq!(waiting[0].body, "Run the linter first");
+        let after = store.detail(&project, &card.id).unwrap();
+        assert_eq!(after.sources, before.sources);
+        assert_eq!(after.evidence, before.evidence);
         // Verified again, the card is checked again before it is suggested.
         // A claim made after the check read the card was never judged.
         assert!(
@@ -6922,6 +8067,14 @@ PRAGMA user_version=14;"#,
                 .promotion_unchecked(&project, 70, 3)
                 .unwrap()
                 .is_empty()
+        );
+        store
+            .set_document_comparison(&project, 1, 1, &comparison)
+            .unwrap();
+        assert_eq!(
+            store.correction_checks(&project, 4).unwrap()[0].fingerprint,
+            None,
+            "a fresh comparison must not inherit the prior document check"
         );
     }
 
@@ -7007,7 +8160,7 @@ PRAGMA user_version=14;"#,
     /// B19: every branch whose pull request ended is found once, whatever
     /// the card's current revision, and an attempt still open or failed is not.
     #[test]
-    fn settled_branches_lists_each_ended_branch_once() {
+    fn retirement_branches_lists_each_ended_branch_once() {
         let (temp, mut store, project) = store();
         for (index, text) in ["Run the linter first", "Name the tests by result"]
             .into_iter()
@@ -7041,12 +8194,13 @@ PRAGMA user_version=14;"#,
             .set_promotion(&project, 1, &row(PromotionState::Merged, Some("b-1")))
             .unwrap();
         assert_eq!(
-            store.settled_branches("local").unwrap(),
+            store.retirement_branches("local").unwrap(),
             [(
                 project.clone(),
                 temp.path().to_string_lossy().into_owned(),
                 "b-1".to_owned(),
-                vec!["agent-7".to_owned()]
+                vec!["agent-7".to_owned()],
+                false
             )]
         );
         // A batch's cards share one branch; an open or failed attempt, or one
@@ -7058,13 +8212,13 @@ PRAGMA user_version=14;"#,
                 &row(PromotionState::ClosedUnmerged, Some("b-1")),
             )
             .unwrap();
-        assert_eq!(store.settled_branches("local").unwrap().len(), 1);
+        assert_eq!(store.retirement_branches("local").unwrap().len(), 1);
         for state in [PromotionState::PrOpen, PromotionState::Failed] {
             store
                 .set_promotion(&project, 2, &row(state, Some("b-2")))
                 .unwrap();
             assert_eq!(
-                store.settled_branches("local").unwrap().len(),
+                store.retirement_branches("local").unwrap().len(),
                 1,
                 "{state:?}"
             );
@@ -7072,8 +8226,45 @@ PRAGMA user_version=14;"#,
         store
             .set_promotion(&project, 2, &row(PromotionState::Merged, None))
             .unwrap();
-        assert_eq!(store.settled_branches("local").unwrap().len(), 1);
-        assert_eq!(store.settled_branches("elsewhere").unwrap(), []);
+        assert_eq!(store.retirement_branches("local").unwrap().len(), 1);
+        assert_eq!(store.retirement_branches("elsewhere").unwrap(), []);
+        store
+            .set_promotion(&project, 2, &row(PromotionState::Outdated, Some("b-1")))
+            .unwrap();
+        let branches = store.retirement_branches("local").unwrap();
+        assert_eq!(
+            branches.len(),
+            1,
+            "one branch shared by an outdated and merged card"
+        );
+        assert!(
+            branches[0].4,
+            "the outdated card protects the branch's commits"
+        );
+        assert!(
+            store
+                .branch_has_outdated_promotion(&project, "b-1")
+                .unwrap()
+        );
+        assert!(!store.branch_has_outdated_promotion("other", "b-1").unwrap());
+        store
+            .set_promotion(&project, 2, &row(PromotionState::Merged, Some("b-1")))
+            .unwrap();
+        assert!(
+            !store
+                .branch_has_outdated_promotion(&project, "b-1")
+                .unwrap()
+        );
+        store
+            .set_promotion(&project, 2, &row(PromotionState::Outdated, Some("b-1")))
+            .unwrap();
+        drop(store);
+        let store = MemoryStore::open_read_only(&temp.path().join("memory.sqlite3")).unwrap();
+        assert_eq!(
+            store.retirement_branches("local").unwrap(),
+            branches,
+            "restart finds unfinished cleanup"
+        );
     }
 
     #[test]
@@ -7412,6 +8603,7 @@ PRAGMA user_version=14;"#,
                         .to_owned(),
                 }],
                 token_count: 7,
+                matched: 0,
             }
             .context()
             .unwrap();
@@ -7686,6 +8878,61 @@ PRAGMA user_version=14;"#,
     }
 
     #[test]
+    fn retry_caches_redact_metadata_and_reopen_as_typed_payloads() {
+        let (temp, store, project) = store();
+        let secret = "sk-ant-api03-syntheticcredentialvalue12345678901234567890";
+        let mut card = candidate("Keep durable provenance", CandidateRelation::New);
+        card.title = format!("credential={secret}\" title");
+        card.aliases = vec![secret.to_owned()];
+        card.cited_paths = vec![format!("docs/{secret}.md")];
+        let output = crate::engine::AnalysisOutput {
+            candidates: vec![card.clone()],
+            backfill: vec![crate::engine::AliasBackfill {
+                target_id: "one".into(),
+                title: secret.into(),
+                aliases: vec![secret.into()],
+            }],
+            secret_rejected: 0,
+        };
+        store
+            .save_analysis_proposal("cache", &project, "test", &output)
+            .unwrap();
+        store
+            .prepare_analysis("cache", &[card], &ApplyOptions::default())
+            .unwrap();
+        let stored: (String, String) = store
+            .connection
+            .query_row(
+                "SELECT output,prepared FROM analysis_proposals WHERE batch_id='cache'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(!stored.0.contains(secret) && !stored.1.contains(secret));
+        drop(store);
+        let reopened = MemoryStore::open(&temp.path().join("memory.sqlite3")).unwrap();
+        assert_eq!(
+            reopened
+                .analysis_proposal("cache")
+                .unwrap()
+                .unwrap()
+                .1
+                .candidates
+                .len(),
+            1
+        );
+        assert_eq!(
+            reopened
+                .prepared_analysis("cache")
+                .unwrap()
+                .unwrap()
+                .0
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn retrieval_honors_the_consumed_invocation_deadline_without_restarting_it() {
         let (_temp, mut store, project) = store();
         let body = "Keep the caller-owned deadline";
@@ -7700,7 +8947,7 @@ PRAGMA user_version=14;"#,
         let (elapsed, expired) = invocation_clock();
         elapsed.fetch_add(99, Ordering::SeqCst);
 
-        let provided = store.retrieve_with_expiry(&query, &expired).unwrap();
+        let provided = store.retrieve_with_expiry(&query, expired.clone()).unwrap();
         assert_eq!(provided.outcome, InjectionOutcome::Provided);
         assert_eq!(provided.items.len(), 1);
         assert_eq!(provided.items[0].text, body);
@@ -7708,12 +8955,13 @@ PRAGMA user_version=14;"#,
         elapsed.fetch_add(1, Ordering::SeqCst);
 
         assert_eq!(
-            store.retrieve_with_expiry(&query, &expired).unwrap(),
+            store.retrieve_with_expiry(&query, expired.clone()).unwrap(),
             Injection {
                 outcome: InjectionOutcome::Deadline,
                 kind: InjectionKind::Index,
                 items: Vec::new(),
                 token_count: 0,
+                matched: 0,
             }
         );
     }
@@ -8926,7 +10174,7 @@ PRAGMA user_version=14;"#,
         connection.execute_batch(SCHEMA).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE card_comparisons; DROP TABLE promotion_batches; ALTER TABLE memory_revisions DROP COLUMN docs_compared; ALTER TABLE card_promotions DROP COLUMN repository; ALTER TABLE card_promotions DROP COLUMN failure; ALTER TABLE analysis_calls DROP COLUMN checks; PRAGMA user_version=9;",
+                "DROP TABLE card_comparisons; DROP TABLE promotion_batches; ALTER TABLE memory_revisions DROP COLUMN docs_compared; ALTER TABLE card_promotions DROP COLUMN repository; ALTER TABLE card_promotions DROP COLUMN failure; ALTER TABLE analysis_calls DROP COLUMN checks; ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; ALTER TABLE projects DROP COLUMN answered_at_ms; PRAGMA user_version=9;",
             )
             .unwrap();
         let scratch = tempfile::tempdir().unwrap();

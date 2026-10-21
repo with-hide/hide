@@ -2974,7 +2974,11 @@ impl Runtime {
                         self.remember_operator_tab_name(tab_id, Some(name));
                     }
                     if let Some(context) = context {
-                        match self.queue_restored_agent_tab(context, tab_id) {
+                        match self.queue_restored_agent_tab(
+                            context,
+                            tab_id,
+                            &format!("reopen:{key}"),
+                        ) {
                             Ok(()) => self.finish_agent_effect(
                                 &context.checkout_path,
                                 &format!("reopen:{key}"),
@@ -3023,6 +3027,14 @@ impl Runtime {
     /// `close_tab` on this machine, and the same step a tree close takes for
     /// a local tab, so both refuse and start exactly alike.
     pub(super) fn close_local_tab(&mut self, tab_id: String, confirmed: bool) -> bool {
+        if self.pane_move_holds_tab(&tab_id) {
+            self.set_error(
+                "pane.move_pending",
+                "Check the pending pane move before closing this tab",
+                false,
+            );
+            return true;
+        }
         let tab = self
             .snapshot
             .navigator
@@ -3093,6 +3105,14 @@ impl Runtime {
         confirmed: bool,
         may_queue: bool,
     ) -> bool {
+        if self.pane_move_holds_pane(&pane_id) {
+            self.set_error(
+                "pane.move_pending",
+                "Check the pending pane move before closing this pane",
+                false,
+            );
+            return true;
+        }
         let status_unknown = self.snapshot.navigator.agents.iter().any(|agent| {
             agent.pane_id == pane_id
                 && (agent.requires_close_status_check

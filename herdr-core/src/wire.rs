@@ -1073,12 +1073,25 @@ pub(crate) fn pane_join_params(
     target_tab_id: &str,
     target_pane_id: &str,
 ) -> Result<Value, String> {
+    pane_insert_params(pane_id, target_tab_id, target_pane_id, false)
+}
+
+pub(crate) fn pane_insert_params(
+    pane_id: &str,
+    target_tab_id: &str,
+    target_pane_id: &str,
+    down: bool,
+) -> Result<Value, String> {
     params(req::PaneMoveParams {
         pane_id: pane_id.into(),
         destination: req::PaneMoveDestination::Tab {
             tab_id: target_tab_id.into(),
             target_pane_id: Some(target_pane_id.into()),
-            split: req::SplitDirection::Right,
+            split: if down {
+                req::SplitDirection::Down
+            } else {
+                req::SplitDirection::Right
+            },
             ratio: Some(0.5),
         },
         focus: false,
@@ -1611,6 +1624,7 @@ pub(crate) fn agent_state(value: Value) -> Result<AgentState, String> {
 /// Fresh delivery guard, converted here rather than exposing generated types.
 pub(crate) struct DeliveryAgent {
     pub pane_id: String,
+    pub terminal_id: String,
     pub name: String,
     pub kind: Option<String>,
     pub session: Option<String>,
@@ -1653,6 +1667,7 @@ pub(crate) fn delivery_agent(value: Value) -> Result<DeliveryAgent, String> {
         res::ResponseResult::AgentInfo { agent } => Ok(DeliveryAgent {
             name: agent.name.unwrap_or_else(|| agent.pane_id.clone()),
             pane_id: agent.pane_id,
+            terminal_id: agent.terminal_id,
             kind: agent.agent,
             session: agent
                 .agent_session
@@ -1663,6 +1678,31 @@ pub(crate) fn delivery_agent(value: Value) -> Result<DeliveryAgent, String> {
         }),
         _ => Err("delivery_agent_format".into()),
     }
+}
+
+/// Exact native reference of a pane re-read on its already-proven server.
+/// This does not resolve a past target by name or prove model intake.
+pub(crate) fn direct_observation_agent(
+    value: Value,
+) -> Result<
+    (
+        DeliveryAgent,
+        Option<hide_agent_hooks::observation::ObservationNativeSession>,
+    ),
+    String,
+> {
+    let native = match response(value.clone(), "observation_agent_format")? {
+        res::ResponseResult::AgentInfo { agent } => agent.agent_session.map(|session| {
+            hide_agent_hooks::observation::ObservationNativeSession {
+                source: session.source,
+                agent: session.agent,
+                kind: session.kind.to_string(),
+                value: session.value,
+            }
+        }),
+        _ => return Err("observation_agent_format".into()),
+    };
+    Ok((delivery_agent(value)?, native))
 }
 
 pub(crate) fn delivery_prompt_params(pane: &str, text: &str) -> Result<Value, String> {
@@ -1778,6 +1818,104 @@ pub(crate) fn foreground_process(value: Value, pane_id: &str) -> Result<Option<S
     }
 }
 
+/// An explicit native resume selector in the current foreground argv is
+/// only a locator. The label reader must still prove its native owner.
+/// Never parses shell commands, terminal text, cwd or a latest-session hint.
+pub(crate) fn resumed_session_reference(
+    value: Value,
+    pane_id: &str,
+    agent: hide_session::Agent,
+) -> Result<Option<(String, String)>, String> {
+    let res::ResponseResult::PaneProcessInfo { process_info, .. } =
+        response(value, "session_process_missing")?
+    else {
+        return Err("session_process_missing".into());
+    };
+    if process_info.pane_id != pane_id {
+        return Err("session_process_pane_mismatch".into());
+    }
+    let adapter = agent.format().adapter();
+    let Some(dialect) = adapter.resume else {
+        return Ok(None);
+    };
+    let mut found = None;
+    for process in process_info.foreground_processes {
+        let Some(argv) = process.argv else {
+            continue;
+        };
+        if argv.len() > 64 || argv.iter().map(String::len).sum::<usize>() > 8192 {
+            return Err("session_process_argv_capacity".into());
+        }
+        let Some(executable) = argv.first() else {
+            continue;
+        };
+        let name = executable.rsplit(['/', '\\']).next().unwrap_or_default();
+        let name = name.strip_suffix(".exe").unwrap_or(name);
+        if !adapter.executables.contains(&name) {
+            continue;
+        }
+        // A fork's selector names its source, not the running conversation.
+        if argv
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--fork" | "--fork-session" | "fork"))
+        {
+            continue;
+        }
+        let selector = dialect.resume_flag();
+        let mut args = argv.iter().skip(1);
+        while let Some(arg) = args.next() {
+            if arg == "--" {
+                break;
+            }
+            if arg == selector {
+                let Some(value) = args.next() else {
+                    break;
+                };
+                let kind = if hide_session::valid_native_id(value) {
+                    "id"
+                } else {
+                    "path"
+                };
+                if value.starts_with('-')
+                    || value.is_empty()
+                    || value.len() > 4096
+                    || value.chars().any(char::is_control)
+                {
+                    break;
+                }
+                let reference = (kind.to_owned(), value.clone());
+                if found.as_ref().is_some_and(|old| old != &reference) {
+                    return Err("session_process_ambiguous".into());
+                }
+                found = Some(reference);
+                break;
+            }
+            // Known options that consume a value cannot turn their value
+            // into a selector. Unknown positional commands are refused.
+            if matches!(
+                arg.as_str(),
+                "-c" | "--config"
+                    | "-m"
+                    | "--model"
+                    | "-p"
+                    | "--profile"
+                    | "-s"
+                    | "--sandbox"
+                    | "-C"
+                    | "--cd"
+                    | "--add-dir"
+                    | "-i"
+                    | "--image"
+            ) {
+                args.next();
+            } else if !arg.starts_with('-') {
+                break;
+            }
+        }
+    }
+    Ok(found)
+}
+
 pub(crate) fn pane_process_group(value: Value) -> Result<PaneProcessGroup, String> {
     let missing = "pane.process_info response is missing process_info";
     match response(value, missing)? {
@@ -1855,6 +1993,12 @@ pub(crate) fn pane_unzoom_params(pane: &str) -> Result<Value, String> {
         mode: req::PaneZoomMode::Off,
     })
 }
+pub(crate) fn pane_restore_zoom_params(pane: &str) -> Result<Value, String> {
+    params(req::PaneZoomParams {
+        pane_id: Some(pane.into()),
+        mode: req::PaneZoomMode::On,
+    })
+}
 pub(crate) fn pane_read_params(pane: &str, source: &str, lines: u32) -> Result<Value, String> {
     params(req::PaneReadParams {
         pane_id: pane.into(),
@@ -1864,6 +2008,18 @@ pub(crate) fn pane_read_params(pane: &str, source: &str, lines: u32) -> Result<V
         lines: Some(lines),
         format: req::ReadFormat::Text,
         strip_ansi: true,
+    })
+}
+
+/// The pane's visible screen with its styling kept, which an agent's
+/// composer declaration is judged against (`delivery/composer.rs`).
+pub(crate) fn composer_screen_params(pane: &str) -> Result<Value, String> {
+    params(req::PaneReadParams {
+        pane_id: pane.into(),
+        source: req::ReadSource::Visible,
+        lines: None,
+        format: req::ReadFormat::Ansi,
+        strip_ansi: false,
     })
 }
 
@@ -2419,6 +2575,74 @@ mod tests {
         assert_eq!(
             super::tab_rename_params("w1:t1", "").unwrap(),
             serde_json::json!({"tab_id":"w1:t1","label":""})
+        );
+    }
+
+    #[test]
+    fn resume_locators_use_explicit_argv_and_refuse_shell_text_forks_and_other_panes() {
+        use hide_session::Agent;
+        let reply = |argv: Value| {
+            serde_json::json!({"type":"pane_process_info","process_info":{
+                "pane_id":"w1:p1","foreground_processes":[{"pid":41,"name":"codex","argv":argv}],
+                "terminal_title":"codex resume invented-session"
+            }})
+        };
+        for (kind, argv, expected_kind, expected_value) in [
+            (
+                Agent::Codex,
+                json!([
+                    "/usr/bin/codex",
+                    "-c",
+                    "model=fixture",
+                    "resume",
+                    "native-a"
+                ]),
+                "id",
+                "native-a",
+            ),
+            (
+                Agent::Claude,
+                json!(["C:\\bin\\claude.exe", "--resume", "native-a"]),
+                "id",
+                "native-a",
+            ),
+            (
+                Agent::Pi,
+                json!(["pi", "--session", "/private/session.jsonl"]),
+                "path",
+                "/private/session.jsonl",
+            ),
+            (
+                Agent::OpenCode,
+                json!(["opencode", "-s", "ses_test"]),
+                "id",
+                "ses_test",
+            ),
+        ] {
+            assert_eq!(
+                super::resumed_session_reference(reply(argv), "w1:p1", kind).unwrap(),
+                Some((expected_kind.into(), expected_value.into()))
+            );
+        }
+        for argv in [
+            json!(["sh", "-c", "codex resume native-a"]),
+            json!(["codex", "--fork", "resume", "native-a"]),
+            json!(["codex", "exec", "resume", "native-a"]),
+            json!(["codex", "--", "resume", "native-a"]),
+            json!(["codex", "--config", "resume", "native-a"]),
+        ] {
+            assert_eq!(
+                super::resumed_session_reference(reply(argv), "w1:p1", Agent::Codex).unwrap(),
+                None
+            );
+        }
+        assert!(
+            super::resumed_session_reference(
+                reply(json!(["codex", "resume", "native-a"])),
+                "w2:p1",
+                Agent::Codex
+            )
+            .is_err()
         );
     }
 

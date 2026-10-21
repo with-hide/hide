@@ -285,6 +285,18 @@ impl Runtime {
     }
 
     pub(super) fn request_remote_control(&mut self, payload: RemoteControlPayload) -> bool {
+        self.request_remote_control_inner(payload, false)
+    }
+
+    pub(super) fn request_remote_terminal(&mut self, payload: RemoteControlPayload) -> bool {
+        self.request_remote_control_inner(payload, true)
+    }
+
+    fn request_remote_control_inner(
+        &mut self,
+        payload: RemoteControlPayload,
+        terminal_intent: bool,
+    ) -> bool {
         let target_id = payload.target_id;
         let request_id = payload.request_id;
         let focus_device = payload.focus_device;
@@ -548,7 +560,7 @@ impl Runtime {
                 false
             );
         }
-        let action = match payload.request {
+        let mut action = match payload.request {
             RemoteControlRequest::FocusPane { .. } => {
                 RemoteControlAction::Pane(PaneControlAction::Focus {
                     pane_id: source_pane_id.expect("remote pane source id was validated"),
@@ -613,6 +625,7 @@ impl Runtime {
                         cwd: checkout.path.clone(),
                         label: checkout.next_tab_label.clone(),
                         area_id: None,
+                        group_id: None,
                         admission_id: None,
                     },
                 }
@@ -652,6 +665,7 @@ impl Runtime {
                 checkout_id,
                 cwd,
                 label,
+                area_id,
             } => {
                 let Some((project, checkout)) =
                     remote_checkout(&session, &workspace_id, checkout_id.as_deref())
@@ -673,6 +687,28 @@ impl Runtime {
                     );
                     return true;
                 }
+                let key = (target_id.clone(), checkout.path.clone());
+                let area_id = area_id.or_else(|| {
+                    self.agent_layout_of(&key)
+                        .map(|layout| layout.tree.active_area.clone())
+                });
+                if area_id.as_ref().is_some_and(|id| {
+                    self.agent_layout_of(&key)
+                        .is_none_or(|layout| layout.tree.area(id).is_none())
+                }) {
+                    self.set_error(
+                        "agent_layout.unknown_area",
+                        "The Agent area is no longer available",
+                        false,
+                    );
+                    return true;
+                }
+                let group_id = self
+                    .workspace_views
+                    .as_ref()
+                    .and_then(|store| store.views.get(&key.0, &key.1))
+                    .and_then(|view| view.agent_groups.selected.clone())
+                    .map(String::into_boxed_str);
                 // A new tab goes to the checkout's owner on the device, opened
                 // first when none is (D-07, D-10).
                 if checkout.owner_workspace_id.is_none() && checkout.unconfirmed {
@@ -684,14 +720,16 @@ impl Runtime {
                         workspace_id: owner,
                         cwd,
                         label,
-                        area_id: None,
+                        area_id,
+                        group_id,
                         admission_id: None,
                     },
                     TabHost::Open(owner) => RemoteControlAction::OpenOwner {
                         cwd: owner.path().to_owned(),
                         owner,
                         label,
-                        area_id: None,
+                        area_id,
+                        group_id,
                         admission_id: None,
                     },
                 }
@@ -760,6 +798,26 @@ impl Runtime {
             }
         };
 
+        let creation_admission = if terminal_intent {
+            match &mut action {
+                RemoteControlAction::CreateTab {
+                    cwd, admission_id, ..
+                }
+                | RemoteControlAction::OpenOwner {
+                    cwd, admission_id, ..
+                } => {
+                    let key = (target_id.clone(), cwd.clone());
+                    let Some(id) = self.reserve_agent_creation(&key) else {
+                        return true;
+                    };
+                    *admission_id = Some(id);
+                    Some((key, id))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         let chooses_focus = matches!(
             action,
             RemoteControlAction::Pane(PaneControlAction::Focus { .. })
@@ -927,6 +985,9 @@ impl Runtime {
             if let Some(key) = creation_key {
                 self.remote_tab_creations_in_flight.remove(&key);
             }
+            if let Some((key, id)) = creation_admission {
+                self.finish_agent_creation(&key, id);
+            }
             if pane_focus_target.is_some() {
                 self.finish_pane_focus_request_by_id(
                     &dispatched_request_id,
@@ -948,6 +1009,9 @@ impl Runtime {
                 self.reveal_remote_agent_tab(&key, &tab, delegated);
             } else {
                 self.choose_when_in_front(&target_id, &dispatched_request_id, key);
+                if terminal_intent {
+                    self.await_terminal_choice(&target_id, &dispatched_request_id);
+                }
             }
         }
         if focus_device && !self.device_in_front(&target_id) {
@@ -1787,7 +1851,10 @@ impl Runtime {
         let mut requests = Vec::new();
         let mut settled = Vec::new();
         for agent in &self.snapshot.navigator.agents {
-            if !agent.delegated || crate::agent_hooks::is_remote_pane(&agent.pane_id) {
+            if !agent.delegated
+                || crate::agent_hooks::is_remote_pane(&agent.pane_id)
+                || self.manually_placed_pane(&agent.pane_id)
+            {
                 continue;
             }
             let Some(parent_pane_id) = agent.lineage_parent_pane_id.as_deref() else {
@@ -2433,9 +2500,13 @@ impl Runtime {
                     let result = persistence::save(&path, &state, &sizes);
                     let changed = {
                         let mut guard = runtime.lock().unwrap_or_else(|e| e.into_inner());
-                        let resolving = state.resolved_sessions.iter().any(|(pane, record)| {
+                        let resolution = state.resolved_sessions.iter().any(|(pane, record)| {
                             guard.pending_session_resolutions.get(pane) == Some(record)
                         });
+                        let resolving = resolution
+                            || guard.pending_revisit.iter().any(|(pane, pending)| {
+                                state.revisit_sessions.get(pane) == pending.as_ref()
+                            });
                         let resolved_changed =
                             guard.acknowledge_session_save(&state, result.is_ok());
                         let archive_changed =
@@ -2453,7 +2524,11 @@ impl Runtime {
                                 );
                             } else if resolving && !dormant_changed {
                                 guard.push_diagnostic(
-                                    "session.resolve.save_failed",
+                                    if resolution {
+                                        "session.resolve.save_failed"
+                                    } else {
+                                        "revisit.save_failed"
+                                    },
                                     message.clone(),
                                 );
                             } else if archive_changed {
@@ -2686,6 +2761,7 @@ impl Runtime {
         // The pane is born in the source's folder, which can sit below the
         // checkout; the tab is the checkout's (`record_created_tab_checkout`).
         self.record_created_tab_checkout(tab_id, &checkout_path);
+        let placement_capacity = self.agent_placement_capacity(None);
         let Some(store) = self.workspace_views.as_mut() else {
             return Some(checkout_path);
         };
@@ -2725,7 +2801,7 @@ impl Runtime {
             }
             return Some(checkout_path);
         }
-        if store.agent_placements.len() >= 64 && !store.agent_placements.contains_key(tab_id) {
+        if !placement_capacity && !store.agent_placements.contains_key(tab_id) {
             self.push_diagnostic(
                 "agent_layout.placement_limit",
                 "Too many pending Agent tab placements",
@@ -2885,6 +2961,73 @@ impl Runtime {
         )
     }
 
+    // Account for a confirmed creation even when its connection has since left.
+    // This records placement only; focus and the device catalog need a current answer.
+    fn settle_remote_terminal_creation(
+        &mut self,
+        target_id: &str,
+        action: &RemoteControlAction,
+        result: &Result<RemoteControlOutcome, live::ControlFailure>,
+    ) -> bool {
+        let (cwd, admission_id, group, area) = match action {
+            RemoteControlAction::CreateTab {
+                cwd,
+                admission_id,
+                group_id,
+                area_id,
+                ..
+            }
+            | RemoteControlAction::OpenOwner {
+                cwd,
+                admission_id,
+                group_id,
+                area_id,
+                ..
+            } => (cwd, admission_id, group_id, area_id),
+            _ => return false,
+        };
+        if result.as_ref().is_err_and(|error| error.is_ambiguous()) {
+            return false;
+        }
+        let key = (target_id.to_owned(), cwd.clone());
+        if let Some(id) = admission_id {
+            // Forgetting a device also ends its pending creations.
+            if self.workspace_views.as_ref().is_none_or(|store| {
+                store
+                    .agent_admissions
+                    .get(&key)
+                    .is_none_or(|claims| !claims.contains(&format!("create:{id}")))
+            }) {
+                return false;
+            }
+            self.finish_agent_creation(&key, *id);
+        }
+        if let Some(key) = remote_tab_creation_key(target_id, action) {
+            self.remote_tab_creations_in_flight.remove(&key);
+        }
+        let placement_capacity = self.agent_placement_capacity(None);
+        if let Ok(RemoteControlOutcome::Acknowledged {
+            created_tab_id: Some(tab),
+            ..
+        }) = result
+            && let Some(area) = area
+            && let Some(store) = self.workspace_views.as_mut()
+        {
+            if placement_capacity {
+                store.agent_placements.insert(
+                    crate::session_sync::remote_tab_id(target_id, tab),
+                    (key, group.as_deref().map(str::to_owned), area.clone(), None),
+                );
+            } else {
+                self.push_diagnostic(
+                    "agent_layout.placement_limit",
+                    "Too many pending Agent tab placements",
+                );
+            }
+        }
+        true
+    }
+
     fn ingest_remote_control_result_with_failure(
         &mut self,
         target_id: &str,
@@ -2935,15 +3078,30 @@ impl Runtime {
                 .unwrap_or(0)
                 != generation
             {
-                // An answer from a connection that is gone is a lost answer.
+                // Its navigation is stale; a definite terminal creation still owns
+                // an admission and a group placement that must be settled.
                 self.drop_pending_choice(target_id, request_id);
+                let settled = if matches!(
+                    &action,
+                    RemoteControlAction::CreateTab {
+                        admission_id: Some(_),
+                        ..
+                    } | RemoteControlAction::OpenOwner {
+                        admission_id: Some(_),
+                        ..
+                    }
+                ) {
+                    self.settle_remote_terminal_creation(target_id, &action, &result)
+                } else {
+                    false
+                };
                 self.push_diagnostic(
                     "remote.control.stale_result",
                     format!(
                         "Ignored remote {action_kind} result for {target_id} from connection generation {generation}"
                     ),
                 );
-                return false;
+                return settled;
             }
             if self
                 .remote_operations
@@ -2977,6 +3135,7 @@ impl Runtime {
         if let Some(key) = remote_tab_creation_key(target_id, &action) {
             self.remote_tab_creations_in_flight.remove(&key);
         }
+        self.settle_remote_terminal_creation(target_id, &action, &result);
         if result.is_err() {
             self.drop_pending_choice(target_id, request_id);
         }
@@ -3001,6 +3160,11 @@ impl Runtime {
                     | RemoteControlAction::OpenOwner { cwd, .. },
                 ) = (created_tab_id.as_deref(), &action)
                 {
+                    self.note_terminal_choice(
+                        target_id,
+                        request_id,
+                        crate::session_sync::remote_tab_id(target_id, tab_id),
+                    );
                     self.record_created_device_tab(target_id, tab_id, cwd);
                 }
                 self.acknowledge_choice(target_id, request_id);

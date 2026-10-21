@@ -189,6 +189,8 @@ pub struct AgentRecord {
     pub native_machine: String,
     pub session: String,
     pub instance: String,
+    /// Herdr's terminal incarnation, retained when a move changes the public pane id.
+    pub terminal_id: Option<String>,
     pub pane: String,
     pub parent: Option<String>,
     /// Provenance only for handoffs and forks; delegated provenance is the
@@ -217,6 +219,8 @@ struct AgentRecordOnDisk {
     native_machine: String,
     session: String,
     instance: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_id: Option<String>,
     pane: String,
     parent: Option<String>,
     #[serde(default)]
@@ -238,6 +242,7 @@ impl From<AgentRecord> for AgentRecordOnDisk {
             native_machine: record.native_machine,
             session: record.session,
             instance: record.instance,
+            terminal_id: record.terminal_id,
             pane: record.pane,
             parent: record.parent,
             origin: record.origin,
@@ -262,6 +267,7 @@ impl From<AgentRecordOnDisk> for AgentRecord {
             native_machine: disk.native_machine,
             session: disk.session,
             instance: disk.instance,
+            terminal_id: disk.terminal_id,
             pane: disk.pane,
             parent: disk.parent,
             origin: disk.origin,
@@ -390,6 +396,13 @@ pub(crate) enum Mutation {
     /// registration waits for it (`identity_wait`).
     AwaitIdentity {
         wait: identity_wait::IdentityWait,
+    },
+    /// An agent the caller started through Herdr directly, seen after the
+    /// fact by a passive observation: the operator's root with the caller as
+    /// its origin. Only the core's observation path builds one
+    /// (`executor::link_started`).
+    RegisterStarted {
+        record: AgentRecord,
     },
 }
 
@@ -597,6 +610,10 @@ pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
             || !key(&record.id)
             || !record.id.starts_with("agent-")
             || record.name.as_deref().is_some_and(|name| !key(name))
+            || record
+                .terminal_id
+                .as_deref()
+                .is_some_and(|terminal| !key(terminal))
             || ![
                 &record.machine,
                 &record.host_scope,
@@ -1084,6 +1101,25 @@ pub(crate) fn apply(
             Ok(json!(spawn))
         }
         Mutation::AwaitIdentity { wait } => identity_wait::reserve(ledger, caller, wait),
+        Mutation::RegisterStarted { record } => {
+            // The caller vouches only for an agent other than itself, as its
+            // origin, never as its parent: nothing watches the start.
+            let callers_own = record.origin.as_ref().is_some_and(|id| {
+                ledger
+                    .agents
+                    .iter()
+                    .any(|p| &p.id == id && !p.ended && p.actor.same_identity(caller))
+            });
+            if !callers_own
+                || record.parent.is_some()
+                || record.forked
+                || record.actor.same_identity(caller)
+            {
+                return Err("parent_authority_required".into());
+            }
+            validate_registration_name(caller, record)?;
+            insert_record(ledger, record, false)
+        }
     }
 }
 
@@ -1282,6 +1318,7 @@ pub(crate) struct Rebind {
     pub(crate) to: Actor,
     /// Herdr's own id of the woken pane, which a local actor spells the same.
     pub(crate) pane: String,
+    pub(crate) terminal_id: Option<String>,
 }
 
 /// Points each registration at the pane that woke it, with the letters,
@@ -1312,6 +1349,7 @@ pub(crate) fn rebind(
             record.instance = rebind.pane.clone();
         }
         let old_pane = std::mem::replace(&mut record.pane, rebind.pane.clone());
+        record.terminal_id.clone_from(&rebind.terminal_id);
         record.actor = rebind.to.clone();
         for letter in &mut ledger.letters {
             for party in [&mut letter.sender, &mut letter.recipient] {
@@ -1351,7 +1389,7 @@ fn allocate(ledger: &mut Ledger, prefix: &str) -> Result<String, String> {
 
 #[cfg(test)]
 pub(crate) use executor::{SPAWN, SPAWN_TURN};
-pub(crate) use executor::{link_fork, register_code_owned, run};
+pub(crate) use executor::{link_fork, link_started, register_code_owned, run};
 
 #[cfg(test)]
 mod tests {
@@ -1378,6 +1416,7 @@ mod tests {
                 session: crate::wire::session_digest(session),
             },
             ended: false,
+            terminal_id: None,
             forked: false,
         }
     }
@@ -1550,6 +1589,62 @@ mod tests {
             register_as(&mut ledger, stranger, &source.actor).unwrap_err(),
             "parent_authority_required"
         );
+    }
+
+    // PRD direct-prompt-observation-widen B14, B17: an agent the caller
+    // started through Herdr directly is the operator's root with the caller
+    // as its origin, never its child; nobody else vouches for it.
+    #[test]
+    fn an_observed_start_registers_a_root_whose_origin_is_its_starter() {
+        let mut ledger = Ledger::default();
+        let starter = record("pane-a", "session-a", None);
+        let other = record("pane-b", "session-b", None);
+        let starter_id = register(&mut ledger, starter.clone(), &starter.actor);
+        let other_id = register(&mut ledger, other.clone(), &other.actor);
+        let started = |origin: &str| {
+            let mut child = record("pane-c", "session-c", None);
+            child.origin = Some(origin.into());
+            child
+        };
+        let start = |ledger: &mut Ledger, record: AgentRecord, caller: &Actor| {
+            apply(ledger, caller, &Mutation::RegisterStarted { record }, 1)
+        };
+        let before = ledger.clone();
+        for (record, caller) in [
+            (started(&starter_id), &other.actor),
+            (started(&other_id), &starter.actor),
+            (
+                {
+                    let mut child = started(&starter_id);
+                    child.parent = Some(starter_id.clone());
+                    child.origin = None;
+                    child
+                },
+                &starter.actor,
+            ),
+            (
+                {
+                    let mut own = starter.clone();
+                    own.origin = Some(starter_id.clone());
+                    own
+                },
+                &starter.actor,
+            ),
+        ] {
+            assert_eq!(
+                start(&mut ledger, record, caller).unwrap_err(),
+                "parent_authority_required"
+            );
+        }
+        assert_eq!(ledger, before);
+        let shown = start(&mut ledger, started(&starter_id), &starter.actor).unwrap();
+        assert!(shown["parent"].is_null());
+        assert_eq!(shown["origin"], starter_id);
+        assert!(ledger.watches.is_empty());
+        // The same observation again converges on the one record.
+        let again = start(&mut ledger, started(&starter_id), &starter.actor).unwrap();
+        assert_eq!(again["id"], shown["id"]);
+        assert!(validate_records(&ledger).is_ok());
     }
 
     /// Both ways a registration ends, `hide agent end` and the core finding
@@ -2736,6 +2831,7 @@ mod tests {
                 ..from.clone()
             },
             pane: pane.into(),
+            terminal_id: None,
         }
     }
 

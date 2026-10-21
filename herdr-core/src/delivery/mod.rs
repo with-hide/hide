@@ -1,5 +1,6 @@
 //! Durable agent delivery owned by the core.
 mod bell;
+pub(crate) mod composer;
 pub(crate) mod doorbell;
 mod human;
 pub mod ledger;

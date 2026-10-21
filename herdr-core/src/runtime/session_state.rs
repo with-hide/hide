@@ -54,6 +54,10 @@ impl Runtime {
             );
             return false;
         };
+        if let Some(reason) = sessions::resolve_refusal(row) {
+            self.push_diagnostic("session.resolve.refused", format!("Pane {pane}: {reason}"));
+            return false;
+        }
         if self.snapshot.ui_state.resolved_sessions.contains_key(pane)
             || self.pending_session_resolutions.contains_key(pane)
         {
@@ -65,10 +69,17 @@ impl Runtime {
             session: row.lineage_session.clone(),
             activity: row.last_activity.clone(),
         };
+        // 해결 puts the task away, its ★ and read ask with it (D-14).
+        if source == sessions::ResolveSource::Operator
+            && self.revisit_mark(pane).is_some_and(|mark| !mark.is_empty())
+        {
+            self.pending_revisit.insert(pane.to_owned(), None);
+        }
         self.failed_session_resolutions.remove(pane);
         self.pending_session_resolutions
             .insert(pane.to_owned(), record);
         if let Err(message) = self.write_ui_state() {
+            self.pending_revisit.remove(pane);
             if let Some(record) = self.pending_session_resolutions.remove(pane) {
                 self.failed_session_resolutions
                     .insert(pane.to_owned(), record);
@@ -79,8 +90,14 @@ impl Runtime {
         // A standalone runtime has already acknowledged its synchronous write.
         self.sync_session_state();
         self.refresh_agent_scopes();
-        self.snapshot.ui_state.resolved_sessions.contains_key(pane)
-            || self.pending_session_resolutions.contains_key(pane)
+        let resolved = self.snapshot.ui_state.resolved_sessions.contains_key(pane)
+            || self.pending_session_resolutions.contains_key(pane);
+        // The operator who resolves a row has dealt with it, so it is read:
+        // 쉬는 중 never holds a row that still says it is unread.
+        if resolved && source == sessions::ResolveSource::Operator {
+            self.open_result(pane);
+        }
+        resolved
     }
 
     pub(super) fn acknowledge_session_save(
@@ -105,6 +122,7 @@ impl Runtime {
                     .insert(pane.clone(), record.clone());
             }
         }
+        changed |= self.acknowledge_revisit_save(saved, succeeded);
         if changed {
             self.project_session_state()
                 | self.refresh_inactive_groups()
@@ -112,6 +130,144 @@ impl Runtime {
         } else {
             false
         }
+    }
+
+    /// The mark as it stands, a change waiting on its save included.
+    pub(super) fn revisit_mark(&self, pane: &str) -> Option<&sessions::RevisitMark> {
+        match self.pending_revisit.get(pane) {
+            Some(pending) => pending.as_ref(),
+            None => self.snapshot.ui_state.revisit_sessions.get(pane),
+        }
+    }
+
+    /// ★ on a task (PRD revisit-group D-03, B6). Pressing it twice changes
+    /// nothing more (B12); past the cap it is refused and said once (B22).
+    pub(super) fn star_session(&mut self, pane: &str) -> bool {
+        let Some(row) = self.session_rows().find(|row| row.pane_id == pane) else {
+            self.push_diagnostic(
+                "revisit.star.unavailable",
+                format!("Pane {pane} is no longer an agent"),
+            );
+            return false;
+        };
+        if row.lineage_parent_pane_id.is_some() {
+            self.push_diagnostic(
+                "revisit.star.not_root",
+                format!("Pane {pane} is a delegated child"),
+            );
+            return false;
+        }
+        let session = row.lineage_session.clone();
+        let mut mark = self.revisit_mark(pane).cloned().unwrap_or_default();
+        if mark.starred_at_unix_ms.is_some() {
+            return false;
+        }
+        let starred = self
+            .snapshot
+            .ui_state
+            .revisit_sessions
+            .keys()
+            .chain(self.pending_revisit.keys())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .filter(|key| {
+                self.revisit_mark(key)
+                    .is_some_and(|m| m.starred_at_unix_ms.is_some())
+            })
+            .count();
+        if starred >= sessions::MAX_STARRED_SESSIONS {
+            self.set_error(
+                "revisit.capacity",
+                format!(
+                    "At most {} tasks can be starred to revisit",
+                    sessions::MAX_STARRED_SESSIONS
+                ),
+                false,
+            );
+            return true;
+        }
+        mark.starred_at_unix_ms = Some(unix_milliseconds());
+        mark.session = session;
+        self.save_revisit(pane, Some(mark))
+    }
+
+    /// 다 봤음 (PRD revisit-group D-05, B11): the ★ goes and the read ask
+    /// standing now is put away, so the task rests until something new.
+    pub(super) fn finish_revisit(&mut self, pane: &str) -> bool {
+        let Some(row) = self.session_rows().find(|row| row.pane_id == pane) else {
+            self.push_diagnostic(
+                "revisit.done.unavailable",
+                format!("Pane {pane} is no longer an agent"),
+            );
+            return false;
+        };
+        let current = self.revisit_mark(pane).cloned();
+        let ask = row
+            .revisit
+            .filter(|revisit| revisit.read_ask)
+            .and(row.changed_at_unix_ms);
+        let next = sessions::RevisitMark {
+            starred_at_unix_ms: None,
+            dismissed_ask_since: ask.or(current.as_ref().and_then(|m| m.dismissed_ask_since)),
+            session: row.lineage_session.clone(),
+        };
+        let next = (!next.is_empty()).then_some(next);
+        if next == current || (next.is_none() && current.is_none()) {
+            return false;
+        }
+        self.save_revisit(pane, next)
+    }
+
+    /// The mark changes only once the save holds it (B23).
+    fn save_revisit(&mut self, pane: &str, mark: Option<sessions::RevisitMark>) -> bool {
+        self.pending_revisit.insert(pane.to_owned(), mark);
+        // A synchronous save already settled and reported its failure.
+        if let Err(message) = self.write_ui_state()
+            && self.pending_revisit.remove(pane).is_some()
+        {
+            self.report_revisit_save_failed(&message);
+        }
+        self.sync_session_state();
+        self.refresh_agent_scopes();
+        true
+    }
+
+    fn report_revisit_save_failed(&mut self, message: &str) {
+        self.push_diagnostic("revisit.save_failed", message.to_owned());
+        self.set_error(
+            "revisit.save_failed",
+            "The revisit mark could not be saved",
+            true,
+        );
+    }
+
+    fn acknowledge_revisit_save(&mut self, saved: &UiStateSnapshot, succeeded: bool) -> bool {
+        let settled: Vec<String> = self
+            .pending_revisit
+            .iter()
+            .filter(|(pane, pending)| saved.revisit_sessions.get(*pane) == pending.as_ref())
+            .map(|(pane, _)| pane.clone())
+            .collect();
+        let mut changed = false;
+        let mut failed = false;
+        for pane in settled {
+            let Some(pending) = self.pending_revisit.remove(&pane) else {
+                continue;
+            };
+            if !succeeded {
+                failed = true;
+                continue;
+            }
+            let revisits = &mut self.snapshot.ui_state.revisit_sessions;
+            changed |= match pending {
+                Some(mark) => revisits.insert(pane, mark.clone()).as_ref() != Some(&mark),
+                None => revisits.remove(&pane).is_some(),
+            };
+        }
+        if failed {
+            self.report_revisit_save_failed("The UI state save failed");
+        }
+        changed
     }
 
     pub(super) fn reopen_resolved_session(&mut self, pane: &str) -> bool {
@@ -156,11 +312,18 @@ impl Runtime {
             .ui_state
             .session_resolution_inputs
             .retain(|pane, _| !gone(pane));
-        if before
-            != (
-                self.snapshot.ui_state.resolved_sessions.len(),
-                self.snapshot.ui_state.session_resolution_inputs.len(),
-            )
+        let revisits = self.snapshot.ui_state.revisit_sessions.len();
+        self.snapshot
+            .ui_state
+            .revisit_sessions
+            .retain(|pane, _| !gone(pane));
+        self.pending_revisit.retain(|pane, _| !gone(pane));
+        if revisits != self.snapshot.ui_state.revisit_sessions.len()
+            || before
+                != (
+                    self.snapshot.ui_state.resolved_sessions.len(),
+                    self.snapshot.ui_state.session_resolution_inputs.len(),
+                )
         {
             self.persist_ui_state();
         }
@@ -263,6 +426,8 @@ impl Runtime {
                 .find(|letter| letter.id == id)
                 .and_then(|letter| crate::display_text::one_line(letter.body.lines().next()?, 80))
         });
+        let mut stale_revisits = Vec::new();
+        let mut adopted_revisits = Vec::new();
         for row in &mut rows {
             // A raise brings a resolved root back, as a new letter would.
             if !row.raised.is_empty() && row.resolved.is_some() {
@@ -271,6 +436,42 @@ impl Runtime {
                 row.resolved_recent = false;
             }
             crate::agent_state::rederive(row);
+            // A mark belongs to the conversation it was written for (D-11).
+            let mark = self
+                .snapshot
+                .ui_state
+                .revisit_sessions
+                .get(&row.pane_id)
+                .filter(|mark| {
+                    // Only a known conversation replacing another drops it:
+                    // one not yet reported, or reported late, keeps the ★.
+                    let current = match (&mark.session, &row.lineage_session) {
+                        (Some(marked), Some(now)) => marked == now,
+                        (None, Some(now)) => {
+                            adopted_revisits.push((row.pane_id.clone(), now.clone()));
+                            true
+                        }
+                        _ => true,
+                    };
+                    if !current {
+                        stale_revisits.push(row.pane_id.clone());
+                    }
+                    current
+                });
+            row.revisit = sessions::revisit_of(row, mark);
+        }
+        if !stale_revisits.is_empty() || !adopted_revisits.is_empty() {
+            for pane in &stale_revisits {
+                self.snapshot.ui_state.revisit_sessions.remove(pane);
+            }
+            // The first conversation reported after the ★ becomes its own, so
+            // a later one replacing it drops the mark.
+            for (pane, session) in adopted_revisits {
+                if let Some(mark) = self.snapshot.ui_state.revisit_sessions.get_mut(&pane) {
+                    mark.session = Some(session);
+                }
+            }
+            self.persist_ui_state();
         }
         self.session_window_deadline_unix_ms = deadline;
         let mut changed = false;

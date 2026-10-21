@@ -23,7 +23,10 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, type IDisposable, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { submitFiles } from "./attachments";
+import { submitExplorerImage, submitFiles } from "./attachments";
+import { copiedExplorerFile, isImageDrag, terminalPathText, type ExplorerDrag } from "./explorerDrag";
+import { useUiStore } from "./ui";
+import { localDeviceId } from "./snapshot";
 import { keySystem } from "./host";
 import { terminalKey } from "./keys";
 import { noteWriteComplete, probeEnabled } from "./probe";
@@ -35,9 +38,13 @@ import { osc8Handler, registerTerminalLinks, terminalLinkAtCell, terminalPathOwn
 import { isHtmlFile } from "./browserViews";
 import { pointerModifiers, wheelRows } from "./wheel";
 import { useShellStore, type TerminalChunk } from "./store";
+import { catalogWorkspaces, type SnapshotRest } from "./snapshot";
 import type { DispatchFn } from "./ws";
 
 type Instance = {
+  /** Mutable routing address; Herdr may rekey it while retaining the terminal. */
+  paneId: string;
+  identity: string | null;
   term: Terminal;
   fit: FitAddon;
   /** Lives with the instance, including while parked; no retry after fallback. */
@@ -60,13 +67,12 @@ type Instance = {
   /** Wheel rows accumulated toward the next flush, and the pending flush. */
   wheel: { held: boolean; rows: number; remainder: number; column: number; row: number; modifiers: number; frame: number | null };
   /**
-   * The selection a wheel scrolled and the text it covered, until the frame
-   * that moved that text under it has been found; null when none waits.
+   * The selection a wheel scrolled, including its original offscreen ends.
+   * Retained while clipped so a reverse wheel restores the complete range.
    */
   follow: FollowedSelection | null;
   /**
-   * The copy text of a selection the wheel carried off the screen: nothing is
-   * drawn for it, and Copy still takes it until the next drag, click or key.
+   * The original copy text while a selection is partly or wholly offscreen.
    */
   kept: string | null;
   /** The cell of a primary press that may still become a click, or null once it dragged or was not one. */
@@ -86,6 +92,8 @@ type Instance = {
 type FollowedSelection = {
   start: { x: number; y: number };
   end: { x: number; y: number };
+  /** The clipped range xterm currently draws, separate from the original ends. */
+  drawn: { start: { x: number; y: number }; end: { x: number; y: number } };
   rows: string[];
   /** What Copy takes from it. */
   text: string;
@@ -94,6 +102,76 @@ type FollowedSelection = {
 };
 
 const instances = new Map<string, Instance>();
+
+let identityCatalog: SnapshotRest | null | undefined;
+const identities = new Map<string, string>();
+let reconciledCatalog: SnapshotRest | null | undefined;
+
+function terminalIdentity(paneId: string): string | null {
+  const rest = useShellStore.getState().rest;
+  if (identityCatalog !== rest) {
+    identityCatalog = rest;
+    identities.clear();
+    for (const workspace of catalogWorkspaces(rest)) {
+      for (const checkout of workspace.checkouts) {
+        for (const tab of checkout.tabs) {
+          for (const pane of tab.panes) {
+            if (pane.terminal_id) identities.set(pane.id, JSON.stringify([workspace.device_id, pane.terminal_id]));
+          }
+        }
+      }
+    }
+  }
+  return identities.get(paneId) ?? null;
+}
+
+/** Readdress once per snapshot, before an old host parks or a new one attaches. */
+function reconcileTerminalIds() {
+  const rest = useShellStore.getState().rest;
+  if (reconciledCatalog === rest) return;
+  reconciledCatalog = rest;
+  const attached = new Set(attachedPaneIds());
+  const addresses = new Map<string, string | null>();
+  for (const paneId of attached) {
+    const identity = terminalIdentity(paneId);
+    if (identity) addresses.set(identity, addresses.has(identity) ? null : paneId);
+  }
+  for (const [previous, instance] of instances) {
+    instance.identity ??= terminalIdentity(previous);
+    if (!instance.identity || attached.has(previous)) continue;
+    const current = addresses.get(instance.identity);
+    if (!current || instances.has(current)) continue;
+    instances.delete(previous);
+    instance.paneId = current;
+    instance.element.dataset.terminal = current;
+    instances.set(current, instance);
+  }
+}
+
+/** One inert image of a cached terminal, without fitting or attaching its PTY. */
+export function mountTerminalPreview(paneId: string, host: HTMLElement): boolean {
+  reconcileTerminalIds();
+  const instance = instances.get(paneId);
+  if (!instance) return false;
+  const canvases = [...instance.element.querySelectorAll("canvas")];
+  if (canvases.reduce((pixels, canvas) => pixels + canvas.width * canvas.height, 0) > 16_777_216) return false;
+  const clone = instance.element.cloneNode(true) as HTMLElement;
+  const copies = [...clone.querySelectorAll("canvas")];
+  for (const [index, canvas] of canvases.entries()) {
+    const copy = copies[index];
+    if (!copy) return false;
+    const context = copy.getContext("2d");
+    if (!context) return false;
+    context.drawImage(canvas, 0, 0);
+  }
+  clone.setAttribute("aria-hidden", "true");
+  clone.inert = true;
+  clone.style.pointerEvents = "none";
+  clone.removeAttribute("data-terminal");
+  for (const element of clone.querySelectorAll("[id]")) element.removeAttribute("id");
+  host.replaceChildren(clone);
+  return true;
+}
 
 /** Keys that end nothing by themselves: the chord they begin may be Copy. */
 const MODIFIER_KEYS = new Set(["Meta", "Control", "Shift", "Alt", "AltGraph", "CapsLock", "Fn", "OS"]);
@@ -166,6 +244,7 @@ function bytesBase64(bytes: Uint8Array): string {
 }
 
 export function feedChunks(chunks: TerminalChunk[]) {
+  reconcileTerminalIds();
   for (const chunk of chunks) {
     const instance = instances.get(chunk.pane_id);
     if (!instance) continue;
@@ -178,7 +257,7 @@ export function feedChunks(chunks: TerminalChunk[]) {
         noteWriteComplete(term);
       });
     } else {
-      instance.term.write(bytes, instance.follow ? () => followSelection(instance) : undefined);
+      instance.term.write(bytes, instance.follow?.expected ? () => followSelection(instance) : undefined);
     }
   }
 }
@@ -332,12 +411,10 @@ function armFollow(instance: Instance, rows: number) {
     return;
   }
   const known = instance.follow;
-  const same = known && known.start.x === range.start.x && known.start.y === range.start.y && known.end.x === range.end.x && known.end.y === range.end.y;
+  const same = known && known.drawn.start.x === range.start.x && known.drawn.start.y === range.start.y && known.drawn.end.x === range.end.x && known.drawn.end.y === range.end.y;
   const shift = rows > 0 ? -Math.abs(rows) : Math.abs(rows);
   if (same) {
     known.expected += shift;
-    // Wheels that cancel out before any frame moved nothing.
-    if (known.expected === 0) instance.follow = null;
     return;
   }
   // A selection ending at column 0 does not take that row.
@@ -345,6 +422,7 @@ function armFollow(instance: Instance, rows: number) {
   instance.follow = {
     start: { ...range.start },
     end: { ...range.end },
+    drawn: range,
     rows: screenRows(term).slice(range.start.y, last),
     text: selectedText(instance) ?? "",
     expected: shift,
@@ -358,7 +436,7 @@ function keepOffscreen(instance: Instance, follow: FollowedSelection) {
 }
 
 /**
- * Keeps or drops the text of a selection that left the screen. The terminal's
+ * Keeps or drops the text of a selection clipped by the screen. The terminal's
  * input textarea holds it selected while kept, since the browser fires a copy
  * event (⌘C, the Edit menu) only for a selection to copy; `onCopy` then puts
  * the text on the clipboard.
@@ -388,23 +466,25 @@ function hasCopyText(instance: Instance): boolean {
 /**
  * Runs after a frame is drawn: moves a waiting selection onto the text it
  * covered. It waits while the wheel's rows are not all accounted for, so
- * several frames of one fast scroll each move it, and ends when they are, when
- * the selection is cleared, replaced or moved by xterm, or when text it
- * cannot find changed under it.
+ * several frames of one fast scroll each move it. A clipped selection keeps
+ * its original ends after the move, until restored, cleared or replaced.
  */
 function followSelection(instance: Instance) {
   const follow = instance.follow;
-  if (!follow) return;
+  if (!follow || follow.expected === 0) return;
   const { term } = instance;
   const range = term.getSelectionPosition();
-  if (!range || range.start.x !== follow.start.x || range.start.y !== follow.start.y || range.end.x !== follow.end.x || range.end.y !== follow.end.y) {
+  if (!range || range.start.x !== follow.drawn.start.x || range.start.y !== follow.drawn.start.y || range.end.x !== follow.drawn.end.x || range.end.y !== follow.drawn.end.y) {
     instance.follow = null;
     return;
   }
   // Only the selected rows are read while they are unchanged, which is every
   // chunk of output elsewhere on the screen.
   const buffer = term.buffer.active;
-  const unchanged = follow.rows.every((text, index) => (buffer.getLine(follow.start.y + index)?.translateToString(true) ?? "") === text);
+  const unchanged = follow.rows.every((text, index) => {
+    const row = follow.start.y + index;
+    return row < 0 || row >= term.rows || (buffer.getLine(row)?.translateToString(true) ?? "") === text;
+  });
   if (unchanged) return;
   const screen = screenRows(term);
   const shift = followScroll(follow.rows, follow.start.y, screen, follow.expected);
@@ -426,17 +506,17 @@ function followSelection(instance: Instance) {
   term.select(moved.column, moved.row, moved.length);
   const now = term.getSelectionPosition();
   const remaining = follow.expected - shift;
-  if (!now || remaining === 0 || Math.sign(remaining) !== Math.sign(follow.expected)) {
+  if (!now) {
     instance.follow = null;
     return;
   }
-  instance.follow = {
-    start: { ...now.start },
-    end: { ...now.end },
-    rows: screen.slice(now.start.y, now.end.x === 0 && now.end.y > now.start.y ? now.end.y : now.end.y + 1),
-    text: follow.text,
-    expected: remaining,
-  };
+  follow.start.y += shift;
+  follow.end.y += shift;
+  follow.drawn = now;
+  follow.expected = Math.sign(remaining) === Math.sign(follow.expected) ? remaining : 0;
+  const clipped = follow.start.y < 0 || follow.end.y >= term.rows;
+  setKept(instance, clipped ? follow.text : null);
+  if (!clipped && follow.expected === 0) instance.follow = null;
 }
 
 function flushWheel(paneId: string, instance: Instance) {
@@ -528,7 +608,10 @@ function onMouseDown(instance: Instance, event: MouseEvent) {
   instance.press = null;
   // A right-click opens the menu, whose Copy still takes the kept text.
   // On macOS a ctrl-press is a right-click too.
-  if (event.button === 0 && !(event.ctrlKey && keySystem() === "mac")) setKept(instance, null);
+  if (event.button === 0 && !(event.ctrlKey && keySystem() === "mac")) {
+    instance.follow = null;
+    setKept(instance, null);
+  }
   // The primary button alone can become a click; ⌥ + press and a second
   // click of a multi-click are the `application` and `localSelection`
   // routes, and neither is replayed to the program. A press on a link is the
@@ -569,7 +652,7 @@ function selectedText(instance: Instance): string | null {
 /** The copy text of the pane's selection, for the probe; null without a selection or an instance. */
 export function terminalSelectionText(paneId: string): string | null {
   const instance = instances.get(paneId);
-  return instance ? (selectedText(instance) ?? instance.kept) : null;
+  return instance ? (instance.kept ?? selectedText(instance)) : null;
 }
 
 /** Resolves only the cell right-clicked, using the link provider's existing bounds and cache. */
@@ -588,6 +671,32 @@ export async function terminalLinkAt(paneId: string, point: { clientX: number; c
 /** Pastes text as typed input, wrapped in bracketed paste when the program asked for it. */
 export function pasteText(paneId: string, text: string) {
   instances.get(paneId)?.term.paste(text);
+}
+
+/** Explorer Copy retains file identity only while the system text still matches. */
+export function pasteExplorerCopy(paneId: string, text: string): boolean {
+  const held = useUiStore.getState().explorerClipboard;
+  const item = copiedExplorerFile(held, text);
+  if (!item) {
+    if (held?.terminalCopy) useUiStore.getState().setExplorerClipboard({ ...held, terminalCopy: false });
+    return false;
+  }
+  pasteExplorerFile(paneId, item);
+  return true;
+}
+
+/** Drag and Copy share one path/image decision and the existing terminal ingress. */
+export function pasteExplorerFile(paneId: string, item: ExplorerDrag): void {
+  const state = useShellStore.getState();
+  if (item.device !== (remoteTargetOfPane(state.rest, paneId) ?? localDeviceId(state.rest))) {
+    state.setAttachmentRefusal({ pane_id: paneId, reason: "source_device" });
+    return;
+  }
+  if (isImageDrag(item)) void submitExplorerImage(paneId, item, bracketedPaste(paneId));
+  else {
+    try { pasteText(paneId, terminalPathText(item.path)); }
+    catch { state.setAttachmentRefusal({ pane_id: paneId, reason: "invalid_request_id" }); }
+  }
 }
 
 /**
@@ -628,7 +737,7 @@ export async function pasteClipboard(paneId: string, where: string): Promise<voi
       return void submitFiles(paneId, [new File([image], `clipboard.${type.slice("image/".length)}`, { type })], true, bracketedPaste(paneId));
     }
     const text = await navigator.clipboard.readText();
-    if (text) pasteText(paneId, text);
+    if (text && !pasteExplorerCopy(paneId, text)) pasteText(paneId, text);
   } catch {
     noteDiagnostic(`${where} paste: clipboard read refused`);
   }
@@ -636,11 +745,14 @@ export async function pasteClipboard(paneId: string, where: string): Promise<voi
 
 /** Selects the pane's whole text, for Copy to take; the pane keeps no scrollback, so that is what it shows. */
 export function selectAllText(paneId: string) {
-  instances.get(paneId)?.term.selectAll();
+  const instance = instances.get(paneId);
+  if (!instance) return;
+  instance.follow = null;
+  instance.term.selectAll();
 }
 
 function onCopy(instance: Instance, event: ClipboardEvent) {
-  const text = selectedText(instance) ?? instance.kept;
+  const text = instance.kept ?? selectedText(instance);
   if (text === null || !event.clipboardData) return;
   // One owner again: xterm's own copy handler would put its padded,
   // hard-broken rows on the clipboard from the same event.
@@ -667,7 +779,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
     allowProposedApi: true,
     // A program's own links open like the ones found in the text, never
     // through xterm's confirm dialog.
-    linkHandler: osc8Handler(paneId, link, () => instance.links, () => instance.term.hasSelection()),
+    linkHandler: osc8Handler(() => instance.paneId, link, () => instance.links, () => instance.term.hasSelection()),
     // A right-click opens the pane's menu; it leaves the drag selection as it
     // was, so Copy there copies what the operator selected, not a word.
     rightClickSelectsWord: false,
@@ -675,6 +787,8 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
   const fit = new FitAddon();
   term.loadAddon(fit);
   const instance: Instance = {
+    paneId,
+    identity: terminalIdentity(paneId),
     term,
     fit,
     renderer: null,
@@ -698,10 +812,10 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
   // Right after a new tab or split was asked for, keys go to that request's
   // pane rather than this one (`keyTarget.ts`).
   const send = (bytes: Uint8Array) =>
-    dispatch({
+    instance.dispatch({
       schema_version: 2,
       kind: "key",
-      payload: keyPayload(paneId, bytesBase64(bytes)),
+      payload: keyPayload(instance.paneId, bytesBase64(bytes)),
     });
   const system = keySystem();
   term.attachCustomKeyEventHandler((event) => {
@@ -712,18 +826,21 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
     // On macOS ⌘C is the browser's own copy, which `terminalKey` leaves alone.
     const copying = action?.kind === "copy"
       || (system === "mac" && event.metaKey && !event.shiftKey && !event.altKey && (event.code === "KeyC" || event.key.toLowerCase() === "c"));
-    if (!copying && !MODIFIER_KEYS.has(event.key)) setKept(instance, null);
+    if (!copying && !MODIFIER_KEYS.has(event.key)) {
+      instance.follow = null;
+      setKept(instance, null);
+    }
     if (!action) return true;
     event.preventDefault();
     const run = () => {
       if (action.kind === "bytes") send(action.bytes);
       // The page's own Ctrl+Shift+V is paste-as-plain-text, which drops an
       // image, so the chord reads the clipboard itself.
-      else if (action.kind === "paste") void pasteClipboard(paneId, "terminal");
+      else if (action.kind === "paste") void pasteClipboard(instance.paneId, "terminal");
       // Clearing the selection once it is copied lets the next Ctrl+C
       // interrupt; a refused copy keeps it. Nothing selected copies nothing.
       else if (hasCopyText(instance)) {
-        void copySelection(paneId, "terminal").then((copied) => {
+        void copySelection(instance.paneId, "terminal").then((copied) => {
           if (!copied) return;
           setKept(instance, null);
           term.clearSelection();
@@ -741,7 +858,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
       instance.keysWaiting += 1;
       setTimeout(() => {
         instance.keysWaiting -= 1;
-        if (instances.get(paneId) === instance) run();
+        if (instances.get(instance.paneId) === instance) run();
       }, 0);
     } else run();
     return false;
@@ -749,12 +866,13 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
   // A selection drawn again, a drag or select-all, replaces the kept text.
   term.onSelectionChange(() => {
     if (term.hasSelection()) setKept(instance, null);
+    else instance.follow = null;
   });
   term.onData((data) => send(new TextEncoder().encode(data)));
-  const linkProvider = registerTerminalLinks(term, paneId, link, () => instance.links);
-  const wheel = (event: WheelEvent) => onWheel(paneId, instance, event);
+  const linkProvider = registerTerminalLinks(term, () => instance.paneId, link, () => instance.links);
+  const wheel = (event: WheelEvent) => onWheel(instance.paneId, instance, event);
   const down = (event: MouseEvent) => onMouseDown(instance, event);
-  const up = (event: MouseEvent) => onMouseUp(paneId, instance, event);
+  const up = (event: MouseEvent) => onMouseUp(instance.paneId, instance, event);
   const copy = (event: ClipboardEvent) => onCopy(instance, event);
   element.addEventListener("wheel", wheel, { capture: true, passive: false });
   // The press and release are read on the way down and left to xterm, whose
@@ -788,6 +906,7 @@ export function attachTerminal(
   links: TerminalLinkActions,
   scale: number,
 ): () => void {
+  reconcileTerminalIds();
   let instance = instances.get(paneId);
   const fresh = !instance;
   if (!instance) {
@@ -818,23 +937,23 @@ export function attachTerminal(
     // the snapshot, not the click.
     shown.term.textarea?.addEventListener("focus", () => {
       holdKept(shown);
-      noteTerminalFocus(paneId);
+      noteTerminalFocus(shown.paneId);
       if (followingSnapshot) return;
       // A snapshot can lag a newer intent. Core owns focus idempotence and
       // coalescing, so every operator focus must reach it.
       // A remote pane's focus is its host's, so it goes there by the pane's
       // own scoped id; this machine's `focus_pane` never carries it.
-      const targetId = remoteTargetOfPane(useShellStore.getState().rest, paneId);
+      const targetId = remoteTargetOfPane(useShellStore.getState().rest, shown.paneId);
       shown.dispatch(
         targetId
-          ? remoteControl(targetId, { action: "focus_pane", pane_id: paneId })
-          : { schema_version: 2, kind: "focus_pane", payload: { pane_id: paneId, origin: "operator" } },
+          ? remoteControl(targetId, { action: "focus_pane", pane_id: shown.paneId })
+          : { schema_version: 2, kind: "focus_pane", payload: { pane_id: shown.paneId, origin: "operator" } },
       );
     });
   }
   // The observer also fires once when it starts watching, with the grid the
   // attach below just sent; only a grid the host's new size changes goes out.
-  const observer = new ResizeObserver(() => sendGrid(paneId, shown, false, true));
+  const observer = new ResizeObserver(() => sendGrid(shown.paneId, shown, false, true));
   observer.observe(host);
   shown.observer = observer;
   const needsFrame = fresh || shown.stale;
@@ -842,17 +961,19 @@ export function attachTerminal(
   sendGrid(paneId, shown, needsFrame);
   if (!fresh) shown.term.refresh(0, shown.term.rows - 1);
   return () => {
+    reconcileTerminalIds();
     observer.disconnect();
     shown.observer = null;
     shown.host = null;
     // Text kept off screen is the shown pane's; coming back to it later must
     // not find Ctrl+C taken for a copy nobody can see.
+    shown.follow = null;
     setKept(shown, null);
     parkingLot().append(shown.element);
     // A pane closed while shown left the core's list before its view
     // unmounted, so the park decides for itself instead of waiting for a
     // later change to sweep it.
-    if (!attachedPaneIds().includes(paneId)) disposeInstance(paneId, shown);
+    if (!attachedPaneIds().includes(shown.paneId)) disposeInstance(shown.paneId, shown);
   };
 }
 
@@ -862,6 +983,7 @@ export function attachTerminal(
  * skipped here; its park checks the same list when the view unmounts.
  */
 export function retainTerminals() {
+  reconcileTerminalIds();
   const attached = new Set(attachedPaneIds());
   for (const [paneId, instance] of instances) {
     if (attached.has(paneId) || instance.host) continue;

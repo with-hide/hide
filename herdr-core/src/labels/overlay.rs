@@ -23,6 +23,7 @@ use crate::sidebar::{AgentLabel, SessionAgentPayload, SessionSnapshotPayload};
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct LabelOverlay {
     panes: HashMap<String, OverlayPane>,
+    records: HashMap<String, super::record::RecordBinding>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -60,6 +61,7 @@ struct Summary {
     goal: Option<String>,
     line: String,
     end: Option<LabelEnd>,
+    recent_turns: Vec<store::RecentTurn>,
 }
 
 impl LabelOverlay {
@@ -80,6 +82,7 @@ impl LabelOverlay {
                         goal: record.goal.clone(),
                         line: record.line.clone(),
                         end: record.end,
+                        recent_turns: record.recent_turns.clone(),
                     }),
                     facts: row_facts(&record.facts),
                     turn: record.turn_read(),
@@ -96,7 +99,18 @@ impl LabelOverlay {
                 )
             })
             .collect();
-        Self { panes }
+        Self {
+            panes,
+            records: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn with_bindings(
+        mut self,
+        records: impl IntoIterator<Item = (String, super::record::RecordBinding)>,
+    ) -> Self {
+        self.records = records.into_iter().collect();
+        self
     }
 
     /// What the agent waits for in its current Herdr state, as its session
@@ -138,6 +152,28 @@ impl LabelOverlay {
             let Some(pane_id) = agent.pane_id.as_deref().or(agent.id.as_deref()) else {
                 continue;
             };
+            let current_provider = agent
+                .agent
+                .as_deref()
+                .and_then(hide_session::Agent::from_kind);
+            let current_reference = agent.agent_session.as_ref().and_then(|r| {
+                label_reference_token(
+                    agent.agent.as_deref().unwrap_or_default(),
+                    &r.kind,
+                    &r.value,
+                )
+            });
+            if let Some(record) = self.records.get(pane_id).filter(|r| {
+                current_provider.is_some_and(|provider| provider.as_str() == r.provider)
+                    && current_reference == r.reported_reference
+                    && (r.metadata.native_title.is_some()
+                        || r.metadata.manual_title.is_some()
+                        || r.metadata.goal.is_some()
+                        || !r.metadata.summary.is_empty()
+                        || !r.metadata.created_prs.is_empty())
+            }) {
+                agent.record = Some(record.clone());
+            }
             let Some(pane) = self.panes.get(pane_id) else {
                 continue;
             };
@@ -234,13 +270,14 @@ impl LabelOverlay {
                 });
                 facts.end = summary.end;
                 facts.line = line;
+                facts.recent_turns.clone_from(&summary.recent_turns);
             }
             agent.facts = Some(facts);
         }
     }
 }
 
-fn unix_milliseconds() -> u64 {
+pub(super) fn unix_milliseconds() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| {
@@ -270,6 +307,7 @@ fn row_facts(facts: &SessionFacts) -> RowFacts {
             .collect(),
         end: None,
         line: None,
+        recent_turns: Vec::new(),
         awaiting_operator: false,
         user_turn: None,
         wake_devices: 0,

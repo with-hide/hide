@@ -541,6 +541,7 @@ fn launch_records_leave_with_their_device_and_stop_at_the_cap() {
                 ssh_alias: device.to_owned(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     let remote = format!("remote:{device}:pane:w1:p1");

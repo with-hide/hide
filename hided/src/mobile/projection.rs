@@ -279,15 +279,18 @@ mod tests {
         );
     }
 
-    /// The request view's words (the operator's request, the agent's reply)
-    /// stay on the desktop: the phone's rows carry none of them (PRD
-    /// overview-request-view Risks).
+    /// The request view's words (the operator's request, its summary and
+    /// the earlier turns', the agent's reply) stay on the desktop: the
+    /// phone's rows carry none of them (PRD overview-request-view Risks,
+    /// pane-last-request D-13).
     #[test]
     fn the_request_views_text_never_reaches_a_phone_row() {
         let mut rest = rest();
         rest["navigator"]["agents"][0]["request"] = json!({
             "verb": "working", "verb_since_unix_ms": 1,
             "request": {"text": "secret request words", "cut": false, "images": 0, "at_unix_ms": 1, "sender": {"kind": "operator"}},
+            "request_summary": "secret summary",
+            "recent_turns": [{"request": "secret earlier summary", "sender": {"kind": "operator"}, "end": "done", "line": "secret earlier line", "at_unix_ms": 0}],
             "reply": {"text": "secret reply words", "cut": false, "at_unix_ms": 2},
             "later_by": null, "pull_requests": [],
         });

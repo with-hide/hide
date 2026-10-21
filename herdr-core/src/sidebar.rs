@@ -192,6 +192,10 @@ pub struct AgentLabel {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct SessionAgentPayload {
+    /// The query failed while its topology subscription is still live.
+    /// Internal provenance, never supplied by Herdr or a shell client.
+    #[serde(skip)]
+    pub(crate) telemetry_stale: bool,
     #[serde(default)]
     pub id: Option<String>,
     /// The name Herdr knows the agent by (`agent.start --name`, `agent
@@ -250,6 +254,9 @@ pub struct SessionAgentPayload {
     /// on by the label overlay, never read from Herdr.
     #[serde(skip)]
     pub(crate) facts: Option<crate::request_view::RowFacts>,
+    /// Display history, never used by agent_demand/activity or close proof.
+    #[serde(skip)]
+    pub(crate) record: Option<crate::labels::record::RecordBinding>,
 }
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize, Eq, PartialEq)]
@@ -639,13 +646,27 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
         .facts
         .as_ref()
         .and_then(|facts| line_text(facts.native_custom_title.as_deref(), MAX_LABEL_TEXT_CHARS));
-    let title = manual_title.or(task).or(native_title);
+    let title = manual_title.or(task).or(native_title).or_else(|| {
+        agent.record.as_ref().and_then(|r| {
+            line_text(r.metadata.manual_title.as_deref(), MAX_LABEL_TEXT_CHARS)
+                .or_else(|| line_text(r.metadata.goal.as_deref(), MAX_LABEL_TEXT_CHARS))
+                .or_else(|| line_text(r.metadata.native_title.as_deref(), MAX_LABEL_TEXT_CHARS))
+        })
+    });
     let identity_label = title.unwrap_or_else(|| provider_name(agent.agent.as_deref()));
     let projected = SidebarAgentSnapshot {
+        telemetry_stale: agent.telemetry_stale,
+        record_connection: agent.record.as_ref().map(|r| r.connection),
+        record_summary: agent
+            .record
+            .as_ref()
+            .and_then(|r| line_text(Some(&r.metadata.summary), MAX_LABEL_TEXT_CHARS)),
+        record_metadata: agent.record.map(|r| r.metadata),
         close_session: agent.agent_session.clone(),
         state: Default::default(),
         resolved: None,
         resolved_recent: false,
+        revisit: None,
         escalation: None,
         letters_waiting: None,
         raised: Vec::new(),
@@ -929,6 +950,7 @@ mod tests {
         use crate::labels::facts::{Request, Requester};
         let request = |at_unix_ms, requester| Request {
             text: "a native request".to_owned(),
+            offset: None,
             cut: false,
             images: 0,
             at_unix_ms,
@@ -1226,6 +1248,22 @@ mod tests {
                 .as_deref(),
             Some("working")
         );
+        // The read error and the read question are both the operator's turn;
+        // once the error's task is resolved it rests in every list, and the
+        // badge stops counting it too.
+        assert_eq!(workspaces[0].checkouts[0].agent_summary.marks.turn, 2);
+        agents
+            .iter_mut()
+            .find(|a| a.pane_id == "error")
+            .unwrap()
+            .resolved = Some(crate::agent_state::sessions::Resolution {
+            at_unix_ms: 1,
+            source: crate::agent_state::sessions::ResolveSource::Operator,
+            session: None,
+            activity: String::new(),
+        });
+        sync_checkout_agent_summaries(&mut workspaces, &agents);
+        assert_eq!(workspaces[0].checkouts[0].agent_summary.marks.turn, 1);
     }
 
     fn payload(agents: Value) -> SessionSnapshotPayload {

@@ -288,6 +288,12 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
     ),
     (
         CORE_STATE,
+        "/revisit_sessions/{key}",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        CORE_STATE,
         "/session_resolution_inputs/{key}",
         Mechanism::Owned,
         Moves::Pane,
@@ -1511,6 +1517,7 @@ mod tests {
                 "device_registrations": [{"id": "mini", "label": "Mac mini", "ssh_alias": "mini"}],
                 "device_expanded_paths": {"local": ["/x"], "mini": ["/srv/p"]},
                 "resolved_sessions": {"w1:p1": {"at_unix_ms": 1}},
+                "revisit_sessions": {"w1:p1": {"starred_at_unix_ms": 1, "session": "s"}},
                 "session_resolution_inputs": {"w1:p1": 1},
                 "session_collapsed_checkout_ids": ["workspace:a:checkout:1"],
                 "session_open_folds": ["workspace:a", "cleanup/local"],
@@ -1888,6 +1895,7 @@ mod tests {
         "agent_onboarding",
         "agent_onboarding_agents",
         "first_run",
+        "first_run_choices",
         "desktop_notifications",
         "desktop_notifications_done",
         "screen_intros_seen",

@@ -21,6 +21,7 @@ pub(crate) mod delivery;
 mod detail;
 mod device_catalog;
 mod devices;
+mod direct_observation;
 mod disk_sweep;
 mod documents;
 mod drawn_ahead;
@@ -30,6 +31,7 @@ mod first_run;
 mod github_poll;
 pub(crate) mod group_starts;
 mod guardrails;
+mod herdr_profiles;
 mod home;
 mod hosts;
 mod inbound;
@@ -45,6 +47,8 @@ mod op_timing;
 mod operations;
 pub(crate) mod output_language;
 mod overview_graph;
+pub(crate) mod pane_move;
+mod pane_move_preview;
 mod pane_prediction;
 mod pane_reopen;
 pub(crate) mod project_memory;
@@ -116,7 +120,8 @@ use crate::sidebar::{SessionSnapshotPayload, project_agents};
 use crate::{environment, files, live, persistence, pet, session_sync, workspace};
 
 fn conversation_agent_kind(kind: &str) -> bool {
-    hide_agent_adapter::adapter(kind).is_some_and(|row| row.conversation.is_some())
+    hide_session::Agent::from_kind(kind)
+        .is_some_and(|agent| agent.format().adapter().conversation.is_some())
 }
 
 /// Which Herdr workspace each tab belongs to, from each workspace's tab order.
@@ -1036,30 +1041,47 @@ fn remote_terminal_pane_sets(
     (live_pane_ids, active_pane_ids)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+enum RemoteTabCreationIdentity {
+    Label(String),
+    Admission(u64),
+}
+
 fn remote_tab_creation_key(
     target_id: &str,
     action: &RemoteControlAction,
-) -> Option<(String, String, String, String)> {
+) -> Option<(String, String, String, RemoteTabCreationIdentity)> {
     match action {
         RemoteControlAction::CreateTab {
             workspace_id,
             cwd,
             label,
+            admission_id,
             ..
         } => Some((
             target_id.to_owned(),
             workspace_id.clone(),
             cwd.clone(),
-            label.clone(),
+            admission_id.map_or_else(
+                || RemoteTabCreationIdentity::Label(label.clone()),
+                RemoteTabCreationIdentity::Admission,
+            ),
         )),
         // An owner being opened is keyed by its folder.
         RemoteControlAction::OpenOwner {
-            owner, cwd, label, ..
+            owner,
+            cwd,
+            label,
+            admission_id,
+            ..
         } => Some((
             target_id.to_owned(),
             owner.path().to_owned(),
             cwd.clone(),
-            label.clone(),
+            admission_id.map_or_else(
+                || RemoteTabCreationIdentity::Label(label.clone()),
+                RemoteTabCreationIdentity::Admission,
+            ),
         )),
         _ => None,
     }
@@ -1114,6 +1136,10 @@ pub struct Runtime {
     /// When each observed pane's input was last traced (`delivery.input`).
     delivery_input_traced: HashMap<String, u64>,
     composer_store: Option<crate::composer_store::ComposerStore>,
+    /// The agent versions whose composer was checked against its
+    /// declaration (`composer_checks.rs`), and the store that keeps them.
+    composer_checks: Vec<crate::composer_checks::Check>,
+    composer_checks_store: Option<crate::composer_checks::ComposerChecks>,
     delivery_overflow: HashSet<String>,
     delivery_connected: HashSet<String>,
     /// Each host's Herdr panes as its in-sync replica last published them.
@@ -1146,6 +1172,8 @@ pub struct Runtime {
     state_path: PathBuf,
     pending_session_resolutions: BTreeMap<String, crate::agent_state::sessions::Resolution>,
     failed_session_resolutions: BTreeMap<String, crate::agent_state::sessions::Resolution>,
+    /// 다시 볼 것 changes waiting on their save; `None` removes the mark.
+    pending_revisit: BTreeMap<String, Option<crate::agent_state::sessions::RevisitMark>>,
     delivery_holds: BTreeMap<String, crate::delivery::doorbell::Hold>,
     /// The panes whose letters the operator is shown waiting on a possible
     /// draft, with how many (`doorbell::letters_waiting`).
@@ -1248,7 +1276,7 @@ pub struct Runtime {
     /// Advances when a remote target's session connects or drops, so a late
     /// answer from an older connection cannot settle a newer request.
     remote_connection_generations: HashMap<String, u64>,
-    remote_tab_creations_in_flight: HashSet<(String, String, String, String)>,
+    remote_tab_creations_in_flight: HashSet<(String, String, String, RemoteTabCreationIdentity)>,
     /// Every node's terminals (PRD core-host-node-terminal): the core tells
     /// them which panes attach and hears their state back; keys and output
     /// never pass here.
@@ -1635,6 +1663,9 @@ pub struct Runtime {
     group_start: Option<group_starts::ActiveStart>,
     task_start_focus: Option<group_starts::TaskStartFocus>,
     group_start_saves: Vec<group_starts::SaveWaiter>,
+    pane_moves: BTreeMap<String, pane_move::Operation>,
+    pane_move_saves: Vec<pane_move::SaveWaiter>,
+    pane_move_preview: pane_move_preview::Preview,
     /// How the pane a task created says its shell has finished starting,
     /// by task id, for that task's agent start.
     task_pane_shell: Option<(u64, crate::agent_start::ShellStart)>,
@@ -1808,6 +1839,8 @@ pub struct Runtime {
     next_ssh_hosts_id: u64,
     /// The listing `status.ssh_hosts` reports as loading, while its worker runs.
     ssh_hosts_job: Option<ssh_hosts::SshHostsJob>,
+    herdr_profiles_job: Option<herdr_profiles::HerdrProfilesJob>,
+    herdr_profile_endpoints: BTreeMap<String, Result<String, String>>,
     /// The checkout a purpose receipt belongs to. A remote checkout lives in
     /// `status.remote[].session`, not the local navigator, so the operation
     /// carries this target separately from its shell-facing receipt.
@@ -2056,6 +2089,8 @@ impl Runtime {
             composer_marks: Vec::new(),
             delivery_input_traced: HashMap::new(),
             composer_store: None,
+            composer_checks: Vec::new(),
+            composer_checks_store: None,
             delivery_overflow: HashSet::new(),
             delivery_connected: HashSet::new(),
             delivery_panes: HashMap::new(),
@@ -2200,6 +2235,7 @@ impl Runtime {
             worker_context: None,
             pending_session_resolutions: BTreeMap::new(),
             failed_session_resolutions: BTreeMap::new(),
+            pending_revisit: BTreeMap::new(),
             delivery_holds: BTreeMap::new(),
             letters_waiting: BTreeMap::new(),
             session_window_deadline_unix_ms: 0,
@@ -2263,6 +2299,9 @@ impl Runtime {
             group_start: None,
             task_start_focus: None,
             group_start_saves: Vec::new(),
+            pane_moves: BTreeMap::new(),
+            pane_move_saves: Vec::new(),
+            pane_move_preview: Default::default(),
             task_pane_shell: None,
             home_links: HashMap::new(),
             last_accepted_catalog: None,
@@ -2318,6 +2357,8 @@ impl Runtime {
             repository_clone_job: None,
             next_ssh_hosts_id: 0,
             ssh_hosts_job: None,
+            herdr_profiles_job: None,
+            herdr_profile_endpoints: BTreeMap::new(),
             purpose_operation_target: None,
             created_purpose_writes_in_flight: HashMap::new(),
             unconfirmed_created_purposes: HashMap::new(),

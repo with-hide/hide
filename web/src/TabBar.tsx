@@ -1,8 +1,13 @@
+import { usePaneMove } from "./PaneMoveControls";
+import { movingTab } from "./paneMove";
 import { PanelsTopLeftIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { StatusMark } from "./components/status-mark";
-import { markTone, markWords } from "./agentRow";
+import { markTone, markWords, recordWords } from "./agentRow";
+import { AgentRecordTitle } from "./components/agent-record-title";
+import { agentsByPane } from "./paneAgents";
+import { usePaneAgents } from "./PaneHeaderBand";
 import { AgentMark } from "./AgentMark";
 import { useAgentLogosShown } from "./agentLogoMode";
 import { agentProductName } from "./agentAdapters";
@@ -10,7 +15,7 @@ import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Keycap } from "./components/ui/keycap";
 import { Hint, Tooltip, TooltipTrigger, TooltipContent } from "./components/ui/tooltip";
-import type { AsyncOperation, Checkout, StripTab, TabAgent } from "./snapshot";
+import type { AgentRow, AsyncOperation, Checkout, StripTab, TabAgent } from "./snapshot";
 import { useShellStore } from "./store";
 import { tabFit, type AreaTabInteraction } from "./AreaTree";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -37,12 +42,17 @@ export function AgentTab({ number, entry, checkout, interaction, actions, renami
   const { t } = useInterfaceTranslation();
   const operations = useShellStore((s) => s.rest?.status?.async_operations) ?? NONE;
   const tab = checkout.tabs.find((row) => row.id === entry.source_id);
+  const move = usePaneMove();
+  const moving = movingTab(operations, entry.source_id) || !!tab?.panes.some(pane => move?.mutationBlocked(pane.id));
   const agent = tab?.agent;
+  const rows = agentsByPane(usePaneAgents());
+  const focusedAgent = tab?.sidebar?.focused_pane_id ? rows.get(tab.sidebar.focused_pane_id) : undefined;
+  const recordAgent = focusedAgent?.identity_label === entry.label ? focusedAgent : undefined;
   // The core gives only agent panes an identity, on local and device tabs alike.
   // Native subagents live inside that pane and are not additional panes.
   const agentPaneCount = tab?.panes.reduce((count, pane) => count + Number(pane.identity_label !== null), 0) ?? 0;
   const identity = `${agent ? t("panes.agent.tabIdentityAgent", { kind: agentProductName(agent.agent_kind), label: entry.label }) : t("panes.agent.tabIdentityTerminal", { label: entry.label })}${agent ? ` · ${markWords(t, agent)}` : ""}${agentPaneCount > 0 ? ` · ${t("panes.agent.tabPaneCount", { count: agentPaneCount })}` : ""}`;
-  return <TabButton entry={entry} editor={renaming ? <TabRenameInput key={entry.source_id} entry={entry} actions={actions} onCancel={onCancelRename} /> : null} identity={identity} agentPaneCount={agentPaneCount} mark={<TabMark agent={agent} />} number={number} active={interaction.selected} areaActive={interaction.areaActive} closing={closingSuffix(entry.source_id, "tab.close", operations)} closeLabel={t("shell.closeTab", { title: entry.label })} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(entry.source_id)} onPointerDown={interaction.press} />;
+  return <TabButton recordAgent={recordAgent} entry={entry} editor={renaming ? <TabRenameInput key={entry.source_id} entry={entry} actions={actions} onCancel={onCancelRename} /> : null} identity={[identity, recordAgent && recordWords(t, recordAgent)].filter(Boolean).join(" · ")} agentPaneCount={agentPaneCount} mark={<TabMark agent={agent} />} number={number} active={interaction.selected} areaActive={interaction.areaActive} closeDisabled={moving} closing={closingSuffix(entry.source_id, "tab.close", operations)} closeLabel={t("shell.closeTab", { title: entry.label })} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(entry.source_id)} onPointerDown={event => { if (!moving) interaction.press(event); }} />;
 }
 
 /**
@@ -117,6 +127,7 @@ function TabRenameInput({ entry, actions, onCancel }: { entry: StripTab; actions
 
 const TabButton = memo(function TabButton({
   entry,
+  recordAgent,
   identity,
   agentPaneCount,
   editor,
@@ -125,6 +136,7 @@ const TabButton = memo(function TabButton({
   number,
   closing,
   closeLabel,
+  closeDisabled = false,
   fit: slotFit,
   dragging,
   areaActive,
@@ -133,6 +145,7 @@ const TabButton = memo(function TabButton({
   onPointerDown,
 }: {
   entry: StripTab;
+  recordAgent?: AgentRow;
   identity: string;
   agentPaneCount: number;
   editor: React.ReactNode;
@@ -142,6 +155,7 @@ const TabButton = memo(function TabButton({
   number: number | null;
   closing: boolean;
   closeLabel: string;
+  closeDisabled?: boolean;
   /** How the tab draws its contents in its slot (`AreaTabInteraction.fit`). */
   fit: TabFit;
   dragging: boolean;
@@ -175,11 +189,9 @@ const TabButton = memo(function TabButton({
       }}
     >
       {mark}
-      {editor ?? <span className={`@container/tab-title flex min-w-0 flex-1 items-center gap-xs ${fit.title}`}>
-        <span className="min-w-0 flex-1 truncate">
-        {entry.label}
+      {editor ?? <span className={`@container/tab-title flex h-full min-w-0 flex-1 items-center gap-xs ${fit.title}`}>
+        {recordAgent ? <AgentRecordTitle agent={recordAgent} /> : <span className="min-w-0 flex-1 truncate">{entry.label}</span>}
         {closing ? <span className="text-muted-foreground"> {t("panes.transport.closing")}</span> : null}
-        </span>
         {/* Keep title room and the close/keycap slot even at the title minimum.
             CSS follows the available title slot without another resize observer. */}
         {agentPaneCount >= 2 && slotFit === "titled" ? <span aria-hidden="true" data-agent-pane-count={agentPaneCount} className="hidden shrink-0 items-center gap-xxs text-micro text-muted-foreground tabular-nums agent-tab-count-room:inline-flex">
@@ -196,6 +208,7 @@ const TabButton = memo(function TabButton({
           size="icon-sm"
           className={`shrink-0 hover:bg-popover hover:text-foreground ${fit.close} ${number !== null ? "invisible" : `focus-visible:visible group-hover:visible ${active ? "visible" : "invisible"}`}`}
           aria-label={closeLabel}
+          disabled={closeDisabled}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => {
             event.stopPropagation();

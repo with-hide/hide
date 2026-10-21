@@ -387,6 +387,7 @@ pub enum RemoteControlAction {
         cwd: String,
         label: String,
         area_id: Option<String>,
+        group_id: Option<Box<str>>,
         admission_id: Option<u64>,
     },
     /// A new tab in a checkout whose owner Herdr workspace is not open: the
@@ -396,6 +397,7 @@ pub enum RemoteControlAction {
         cwd: String,
         label: String,
         area_id: Option<String>,
+        group_id: Option<Box<str>>,
         admission_id: Option<u64>,
     },
     CloseTab {
@@ -2679,9 +2681,19 @@ pub(crate) fn start_agent(
             crate::agent_start::SHELL_STARTING,
             screen.as_deref().unwrap_or_default(),
         ),
+        // Herdr refused the pane as busy until the start's deadline: nothing
+        // was typed, and the same intent asks again in the same pane.
+        crate::agent_start::StartError::Herdr(ApiError::Remote { code, .. })
+            if code == crate::agent_start::PANE_BUSY =>
+        {
+            PANE_BUSY_REFUSAL.to_owned()
+        }
         other => start_error_message(other),
     })
 }
+
+/// A spawn's start that Herdr refused as busy for its whole wait.
+pub(crate) const PANE_BUSY_REFUSAL: &str = "pane_busy";
 
 #[allow(clippy::too_many_arguments)] // the existing start identity plus its effect admission
 fn start_agent_checked(
@@ -6293,6 +6305,7 @@ mod tests {
                 cwd: "/repo-feat".to_owned(),
                 label: "Tab 2".to_owned(),
                 area_id: None,
+                group_id: None,
                 admission_id: None,
             },
         )
@@ -6670,6 +6683,7 @@ mod tests {
                 cwd: "/tmp/hide-remote-tab".to_owned(),
                 label: "New tab".to_owned(),
                 area_id: None,
+                group_id: None,
                 admission_id: None,
             },
             RemoteControlAction::CloseTab {
@@ -6808,6 +6822,7 @@ mod tests {
                 cwd: cwd.clone(),
                 label: "Hide remote control probe".to_owned(),
                 area_id: None,
+                group_id: None,
                 admission_id: None,
             },
         )

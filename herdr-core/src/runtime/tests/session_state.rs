@@ -3,11 +3,45 @@ use crate::agent_state::sessions::ResolveSource;
 use serde_json::json;
 
 fn with_session() -> Runtime {
+    with_status("done")
+}
+
+fn with_status(status: &str) -> Runtime {
     let mut runtime = runtime();
     runtime.snapshot.navigator.agents = project_agents(serde_json::from_value(json!({
-        "agents": [{"pane_id":"session", "agent":"codex", "agent_status":"done", "state_change_seq":1}]
+        "agents": [{"pane_id":"session", "agent":"codex", "agent_status":status, "state_change_seq":1}]
     })).unwrap()).agents;
     runtime
+}
+
+#[test]
+fn work_that_runs_or_waits_and_an_approval_prompt_cannot_be_resolved() {
+    let waiting = || {
+        let mut runtime = with_status("idle");
+        let row = &mut runtime.snapshot.navigator.agents[0];
+        row.wait = Some(crate::model::AgentWait::Children);
+        crate::agent_state::rederive(row);
+        runtime
+    };
+    for (case, mut runtime) in [
+        ("working", with_status("working")),
+        ("waiting", waiting()),
+        ("approval", with_status("blocked")),
+    ] {
+        let _dirs = hold_dirs(&mut runtime);
+        assert!(
+            !runtime.resolve_session("session", ResolveSource::Operator),
+            "{case}"
+        );
+        assert!(
+            runtime.snapshot.navigator.agents[0].resolved.is_none(),
+            "{case}"
+        );
+        assert!(
+            runtime.snapshot.ui_state.resolved_sessions.is_empty(),
+            "{case}"
+        );
+    }
 }
 
 #[test]
@@ -35,6 +69,20 @@ fn session_resolution_survives_restart_and_new_input_restores_the_live_pane() {
         !runtime.sync_session_state(),
         "unchanged state publishes no new frame"
     );
+}
+
+#[test]
+fn resolving_an_unread_finish_reads_it_so_it_rests_without_its_dot() {
+    let mut runtime = with_session();
+    let _dirs = hold_dirs(&mut runtime);
+    let row = &runtime.snapshot.navigator.agents[0];
+    assert!(row.unread, "Herdr's done is an unread finish");
+    assert_eq!(row.group, "done");
+    assert!(runtime.resolve_session("session", ResolveSource::Operator));
+    let row = &runtime.snapshot.navigator.agents[0];
+    assert!(row.resolved.is_some());
+    assert!(!row.unread);
+    assert_eq!(row.mark, crate::agent_state::RowMark::Quiet);
 }
 
 #[test]
@@ -305,6 +353,78 @@ fn pane_bands_leave_pull_requests_and_results_to_the_header() {
     }
 }
 
+/// The second row leads with the turn's request while it shows the turn: an
+/// ask, the agent working, or a finished turn the operator has not looked at,
+/// which says its result. A read finished turn, a wait and an idle pane have
+/// no row (PRD pane-last-request B1, B10, B11).
+#[test]
+fn pane_header_leads_with_the_request_only_while_its_row_shows_the_turn() {
+    use crate::agent_state::{RequestVerb, header};
+    use crate::request_view::{AgentRequestSnapshot, RequestLineSnapshot, RequestSender};
+    let runtime = with_session();
+    let mut agent = runtime.snapshot.navigator.agents[0].clone();
+    let pane = pane("session", "/work/app");
+    agent.request = Some(AgentRequestSnapshot {
+        verb: RequestVerb::Working,
+        verb_since_unix_ms: 0,
+        line: Some("검증 끝, PR 올림".into()),
+        end: None,
+        request: Some(RequestLineSnapshot {
+            text: "ㅇㅇ 그렇게 해".into(),
+            cut: false,
+            images: 0,
+            at_unix_ms: 1,
+            sender: RequestSender::Operator,
+        }),
+        request_summary: Some("제안대로 진행".into()),
+        recent_turns: Vec::new(),
+        later_by: None,
+        reply: None,
+        pull_requests: Vec::new(),
+    });
+    let summary = Some(header::TurnRequest {
+        text: Some("제안대로 진행".into()),
+        images: 0,
+    });
+    agent.state.verb = RequestVerb::Working;
+    assert_eq!(header::of(&pane, Some(&agent), None, None).request, summary);
+    agent.state.verb = RequestVerb::Stopped;
+    assert_eq!(header::of(&pane, Some(&agent), None, None).request, summary);
+    agent.state.verb = RequestVerb::Result;
+    agent.completed = true;
+    agent.unread = true;
+    let finished = header::of(&pane, Some(&agent), None, None);
+    assert_eq!(
+        (
+            finished.finished,
+            finished.progress.as_deref(),
+            finished.request
+        ),
+        (true, Some("검증 끝, PR 올림"), summary.clone())
+    );
+    agent.unread = false;
+    let read = header::of(&pane, Some(&agent), None, None);
+    assert_eq!(
+        (read.finished, read.progress, read.request),
+        (false, None, None)
+    );
+    for verb in [RequestVerb::Waiting, RequestVerb::Idle, RequestVerb::Review] {
+        agent.state.verb = verb;
+        agent.unread = true;
+        assert_eq!(
+            header::of(&pane, Some(&agent), None, None).request,
+            None,
+            "{verb:?}"
+        );
+    }
+    // A pane whose terminal is not live shows no turn.
+    agent.state.verb = RequestVerb::Working;
+    assert_eq!(
+        header::of(&pane, Some(&agent), None, Some("mini")).request,
+        None
+    );
+}
+
 /// A question stays the operator's turn after they look at the pane: the
 /// band is marked read and keeps asking until a reply moves the agent on.
 #[test]
@@ -366,4 +486,215 @@ fn pane_notices_keep_idle_and_ci_wait_quiet_and_distinguish_failed_exits() {
             (kind, tone, Some(code))
         );
     }
+}
+
+/// A stopped root that asked a question the operator has read.
+fn with_read_question() -> Runtime {
+    let mut runtime = with_session();
+    let row = &mut runtime.snapshot.navigator.agents[0];
+    row.demand = "question".into();
+    row.unread = false;
+    row.completed = false;
+    row.changed_at_unix_ms = Some(5);
+    runtime.sync_session_state();
+    runtime
+}
+
+#[test]
+fn a_read_question_waits_in_revisit_until_done_puts_it_away() {
+    // PRD revisit-group B2, B11, B16.
+    let mut runtime = with_read_question();
+    let _dirs = hold_dirs(&mut runtime);
+    let row = &runtime.snapshot.navigator.agents[0];
+    assert_eq!(row.group, "seen");
+    let revisit = row.revisit.expect("a read question waits in 다시 볼 것");
+    assert!(revisit.read_ask && !revisit.starred);
+    assert!(runtime.finish_revisit("session"));
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    let saved = persistence::load(&runtime.state_path).0;
+    assert_eq!(
+        saved.revisit_sessions["session"].dismissed_ask_since,
+        Some(5)
+    );
+    assert!(
+        !runtime.finish_revisit("session"),
+        "a second 다 봤음 changes nothing"
+    );
+    // The next ask stands again.
+    runtime.snapshot.navigator.agents[0].changed_at_unix_ms = Some(9);
+    runtime.sync_session_state();
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_some());
+}
+
+#[test]
+fn a_star_holds_a_quiet_task_survives_restart_and_done_takes_it() {
+    // B6, B11, B12, B16.
+    let mut runtime = with_session();
+    let _dirs = hold_dirs(&mut runtime);
+    runtime.snapshot.navigator.agents[0].unread = false;
+    runtime.sync_session_state();
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    assert!(runtime.star_session("session"));
+    let revisit = runtime.snapshot.navigator.agents[0].revisit.unwrap();
+    assert!(revisit.starred && !revisit.read_ask);
+    let at = runtime.snapshot.ui_state.revisit_sessions["session"].starred_at_unix_ms;
+    assert!(
+        !runtime.star_session("session"),
+        "a second ★ changes nothing"
+    );
+    assert_eq!(
+        persistence::load(&runtime.state_path).0.revisit_sessions["session"].starred_at_unix_ms,
+        at
+    );
+    assert!(runtime.finish_revisit("session"));
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    assert!(
+        persistence::load(&runtime.state_path)
+            .0
+            .revisit_sessions
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_read_block_and_an_unread_question_never_wait_in_revisit() {
+    // B3, B4: the current state wins.
+    let mut runtime = with_read_question();
+    runtime.snapshot.navigator.agents[0].unread = true;
+    runtime.sync_session_state();
+    assert_eq!(runtime.snapshot.navigator.agents[0].group, "needs_you");
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    let row = &mut runtime.snapshot.navigator.agents[0];
+    row.demand = "error".into();
+    row.unread = false;
+    runtime.sync_session_state();
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+}
+
+#[test]
+fn resolving_puts_the_star_away_and_a_failed_save_keeps_the_row_as_it_was() {
+    // B17, B23.
+    let mut runtime = with_session();
+    let _dirs = hold_dirs(&mut runtime);
+    runtime.snapshot.navigator.agents[0].unread = false;
+    assert!(runtime.star_session("session"));
+    assert!(runtime.resolve_session("session", ResolveSource::Operator));
+    assert!(runtime.snapshot.ui_state.revisit_sessions.is_empty());
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+
+    let mut runtime = with_session();
+    let occupied = runtime.state_path.with_file_name("occupied");
+    std::fs::write(&occupied, b"not a directory").unwrap();
+    runtime.state_path = occupied.join("state.json");
+    runtime.star_session("session");
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    assert!(runtime.pending_revisit.is_empty());
+    assert_eq!(
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|e| e.kind.as_str()),
+        Some("revisit.save_failed")
+    );
+}
+
+#[test]
+fn a_new_conversation_in_the_pane_drops_its_mark() {
+    // D-11: a mark belongs to the session it was written for, and a
+    // conversation reported only after the ★ keeps it.
+    let mut runtime = with_session();
+    let _dirs = hold_dirs(&mut runtime);
+    runtime.snapshot.navigator.agents[0].unread = false;
+    runtime.snapshot.navigator.agents[0].lineage_session = None;
+    assert!(runtime.star_session("session"));
+    runtime.snapshot.navigator.agents[0].lineage_session = Some("first".into());
+    runtime.sync_session_state();
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_some());
+    assert_eq!(
+        runtime.snapshot.ui_state.revisit_sessions["session"]
+            .session
+            .as_deref(),
+        Some("first")
+    );
+    runtime.snapshot.navigator.agents[0].lineage_session = Some("another".into());
+    runtime.sync_session_state();
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    assert!(runtime.snapshot.ui_state.revisit_sessions.is_empty());
+}
+
+#[test]
+fn the_phone_lists_a_read_question_in_revisit_between_unread_and_working() {
+    // B19.
+    let runtime = with_read_question();
+    let row = &runtime.snapshot.navigator.agents[0];
+    let phone =
+        crate::agent_state::phone::project(&json!({"navigator": {"agents": [row]}}), "local");
+    assert_eq!(phone.agents().next().unwrap().group, "revisit");
+    assert_eq!(
+        crate::agent_state::phone::GROUP_ORDER,
+        ["needs_you", "done", "revisit", "working", "seen"]
+    );
+}
+
+#[test]
+fn a_read_approval_waits_like_a_question() {
+    // B5, D-13.
+    let mut runtime = with_read_question();
+    runtime.snapshot.navigator.agents[0].demand = "approval".into();
+    runtime.sync_session_state();
+    assert!(
+        runtime.snapshot.navigator.agents[0]
+            .revisit
+            .is_some_and(|r| r.read_ask)
+    );
+}
+
+#[test]
+fn a_closed_pane_takes_its_mark_and_a_star_past_the_cap_is_refused() {
+    // B16, B22.
+    let mut runtime = with_session();
+    let _dirs = hold_dirs(&mut runtime);
+    assert!(runtime.star_session("session"));
+    runtime.prune_resolved_sessions(|pane| pane == "session");
+    assert!(runtime.snapshot.ui_state.revisit_sessions.is_empty());
+    assert!(runtime.pending_revisit.is_empty());
+
+    for index in 0..crate::agent_state::sessions::MAX_STARRED_SESSIONS {
+        runtime.snapshot.ui_state.revisit_sessions.insert(
+            format!("other-{index}"),
+            crate::agent_state::sessions::RevisitMark {
+                starred_at_unix_ms: Some(1),
+                ..Default::default()
+            },
+        );
+    }
+    runtime.star_session("session");
+    assert!(
+        !runtime
+            .snapshot
+            .ui_state
+            .revisit_sessions
+            .contains_key("session")
+    );
+    assert_eq!(
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|e| e.kind.as_str()),
+        Some("revisit.capacity")
+    );
+}
+
+#[test]
+fn resolving_a_read_question_takes_it_out_of_revisit() {
+    // B17, D-14.
+    let mut runtime = with_read_question();
+    let _dirs = hold_dirs(&mut runtime);
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_some());
+    assert!(runtime.resolve_session("session", ResolveSource::Operator));
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
 }

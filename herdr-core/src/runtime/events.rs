@@ -293,6 +293,8 @@ pub(super) struct RegisterDevicePayload {
     /// The device's Herdr socket when its server is not at the default path.
     #[serde(default)]
     pub(super) herdr_socket_path: Option<String>,
+    #[serde(default)]
+    pub(super) herdr_session: Option<String>,
     /// The operator allowed Hide's helper on the device in the same form
     /// (PRD S5.5 B50); absent or false registers it without file access.
     #[serde(default)]
@@ -447,6 +449,8 @@ pub(super) enum RemoteControlRequest {
         checkout_id: Option<String>,
         cwd: String,
         label: String,
+        #[serde(default)]
+        area_id: Option<String>,
     },
     CloseTab {
         tab_id: String,
@@ -771,6 +775,14 @@ pub(super) struct MemoryExpandPayload {
     pub(super) workspace_id: String,
     #[serde(default)]
     pub(super) number: Option<u64>,
+}
+
+/// The Memory tab said how many older cards were cleared to make room, the
+/// newest at `through_unix_ms`.
+#[derive(Debug, Deserialize)]
+pub(super) struct MemoryEvictionsSeenPayload {
+    pub(super) workspace_id: String,
+    pub(super) through_unix_ms: u64,
 }
 
 /// Searches the opened Project's cards; empty words clear the search.
@@ -1185,6 +1197,15 @@ pub(super) struct KitCheckPayload {}
 #[derive(Debug, Deserialize)]
 pub(super) struct SshHostsListPayload {}
 
+#[derive(Debug, Deserialize)]
+pub(super) struct HerdrProfilesListPayload {}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct HerdrProfileConnectPayload {
+    pub(super) profile_id: String,
+    pub(super) host_consent: bool,
+}
+
 /// Whether any window draws this daemon's snapshot, sent by hided as its
 /// first window arrives and its last one leaves. Without one, the readers
 /// that only feed what a window draws (ports, worktrees, pull requests,
@@ -1296,6 +1317,20 @@ pub(super) struct FirstRunAdvancePayload {
     /// to leave it as it is.
     #[serde(default)]
     pub(super) notifications: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FirstRunBackPayload {
+    pub(super) from: crate::model::FirstRunStep,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FirstRunDraftPayload {
+    pub(super) agents: Option<Vec<String>>,
+    pub(super) devices: Option<Vec<String>>,
+    pub(super) project_device: Option<String>,
+    pub(super) project_path: Option<String>,
+    pub(super) project_form: Option<crate::model::FirstRunProjectForm>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1414,6 +1449,10 @@ pub(super) enum Event {
     WorkspaceView(WorkspaceViewPayload),
     ViewLayout(ViewLayoutPayload),
     AgentLayout(AgentLayoutPayload),
+    PaneMove(super::pane_move::Request),
+    PaneMoveCheck(super::pane_move::Check),
+    PaneMovePreview(super::pane_move_preview::Request),
+    PaneMovePreviewCancel(super::pane_move_preview::Cancel),
     AgentGroup(AgentGroupPayload),
     BrowserOpen(BrowserOpenPayload),
     BrowserState(BrowserStatePayload),
@@ -1466,6 +1505,8 @@ pub(super) enum Event {
     PaneInputSubmitted(PaneTargetPayload),
     PaneInputSent(PaneTargetPayload),
     ResolveSession(PaneTargetPayload),
+    RevisitStar(PaneTargetPayload),
+    RevisitDone(PaneTargetPayload),
     DeliverLettersNow(PaneTargetPayload),
     PaneVisit(PaneTargetPayload),
     AgentWake(AgentWakePayload),
@@ -1522,6 +1563,7 @@ pub(super) enum Event {
     MemoryOpen(MemoryOpenPayload),
     ProjectMemoryNavigate(ProjectMemoryNavigatePayload),
     MemoryExpand(MemoryExpandPayload),
+    MemoryEvictionsSeen(MemoryEvictionsSeenPayload),
     MemorySearch(MemorySearchPayload),
     RetryConnect(RetryConnectPayload),
     CloneRepository(CloneRepositoryPayload),
@@ -1531,6 +1573,8 @@ pub(super) enum Event {
     CodexDaemonDisable(CodexDaemonDisablePayload),
     KitCheck(KitCheckPayload),
     SshHostsList(SshHostsListPayload),
+    HerdrProfilesList(HerdrProfilesListPayload),
+    HerdrProfileConnect(HerdrProfileConnectPayload),
     UiAttached(UiAttachedPayload),
     AiSettings(AiSettingsPayload),
     TerminalResize(TerminalResizePayload),
@@ -1550,6 +1594,8 @@ pub(super) enum Event {
     UsageHiddenSet(UsageHiddenSetPayload),
     AgentOnboardingApply(AgentOnboardingApplyPayload),
     FirstRunAdvance(FirstRunAdvancePayload),
+    FirstRunBack(FirstRunBackPayload),
+    FirstRunDraft(FirstRunDraftPayload),
     DesktopNotificationsSet(DesktopNotificationsSetPayload),
     DesktopNotificationsDoneSet(DesktopNotificationsDoneSetPayload),
     ScreenIntroSeen(ScreenIntroSeenPayload),
@@ -1721,6 +1767,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "pane_input_submitted" => decode!(PaneTargetPayload, PaneInputSubmitted),
         "pane_input_sent" => decode!(PaneTargetPayload, PaneInputSent),
         "resolve_session" => decode!(PaneTargetPayload, ResolveSession),
+        "revisit_star" => decode!(PaneTargetPayload, RevisitStar),
+        "revisit_done" => decode!(PaneTargetPayload, RevisitDone),
         "deliver_letters_now" => decode!(PaneTargetPayload, DeliverLettersNow),
         "pane_visit" => decode!(PaneTargetPayload, PaneVisit),
         "agent_wake" => decode!(AgentWakePayload, AgentWake),
@@ -1789,6 +1837,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "memory_open" => decode!(MemoryOpenPayload, MemoryOpen),
         "project_memory_navigate" => decode!(ProjectMemoryNavigatePayload, ProjectMemoryNavigate),
         "memory_expand" => decode!(MemoryExpandPayload, MemoryExpand),
+        "memory_evictions_seen" => decode!(MemoryEvictionsSeenPayload, MemoryEvictionsSeen),
         "memory_search" => decode!(MemorySearchPayload, MemorySearch),
         "retry_connect" => decode!(RetryConnectPayload, RetryConnect),
         "clone_repository" => decode!(CloneRepositoryPayload, CloneRepository),
@@ -1798,6 +1847,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "codex_daemon_disable" => decode!(CodexDaemonDisablePayload, CodexDaemonDisable),
         "kit_check" => decode!(KitCheckPayload, KitCheck),
         "ssh_hosts_list" => decode!(SshHostsListPayload, SshHostsList),
+        "herdr_profiles_list" => decode!(HerdrProfilesListPayload, HerdrProfilesList),
+        "herdr_profile_connect" => decode!(HerdrProfileConnectPayload, HerdrProfileConnect),
         "ui_attached" => decode!(UiAttachedPayload, UiAttached),
         "ai_settings" => decode!(AiSettingsPayload, AiSettings),
         "terminal_resize" => decode!(TerminalResizePayload, TerminalResize),
@@ -1817,6 +1868,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "interface_language_set" => decode!(InterfaceLanguageSetPayload, InterfaceLanguageSet),
         "agent_onboarding_apply" => decode!(AgentOnboardingApplyPayload, AgentOnboardingApply),
         "first_run_advance" => decode!(FirstRunAdvancePayload, FirstRunAdvance),
+        "first_run_back" => decode!(FirstRunBackPayload, FirstRunBack),
+        "first_run_draft" => decode!(FirstRunDraftPayload, FirstRunDraft),
         "desktop_notifications_set" => {
             decode!(DesktopNotificationsSetPayload, DesktopNotificationsSet)
         }
@@ -1872,6 +1925,12 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "pet_shortcut_update" => decode!(PetShortcutPayload, PetShortcutUpdate),
         "workspace_view" => decode!(WorkspaceViewPayload, WorkspaceView),
         "agent_layout" => decode!(AgentLayoutPayload, AgentLayout),
+        "pane_move" => decode!(super::pane_move::Request, PaneMove),
+        "pane_move_check" => decode!(super::pane_move::Check, PaneMoveCheck),
+        "pane_move_preview" => decode!(super::pane_move_preview::Request, PaneMovePreview),
+        "pane_move_preview_cancel" => {
+            decode!(super::pane_move_preview::Cancel, PaneMovePreviewCancel)
+        }
         "agent_group" => decode!(AgentGroupPayload, AgentGroup),
         "view_layout" => decode!(ViewLayoutPayload, ViewLayout),
         "browser_open" => decode!(BrowserOpenPayload, BrowserOpen),
@@ -1990,10 +2049,14 @@ impl Runtime {
         true
     }
 
-    fn apply_event(&mut self, event: Event) -> bool {
+    pub(super) fn apply_event(&mut self, event: Event) -> bool {
         match event {
             Event::WorkspaceView(payload) => self.apply_workspace_view(payload),
             Event::AgentLayout(payload) => self.apply_agent_layout(payload),
+            Event::PaneMove(payload) => self.apply_pane_move(payload),
+            Event::PaneMoveCheck(payload) => self.check_pane_move(payload),
+            Event::PaneMovePreview(payload) => self.request_pane_move_preview(payload),
+            Event::PaneMovePreviewCancel(payload) => self.cancel_pane_move_preview(payload),
             Event::AgentGroup(payload) => self.apply_agent_group(payload),
             Event::ViewLayout(payload) => self.apply_view_layout(payload),
             Event::BrowserOpen(payload) => self.open_browser(payload),
@@ -2025,6 +2088,9 @@ impl Runtime {
             Event::MemoryExpand(payload) => {
                 self.expand_memory_card(&payload.workspace_id, payload.number)
             }
+            Event::MemoryEvictionsSeen(payload) => {
+                self.memory_evictions_seen(&payload.workspace_id, payload.through_unix_ms)
+            }
             Event::MemorySearch(payload) => {
                 self.search_project_memory(&payload.workspace_id, payload.query)
             }
@@ -2050,6 +2116,8 @@ impl Runtime {
                 &payload.pane_id,
                 crate::agent_state::sessions::ResolveSource::Operator,
             ),
+            Event::RevisitStar(payload) => self.star_session(&payload.pane_id),
+            Event::RevisitDone(payload) => self.finish_revisit(&payload.pane_id),
             Event::PaneInputSent(payload) => {
                 self.note_delivery_key(&payload.pane_id, "phone");
                 false
@@ -2161,6 +2229,10 @@ impl Runtime {
             ),
             Event::KitCheck(_) => self.request_kit_check(),
             Event::SshHostsList(_) => self.request_ssh_hosts(),
+            Event::HerdrProfilesList(_) => self.request_herdr_profiles(),
+            Event::HerdrProfileConnect(payload) => {
+                self.connect_herdr_profile(&payload.profile_id, payload.host_consent)
+            }
             // Nothing drawn changes; the coordinator reads it on its next wake.
             Event::UiAttached(payload) => {
                 self.ui_attached = payload.attached;
@@ -2330,17 +2402,15 @@ impl Runtime {
                     );
                     return true;
                 }
+                let Some(admission_id) = self.reserve_agent_creation(&key) else {
+                    return true;
+                };
                 self.snapshot.navigator.focused_workspace_id = Some(workspace_id.clone());
                 self.snapshot.navigator.focused_checkout_id = Some(checkout_id);
                 self.snapshot.navigator.root_path = Some(cwd.clone());
                 self.sync_changes_root_path();
                 self.yield_surface_to_terminal();
                 self.persist_current_ui_state();
-                self.next_async_operation_id = self
-                    .next_async_operation_id
-                    .saturating_add(1)
-                    .max(unix_milliseconds());
-                let admission_id = self.next_async_operation_id;
                 self.begin_op_timing(
                     &super::op_timing::tab_create_op_id(admission_id),
                     "tab.create",
@@ -2355,20 +2425,20 @@ impl Runtime {
                     );
                     self.sync_input_requests();
                 }
-                if let Some(store) = self.workspace_views.as_mut() {
-                    store
-                        .agent_admissions
-                        .entry(key)
-                        .or_default()
-                        .insert(format!("create:{admission_id}"));
-                }
                 let admission_path = cwd.clone();
+                let group_id = self
+                    .workspace_views
+                    .as_ref()
+                    .and_then(|store| store.views.get(self.node.as_str(), &cwd))
+                    .and_then(|view| view.agent_groups.selected.clone())
+                    .map(String::into_boxed_str);
                 let action = match host {
                     TabHost::Workspace(workspace_id) => RemoteControlAction::CreateTab {
                         workspace_id,
                         cwd,
                         label: label.to_owned(),
                         area_id,
+                        group_id,
                         admission_id: Some(admission_id),
                     },
                     TabHost::Open(owner) => RemoteControlAction::OpenOwner {
@@ -2376,6 +2446,7 @@ impl Runtime {
                         cwd,
                         label: label.to_owned(),
                         area_id,
+                        group_id,
                         admission_id: Some(admission_id),
                     },
                 };
@@ -2773,6 +2844,19 @@ impl Runtime {
                     .map(str::trim)
                     .filter(|path| !path.is_empty())
                     .map(str::to_owned);
+                if payload
+                    .herdr_session
+                    .as_deref()
+                    .is_some_and(|session| !hide_node_link::device::valid_herdr_session(session))
+                    || (payload.herdr_session.is_some() && herdr_socket_path.is_some())
+                {
+                    self.set_error(
+                        "device.invalid",
+                        "Choose one valid Herdr session or an explicit socket",
+                        false,
+                    );
+                    return true;
+                }
                 if herdr_socket_path
                     .as_deref()
                     .is_some_and(|path| !crate::remote::valid_remote_socket_path(path))
@@ -2809,6 +2893,7 @@ impl Runtime {
                         ssh_alias: ssh_alias.clone(),
                     },
                     herdr_socket_path,
+                    herdr_session: payload.herdr_session,
                     host_consent: payload.host_consent.then(|| self.new_host_consent()),
                 };
                 self.snapshot
@@ -3083,6 +3168,14 @@ impl Runtime {
             Event::ReopenClosed => self.reopen_closed(),
             Event::ForkPane(payload) => {
                 let pane_id = payload.pane_id;
+                if self.pane_move_holds_pane(&pane_id) {
+                    self.set_error(
+                        "pane.move_pending",
+                        "Check the pending pane move before forking this pane",
+                        false,
+                    );
+                    return true;
+                }
                 let Some(agent) = self
                     .snapshot
                     .navigator
@@ -3886,6 +3979,8 @@ impl Runtime {
             Event::FirstRunAdvance(payload) => {
                 self.advance_first_run(payload.from, payload.notifications)
             }
+            Event::FirstRunBack(payload) => self.back_first_run(payload.from),
+            Event::FirstRunDraft(payload) => self.update_first_run_draft(payload),
             Event::DesktopNotificationsSet(payload) => self
                 .set_desktop_notification_preferences(Some(payload.enabled), payload.done_enabled),
             Event::DesktopNotificationsDoneSet(payload) => {
@@ -4120,6 +4215,7 @@ impl Runtime {
                         .and_then(RightPanelSection::parse)
                         .unwrap_or(current.right_panel_section),
                     resolved_sessions: current.resolved_sessions,
+                    revisit_sessions: current.revisit_sessions,
                     session_resolution_inputs: current.session_resolution_inputs,
                     session_collapsed_checkout_ids: current.session_collapsed_checkout_ids,
                     session_open_folds: current.session_open_folds,
@@ -4207,6 +4303,7 @@ impl Runtime {
                     // The wizard's own events own its progress, the
                     // notification switch and the introductions seen.
                     first_run: current.first_run,
+                    first_run_choices: current.first_run_choices,
                     desktop_notifications: current.desktop_notifications,
                     product_analytics_enabled: current.product_analytics_enabled,
                     desktop_notifications_done: current.desktop_notifications_done,

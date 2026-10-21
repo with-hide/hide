@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { addProjectHosts, alreadyRegistered, defaultProjectParent, hostWays, initialHost, parseCloneUrl, projectNameProblem, projectPath, refusalText, trimFolder } from "./addProject";
+import { addProjectHosts, alreadyRegistered, cloneUrlDraft, defaultProjectParent, hostWays, initialHost, parseCloneUrl, projectNameProblem, projectPath, refusalText, trimFolder } from "./addProject";
 import type { Device, WorkspaceRegistration } from "./snapshot";
 
 const { t } = initializeInterfaceI18n("en");
@@ -83,9 +83,20 @@ describe("Add a project", () => {
     }
   });
 
-  it("puts a new project beside the most recently added one on this Mac, else in home", () => {
+  it("saves only complete clone URL drafts without user information, queries or fragments", () => {
+    for (const raw of ["https://alice:password@example.test/repo.git", "https://token@example.test/repo.git", "https://example.test/repo.git?token=secret", "https://example.test/repo.git#secret", "git@example.test:repo.git", "https://alice:password@", "unfinished-secret"]) {
+      expect(cloneUrlDraft(raw), raw).toBe("");
+    }
+    for (const raw of ["https://example.test/team/repo.git", "example.test:team/repo.git", "file:///work/repo.git"]) {
+      expect(cloneUrlDraft(` ${raw} `)).toBe(raw);
+    }
+  });
+
+  it("puts a new project where most of this Mac's projects live, the latest winning a tie, else in home", () => {
     expect(defaultProjectParent([], "local")).toBe("~");
     expect(defaultProjectParent([registration("/home/me/work/a"), registration("/home/me/side/b/"), registration("/home/me/x", "mini")], "local")).toBe("/home/me/side");
+    // A worktree folder added last does not take the default away from where the projects are.
+    expect(defaultProjectParent([registration("/home/me/a"), registration("/home/me/b"), registration("/home/me/app.worktrees/c")], "local")).toBe("/home/me");
     expect(defaultProjectParent([registration("/home/me/a", "mini")], "local")).toBe("~");
     // The device's Home is no project: a project added after it is not expected beside `~/hide`.
     expect(defaultProjectParent([registration("/home/me/work/a"), { ...registration("/home/me/hide"), home: true }], "local")).toBe("/home/me/work");

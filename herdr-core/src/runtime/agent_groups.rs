@@ -1,4 +1,4 @@
-//! Named-group actions are one core transition, with no Herdr mutation.
+//! Named-group actions, including terminal creation in the selected group.
 use super::view_areas::ViewWorkspace;
 use super::*;
 use crate::agent_groups::GroupError;
@@ -34,6 +34,9 @@ enum Action {
     Undo,
     NewTab {
         area_id: Option<String>,
+        /// Older clients can still finish their draft-based start flow.
+        #[serde(default)]
+        terminal: bool,
     },
     CloseDraft {
         tab_id: String,
@@ -68,6 +71,24 @@ impl Runtime {
             );
             return true;
         }
+        let touched = match &payload.action {
+            Action::Move { tab_id }
+            | Action::Create {
+                tab_id: Some(tab_id),
+                ..
+            } => self.pane_move_holds_tab(tab_id),
+            Action::Dissolve | Action::Undo => self.pane_move_holds_workspace(&key),
+            _ => false,
+        };
+        if touched {
+            self.set_request_error(
+                "pane.move_pending",
+                "Check the pending pane move before changing its group",
+                false,
+                Some(&payload.request_id),
+            );
+            return true;
+        }
         let request = format!("group:{}", payload.request_id);
         if self.split_request_seen(&key, &request) {
             return false;
@@ -83,6 +104,71 @@ impl Runtime {
                 self.remember_split_request(&key, request);
             }
             return changed;
+        }
+        if let Action::NewTab {
+            area_id,
+            terminal: true,
+        } = &payload.action
+        {
+            let Some(view) = self
+                .workspace_views
+                .as_ref()
+                .and_then(|store| store.views.get(&key.0, &key.1))
+            else {
+                return false;
+            };
+            if view.agent_groups.selected != payload.group_id {
+                self.set_request_error(
+                    "agent_group.refused",
+                    "The group changed. Select it again and retry.",
+                    false,
+                    Some(&payload.request_id),
+                );
+                return true;
+            }
+            let area_id = area_id
+                .clone()
+                .unwrap_or_else(|| view.selected_agent_layout().tree.active_area.clone());
+            let Some((workspace_id, checkout_id, label)) = self
+                .catalog_workspaces()
+                .filter(|workspace| workspace.device_id == key.0)
+                .flat_map(|workspace| &workspace.checkouts)
+                .find(|checkout| checkout.path == key.1)
+                .map(|checkout| {
+                    (
+                        checkout.workspace_id.clone(),
+                        checkout.id.clone(),
+                        checkout.next_tab_label.clone(),
+                    )
+                })
+            else {
+                return false;
+            };
+            self.supersede_start_navigation();
+            self.remember_split_request(&key, request);
+            return if key.0 == self.node.as_str() {
+                self.apply_event(Event::CreateTab(CreateTabPayload {
+                    area_id: Some(area_id),
+                    workspace_id,
+                    checkout_id: Some(checkout_id),
+                    label,
+                    request_id: Some(payload.request_id),
+                }))
+            } else {
+                self.request_remote_terminal(RemoteControlPayload {
+                    target_id: key.0,
+                    request_id: payload.request_id,
+                    report_pane_focus_outcome: false,
+                    focus_device: true,
+                    request: RemoteControlRequest::CreateTab {
+                        workspace_id,
+                        checkout_id: Some(checkout_id),
+                        cwd: key.1,
+                        label,
+                        area_id: Some(area_id),
+                    },
+                })
+            };
         }
         let Some(store) = self.workspace_views.as_mut() else {
             return false;
@@ -123,7 +209,7 @@ impl Runtime {
                         .ok_or(GroupError::MissingGroup)?,
                 )?,
                 Action::Undo => view.undo_agent_group()?,
-                Action::NewTab { area_id } => {
+                Action::NewTab { area_id, .. } => {
                     if view.agent_groups.selected != payload.group_id {
                         return Err(GroupError::MissingGroup);
                     }

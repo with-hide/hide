@@ -132,6 +132,19 @@ it("selects and brings into view the row that stands for the focused pane, openi
     expect(container.querySelector('[data-agent-open="pane:parent"]')?.getAttribute("aria-current")).toBe("true");
     expect(scrolled).toHaveLength(before);
 
+    // A section can cover a row before the next paint updates data-stuck (issue 1025).
+    // Current geometry, rather than that stale marker, decides visibility.
+    const header = container.querySelector<HTMLElement>("[data-section-sticky]")!;
+    header.dataset.stuck = "false";
+    layout.mockImplementation(function (this: HTMLElement) {
+      if (this.matches("[data-project-list]")) return rect(0, 100);
+      if (this.matches("[data-section-sticky]")) return rect(0, 26);
+      return rect(10, 28);
+    });
+    await show("checkout:beta-main", "pane:beta");
+    expect(scrolled).toHaveLength(before + 1);
+    expect(scrolled.at(-1)).toBe(betaRow);
+
   } finally {
     await act(async () => root.unmount());
     container.remove();

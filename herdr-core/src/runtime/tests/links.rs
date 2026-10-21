@@ -373,6 +373,7 @@ fn spawned_record(
             session: crate::wire::session_digest(session),
         },
         ended: false,
+        terminal_id: None,
         forked: false,
     }
 }
@@ -1642,7 +1643,7 @@ fn resuming_starts_the_providers_resume_and_refuses_what_cannot_resume() {
         ("omp", "--no-session", "agent_start.invalid_resume"),
         ("omp", "--yolo", "agent_start.invalid_resume"),
         ("grok", "native-one", "agent_start.invalid_resume"),
-        ("cursor", "native-one", "agent_start.invalid_resume"),
+        ("cursor", "native-one", "agent_start.unknown_provider"),
         ("unknown", "native-one", "agent_start.unknown_provider"),
         ("claude", "a b", "agent_start.invalid_resume"),
         ("claude", "--dangerous", "agent_start.invalid_resume"),

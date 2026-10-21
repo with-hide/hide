@@ -84,6 +84,17 @@ pub(super) struct RemoteDeviceConnection {
 }
 
 impl Runtime {
+    pub(super) fn refresh_remote_topology(&self, device: &str) -> bool {
+        if let Some(sync) = self
+            .remote_connections
+            .get(device)
+            .and_then(|connection| connection.sync.as_ref())
+        {
+            sync.republish_waker().refresh_topology()
+        } else {
+            false
+        }
+    }
     /// Makes a registered device the one in front: its checkouts, panes and
     /// files are what the shell shows next.
     pub(super) fn bring_device_forward(&mut self, device_id: String) {
@@ -189,11 +200,12 @@ impl Runtime {
                     let home_path = self.home_path.as_ref().ok_or_else(|| {
                         "HOME is unavailable, so the SSH config cannot be resolved".to_owned()
                     })?;
-                    let transport = self.devices.transport(
+                    let transport = self.devices.transport_session(
                         home_path,
                         &device_id,
                         &ssh_alias,
                         registration.herdr_socket_path.clone(),
+                        registration.herdr_session.clone(),
                     )?;
                     (DeviceReach::Dialed(transport), None)
                 }

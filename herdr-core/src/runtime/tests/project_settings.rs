@@ -840,6 +840,7 @@ fn acknowledged_remote_repository_edits_invalidate_native_intake_before_returnin
                 ssh_alias: "mini".into(),
             },
             herdr_socket_path: None,
+            herdr_session: None,
             host_consent: None,
         });
     let mut project = runtime.snapshot.navigator.workspaces.remove(0);

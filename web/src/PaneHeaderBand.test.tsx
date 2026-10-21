@@ -102,7 +102,7 @@ it("puts the tree and direct-child number first while keeping state counts acces
     const trigger = row.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
     expect(trigger.getAttribute("aria-label")).toBe("Child agents 5 · Child requests: 1 · Working: 1 · Reported results: 1 · Unknown state: 1 · Resting: 1");
     expect(trigger.textContent).toBe("5");
-    expect(row.firstElementChild).toBe(trigger);
+    expect(row.firstElementChild?.firstElementChild).toBe(trigger);
     // An ordinary child's question is its parent's to answer: no raised count.
     expect(trigger.querySelector('[data-mark="turn"]')).toBeNull();
     expect(row.querySelectorAll("[data-pane-child-name]")).toHaveLength(0);
@@ -126,7 +126,7 @@ it("puts the pane's own approval after the tree and keeps raised counts in its n
   const { container, unmount } = await mount({ working: false, notice: null, band: { ...header.band!, kind: "approval", reason: "Run the verification command", raised: undefined, action: null, more: 1 } }, agents);
   try {
     const row = container.querySelector('[data-pane-header-band="approval"]')!;
-    expect(row.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
+    expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
     expect(row.querySelector("[data-verb]")?.getAttribute("data-verb")).toBe("approval");
     expect(row.querySelector("[data-pane-band-who]")).toBeNull();
     expect(row.querySelector("[data-pane-child-names]")).toBeNull();
@@ -143,7 +143,7 @@ it("shows only the core-owned progress when no request waits, with or without ch
   const withChildren = await mount({ working: true, notice: null, band: null, progress }, childrenFixture());
   try {
     const row = withChildren.container.querySelector('[data-pane-header-band="progress"]')!;
-    expect(row.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
+    expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
     expect(row.querySelector('[data-pane-own-progress]')?.textContent).toBe(progress);
     expect(row.textContent).not.toContain("Child question");
   } finally { await withChildren.unmount(); }
@@ -542,4 +542,155 @@ it("draws no second row for a pane with nothing waiting and no children", async 
   try {
     expect(container.querySelector("[data-pane-header-band]")).toBeNull();
   } finally { await unmount(); }
+});
+
+// PRD pane-last-request B1, B10, B11: the second row leads with the turn's
+// request, `<request> → <answer>` with no word before it, while the core says it shows the
+// turn; a request with no words counts its images.
+it("leads the row with the turn's request before its ask, progress or result", async () => {
+  const request = { text: "Proceed as proposed + check unclear states", images: 0 };
+  const ask: PaneBand = { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 };
+  const cases: [PaneHeader, string, string][] = [
+    [{ working: false, notice: null, band: ask, request }, "answer", "Proceed as proposed + check unclear states→QuestionBundle questions 1-3 into one PR?"],
+    [{ working: true, notice: null, band: null, progress: "Reading the status model", request }, "progress", "Proceed as proposed + check unclear states→Reading the status model"],
+    [{ working: true, notice: null, band: null, request }, "request", "Proceed as proposed + check unclear states→Working"],
+    [{ working: false, notice: null, band: null, progress: "Remote reads every 3 s, PR merged", finished: true, request }, "finished", "Proceed as proposed + check unclear states→DoneRemote reads every 3 s, PR merged"],
+    [{ working: false, notice: null, band: null, finished: true, request: { text: null, images: 2 } }, "finished", "2 images→Done"],
+  ];
+  for (const [value, kind, text] of cases) {
+    const { container, unmount } = await mount(value, [], { paneId: "solo" });
+    try {
+      const row = container.querySelector(`[data-pane-header-band="${kind}"]`)!;
+      expect(row.textContent).toBe(text);
+      // The request and the answer are the row's two parts, so a turn that
+      // does not fit one line wraps its answer under the request (B4).
+      expect([...row.querySelectorAll("[data-pane-turn-part]")].map((part) => part.getAttribute("data-pane-turn-part"))).toEqual(["request", "answer"]);
+      expect(row.querySelector("[data-pane-turn-request]")?.getAttribute("aria-label")).toBe(`Request: ${text.split("→")[0]}`);
+    } finally { await unmount(); }
+  }
+});
+
+function turnAgent(): AgentRow {
+  return legacyAgentRow({
+    id: "a", pane_id: "solo", identity_label: "Unread-state marks", agent_kind: "claude", session_id: "s-1", device_id: "local",
+    request: {
+      verb: "answer", verb_since_unix_ms: 0, line: "Bundle questions 1-3 into one PR?", end: "question",
+      request: { text: "ok do that. it should stay unread i think?\nalso check for other unclear states\nand a third line", cut: false, images: 0, at_unix_ms: 1, sender: { kind: "operator" } },
+      request_summary: "Proceed as proposed + check unclear states",
+      recent_turns: [
+        { request: "Proposal for the white ring after finishing", end: "done", line: "Two options drafted", at_unix_ms: 2 },
+        { request: "Why unread states stick", end: null, line: null, at_unix_ms: 1 },
+      ],
+      later_by: { kind: "named", name: "lead" },
+      reply: { text: "Found three unclear states:\n1. finished but unread\n2. idle with letters\n3. stale ring\n4. more", cut: false, at_unix_ms: 3 },
+      pull_requests: [],
+    },
+  } as Partial<AgentRow>);
+}
+
+// PRD pane-last-request B6-B9: the pointer or focus on the request opens the
+// turn card under it, a press pins it, and Esc closes a pinned card and stops
+// there; a card the pointer only shows leaves Esc to the terminal.
+it("opens the turn card from the request and pins it on a press until Esc", async () => {
+  const value: PaneHeader = { working: false, notice: null, band: { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 }, request: { text: "Proceed as proposed + check unclear states", images: 0 } };
+  const { container, unmount } = await mount(value, [turnAgent()], { paneId: "solo", rest: { status: { pane_focus_request: null }, terminal: { headers: { solo: value } } } as SnapshotRest });
+  const card = () => document.querySelector<HTMLElement>("[data-pane-turn-card=solo]");
+  const button = () => container.querySelector<HTMLButtonElement>("[data-pane-turn-request=solo]")!;
+  try {
+    expect(card()).toBeNull();
+    await act(async () => button().dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    expect(card()?.querySelector("[data-turn-card-summary]")?.textContent).toBe("Proceed as proposed + check unclear states");
+    expect(card()?.querySelector("[data-turn-card-original]")?.textContent).toContain("ok do that.");
+    expect(card()?.querySelector("[data-turn-card-later]")?.textContent).toBe("Next request from lead");
+    expect(card()?.querySelector("[data-turn-card-response]")?.textContent).toBe("QuestionBundle questions 1-3 into one PR?");
+    expect(card()?.querySelector("[data-turn-card-reply]")?.textContent).toContain("Found three unclear states");
+    expect(card()?.querySelector("[data-turn-card-sender]")?.textContent).toBe("Me");
+    // The rail reads in time order, so the older of the two turns before comes first.
+    expect([...card()!.querySelectorAll("[data-turn-card-earlier-item]")].map((item) => [...item.querySelectorAll("p")].map((line) => line.textContent))).toEqual([
+      ["Why unread states stick"],
+      ["Proposal for the white ring after finishing", "Done · Two options drafted"],
+    ]);
+    expect(card()?.querySelector("[data-turn-card-record]")?.textContent).toBe("Open record");
+    // A card the pointer only shows leaves Esc to the terminal.
+    const passed = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    await act(async () => document.body.dispatchEvent(passed));
+    expect(card()).not.toBeNull();
+    await act(async () => { button().dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })); vi.advanceTimersByTime(200); });
+    expect(card()).toBeNull();
+    await act(async () => button().click());
+    expect(button().hasAttribute("aria-pressed")).toBe(false);
+    expect(button().getAttribute("aria-expanded")).toBe("true");
+    await act(async () => { button().dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })); vi.advanceTimersByTime(200); });
+    expect(card(), "a pinned card stays when the pointer leaves").not.toBeNull();
+    await act(async () => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    expect(card()).toBeNull();
+    await act(async () => button().focus());
+    expect(card()).not.toBeNull();
+    await act(async () => button().blur());
+    expect(card()).toBeNull();
+  } finally { await unmount(); }
+});
+
+// PRD pane-last-request B6, B9: the keyboard reaches the card's 기록 열기
+// with Tab from the focused request, the card stays open while focus is in
+// it, Shift+Tab goes back, Tab past its end closes it on the request, and
+// the shell's Esc (its innermost layer) closes it and returns focus without
+// reopening it. A card the pointer only shows is no Esc layer, so Esc stays
+// the terminal's.
+it("moves the keyboard into the turn card with Tab and back", async () => {
+  const value: PaneHeader = { working: false, notice: null, band: { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 }, request: { text: "Proceed as proposed + check unclear states", images: 0 } };
+  const { container, unmount } = await mount(value, [turnAgent()], { paneId: "solo", rest: { status: { pane_focus_request: null }, terminal: { headers: { solo: value } } } as SnapshotRest });
+  const card = () => document.querySelector<HTMLElement>("[data-pane-turn-card=solo]");
+  const button = () => container.querySelector<HTMLButtonElement>("[data-pane-turn-request=solo]")!;
+  const record = () => card()?.querySelector<HTMLButtonElement>("[data-turn-card-record]") ?? null;
+  const key = (target: Element, init: KeyboardEventInit) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
+  const layers = () => useUiStore.getState().escapeLayers;
+  try {
+    await act(async () => button().dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    expect(card()).not.toBeNull();
+    expect(layers(), "a hover card leaves Esc to the terminal").toHaveLength(0);
+    await act(async () => { button().dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })); vi.advanceTimersByTime(200); });
+    await act(async () => button().focus());
+    expect(card()).not.toBeNull();
+    expect(layers()).toHaveLength(1);
+    await key(button(), { key: "Tab" });
+    expect(document.activeElement).toBe(record());
+    expect(card(), "focus inside the card keeps it open").not.toBeNull();
+    await key(record()!, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(button());
+    expect(card()).not.toBeNull();
+    await key(button(), { key: "Tab" });
+    await key(record()!, { key: "Tab" });
+    expect(card(), "Tab past the end closes the card").toBeNull();
+    expect(document.activeElement).toBe(button());
+    await act(async () => { button().blur(); button().focus(); });
+    await key(button(), { key: "Tab" });
+    expect(document.activeElement).toBe(record());
+    await act(async () => layers().at(-1)!());
+    expect(card()).toBeNull();
+    expect(document.activeElement).toBe(button());
+    expect(layers()).toHaveLength(0);
+  } finally { await unmount(); }
+});
+
+// PRD pane-last-request B11, D-12: the title shows the same card on the
+// pointer in place of its hint, headed by its title, product and state words;
+// a press still opens the session record.
+it("shows the turn card on the record button's hover, headed by the title", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  useShellStore.setState({ agents: [turnAgent()], rest: { status: { pane_focus_request: null } } as SnapshotRest });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider><PaneRecordButton paneId="solo" title="Unread-state marks" product="Claude Code" actions={createActions(() => true)} plain={<span />}>Unread-state marks</PaneRecordButton></TooltipProvider>));
+  try {
+    const button = container.querySelector<HTMLButtonElement>("[data-pane-record]")!;
+    await act(async () => button.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    const card = document.querySelector<HTMLElement>("[data-pane-turn-card=solo]")!;
+    expect(card.querySelector("[data-turn-card-head]")?.textContent).toMatch(/^Unread-state marksClaude Code/);
+    expect(card.querySelector("[data-turn-card-summary]")?.textContent).toBe("Proceed as proposed + check unclear states");
+    expect(document.querySelector("[role=tooltip]")).toBeNull();
+  } finally { await act(async () => root.unmount()); }
 });

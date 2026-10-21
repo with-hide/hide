@@ -229,6 +229,9 @@ Regression owners: `a_turn_end_is_not_a_stop_until_its_session_read_lands`, `a_r
 ## Where each axis comes from
 
 Activity and completion come only from Herdr's `agent_status` and `completion_seq`: `working` is Working, `idle` and `done` are stopped, `done` or `idle` with a `completion_seq` reports a completion, and any other value reads as unknown rather than idle.
+An agent-list transport failure makes the retained telemetry unconfirmed while the topology stream remains connected.
+Until a successful agent list or bootstrap snapshot confirms it again, the agent keeps its identity and task title but has Unknown activity, no completion or current demand, and requires a status check before closing.
+An identical successful list restores the confirmed state; a topology event alone does not confirm the entire agent list.
 No pane token is read for either.
 Demand has these sources:
 
@@ -283,6 +286,7 @@ Each of the four groups above is then a group of the rows the operator's lists e
 Done is deliberately separate from Needs You: a stop to read is "look when you have a moment", an unread demand is "act now".
 
 An archived session (PRD session-archive) is in no group and draws no mark: nothing of it runs, so it has no turn, no progress and nothing to read, and it is counted on no badge.
+A resolved row rests in every list, so its mark is counted on no checkout badge either (`sync_checkout_agent_summaries`), as the 태스크 list's Needs You, the raised lists and the phone's list already leave it out.
 It stands only in the 태스크 list's `보관됨` fold and its record, with its archive state (archiving, resuming, could not resume, deleting, unknown) as words; a member that came back is an ordinary row again, and a member still archived while its root is live is listed in that root's record, not as a row.
 While a member is archived, its delivery registration and the watches on it are held as a sleeping session's are (`docs/delivery.md`), so its pane's absence does not end its work's ownership; resuming continues them.
 
@@ -785,6 +789,31 @@ The workspace inspector uses the canonical representative agent and disconnected
 
 ## Task identity
 
+Conversation display history belongs to `(device, provider, native session ID)` in the existing links ledger, independently of the pane that currently runs it.
+The label worker restores only title, goal, summary and PR references into a display binding; its current turn facts, wait causes, lifecycle and input target still require the existing current-reference proof.
+A missing Herdr reference may use the exact foreground executable's explicit resume argument as a history locator, after the native reader proves that record's owner.
+That argument is launch intent, not proof of the conversation the process currently has open: such a binding remains `unconfirmed`, spends no new analysis and supplies no current facts or control authority.
+A new Herdr hook reference supersedes the locator and clears the previous display immediately; only a native read for that reference and generation confirms the binding.
+No latest-session, cwd or reverse owner-hash guess is made.
+
+The core publishes `record_connection` as `checking`, `confirmed` or `unconfirmed` when a row has display history.
+Checking and unconfirmed history keeps its last title and valid PRs dimmed, with the localized connection words only in the hint and accessible name; confirmed history removes that treatment.
+A provisional PR participates in the display summary without gaining current work duty or a session-created relation; the normal merged/closed display filter still applies.
+It cannot change a task's stage, and a tab's title provenance follows the core's focused pane even when several panes share a title.
+Failure keeps display history and retries through the existing single reader, at most once per pane per fifteen seconds after an unsuccessful confirmation.
+The row's branch may differ from a saved PR's branch; existing closed/merged filters remain, and a provisional relation never grants current PR duty or a confirmed-created mark.
+This connection state is separate from hook installation diagnosis and GitHub read staleness.
+A different provider or reference clears the old display, and generation fencing rejects old reads and analyses even on an A-to-B-to-A return.
+
+The existing labels file is compatibility input, never a second session-history database.
+The existing ledger writer acknowledges display saves after commit; an unindexed session or failed query remains pending and retries through the same bounded reader, and queue admission alone never settles a save.
+Native title changes preserve absent fields and apply explicit clears, and generator standby suppresses display bindings along with labels.
+Only a record with an explicit native ID and matching provider owner is eligible for import, repeated imports converge, and corrupt or newer labels files are preserved instead of overwritten by an empty save.
+The links writer keeps the existing device separation and session retention; display metadata adds no transcript, path or complete facts copy.
+Agent summaries Off hides saved goals and summaries while retaining native/manual titles and PR restoration.
+Regression owners are `labels/record_tests.rs`, `labels/store.rs`, `links/ledger_store_tests.rs`, the wire locator tests, and the shared row/PR tests.
+
+
 Project and Task session rows project a separate `last_prompt_at_unix_ms` from the latest dated actual request in the proven native session, whether sent by the operator or another agent.
 Missing or zero timestamps draw no elapsed time; status changes and daemon restarts never manufacture one.
 The existing `changed_at_unix_ms`, ordering, unread, waiting and escalation clocks keep their state semantics.
@@ -848,7 +877,9 @@ Where a program compares names, an unnamed registration is called by its registr
 Where a person reads a name (the bell line, a row) an unnamed agent is called by its title, and by its runtime's name when it has none.
 Nothing publishes a session `name`, reads Codex's first human turn as a title, or renames an agent or tab.
 
-The label is made by the core, not by a plugin and not through pane tokens: `herdr-core/src/labels/` reads each Claude, Codex, Grok, Pi, omp, Cursor or OpenCode pane's conversation, asks the background AI for the session's goal, one line for the turn and how the turn ended (`context_label.v18`), in the core's output language ([AI_PROVIDERS.md](AI_PROVIDERS.md#the-output-language)), and keeps the answer per pane (the architecture is in [ARCHITECTURE.md](ARCHITECTURE.md#agent-labels-in-the-core)).
+The label is made by the core, not by a plugin and not through pane tokens: `herdr-core/src/labels/` reads each Claude, Codex, Grok, Pi, omp, Cursor or OpenCode pane's conversation, asks the background AI for the session's goal, one line for the turn, the turn's request in one line and how the turn ended (`context_label.v19`), in the core's output language ([AI_PROVIDERS.md](AI_PROVIDERS.md#the-output-language)), and keeps the answer per pane (the architecture is in [ARCHITECTURE.md](ARCHITECTURE.md#agent-labels-in-the-core)).
+Each pane keeps the request summaries of its last three turns by the offset of the message that began each, with how each stood at its last judgment (`PaneRecord::recent_turns`, a device's in its mark), so a restart keeps them; the turn start's summary stays when the turn end is judged, because the end may see only the agent's last words of a long turn; a turn another agent's letter began is not kept while a pane the ledger names no parent for has an operator's request, so a lead's reports cannot push the shown request's summary out, while a delegated child, whose header shows its newest request, keeps its parent's follow-ups; a judgment of an older turn that lands after a newer request began writes only its own turn; a failed judgment forgets how its turn stood but keeps its summary; and a new session or a rewritten conversation drops them all (PRD pane-last-request D-09, D-10).
+The request view shows the shown request's summary as `request_summary`, or the request's own first line (a letter's header left out, spaces folded, cut at 80 characters) while the label has none, summaries are off, the judgment failed or the turn predates the summary; `recent_turns` carries up to two summarized turns before it, each with its line only when it is known how the turn ended, and neither reaches a phone.
 A session with no goal and no assigned work answers `goal: null`; greetings, identity questions and capability questions create no task and no placeholder title.
 The row uses the existing title priority above, and the next analysis after real work is requested sets its first goal.
 A session started with a goal command is named from that goal like any other request.
@@ -938,7 +969,9 @@ A Hide AI row for a home is a task only while it is in Needs You, where it draws
 Resolve records `resolved_sessions` in core UI state and publishes the hidden row only after the existing coalesced writer acknowledges that exact save.
 Failure keeps it visible with the existing actionable save error; input, activity, session replacement or pane closure invalidates a pending acknowledgement.
 New operator input, a received letter or renewed working activity restores the session.
-Automatic resolution requires a stopped agent, no demand and every assigned PR merged or closed; settlements before restored input cannot resolve it again.
+The operator cannot resolve a row whose agent works or waits, or one an approval prompt holds: the 태스크 menu does not offer it, and the core refuses it with a `session.resolve.refused` diagnostic (`sessions::resolve_refusal`).
+Automatic resolution requires a stopped agent whose row is Seen (nothing unread and nothing it waits on), no demand and every assigned PR merged or closed; settlements before restored input cannot resolve it again.
+An unread finish therefore stays under the 태스크 list's 읽을 것 and a wait under 대기 though the pull request merged, and resolves once it is read and nothing is left to wait on; an operator's Resolve reads the row as well, so no row rests with a mark that says otherwise.
 A resolved task rests, folded under the 태스크 list's `쉬는 중`; resolutions older than 24 hours (`RESOLVED_WINDOW_MS`) leave the Resolved group and stay among the resting tasks.
 The existing runtime tick advances that window without adding a timer or per-snapshot clock read.
 Closing a pane prunes its resolution and input record.
@@ -1006,11 +1039,11 @@ Regression owners: `agent_state::escalation::tests`, `runtime::tests::lineage`, 
 
 ### Quiet pane headers
 
-`agent_state/header.rs` publishes a working-line flag, at most one notice, at most one band, and the current pane agent's own live Working progress when it has a nonblank sentence.
+`agent_state/header.rs` publishes a working-line flag, at most one notice, at most one band, the current pane agent's own live Working progress when it has a nonblank sentence, and the turn's request while the second row shows the turn (PRD pane-last-request B1, B10, B11): the pane's own or a raised ask, Working, or a finished turn the operator has not looked at (`finished`, with the label's result sentence as its progress).
 The notice says why the terminal is not live and is drawn in the pane's body: the device away first, then Herdr's restoration failure, sleep, and the stream's own state (ended with its exit code, released, closing, unavailable, starting, or a wheel another client holds); a device's unavailable pane reads `reconnecting` or `helper_not_allowed` by what its link waits for.
 A pane with a notice takes no answer, so it has no band, progress or working line.
 The band is the operator's turn and nothing else: the pane's own Approval, Answer or Blocked first, then the lead raised descendant, then the pane's own Stopped.
-A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; Working has a thin blue line and can show its own progress, while CI wait, child wait and Idle have nothing.
+A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; a finished turn the operator has not looked at still shows its request and result without a band until the pane is read; Working has a thin blue line and can show its own progress, while CI wait, child wait, a read finished turn and Idle have nothing.
 A band stays until it is answered, not until it is read: `Band.read` says the operator has had the pane focused since it arrived, and a question the operator read but did not answer keeps its Answer band although the row's verb has left Answer.
 An ask band is quiet text on the secondary fill with a warning rail (PRD D-43): the pane's own ask starts with its verb and says what is asked (for an Answer, the row's second line, so a native question reads as itself).
 A raised descendant's `RaisedAsk` starts with its verb, then the originating agent's name and `(자식)` for a direct child or `(하위 세션)` for a deeper descendant, what to do, the unreceived parent for an Answer, the elapsed time, and Open.
@@ -1071,7 +1104,11 @@ The core never renames the Herdr tab for this; the Recent Panels label is projec
 ### A device's tasks
 
 A device's tasks (PRD overview-device-tasks D-05) group a root and every descendant on any device into one task, derived by `agent_state/tally/tasks.rs` from the same agent rows and lineage the sidebar draws; the sidebar's 태스크 list draws them (PRD sidebar-task-lens D-20), the Overview's Projects counts them, and the shell adds no state of its own.
-A task's state is its root's, in this order: blocked when the root's demand is an error, Needs You and Done from the root's group, working from its activity, waiting while it waits on proven work (its descendants, a background task, a reply or a pull request's checks), and otherwise resting, or cleanup when every pull request merged and a linked worktree is still on disk.
+A task's state is its root's, in this order: blocked when the root's demand is an error, Needs You and Done from the root's group, working from its activity, revisit while the root carries `revisit` (below), waiting while it waits on proven work (its descendants, a background task, a reply or a pull request's checks), and otherwise resting, or cleanup when every pull request merged and a linked worktree is still on disk.
+`revisit` (PRD revisit-group) is laid on a root row by `sessions::revisit_of` from the row's own axes and the operator's mark in `ui_state.revisit_sessions`: a question or approval the operator read, on a root that is not blocked, working or resolved, unless 다 봤음 put away that ask (known by its state stamp, `changed_at_unix_ms`, which reading does not move); or the operator's ★.
+The current state wins: a ★ task that asks, finishes or works stands in that group, and a ★ wins over waiting, rest and an automatic resolution, while an operator's 해결 takes the mark.
+A mark is bound to the session the pane hosted when it was written and is dropped when another known conversation replaces it or the pane closes, while a conversation reported only after the ★ keeps it; the phone's 다시 볼 것 counts as read, so reading an ask on the desktop clears its phone notice; the archive record keeps the root's ★ and gives it back to the resumed pane; at most 256 tasks carry a ★ (`MAX_STARRED_SESSIONS`), and a mark changes only once the state save holds it.
+Inside revisit the task waiting longest stands first, by the older of its ask and its ★.
 A resolved root rests whatever its group was, and a descendant's state moves only its own row, as everywhere else: a child's ask reaches the card through the root's escalation ([Delegated escalation](#delegated-escalation)), never as a second state.
 A project's Needs You counts the tasks whose root asks for the operator, blocked ones included and resolved ones not, and work another device's root delegated here is counted on the root's device alone.
 A checkout names its issue or memo by the resolution below, and a started item rides its task instead of standing in the backlog.

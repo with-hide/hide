@@ -46,8 +46,8 @@ it.each(AGENT_ADAPTERS.map((row) => [row.id, row.herdr_kind, row.label]))("draws
   expect(renderToStaticMarkup(<AgentMark kind={` ${id.toUpperCase()} `} />)).toContain(`data-agent-mark="${herdrKind}"`);
 });
 
-// A plain shell has no kind, and a bundled logo that no adapter lists (Gemini CLI's, kept for Hide AI) names no agent Hide supports.
-it.each(["future-agent", "gemini-cli", "", null, undefined])("keeps %s neutral", (kind) => {
+// A plain shell has no kind, and a retired kind names no agent Hide actively supports.
+it.each(["future-agent", "gemini-cli", "cursor", "", null, undefined])("keeps %s neutral", (kind) => {
   const markup = renderToStaticMarkup(<AgentMark kind={kind} />);
   expect(markup).toContain('data-agent-mark="neutral"');
   expect(markup).not.toContain("<img");
@@ -68,11 +68,11 @@ it("draws the provider logo in the phone detail head and not in a list row", () 
   expect(renderToStaticMarkup(<AgentHead agent={agent} large />)).toContain('data-agent-mark="codex"');
 });
 
-it.each(["future-agent"])("keeps %s ineligible for resume", (kind) => {
+it.each(["future-agent", "cursor"])("keeps %s ineligible for resume", (kind) => {
   expect(resumeProvider(kind)).toBeNull();
 });
 
-it.each(["grok", "pi", "omp", "cursor"])("enables the completed exact resume reader of %s", (kind) => {
+it.each(["grok", "pi", "omp"])("enables the completed exact resume reader of %s", (kind) => {
   expect(resumeProvider(` ${kind.toUpperCase()} `)).toBe(kind);
 });
 
@@ -80,12 +80,12 @@ it("resumes OpenCode by its proven session id", () => {
   expect(resumeProvider(" OPENCODE ")).toBe("opencode");
 });
 
-it("derives all eight supported phone starts and the existing default from the generated projection", () => {
+it("derives all seven supported phone starts and the existing default from the generated projection", () => {
   expect(START_KINDS).toEqual([
     { id: "claude", label: "Claude" }, { id: "codex", label: "Codex" },
     { id: "grok", label: "Grok" }, { id: "opencode", label: "OpenCode" },
     { id: "pi", label: "Pi" }, { id: "omp", label: "omp" },
-    { id: "cursor", label: "Cursor" }, { id: "agy", label: "Antigravity" },
+    { id: "agy", label: "Antigravity" },
   ]);
   expect(START_KINDS.map((row) => row.id)).toEqual(PROVIDER_KINDS);
   expect(START_KINDS).toEqual(AGENT_ADAPTERS.filter((row) => row.can_start).map((row) => ({ id: row.herdr_kind, label: row.picker_label })));
@@ -93,7 +93,7 @@ it("derives all eight supported phone starts and the existing default from the g
   expect(agentAdapter("future-agent")).toBeUndefined();
 });
 
-it.each([[" CLAUDE_CODE ", "claude", "Claude Code"], [" CODEX ", "codex", "Codex"], [" GROK ", "grok", "Grok"], [" PI ", "pi", "Pi"], [" OMP ", "omp", "omp"], [" CURSOR ", "cursor", "Cursor"], [" OPENCODE ", "opencode", "OpenCode"], [" AGY ", "agy", "Antigravity"]])("dispatches a canonical resume from the actual %s session button", async (kind, canonical, product) => {
+it.each([[" CLAUDE_CODE ", "claude", "Claude Code"], [" CODEX ", "codex", "Codex"], [" GROK ", "grok", "Grok"], [" PI ", "pi", "Pi"], [" OMP ", "omp", "omp"], [" OPENCODE ", "opencode", "OpenCode"], [" AGY ", "agy", "Antigravity"]])("dispatches a canonical resume from the actual %s session button", async (kind, canonical, product) => {
   const saved = useShellStore.getState();
   const checkout = { id: "checkout", workspace_id: "project", path: "/project/task", branch: "task", exists: true } as Checkout;
   const project = { id: "project", device_id: "local", path: "/project", label: "Project", checkouts: [checkout] } as Workspace;

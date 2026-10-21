@@ -88,6 +88,16 @@ Read actual job outcomes and retries; this mapping describes checked-in ownershi
 
 ## Resident ticks, timers and watchers
 
+
+Conversation display restoration reuses the labels reader and links writer, adding no timer, input callback or coordinator I/O.
+A missing hook reference admits one serialized process-info locator read (one-second deadline), the existing bounded native read, and one local metadata RPC (one-second deadline); failures retry no sooner than fifteen seconds.
+Only native owner plus current hook proof confirms a binding, and the same pane/provider/reference generation fences every result.
+An unchanged known owner reuses its display metadata without another ledger query, and unchanged metadata is not written again.
+Compatibility memory retains at most 512 short display records and twenty PRs per record; ledger queries return twenty PRs, use the existing sixteen-call mailbox and existing bounded write queue, and deletion follows existing session retention.
+The labels reader is joined by its coordinator owner and the links writer by its existing owner; their existing single-flight admission bounds pending restoration work.
+No new work occurs per keystroke or terminal frame, and publication follows actual display connection or metadata transitions.
+
+
 Use this ledger when deciding whether a feature can reuse an owner instead of adding another permanent loop.
 The source paths are the authority for cadence, admission and cleanup; a duration is a scheduling interval or deadline, never a measured latency guarantee.
 The ledger covers core/daemon background schedules, the desktop host's discovery watch and the shared elapsed display clock.
@@ -124,7 +134,7 @@ Hook diagnosis uses the existing kit worker so a held read no longer blocks topo
 | Terminals relay tap: `hided/src/relay.rs` (one per linked node) | Every output chunk of a pane that is not the node's own, on the producer's thread; the relay's writer wakes on it. | Encode the chunk to base64 outside the tap's lock, then queue it; the writer sends at most 256 items or 1 MiB of text per message and asks the redraws the tap owes. | 4 MiB of base64 output per node, full frames included: a few screens' full frames and their output after them, past which a node that reads nothing is drawn again rather than queued for. Output that would pass it drops the backlog; a full frame that would pass it drops the waiting output of the panes that waited longest until it fits; either redraws those panes from a full frame asked on the writer's next send, never while it is stalled. A full frame alone over 4 MiB is not relayed. Pane ends (`forget`) are never dropped. | The tap closes and empties when its relay ends or a second relay of the node replaces it. |
 | Project Memory pass: `runtime/memory_analysis.rs`, `runtime/operations.rs` | A pass every 60 s on operation ticks, at once when a live session's pane closes; a session must be unchanged for 30 minutes, or its pane closed, before analysis. | Decide that a pass is due under the lock, then walk Projects, read sessions and SQLite and call the provider off-lock, reporting each Project's state and finishing under the lock. | One pass at a time; 1,000 calls a day, the usage limit and input/storage limits belong to the [Memory cost contract](#project-memory-cost-contract). | Runtime Drop cancels the pass's provider call; the pass thread has no retained join handle, so cancellation is not a join guarantee. |
 | Project Memory tab reads: `runtime/project_memory.rs` | `memory_open`, `memory_expand`, `memory_search`, a Memory write, or a receipt batch while a Project is open. | Take owned request data under the lock; open the store read-only and read the Project's cards (one card's sources and previous text only when shown in full) off-lock; land the answer under the lock and publish only when the section changed. | One opened-Project read in flight with at most one waiting; 10,000 cards per Project. | A read whose generation is behind never lands; the worker thread has no retained join handle. |
-| Memory promotion tracker: `runtime/memory_promotion.rs` | Each GitHub answer that changed the catalog, a promote action, and the operation tick at most once a minute while an attempt is running. | Read the store's open promotion rows off-lock; under the lock read only the PR catalog's rows for each attempt's branch and the in-memory coordination ledger, and ask one PR catalog read per attempt the first time its agent is found gone; off the lock, ask an unseen agent's spawn again (one bounded spawn call, up to five seconds, per such attempt per check, only within the five-minute grace); write the moves off-lock as conditional updates and refresh the opened Project only when one moved. | One check in flight with at most one waiting, kept across a Project reopen; at most one open promotion per card and three open suggestions per Project. | Stops checking once a check finds nothing open until a promote or a read finds one again; a panicking check clears its flight; the worker thread has no retained join handle. |
+| Memory promotion tracker: `runtime/memory_promotion.rs` | Changed GitHub catalog, a promotion or outdated action, and the existing operation tick at most once a minute while an attempt runs or cleanup waits. | Read open rows and, after invalidation or restart, ended branches off-lock; inspect current PR and agent ownership under brief Runtime locks. The same off-lock worker retries eligible cleanup, at most sixteen branches per check; held shared branches remain pending. One effects gate serializes cleanup with retry reservation, and a busy gate defers tracking or refuses a start without waiting under Runtime. Unseen-agent spawn recovery keeps its existing five-second call and five-minute grace. Only changed store facts refresh opened Memory. | One check in flight and one waiting, one effects gate, one open promotion per card and three open suggestions per Project. The carried retirement map and full row/branch scans have no independent numeric cap; sixteen caps effects, not retained entries or scan work. | Stops minute checks after running attempts and retryable cleanup end; protected, dirty or committed outdated branches are kept without further cleanup polling. Runtime owns the carried map and gate; worker exit releases the gate, and a panicking check clears its flight. The worker has no retained join handle. |
 | Link record worker: `links/worker.rs`, `links/store.rs`, `runtime/links.rs` | Condvar wake on changed facts or a panel request; list changed session files every 15 s, every 3 s while a panel is open (60 s overlap, a 90-day backfill once); pane spans re-applied every 60 s; each ready device asked at most every 60 s, a failed one left for 60 s; a store that failed to open retried every 15 s; prune every 30 min; summary published at most every 2 s. | Upsert the handed facts, read one queued session file for one 20 ms turn then rest 30 ms, answer the open panel after a write, and publish `link_summaries` or `link_panel` only when the value changed; local and connected-device facts are fingerprinted under the lock, so unchanged inputs hand nothing. Ledger writes and output reconciliation run on this worker; a changed record refreshes at most 33 cached identities (the root and 32 descendant edges). No `git` process and no read under `Mutex<Runtime>`. | One worker per Core and one write connection; the mailbox holds the latest facts of each kind and one latest panel request; one session file read up to 1 MiB per turn, resumed from its cursor on the next; a device answers at most 8 reads per call with a 10 s deadline; the file is capped at 64 MiB (`links_store_full`); the panel carries 200 lines. Ledger updates queue at most 512, cached contexts hold 512 identities, and at most 16 context reads are in flight; a record tree has 2,000 requests/nodes and 32 descendant edges, 200 tasks or missed items per session, and summaries cover 16 projects with 2,000 sessions each. Crossing a ledger bound records a diagnostic. A list page names at most 2,000 files (newest first, walking at most 100,000 entries); the next page is listed only once the queue has drained. | `LinkWorker::drop` (dropped in `Drop for Core` after the search worker) marks stop, wakes and joins; a turn in progress finishes its one read first. |
 | Local Explorer watch: `hided/src/watch.rs` | 200 ms poll of the core's own node and 200 ms coalescing window, or target-change notification; 2 s after a failed poll; with no renderer attached the target is none (`WatchService::set_drawn`), and the target the snapshot asked for is kept for the first renderer back. | Stamp the focused checkout's watched folders in one `Call::Stamps` to the core's own node, which runs it on a thread of its own (one thread start per poll, among at most 64 own-node calls at once) and broadcast one changed-folder frame per coalesced change; ignore an overtaken target. | 64 folders via the shared watch selection; one request at a time; 64 broadcast frames. | Clearing the target stops I/O, not the timer; last-renderer detach clears it with the core's `ui_attached`. The task ends with the daemon's async runtime. |
 | Device Explorer watch: `hided/src/watch.rs` | 2 s or target-change notification; missed interval ticks are skipped; no target while no renderer is attached. | Stamp the selected visible device Explorer's folders in one awaited helper request; ignore an overtaken target. | 64 folders via the shared watch selection; one request at a time; no queue of periodic helper reads. | Clearing the target stops I/O, not the timer; the task has no separate stop handle and ends with the daemon's async runtime. |
@@ -200,12 +210,28 @@ On Windows, agy's command starts one Windows PowerShell process between its exis
 This shell runs only for that event; it adds no resident worker, timer, retained state, pending queue or notification, and leaves the helper's input and deadlines unchanged.
 agy owns the command's existing eight-second timeout; this wrapper adds no separate descendant-cancellation guarantee.
 Measure its cold call and warmed caller-side p50, p95 and maximum against a cmd command that actually runs the same helper, reporting the old escaped command's skipped helper separately rather than counting that skipped work as a working baseline.
-Claude Code and Codex pay nothing at a tool: their letters are typed by the doorbell, on its own thread, as at rest.
+Claude Code and Codex start no tool-letter helper: their letters are typed by the doorbell, on its own thread, as at rest.
+Their passive Post helper cost is recorded separately below.
 Nothing here keeps state, runs a timer or publishes; the retained data is the throttled delivery diagnostic.
 
 Measure it at the command boundary as the spawn guard is measured: the helper's `letters` operation with its JSON on stdin, and the hook with each agent's documented tool payload, against a real daemon that holds no letter for the pane, wall time per call from the caller's side with the first calls discarded as warm-up, p50 and p95, the load average before and after; that is the cost per tool call, since every call asks.
 The PRD that landed it set no bar (D-12); the figures measured on macOS are in the pull request that landed it, and a later change to this path reports its own.
 Regression owners are `hide-agent-hooks/tests/opencode/plugin.test.mjs` and `tests/pi-extension/extension.test.mjs` (no ask while a handover waits for its receipt, a late helper leaves the result unchanged) and `tests/it/grok_cursor_hooks.rs` (nothing asked outside a pane or without a session).
+
+## Passive Post observations
+
+Claude Code, Codex, Grok and Antigravity add one native helper start per selected shell Post event; their ordinary result pays the bounded input read and local JSON/command filter, with no observation CLI child.
+OpenCode 1/2 and Pi/omp filter the actual shell command inside the existing result handler before starting an observation helper.
+Only a recognized direct prompt or agent start starts an owned sibling `hide observation --hook` (and, for starts, one more with `--start`), carrying one array of at most 64 observations of at most 8 KiB each within one shared 1.2-second send budget; the child asks the daemon once per observation.
+The helper transiently bounds command text to 64 KiB and result text to 128 KiB, discards both after parsing, and never resends the original prompt.
+No observation adds a Pre RPC, spool, timer, polling thread or detached process.
+Plugin/extension helpers share the existing eight-child admission cap, 1.5-second outer budget and shutdown cleanup; saturated helpers report a bounded lost diagnostic and preserve the tool result.
+Native hooks share the 256 KiB input cap and 500 ms input deadline, and always print no permission or replacement result.
+The existing proof-bound daemon admission owns freshness and endpoint validation, and the existing links worker owns metadata storage; their queue, TTL and storage limits are described with the admission implementation.
+No runtime mutex is acquired by this parser and it publishes no notification itself.
+Measure ordinary Post startup, the existing ordinary Pre path and a matched candidate separately through their installed `sh -c` command, with the same payload size, process baseline, warm-up exclusions and caller-side p50/p95 methodology above.
+A stand-in observation CLI measures local parsing and owned child transport only, not native provider scheduling or real proof admission.
+Regression owners are `observation.rs` and the OpenCode and Pi/omp result fixtures; native provider event emission remains a separate observed result.
 
 ## The guardrails on a pre-tool call
 
@@ -221,12 +247,12 @@ B27's bar is the no-protection call's p95 at or under 15 ms on macOS; report the
 ## Resident work cost review
 
 The active checkout Git header reuses the Changes pump's 250 ms wake, with one Git reader (two-second spacing after settlement) and one independent CI reader (30 seconds after settlement), never a reader per tab or repository.
-Each wake adds constant scalar/request comparisons and three short lock acquisitions; it does no machine work under the lock or on the input/session-sync thread.
+Each wake adds scalar/request comparisons bounded by five commit identities and three short lock acquisitions; it does no machine work under the lock or on the input/session-sync thread.
 Only the front Git checkout with an attached UI is admitted; Home, plain folders, detached renderers and inactive checkouts read nothing.
 One Git job and one CI job may run, and only the latest target is pending; old generations and old SHAs cannot publish over their replacements.
-Git retains counts, one capped subject and one CI summary, not paths from its status scan or a per-checkout cache; the node bounds status output at 8 MiB and log output at 64 KiB and reports overflow as failure.
-Git's three-second budget and CI's two sequential 20-second link waits bound shutdown joins; underlying node `gh` work has its existing 15-second command timeout and no new authentication path.
-The existing gh pipe reader still lacks a retained-byte cap; this is a pre-existing boundary limitation, and the fixed new filters return only one state and one provider URL rather than raw check lists.
+Git retains counts, at most five subjects and five CI summaries, not paths from its status scan or a per-checkout cache; the node bounds status output at 8 MiB and log output at 64 KiB and reports overflow as failure.
+Git's three-second budget and CI's one 20-second link wait bound shutdown joins; underlying node `gh` work has its existing 15-second command timeout and no new authentication path.
+The existing gh pipe reader still lacks a retained-byte cap; this is a pre-existing boundary limitation, and the fixed query returns at most five oids, aggregate states and provider commit URLs rather than raw check lists.
 Notifications fan out only on an actual target, fact, error/recovery or stale-state transition; identical status reads renew only the internal freshness deadline.
 Regression owners are `checkout_header_reads_file_edits_unborn_head_and_tracking_ref_changes`, `header_fences_late_git_ci_and_reconnect_results_and_ages_without_false_clean`, and `web/e2e/checkout-git-header.spec.ts`; browser/native timings and captures belong to the run record, not an inferred responsiveness verdict.
 
@@ -448,6 +474,11 @@ Record uptime, the restart time, and both sample windows in the run directory, a
 - Keep the keyboard path to the byte bridge: a key goes from the web socket to the router to the pane's writer and never takes `Mutex<Runtime>` (PRD core-host-node-terminal B5).
   The node adds the operator-submit check per key (`hide-node/src/terminal/input.rs`, `submits`, PRD overview-request-view D-19): a chunk over 64 bytes is skipped and a shorter one is scanned in place.
   The core hears a key only as an input fact: the first key after a quiet second, an Enter and a key that moves the keyboard at once, and the keys between folded into one report a second later; a report is one push onto the report channel, and the core takes waiting reports into the runtime in one batch and publishes once.
+- Terminal selection tracking (`web/src/terminals.ts`) retains one original range, its selected rows and Copy text per pane while the highlight is clipped, bounded by the grid at selection time.
+  A wheel still coalesces into one scroll dispatch per animation frame; tracking adds no core notification, timer or input queue.
+  Only a pending scroll installs a write callback: it reads the selected rows first, and searches the current screen only after those rows change.
+  A settled clipped selection retains its original ends without adding work to ordinary output; clearing, replacing, resizing or parking the selection releases its tracking state.
+  `web/e2e/terminal-selection-scroll.spec.ts` owns the partial-edge return and original Copy text regression alongside the existing continuous-scroll and offscreen-copy journey.
 - Keep async operation records bounded by active intent and conflict scope; a tab's geometry operations wait in its line, one with Herdr and at most `GEOMETRY_QUEUE_LIMIT` behind it.
   A close or topology mutation uses an absolute five-second stage deadline; expiry becomes a caller-visible unknown result and never schedules a destructive resend.
   Status checks are read-only and are started only for an ambiguous close or an explicit status action, so unknown activity does not become a polling loop.
@@ -732,6 +763,13 @@ Regression owners are `projects_follow_authoritative_activity_and_identical_snap
 Manual acceptance in the desktop app uses many private projects, Search and disclosure, live pane retirement/movement, pin and unpin, and registration removal with and without open panes.
 Measure baseline and candidate idle/driven work separately with the same project/pane count; tests alone do not prove desktop responsiveness.
 
+Sidebar sticky-header invalidations from scroll, resize and direct section changes schedule at most one animation frame per mounted list (`web/src/sidebarSticky.ts`).
+An idle list schedules no frame; a burst adds one constant-time pending-frame check per event, followed by one list rectangle and one rectangle per section, all read before changed paint-marker writes.
+This publishes no core state and starts no process, timer loop or notification fan-out.
+The section scan follows the mounted list and has no independent numeric section cap; unmount removes listeners, disconnects both observers and cancels the pending frame.
+Focus reveal reads current header rectangles once per focus change so the deferred paint marker cannot conceal a row; fully visible alternatives still avoid scrolling.
+Regression owners are `sidebarSticky.test.ts`, `sidebarFollowsFocus.test.tsx` and the sticky-header journey in `web/e2e/projects-sidebar.spec.ts`; these establish functional scheduling and visibility, not measured latency or RSS parity.
+
 ### Project worktrees, disk and cleanup
 
 No screen opening asks for a worktree read: every local Git project is read in the background, a repository's watch scopes the re-reads as below, and `overview_refresh` names one project to read whole again.
@@ -814,6 +852,14 @@ That query can scan more existing rows than the matches it returns; its cost dep
 Checking start, completion and an actionable deferral publish only a changed core state; each of the existing four re-verifications and three promotion checks per Project can request one coalesced open-Memory refresh as its answer lands.
 Cancellation and worker completion clear the active card, while budget holds clear when work resumes or no check is due, and provider holds also clear when settings change.
 The daily cap counts a call when it is admitted, so a failing provider spends it too; that is the runaway bound, and the provider's backoff keeps failures to a few dozen a day.
+An intent-local session failure keeps its unfinished cursor but rotates its durable queue turn; the existing Project failure record and backoff throttle retry without keeping other Projects behind that session.
+Account/provider readiness, usage and resource-cap pauses preserve the durable next position; intent-local failures yield to peers.
+Hide AI off still permits receipt and evidence reads, but creates no analysis queue entry and requests no usage refresh for analysis.
+A reader-rejected native record is diagnosed and skipped while valid later records and the source checkpoint continue.
+Normalized event text is capped at 256 KiB before chunk allocation; an event past it records its Project/session/offset, measured bytes and limit without content, and is skipped rather than retried forever.
+Accepted events preserve their complete text through 36 KiB groups and the four-group session quantum.
+At the active-card cap, only new growth is rejected: accepted merges and corrections commit with the batch, its cursor advances, and `analysis.session_cards` reports the rejection count.
+
 With no window attached, the usage reader runs on its own 5-minute schedule for 30 minutes after a pass last had a session due, so the usage limit has a figure headless (the usage reader also runs headless while Hide AI is paused by the limit or an agent worked in the last 30 minutes, at the same one read per provider every 5 minutes); that is at most one usage read per provider every 5 minutes, and none while no session is due.
 Session file discovery, incremental reads, SQLite work, redaction, provider requests, hook-config writes, and JSON serialization stay outside `Mutex<Runtime>`.
 One incremental transcript read takes at most 1 MiB, one retained JSONL line is capped at 256 KiB, and catalog or archive detail parsing rejects a complete session above 64 MiB.
@@ -841,12 +887,14 @@ Overview History searches retained canonical requests on demand through the exis
 The old `session-search.sqlite3` is opened read-only only to read each project's retention choice, and a missing file or table costs nothing beyond that open.
 
 `UserPromptSubmit` is a separate high-frequency boundary.
-The hook accepts at most 256 KiB of input and asks the core with one `hide workspace memory` beside its letter pull, carrying the prompt's first 8 KiB; the core asks the checkout's node for its Project, opens its store read-only, checks schema and active-projection integrity, requests at most sixty local FTS candidates within the store's 100 ms retrieval deadline, and returns at most three whole items and 600 estimated tokens, off the runtime lock.
-The core sets a one-second Memory answer deadline, but `CoreHandle::memory_scope` waits for its owner reply without a receive timeout, and a remote node call applies its timeout separately to admission, write and answer.
-Those boundaries do not enforce a one-second end-to-end execution cutoff for the daemon job; the CLI/hook can stop waiting while admitted work remains.
+The hook accepts at most 256 KiB of input and asks the core with one `hide workspace memory` beside its letter pull, carrying the prompt's first 8 KiB; the core uses the attested checkout's prepared Project and at most 1024 bytes of confirmed task context, opens its store read-only, checks schema and the writer's indexed projection certificate, and requests at most sixty local FTS candidates within the earlier of the caller expiry and the 100 ms retrieval deadline.
+The body selector keeps at most three whole items and 600 estimated body tokens; the final escaped envelope, including wrappers and receipts, is trimmed to a shared 1200 estimated rendered-token limit, off the runtime lock.
+These are local estimates, not provider billing tokens.
+The core sets a one-second Memory answer deadline; `CoreHandle::memory_scope` bounds its owner reply with the remaining expiry, and remote admission, write and answer share one absolute deadline.
+SQLite's progress handler observes the invocation expiry, and retrieval also enforces its local 100 ms allowance.
 Memory and letter reads run beside each other: Memory waits until 1,250 ms after the inner hook starts, and the 1,650 ms intake budget reserves its last 400 ms for confirmation after a successful stdout flush.
 The prompt supervisor bounds the inner helper at 1,850 ms from the outer helper's start; 1,250 ms is a Memory read budget, not the whole hook duration.
-The core's lookup starts no model, embedding, transcript scan, child process, network request beyond the node call, or database write.
+The core's lookup starts no model, embedding, transcript scan, child process, network request, repository discovery, full-store scan, or database write.
 Missing, locked, corrupt, stale, unresolved, unreachable or over-deadline inputs exit successfully with empty context so prompt submission continues.
 `SessionStart` reads the Project's index under the same read-only and fail-open ownership and the same Memory read budget: at most 20 one-line rule, decision, lesson and preference cards and no body.
 Its separate Workspace probe has a two-second CLI timeout and runs beside Memory when its thread starts; later count-report calls also have their own two-second timeouts.
@@ -887,10 +935,22 @@ Issue comments use the existing detail worker, fifty per requested page and two 
 
 Work derives its graph from canonical agent, lineage, verified launch and bounded delivery facts, never from terminal output or letter bodies.
 The graph delivery projection keeps at most 2,000 metadata edges, independently of the existing 5,000-item delivery ledger, and publishes only changed facts.
+Work places its operator-centred force map synchronously on the main thread in `overviewMapLayout.ts` (d3-force), over at most four hundred nodes, only when the structure key changes: a fixed 120 ticks of Barnes-Hut charge, collision and ties, so the cost is O(ticks × n log n) and never loops.
+Measured on an Apple Silicon Mac in the unit-test runtime, 75 nodes took about 15 ms, 225 about 67 ms and 399 about 140 ms; placing one new session beside 398 held ones took about 130 ms, because held sessions still take part in each tick.
+A drag runs the same simulation on d3's animation timer only while a circle is held or settling, about two seconds after release, and the view stops it when it unmounts or replaces the map.
+On a 2026 MacBook in vitest, the slowest shape measured was one root with 398 children at about 43 ms, a 255-session binary team about 5 ms, and 399 roots or 200 one-session projects under 2 ms.
+Each admitted project reserves an access position before the remaining room is shared in identity order, so a hidden member can be selected without another layout request.
+Protected current members reserve additional positions before admission, independently of the one selected-member position.
+Lines carry no labels; each is a straight segment between two orb centres computed during redraw, and team outlines are convex hulls of at most one team's orbs.
+Drag updates one local offset map and redraws the bounded nodes and edges; endpoint lookup uses a node-ID index rather than scanning the node array for each edge.
+Selection may reproject the existing bounded relationship metadata but starts no daemon request, provider read, inference, polling clock or pending-layout queue.
+The layout key contains representative identity, drawn parents, access slots and interface scale, excluding labels, marks, filters, hiding, hover, selection and correspondence.
+The map has no replay or decorative animation, so idle has neither a loop nor a clock.
+
 `overviewGraphModel.ts` creates a stable structure key so status, model and elapsed-text updates do not schedule another layout.
-`dependencyLayout.ts` owns at most one layout Worker and AbortController with a deadline, terminates them on success, failure, cancellation and unmount, and refuses more than four hundred layout nodes.
-A failed layout leaves the fifty-row list usable with Retry; hover, zoom, folding and selection add no core event or reader.
-Reduced-motion changes and unmount release animation and media-query listeners rather than leaving background work running.
+`overviewMapLayout.ts` refuses more than four hundred layout nodes and starts no worker.
+A failed layout leaves the fifty-row list usable with Retry; hover, zoom, folding, hiding and selection add no core event or reader.
+Unmount releases the theme and interface-scale observers rather than leaving background work running.
 
 History queries the retained request ledger through the existing session-work worker and its sixteen-RPC admission and 512-command queue, without a new resident worker, native session scan or polling interval.
 One cancellable 180 ms debounce belongs to the mounted view; a newer query replaces its demand and request-id and connection-generation checks reject stale answers.
@@ -911,11 +971,27 @@ These bounds and functional regressions establish ownership and capped work, not
 Measure matched baseline and candidate idle and driven workloads separately before making a performance claim.
 An item's panel reads where it came from once when it opens (`backlog_origin`, one slot per item, at most 32), and the Start dialog reads its issue once (`issue_detail_request`, `gh issue view` on a worker off `Mutex<Runtime>`); a later read of the same item replaces its slot so only the newest answer lands.
 The ⌘K GitHub search is one `github_search` event per query the operator commits, never per keystroke and never on a timer; its `gh search prs` and `gh search issues` calls (two calls however many projects, at most 20 `--repo`, 15 s each, after one `gh repo view` per project the reader has not read) run one after another on a single worker off `Mutex<Runtime>`, one search at a time with a newer request replacing the one waiting, and it adds only the `issue_work.search` slot (at most 20 pull requests and 20 issues) to the revisioned `rest` section; `runtime::tests::issues` owns the lifecycle and `github::tests` the allowlist and parser.
-The sidebar's 태스크 list (PRD sidebar-task-lens B22) is `taskList` in `web/src/taskList.ts`, one pass over the device's `agent_scope.tasks` memoized on that value, the agent rows and the view option; the core rebuilds the tasks only with the scope cache's compared input (`agent_state/tally/tasks.rs`), the list draws no rows while the 프로젝트 list or a hidden sidebar shows, its elapsed clock updates only its own text, and the 보기 slot adds one read per item the operator opens, the card's or the record's, on the event that opens it.
+The sidebar's 태스크 list (PRD sidebar-task-lens B22) is `taskList` in `web/src/taskList.ts`, derived from the device's `agent_scope.tasks` and memoized on that value, the agent rows, projects, archived rows and the view option.
+Its resting subset adds O(r log r) sorting by the last prompt timestamp to the existing grouping work, where r is the number of resting rows; this runs inside the existing `TaskLens` memo, adds no I/O, timer, notification or pending-work queue, and leaves open tasks in the core's order.
+The core rebuilds the tasks only with the scope cache's compared input (`agent_state/tally/tasks.rs`), the list draws no rows while the 프로젝트 list or a hidden sidebar shows, its elapsed clock updates only its own text, and the 보기 slot adds one read per item the operator opens, the card's or the record's, on the event that opens it.
 The PRs tool (PRD work-tab-pr-lens B44, B53, sidebar-task-lens D-17) is `prListModel` in `web/src/prWork.ts`, one pass over the core's board of each project in scope, memoized on the snapshot; the core computes the groups and reasons in `agent_state/work/board.rs` from the `gh pr list` answer it already holds and the agents' state, with no process, file or network read under the runtime lock, and sends only the pull requests the lens shows, so the snapshot grows with that bounded list.
 The lens adds three reads to the five-minute generation (the login, the review-requested search and one `HidePrFacts` query) and nothing per row; a card adds one GraphQL read when it opens or its head moves, at most eight cards are kept, and a card's summary is one background-router call per head, off the lock.
 Its other reads are a pull request's body and feedback when 맡기기 or 새 이슈 만들기 opens (one `pr_feedback_read`, `gh pr view` on a worker), and its only writes follow a confirmation; hover, focus, unfolding and the half-second cards are screen state.
 
+
+### Pane movement cost contract
+
+Header dragging and menu navigation remain page-local until a committed move or an unattached-tab hover read.
+Pointer updates render only when the candidate destination changes; one 450 ms hover timer requests text, and Escape or a changed scope cancels that preview.
+The core admits at most sixteen active moves or unsettled publication barriers, reserves both participating tabs and shares the ordinary 64-tab admission count for a new destination.
+It retains at most 128 move receipts in the existing Workspace view journal, saves before mutation off Runtime, and uses finite workers with a weak runtime owner rather than adding a resident timer or subprocess.
+Each native operation has a five-second API deadline and journal acknowledgement a fifteen-second deadline; a recovery check reads actual topology and never resends the original mutation.
+The final publication barrier overlays only the participating tabs until a newly started coordinator bootstrap can replace it, adding one authoritative refresh per settled move and no per-key work.
+Hover reads have one active worker and one latest pending request, at most 64 panes, 4,096 characters per pane, a 64 KiB API response cap, a two-second per-read deadline and a five-second batch deadline.
+Cancellation is checked between reads; an already admitted read can finish, and a stale answer cannot replace the current preview.
+The page indexes terminal identities once per changed catalog and readdresses an existing xterm instance without recreating its input, scroll or selection state.
+Unchanged input callbacks add no catalog scan, subprocess or notifier fan-out, and terminal retention still follows the existing attached-tab limit.
+Regression owners are `runtime::tests::pane_move`, delivery continuity tests, `web/e2e/pane-move.spec.ts` and `desktop/e2e/pane-move.spec.ts`; controlled measurement remains separate from these functional claims.
 
 ### Terminal path links
 

@@ -21,6 +21,8 @@ struct StoredUiState {
     #[serde(default)]
     resolved_sessions: BTreeMap<String, crate::agent_state::sessions::Resolution>,
     #[serde(default)]
+    revisit_sessions: BTreeMap<String, crate::agent_state::sessions::RevisitMark>,
+    #[serde(default)]
     session_resolution_inputs: BTreeMap<String, u64>,
     #[serde(default)]
     session_collapsed_checkout_ids: Vec<String>,
@@ -137,6 +139,8 @@ struct StoredUiState {
     agent_onboarding_agents: Vec<String>,
     #[serde(default)]
     first_run: Option<crate::model::FirstRun>,
+    #[serde(default)]
+    first_run_choices: crate::model::FirstRunChoices,
     #[serde(default)]
     desktop_notifications: bool,
     #[serde(default = "default_panel_visible")]
@@ -437,6 +441,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
     (
         UiStateSnapshot {
             resolved_sessions: stored.resolved_sessions,
+            revisit_sessions: stored.revisit_sessions,
             session_resolution_inputs: stored.session_resolution_inputs,
             session_collapsed_checkout_ids: stored.session_collapsed_checkout_ids,
             session_open_folds: stored.session_open_folds,
@@ -483,6 +488,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             agent_onboarding: stored.agent_onboarding,
             agent_onboarding_agents: stored.agent_onboarding_agents,
             first_run: stored.first_run,
+            first_run_choices: stored.first_run_choices,
             desktop_notifications: stored.desktop_notifications,
             product_analytics_enabled: stored.product_analytics_enabled,
             desktop_notifications_done: stored
@@ -605,6 +611,7 @@ pub fn save(
         .map_err(|_| "UI state directory could not be prepared".to_owned())?;
     let stored = StoredUiState {
         resolved_sessions: state.resolved_sessions.clone(),
+        revisit_sessions: state.revisit_sessions.clone(),
         session_resolution_inputs: state.session_resolution_inputs.clone(),
         session_collapsed_checkout_ids: state.session_collapsed_checkout_ids.clone(),
         session_open_folds: state.session_open_folds.clone(),
@@ -653,6 +660,7 @@ pub fn save(
         agent_onboarding: state.agent_onboarding,
         agent_onboarding_agents: state.agent_onboarding_agents.clone(),
         first_run: state.first_run,
+        first_run_choices: state.first_run_choices.clone(),
         desktop_notifications: state.desktop_notifications,
         product_analytics_enabled: state.product_analytics_enabled,
         desktop_notifications_done: Some(state.desktop_notifications_done),

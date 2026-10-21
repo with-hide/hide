@@ -147,10 +147,15 @@ mod tests {
             other => (other, "none"),
         };
         SidebarAgentSnapshot {
+            record_connection: None,
+            record_summary: None,
+            record_metadata: None,
+            telemetry_stale: false,
             close_session: None,
             state: Default::default(),
             resolved: None,
             resolved_recent: false,
+            revisit: None,
             escalation: None,
             letters_waiting: None,
             raised: Vec::new(),

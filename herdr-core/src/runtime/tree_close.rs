@@ -803,6 +803,7 @@ impl Runtime {
                         NodeState::Failed(reason) => ("failed", Some((*reason).to_owned())),
                     };
                     crate::model::AsyncOperationSnapshot {
+                        related_scope_ids: Vec::new(),
                         id: format!("{}:{}", tree.id, node.id),
                         kind: "tree.close".to_owned(),
                         target_id: node.id.clone(),
@@ -974,6 +975,9 @@ impl Runtime {
     /// replacement-shell close, and a failed pane operation wait for the
     /// operator. `retrying` names records the new close replaces.
     fn local_tab_close_state(&self, tab_id: &str, retrying: &[String]) -> TabClose {
+        if self.pane_move_holds_tab(tab_id) {
+            return TabClose::Unresolved;
+        }
         let running = |phase: &str, deadline: Option<u64>| match phase {
             "preparing" | "capturing" | "transmitting" | "awaiting_topology" => true,
             "unknown" => deadline.is_some(),

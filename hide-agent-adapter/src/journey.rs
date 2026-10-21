@@ -143,12 +143,30 @@ pub struct JourneyCells {
     pub guidance_memory: bool,
     /// A letter reaches the agent and its reply.
     pub letter: bool,
+    /// Typed, erased, pasted and cleared text reads as the composer's own
+    /// verdict on its screen. It starts no model turn.
+    pub composer: bool,
     pub sleep_wake: bool,
     /// Wake keeps the native session.
     pub resume: bool,
     pub fork: bool,
     pub title: bool,
     pub usage: bool,
+}
+
+/// The current probe proves context through a private Memory-card token.
+/// A guidance-only agent needs its own probe before its declaration can ship;
+/// never turn that supported context path into an undeclared N/A cell.
+fn context_cell(row: &super::AgentAdapter) -> bool {
+    let start = row.start.is_some();
+    let guidance = row.guidance.is_some();
+    let memory = row.memory.is_some();
+    assert!(
+        !start || !guidance || memory,
+        "{}: guidance-only delivery needs a journey probe; the Memory-card probe cannot measure it",
+        row.id
+    );
+    start && (guidance || memory)
 }
 
 pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
@@ -159,8 +177,9 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             start_untrusted: start,
             reply: start && row.conversation.is_some(),
             integration: start,
-            guidance_memory: start && row.memory.is_some(),
+            guidance_memory: context_cell(row),
             letter: start && (row.bell || row.tool_letters.is_some()),
+            composer: start && row.composer.is_some(),
             sleep_wake: start && row.sleep.is_some(),
             resume: start && row.sleep.is_some() && row.resume.is_some(),
             fork: start && row.fork.is_some(),
@@ -173,7 +192,8 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
         // tells its session only at its first turn, as Codex does, is
         // registered as a fork only then, and the operator types into a fork
         // to use it) and the prompt typed after Wake. The other cells judge
-        // what Hide shows of those turns and start none.
+        // what Hide shows of those turns and start none; the composer cell
+        // types text it never submits.
         let turns = [
             start,
             cells.start_untrusted,
@@ -198,10 +218,20 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             Some(dialect) if dialect.closes_pane_when_sleeping() => JourneyWake::SleepingSession,
             _ => JourneyWake::Pane,
         });
-        let title = cells.title.then_some(match row.titles {
-            Some(super::SessionFormat::Pi) => JourneyTitle::Named("/name"),
-            _ => JourneyTitle::Automatic,
-        });
+        let title = row
+            .titles
+            .supported()
+            .filter(|_| cells.title)
+            .map(|format| match format {
+                super::SessionFormat::Pi => JourneyTitle::Named("/name"),
+                super::SessionFormat::Claude
+                | super::SessionFormat::Codex
+                | super::SessionFormat::Grok
+                | super::SessionFormat::Omp
+                | super::SessionFormat::Cursor
+                | super::SessionFormat::OpenCode
+                | super::SessionFormat::Antigravity => JourneyTitle::Automatic,
+            });
         JourneyAdapter {
             id: row.id,
             fake_home: row.fake_home,
@@ -218,4 +248,34 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             title,
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AgentId, CapabilityAbsence, usage::Support};
+
+    const ABSENT: CapabilityAbsence = CapabilityAbsence {
+        reason: "This host fixture does not deliver that context.",
+        evidence: "docs/agent-hooks.md",
+        would_change: "Implement and measure the host's delivery path.",
+    };
+
+    #[test]
+    fn supported_context_never_silently_becomes_an_undeclared_cell() {
+        let mut row = *AgentId::Codex.adapter();
+        assert!(context_cell(&row));
+        row.guidance = Support::Unsupported(ABSENT);
+        assert!(context_cell(&row), "Memory-only delivery is still measured");
+        row.memory = Support::Unsupported(ABSENT);
+        assert!(!context_cell(&row), "neither path is supported");
+    }
+
+    #[test]
+    #[should_panic(expected = "guidance-only delivery needs a journey probe")]
+    fn guidance_only_support_requires_a_probe_instead_of_a_silent_na() {
+        let mut row = *AgentId::Codex.adapter();
+        row.memory = Support::Unsupported(ABSENT);
+        context_cell(&row);
+    }
 }

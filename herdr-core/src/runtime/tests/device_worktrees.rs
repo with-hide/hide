@@ -526,6 +526,7 @@ fn scoped_remote_base_reaches_real_git_facts_and_obsolete_read_is_discarded() {
                 label: "Fixture".into(),
                 origin: crate::model::LinkOrigin::Inbound,
                 herdr_socket_path: None,
+                herdr_session: None,
                 host_consent: None,
             });
         runtime

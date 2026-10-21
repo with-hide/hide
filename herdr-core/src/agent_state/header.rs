@@ -13,6 +13,34 @@ pub struct Header {
     /// This pane agent's own current working sentence; never a descendant's line.
     pub progress: Option<String>,
     pub working: bool,
+    /// The request the second row leads with (PRD pane-last-request B1):
+    /// present only while the row shows this turn, an ask, a raised ask, the
+    /// agent working or a finished turn the operator has not looked at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<TurnRequest>,
+    /// The turn finished and the operator has not looked at the pane since
+    /// (B10); `progress` is then the label's result sentence, if any.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub finished: bool,
+}
+
+/// The shown request in one line, the label's summary or its own first line,
+/// and its images, which the shell counts.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TurnRequest {
+    pub text: Option<String>,
+    pub images: u32,
+}
+
+/// The row's request, when the row has one.
+fn turn_request(agent: &SidebarAgentSnapshot) -> Option<TurnRequest> {
+    let view = agent.request.as_ref()?;
+    let shown = view.request.as_ref()?;
+    let text = view.request_summary.clone();
+    (text.is_some() || shown.images > 0).then_some(TurnRequest {
+        text,
+        images: shown.images,
+    })
 }
 
 /// The terminal's own state while it is not live: the device is away, the
@@ -148,9 +176,7 @@ pub(crate) fn of(
     if notice.is_some() {
         return Header {
             notice,
-            band: None,
-            progress: None,
-            working: false,
+            ..Header::default()
         };
     }
     let Some(agent) = agent else {
@@ -163,9 +189,7 @@ pub(crate) fn of(
         && let Some(lead) = agent.raised.first()
     {
         return Header {
-            notice: None,
-            progress: None,
-            working: false,
+            request: turn_request(agent),
             band: Some(Band {
                 kind: "raised".to_owned(),
                 reason: None,
@@ -178,26 +202,41 @@ pub(crate) fn of(
                 more: agent.raised.len() - 1,
                 raised: Some(lead.clone()),
             }),
+            ..Header::default()
         };
     }
     let Some(kind) = own else {
         let working = agent.state.verb == super::RequestVerb::Working;
-        return Header {
-            notice: None,
-            band: None,
-            progress: working
-                .then_some(agent.progress.as_deref())
-                .flatten()
-                .map(str::trim)
+        // A finished turn shows until the operator looks at the pane; a
+        // pull request's result is its mark's, not the row's (B10, B11).
+        let finished =
+            agent.state.verb == super::RequestVerb::Result && agent.completed && agent.unread;
+        let sentence = |line: Option<&str>| {
+            line.map(str::trim)
                 .filter(|line| !line.is_empty())
-                .map(str::to_owned),
+                .map(str::to_owned)
+        };
+        return Header {
+            progress: if working {
+                sentence(agent.progress.as_deref())
+            } else if finished {
+                sentence(
+                    agent
+                        .request
+                        .as_ref()
+                        .and_then(|request| request.line.as_deref()),
+                )
+            } else {
+                None
+            },
             working,
+            request: (working || finished).then(|| turn_request(agent)).flatten(),
+            finished,
+            ..Header::default()
         };
     };
     Header {
-        notice: None,
-        progress: None,
-        working: false,
+        request: turn_request(agent),
         band: Some(Band {
             kind: kind.to_owned(),
             // An Answer says what the row's ask says (`detail`), so a native
@@ -222,6 +261,7 @@ pub(crate) fn of(
             },
             raised: None,
         }),
+        ..Header::default()
     }
 }
 

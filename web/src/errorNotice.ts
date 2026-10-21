@@ -3,6 +3,7 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { viewRefusal } from "./viewLayout";
 import { archiveNotice } from "./archive";
+import { translate } from "./i18n/client";
 
 type Shell = { rest: SnapshotRest | null };
 
@@ -35,6 +36,9 @@ export function errorNotice(error: { kind: string; message: string } | null | un
   // An archive that closed, saved or deleted nothing says why in one line (PRD session-archive B10, B12, B30).
   const archive = archiveNotice(error.kind);
   if (archive) return { text: archive, refreshable: error.kind === "archive.status_unknown" };
+  // A ★ or 다 봤음 that did not hold leaves the row as it was and says so once (PRD revisit-group B22, B23).
+  if (error.kind === "revisit.save_failed") return { text: translate("taskLens.revisit.saveFailed"), refreshable: false };
+  if (error.kind === "revisit.capacity") return { text: translate("taskLens.revisit.capacity"), refreshable: false };
   return null;
 }
 

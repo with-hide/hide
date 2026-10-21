@@ -1,6 +1,6 @@
 // The first run on invented data (PRD first-run-onboarding B42): the shell's
 // real Sidebar and Home behind the real FirstRunWizard, start panel or
-// Settings sheet, over a synthetic This Mac with the eight agents and no
+// Settings sheet, over a synthetic This Mac with the seven agents and no
 // daemon. A desktop host stands in for the Electron bridge, so the steps and
 // the notification lines draw as the desktop app draws them, on the system
 // the query names; the scene's state is the step the core would keep and
@@ -18,7 +18,7 @@ import { OverviewPage } from "../Overview";
 import { SettingsGate } from "../SettingsSheet";
 import { SETTINGS_GROUPS, type SettingsTab } from "../settings";
 import { Sidebar } from "../sidebar";
-import type { AiProvider, KitAgent, KitPiece, SnapshotRest } from "../snapshot";
+import type { AiProvider, HerdrProfile, KitAgent, KitPiece, SnapshotRest } from "../snapshot";
 import { StartPanelHost } from "../StartPanel";
 import { useStartPanel } from "../startDraft";
 import { useShellStore } from "../store";
@@ -42,6 +42,12 @@ export const ONBOARDING_STATES = [
   "agents-none",
   "agents-refused",
   "agents-setup",
+  "devices",
+  "devices-loading",
+  "devices-failed",
+  "devices-disabled",
+  "devices-partial",
+  "devices-long32",
   "notifications",
   "notifications-asking",
   "notifications-on",
@@ -142,7 +148,7 @@ function kitAgents(state: OnboardingState, system: OnboardingSystem): KitAgent[]
     doc_url: "https://example.test",
     ...extra,
   });
-  // Off macOS, OpenCode and Cursor are installed but Hide cannot attach to them there yet (B49).
+  // Off macOS, OpenCode is installed but Hide cannot attach to it there yet (B49).
   const pc = system !== "mac";
   return [
     row("claude-code", "Claude Code", true, { hook: `${HOME}/.claude/settings.json`, skill: `${HOME}/.claude/skills/hide-browser/SKILL.md`, herdr: `${HOME}/.claude` }),
@@ -151,7 +157,7 @@ function kitAgents(state: OnboardingState, system: OnboardingSystem): KitAgent[]
     row("opencode", "OpenCode", true, { hook: `${HOME}/.config/opencode/plugins/hide.js`, skill: shared, herdr: `${HOME}/.config/opencode` }, pc ? { availability: "unsupported_system" } : {}),
     row("pi", "Pi", true, { hook: `${HOME}/.pi/agent/extensions/hide.ts`, skill: shared, herdr: `${HOME}/.pi/agent` }),
     row("omp", "omp", !pc, { hook: `${HOME}/.omp/agent/extensions/hide.ts`, skill: shared, herdr: `${HOME}/.omp/agent` }),
-    row("cursor", "Cursor", pc, { hook: `${HOME}/.cursor/hooks.json`, skill: shared, herdr: `${HOME}/.cursor` }, pc ? { availability: "unsupported_system" } : {}),
+    row("antigravity", "Antigravity", false, { hook: `${HOME}/.gemini/config/hooks.json`, skill: `${HOME}/.gemini/config/skills/hide-browser/SKILL.md`, herdr: `${HOME}/.gemini/config` }),
   ];
 }
 
@@ -204,11 +210,11 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
 
 function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRest {
   const now = Math.floor(Date.now() / 1000);
-  const projects = state === "project" || state.startsWith("agents") || state.startsWith("notifications") || state === "home-no-project" ? [] : [
+  const projects = state === "project" || state.startsWith("agents") || state.startsWith("devices") || state.startsWith("notifications") || state === "home-no-project" ? [] : [
     workspace("my-app", { path: "/work/my-app", checkouts: [checkout({ id: "my-app:main", workspace: "my-app", branch: "main", primary: true, age: 3600 }, now)] }, REFERENCE_FOLDS),
   ];
   // Help's walk is the page's own, over a first run that ended (B45).
-  const step = state === "agents-setup" ? "done" : state.startsWith("agents") ? "agents" : state.startsWith("notifications") ? "notifications" : state === "project" ? "project" : "done";
+  const step = state === "agents-setup" ? "done" : state.startsWith("agents") ? "agents" : state.startsWith("devices") ? "devices" : state.startsWith("notifications") ? "notifications" : state === "project" ? "project" : "done";
   // The switch is on once Turn on was pressed; macOS's answer is the host's (`permissionOf`).
   const enabled = (state.startsWith("notifications-") && state !== "notifications-no-service") || state === "settings-on" || state === "settings-blocked" || state === "settings-both";
   // A first pass that stopped before changing anything: a state folder HIDE_STATE_DIR chose that other
@@ -218,6 +224,12 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
   const kit = refused
     ? { agents, components: [], busy: false, refused: { cause: "unsafe", path: system === "windows" ? "D:\\" : system === "linux" ? "/srv/team" : "/Volumes/Team", variable: "HIDE_STATE_DIR", stop: REFUSED_STOP[system] } }
     : { agents, components: [{ id: "cli", label: "hide", state: "off", reason: null, location: system === "windows" ? `${HOME}/.local/bin/hide.cmd` : `${HOME}/.local/bin/hide` }], busy: false };
+  const profile = (id: string, label: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label, target: `${id}@work.example`, session: "work", enabled: true, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_error: null, ...patch });
+  const savedProfiles = state === "devices-long32" ? Array.from({ length: 32 }, (_, index) => profile(`research-${index}`, `연구 개발팀의 아주 긴 기기 이름 ${index + 1} · 프로젝트 빌드 서버`, { target: `developer-${index}@very-long-research-hostname.engineering.example.test:2222`, session: "research-team-project-session-with-a-long-name" }))
+    : state === "devices-disabled" ? [profile("build", "Build server", { enabled: false, problem: "disabled" }), profile("existing", "Design Mac", { added_as: "Design Mac", device_id: "existing", connect_state: "added" }), profile("invalid", "Unavailable configuration", { problem: "invalid_target" })]
+    : state === "devices-partial" ? [profile("build", "Build server", { added_as: "Build server", device_id: "build", connect_state: "connected" }), profile("research", "Research server", { added_as: "Research server", device_id: "research", connect_state: "failed", connect_error: "SSH access was refused" })]
+    : [profile("build", "Build server"), profile("research", "Research server", { session: "experiments" })];
+  const deviceStep = state.startsWith("devices");
   return {
     revision: 1,
     navigator: {
@@ -225,24 +237,48 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       workspaces: projects,
       inactive_projects: [],
       agents: [],
-      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }],
+      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }, ...(state === "devices-partial" ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "build", label: "Build server", kind: "remote", state: "connected", message: null, ssh_alias: "build", agent_count: 0, test: null, kit }] : [])],
       focused_device_id: "local",
       focused_checkout_id: null,
     },
     ui_state: {
       left_sidebar_visible: true,
       first_run: { version: 1, step },
+      first_run_choices: { devices: state === "devices-partial" ? ["build", "research"] : [] },
       agent_onboarding: state === "agents-refused" ? null : step === "agents" ? "pending" : "done",
       desktop_notifications: enabled,
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",
       workspace_registrations: [{ id: "home", label: "hide", path: `${HOME}/hide`, device_id: "local", pinned: false, home: true }, ...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],
     },
-    status: { background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null } },
+    status: { background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : [] },
   } as unknown as SnapshotRest;
 }
 
 export function OnboardingScene({ theme, state, system, language, scale, page = "notifications", update }: OnboardingSceneParams) {
-  const actions = useMemo(() => createActions(() => true), []);
+  // This fixture changes invented snapshots only. It records consent presses,
+  // and never dispatches to a daemon, SSH target or native permission service.
+  const actions = useMemo(() => createActions((event) => {
+    const container = document.querySelector<HTMLElement>('[data-gallery-scene="onboarding"]');
+    if (container) container.dataset.sceneEvents = JSON.stringify([...(JSON.parse(container.dataset.sceneEvents ?? "[]") as unknown[]), event]);
+    useShellStore.setState((current) => {
+      if (!current.rest) return current;
+      const rest = structuredClone(current.rest);
+      const ui = rest.ui_state!;
+      const payload = event.payload as Record<string, unknown>;
+      if (event.kind === "first_run_draft") ui.first_run_choices = { ...ui.first_run_choices, ...payload };
+      if (event.kind === "first_run_back" || event.kind === "first_run_advance") {
+        const steps = rest.status?.herdr_profiles?.profiles.length ? ["agents", "devices", "notifications", "project", "done"] : ["agents", "notifications", "project", "done"];
+        const index = steps.indexOf(String(payload.from));
+        if (ui.first_run?.step === payload.from && index >= 0) ui.first_run = { version: 1, step: steps[index + (event.kind === "first_run_back" ? -1 : 1)] as NonNullable<typeof ui.first_run>["step"] };
+      }
+      if (event.kind === "herdr_profile_connect") {
+        const row = rest.status?.herdr_profiles?.profiles.find((entry) => entry.id === payload.profile_id);
+        if (row) row.connect_state = "connecting";
+      }
+      return { rest, revision: current.revision + 1 };
+    });
+    return true;
+  }), []);
   // The host and the stores are in place before the first render, since the wizard asks the host which one it is in.
   useMemo(() => {
     window.hideHost = sceneHost(system, permissionOf(state, system), update);

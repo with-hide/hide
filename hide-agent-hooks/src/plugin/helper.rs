@@ -70,6 +70,9 @@ struct Input {
     /// is an agent started in another agent's shell, which a pane variable
     /// it inherited does not make the pane's own (PRD agent-guardrails B22).
     guard_only: bool,
+    /// Transient Post input, consumed by the same owned helper. Never stored
+    /// in the metadata admission request.
+    observation: Option<Value>,
 }
 
 /// The agent a script speaks for: its adapter row and the runtime id the
@@ -148,6 +151,12 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
         Some("prompt") => prompt(&home, &agent, input, started + PROMPT_BUDGET),
         Some("confirm") => confirm(&home, input, started + CONFIRM_BUDGET),
         Some("tool") => tool(&home, &agent, input, started + TOOL_BUDGET),
+        Some("observation")
+            if agent.adapter.observation
+                == hide_agent_adapter::ObservationSupport::Plugin(agent.dialect) =>
+        {
+            observation(&home, &agent, &input, started)
+        }
         Some("letters") if agent.adapter.tool_letters.is_some() => {
             letters(&home, input, started + LETTERS_BUDGET)
         }
@@ -157,6 +166,49 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
         _ => json!({}),
     };
     answer(&output);
+}
+
+fn observation(home: &Path, agent: &Agent, input: &Input, started: Instant) -> Value {
+    use hide_agent_hooks::observation::{self, ObservationCorrelation, ToolResult};
+    let Some(post) = input.observation.as_ref() else {
+        return json!({});
+    };
+    if input.guard_only {
+        return json!({});
+    }
+    let Some(command) = post["command"].as_str() else {
+        return json!({});
+    };
+    let Some(session) = input.session_id.as_deref() else {
+        return json!({});
+    };
+    let Some(call_id) = post["call_id"].as_str() else {
+        return json!({});
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let parsed = observation::observe(
+        ToolResult {
+            runtime_id: agent.runtime(),
+            session_id: session,
+            call_id,
+            command,
+            correlation_kind: ObservationCorrelation::ToolCall,
+            result: post.get("result"),
+            failed: post["failed"] == true,
+            interrupted: post["interrupted"] == true,
+            truncated: post["truncated"] == true,
+            asynchronous: post["asynchronous"] == true,
+        },
+        now,
+        &|name| std::env::var(name).ok(),
+    );
+    let accepted = parsed
+        .as_ref()
+        .is_some_and(|parsed| observation::send(home, parsed, started + observation::SEND_BUDGET));
+    json!({ "observed": accepted })
 }
 
 fn answer(value: &Value) {
@@ -268,8 +320,29 @@ fn prompt_memory(
         context.push_str(index.context.as_deref().unwrap_or_default());
     }
     let prompt = memory_context_until(request(HookEvent::UserPromptSubmit), home, deadline);
-    context.push_str(prompt.context.as_deref().unwrap_or_default());
-    ((!context.is_empty()).then_some(context), start)
+    let body = prompt.context.as_deref().unwrap_or_default();
+    let (context, index_kept) = bounded_memory_capsule(&context, body);
+    (context, start && index_kept)
+}
+
+/// Keep complete envelopes so a signed receipt never names a cut card.
+/// Prompt bodies take priority; a deferred index is asked again next turn.
+/// Letters are appended by the caller after this Memory-only quota.
+fn bounded_memory_capsule(index: &str, bodies: &str) -> (Option<String>, bool) {
+    use hide_memory::hook::{RENDERED_TOKEN_LIMIT, estimated_tokens};
+    if estimated_tokens(bodies) > RENDERED_TOKEN_LIMIT {
+        return (
+            (!index.is_empty() && estimated_tokens(index) <= RENDERED_TOKEN_LIMIT)
+                .then(|| index.to_owned()),
+            true,
+        );
+    }
+    let combined = format!("{index}{bodies}");
+    if estimated_tokens(&combined) <= RENDERED_TOKEN_LIMIT {
+        ((!combined.is_empty()).then_some(combined), true)
+    } else {
+        ((!bodies.is_empty()).then(|| bodies.to_owned()), false)
+    }
 }
 
 /// The letters due while the pane's agent works, asked at one of its tool
@@ -399,4 +472,36 @@ fn subagents(home: &Path, agent: &Agent, input: Input) -> Value {
     let socket_path = socket_path.unwrap_or_default();
     let _ = report::record_outcome(home, &pane, "subagent count", &socket_path, &outcome);
     json!({ "reported": outcome.is_ok() })
+}
+
+#[cfg(test)]
+mod memory_budget_tests {
+    use super::bounded_memory_capsule;
+
+    #[test]
+    fn a_first_prompt_keeps_its_whole_signed_body_within_the_shared_quota() {
+        let index = format!(
+            "<hide-memory-index>{}</hide-memory-index>",
+            "index ".repeat(600)
+        );
+        let bodies = format!(
+            "<hide-memory-context>{}</hide-memory-context><hide-memory-receipt items=\"m1@2\" auth=\"synthetic\" />",
+            "body ".repeat(600)
+        );
+        let (capsule, index_kept) = bounded_memory_capsule(&index, &bodies);
+        let capsule = capsule.unwrap();
+        assert!(!index_kept);
+        assert_eq!(capsule, bodies);
+        assert!(hide_memory::hook::estimated_tokens(&capsule) <= 1200);
+        let (capsule, index_kept) = bounded_memory_capsule(
+            "<hide-memory-index>one</hide-memory-index>",
+            "<hide-memory-context>two</hide-memory-context>",
+        );
+        assert!(index_kept);
+        assert!(
+            capsule
+                .unwrap()
+                .contains("one</hide-memory-index><hide-memory-context>two")
+        );
+    }
 }

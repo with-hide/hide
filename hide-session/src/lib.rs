@@ -22,7 +22,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::fs::{self, File, Metadata};
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -66,12 +66,6 @@ pub use catalog::{
     ProjectSession, ProjectSessions, SESSION_DISCOVERY_LIMIT, SessionAvailability, SessionCatalog,
     SessionCatalogError, SessionFilter, SessionStoreRefusal,
 };
-
-#[cfg(not(unix))]
-use std::time::SystemTime;
-
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 
 /// Number of recent day directories used when Herdr has not reported a Codex
 /// session identity yet.
@@ -284,12 +278,13 @@ pub enum Agent {
 }
 
 impl Agent {
-    /// The session formats actually declared by this build, independent of
-    /// whether its launch, hooks or other features are enabled.
+    /// The readable session formats, including retained history for retired
+    /// agents, independent of active launch, hook or provider support.
     pub fn supported() -> impl Iterator<Item = Self> {
         hide_agent_adapter::ADAPTERS
             .iter()
             .filter_map(|row| row.session.map(Self::from_format))
+            .chain(std::iter::once(Self::Cursor))
     }
 
     pub const fn format(self) -> hide_agent_adapter::SessionFormat {
@@ -319,6 +314,10 @@ impl Agent {
     }
 
     pub fn from_kind(kind: &str) -> Option<Self> {
+        // Cursor is retired from active support; its existing history remains readable.
+        if kind.trim().eq_ignore_ascii_case("cursor") {
+            return Some(Self::Cursor);
+        }
         hide_agent_adapter::adapter(kind)?
             .session
             .map(Self::from_format)
@@ -404,6 +403,9 @@ pub struct ConversationEvent {
     /// context. Text prefixes can classify display semantics but never set
     /// this trust bit.
     provider_injected: bool,
+    /// A native adapter's explicit context-loss boundary, never inferred from text.
+    #[serde(default)]
+    pub context_reset: bool,
     pub at_unix_ms: u64,
     pub text: String,
     /// Images attached to the message; their bytes never enter `text`, and
@@ -420,6 +422,8 @@ struct OwnedConversationEvent {
     role: String,
     kind: EventKind,
     provider_injected: bool,
+    #[serde(default)]
+    context_reset: bool,
     at_unix_ms: u64,
     text: String,
     images: u32,
@@ -439,6 +443,7 @@ impl TryFrom<OwnedConversationEvent> for ConversationEvent {
             role,
             kind: event.kind,
             provider_injected: event.provider_injected,
+            context_reset: event.context_reset,
             at_unix_ms: event.at_unix_ms,
             text: event.text,
             images: event.images,
@@ -468,11 +473,17 @@ impl ConversationEvent {
             role,
             kind,
             provider_injected: false,
+            context_reset: false,
             at_unix_ms,
             text: text.into(),
             images: 0,
             part: None,
         }
+    }
+
+    fn with_context_reset(mut self, reset: bool) -> Self {
+        self.context_reset = reset;
+        self
     }
 
     fn with_images(mut self, images: u32) -> Self {
@@ -712,6 +723,9 @@ pub type Result<T> = std::result::Result<T, SessionError>;
 struct FileIdentity {
     first: u64,
     second: u64,
+    /// Windows keeps a 128-bit file index. Old Unix checkpoints omit this.
+    #[serde(default)]
+    high: u64,
 }
 
 /// Durable state for resuming one append-only session file after relaunch.
@@ -731,26 +745,18 @@ pub struct CursorCheckpoint {
 }
 
 impl FileIdentity {
-    fn from_metadata(metadata: &Metadata) -> Self {
-        #[cfg(unix)]
-        {
-            Self {
-                first: metadata.dev(),
-                second: metadata.ino(),
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            let modified = metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
-                .map_or(0, |duration| duration.as_nanos() as u64);
-            Self {
-                first: metadata.len(),
-                second: modified,
-            }
-        }
+    fn from_file(file: &File) -> io::Result<Self> {
+        let id = hide_platform::fs::identity::file_id_of(file)?;
+        Ok(Self {
+            first: id.volume(),
+            second: id.index() as u64,
+            high: (id.index() >> 64) as u64,
+        })
+    }
+
+    fn incarnation(self) -> String {
+        let index = (u128::from(self.high) << 64) | u128::from(self.second);
+        format!("{}:{index}", self.first)
     }
 }
 
@@ -1726,10 +1732,20 @@ fn parse_claude_line(item: &Value, reply: &dyn Fn() -> CommandReply) -> LineResu
 /// Memory receipt in it is the hook's; the operator's words are never in an
 /// attachment. Any other kind of attachment is not conversation.
 fn claude_hook_context(item: &Value) -> LineResult {
-    let Some(claude_attachment::Attachment::HookContext { content }) =
-        claude_attachment::Attachment::of(item)
-    else {
-        return LineResult::Ignore;
+    let content = match claude_attachment::Attachment::of(item) {
+        Some(claude_attachment::Attachment::HookSuccess {
+            hook_name: Some("SessionStart:clear" | "SessionStart:compact"),
+        }) => {
+            return match timestamp_ms(item.get("timestamp")) {
+                Ok(at) => LineResult::Event(
+                    ConversationEvent::new("system", EventKind::Injected, at, "")
+                        .with_context_reset(true),
+                ),
+                Err(reason) => LineResult::Skip(reason),
+            };
+        }
+        Some(claude_attachment::Attachment::HookContext { content }) => content,
+        _ => return LineResult::Ignore,
     };
     let Some(text) = claude_attachment::hook_context_text(content) else {
         return LineResult::Ignore;
@@ -1822,6 +1838,17 @@ fn image_blocks(content: Option<&Value>, kind: &str) -> u32 {
 }
 
 fn parse_codex_line(item: &Value) -> LineResult {
+    if item.get("type").and_then(Value::as_str) == Some("compacted") {
+        // A native boundary proves a replacement context, not which Memory
+        // bodies survived in retained_context. Never ingest that payload.
+        return match timestamp_ms(item.get("timestamp")) {
+            Ok(at) => LineResult::Event(
+                ConversationEvent::new("system", EventKind::Injected, at, "")
+                    .with_context_reset(true),
+            ),
+            Err(_) => LineResult::Ignore,
+        };
+    }
     if item.get("type").and_then(Value::as_str) != Some("response_item") {
         return LineResult::Ignore;
     }
@@ -2189,6 +2216,16 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn checkpoints_without_the_high_file_index_remain_readable() {
+        let checkpoint: CursorCheckpoint = serde_json::from_value(serde_json::json!({
+            "offset": 42, "identity": {"first": 1, "second": 2}
+        }))
+        .unwrap();
+        let cursor = SessionCursor::restore(checkpoint);
+        assert_eq!(cursor.checkpoint().offset, 42);
+    }
 
     #[test]
     fn parses_rfc3339_with_fraction_and_offset() {

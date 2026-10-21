@@ -133,18 +133,42 @@ function validHost(host: string): boolean {
   return host.length > 0 && /^[A-Za-z0-9._\-[\]:]+$/.test(host);
 }
 
+/** Only a complete URL without authentication material may become a shared setup draft. Git still receives the form's original input. */
+export function cloneUrlDraft(raw: string): string {
+  const value = raw.trim();
+  if (value.length > 4096 || /[?#]/.test(value) || !parseCloneUrl(value).ok) return "";
+  const authority = value.includes("://") ? value.split("://")[1]!.split("/")[0]! : value.split(":")[0]!;
+  return authority.includes("@") ? "" : value;
+}
+
 /**
- * Where Create new project puts its folder at first: beside the most recently
- * added project on this Mac (registrations are kept in the order they were
- * added), else the home folder.
+ * Where Create new project and Clone from URL put their folder at first: the
+ * parent most of this Mac's projects live in, the most recently added one
+ * winning a tie, else the home folder. One project added elsewhere (a
+ * worktree folder, a scratch checkout) does not move where the next one goes.
  */
 export function defaultProjectParent(registrations: readonly WorkspaceRegistration[], node: string): string {
   // The Home (`~/hide`) is no project, so it is not where the next one is expected to live.
-  const last = registrations.filter((row) => row.device_id === node && !row.home).at(-1);
-  if (!last) return "~";
-  const path = trimFolder(last.path);
-  const cut = path.lastIndexOf("/");
-  return cut > 0 ? path.slice(0, cut) : "~";
+  const parents = registrations
+    .filter((row) => row.device_id === node && !row.home)
+    .map((row) => {
+      const path = trimFolder(row.path);
+      const cut = path.lastIndexOf("/");
+      return cut > 0 ? path.slice(0, cut) : "~";
+    });
+  const counts = new Map<string, number>();
+  for (const parent of parents) counts.set(parent, (counts.get(parent) ?? 0) + 1);
+  let best = "~";
+  let bestCount = 0;
+  // Registrations are in the order they were added, so `>=` lets a later parent take a tie.
+  for (const parent of parents) {
+    const count = counts.get(parent)!;
+    if (count >= bestCount) {
+      best = parent;
+      bestCount = count;
+    }
+  }
+  return best;
 }
 
 /** Why a typed `name` cannot be a new project's folder name, or null; an empty name has nothing to say yet. */

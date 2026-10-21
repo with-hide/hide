@@ -268,6 +268,7 @@ fn spawner() -> Spawner {
                         ssh_alias: id.to_owned(),
                     },
                     herdr_socket_path: None,
+                    herdr_session: None,
                     host_consent: None,
                 });
         }
@@ -330,6 +331,7 @@ fn spawner() -> Spawner {
                 project: None,
                 actor: actor.clone(),
                 ended: false,
+                terminal_id: None,
                 forked: false,
             },
             check: false,

@@ -95,6 +95,8 @@ export type AgentRow = {
   resolved?: { at_unix_ms: number; source: "operator" | "automatic" } | null;
   /** Resolved within the last 24 hours, so Sessions still lists it. */
   resolved_recent?: boolean;
+  /** The operator's ★ or a read, unanswered ask, and since when it waits (PRD revisit-group). */
+  revisit?: { starred: boolean; read_ask: boolean; since_unix_ms: number } | null;
   escalation?: { cause: "parent_blocked" | "draft" | "bell_exhausted" | "undelivered" | "child_blocked" | "observer_unconfirmed"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
   /** How many letters wait on this pane for a possible draft, once it has rested; absent while none waits (docs/delivery.md). */
   letters_waiting?: number;
@@ -106,6 +108,9 @@ export type AgentRow = {
   id: string;
   pane_id: string;
   identity_label: string;
+  /** Conversation display provenance, independent of lifecycle and hook health. */
+  record_connection?: "checking" | "confirmed" | "unconfirmed";
+  record_summary?: string;
   /** The name Herdr knows the agent by (`agent start --name`, `agent rename`); absent when it was given none. */
   herdr_name?: string;
   agent_kind: string;
@@ -196,12 +201,24 @@ export type AgentRequest = {
   end?: LabelEnd;
   /** The operator's last request, else the last one another agent sent. */
   request: { text: string; cut: boolean; images: number; at_unix_ms: number; sender: RequestSender } | null;
+  /** The shown request in one line: the label's summary of it, or its own first line until there is one (PRD pane-last-request D-16). */
+  request_summary?: string | null;
+  /** Up to two turns before the shown request, newest first, for the turn card. */
+  recent_turns?: AgentTurn[];
   /** Who sent a request after the operator's last one (B4). */
   later_by: RequestSender | null;
   /** The agent's last words. */
   reply: { text: string; cut: boolean; at_unix_ms: number } | null;
   /** The chip first (D-46), then the other live ones, then settled ones. */
   pull_requests: AgentPullRequest[];
+};
+
+/** A turn before the shown request (`TurnSnapshot`): the label's summary of its request and how it ended. */
+export type AgentTurn = {
+  request: string | null;
+  end: LabelEnd | null;
+  line: string | null;
+  at_unix_ms: number;
 };
 
 /** One of a row's pull requests (`AgentPullRequestSnapshot`). */
@@ -656,6 +673,7 @@ export type CheckoutAgentSummary = {
 export type MarkCounts = { turn: number; going: number; done: number; unread: number };
 
 export type PaneRow = {
+  terminal_id?: string | null;
   failed_terminal_id?: string;
   ports?: number[];
   servers?: { host: string; port: number }[];
@@ -678,7 +696,7 @@ export type TabAgent = Pick<AgentRow, "agent_kind" | "mark" | "demand" | "activi
 
 export type Tab = {
   /** `named_by_operator`: the manual name is one the operator gave through Rename, which keeps the tab when its agents leave. */
-  sidebar?: { manual_name: string | null; number: number; named_by_operator: boolean };
+  sidebar?: { manual_name: string | null; number: number; named_by_operator: boolean; focused_pane_id?: string };
   agent?: TabAgent | null;
   id: string | null;
   workspace_id: string | null;
@@ -962,9 +980,15 @@ export type PaneHeader = {
   notice: PaneNotice | null;
   /** What waits on the operator in this pane, drawn on its second row. */
   band: PaneBand | null;
-  /** The current pane agent's own live working sentence, selected by the core. */
+  /** The current pane agent's own live working sentence, or a finished turn's result sentence, selected by the core. */
   progress?: string | null;
+  /** The request the second row leads with, present only while the row shows the turn (PRD pane-last-request B1). */
+  request?: PaneTurnRequest;
+  /** The turn finished and the operator has not looked at the pane since (B10). */
+  finished?: boolean;
 };
+/** The shown request in one line and its images, which the row counts. */
+export type PaneTurnRequest = {text: string | null; images: number};
 export type PaneNotice = {kind: string; tone: "muted" | "warning" | "error"; reason: string | null; since_unix_ms: number | null; exit_code: number | null};
 /** The pane's own approval, answer, block or stop, or a raised descendant's ask; `read` once the operator has looked. */
 export type PaneBand = {kind: "approval" | "answer" | "blocked" | "stopped" | "raised"; reason: string | null; since_unix_ms: number | null; read: boolean; action: {pane_id: string; label: string} | null; more: number; raised?: RaisedAsk};
@@ -975,6 +999,8 @@ export type TerminalPane = {
   exit_code: number | null;
   transport_state: string;
   transport_message: string | null;
+  /** Core transport identity; absent in older snapshots and fixtures. */
+  transport_generation?: number;
   /** This client only observes the pane and Herdr did not move it for the last wheel; absent while false. */
   scroll_held_elsewhere?: boolean;
 };
@@ -988,6 +1014,7 @@ export type InputRequest = {
 };
 
 export type AsyncOperation = {
+  related_scope_ids?: string[];
   id: string;
   kind: string;
   target_id: string;
@@ -1383,9 +1410,17 @@ export type KitComponentState = "installed" | "outdated" | "not_installed" | "re
 export type KitAgentAvailability = "available" | "not_installed" | "unsupported_system";
 
 /** The first-run wizard's steps (`contracts/snapshot-wire-enums.json`: `first_run_step`). */
-export type FirstRunStep = "agents" | "notifications" | "project" | "done";
+export type FirstRunStep = "agents" | "devices" | "notifications" | "project" | "done";
 
 export type FirstRun = { version: number; step: FirstRunStep };
+export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
+export type FirstRunChoices = { agents?: string[] | null; devices?: string[]; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
+export type HerdrProfile = {
+  id: string; label: string; target: string; session: string; enabled: boolean;
+  added_as: string | null; problem: string | null; device_id: string | null;
+  connect_state: string; connect_error: string | null;
+};
+export type HerdrProfiles = { state: "idle" | "loading" | "ready" | "failed"; error: string | null; profiles: HerdrProfile[]; truncated: boolean };
 
 /** The flow version this build draws; the core keeps the same number (`FIRST_RUN_VERSION`). */
 export const FIRST_RUN_VERSION = 1;
@@ -1576,7 +1611,7 @@ export type CoreDiagnostic = { kind: string; message: string; occurred_at: numbe
 export type AiProvider = {
   id: string;
   label: string;
-  /** The id the logos key the same agent by: the install kit's adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`, `cursor`), or `gemini-cli` for Gemini CLI, which Hide AI still uses though the kit no longer lists it. */
+  /** The id the logos key the same agent by: the install kit's adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`, `antigravity`). */
   agent: string;
   /** `ready`, `needs_login`, `usage_limited`, `not_installed`, `unavailable`, `unsupported`, or `unread`. */
   state: string;
@@ -1589,12 +1624,12 @@ export type AiProvider = {
   selectable: boolean;
   /** When a usage limit ends (unix ms), when the agent said. */
   retry_at_ms: number | null;
-  /** False when the agent has no sign-in check (Gemini CLI): `ready` then only means its program was found; absent from an older daemon. */
+  /** Every current provider checks sign-in; false or absent remains readable from older peers. */
   login_checked?: boolean;
   /** The model it is asked for; empty is the CLI's own default. */
   model: string;
   models: string[];
-  /** The list is the CLI's documented one and cannot be asked for (Gemini CLI). */
+  /** The list is documented rather than queried, as an older peer may report. */
   models_fixed: boolean;
   /** "CLI default" can be chosen: the agent is asked with no `--model`. */
   cli_default: boolean;
@@ -1800,6 +1835,10 @@ export type ProjectMemory = {
   loading: boolean;
   enabled: boolean;
   capacity_reached: boolean;
+  /** Cards forgotten automatically to make room for new ones since the tab last said so. */
+  evicted_cards: number;
+  /** When the newest of those was forgotten; the tab names it back once it said so. */
+  evicted_through_unix_ms: number | null;
   rows: MemoryRow[];
   questions: MemoryQuestion[];
   /** `memory_analysis_state`. */
@@ -1951,6 +1990,8 @@ export type ArchivedSession = {
   listed: boolean;
   archived_at_unix_ms: number;
   reason: string | null;
+  /** The root carries the operator's ★ (PRD revisit-group B15). */
+  starred?: boolean;
   /** The root first. */
   members: ArchivedMember[];
 };
@@ -1966,7 +2007,7 @@ export type ArchivedMember = {
   reason: string | null;
 };
 
-/** Metadata from the retained delivery ledger, with current session proof from the core. No bodies. */
+/** Retained letter and passive direct-input metadata with exact session proof. No bodies. */
 export type OverviewGraphParty = { device_id: string; pane_id: string; session: string };
 export type OverviewGraphLetter = { id: string; sender: OverviewGraphParty; recipient: OverviewGraphParty; kind: string; at_unix_ms: number };
 export type OverviewGraphMetadata = {
@@ -1976,6 +2017,7 @@ export type OverviewGraphMetadata = {
   truncated: boolean;
   retention_ms: number;
   letters: OverviewGraphLetter[];
+  direct_inputs?: { id: string; sender: OverviewGraphParty; recipient: OverviewGraphParty; at_unix_ms: number }[];
   sessions: { device_id: string; pane_id: string; session_digest: string; launch_model: string | null }[];
 };
 
@@ -2060,6 +2102,7 @@ export type SnapshotRest = {
     agent_onboarding_agents?: string[];
     /** The first-run wizard's progress (PRD first-run-onboarding D-07): absent on a Mac that never had one; another flow `version` is not this build's to show. */
     first_run?: FirstRun | null;
+    first_run_choices?: FirstRunChoices;
     /** Settings > Notifications' Notify me when an agent needs me (D-21); the desktop app shows agent notifications only while it is on. */
     desktop_notifications?: boolean;
     product_analytics_enabled?: boolean;
@@ -2097,8 +2140,11 @@ export type SnapshotRest = {
     background_ai?: BackgroundAi;
     /** The Host entries Add device lists, read on an `ssh_hosts_list` event (PRD settings-cleanup D-19). */
     ssh_hosts?: SshHosts;
+    herdr_profiles?: HerdrProfiles;
     diagnostics?: CoreDiagnostic[];
     async_operations?: AsyncOperation[];
+    /** Bounded read-only hover text; never an attachment or a focus request. */
+    pane_move_preview?: { request_id: string; tab_id: string; phase: "preparing" | "ready" | "failed"; panes: { pane_id: string; text: string }[]; message?: string | null } | null;
     tab_rename?: { request_id: string; tab_id: string; label: string; phase: "pending" | "succeeded" | "failed" } | null;
     pane_focus_request?: PaneFocusRequest | null;
     /** The answers to the latest `browser_open` events that named themselves, oldest first and bounded. */

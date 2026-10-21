@@ -217,13 +217,15 @@ fn run_coordinator(
                     subscription: next_subscription,
                     snapshot_at,
                 }) => {
-                    if !begin_read_connection(&context) {
+                    if !begin_read_connection(&context, snapshot_started_at) {
                         stop_subscription(&mut subscription);
                         return;
                     }
                     replica = Some(next_replica);
                     subscription = Some(next_subscription);
                     catalog_cache.connection = subscription_generation;
+                    catalog_cache.accepted = None;
+                    catalog_cache.accepted_stale = false;
                     reconcile_until = snapshot_at + RECONCILE_GRACE;
                     active_tab_reads.clear();
                     if let Err(message) = sync_reader.reset() {
@@ -598,6 +600,14 @@ fn run_coordinator(
             next_operation_tick,
         );
         match receiver.recv_timeout(timeout) {
+            Ok(CoordinatorMessage::RefreshTopology) => {
+                // Discard the old stream generation. The next bootstrap is a
+                // read only; it can safely supersede a move's final drawing
+                // even when another client has since moved or closed it.
+                stop_subscription(&mut subscription);
+                reconnect_at = Instant::now();
+                defer_background_reads = true;
+            }
             Ok(CoordinatorMessage::Stop) => {
                 stop_subscription(&mut subscription);
                 return;
@@ -861,6 +871,41 @@ fn run_coordinator(
                             }
                         }
                         Err(error) => {
+                            // An independent query's transport failure says
+                            // nothing about the live subscription. Keep its
+                            // topology and terminal generation, but stop
+                            // presenting the previous telemetry as confirmed.
+                            // Protocol/projection failures still rebuild below.
+                            if matches!(
+                                error,
+                                SessionFetchError::SocketMissing(_)
+                                    | SessionFetchError::Unreachable(_)
+                            ) {
+                                agents_asked_at_events = None;
+                                let current = replica
+                                    .as_mut()
+                                    .expect("active subscription always has a replica");
+                                if current.invalidate_agents() {
+                                    log_sync_failure(
+                                        &context,
+                                        "agent_refresh.failed",
+                                        Some(current),
+                                        &error,
+                                    );
+                                    if !publish_replica(
+                                        &context,
+                                        current,
+                                        &mut catalog_cache,
+                                        &mut purpose_mirror,
+                                        &mut labels,
+                                        &mut arrivals,
+                                    ) {
+                                        stop_subscription(&mut subscription);
+                                        return;
+                                    }
+                                }
+                                continue;
+                            }
                             log_sync_failure(
                                 &context,
                                 "agent_refresh.failed",
@@ -1045,6 +1090,7 @@ fn agent_tick_changes(
 ) -> (bool, bool) {
     let native_changed = replica.state.agents != agents;
     let publish = native_changed
+        || !replica.agents_confirmed
         || catalog_cache.is_none_or(|cache| cache.built_at.elapsed() >= CATALOG_REFRESH_INTERVAL);
     (native_changed, publish)
 }
@@ -1256,6 +1302,7 @@ fn publish_replica(
 ) -> bool {
     let awaiting = replica.panes_awaiting_cwd();
     let mut payload = replica.project();
+    let mut held_state = None;
     let overlay = labels.as_mut().map(|worker| {
         exchange_pull_requests(context, worker);
         hand_memory_receipts(context, worker);
@@ -1298,14 +1345,27 @@ fn publish_replica(
                 Some(stand_ins) => catalog_cache.stand_ins = stand_ins,
                 None => {
                     catalog_cache.held_for_cwd = true;
-                    return true;
+                    if replica.agents_confirmed || catalog_cache.accepted_stale {
+                        return true;
+                    }
+                    let Some(accepted) = catalog_cache.accepted.as_ref() else {
+                        return true;
+                    };
+                    payload = accepted.project();
+                    for agent in &mut payload.agents {
+                        agent.telemetry_stale = true;
+                    }
+                    held_state = Some(accepted.clone());
+                    catalog_cache.accepted_stale = true;
                 }
             }
         } else {
             catalog_cache.stand_ins.clear();
         }
-        catalog_cache.held_for_cwd = false;
-        if !arrivals.is_empty() {
+        if held_state.is_none() {
+            catalog_cache.held_for_cwd = false;
+        }
+        if held_state.is_none() && !arrivals.is_empty() {
             guard.observe_herdr_arrivals(&std::mem::take(arrivals));
         }
         match &context.target {
@@ -1326,11 +1386,31 @@ fn publish_replica(
             }
         }
     }
+    if held_state.is_none() {
+        let mut accepted = replica.published_state.clone();
+        // Cache the cwd actually accepted for each pane, including a
+        // confirmed sibling's stand-in, before any label overlay is applied.
+        let cwds: HashMap<_, _> = payload
+            .panes
+            .iter()
+            .map(|pane| (pane.pane_id.as_str(), &pane.cwd))
+            .collect();
+        for pane in &mut accepted.panes {
+            if let Some(cwd) = cwds.get(pane.pane_id.as_str()) {
+                pane.cwd.clone_from(cwd);
+            }
+        }
+        catalog_cache.accepted = Some(accepted);
+        catalog_cache.accepted_stale = !replica.agents_confirmed;
+    }
     if let SessionSyncTarget::Remote { target_id, .. } = &context.target {
         if let Some(overlay) = &overlay {
             overlay.apply(&mut payload);
         }
-        let projection = replica.project_remote(target_id, payload);
+        let projection = match held_state.as_ref() {
+            Some(state) => SessionReplica::project_remote_state(state, target_id, payload),
+            None => replica.project_remote(target_id, payload),
+        };
         let (fetched, excluded) = match projection {
             Ok((session, excluded)) => (Ok(session), excluded),
             Err(error) => (Err(error), Vec::new()),
@@ -1633,11 +1713,23 @@ fn start_label_worker(
     });
     let worker = match &context.target {
         SessionSyncTarget::Local { socket_path } => match context.node() {
-            Some(node) => services.local_worker(socket_path, Arc::clone(node), wake, language),
+            Some(node) => services.local_worker(
+                socket_path,
+                Arc::clone(node),
+                wake,
+                language,
+                Arc::clone(&context.api_connector),
+            ),
             None => Ok(None),
         },
         SessionSyncTarget::Remote { target_id, .. } => services
-            .device_worker(target_id, context.runtime.clone(), wake, language)
+            .device_worker(
+                target_id,
+                context.runtime.clone(),
+                wake,
+                language,
+                Arc::clone(&context.api_connector),
+            )
             .map(Some),
     };
     worker.unwrap_or_else(|message| {
@@ -1751,7 +1843,7 @@ fn observe_labels(worker: &mut LabelWorker, replica: &SessionReplica) {
 /// Starts the read axis's view of this connection before its first
 /// projection: the server reached may be the one lost or a restored one, and
 /// only the panes' marks tell (`agent_state::ReadConnection`).
-fn begin_read_connection(context: &SessionSyncContext) -> bool {
+fn begin_read_connection(context: &SessionSyncContext, snapshot_started_at: Instant) -> bool {
     let Some(runtime) = context.runtime.upgrade() else {
         return false;
     };
@@ -1759,6 +1851,12 @@ fn begin_read_connection(context: &SessionSyncContext) -> bool {
         return false;
     };
     guard.begin_read_connection(context.read_target());
+    let changed =
+        guard.release_pane_move_publication_barriers(context.read_target(), snapshot_started_at);
+    drop(guard);
+    if changed {
+        context.notifier.notify();
+    }
     true
 }
 
@@ -2996,8 +3094,14 @@ mod focus_readback_order_tests {
     /// tab then.
     #[test]
     fn a_cwd_answer_publishes_only_when_the_screen_would_change() {
-        let first =
-            SessionReplica::from_snapshot(&snapshot(&["p1"], "p1", false)).expect("first snapshot");
+        let mut value = snapshot(&["p1"], "p1", false);
+        value["agents"] = json!([{
+            "pane_id":"w1:p1", "workspace_id":"w1", "tab_id":"w1:t1",
+            "terminal_id":"fixture-terminal", "focused":false, "revision":1,
+            "name":"fixture-agent", "agent":"codex", "agent_status":"working",
+            "state_change_seq":4, "tokens":{}
+        }]);
+        let first = SessionReplica::from_snapshot(&value).expect("first snapshot");
         let runtime = runtime_with(&first);
         let herdr = FakeHerdr::start("cwd-answer-publish", |method, _| {
             panic!("unexpected {method}")
@@ -3094,6 +3198,54 @@ mod focus_readback_order_tests {
         assert!(
             pane_cwds_answer_publishes(false, &cache, &replica),
             "the answer after a held publish publishes"
+        );
+        let accepted_panes = view(&runtime).0;
+        assert!(replica.invalidate_agents());
+        publish(&mut replica, &mut cache);
+        assert!(cache.held_for_cwd);
+        assert_eq!(
+            view(&runtime).0,
+            accepted_panes,
+            "freshness never leaks held topology"
+        );
+        let guard = runtime.lock().unwrap();
+        let row = guard
+            .snapshot()
+            .navigator
+            .agents
+            .iter()
+            .find(|row| row.pane_id == "w1:p1")
+            .unwrap();
+        assert_eq!(
+            row.activity, "unknown",
+            "cwd cannot hold freshness invalidation"
+        );
+        drop(guard);
+        // Remote projection must use the same accepted topology, too.
+        let accepted = cache.accepted.as_ref().unwrap();
+        let mut payload = accepted.project();
+        for agent in &mut payload.agents {
+            agent.telemetry_stale = true;
+        }
+        let (remote, _) = SessionReplica::project_remote_state(accepted, "mini", payload).unwrap();
+        assert!(
+            !remote
+                .pane_layouts
+                .iter()
+                .flat_map(|layout| &layout.frames)
+                .any(|frame| frame.pane_id.ends_with(":w1:p3"))
+        );
+        assert_eq!(remote.agents[0].activity, "unknown");
+        replica.replace_agents(first.state.agents.clone());
+        replica.refresh_published_state().unwrap();
+        publish(&mut replica, &mut cache);
+        assert!(
+            cache.held_for_cwd,
+            "an equal list cannot confirm held topology"
+        );
+        assert_eq!(
+            runtime.lock().unwrap().snapshot().navigator.agents[0].activity,
+            "unknown"
         );
         // Herdr confirms the cwd the pane was announced with: nothing changed.
         assert!(!replica.confirm_pane_cwd("w1:p3", Some("/unverified/birth".to_owned())));

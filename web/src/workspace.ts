@@ -70,7 +70,9 @@ export type WorkspaceView = {
 export type CheckoutGitHeader = {
   state: "loading" | "fresh" | "stale" | "unavailable";
   reason: string | null;
+  recent_ci?: CheckoutCi[];
   facts: {
+    recent_commits?: CheckoutCommitRecord[];
     head_sha: string | null;
     subject: string | null;
     commit_unix_seconds: number | null;
@@ -82,12 +84,15 @@ export type CheckoutGitHeader = {
     behind: number | null;
     last_fetch_unix_ms: number | null;
   } | null;
-  ci: {
-    sha: string;
-    state: "loading" | "passing" | "pending" | "failed" | "none" | "unknown" | "unavailable" | "stale";
-    checked_at_unix_ms: number | null;
-    url: string | null;
-  } | null;
+  ci: CheckoutCi | null;
+};
+
+export type CheckoutCommitRecord = { sha: string; subject: string; commit_unix_seconds: number | null };
+export type CheckoutCi = {
+  sha: string;
+  state: "loading" | "passing" | "pending" | "failed" | "none" | "unknown" | "unavailable" | "stale";
+  checked_at_unix_ms: number | null;
+  url: string | null;
 };
 
 /** The pixel sizes the body is laid out with, read from their tokens. */

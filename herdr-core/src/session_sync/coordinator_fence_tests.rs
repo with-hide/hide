@@ -207,6 +207,7 @@ impl Fixture {
                 project: None,
                 actor,
                 ended: false,
+                terminal_id: None,
                 forked: false,
             });
         }

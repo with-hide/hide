@@ -23,7 +23,7 @@ test('Overview selects explicitly, shares filters and preserves layout in a priv
     await expect(graph.getByRole('checkbox', { name: 'Include sleeping' })).not.toBeChecked();
     const target = graph.locator('.og-session-target').first();
     await expect(target).toBeVisible();
-    const positions = () => graph.locator('.react-flow__node').evaluateAll(nodes => nodes.map(node => [node.getAttribute('data-id'), (node as HTMLElement).style.transform]));
+    const positions = () => graph.locator('.react-flow__node').evaluateAll(nodes => nodes.filter(node => !node.getAttribute('data-id')?.startsWith('team:')).map(node => [node.getAttribute('data-id'), (node as HTMLElement).style.transform]));
     const before = await positions();
     await target.click();
     await expect(graph.locator('[data-graph-preview]')).toBeVisible();
@@ -43,9 +43,11 @@ test('Overview selects explicitly, shares filters and preserves layout in a priv
     await target.press('Space');
     await expect(graph.locator('[data-graph-preview]')).toBeVisible();
     await page.keyboard.press('Escape');
-    await graph.getByRole('checkbox', { name: 'Letters', exact: true }).uncheck();
+    // A filter dims what it does not match; no circle moves (PRD overview-main-map B10, B17).
+    await graph.getByRole('button', { name: /^My turn/ }).click();
+    await expect(graph).toHaveAttribute('data-graph-phase', 'ready');
     expect(await positions()).toEqual(before);
-    await graph.getByRole('checkbox', { name: 'Letters', exact: true }).check();
+    await graph.getByRole('button', { name: /^All/ }).click();
     expect(await positions()).toEqual(before);
     const groupSize = () => graph.locator('.react-flow__node-project').first().getAttribute('style');
     const originalSize = await groupSize();

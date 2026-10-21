@@ -27,6 +27,8 @@ function standIns(herdr: HerdrFixture): string {
   fixtureProgram(dir, "pi", `if (process.argv.includes("--list-models")) { console.log("xai/pi-fixture\\nxai/pi-fixture-mini"); process.exit(0); }\nprocess.exit(1);\n`);
   // OpenCode can be named but not yet used (no way to keep its call read-only): it only has to exist.
   fixtureProgram(dir, "opencode", "process.exit(0);\n");
+  // A retired CLI can still be installed. Finding it must never probe or run it.
+  fixtureProgram(dir, "gemini", `require("node:fs").writeFileSync(${JSON.stringify(path.join(herdr.root, "gemini-invoked"))}, "unexpected invocation"); process.exit(1);\n`);
   return dir;
 }
 
@@ -105,6 +107,8 @@ test("Add agent offers the agents Hide AI can use, dims the one it cannot, and t
     await expect(group).toContainText("If Claude Code can't answer");
     // D-16: an empty list is no fallback, and there is no switch.
     await expect(group.locator("[data-ai-fallback]")).toHaveCount(0);
+    await expect(group).toContainText("None added:");
+    await expect(group).toContainText("your usage limit");
     await expect(group.getByRole("switch")).toHaveCount(0);
 
     // B38: Grok and Pi are choosable, OpenCode is installed but dimmed under its heading with the reason.
@@ -113,6 +117,7 @@ test("Add agent offers the agents Hide AI can use, dims the one it cannot, and t
     await expect(menu.locator("[data-ai-add-item]")).toHaveCount(2);
     await expect(menu.locator("[data-ai-add-item='grok']")).toBeVisible();
     await expect(menu.locator("[data-ai-add-item='pi']")).toBeVisible();
+    await expect(menu).not.toContainText("Gemini");
     await expect(menu).toContainText("Hide AI can't use these yet");
     const dimmed = menu.locator("[data-ai-unusable-item='opencode']");
     await expect(dimmed).toHaveAttribute("data-disabled", "");
@@ -122,9 +127,11 @@ test("Add agent offers the agents Hide AI can use, dims the one it cannot, and t
     // B39: added in the order chosen, numbered, each with its own model and a remove.
     await menu.locator("[data-ai-add-item='pi']").click();
     await expect(group.locator("[data-ai-fallback='pi']")).toBeVisible();
+    await expect(group).not.toContainText("None added:");
     await group.locator("[data-ai-add-agent]").click();
     await page.locator("[data-ai-add-item='grok']").click();
     await expect(group.locator("[data-ai-fallback]")).toHaveCount(2);
+    await expect(group).not.toContainText("None added:");
     await expect(group.locator("[data-ai-fallback-order]")).toHaveText(["1", "2"]);
     expect(await group.locator("[data-ai-fallback]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-ai-fallback")))).toEqual(["pi", "grok"]);
     await expect.poll(() => stored(daemon).fallback?.map((entry) => entry.provider)).toEqual(["pi", "grok"]);
@@ -157,7 +164,49 @@ test("Add agent offers the agents Hide AI can use, dims the one it cannot, and t
   }
 });
 
-test("Hide AI reads without sideways scrolling in Korean and English, light and dark, on a narrow window", async ({ page }) => {
+test("a saved retired Gemini choice stays unchosen, preserves model data and never invokes its installed CLI", async ({ page }) => {
+  const herdr = await startHerdr();
+  const home = path.join(herdr.root, "retired-ai-home");
+  const settings = aiSettingsFile(home);
+  fs.mkdirSync(path.dirname(settings), { recursive: true });
+  fs.writeFileSync(settings, JSON.stringify({
+    provider: "gemini-cli",
+    models: { "gemini-cli": "saved-gemini", antigravity: "gemini-3.8-flash-high" },
+    fallback: [{ provider: "gemini-cli" }, { provider: "grok", model: "grok-fixture-mini" }],
+  }));
+  const daemon = await startHided(herdr, "hide-ai-retired", home, { PATH: `${standIns(herdr)}${path.delimiter}${herdr.fixturePath}` });
+  try {
+    const tab = await openHideAi(page, daemon);
+    // The kit has no switched-on agent here, so the normal first-run rule makes no replacement choice.
+    await expect(tab.locator("[data-ai-provider]")).toContainText("Choose");
+    await expect(tab.locator('[data-settings-group="hide-ai-fallback"]')).toHaveCount(0);
+    await tab.locator("[data-ai-provider]").click();
+    await expect(page.getByRole("option", { name: /Grok/ })).toBeVisible();
+    await expect(page.getByRole("option", { name: /Gemini/ })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    expect(fs.existsSync(path.join(herdr.root, "gemini-invoked"))).toBe(false);
+
+    // A settings write must not persist the internal default as a choice or erase the retired model.
+    await tab.locator("[data-ai-use]").click();
+    await expect.poll(() => stored(daemon).enabled).toBe(false);
+    expect(stored(daemon).provider).toBeUndefined();
+    expect(stored(daemon).fallback).toEqual([{ provider: "grok", model: "grok-fixture-mini" }]);
+    expect(stored(daemon).models).toMatchObject({ "gemini-cli": "saved-gemini", antigravity: "gemini-3.8-flash-high" });
+    await screenshot(page, "hide-ai-retired-gemini");
+    await tab.locator("[data-ai-use]").click();
+    await tab.locator("[data-ai-provider]").click();
+    await page.getByRole("option", { name: /Grok/ }).click();
+    await expect.poll(() => stored(daemon).provider).toBe("grok");
+    await expect(tab.locator("[data-ai-provider]")).toContainText("Grok");
+    expect(stored(daemon).fallback).toEqual([]);
+    expect(fs.existsSync(path.join(herdr.root, "gemini-invoked"))).toBe(false);
+  } finally {
+    daemon.stop();
+    herdr.stop();
+  }
+});
+
+test("Hide AI reads without sideways scrolling in all four languages, light and dark, on a narrow window", async ({ page }) => {
   // B65: the sheet shrinks with its window; the longest lines (the stand-in line, the fallback note, the dimmed reasons) wrap, not clip.
   const { herdr, daemon } = await start("hide-ai-narrow", true);
   try {
@@ -175,6 +224,8 @@ test("Hide AI reads without sideways scrolling in Korean and English, light and 
       ["en", "light"],
       ["ko", "light"],
       ["ko", "dark"],
+      ["ja", "light"],
+      ["zh-CN", "dark"],
     ] as const) {
       await page.locator('[data-settings-tab="general"]').click();
       await page.locator("[data-interface-language]").click();

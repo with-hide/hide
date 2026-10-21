@@ -546,6 +546,7 @@ fn hides_receipt_in_an_opencode_2_synthetic_message_is_reported_and_kept_out_of_
     assert_eq!(
         transcript.memory_receipts,
         [hide_session::label_transcript::MemoryReceiptPart {
+            context_reset: false,
             offset: FIXTURE_MESSAGES,
             text: receipt.to_owned(),
         }]

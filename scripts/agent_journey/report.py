@@ -29,7 +29,8 @@ def markdown(report):
                 "of a provider; its rows are apart from a signed-in run's and never prove a provider or a login.", ""]
                if report.get("fake_model") else []),
              "Each cell is judged from what Hide reported (spawn answer, snapshot rows, Hide's conversation reader, "
-             "the letter record, Herdr's session report), never from screen text.", "",
+             "the letter record, Herdr's session report), never from screen text; the composer cell is judged by the "
+             "product's composer parser on the screen's styling, and keeps no screen text.", "",
              *table_lines(report), "",
              "## Every cell", "", "| Agent | Cell | Result | Reason | Evidence |", "| --- | --- | --- | --- | --- |"]
     for agent, cells in report["table"].items():

@@ -22,6 +22,11 @@ on:
         description: Positive safe integer used by every package of this candidate.
         required: true
         type: string
+      live_agents:
+        description: Call signed-in providers; false records them as not measured and keeps fixture/fake checks.
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -59,6 +64,17 @@ jobs:
           node scripts/release-candidate.mjs "$RUNNER_TEMP/verification.json" > "$RUNNER_TEMP/candidate.json"
           git merge-base --is-ancestor "$PUBLIC_SHA" origin/main
           echo "receipt=$(cat "$RUNNER_TEMP/candidate.json")" >> "$GITHUB_OUTPUT"
+      - name: Require the build steps the source was verified with
+        env:
+          PUBLIC_SHA: ${{ inputs.public_sha }}
+        run: |
+          # The called workflows' steps come from this dispatch revision but
+          # run on public_sha's checkout, so a step added after public_sha
+          # would reach files the source does not have.
+          if ! git diff --quiet "$PUBLIC_SHA" HEAD -- .github/workflows/package.yml .github/workflows/agent-journey.yml; then
+            echo "::error::package.yml or agent-journey.yml changed on main after $PUBLIC_SHA; choose a newer public_sha whose verify push run passed"
+            exit 1
+          fi
 
   packages:
     needs: validate
@@ -78,7 +94,7 @@ jobs:
     with:
       source-sha: ${{ inputs.public_sha }}
       systems: '["linux","macos","windows"]'
-      live: true
+      live: ${{ inputs.live_agents }}
       fake: true
       agy: linux
     # These are the existing public journey's provider keys, never signing
@@ -105,7 +121,14 @@ jobs:
           RECEIPT: ${{ needs.validate.outputs.receipt }}
         run: |
           mkdir -p agents/runs/release-candidate
-          node -e 'require("node:fs").writeFileSync("agents/runs/release-candidate/candidate.json", JSON.stringify(JSON.parse(process.env.RECEIPT)) + "\n")'
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const receipt = JSON.parse(process.env.RECEIPT);
+          fs.writeFileSync('agents/runs/release-candidate/candidate.json', JSON.stringify(receipt) + '\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, receipt.live_agents
+            ? 'Live provider checks requested. Read the journey report for missing-key or quota cells.\n'
+            : 'Live provider checks: not measured (live_agents=false). Fixture and fake-model checks passed.\n');
+          NODE
       - uses: actions/upload-artifact@v7
         with:
           name: hide-release-candidate

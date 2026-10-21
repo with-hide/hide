@@ -1405,12 +1405,12 @@ impl Runtime {
                 .collect::<HashSet<_>>();
             store.agent_live.retain(|key| keys.contains(key));
             // A timeout does not prove an external creation did not happen.
-            store
-                .agent_admissions
-                .retain(|key, pending| keys.contains(key) && !pending.is_empty());
+            store.agent_admissions.retain(|key, pending| {
+                (key.0 != self.node.as_str() || keys.contains(key)) && !pending.is_empty()
+            });
             store
                 .agent_placements
-                .retain(|_, (key, _, _, _)| keys.contains(key));
+                .retain(|_, (key, _, _, _)| key.0 != self.node.as_str() || keys.contains(key));
         }
         for workspace in workspaces.iter_mut() {
             for checkout in workspace.checkouts.iter_mut() {
@@ -1442,50 +1442,6 @@ impl Runtime {
                     let store = self.workspace_views.as_mut().expect("checked above");
                     let first = store.agent_live.insert(key.clone());
                     let view = store.views.entry(&key.0, &key.1);
-                    let placements = store
-                        .agent_placements
-                        .iter()
-                        .filter(|(id, (scope, _, _, _))| {
-                            scope == &key && view.agent_tab_group(id).is_some()
-                        })
-                        .map(|(id, (_, group, area, index))| {
-                            (id.clone(), group.clone(), area.clone(), *index)
-                        })
-                        .collect::<Vec<_>>();
-                    for (id, group, area, index) in placements {
-                        let group = group.filter(|id| view.group_layout(Some(id)).is_some());
-                        let selected = view.agent_groups.selected.clone();
-                        if let Err(error) =
-                            view.move_agent_to_group(&id, group.as_deref(), unix_milliseconds())
-                        {
-                            agent_layout_errors.push(format!("Created tab {id}: {error:?}"));
-                            continue;
-                        }
-                        view.agent_groups.selected = selected;
-                        let layout = view
-                            .group_layout_mut(group.as_deref())
-                            .expect("placement group checked");
-                        let target = layout
-                            .tree
-                            .area(&area)
-                            .unwrap_or_else(|| layout.tree.active_area());
-                        let area = target.id.clone();
-                        let index = index.unwrap_or(target.displays.len());
-                        match layout.tree.move_display(
-                            &id,
-                            &area,
-                            index,
-                            layout.tree.next_stamp(unix_milliseconds()),
-                        ) {
-                            Ok(changed) => {
-                                agent_layout_changed |= changed;
-                                store.agent_placements.remove(&id);
-                            }
-                            Err(error) => {
-                                agent_layout_errors.push(format!("Created tab {id}: {error:?}"))
-                            }
-                        }
-                    }
                     let layout = view.selected_agent_layout();
                     placed_tabs = Some(
                         layout
@@ -2000,6 +1956,7 @@ impl Runtime {
         // so the remote server's own focus is the read signal.
         let mut read_changed = false;
         if let Ok(session) = fetched.as_mut() {
+            self.overlay_remote_pane_moves(target_id, session);
             // A node that dials this core sleeps as the core's own machine
             // does (PRD core-host-node-remote-core B13).
             self.stamp_node_agent_sleep(target_id, &mut session.agents);
@@ -2509,6 +2466,13 @@ impl Runtime {
         // Sleeping agents Herdr no longer lists are drawn from their records
         // before anything below reads the agents (PRD agent-sleep B10).
         let mut fetched = fetched;
+        let mut precomputed = precomputed;
+        if let Ok(payload) = fetched.as_mut() {
+            self.overlay_pane_moves(payload);
+            if let Some(catalog) = precomputed.as_mut() {
+                self.overlay_pane_move_catalog(catalog);
+            }
+        }
         let mut inline_paths = None;
         if let Ok(payload) = fetched.as_mut() {
             self.label_overlay.apply(payload);
@@ -4106,6 +4070,10 @@ impl Runtime {
                     Some(device) => super::operations::remote_pane_id(device, &pane_id),
                     None => pane_id,
                 };
+                let tab_id = created_tab_id.map(|tab| match device.as_deref() {
+                    Some(device) => crate::session_sync::remote_tab_id(device, &tab),
+                    None => tab,
+                });
                 let operation = self
                     .snapshot
                     .task_operation
@@ -4123,17 +4091,17 @@ impl Runtime {
                 let input_ready = operation.agent_phase.is_none().then(|| pane_id.clone());
                 let waits_for_local_catalog = operation.kind == "agent_start"
                     && device.is_none()
-                    && self.created_pane_place(&pane_id).is_none()
-                    && !self.catalog_workspaces().any(|workspace| {
-                        workspace.device_id == self.node.as_str()
-                            && workspace.checkouts.iter().any(|checkout| {
-                                checkout.path == path
-                                    && checkout
-                                        .tabs
-                                        .iter()
-                                        .any(|tab| tab.panes.iter().any(|pane| pane.id == pane_id))
-                            })
-                    });
+                    && !self
+                        .created_pane_place(&pane_id)
+                        .is_some_and(|(owner, tab)| {
+                            owner == path && tab_id.as_deref().is_none_or(|id| id == tab)
+                        })
+                    && !self.start_pane_is_listed(
+                        self.node.as_str(),
+                        &path,
+                        tab_id.as_deref(),
+                        &pane_id,
+                    );
                 crate::diagnostic!(serde_json::json!({
                     "component": "agent_start",
                     "kind": "start.focus_disposition",
@@ -4147,13 +4115,12 @@ impl Runtime {
                     "selected_pane_id": self.snapshot.focused.pane_id,
                 }));
                 if should_focus && let Some(device) = device.as_deref() {
-                    self.queue_start_focus(id, pane_id.clone());
+                    self.queue_start_focus(id, tab_id.clone(), pane_id.clone());
                     self.follow_start(Some(device));
                 } else if should_focus && waits_for_local_catalog {
-                    // A first Home's catalog may still contain only the
-                    // owner's seed pane. Wait for this returned pane, or the
-                    // next session stays scoped to the previous checkout.
-                    self.queue_start_focus(id, pane_id.clone());
+                    // Home may still list only its seed pane; an add-pane
+                    // result may still list the pane in its staging tab.
+                    self.queue_start_focus(id, tab_id, pane_id.clone());
                 } else if should_focus {
                     // Targeted creation intentionally did not focus Herdr.
                     // Use the same ordered, acknowledged focus as a pane press.
@@ -5280,27 +5247,31 @@ impl Runtime {
                         RemoteControlAction::CreateTab {
                             cwd,
                             area_id: Some(area),
+                            group_id,
                             ..
                         }
                         | RemoteControlAction::OpenOwner {
                             cwd,
                             area_id: Some(area),
+                            group_id,
                             ..
-                        } => Some((cwd.clone(), area.clone())),
+                        } => Some((
+                            cwd.clone(),
+                            area.clone(),
+                            group_id.as_deref().map(str::to_owned),
+                        )),
                         _ => None,
                     };
-                    if let Some((path, area)) = placement
+                    let placement_capacity = self.agent_placement_capacity(None);
+                    if let Some((path, area, group)) = placement
                         && let Some(store) = self.workspace_views.as_mut()
                     {
-                        if store.agent_placements.len() < 64 {
+                        if placement_capacity {
                             store.agent_placements.insert(
                                 tab_id.clone(),
                                 (
                                     (self.node.as_str().to_owned(), path.clone()),
-                                    store
-                                        .views
-                                        .get(self.node.as_str(), &path)
-                                        .and_then(|v| v.agent_groups.selected.clone()),
+                                    group,
                                     area,
                                     None,
                                 ),
@@ -5311,6 +5282,44 @@ impl Runtime {
                                 "Too many pending Agent tab placements",
                             );
                         }
+                    }
+                }
+                // The catalog may already contain the tab before its answer
+                // supplies the captured group and area. Apply that receipt to
+                // the full known checkout topology before selection reads the
+                // tab's temporary Ungrouped membership. An unanswered catalog
+                // or an unlisted tab leaves the receipt for normal admission.
+                let known_placement = created_tab_id.as_ref().and_then(|id| {
+                    let key = &self.workspace_views.as_ref()?.agent_placements.get(id)?.0;
+                    if self.catalog_from_coordinator && !self.catalog_paths.knows(&key.1) {
+                        return None;
+                    }
+                    let checkout = self
+                        .snapshot
+                        .navigator
+                        .workspaces
+                        .iter()
+                        .filter(|workspace| workspace.device_id == key.0)
+                        .flat_map(|workspace| &workspace.checkouts)
+                        .find(|checkout| {
+                            checkout.path == key.1
+                                && checkout.tabs.iter().any(|tab| tab.id.as_ref() == Some(id))
+                        })?;
+                    let topology = checkout
+                        .tabs
+                        .iter()
+                        .filter_map(|tab| Some((tab.id.clone()?, tab.delegated)))
+                        .collect::<Vec<_>>();
+                    Some((key.clone(), topology))
+                });
+                if let Some((key, topology)) = known_placement {
+                    match self.reconcile_agent_topology(&key, &topology) {
+                        Ok(true) => self.persist_workspace_views(),
+                        Ok(false) => {}
+                        Err(error) => self.push_diagnostic(
+                            "agent_layout.reconcile_refused",
+                            format!("Creation placement for {}: {error:?}", key.1),
+                        ),
                     }
                 }
                 let can_show_created = match (&action, created_tab_id.as_deref()) {
@@ -5325,11 +5334,37 @@ impl Runtime {
                 // names where they are now, and the creation's answer is the
                 // older request: the new tab waits in the strip rather than
                 // taking the screen back from the tab they chose.
-                let chosen_since = created_tab_id.is_some()
-                    && self
-                        .control_lane
-                        .running_serial()
-                        .is_some_and(|serial| self.last_view_intent_serial > serial);
+                // An empty group selection sends no Herdr focus control,
+                // so it has no newer lane serial. The captured placement
+                // still names the creation's group; another selected group
+                // keeps the screen while this tab joins its original group.
+                let group_chosen_since = match &action {
+                    RemoteControlAction::CreateTab {
+                        cwd,
+                        area_id: Some(_),
+                        group_id,
+                        ..
+                    }
+                    | RemoteControlAction::OpenOwner {
+                        cwd,
+                        area_id: Some(_),
+                        group_id,
+                        ..
+                    } => self
+                        .workspace_views
+                        .as_ref()
+                        .and_then(|store| store.views.get(self.node.as_str(), cwd))
+                        .is_some_and(|view| {
+                            view.agent_groups.selected.as_deref() != group_id.as_deref()
+                        }),
+                    _ => false,
+                };
+                let chosen_since = group_chosen_since
+                    || (created_tab_id.is_some()
+                        && self
+                            .control_lane
+                            .running_serial()
+                            .is_some_and(|serial| self.last_view_intent_serial > serial));
                 if chosen_since && can_show_created {
                     crate::diagnostic!(serde_json::json!({
                         "component": "tab_control",

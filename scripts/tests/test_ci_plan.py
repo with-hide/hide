@@ -1,5 +1,6 @@
 """Which lanes `scripts/ci-plan.py` plans for real changes, and what `verify` accepts."""
 import importlib.util
+from fnmatch import fnmatchcase
 import json
 import re
 from pathlib import Path, PurePosixPath
@@ -15,7 +16,7 @@ CRATES = ci.cargo_crates(ROOT)
 EVERY_PACKAGE = sorted(crate["name"] for crate in CRATES.values())
 # The lanes that take a macOS runner; every other check on macOS is a job of
 # `nightly.yml`.
-MACOS_LANES = {"os-contract-macos", "desktop-e2e", "package"}
+MACOS_LANES = {"os-contract-macos", "desktop-e2e", "package", "omp-contract"}
 # Every lane but `package`: what a push, the nightly and an unclassified path plan.
 FULL = [lane for lane in ci.LANES if lane not in ("package", "agent-clis")]
 # A full plan with a package input: `agent-clis` is planned by its own paths only.
@@ -43,6 +44,41 @@ def needs_for(result, **override):
 
 
 class Selection(unittest.TestCase):
+    def test_unit_test_changes_keep_existing_systems_without_application_suites(self):
+        for status in ("A", "M", "D"):
+            for path in ("desktop/src/main/new.test.ts", "desktop/src/main/updater.test.ts",
+                         "desktop/e2e/fixture-cleanup.unit.ts"):
+                with self.subTest(status=status, path=path):
+                    result = plan(path, status=status)
+                    self.assertEqual(result["lanes"], ["policy", "checks", "windows-check"])
+                    self.assertEqual(result["rust_packages"], [])
+                    self.assertFalse(ci.reads_no_lane(status, path, CRATES, ROOT))
+
+    def test_web_unit_tests_keep_their_rust_and_css_build_readers(self):
+        # sidebar.rs scans all web/src TS, including comments in test files;
+        # Tailwind's web-root scan also reads source and e2e unit tests.
+        for path in ("web/src/new.test.ts", "web/src/components/new.test.tsx"):
+            with self.subTest(path=path):
+                result = plan(path)
+                self.assertEqual(set(result["lanes"]), {"policy", "rust", "checks", "web-e2e", "desktop-e2e"})
+                self.assertEqual(result["rust_packages"], ["herdr-core"])
+        self.assertEqual(set(plan("web/e2e/platform-program.unit.ts")["lanes"]),
+                         {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"})
+
+    def test_unit_tests_do_not_remove_a_products_lanes_or_a_conservative_fallback(self):
+        for product in ("web/src/terminals.ts", "desktop/src/main/index.ts", "desktop/src/main/updater.ts", "hide-platform/src/lib.rs",
+                        "Cargo.lock", "scripts/ci-plan.py", "unclaimed/config.json"):
+            with self.subTest(product=product):
+                expected = set(plan(product)["lanes"]) | {"checks"}
+                self.assertEqual(set(plan("desktop/src/main/new.test.ts", product)["lanes"]), expected | {"windows-check"})
+        self.assertIn("package", plan("desktop/src/main/updater.ts")["lanes"])
+        self.assertEqual(plan("web/src/new.test.ts", status="R100")["lanes"], FULL)
+        for path in ("desktop/src/main/new.test.tsx", "web/e2e/new.unit.ts", "desktop/e2e/new.unit.ts"):
+            with self.subTest(unregistered=path):
+                self.assertIn("desktop-e2e", plan(path)["lanes"])
+        self.assertEqual(ci.select([("M", "web/src/new.test.ts")], CRATES, ROOT,
+                                   full_reason="push to main")["lanes"], FULL)
+
     def test_documentation_runs_only_the_policy_checks(self):
         result = plan("docs/ARCHITECTURE.md", "CONTRIBUTING.md", "desktop/AGENTS.md", "design/hide-ui.lib.pen")
         self.assertEqual(result["lanes"], ["policy"])
@@ -397,7 +433,7 @@ class NamedPaths(unittest.TestCase):
                 self.assertEqual(self.lanes(path), {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e",
                                                     "windows-desktop", "windows-check", "agent-journey"})
         for path in ("hide-session/examples/journey_conversation.rs", "hide-memory/examples/journey_memory.rs",
-                     "hide-agent-hooks/tests/fixtures/fake-codex.py"):
+                     "hide-agent-adapter/examples/journey_composer.rs", "hide-agent-hooks/tests/fixtures/fake-codex.py"):
             with self.subTest(path=path):
                 self.assertIn("agent-journey", self.lanes(path))
                 self.assertIn("rust", self.lanes(path))
@@ -418,9 +454,35 @@ class NamedPaths(unittest.TestCase):
         self.assertIn("policy", result["lanes"])
 
     def test_desktop_e2e_helpers_run_the_desktop_suites_and_windows_unit_tests(self):
-        for path in ("desktop/e2e/fixture.ts", "desktop/e2e/fixture-cleanup.unit.ts", "desktop/playwright.config.ts", "desktop/vitest.config.ts"):
+        for path in ("desktop/e2e/fixture.ts", "desktop/playwright.config.ts", "desktop/vitest.config.ts"):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), {"policy", "checks", "desktop-e2e", "windows-desktop", "windows-check"})
+
+    def test_the_narrow_unit_paths_are_exactly_the_registered_desktop_vitest_tests(self):
+        # Independent authority: Vitest's actual include lists, not the selector.
+        # A new test convention must be registered before its app lanes can go.
+        registered = set()
+        for folder, config in (("desktop", "vitest.config.ts"),):
+            text = (ROOT / folder / config).read_text()
+            patterns = json.loads(re.search(r"include: (\[[^\]]+\])", text).group(1))
+            for pattern in patterns:
+                expanded = [pattern]
+                if "{ts,tsx}" in pattern:
+                    expanded = [pattern.replace("{ts,tsx}", ext) for ext in ("ts", "tsx")]
+                for glob in expanded:
+                    registered.update(path.relative_to(ROOT).as_posix() for path in (ROOT / folder).glob(glob))
+        sources = code_sources()
+        selected = {path for path in sources if any(fnmatchcase(path, glob) for glob in ci.UNIT_TEST_PATHS)}
+        self.assertTrue(registered)
+        self.assertEqual(selected, registered)
+        for path in registered:
+            with self.subTest(path=path):
+                self.assertEqual(self.lanes(path), {"policy", "checks", "windows-check"})
+        # Both retained jobs run both Vitest suites; a configured matrix alone
+        # would not establish that these tests are executed on Windows.
+        for lane in ("checks", "windows-check"):
+            for folder in ("web", "desktop"):
+                self.assertIn(f"bash scripts/verify-web.sh {folder} test", pr_jobs()[lane])
 
     def test_configuration_names_the_lanes_that_read_it(self):
         expected = {
@@ -535,7 +597,7 @@ def code_sources():
     """Each Rust, web and desktop source's code with comment lines left out, by path, with its crate."""
     crate_of = {directory: crate["name"] for directory, crate in CRATES.items()}
     sources = {}
-    for folder in [*crate_of, "web/src", "web/e2e", "desktop/src", "desktop/e2e"]:
+    for folder in [*crate_of, "web/src", "web/e2e", "desktop/src", "desktop/e2e", "desktop/scripts"]:
         for source in (ROOT / folder).rglob("*"):
             if source.suffix not in (".rs", ".ts", ".tsx", ".mjs", ".js") or "node_modules" in source.parts:
                 continue
@@ -562,7 +624,7 @@ def runner_jobs(block):
     if "uses: ./.github/workflows/desktop-e2e.yml" in block:
         # Each shard builds in place.
         return int(re.search(r"\n      shards: (\d+)", block).group(1))
-    if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "agy-contract", "agent-clis")):
+    if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "agy-contract", "omp-contract", "agent-clis")):
         return len(json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1)))
     if "uses: ./.github/workflows/agent-journey.yml" in block:
         # The stand-ins run on each system but Windows, and Windows has its forms job.
@@ -582,7 +644,7 @@ class Workflows(unittest.TestCase):
         for lane, block in pr_jobs().items():
             for called in re.findall(r"uses: \./(\.github/workflows/[a-z0-9-]+\.yml)", block):
                 callers.setdefault(called, set()).add(lane)
-        self.assertEqual(len(callers), 8)
+        self.assertEqual(len(callers), 9)
         for workflow, lanes in callers.items():
             with self.subTest(workflow=workflow):
                 result = plan(workflow)
@@ -663,7 +725,7 @@ class Workflows(unittest.TestCase):
         # added, then the agent CLIs' Linux and Windows installs, which only a
         # pin change plans; a job beyond these is a new decision, made with
         # this number.
-        self.assertLessEqual(most, 29, "a run starts more jobs than the e2e shards, the agent journey and the CLI pins need")
+        self.assertLessEqual(most, 32, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
@@ -757,7 +819,7 @@ LINES = "".join(f"line {n}\n" for n in range(1, 21))
 
 
 class ReuseGreenRun(unittest.TestCase):
-    """A push whose change since the last green run no lane but `policy` reads plans `policy` alone."""
+    """Reuse unchanged app checks, rerunning policy and any changed registered unit tests."""
 
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -806,6 +868,60 @@ class ReuseGreenRun(unittest.TestCase):
         self.pr.merge_main_into_topic()
         self.pr.check_out_merge()
         self.assertRuns(self.pr.plan(lambda: self.green), "main changed web/src/x.ts")
+
+    def test_only_registered_unit_checks_rerun_after_a_green_app_run(self):
+        for path, lanes in (("desktop/src/main/x.test.ts", ["policy", "checks", "windows-check"]),
+                            ("desktop/e2e/windows-processes.unit.ts", ["policy", "checks", "windows-check"])):
+            with self.subTest(path=path):
+                self.pr.git("checkout", "-q", "topic")
+                self.pr.git("reset", "--hard", self.green["head"])
+                self.pr.commit("topic", "unit assertion", {path: "test\n", "docs/b.md": "guide\n"})
+                self.pr.check_out_merge()
+                result = self.pr.plan(lambda: self.green)
+                self.assertEqual(result["lanes"], lanes)
+                self.assertEqual(result["rust_packages"], [])
+                self.assertEqual(result["verified"], self.green)
+                self.assertEqual(ci.plan_record(result, 7, 202)["verified"], self.green)
+                self.assertIn("this run checks " + ", ".join(lanes), ci.summary(result))
+                # A lost artifact must run the whole PR's app checks again.
+                self.assertIn("desktop-e2e", self.pr.plan(None)["lanes"])
+
+    def test_modified_and_deleted_unit_tests_are_rechecked_against_the_original_green_anchor(self):
+        self.green["head"] = self.pr.commit("topic", "unit fixture", {"desktop/src/main/x.test.ts": "first\n"})
+        self.pr.commit("topic", "unit assertion", {"desktop/src/main/x.test.ts": "second\n"})
+        self.pr.check_out_merge()
+        first = self.pr.plan(lambda: self.green)
+        self.assertEqual(first["lanes"], ["policy", "checks", "windows-check"])
+        # This partial green must not claim that its app lanes checked a new
+        # head: later runs still compare with the original app-tested commits.
+        anchor = ci.plan_record(first, 7, 202)["verified"]
+        self.pr.git("checkout", "-q", "topic")
+        self.pr.git("rm", "desktop/src/main/x.test.ts")
+        self.pr.git("commit", "-qm", "delete unit test")
+        self.pr.check_out_merge()
+        deleted = self.pr.plan(lambda: anchor)
+        self.assertEqual(deleted["lanes"], ["policy", "checks", "windows-check"])
+        self.assertEqual(deleted["verified"], self.green)
+        self.pr.commit("topic", "product change", {"web/src/x.ts": "changed again\n"})
+        self.pr.check_out_merge()
+        self.assertRuns(self.pr.plan(lambda: anchor), "the pull request changed web/src/x.ts")
+
+    def test_unit_edits_do_not_reuse_app_checks_when_main_changed_shared_product_code(self):
+        self.pr.commit("main", "main moves", {"web/src/x.ts": LINES.replace("line 19\n", "line nineteen\n")})
+        self.pr.merge_main_into_topic()
+        self.pr.commit("topic", "unit assertion", {"desktop/src/main/x.test.ts": "test\n"})
+        self.pr.check_out_merge()
+        self.assertRuns(self.pr.plan(lambda: self.green), "main changed web/src/x.ts")
+
+    def test_an_unregistered_test_or_shared_test_configuration_does_not_reuse_app_checks(self):
+        for path in ("web/src/x.test.ts", "web/e2e/platform-program.unit.ts", "web/e2e/new.unit.ts",
+                     "web/vite.config.ts", "desktop/src/main/new.test.tsx"):
+            with self.subTest(path=path):
+                self.pr.git("checkout", "-q", "topic")
+                self.pr.git("reset", "--hard", self.green["head"])
+                self.pr.commit("topic", "unclassified input", {path: "changed\n"})
+                self.pr.check_out_merge()
+                self.assertRuns(self.pr.plan(lambda: self.green), f"the pull request changed {path}")
 
     def test_a_conflict_resolved_in_code_runs_the_lanes(self):
         self.pr.commit("main", "main moves", {"web/src/x.ts": LINES.replace("line 2\n", "line 2!\n")})

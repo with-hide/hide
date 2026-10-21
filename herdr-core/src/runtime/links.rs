@@ -24,6 +24,7 @@ use std::hash::{Hash, Hasher};
 #[derive(Default)]
 pub(super) struct LinksWork {
     pub(super) client: Option<LinkClient>,
+    pub(super) direct_inputs: Vec<crate::model::GraphDirectInput>,
     projects_print: Option<u64>,
     panes: Arc<Vec<PaneFact>>,
     parents: Arc<Vec<ParentFact>>,
@@ -91,6 +92,15 @@ impl RuntimeSink {
 }
 
 impl Sink for RuntimeSink {
+    fn direct_observations(&self, facts: Vec<crate::links::observation::DirectFact>) {
+        let mut inputs: Vec<_> = facts.iter().filter_map(|fact| fact.graph_input()).collect();
+        inputs.sort_unstable_by(|a, b| {
+            b.at_unix_ms
+                .cmp(&a.at_unix_ms)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        self.apply(move |runtime| runtime.ingest_direct_observations(inputs));
+    }
     fn record(&self, generation: u64, answer: Result<SessionRecord, String>) {
         self.apply(move |runtime| runtime.ingest_session_record(generation, answer));
     }
@@ -174,12 +184,36 @@ pub(crate) fn spawn_worker(
 
 /// A session file's agent name for a Hide agent kind.
 pub(super) fn session_agent(kind: &str) -> Option<&'static str> {
-    hide_agent_adapter::adapter(kind)?
-        .session
-        .map(|format| format.adapter().herdr.name)
+    hide_session::Agent::from_kind(kind).map(|agent| agent.as_str())
 }
 
 impl Runtime {
+    /// The proof owner obtains a handle under the lock, then admits off-lock.
+    pub fn direct_observation_client(&self) -> Option<LinkClient> {
+        self.links_work.client.clone()
+    }
+
+    fn ingest_direct_observations(&mut self, inputs: Vec<crate::model::GraphDirectInput>) -> bool {
+        if self.links_work.direct_inputs == inputs {
+            return false;
+        }
+        self.links_work.direct_inputs = inputs.clone();
+        let mut graph = self
+            .delivery_ledger
+            .as_ref()
+            .map_or_else(
+                |_| crate::model::OverviewGraphSnapshot::default(),
+                |ledger| {
+                    crate::model::OverviewGraphSnapshot::from_ledger(ledger, unix_milliseconds())
+                },
+            )
+            .with_direct_inputs(inputs);
+        graph.sessions = std::mem::take(&mut self.snapshot.overview_graph.sessions);
+        let changed = self.snapshot.overview_graph != graph;
+        self.snapshot.overview_graph = graph;
+        changed
+    }
+
     pub(super) fn open_session_record(&mut self, payload: RecordOpenPayload) -> bool {
         self.links_work.record_generation += 1;
         let mut record = SessionRecordSnapshot {
@@ -1161,6 +1195,27 @@ fn link_pr(
 #[cfg(test)]
 mod history_tests {
     use super::*;
+
+    #[test]
+    fn retained_history_keeps_its_native_search_presence() {
+        let mut runtime = crate::runtime::tests::runtime();
+        let payload = crate::sidebar::owned_label_fixture(serde_json::json!({
+            "agents": [{
+                "pane_id":"w1:p1", "workspace_label":"History", "agent":"cursor",
+                "agent_status":"idle",
+                "tokens":{"status_idle":"○", "activity":"000000000000"}
+            }]
+        }))
+        .unwrap();
+        let mut agents = crate::sidebar::project_agents(payload).agents;
+        agents[0].session_id = Some("retained-native-id".into());
+        runtime.snapshot.navigator.agents = agents;
+        let presence = runtime.session_search_presence();
+        assert_eq!(presence.len(), 1);
+        assert_eq!(presence[0].session.agent, "cursor");
+        assert_eq!(presence[0].session.session_id, "retained-native-id");
+        assert!(session_agent("unknown-reader").is_none());
+    }
 
     #[test]
     fn history_late_search_answer_cannot_replace_the_new_request_or_its_cursor() {

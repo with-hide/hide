@@ -77,9 +77,12 @@ mod named_tab;
 mod node_agent_areas;
 #[path = "tests/node_issues.rs"]
 mod node_issues;
+#[path = "tests/observed_start.rs"]
+mod observed_start;
 #[path = "tests/operator_focus.rs"]
 mod operator_focus;
 mod pane_geometry;
+pub(super) mod pane_move;
 #[path = "tests/project_settings.rs"]
 mod project_settings;
 #[path = "tests/projects.rs"]
@@ -1143,6 +1146,7 @@ fn a_created_tab_joins_its_requested_checkout_while_an_external_tab_follows_its_
                 cwd: checkout_path.clone(),
                 label: "new".to_owned(),
                 area_id: None,
+                group_id: None,
                 admission_id: None,
             },
             Ok(RemoteControlOutcome::Acknowledged {

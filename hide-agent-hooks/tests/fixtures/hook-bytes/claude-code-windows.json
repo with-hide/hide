@@ -21,7 +21,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event Stop --memory-injection --source hide-subagents@8 }"
+              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event Stop --memory-injection --source hide-subagents@10 }"
             ],
             "timeout": 8
           }
@@ -38,7 +38,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@8 }"
+              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event SessionStart --memory-injection --source hide-subagents@10 }"
             ],
             "timeout": 8
           }
@@ -55,7 +55,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event UserPromptSubmit --memory-injection --source hide-subagents@8 }"
+              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event UserPromptSubmit --memory-injection --source hide-subagents@10 }"
             ],
             "timeout": 8
           }
@@ -72,7 +72,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event SubagentStart --memory-injection --source hide-subagents@8 }"
+              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event SubagentStart --memory-injection --source hide-subagents@10 }"
             ],
             "timeout": 8
           }
@@ -89,7 +89,7 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event SubagentStop --memory-injection --source hide-subagents@8 }"
+              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event SubagentStop --memory-injection --source hide-subagents@10 }"
             ],
             "timeout": 8
           }
@@ -106,12 +106,48 @@
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event PreToolUse --source hide-subagents@8 }"
+              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event PreToolUse --source hide-subagents@10 }"
             ],
             "timeout": 8
           }
         ],
         "matcher": "Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event PostToolUse --source hide-subagents@10 }"
+            ],
+            "timeout": 8
+          }
+        ],
+        "matcher": "Bash|PowerShell"
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime claude-code --event PostToolUseFailure --source hide-subagents@10 }"
+            ],
+            "timeout": 8
+          }
+        ],
+        "matcher": "Bash|PowerShell"
       }
     ]
   }

@@ -40,6 +40,8 @@ type AgentSpec = {
   parent?: string;
   children?: string[];
   ask?: AgentState["ask"];
+  /** What the session is doing now, as its quiet sentence. */
+  now?: string;
   pulls?: { pr: AgentPullRequest; state: PullState }[];
   approval?: boolean;
 };
@@ -51,6 +53,7 @@ function agent(spec: AgentSpec, now: number): AgentRow {
     ...preset,
     root: spec.parent === undefined,
     ask: spec.ask ?? null,
+    line: spec.now ? { text: spec.now, mode: "quiet", tone: { kind: "subtle", read: false } } : preset.line,
     pr: pulls.length ? { count: pulls.length, worst: pulls[0]!.state, pulls: pulls.map((one, index) => ({ index, state: one.state })) } : null,
     request_since: now - spec.ago,
   };
@@ -132,19 +135,19 @@ export function overviewWorld(now: number): OverviewWorld {
   const billingPr = pull("example/billing-api", 88, "Verify webhook signatures", "failed");
   const agents: AgentRow[] = [
     agent({ pane: "h-a3", title: "배포 전 변경 확인", look: "asking", ago: 3 * MINUTE, ask: { verb: "answer", what: "프로덕션 배포 전에 이번 변경 범위를 확인해 주세요", more: 0 }, pulls: [{ pr: hidePrs.release, state: "mergeable" }] }, now),
-    agent({ pane: "h-a1", title: "사이드바 가독성 개선", look: "working", ago: MINUTE, children: ["h-a1c1", "h-a1c2", "h-a1c3", "h-a1c4"], pulls: [{ pr: hidePrs.sidebar, state: "pending" }] }, now),
+    agent({ pane: "h-a1", now: "좁은 폭 줄바꿈 고치는 중", title: "사이드바 가독성 개선", look: "working", ago: MINUTE, children: ["h-a1c1", "h-a1c2", "h-a1c3", "h-a1c4"], pulls: [{ pr: hidePrs.sidebar, state: "pending" }] }, now),
     agent({ pane: "h-a1c1", title: "컴포넌트 구조 정리", look: "working", ago: 40_000, kind: "codex", parent: "h-a1", children: ["h-a1g1"] }, now),
     agent({ pane: "h-a1c2", title: "한글 가독성 확인", look: "done", ago: 6 * MINUTE, parent: "h-a1" }, now),
     agent({ pane: "h-a1c3", title: "긴 한국어와 English title wrapping 검토", look: "working", ago: 3 * MINUTE, parent: "h-a1", kind: "codex" }, now),
     agent({ pane: "h-a1c4", title: "키보드 이동 확인", look: "idle", ago: 15 * MINUTE, parent: "h-a1" }, now),
     agent({ pane: "h-a1g1", title: "모바일 표 너비 조정", look: "working", ago: 2 * MINUTE, parent: "h-a1c1" }, now),
-    agent({ pane: "h-e1", title: "키보드 단축키와 English 화면 연결 검증", look: "working", ago: 4 * MINUTE, kind: "codex" }, now),
-    agent({ pane: "h-q2", title: "검색 팔레트", look: "idle", ago: 3 * 60 * MINUTE, pulls: [{ pr: hidePrs.search, state: "merged" }] }, now),
-    agent({ pane: "h-r1", title: "릴리스 노트 초안", look: "idle", ago: 26 * 60 * MINUTE }, now),
-    agent({ pane: "h-r2", title: "의존성 업데이트 검토", look: "idle", ago: 2 * 24 * 60 * MINUTE }, now),
+    agent({ pane: "h-e1", now: "English 화면 단축키 확인 중", title: "키보드 단축키와 English 화면 연결 검증", look: "working", ago: 4 * MINUTE, kind: "codex" }, now),
+    agent({ pane: "h-q2", now: "PR 머지됨", title: "검색 팔레트", look: "idle", ago: 3 * 60 * MINUTE, pulls: [{ pr: hidePrs.search, state: "merged" }] }, now),
+    agent({ pane: "h-r1", now: "초안 끝", title: "릴리스 노트 초안", look: "idle", ago: 26 * 60 * MINUTE }, now),
+    agent({ pane: "h-r2", now: "변경 목록 정리 끝", title: "의존성 업데이트 검토", look: "idle", ago: 2 * 24 * 60 * MINUTE }, now),
     agent({ pane: "b-1", title: "결제 재시도 로그 정리", look: "asking", approval: true, ago: 9 * MINUTE, kind: "codex", ask: { verb: "approval", what: "마이그레이션을 운영 DB에 실행할까요?", more: 0 } }, now),
-    agent({ pane: "b-2", title: "웹훅 서명 검증 추가", look: "working", ago: 2 * MINUTE, pulls: [{ pr: billingPr, state: "failed" }] }, now),
-    agent({ pane: "s-1", title: "랜딩 문구 다듬기", look: "done", ago: 12 * MINUTE }, now),
+    agent({ pane: "b-2", now: "CI 실패 고치는 중", title: "웹훅 서명 검증 추가", look: "working", ago: 2 * MINUTE, pulls: [{ pr: billingPr, state: "failed" }] }, now),
+    agent({ pane: "s-1", now: "문구 3안 끝", title: "랜딩 문구 다듬기", look: "done", ago: 12 * MINUTE }, now),
   ];
 
   const hideCheckouts: Checkout[] = [
@@ -244,6 +247,8 @@ export function overviewWorld(now: number): OverviewWorld {
       available: true, limit: 2000, retained_count: 12, truncated: false, retention_ms: 86_400_000,
       sessions: agents.map((row) => ({ device_id: "local", pane_id: row.pane_id, session_digest: `fixture-${row.pane_id}`, launch_model: row.agent_kind === "codex" ? "model-c" : "model-a" })),
       letters: Array.from({ length: 12 }, (_, i) => ({ id: `fixture-letter-${i}`, sender: { device_id: "local", pane_id: i % 2 ? "h-a1c1" : "b-1", session: i % 2 ? "fixture-h-a1c1" : "fixture-b-1" }, recipient: { device_id: "local", pane_id: i % 2 ? "h-a1" : "h-a3", session: i % 2 ? "fixture-h-a1" : "fixture-h-a3" }, kind: i % 3 ? "progress" : "request", at_unix_ms: now - i * MINUTE })),
+      // Herdr input with no letter between two teams draws the dotted direct-only line.
+      direct_inputs: Array.from({ length: 3 }, (_, i) => ({ id: `fixture-direct-${i}`, sender: { device_id: "local", pane_id: "h-e1", session: "fixture-h-e1" }, recipient: { device_id: "local", pane_id: "s-1", session: "fixture-s-1" }, at_unix_ms: now - (i + 2) * MINUTE })),
     },
     navigator: {
       workspaces,
@@ -318,18 +323,31 @@ export function overviewFocusWorld(now: number, content: string): OverviewWorld 
   Object.assign(get("h-r2"), { mark: "asleep", identity_label: "잠든 릴리스 세션", lineage_parent_pane_id: "h-r1" });
   if (content === "long") for (const row of agents) row.identity_label += " · 긴 한국어 제목과 English identifiers 줄바꿈 확인";
   const extraProjects: Workspace[] = [];
-  const count = content === "many" ? 64 : 1;
-  for (let index = 0; index < count; index += 1) {
+  const sizes = content === "many" || content === "dense" ? [48, 30, ...Array(19).fill(8)] : content === "large" ? [48] : [3, 3, 3, 3, 2];
+  for (const [index, count] of sizes.entries()) {
     const id = `focus-project-${index}`;
-    const pane = `focus-pane-${index}`;
-    const row = agent({ pane, title: `쉬는 작업 ${index + 1}`, look: "idle", ago: MINUTE }, now);
-    if (content === "many" && index % 3 === 0) Object.assign(row, { mark: "going", group: "working", activity: "working", state: { ...get("h-a1c1").state, root: true } });
-    agents.push(row);
-    const one = checkout({ id: `${id}:main`, workspace: id, branch: "main", primary: true, panes: [pane] }, Math.floor(now / 1000));
-    extraProjects.push(workspace(id, { label: `실험 프로젝트 ${index + 1}`, checkouts: [one], agent_scope: scopeWith([card(pane, "working", [pane], [one.id], "0")]) }, REFERENCE_FOLDS));
+    const panes = Array.from({ length: count }, (_, session) => `focus-pane-${index}-${session}`);
+    const rows = panes.map((pane, session) => agent({ pane, title: `실험 작업 ${index + 1} · ${session + 1}${content === "long" ? " · 긴 한국어 제목과 English identifiers" : ""}`, look: session % 3 === 0 ? "working" : "idle", ago: MINUTE, ...(session > 0 && session % 3 === 0 ? { parent: panes[0] } : {}) }, now));
+    agents.push(...rows);
+    const one = checkout({ id: `${id}:main`, workspace: id, branch: "main", primary: true, panes }, Math.floor(now / 1000));
+    extraProjects.push(workspace(id, { label: `실험 프로젝트 ${index + 1}${content === "long" ? " · Korean and English 프로젝트 이름 줄바꿈" : ""}`, checkouts: [one], agent_scope: scopeWith(rows.map((row) => card(row.pane_id, "working", [row.pane_id], [one.id], "0"))) }, REFERENCE_FOLDS));
   }
   world.rest.navigator!.workspaces!.push(...extraProjects);
+  if (content === "connection") for (const [index, row] of agents.entries()) {
+    row.identity_label += " · 긴 한국어와 English 저장 대화 제목";
+    row.record_connection = (["checking", "unconfirmed", "confirmed"] as const)[index % 3];
+    row.record_summary = "기록에 보관한 진행 요약 · saved conversation summary";
+  }
   if (content === "resting") for (const row of agents) Object.assign(row, { mark: "quiet", group: "seen", state: { ...get("h-r1").state } });
+  if (content === "direct") world.rest.overview_graph!.direct_inputs = [
+    { id: "fixture-direct-one", sender: { device_id: "local", pane_id: "h-a1c1", session: "fixture-h-a1c1" }, recipient: { device_id: "local", pane_id: "h-a1", session: "fixture-h-a1" }, at_unix_ms: now - MINUTE },
+    { id: "fixture-direct-two", sender: { device_id: "local", pane_id: "h-a1c1", session: "fixture-h-a1c1" }, recipient: { device_id: "local", pane_id: "h-a1", session: "fixture-h-a1" }, at_unix_ms: now - 2 * MINUTE },
+    { id: "fixture-direct-cross-project", sender: { device_id: "local", pane_id: "b-1", session: "fixture-b-1" }, recipient: { device_id: "local", pane_id: "h-a3", session: "fixture-h-a3" }, at_unix_ms: now - 3 * MINUTE },
+  ];
+  if (content === "empty") {
+    agents.splice(0);
+    for (const project of world.rest.navigator!.workspaces!) { project.agent_scope = scopeWith([]); for (const checkout of project.checkouts) checkout.agent_scope = scopeWith([]); }
+  }
   world.rest.overview_graph!.sessions = agents.map((row) => ({ device_id: "local", pane_id: row.pane_id, session_digest: `fixture-${row.pane_id}`, launch_model: row.agent_kind === "codex" ? "model-c" : "model-a" }));
   return world;
 }

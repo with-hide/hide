@@ -1,4 +1,17 @@
 use super::*;
+use composer::{Composer, Placeholder, Region, Style};
+const GROK_CONTEXT_ABSENCE: CapabilityAbsence = CapabilityAbsence {
+    reason: "Grok discards SessionStart and UserPromptSubmit output; the installed path cannot inject guidance or Memory.",
+    evidence: "docs/agent-hooks.md#which-agents-hide-supports",
+    would_change: "Prove a model-context delivery path on the real agent, implement it and add installed-host and journey fixtures.",
+};
+
+const RETIRED_CONTEXT_ABSENCE: CapabilityAbsence = CapabilityAbsence {
+    reason: "Cursor is retired from active support; only historical conversation reading remains.",
+    evidence: "docs/agent-hooks.md",
+    would_change: "Restore active support with a pinned Herdr integration and measured context and title contracts.",
+};
+
 use usage::{
     AbsenceKind, Attribution, AttributionFrom, CostBasis, LimitDeclaration, LimitSource, ModelFrom,
     Support, TokenSource, UsageDeclaration, absent, not_built,
@@ -25,6 +38,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["claude"],
         skill_location: SkillLocation::Claude,
         hook: HookInstall::Runtime(HookDialect::ClaudeCode),
+        guidance: Support::Supported(ContextRoute::NativeHook(HookDialect::ClaudeCode)),
+        observation: ObservationSupport::Native(HookDialect::ClaudeCode),
         herdr: HerdrIntegration {
             name: "claude",
             target: "claude",
@@ -37,7 +52,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         }),
         spawn_guard: Some(HookDialect::ClaudeCode),
         subagent_counts: Some(HookDialect::ClaudeCode),
-        memory: Some(HookDialect::ClaudeCode),
+        memory: Support::Supported(ContextRoute::NativeHook(HookDialect::ClaudeCode)),
         bell: true,
         bell_names_inbox: false,
         turn_end_letters: None,
@@ -47,7 +62,18 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         fork: Some(LaunchDialect::Claude),
         resume: Some(LaunchDialect::Claude),
         conversation: Some(SessionFormat::Claude),
-        titles: Some(SessionFormat::Claude),
+        titles: Support::Supported(SessionFormat::Claude),
+        composer: Support::Supported(Composer {
+            region: Region::BetweenRules,
+            marker: &["❯"],
+            trailer: 0,
+            // A suggestion such as `Try "…"` or the next prompt it predicts,
+            // which changes from screen to screen, always dim.
+            empty: &[Placeholder {
+                text: "",
+                style: Style::Dim,
+            }],
+        }),
         start: Some(LaunchDialect::Claude),
         find: Some(FindDialect::ClaudeTranscript),
         usage: UsageDeclaration {
@@ -93,6 +119,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["codex"],
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Runtime(HookDialect::Codex),
+        guidance: Support::Supported(ContextRoute::NativeHook(HookDialect::Codex)),
+        observation: ObservationSupport::Native(HookDialect::Codex),
         herdr: HerdrIntegration {
             name: "codex",
             target: "codex",
@@ -105,7 +133,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         }),
         spawn_guard: Some(HookDialect::Codex),
         subagent_counts: Some(HookDialect::Codex),
-        memory: Some(HookDialect::Codex),
+        memory: Support::Supported(ContextRoute::NativeHook(HookDialect::Codex)),
         bell: true,
         bell_names_inbox: true,
         turn_end_letters: None,
@@ -115,7 +143,16 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         fork: Some(LaunchDialect::Codex),
         resume: Some(LaunchDialect::Codex),
         conversation: Some(SessionFormat::Codex),
-        titles: Some(SessionFormat::Codex),
+        titles: Support::Supported(SessionFormat::Codex),
+        composer: Support::Supported(Composer {
+            region: Region::ToBlank,
+            marker: &["›"],
+            trailer: 0,
+            empty: &[Placeholder {
+                text: "Ask Codex to do anything",
+                style: Style::Dim,
+            }],
+        }),
         start: Some(LaunchDialect::Codex),
         find: Some(FindDialect::CodexTranscript),
         usage: UsageDeclaration {
@@ -160,6 +197,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["grok"],
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Guidance(GuidanceDialect::Grok),
+        guidance: Support::Unsupported(GROK_CONTEXT_ABSENCE),
+        observation: ObservationSupport::Native(HookDialect::Grok),
         herdr: HerdrIntegration {
             name: "grok",
             target: "grok",
@@ -174,7 +213,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         }),
         spawn_guard: Some(HookDialect::Grok),
         subagent_counts: Some(HookDialect::Grok),
-        memory: None,
+        memory: Support::Unsupported(GROK_CONTEXT_ABSENCE),
         bell: true,
         bell_names_inbox: true,
         turn_end_letters: Some(HookDialect::Grok),
@@ -184,7 +223,27 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         fork: Some(LaunchDialect::Grok),
         resume: Some(LaunchDialect::Grok),
         conversation: Some(SessionFormat::Grok),
-        titles: Some(SessionFormat::Grok),
+        titles: Support::Supported(SessionFormat::Grok),
+        composer: Support::Supported(Composer {
+            region: Region::Box {
+                open: '╭',
+                close: '╰',
+                side: '│',
+            },
+            // `> ` on a console Grok takes for Windows' legacy one, which a
+            // Herdr pane on Windows is (`glyphs::prompt_arrow`).
+            marker: &["❯", ">"],
+            trailer: 0,
+            // The next prompt Grok predicts after a turn, drawn as ghost text
+            // in an empty composer (`ghost_text_style`, always italic); its
+            // words change from screen to screen. Typed text and the grey
+            // `[Pasted: …]` chip are never italic, so nothing merely faint
+            // reads empty.
+            empty: &[Placeholder {
+                text: "",
+                style: Style::Italic,
+            }],
+        }),
         start: Some(LaunchDialect::Grok),
         find: None,
         usage: UsageDeclaration {
@@ -238,6 +297,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["opencode"],
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::OpenCode),
+        guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::OpenCode)),
+        observation: ObservationSupport::Plugin(PluginDialect::OpenCode),
         herdr: HerdrIntegration {
             name: "opencode",
             target: "opencode",
@@ -250,7 +311,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         }),
         spawn_guard: Some(HookDialect::OpenCode),
         subagent_counts: Some(HookDialect::OpenCode),
-        memory: Some(HookDialect::OpenCode),
+        memory: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::OpenCode)),
         // A bell's Enter in OpenCode's session picker opens another session
         // (measured 2026-10-07); letters reach it on its next prompt instead.
         bell: false,
@@ -262,7 +323,20 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         fork: Some(LaunchDialect::OpenCode),
         resume: Some(LaunchDialect::OpenCode),
         conversation: Some(SessionFormat::OpenCode),
-        titles: Some(SessionFormat::OpenCode),
+        titles: Support::Supported(SessionFormat::OpenCode),
+        // The last line inside the bar is the agent and model, never input.
+        composer: Support::Supported(Composer {
+            region: Region::Bar {
+                side: '┃',
+                close: '╹',
+            },
+            marker: &[],
+            trailer: 1,
+            empty: &[Placeholder {
+                text: "Ask anything…",
+                style: Style::Rgb(128, 128, 128),
+            }],
+        }),
         start: Some(LaunchDialect::OpenCode),
         find: None,
         usage: UsageDeclaration {
@@ -319,6 +393,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["pi"],
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::Pi),
+        guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Pi)),
+        observation: ObservationSupport::Plugin(PluginDialect::Pi),
         herdr: HerdrIntegration {
             name: "pi",
             target: "pi",
@@ -332,7 +408,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         spawn_guard: Some(HookDialect::Pi),
         // Pi runs no subagents.
         subagent_counts: None,
-        memory: Some(HookDialect::Pi),
+        memory: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Pi)),
         // Pi's previous-session picker reads `done` and a bell's Enter there
         // resumes another session; its trust dialog reads `idle` and Enter
         // picks the highlighted item (measured 2026-10-07). Letters reach it on
@@ -346,7 +422,13 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         fork: Some(LaunchDialect::Pi),
         resume: Some(LaunchDialect::Pi),
         conversation: Some(SessionFormat::Pi),
-        titles: Some(SessionFormat::Pi),
+        titles: Support::Supported(SessionFormat::Pi),
+        composer: Support::Supported(Composer {
+            region: Region::BetweenRules,
+            marker: &[],
+            trailer: 0,
+            empty: &[],
+        }),
         start: Some(LaunchDialect::Pi),
         find: None,
         usage: UsageDeclaration {
@@ -404,6 +486,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["omp"],
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::Omp),
+        guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Omp)),
+        observation: ObservationSupport::Plugin(PluginDialect::Omp),
         herdr: HerdrIntegration {
             name: "omp",
             target: "omp",
@@ -416,7 +500,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         }),
         spawn_guard: Some(HookDialect::Omp),
         subagent_counts: Some(HookDialect::Omp),
-        memory: Some(HookDialect::Omp),
+        memory: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Omp)),
         // omp's previous-session picker reads `done` and a bell's Enter there
         // resumes another session (measured 2026-10-07). Letters reach it on
         // its next prompt instead.
@@ -429,7 +513,16 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         fork: Some(LaunchDialect::Omp),
         resume: Some(LaunchDialect::Omp),
         conversation: Some(SessionFormat::Omp),
-        titles: Some(SessionFormat::Omp),
+        titles: Support::Supported(SessionFormat::Omp),
+        composer: Support::Supported(Composer {
+            region: Region::Line,
+            marker: &["╰─"],
+            trailer: 0,
+            empty: &[Placeholder {
+                text: "⇧⇥ to change thinking effort",
+                style: Style::Any,
+            }],
+        }),
         start: Some(LaunchDialect::Omp),
         find: None,
         usage: UsageDeclaration {
@@ -468,107 +561,6 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         logo_id: "omp",
     },
     AgentAdapter {
-        key: AgentId::Cursor,
-        fake_home: journey::FakeHome::Exception {
-            auto_update: None,
-            reason: "The API-key environment and auto-update policy have not been proven.",
-        },
-        id: "cursor",
-        label: "Cursor",
-        picker_label: "Cursor",
-        sidebar_label: None,
-        terminal_click: false,
-        aliases: &[],
-        executables: &["cursor-agent"],
-        skill_location: SkillLocation::Shared,
-        hook: HookInstall::Guidance(GuidanceDialect::Cursor),
-        herdr: HerdrIntegration {
-            name: "cursor",
-            target: "cursor",
-            folder: &[".cursor"],
-        },
-        default_on: false,
-        // Cursor documents no context a prompt hook may add, so a new
-        // prompt's letters stay with `hide inbox` and its bell stays off;
-        // while it works, its own `preToolUse` hook hands the due letters
-        // over as the tool's added context (`tool_letters`).
-        prompt_hook: None,
-        spawn_guard: Some(HookDialect::Cursor),
-        // Cursor CLI 2026.10.01 runs `subagentStart` and `subagentStop` only
-        // when its agent server asks for them, and none did for a Task
-        // subagent (issue 911). Its chat store does keep each subagent as a
-        // store of its own, but nothing in it marks a subagent still running,
-        // so no count is better than a zero it cannot stand behind.
-        subagent_counts: None,
-        memory: None,
-        bell: false,
-        bell_names_inbox: false,
-        turn_end_letters: None,
-        tool_letters: Some(HookDialect::Cursor),
-        session: Some(SessionFormat::Cursor),
-        sleep: Some(LaunchDialect::Cursor),
-        fork: None,
-        resume: Some(LaunchDialect::Cursor),
-        conversation: Some(SessionFormat::Cursor),
-        titles: None,
-        start: Some(LaunchDialect::Cursor),
-        find: None,
-        usage: UsageDeclaration {
-            limits: LimitDeclaration {
-                five_hour: absent(
-                    AbsenceKind::Excluded,
-                    "Reading limits requires credentials outside the supported usage boundary.",
-                    "An official delegated usage reader becomes available.",
-                ),
-                weekly: absent(
-                    AbsenceKind::Excluded,
-                    "Reading limits requires credentials outside the supported usage boundary.",
-                    "An official delegated usage reader becomes available.",
-                ),
-                scoped: absent(
-                    AbsenceKind::Excluded,
-                    "Reading limits requires credentials outside the supported usage boundary.",
-                    "An official delegated usage reader becomes available.",
-                ),
-                monthly: absent(
-                    AbsenceKind::Excluded,
-                    "Reading limits requires credentials outside the supported usage boundary.",
-                    "An official delegated usage reader becomes available.",
-                ),
-            },
-            tokens: absent(
-                AbsenceKind::NoSuchData,
-                "No supported local usage record is available.",
-                "The agent provides a documented local usage record.",
-            ),
-            cost: absent(
-                AbsenceKind::NoSuchData,
-                "No supported local usage record is available.",
-                "The agent provides a documented local usage record.",
-            ),
-            models: absent(
-                AbsenceKind::NoSuchData,
-                "No supported local usage record is available.",
-                "The agent provides a documented local usage record.",
-            ),
-            attribution: Attribution {
-                session: absent(
-                    AbsenceKind::NoSuchData,
-                    "No supported local usage record is available.",
-                    "The agent provides a documented local usage record.",
-                ),
-                project: absent(
-                    AbsenceKind::NoSuchData,
-                    "No supported local usage record is available.",
-                    "The agent provides a documented local usage record.",
-                ),
-            },
-        },
-        doc_url: "https://cursor.com/docs/context/skills",
-        install_url: "https://cursor.com/docs/cli/installation",
-        logo_id: "cursor",
-    },
-    AgentAdapter {
         key: AgentId::Antigravity,
         fake_home: journey::FakeHome::Exception {
             auto_update: Some(journey::AutoUpdate::Environment {
@@ -586,6 +578,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         executables: &["agy"],
         skill_location: SkillLocation::Antigravity,
         hook: HookInstall::Guidance(GuidanceDialect::Antigravity),
+        guidance: Support::Supported(ContextRoute::GuidanceHook(GuidanceDialect::Antigravity)),
+        observation: ObservationSupport::Native(HookDialect::Antigravity),
         herdr: HerdrIntegration {
             name: "agy",
             target: "antigravity-cli",
@@ -600,7 +594,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         }),
         spawn_guard: Some(HookDialect::Antigravity),
         subagent_counts: Some(HookDialect::Antigravity),
-        memory: Some(HookDialect::Antigravity),
+        memory: Support::Supported(ContextRoute::GuidanceHook(GuidanceDialect::Antigravity)),
         // Herdr 0.9.3 reads agy's permission question as an approval, but
         // its folder-trust question is unmeasured, and a bell's Enter into a
         // dialog Herdr reads as `idle` would answer it; letters reach agy on
@@ -617,7 +611,13 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         fork: Some(LaunchDialect::Antigravity),
         resume: Some(LaunchDialect::Antigravity),
         conversation: Some(SessionFormat::Antigravity),
-        titles: Some(SessionFormat::Antigravity),
+        titles: Support::Supported(SessionFormat::Antigravity),
+        composer: Support::Supported(Composer {
+            region: Region::BetweenRules,
+            marker: &[">"],
+            trailer: 0,
+            empty: &[],
+        }),
         start: Some(LaunchDialect::Antigravity),
         find: None,
         usage: UsageDeclaration {
@@ -656,3 +656,103 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         logo_id: "antigravity",
     },
 ];
+
+/// Historical descriptor retained for stored Cursor conversations and retirement only.
+/// Active support and installation always iterate `ADAPTERS`.
+pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
+    key: AgentId::Cursor,
+    fake_home: journey::FakeHome::Exception {
+        auto_update: None,
+        reason: "The API-key environment and auto-update policy have not been proven.",
+    },
+    id: "cursor",
+    label: "Cursor",
+    picker_label: "Cursor",
+    sidebar_label: None,
+    terminal_click: false,
+    aliases: &[],
+    executables: &["cursor-agent"],
+    skill_location: SkillLocation::Shared,
+    hook: HookInstall::None,
+    guidance: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
+    observation: ObservationSupport::Unsupported {
+        reason: "Cursor is retired; historical hooks perform no observation.",
+    },
+    herdr: HerdrIntegration {
+        name: "cursor",
+        target: "cursor",
+        folder: &[".cursor"],
+    },
+    default_on: false,
+    prompt_hook: None,
+    spawn_guard: None,
+    subagent_counts: None,
+    memory: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
+    bell: false,
+    bell_names_inbox: false,
+    turn_end_letters: None,
+    tool_letters: None,
+    session: Some(SessionFormat::Cursor),
+    sleep: None,
+    fork: None,
+    resume: None,
+    conversation: Some(SessionFormat::Cursor),
+    titles: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
+    composer: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
+    start: None,
+    find: None,
+    usage: UsageDeclaration {
+        limits: LimitDeclaration {
+            five_hour: absent(
+                AbsenceKind::Excluded,
+                "Reading limits requires credentials outside the supported usage boundary.",
+                "An official delegated usage reader becomes available.",
+            ),
+            weekly: absent(
+                AbsenceKind::Excluded,
+                "Reading limits requires credentials outside the supported usage boundary.",
+                "An official delegated usage reader becomes available.",
+            ),
+            scoped: absent(
+                AbsenceKind::Excluded,
+                "Reading limits requires credentials outside the supported usage boundary.",
+                "An official delegated usage reader becomes available.",
+            ),
+            monthly: absent(
+                AbsenceKind::Excluded,
+                "Reading limits requires credentials outside the supported usage boundary.",
+                "An official delegated usage reader becomes available.",
+            ),
+        },
+        tokens: absent(
+            AbsenceKind::NoSuchData,
+            "No supported local usage record is available.",
+            "The agent provides a documented local usage record.",
+        ),
+        cost: absent(
+            AbsenceKind::NoSuchData,
+            "No supported local usage record is available.",
+            "The agent provides a documented local usage record.",
+        ),
+        models: absent(
+            AbsenceKind::NoSuchData,
+            "No supported local usage record is available.",
+            "The agent provides a documented local usage record.",
+        ),
+        attribution: Attribution {
+            session: absent(
+                AbsenceKind::NoSuchData,
+                "No supported local usage record is available.",
+                "The agent provides a documented local usage record.",
+            ),
+            project: absent(
+                AbsenceKind::NoSuchData,
+                "No supported local usage record is available.",
+                "The agent provides a documented local usage record.",
+            ),
+        },
+    },
+    doc_url: "https://cursor.com/docs/context/skills",
+    install_url: "https://cursor.com/docs/cli/installation",
+    logo_id: "cursor",
+};

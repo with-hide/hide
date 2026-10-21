@@ -9,9 +9,9 @@ mod antigravity;
 mod claude;
 mod codex;
 mod codex_home;
-mod gemini;
 mod grok;
 mod log;
+mod omp;
 mod pi;
 mod process;
 mod program;
@@ -30,9 +30,9 @@ pub use antigravity::{
 };
 pub use claude::{ClaudeCliBackend, ClaudeConfig, USAGE_ENVIRONMENT, UsageError};
 pub use codex::{CodexAppServerBackend, CodexConfig};
-pub use gemini::GeminiCliBackend;
 pub use grok::GrokCliBackend;
 pub use log::{AiLogEvent, AiLogSink, NoopLogSink};
+pub use omp::{OmpConfig, OmpSdkBackend};
 pub use pi::PiCliBackend;
 pub use process::ProcessMeasurement;
 pub use program::resolve_binary;
@@ -61,9 +61,8 @@ use serde_json::Value;
 pub enum ModelCatalog {
     /// The list the provider's own CLI or account answered.
     Offered(Vec<String>),
-    /// A list the CLI documents but cannot be asked for (Gemini CLI's
-    /// aliases). The shell says so beside the menu instead of presenting it
-    /// as the account's own list (B36).
+    /// A documented list from a compatible peer, rather than the account's
+    /// own answer. Kept readable for older node responses (B36).
     Fixed(Vec<String>),
     Unknown {
         reason: String,

@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event Stop --memory-injection --source hide-subagents@8 }",
+            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event Stop --memory-injection --source hide-subagents@10 }",
             "timeout": 8
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event SessionStart --memory-injection --source hide-subagents@8 }",
+            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event SessionStart --memory-injection --source hide-subagents@10 }",
             "timeout": 8
           }
         ]
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event UserPromptSubmit --memory-injection --source hide-subagents@8 }",
+            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event UserPromptSubmit --memory-injection --source hide-subagents@10 }",
             "timeout": 8
           }
         ]
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event SubagentStart --memory-injection --source hide-subagents@8 }",
+            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event SubagentStart --memory-injection --source hide-subagents@10 }",
             "timeout": 8
           }
         ]
@@ -60,7 +60,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event SubagentStop --memory-injection --source hide-subagents@8 }",
+            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event SubagentStop --memory-injection --source hide-subagents@10 }",
             "timeout": 8
           }
         ]
@@ -71,11 +71,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event PreToolUse --source hide-subagents@8 }",
+            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event PreToolUse --source hide-subagents@10 }",
             "timeout": 8
           }
         ],
         "matcher": "Bash|request_user_input|request_user_input_async|apply_patch|Edit|Write"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if (Test-Path -LiteralPath 'C:\\kit path\\it''s\\hide-agent-hooks.exe' -PathType Leaf) { & 'C:\\kit path\\it''s\\hide-agent-hooks.exe' hook --runtime codex --event PostToolUse --source hide-subagents@10 }",
+            "timeout": 8
+          }
+        ],
+        "matcher": "Bash|PowerShell"
       }
     ]
   }

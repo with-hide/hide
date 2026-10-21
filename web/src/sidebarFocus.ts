@@ -63,8 +63,11 @@ export function revealSidebarFocus(lists: HTMLElement): void {
  */
 export function revealRow(list: HTMLElement, rows: readonly HTMLElement[], target: HTMLElement): void {
   const view = list.getBoundingClientRect();
-  const covered = list.querySelector<HTMLElement>('[data-section-sticky][data-stuck="true"]')?.getBoundingClientRect().height ?? 0;
-  const top = view.top + covered;
+  // The paint marker updates on the next frame; focus can arrive before it.
+  const top = [...list.querySelectorAll<HTMLElement>("[data-section-sticky]")].reduce((top, header) => {
+    const rect = header.getBoundingClientRect();
+    return rect.top <= view.top + 0.5 && rect.bottom > view.top ? Math.max(top, rect.bottom) : top;
+  }, view.top);
   if (rows.some((row) => inside(row.getBoundingClientRect(), top, view.bottom))) return;
   target.scrollIntoView({ block: "nearest" });
 }

@@ -30,6 +30,7 @@ fn rows(agents: &[(&str, &str)]) -> Vec<SidebarAgentSnapshot> {
 fn request(text: &str, requester: Requester, at: u64, first: bool) -> Request {
     Request {
         text: text.to_owned(),
+        offset: None,
         cut: false,
         images: 0,
         at_unix_ms: at,
@@ -104,6 +105,54 @@ fn run(rows: &mut [SidebarAgentSnapshot], branches: &[(&str, &str)], github: &Gi
 
 fn verb(row: &SidebarAgentSnapshot) -> RequestVerb {
     row.request.as_ref().unwrap().verb
+}
+
+#[test]
+fn saved_pr_is_drawn_before_confirmation_without_assigning_current_work() {
+    use crate::labels::record::RecordConnection;
+    use crate::links::ledger::SessionMetadata;
+    let mut rows = rows(&[("resumed", "idle")]);
+    rows[0].row_facts = None;
+    rows[0].record_connection = Some(RecordConnection::Unconfirmed);
+    rows[0].record_metadata = Some(SessionMetadata {
+        created_prs: vec![
+            ("acme/app".into(), 32, ASKED),
+            ("acme/app".into(), 31, ASKED),
+        ],
+        ..Default::default()
+    });
+    let mut merged = pull_request(
+        31,
+        "old",
+        PullRequestBadge::Merged,
+        PullRequestChecks::Passing,
+    );
+    merged.merged_at_unix_ms = Some(ASKED + 1);
+    let github = github(vec![
+        pull_request(
+            32,
+            "another-branch",
+            PullRequestBadge::Open,
+            PullRequestChecks::Failed,
+        ),
+        merged,
+    ]);
+    run(&mut rows, &[("resumed", "main")], &github);
+    assert_eq!(verb(&rows[0]), RequestVerb::Idle);
+    let shown = crate::agent_state::sessions::own_prs(&rows[0]).unwrap();
+    assert_eq!(shown.count, 1, "the merged historical PR stays filtered");
+    let pull = &rows[0].request.as_ref().unwrap().pull_requests[shown.pulls[0].index];
+    assert_eq!(pull.number, 32);
+    assert!(pull.provisional);
+    assert!(!pull.duty && !pull.created);
+
+    rows[0].record_connection = Some(RecordConnection::Confirmed);
+    run(&mut rows, &[("resumed", "main")], &github);
+    let shown = crate::agent_state::sessions::own_prs(&rows[0]).unwrap();
+    let pull = &rows[0].request.as_ref().unwrap().pull_requests[shown.pulls[0].index];
+    assert_eq!(pull.number, 32);
+    assert!(!pull.provisional);
+    assert!(pull.duty && pull.created);
 }
 
 #[test]
@@ -386,6 +435,35 @@ fn automatic_resolution_waits_for_every_assigned_pr_and_newer_settlement_after_i
     agent[0].blocked = false;
     agent[0].activity = "working".into();
     assert!(!auto_resolvable(&agent[0], None));
+}
+
+#[test]
+fn a_merged_pull_request_resolves_an_unread_finish_only_once_it_is_read() {
+    use crate::agent_state::sessions::auto_resolvable;
+    let mut agent = rows(&[("maker", "done")]);
+    agent[0].row_facts.as_mut().unwrap().created_prs = vec![("acme/app".into(), 1, 1)];
+    let mut merged = pull_request(
+        1,
+        "one",
+        PullRequestBadge::Merged,
+        PullRequestChecks::Passing,
+    );
+    merged.merged_at_unix_ms = Some(ASKED + 10);
+    run(&mut agent, &[("maker", "main")], &github(vec![merged]));
+    assert!(agent[0].unread, "Herdr's done is an unread finish");
+    assert!(
+        !auto_resolvable(&agent[0], None),
+        "an unread finish stays under 읽을 것 though its pull request merged"
+    );
+    agent[0].unread = false;
+    crate::agent_state::rederive(&mut agent[0]);
+    assert!(auto_resolvable(&agent[0], None));
+    agent[0].wait = Some(crate::model::AgentWait::Background);
+    crate::agent_state::rederive(&mut agent[0]);
+    assert!(
+        !auto_resolvable(&agent[0], None),
+        "a row still waiting on its background task stays under 대기"
+    );
 }
 
 #[test]
@@ -805,4 +883,68 @@ fn a_merged_pull_request_of_a_reused_branch_name_is_not_a_rows_result() {
     let current = head_of("feature");
     assert_eq!(on("new-work"), 0);
     assert_eq!(on(&current), 1);
+}
+
+fn turn(offset: u64, request: &str, end: Option<LabelEnd>) -> RecentTurn {
+    RecentTurn {
+        offset,
+        request: request.to_owned(),
+        end,
+        line: format!("{request} 결과"),
+        at_unix_ms: offset,
+    }
+}
+
+/// PRD pane-last-request D-02, D-10, D-16: the shown request reads as the
+/// label's summary of the message at its offset, and as its own first line
+/// (a letter's header left out, spaces folded) until there is one. The turn
+/// card gets up to two turns before it, newest first, never a later one.
+#[test]
+fn the_shown_request_reads_as_its_summary_or_its_own_first_line() {
+    let mut rows = rows(&[("w1:p1", "working")]);
+    let facts = rows[0].row_facts.as_mut().unwrap();
+    let mut asked = request(
+        "Hide letter l-1 from lead (claude) [request]\n\n  ㅇㅇ   그렇게 해  \n점검도",
+        Requester::Operator,
+        ASKED,
+        false,
+    );
+    asked.offset = Some(40);
+    facts.operator_request = Some(asked);
+    run(&mut rows, &[], &github(Vec::new()));
+    let view = rows[0].request.as_ref().unwrap();
+    assert_eq!(view.request_summary.as_deref(), Some("ㅇㅇ 그렇게 해"));
+    assert!(view.recent_turns.is_empty());
+
+    let facts = rows[0].row_facts.as_mut().unwrap();
+    facts.recent_turns = vec![
+        turn(10, "첫 요청 요약", Some(LabelEnd::Done)),
+        turn(20, "둘째 요청 요약", Some(LabelEnd::Working)),
+        turn(30, "셋째 요청 요약", Some(LabelEnd::Question)),
+        turn(
+            40,
+            "제안대로 진행 + 애매한 상태 점검",
+            Some(LabelEnd::Working),
+        ),
+        turn(50, "나중 편지 요약", None),
+    ];
+    run(&mut rows, &[], &github(Vec::new()));
+    let view = rows[0].request.as_ref().unwrap();
+    assert_eq!(
+        view.request_summary.as_deref(),
+        Some("제안대로 진행 + 애매한 상태 점검")
+    );
+    let earlier: Vec<_> = view
+        .recent_turns
+        .iter()
+        .map(|turn| (turn.request.as_deref(), turn.end))
+        .collect();
+    assert_eq!(
+        earlier,
+        [
+            (Some("셋째 요청 요약"), Some(LabelEnd::Question)),
+            // A turn judged only while it ran says nothing of how it ended.
+            (Some("둘째 요청 요약"), None),
+        ]
+    );
 }

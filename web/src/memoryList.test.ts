@@ -67,7 +67,7 @@ describe("Memory promotion rows", () => {
   });
 });
 const project = (overrides: Partial<ProjectMemory>): ProjectMemory => ({
-  workspace_id: "p", unavailable: null, loading: false, enabled: true, capacity_reached: false,
+  workspace_id: "p", unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0, evicted_through_unix_ms: null,
   rows: [1, 2, 3, 4, 5, 6, 7].map(row), questions: [], analysis: "idle", consent_required: false, usable_cards: 2, checking_card: null, check_resume_at_unix_ms: null, forgotten: null,
   pending_action: null, expanded: null, search: null, ...overrides,
 });

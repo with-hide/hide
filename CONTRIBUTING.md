@@ -177,8 +177,21 @@ A stack merges from the bottom: `premerge-check.py` refuses a pull request whose
 Merge the layers one after another as far as they are green, without waiting for the whole stack.
 Each merge changes the counts, so run the script again before the next merge; the merge command is still the one `premerge-check.py` prints.
 
-When main's push run fails, merge nothing else until main is green again, except the change that makes it green.
+### When main's push run fails
+
+When main's push run fails, merge nothing else until main is green again, except the change that makes it green or an unrelated development change under the Windows exception below.
 Revert the merge the failure points to in a pull request of its own (`git revert -m 1 <merge commit>`), then land the change again from the latest main in a new pull request; fix forward instead only when the fix is smaller than the revert and ready now.
+
+During development, an existing Windows-only failure need not stop unrelated pull requests when all of these hold:
+
+- All planned non-Windows checks passed; the failed jobs are Windows jobs and checks that only aggregate their results.
+- The reviewer records the failed run and its diagnosis owner, and checks that the pull request neither changes nor depends on the failing behavior; an unclassified failure or an unclear relationship keeps merges stopped.
+- The pull request's own latest `verify` and the canonical premerge check both passed, including every Windows lane its plan requires.
+
+Windows checks keep running, and their failures remain failures for the owner to resolve.
+Whoever merges still watches main's containing push run; a new failure must meet these same conditions for unrelated merges to continue.
+Before a stable or preview release, the exact tagged commit's full push/main `verify` must pass, Windows included, and all [release gates](#releases) must pass.
+The development exception grants no release waiver; the existing release workflow enforces that boundary.
 
 GitHub's merge queue was turned on 2026-10-05 and off again the next day: with the organization's 20 concurrent jobs, a pull request waited a median 47.6 minutes from ready to merged, of which 12.6 were its own runs.
 Its ruleset is kept disabled and `verify` no longer runs on a merge group.
@@ -329,6 +342,7 @@ Existing releases and downloads remain available.
 
 The public [unsigned release candidate](docs/BUILD.md#unsigned-release-candidates) prepares Linux and Windows packages and runs the full existing agent journey on an exact verified source.
 It creates no tag or Release, and produces its candidate receipt only after both gates pass.
+The optional `live_agents=false` defers signed-in provider calls while preserving Linux/macOS stand-ins, Windows form checks and fake-model checks on all three systems, and records those provider checks as not measured for release approval.
 Public CI keeps the source, installation and update checks; official macOS signing and final publication run privately.
 
 An official release requires:

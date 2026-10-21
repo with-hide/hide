@@ -7,6 +7,14 @@ use crate::links::{CREATED_AFTER_MS, CREATED_BEFORE_MS, SUMMARY_SESSION_LIMIT};
 use rusqlite::{OptionalExtension, Transaction, params};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(super) const METADATA_SCHEMA: &str = "
+ALTER TABLE ledger_titles ADD COLUMN goal TEXT;
+ALTER TABLE ledger_titles ADD COLUMN summary TEXT NOT NULL DEFAULT '';
+ALTER TABLE ledger_titles ADD COLUMN label_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ledger_titles ADD COLUMN analysed_start INTEGER;
+ALTER TABLE ledger_titles ADD COLUMN analysed_end INTEGER;
+";
+
 pub(super) const SCHEMA: &str = "
 ALTER TABLE session_parents ADD COLUMN parent_device TEXT NOT NULL DEFAULT '';
 UPDATE session_parents SET parent_device=device;
@@ -472,6 +480,36 @@ fn cap(
 }
 
 impl LinkStore {
+    /// Small history read on the existing writer. No task tree, raw text,
+    /// path, status, question or END crosses this boundary.
+    fn ledger_metadata(
+        &self,
+        session: &SessionIdentity,
+    ) -> Result<Option<SessionMetadata>, String> {
+        let mut metadata = self.connection.query_row(
+            "SELECT native_title,manual_title,COALESCE(goal,(SELECT goal FROM ledger_chapters c \
+             WHERE c.device=t.device AND c.agent=t.agent AND c.id=t.id ORDER BY at DESC LIMIT 1)),summary,analysed_start,analysed_end \
+             FROM ledger_titles t WHERE device=?1 AND agent=?2 AND id=?3",
+            params![session.device_id, session.agent, session.session_id],
+            |r| Ok(SessionMetadata { native_title:r.get(0)?, manual_title:r.get(1)?, goal:r.get(2)?, summary:r.get(3)?, created_prs:vec![], analysed_start:r.get::<_,Option<i64>>(4)?.map(|v|v as u64), analysed_end:r.get::<_,Option<i64>>(5)?.map(|v|v as u64) })
+        ).optional().map_err(failed)?;
+        let mut statement = self.connection.prepare_cached(
+            "SELECT repo,number,max(at) FROM (SELECT repo,number,sighted_at AS at FROM ledger_outputs WHERE device=?1 AND agent=?2 AND id=?3 AND kind='pr' UNION ALL SELECT repo,number,at FROM ledger_sightings WHERE device=?1 AND agent=?2 AND id=?3 AND kind='pr') GROUP BY repo,number ORDER BY max(at) DESC LIMIT 20"
+        ).map_err(failed)?;
+        let prs = statement
+            .query_map(
+                params![session.device_id, session.agent, session.session_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .map_err(failed)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(failed)?;
+        if !prs.is_empty() {
+            metadata.get_or_insert_default().created_prs = prs;
+        }
+        Ok(metadata)
+    }
+
     /// An incremental native read may omit the session header. The cursor's
     /// retained identity is authoritative for the context that changed.
     pub fn ledger_file_session(
@@ -504,6 +542,28 @@ impl LinkStore {
     }
 
     pub fn ledger_call(&mut self, call: LedgerCall) -> Result<LedgerAnswer, String> {
+        if let LedgerCall::SaveMetadata {
+            session,
+            metadata,
+            at_unix_ms,
+        } = call
+        {
+            self.apply_ledger_update(&LedgerUpdate::Metadata {
+                session: session.clone(),
+                native_title: metadata.native_title,
+                manual_title: metadata.manual_title,
+                goal: metadata.goal,
+                summary: metadata.summary,
+                created_prs: metadata.created_prs,
+                at_unix_ms,
+                analysed_start: metadata.analysed_start,
+                analysed_end: metadata.analysed_end,
+            })?;
+            return self.ledger_metadata(&session).map(LedgerAnswer::Metadata);
+        }
+        if let LedgerCall::Metadata(session) = &call {
+            return self.ledger_metadata(session).map(LedgerAnswer::Metadata);
+        }
         if let LedgerCall::Record(session) = &call {
             return self
                 .ledger_record(session)
@@ -527,7 +587,9 @@ impl LinkStore {
     fn ledger_issue_call(&mut self, call: LedgerCall) -> Result<LedgerAnswer, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let answer = match call {
-            LedgerCall::Record(_) => unreachable!(),
+            LedgerCall::Record(_) | LedgerCall::Metadata(_) | LedgerCall::SaveMetadata { .. } => {
+                unreachable!()
+            }
             LedgerCall::ReserveIssue {
                 key,
                 repository,
@@ -809,6 +871,41 @@ impl LinkStore {
         };
         let tx = self.connection.transaction().map_err(failed)?;
         match update {
+            LedgerUpdate::Metadata {
+                session,
+                native_title,
+                manual_title,
+                goal,
+                summary,
+                created_prs,
+                at_unix_ms,
+                analysed_start,
+                analysed_end,
+            } => {
+                // The same bounded text as labels.json; no raw conversation
+                // or runtime verdict is copied into this display record.
+                if goal.as_ref().is_some_and(|s| s.chars().count() > 256)
+                    || summary.chars().count() > 256
+                    || created_prs.len() > 20
+                {
+                    return Err("ledger_metadata_capacity".into());
+                }
+                let indexed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sessions WHERE device=?1 AND agent=?2 AND id=?3)",
+                    params![session.device_id,session.agent,session.session_id], |r| r.get(0)).map_err(failed)?;
+                if !indexed {
+                    return Err("ledger_metadata_session_not_indexed".into());
+                }
+                tx.execute("INSERT INTO ledger_titles(device,agent,id,goal,summary,label_at,analysed_start,analysed_end,native_title,manual_title) \
+                    VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(device,agent,id) DO UPDATE SET \
+                    native_title=excluded.native_title,manual_title=excluded.manual_title,goal=excluded.goal,summary=excluded.summary,label_at=excluded.label_at,analysed_start=excluded.analysed_start,analysed_end=excluded.analysed_end \
+                    WHERE excluded.label_at>=ledger_titles.label_at",
+                    params![session.device_id, session.agent, session.session_id, goal, summary, *at_unix_ms as i64, analysed_start.map(|v|v as i64),analysed_end.map(|v|v as i64),native_title,manual_title]).map_err(failed)?;
+                for (repository, number, at) in created_prs {
+                    tx.execute("INSERT INTO ledger_sightings(device,agent,id,kind,repo,number,at) VALUES(?1,?2,?3,'pr',?4,?5,?6) ON CONFLICT(device,agent,id,kind,repo,number) DO UPDATE SET at=max(at,excluded.at)",
+                        params![session.device_id,session.agent,session.session_id,repository,number,*at as i64]).map_err(failed)?;
+                }
+                cap(&tx, session, "ledger_sightings", 200)?;
+            }
             LedgerUpdate::Unjudged { session, offsets } => {
                 if offsets.len() > REQUEST_LIMIT {
                     return Err("ledger_request_capacity".into());
@@ -862,7 +959,7 @@ impl LinkStore {
                 state,
             } => {
                 tx.execute(
-                    "INSERT INTO ledger_titles VALUES(?1,?2,?3,?4,?5,?6) \
+                    "INSERT INTO ledger_titles(device,agent,id,native_title,manual_title,state) VALUES(?1,?2,?3,?4,?5,?6) \
                     ON CONFLICT(device,agent,id) DO UPDATE SET native_title=excluded.native_title, \
                     manual_title=excluded.manual_title,state=excluded.state",
                     params![

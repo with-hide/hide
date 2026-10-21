@@ -4,6 +4,7 @@
 //! I/O, starts no work and stores no runtime state. Lookup borrows the input
 //! and static rows: no allocation, lock, normalization buffer or cache.
 
+pub mod composer;
 mod declarations;
 mod journey;
 pub mod usage;
@@ -20,13 +21,16 @@ pub enum AgentId {
     OpenCode,
     Pi,
     Omp,
-    Cursor,
     Antigravity,
+    Cursor,
 }
 
 impl AgentId {
     pub const fn adapter(self) -> &'static AgentAdapter {
-        &ADAPTERS[self as usize]
+        match self {
+            Self::Cursor => &declarations::RETIRED_CURSOR,
+            _ => &ADAPTERS[self as usize],
+        }
     }
 }
 
@@ -34,7 +38,7 @@ impl AgentId {
 /// names the shell call and session, and how a refusal is written. Claude
 /// Code's and Codex's six-event hook, a script file of Hide's in the agent's
 /// own folder (OpenCode's plugin, Pi's and omp's extension), which calls the
-/// same helper, and Grok's and Cursor's own hook files.
+/// same helper, and Grok's own hook file. Cursor's dialect remains for legacy cleanup.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum HookDialect {
     ClaudeCode,
@@ -48,12 +52,11 @@ pub enum HookDialect {
 }
 
 impl HookDialect {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 7] = [
         Self::ClaudeCode,
         Self::Codex,
         Self::OpenCode,
         Self::Grok,
-        Self::Cursor,
         Self::Pi,
         Self::Omp,
         Self::Antigravity,
@@ -110,6 +113,40 @@ pub enum HookInstall {
     Guidance(GuidanceDialect),
     Plugin(PluginDialect),
     None,
+}
+
+/// Where context actually enters the model, independently of installing a hook.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContextRoute {
+    /// Native SessionStart guidance/index and UserPromptSubmit Memory capsules.
+    NativeHook(HookDialect),
+    /// A guidance hook whose output the host consumes as model context.
+    GuidanceHook(GuidanceDialect),
+    /// The host's prompt event carries guidance/index on the first prompt,
+    /// and matching Memory cards on subsequent prompts.
+    PluginPrompt(PluginDialect),
+}
+
+/// A missing context/title capability is a decision with a verifiable reference,
+/// never an omitted field or an unexplained `None`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilityAbsence {
+    pub reason: &'static str,
+    /// Repository-relative owning guide or recorded contract fixture.
+    pub evidence: &'static str,
+    pub would_change: &'static str,
+}
+
+pub type Capability<S> = usage::Support<S, CapabilityAbsence>;
+
+/// Passive tool-result observation is an independent, required decision.
+/// The hook owner implements the selected dialect; unsupported agents must
+/// explain why no result can be observed rather than silently omitting it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObservationSupport {
+    Native(HookDialect),
+    Plugin(PluginDialect),
+    Unsupported { reason: &'static str },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -243,7 +280,7 @@ impl LaunchDialect {
 
     /// How the CLI takes a model and a reasoning effort at launch; `{}` is
     /// replaced by the value. This is the one rule every start and restart
-    /// follows (the start surfaces, `hide agent spawn`, a Factory worker, and
+    /// follows (the start surfaces, `hide agent spawn`, and
     /// a wake, fork or reopen of any of them), so a model or effort an agent
     /// does not declare is refused wherever it is asked for. Verified against
     /// Claude Code 2.1 and Codex 0.160, agy 1.4.0's model (`--model`, listed
@@ -512,12 +549,15 @@ pub struct AgentAdapter {
     pub executables: &'static [&'static str],
     pub skill_location: SkillLocation,
     pub hook: HookInstall,
+    pub observation: ObservationSupport,
+    pub guidance: Capability<ContextRoute>,
     pub herdr: HerdrIntegration,
     pub default_on: bool,
     pub prompt_hook: Option<PromptHook>,
     pub spawn_guard: Option<HookDialect>,
     pub subagent_counts: Option<HookDialect>,
-    pub memory: Option<HookDialect>,
+    /// Automatic model-context injection, not the Memory store or extraction.
+    pub memory: Capability<ContextRoute>,
     pub bell: bool,
     pub bell_names_inbox: bool,
     pub turn_end_letters: Option<HookDialect>,
@@ -530,7 +570,12 @@ pub struct AgentAdapter {
     pub fork: Option<LaunchDialect>,
     pub resume: Option<LaunchDialect>,
     pub conversation: Option<SessionFormat>,
-    pub titles: Option<SessionFormat>,
+    pub titles: Capability<SessionFormat>,
+    /// Where the agent draws its composer and what an empty one shows, so
+    /// a letter held on a possible draft can be released when the screen
+    /// says the composer holds nothing (`docs/delivery.md`, Reading the
+    /// composer).
+    pub composer: Capability<composer::Composer>,
     pub start: Option<LaunchDialect>,
     /// Safety declaration for keyless journeys only; never changes a real login HOME.
     pub fake_home: journey::FakeHome,
@@ -629,11 +674,7 @@ impl AgentAdapter {
     pub const fn supports(&self, feature: Feature) -> bool {
         match feature {
             Feature::Skill | Feature::HerdrIntegration => true,
-            Feature::Guidance => match self.hook {
-                HookInstall::Runtime(_) | HookInstall::Plugin(_) => true,
-                HookInstall::Guidance(dialect) => dialect.prints_guidance(),
-                HookInstall::None => false,
-            },
+            Feature::Guidance => self.guidance.is_some(),
             Feature::Letters => matches!(self.prompt_hook, Some(PromptHook { context: true, .. })),
             Feature::Bell => self.bell,
             Feature::Memory => self.memory.is_some(),

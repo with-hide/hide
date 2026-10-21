@@ -1,6 +1,11 @@
 [
   {
     "id": "claude-code",
+    "context": {
+      "guidance": "native:claude-code",
+      "memory": "native:claude-code",
+      "titles": "claude-code"
+    },
     "hook": {
       "sample": "hide-agent-hooks/tests/fixtures/hook-bytes/claude-code-posix.json"
     },
@@ -34,6 +39,11 @@
   },
   {
     "id": "codex",
+    "context": {
+      "guidance": "native:codex",
+      "memory": "native:codex",
+      "titles": "codex"
+    },
     "hook": {
       "sample": "hide-agent-hooks/tests/fixtures/hook-bytes/codex-posix.json"
     },
@@ -67,6 +77,11 @@
   },
   {
     "id": "grok",
+    "context": {
+      "guidance": "unsupported",
+      "memory": "unsupported",
+      "titles": "grok"
+    },
     "hook": {
       "sample": "hide-agent-hooks/tests/fixtures/grok-pre-tool-use.json"
     },
@@ -97,6 +112,11 @@
   },
   {
     "id": "opencode",
+    "context": {
+      "guidance": "plugin:opencode",
+      "memory": "plugin:opencode",
+      "titles": "opencode"
+    },
     "hook": {
       "sample": "hide-agent-hooks/tests/fixtures/hook-bytes/opencode-plugin.js"
     },
@@ -129,6 +149,11 @@
   },
   {
     "id": "pi",
+    "context": {
+      "guidance": "plugin:pi",
+      "memory": "plugin:pi",
+      "titles": "pi"
+    },
     "hook": {
       "sample": "hide-agent-hooks/tests/fixtures/hook-bytes/pi-extension.ts"
     },
@@ -161,6 +186,11 @@
   },
   {
     "id": "omp",
+    "context": {
+      "guidance": "plugin:omp",
+      "memory": "plugin:omp",
+      "titles": "omp"
+    },
     "hook": {
       "sample": "hide-agent-hooks/tests/fixtures/hook-bytes/omp-extension.ts"
     },
@@ -192,36 +222,12 @@
     }
   },
   {
-    "id": "cursor",
-    "hook": {
-      "sample": "hide-agent-adapter/tests/fixtures/cursor-guidance.json"
-    },
-    "session": {
-      "sample": "hide-session/tests/fixtures/cursor-2026.10.01/graph.json"
-    },
-    "features": [
-      "skill",
-      "guidance",
-      "spawn_guard",
-      "herdr_integration",
-      "sleep",
-      "start",
-      "titles"
-    ],
-    "usage": {
-      "five_hour": "excluded",
-      "weekly": "excluded",
-      "scoped": "excluded",
-      "monthly": "excluded",
-      "tokens": "no_such_data",
-      "cost": "no_such_data",
-      "models": "no_such_data",
-      "session": "no_such_data",
-      "project": "no_such_data"
-    }
-  },
-  {
     "id": "antigravity",
+    "context": {
+      "guidance": "guidance:antigravity",
+      "memory": "guidance:antigravity",
+      "titles": "antigravity"
+    },
     "hook": {
       "sample": "hide-agent-hooks/tests/fixtures/antigravity-pre-tool-use.json"
     },

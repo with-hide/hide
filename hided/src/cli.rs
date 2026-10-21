@@ -59,6 +59,11 @@ pub enum CommandKind {
     },
     WorkspaceInfo,
     WorkspaceHookInfo,
+    /// Private post-tool transport. Its bounded metadata is read from stdin:
+    /// one observation per recipient, or per started agent with `--start`.
+    ObservationHook {
+        start: bool,
+    },
     ViewList,
     ViewStatus {
         view_id: String,
@@ -148,6 +153,13 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::delivery_cli::parse(topic, iter).map(CommandKind::Delivery)
         }
         Some("browser") => parse_browser(iter),
+        Some("observation") => match (iter.next().map(String::as_str), iter.next()) {
+            (Some("--hook"), None) => Ok(CommandKind::ObservationHook { start: false }),
+            (Some("--hook"), Some(flag)) if flag == "--start" && iter.next().is_none() => {
+                Ok(CommandKind::ObservationHook { start: true })
+            }
+            _ => Err("usage: hide observation --hook [--start]".into()),
+        },
         Some("workspace") => match iter.next().map(String::as_str) {
             Some("memory") => {
                 let words: Vec<&str> = iter.map(String::as_str).collect();
@@ -481,6 +493,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Delivery(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
+                    | CommandKind::ObservationHook { .. }
                     | CommandKind::ViewList
                     | CommandKind::ViewStatus { .. }
                     | CommandKind::BrowserOpen { .. }
@@ -550,7 +563,55 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
             println!("{answer}");
             Ok(())
         }
-
+        CommandKind::ObservationHook { start } => {
+            use hide_node_link::panes::{
+                HookCommand, OBSERVATION_ITEM_LIMIT, OBSERVATION_RECIPIENT_LIMIT,
+            };
+            use std::io::Read;
+            // One item per recipient, each already bounded; the array adds
+            // its brackets and commas.
+            let limit = (OBSERVATION_ITEM_LIMIT + 1) * OBSERVATION_RECIPIENT_LIMIT + 2;
+            let mut bytes = Vec::new();
+            std::io::stdin()
+                .lock()
+                .take((limit + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "observation_input_unavailable")?;
+            if bytes.len() > limit {
+                return Err("observation_input_too_large".into());
+            }
+            let observations: Vec<hide_node_link::panes::DirectObservation> =
+                serde_json::from_slice(&bytes).map_err(|_| "observation_input_invalid")?;
+            if observations.is_empty() || observations.len() > OBSERVATION_RECIPIENT_LIMIT {
+                return Err("observation_input_invalid".into());
+            }
+            // Each recipient is proven and recorded on its own; one refusal
+            // does not withhold the others.
+            let mut refusal = None;
+            for observation in observations {
+                let command = if start {
+                    HookCommand::StartObservation { observation }
+                } else {
+                    HookCommand::Observation { observation }
+                };
+                let answer = crate::workspace_cli::request_hook(&env, command)?;
+                if answer["ok"] != true && refusal.is_none() {
+                    refusal = Some(answer);
+                }
+            }
+            let answer = refusal.unwrap_or_else(|| {
+                serde_json::json!({"type":"workspace_result","ok":true,"result":{"queued":true}})
+            });
+            println!("{answer}");
+            if answer["ok"] == true {
+                Ok(())
+            } else {
+                Err(answer["reason"]
+                    .as_str()
+                    .unwrap_or("observation_unavailable")
+                    .into())
+            }
+        }
         CommandKind::WorkspaceMemory {
             event,
             runtime,

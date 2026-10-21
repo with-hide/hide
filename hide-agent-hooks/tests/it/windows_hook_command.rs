@@ -137,24 +137,16 @@ fn every_windows_command_preserves_the_captured_unicode_state_path() {
             }
         }
     }
-    for agent in [GuidanceAgent::Grok, GuidanceAgent::Cursor] {
-        std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
-        guidance::install(agent, &home, target).unwrap();
-        let document: Value =
-            serde_json::from_slice(&std::fs::read(agent.config_path(&home)).unwrap()).unwrap();
-        let command = if agent == GuidanceAgent::Grok {
-            document["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str()
-        } else {
-            document["hooks"]["preToolUse"][0]["command"].as_str()
-        }
+    let agent = GuidanceAgent::Grok;
+    std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
+    guidance::install(agent, &home, target).unwrap();
+    let document: Value =
+        serde_json::from_slice(&std::fs::read(agent.config_path(&home)).unwrap()).unwrap();
+    let command = document["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
         .unwrap();
-        for shell in &shells {
-            assert_route(if agent == GuidanceAgent::Grok {
-                run_grok(command, shell, &home, "{}")
-            } else {
-                run_cursor(command, shell, &home, root.path(), "{}")
-            });
-        }
+    for shell in &shells {
+        assert_route(run_grok(command, shell, &home, "{}"));
     }
     let agent = GuidanceAgent::Antigravity;
     std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
@@ -261,8 +253,8 @@ fn the_windows_entries_run_the_helper_through_powershell_only_while_it_is_there(
     }
 }
 
-/// The shells Grok and the Cursor CLI pick on Windows, both PowerShell 7
-/// first and Windows PowerShell after it.
+/// The shells Grok picks on Windows, PowerShell 7 first and Windows
+/// PowerShell after it.
 fn powershells() -> Vec<&'static str> {
     codex_shells()
 }
@@ -292,35 +284,6 @@ fn run_grok(command: &str, shell: &str, home: &Path, payload: &str) -> Output {
     child.wait_with_output().unwrap()
 }
 
-/// The Cursor CLI 2026.10.01 on Windows writes the event to a file and the
-/// script below to a `.ps1`, which it runs as `<shell> -ExecutionPolicy
-/// Bypass -NonInteractive -File <script>`; a command that starts with `&` is
-/// put into the pipeline as it is (read from its Windows package, `190.index.js`
-/// `executeCommandScript` and `index.js`'s shell executor).
-fn run_cursor(command: &str, shell: &str, home: &Path, scratch: &Path, payload: &str) -> Output {
-    let event = scratch.join("payload.json");
-    std::fs::write(&event, payload).unwrap();
-    let script = scratch.join("ps-script.ps1");
-    std::fs::write(
-        &script,
-        format!(
-            "$OutputEncoding = [System.Text.Encoding]::UTF8; Get-Content -LiteralPath '{}' -Raw | & {{ $input | {command} }}",
-            event.display().to_string().replace('\'', "''")
-        ),
-    )
-    .unwrap();
-    Command::new(shell)
-        .args(["-ExecutionPolicy", "Bypass", "-NonInteractive", "-File"])
-        .arg(&script)
-        .env(hide_platform::host::HOME_VARIABLE, home)
-        .env("HERDR_PANE_ID", "w1:p2")
-        .env("CURSOR_VERSION", "2026.10.01")
-        .env_remove("HIDE_CAP_REF")
-        .stdin(Stdio::null())
-        .output()
-        .unwrap()
-}
-
 /// A launch the spawn guard reads from the event; with no `hide` to ask, the
 /// guard lets it run and writes one `daemon.unreachable` line, which only a
 /// helper that read the event on stdin can write.
@@ -336,7 +299,7 @@ fn guard_log(home: &Path) -> String {
 }
 
 #[test]
-fn grok_and_cursor_run_the_helper_through_the_powershell_they_start_only_while_it_is_there() {
+fn grok_runs_the_helper_through_the_powershell_it_starts_only_while_it_is_there() {
     use hide_agent_hooks::guidance::{self, GuidanceAgent};
 
     let root = tempfile::tempdir().unwrap();
@@ -355,27 +318,17 @@ fn grok_and_cursor_run_the_helper_through_the_powershell_they_start_only_while_i
         "toolInput": { "command": LAUNCH },
     })
     .to_string();
-    let cursor_event = serde_json::json!({
-        "hook_event_name": "preToolUse",
-        "cursor_version": "2026.10.01",
-        "tool_name": "Shell",
-        "tool_input": { "command": LAUNCH, "working_directory": cwd },
-        "cwd": cwd,
-    })
-    .to_string();
-    let allow: Value = serde_json::json!({ "permission": "allow" });
-
-    // One home per agent and shell, so each guard log line is that run's.
     let mut homes = 0;
-    let mut home_for = |agent: GuidanceAgent| {
+    let mut home_for = || {
         homes += 1;
         let home = root.path().join(format!("home-{homes}"));
+        let agent = GuidanceAgent::Grok;
         std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
         guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
         assert_eq!(
             guidance::installed_helper_path(agent, &home).as_deref(),
             helper.to_str(),
-            "{agent:?}: the path is read back from the PowerShell guard"
+            "the path is read back from the PowerShell guard"
         );
         assert!(guidance::matches_install(
             agent,
@@ -394,56 +347,19 @@ fn grok_and_cursor_run_the_helper_through_the_powershell_they_start_only_while_i
             .unwrap()
             .to_owned()
     };
-    let cursor_command = |home: &Path, event: &str| -> String {
-        let document: Value = serde_json::from_str(
-            &std::fs::read_to_string(GuidanceAgent::Cursor.config_path(home)).unwrap(),
-        )
-        .unwrap();
-        document["hooks"][event][0]["command"]
-            .as_str()
-            .unwrap()
-            .to_owned()
-    };
-
-    // The app was moved away: Grok's hook says nothing, Cursor's permission
-    // hook answers allow itself and its session start says nothing.
+    // One home per shell and case, so each guard log is that run's.
     for shell in powershells() {
-        let home = home_for(GuidanceAgent::Grok);
+        let home = home_for();
         let output = run_grok(&grok_command(&home), shell, &home, &grok_event);
         assert!(
             output.status.success() && output.stdout.is_empty(),
             "Grok under {shell}: {output:?}"
         );
-        let home = home_for(GuidanceAgent::Cursor);
-        let scratch = tempfile::tempdir().unwrap();
-        let output = run_cursor(
-            &cursor_command(&home, "preToolUse"),
-            shell,
-            &home,
-            scratch.path(),
-            &cursor_event,
-        );
-        assert!(output.status.success(), "Cursor under {shell}: {output:?}");
-        let answer: Value = serde_json::from_slice(&output.stdout)
-            .unwrap_or_else(|error| panic!("Cursor under {shell}: {error}: {output:?}"));
-        assert_eq!(answer, allow, "Cursor under {shell}");
-        let output = run_cursor(
-            &cursor_command(&home, "sessionStart"),
-            shell,
-            &home,
-            scratch.path(),
-            "{}",
-        );
-        assert!(
-            output.status.success() && output.stdout.is_empty(),
-            "Cursor's session start under {shell}: {output:?}"
-        );
     }
-
     std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
     std::fs::copy(env!("CARGO_BIN_EXE_hide-agent-hooks"), &helper).unwrap();
     for shell in powershells() {
-        let home = home_for(GuidanceAgent::Grok);
+        let home = home_for();
         let output = run_grok(&grok_command(&home), shell, &home, &grok_event);
         assert!(
             output.status.success() && output.stdout.is_empty(),
@@ -454,55 +370,78 @@ fn grok_and_cursor_run_the_helper_through_the_powershell_they_start_only_while_i
             log.contains("\"daemon.unreachable\"") && log.contains("\"runtime\":\"grok\""),
             "Grok under {shell}: the helper did not read the event: {log:?} {output:?}"
         );
-
-        let home = home_for(GuidanceAgent::Cursor);
-        let scratch = tempfile::tempdir().unwrap();
-        let output = run_cursor(
-            &cursor_command(&home, "preToolUse"),
-            shell,
-            &home,
-            scratch.path(),
-            &cursor_event,
-        );
-        assert!(output.status.success(), "Cursor under {shell}: {output:?}");
-        let answer: Value = serde_json::from_slice(&output.stdout)
-            .unwrap_or_else(|error| panic!("Cursor under {shell}: {error}: {output:?}"));
-        assert_eq!(answer, allow, "Cursor under {shell}");
-        let log = guard_log(&home);
-        assert!(
-            log.contains("\"daemon.unreachable\"") && log.contains("\"runtime\":\"cursor\""),
-            "Cursor under {shell}: the helper did not read the event: {log:?} {output:?}"
-        );
-
-        let output = run_cursor(
-            &cursor_command(&home, "sessionStart"),
-            shell,
-            &home,
-            scratch.path(),
-            "{}",
-        );
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            output.status.success() && stdout.is_ascii(),
-            "Cursor's session start under {shell}: {output:?}"
-        );
-        let answer: Value = serde_json::from_str(stdout.trim())
-            .unwrap_or_else(|error| panic!("Cursor under {shell}: {error}: {stdout}"));
-        assert!(
-            answer["additional_context"]
-                .as_str()
-                .is_some_and(|context| context.starts_with(PURPOSE_CONTEXT)),
-            "Cursor's session start under {shell}: {answer}"
-        );
     }
+}
+
+#[test]
+fn retired_cursor_install_is_refused_and_removal_keeps_the_operators_hooks() {
+    use hide_agent_hooks::guidance::{self, GuidanceAgent};
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let helper = root.path().join("kit ' $x [1]").join(HELPER_BINARY_NAME);
+    let agent = GuidanceAgent::Cursor;
+    std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
+    let path = agent.config_path(&home);
+    assert!(guidance::install(agent, &home, crate::hook_target(&helper)).is_err());
+    assert!(
+        !path.exists(),
+        "a retired fresh install writes no hook file"
+    );
+
+    // Historical entries are fixture bytes, never a fresh retired install.
+    // Only Hide's source marker grants removal ownership.
+    let theirs = serde_json::json!({
+        "version": 1,
+        "hooks": { "preToolUse": [{"command": "Write-Output 'operator 한글 $x [1]'"}] },
+        "custom": "keep this setting"
+    });
+    let mut historical = theirs.clone();
+    for (key, event) in [
+        ("preToolUse", "PreToolUse"),
+        ("sessionStart", "SessionStart"),
+    ] {
+        let owned = serde_json::json!({
+            "command": format!("& '{}' hook --runtime cursor --event {event} --source hide-guidance@7", helper.display().to_string().replace('\'', "''")),
+            "timeout": 8
+        });
+        if key == "preToolUse" {
+            historical["hooks"][key].as_array_mut().unwrap().push(owned);
+        } else {
+            historical["hooks"][key] = serde_json::json!([owned]);
+        }
+    }
+    let original = serde_json::to_vec_pretty(&historical).unwrap();
+    std::fs::write(&path, &original).unwrap();
+    assert!(guidance::install(agent, &home, crate::hook_target(&helper)).is_err());
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        original,
+        "refusal changes no existing bytes"
+    );
+    let removed = guidance::remove(agent, &home).unwrap();
+    assert!(removed.changed);
+    assert_eq!(removed.removed_entries, 2);
+    let remaining: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(remaining, theirs);
+    assert!(!guidance::remove(agent, &home).unwrap().changed);
 }
 
 /// agy's Go process launcher quotes its command argument for CommandLineToArgvW,
 /// although cmd parses quotes differently. agy 1.4.2's real Windows hook run
 /// escapes every embedded quote as backslash-quote (docs/agent-hooks.md).
+///
+/// The command starts Windows PowerShell. Its first start in a CI job, beside
+/// the other tests starting theirs, took from 2 s to past the 15 s these runs
+/// allow (issue 1497), so it is paid here, before a deadline starts.
 fn agy_shell(command: &str) -> Command {
     use std::os::windows::process::CommandExt;
 
+    crate::stand_ins::ready_with_args(
+        &Path::new(&std::env::var_os("SystemRoot").unwrap())
+            .join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
+        &["-NoProfile", "-NonInteractive", "-Command", "exit 0"],
+    );
     let mut shell = Command::new("cmd.exe");
     shell
         .raw_arg("/c")
@@ -597,6 +536,9 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
         .join(HELPER_BINARY_NAME);
     std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
     std::fs::copy(env!("CARGO_BIN_EXE_hide-agent-hooks"), &helper).unwrap();
+    // A copied program's first start is paid before the deadline, as
+    // `programs::hook` does for the build's own.
+    crate::stand_ins::ready(&helper);
     guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
     assert_eq!(
         guidance::installed_helper_path(agent, &home).as_deref(),

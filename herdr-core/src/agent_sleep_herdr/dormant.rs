@@ -538,16 +538,15 @@ mod tests {
     }
 
     #[test]
-    fn a_resumed_cursor_is_reported_to_herdr_under_its_integration_with_the_id_it_resumed() {
-        let (result, reports) = report_of("cursor", true);
-        result.unwrap();
-        assert_eq!(reports.len(), 1, "{reports:?}");
-        let report = &reports[0];
-        assert_eq!(report["pane_id"], "w1:p9");
-        assert_eq!(report["source"], "herdr:cursor");
-        assert_eq!(report["agent"], "cursor");
-        assert_eq!(report["agent_session_id"], "native-one");
-        assert!(report["seq"].as_u64().is_some_and(|seq| seq > 0));
+    fn a_retired_cursor_session_is_never_reported_as_a_new_live_session() {
+        for accepts in [true, false] {
+            let (result, reports) = report_of("cursor", accepts);
+            result.unwrap();
+            assert!(
+                reports.is_empty(),
+                "a retired session must not acquire a live integration"
+            );
+        }
     }
 
     #[test]
@@ -560,9 +559,9 @@ mod tests {
     }
 
     #[test]
-    fn a_session_report_herdr_refuses_is_an_error_the_wake_can_act_on() {
-        let (result, reports) = report_of("cursor", false);
-        assert!(matches!(result, Err(ApiError::Remote { .. })));
-        assert_eq!(reports.len(), 1);
+    fn an_unknown_session_kind_has_no_live_integration_report() {
+        let (result, reports) = report_of("future-agent", false);
+        result.unwrap();
+        assert!(reports.is_empty());
     }
 }

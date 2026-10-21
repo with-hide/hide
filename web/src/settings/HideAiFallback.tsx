@@ -25,7 +25,7 @@ export function HideAiFallback({ ai, actions, onChange }: { ai: BackgroundAi; ac
   return (
     <Group
       title={t("hideAi.fallbackTitle", { agent: chosen.label })}
-      note={t("hideAi.fallbackNote", { agent: chosen.label })}
+      note={[t("hideAi.fallbackNote", { agent: chosen.label }), entries.length === 0 ? t("hideAi.fallbackEmpty", { agent: chosen.label }) : null].filter(Boolean).join(" ")}
       data-settings-group="hide-ai-fallback"
     >
       {entries.map((entry, index) => {

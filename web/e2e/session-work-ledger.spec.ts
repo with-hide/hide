@@ -399,10 +399,29 @@ test("@platform a migrated session with an unknown original repository can retai
       return { session: label?.native_session_id, goal: label?.goal, end: label?.end };
     }, { message: "completed native label reached disk before migration restart", timeout: 30_000 })
       .toEqual({ session: identity, goal: FIRST_GOAL, end: "done" });
-    // Emulate the version 2 store while this owned daemon is stopped.
+    // Emulate the version 2 store while this owned daemon is stopped,
+    // removing every later table and column, including display metadata
+    // (version 6). A v2 version number with v6 columns is not a v2 store.
     daemon = await daemon.restart((stateDir) => {
       const db = new DatabaseSync(path.join(stateDir, "links.sqlite3"));
-      try { db.exec("DROP TABLE ledger_session_origins; DROP TABLE ledger_project_connections; DROP TABLE ledger_backlog; DROP TABLE retention_aliases; ALTER TABLE ledger_missed DROP COLUMN backlog_key; PRAGMA user_version=2;"); }
+      try {
+        db.exec(`
+          DROP TABLE ledger_session_origins;
+          DROP TABLE ledger_project_connections;
+          DROP TABLE ledger_backlog;
+          DROP TABLE retention_aliases;
+          DROP TABLE direct_observations;
+          ALTER TABLE ledger_missed DROP COLUMN backlog_key;
+          ALTER TABLE ledger_titles DROP COLUMN goal;
+          ALTER TABLE ledger_titles DROP COLUMN summary;
+          ALTER TABLE ledger_titles DROP COLUMN label_at;
+          ALTER TABLE ledger_titles DROP COLUMN analysed_start;
+          ALTER TABLE ledger_titles DROP COLUMN analysed_end;
+          PRAGMA user_version=2;
+        `);
+        expect(db.prepare("PRAGMA table_info(ledger_titles)").all().map(column => column.name))
+          .toEqual(["device", "agent", "id", "native_title", "manual_title", "state"]);
+      }
       finally { db.close(); }
     });
     await page.goto("about:blank");

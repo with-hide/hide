@@ -75,7 +75,7 @@ fn invoke(
 }
 
 #[test]
-fn every_hook_transport_receives_letters_when_only_the_shell_has_xdg_state_home() {
+fn all_seven_active_hook_transports_receive_letters_with_only_the_shells_xdg_state_home() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     std::fs::create_dir(&home).unwrap();
@@ -114,10 +114,6 @@ fn every_hook_transport_receives_letters_when_only_the_shell_has_xdg_state_home(
                 "UserPromptSubmit",
             ],
             json!({"conversationId":"984dbf44-34b2-444c-91fd-34a2581196c4", "invocationNum":0}),
-        ),
-        (
-            vec!["hook", "--runtime", "cursor", "--event", "PreToolUse"],
-            json!({"conversation_id":"route-session", "tool_name":"Read", "tool_input":{"file_path":"file"}}),
         ),
         (
             vec!["opencode", "prompt"],

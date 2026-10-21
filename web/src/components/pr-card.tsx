@@ -31,6 +31,7 @@ export function pullRequestOpenExternal(event: MouseEvent): boolean {
 export function CheckoutCardHint({
   card,
   description,
+  side = "right",
   onOpenPullRequest,
   onOpenWorkspace,
   onShowPullRequestRow,
@@ -39,6 +40,8 @@ export function CheckoutCardHint({
   card: CheckoutCard;
   /** The screen reader's description of the row: the pull request, the agents, the branch and the path. */
   description: string;
+  /** Where the card opens: beside a sidebar row, or under a pane header's mark. */
+  side?: "right" | "bottom";
   /** Opens the pull request the header names; `external` asks for the default browser. */
   onOpenPullRequest: (url: string, external: boolean) => void;
   /** Where the card was opened from goes to the checkout's Workspace; the card then offers `↵ Workspace`, the same move (PRD overview-lenses-tiles-agents B16). */
@@ -58,7 +61,7 @@ export function CheckoutCardHint({
         {children}
       </TooltipTrigger>
       <TooltipContent
-        side="right"
+        side={side}
         align="start"
         aria-label={description}
         className="pointer-events-auto w-(--size-pr-popover) max-w-(--radix-tooltip-content-available-width) text-left text-wrap rounded-md p-md"

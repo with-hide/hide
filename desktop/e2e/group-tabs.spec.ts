@@ -7,7 +7,7 @@ import { compositorPresents } from "../../web/e2e/wait";
 import { fitWindow, isolate, launchShell, test } from "./fixture";
 import { captureNativeWindow } from "./native-window";
 
-test("named groups and the independent terminal action render in the candidate window", async () => {
+test("named groups and new terminals render in the candidate window", async () => {
   const herdr = await startHerdr();
   const run = isolate(herdr, "group-tabs");
   let app: ElectronApplication | undefined;
@@ -18,6 +18,7 @@ test("named groups and the independent terminal action render in the candidate w
     await fitWindow(app, { width: 1440, height: 900 });
     await enterWorkspace(page, "fixture");
     const selector = page.locator("[data-agent-group-selector]");
+    const tabs = page.locator('[data-agent-tab-bar] [role=tab]');
     await expect(selector).toBeVisible();
     const facts = { build: "worktree debug", daemonPid: run.daemonPid(), home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: herdr.socket, input: "Playwright renderer", externalProvider: "controlled fixture CLI" };
     await compositorPresents(page);
@@ -27,18 +28,33 @@ test("named groups and the independent terminal action render in the candidate w
     await page.getByRole("textbox", { name: "Group name", exact: true }).fill("문서 검토와 다음 작업");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(selector).toHaveText("문서 검토와 다음 작업");
     const group = await selector.getAttribute("data-agent-group-selector");
     const row = page.locator(`[data-sidebar-group-select="${group}"]`);
     if (!(await row.isVisible())) await page.locator("[data-checkout-toggle][aria-expanded=false]").click();
     await expect(row).toBeVisible();
+    await expect(row).toHaveAttribute("aria-current", "true");
+    await expect(tabs).toHaveCount(0);
     await page.locator("[data-new-agent-tab=true]").click();
-    await expect(page.locator("[data-agent-tab-start]")).toHaveAttribute("data-agent-tab-start", /^draft:/);
+    await expect(tabs).toHaveCount(1);
+    await expect(tabs).toHaveAttribute("aria-selected", "true");
+    await expect(tabs).not.toHaveAttribute("data-tab", /^draft:/);
+    const tab = (await tabs.getAttribute("data-tab"))!;
+    expect(tab).not.toBe(herdr.tab);
+    await expect(page.locator("[data-agent-tab-start]")).toHaveCount(0);
+    const canvas = page.locator(`[data-canvas="${tab}"]`);
+    await expect(canvas).toBeVisible();
+    const panes = canvas.locator("[data-pane-view]");
+    await expect(panes).toHaveCount(1);
+    const paneId = (await panes.getAttribute("data-pane-view"))!;
+    expect(herdr.panes).not.toContain(paneId);
+    const pane = canvas.locator(`[data-pane-view="${paneId}"]`);
+    await expect(pane).toBeVisible();
     await expect(row).toHaveAttribute("aria-current", "true");
     await expect(page.locator('[data-agent-open][aria-current="true"]')).toHaveCount(0);
-    await expect(page.locator("[data-group-start-terminal=true]")).toBeEnabled();
     await expect(page.locator("[data-new-agent-tab=true]")).toBeVisible();
     await compositorPresents(page);
-    await captureNativeWindow(app, "group-tabs-blank-native", facts);
+    await captureNativeWindow(app, "group-tabs-terminal-native", facts);
     await page.locator("[data-open-settings]").click();
     await page.locator('[data-settings-tab="general"]').click();
     await page.locator('[data-theme-option="light"]').click();
@@ -48,7 +64,7 @@ test("named groups and the independent terminal action render in the candidate w
     await expect(page.locator("html")).toHaveAttribute("lang", "ko");
     await page.keyboard.press("Escape");
     await fitWindow(app, { width: 920, height: 760 });
-    await expect(page.locator("[data-group-start-terminal=true]")).toBeVisible();
+    await expect(pane).toBeVisible();
     await expect(selector).toContainText("문서 검토와 다음 작업");
     await compositorPresents(page);
     await captureNativeWindow(app, "group-tabs-narrow-light-native", { ...facts, requestedWidth: 920 });

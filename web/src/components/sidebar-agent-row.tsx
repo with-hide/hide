@@ -1,28 +1,28 @@
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { memo, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { memo, useRef, type KeyboardEvent } from "react";
 import { AgentRowMark } from "../AgentRowMark";
 import { agentProductName } from "../agentAdapters";
 import { agentClosing } from "../close";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useShellStore } from "../store";
 import { branchChip, forkLabel, lineParts, lineTone, markTone, markWords, rowAccessibleName, rowDimmed, rowSentence, sidebarLine, treeLine } from "../agentRow";
+import { recordWords } from "../agentRow";
+import { AgentRecordTitle } from "./agent-record-title";
 import { RowLineText } from "./row-line-text";
 import { homeTurnLine, originLine } from "../hideAiOrigin";
 import { AgentForkMark } from "./fork-mark";
+import { RevisitStar, starred } from "./revisit-mark";
 import { RowLetterMark } from "./letter-mark";
 import { cn } from "../lib/utils";
 import type { AgentRow } from "../snapshot";
 import type { AgentMenuItem } from "../workspaceManage";
 import { AskLine, DescendantMark, TreeChevron, TreeRails, type TreePlace } from "./agent-tree";
-import { AgentPrHover, PrHoverList, useAgentStaleness, type MarkPulls } from "./pr-mark";
-import { ownPulls, type PrStaleness, type SessionPull } from "../prMark";
+import { AgentPrHover, PrHoverCard, useAgentStaleness } from "./pr-mark";
+import { ownPulls, type SessionPull } from "../prMark";
 import { AgentTreePopover } from "./agent-tree-popover";
 import { Elapsed } from "./elapsed";
 import { EntryContextMenu, type MenuEntry } from "./entry-menu";
 import { DeviceChip } from "./device-chip";
-import { CheckoutCardHint } from "./pr-card";
-import { pullRequestCard } from "../projects";
-import { catalogWorkspaces } from "../snapshot";
 import { StatusMark } from "./status-mark";
 import { Badge } from "./ui/badge";
 import { Keycap } from "./ui/keycap";
@@ -144,7 +144,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   const offline = unreachable ? t("agents.line.disconnected", { device: remote.label }) : null;
   const titleTone = agent.state.title_emphasized || (selected && agent.state.selection_emphasizes_title) ? "text-foreground" : "text-subtle-foreground";
   // The mark's state and word ride the row's hint, which the mark sits inside (B3).
-  const hint = [device ? `${agent.identity_label} · ${device}` : agent.identity_label, agentProductName(agent.agent_kind), offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
+  const hint = [device ? `${agent.identity_label} · ${device}` : agent.identity_label, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
   const staleness = ask ? undefined : agentPrStaleness;
   const folded = tree ? tree.open !== true : true;
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -186,7 +186,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           ref={main}
           type="button"
           disabled={unreachable}
-          aria-label={[offline ? [agent.identity_label, remote?.label, agentProductName(agent.agent_kind), offline].filter(Boolean).join(", ") : rowAccessibleName(t, agent, device ?? remote?.label ?? null), forkLabel(t, agent), closing ? t("agents.closingName") : null, place].filter(Boolean).join(", ")}
+          aria-label={[offline ? [agent.identity_label, remote?.label, agentProductName(agent.agent_kind), offline].filter(Boolean).join(", ") : rowAccessibleName(t, agent, device ?? remote?.label ?? null), forkLabel(t, agent), starred(agent) ? t("taskLens.revisit.starred") : null, closing ? t("agents.closingName") : null, place].filter(Boolean).join(", ")}
           aria-current={selected ? "true" : undefined}
           aria-expanded={tree && tree.open !== null && !tree.popover ? tree.open : undefined}
           data-agent-open={agent.pane_id}
@@ -206,10 +206,9 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
             {/* The row button's name already reads all of this out. */}
-            <span aria-hidden="true" className={cn("pointer-events-none min-w-0 flex-auto truncate", titleTone)} data-agent-title="true">
-              {agent.identity_label}
-            </span>
+            <AgentRecordTitle agent={agent} className={cn("pointer-events-none", titleTone)} />
             <AgentForkMark agent={agent} />
+            {starred(agent) ? <RevisitStar /> : null}
             {closing ? (
               <span aria-hidden="true" className="pointer-events-none shrink-0 text-caption text-muted-foreground" data-agent-closing="true">
                 {t("agents.closing")}
@@ -223,7 +222,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
             {device ? (
               <DeviceChip label={device} className="pointer-events-none max-w-2/5" />
             ) : null}
-            {ask ? null : <AgentPrHover agent={agent} family={family} staleness={staleness} card={(icon) => <PrHoverCard agent={agent} pulls={family ?? ownPulls(agent)} icon={icon} staleness={staleness} onOpenPullRequest={onOpenPullRequest} />} />}
+            {ask ? null : <AgentPrHover agent={agent} family={family} staleness={staleness} card={(icon) => <PrHoverCard agent={agent} pulls={family ?? ownPulls(agent)} staleness={staleness} onOpenPullRequest={onOpenPullRequest}>{icon}</PrHoverCard>} />}
             {ask || !folded ? null : <span className="pointer-events-none flex shrink-0"><DescendantMark agent={agent} /></span>}
             {agent.letters_waiting ? <RowLetterMark /> : null}
             {/* A time the core never measured draws nothing, and nothing stands in for it. */}
@@ -295,24 +294,4 @@ function RowChevron({ agent, tree, returnFocus }: { agent: AgentRow; tree: Sideb
       />
     </span>
   );
-}
-
-/**
- * Under the pointer, the sidebar PR mark shows the existing PR card for one
- * PR, and each PR with its state and title for several (B23), a root's
- * family naming who holds each.
- */
-function PrHoverCard({ agent, pulls, icon, staleness, onOpenPullRequest }: { agent: AgentRow; pulls: MarkPulls; icon: ReactNode; staleness?: PrStaleness; onOpenPullRequest: (url: string, external: boolean) => void }) {
-  const { t } = useInterfaceTranslation();
-  const trigger = <span className="relative z-10 flex shrink-0" data-pr-hover={agent.pane_id}>{icon}</span>;
-  const single = pulls.length === 1 ? pulls[0]!.pull : null;
-  const pr = useShellStore((s) => (single ? catalogWorkspaces(s.rest).flatMap((project) => project.pull_requests ?? []).find((row) => row.url === single.url) : undefined));
-  if (pr && !staleness?.stale) {
-    return (
-      <CheckoutCardHint card={pullRequestCard(pr, t)} description={`#${pr.number} ${pr.title}`} onOpenPullRequest={onOpenPullRequest}>
-        {trigger}
-      </CheckoutCardHint>
-    );
-  }
-  return <PrHoverList agent={agent} pulls={pulls} staleness={staleness} onOpen={(pull) => onOpenPullRequest(pull.url, false)}>{trigger}</PrHoverList>;
 }
