@@ -49,7 +49,7 @@ const ADD_ANSWER_MARGIN: Duration = Duration::from_secs(5);
 /// and text, so the same text added again is the same batch and never a
 /// second card. Once every card of that batch is gone (forgotten, undone,
 /// or none was kept), the same text starts the next generation's batch.
-const ADD_PROVIDER: &str = "hide";
+const ADD_PROVIDER: &str = hide_memory::HAND_ADDED_PROVIDER;
 const ADD_SESSION: &str = "memory-add";
 /// The most generations one text is looked up through.
 const ADD_GENERATIONS: u32 = 32;

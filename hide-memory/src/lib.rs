@@ -61,6 +61,9 @@ pub const ACTIVE_MEMORY_LIMIT: usize = 10_000;
 /// The most cards a full Project keeps forgotten for new ones, for Undo;
 /// the oldest past it are removed for good.
 pub const EVICTED_CARD_LIMIT: usize = 1_000;
+/// The source provider of a card the operator added by hand
+/// (`hide memory add`), which a full Project never forgets for a new one.
+pub const HAND_ADDED_PROVIDER: &str = "hide";
 /// Unusable answers in a row one unchanged input gets before it is set
 /// aside: a session group is passed over and a correction's document version
 /// is not asked about again, each with a diagnostic, until that input changes.

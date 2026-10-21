@@ -5115,9 +5115,12 @@ fn count_state(
 
 /// The card a full Project forgets for a new one: never used first (oldest
 /// written first), then the least recently used, then by number. A card a
-/// person settled is never chosen: a confirmed correction (its current
-/// revision's comparison says the card is newer) or one with a promotion.
-/// Neither is a card this batch wrote to or one in `named`.
+/// person made or settled is never chosen: one added by hand
+/// ([`crate::HAND_ADDED_PROVIDER`]), a confirmed correction (its current
+/// revision's comparison says the card is newer), or one whose promotion is
+/// under way, merged or kept; a dismissed, failed, closed or outdated
+/// promotion settles nothing. Neither is a card this batch wrote to or one
+/// in `named`.
 fn evictable(
     connection: &Connection,
     project_id: &str,
@@ -5127,13 +5130,19 @@ fn evictable(
     let mut statement = connection.prepare(
         "SELECT i.id,i.number FROM memory_items i WHERE i.project_id=?1 AND i.lifecycle!='tombstoned' \
          AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer') \
-         AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id) \
+         AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.state IN('running','pr_open','merged','building','kept')) \
+         AND NOT EXISTS(SELECT 1 FROM memory_sources s WHERE s.item_id=i.id AND s.provider=?4) \
          AND NOT EXISTS(SELECT 1 FROM memory_revisions r WHERE r.item_id=i.id AND r.batch_id=?2) \
          ORDER BY i.last_used_at_ms IS NOT NULL,i.last_used_at_ms,i.created_at_ms,i.number LIMIT ?3",
     )?;
     let rows = statement
         .query_map(
-            params![project_id, batch_id, named.len() as u64 + 1],
+            params![
+                project_id,
+                batch_id,
+                named.len() as u64 + 1,
+                crate::HAND_ADDED_PROVIDER
+            ],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -6472,6 +6481,55 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             [],
             |row| row.get::<_, bool>(0),
         ).unwrap(), "its revisions go with it");
+    }
+
+    #[test]
+    fn a_card_added_by_hand_is_never_cleared_and_a_dismissed_promotion_protects_nothing() {
+        let (_temp, mut store, project) = store();
+        store
+            .apply_candidates(
+                &AnalysisBatch {
+                    provider: crate::HAND_ADDED_PROVIDER.to_owned(),
+                    ..batch(&project, "added", "added")
+                },
+                &[candidate("Card one, added by hand", CandidateRelation::New)],
+            )
+            .unwrap();
+        for (name, text) in [("b2", "Card two"), ("b3", "Card three")] {
+            store
+                .apply_candidates(
+                    &batch(&project, name, name),
+                    &[candidate(text, CandidateRelation::New)],
+                )
+                .unwrap();
+        }
+        store
+            .set_promotion(
+                &project,
+                2,
+                &Promotion {
+                    state: PromotionState::Dismissed,
+                    ..running(1, "agent-7")
+                },
+            )
+            .unwrap();
+        let evicted = |store: &mut MemoryStore, name: &str| {
+            store
+                .apply_candidates_with_limit(
+                    &batch(&project, name, name),
+                    &[candidate(name, CandidateRelation::New)],
+                    3,
+                )
+                .unwrap()
+                .evicted
+        };
+        assert_eq!(evicted(&mut store, "Card four"), [2]);
+        assert_eq!(evicted(&mut store, "Card five"), [3]);
+        assert_eq!(
+            evicted(&mut store, "Card six"),
+            [4],
+            "the oldest card is the one added by hand, and it stays"
+        );
     }
 
     #[test]
