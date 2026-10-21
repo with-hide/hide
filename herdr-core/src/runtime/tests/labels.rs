@@ -162,6 +162,7 @@ fn operator_asked(text: &str) -> crate::labels::facts::SessionFacts {
     facts.title = Some("요청 보기 만들기".to_owned());
     facts.operator_request = Some(crate::labels::facts::Request {
         text: text.to_owned(),
+        offset: None,
         cut: false,
         images: 0,
         at_unix_ms: 1_000,

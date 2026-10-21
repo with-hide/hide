@@ -353,6 +353,78 @@ fn pane_bands_leave_pull_requests_and_results_to_the_header() {
     }
 }
 
+/// The second row leads with the turn's request while it shows the turn: an
+/// ask, the agent working, or a finished turn the operator has not looked at,
+/// which says its result. A read finished turn, a wait and an idle pane have
+/// no row (PRD pane-last-request B1, B10, B11).
+#[test]
+fn pane_header_leads_with_the_request_only_while_its_row_shows_the_turn() {
+    use crate::agent_state::{RequestVerb, header};
+    use crate::request_view::{AgentRequestSnapshot, RequestLineSnapshot, RequestSender};
+    let runtime = with_session();
+    let mut agent = runtime.snapshot.navigator.agents[0].clone();
+    let pane = pane("session", "/work/app");
+    agent.request = Some(AgentRequestSnapshot {
+        verb: RequestVerb::Working,
+        verb_since_unix_ms: 0,
+        line: Some("검증 끝, PR 올림".into()),
+        end: None,
+        request: Some(RequestLineSnapshot {
+            text: "ㅇㅇ 그렇게 해".into(),
+            cut: false,
+            images: 0,
+            at_unix_ms: 1,
+            sender: RequestSender::Operator,
+        }),
+        request_summary: Some("제안대로 진행".into()),
+        recent_turns: Vec::new(),
+        later_by: None,
+        reply: None,
+        pull_requests: Vec::new(),
+    });
+    let summary = Some(header::TurnRequest {
+        text: Some("제안대로 진행".into()),
+        images: 0,
+    });
+    agent.state.verb = RequestVerb::Working;
+    assert_eq!(header::of(&pane, Some(&agent), None, None).request, summary);
+    agent.state.verb = RequestVerb::Stopped;
+    assert_eq!(header::of(&pane, Some(&agent), None, None).request, summary);
+    agent.state.verb = RequestVerb::Result;
+    agent.completed = true;
+    agent.unread = true;
+    let finished = header::of(&pane, Some(&agent), None, None);
+    assert_eq!(
+        (
+            finished.finished,
+            finished.progress.as_deref(),
+            finished.request
+        ),
+        (true, Some("검증 끝, PR 올림"), summary.clone())
+    );
+    agent.unread = false;
+    let read = header::of(&pane, Some(&agent), None, None);
+    assert_eq!(
+        (read.finished, read.progress, read.request),
+        (false, None, None)
+    );
+    for verb in [RequestVerb::Waiting, RequestVerb::Idle, RequestVerb::Review] {
+        agent.state.verb = verb;
+        agent.unread = true;
+        assert_eq!(
+            header::of(&pane, Some(&agent), None, None).request,
+            None,
+            "{verb:?}"
+        );
+    }
+    // A pane whose terminal is not live shows no turn.
+    agent.state.verb = RequestVerb::Working;
+    assert_eq!(
+        header::of(&pane, Some(&agent), None, Some("mini")).request,
+        None
+    );
+}
+
 /// A question stays the operator's turn after they look at the pane: the
 /// band is marked read and keeps asking until a reply moves the agent on.
 #[test]

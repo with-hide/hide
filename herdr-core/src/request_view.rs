@@ -20,8 +20,9 @@ use crate::agent_state::turn::{RequestVerb, verb_of};
 use crate::agent_state::work::{Linked, assign_duty, linked_pull_requests, shown_pull_requests};
 use crate::display_text;
 use crate::issues::IssueReference;
-use crate::labels::analysis::LabelEnd;
+use crate::labels::analysis::{LabelEnd, truncate_phrase};
 use crate::labels::facts::{Reply, Request, Requester};
+use crate::labels::store::RecentTurn;
 use crate::model::{
     GithubSnapshot, PullRequestBadge, PullRequestChecks, ReviewDecision, SidebarAgentSnapshot,
 };
@@ -51,6 +52,9 @@ pub struct RowFacts {
     /// yet).
     pub(crate) end: Option<LabelEnd>,
     pub(crate) line: Option<String>,
+    /// The label's summaries of the recent turns' requests, oldest first;
+    /// empty while summaries are off.
+    pub(crate) recent_turns: Vec<RecentTurn>,
     /// The session's last turn proposed a plan and waits for the operator to
     /// approve it, as read for the agent's current Herdr state (PRD
     /// codex-plan-approval-hold D-05).
@@ -91,6 +95,19 @@ pub struct RequestLineSnapshot {
     pub images: u32,
     pub at_unix_ms: u64,
     pub sender: RequestSender,
+}
+
+/// A turn before the shown request, for the turn card (PRD pane-last-request
+/// B7): the label's summary of its request and how it ended.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TurnSnapshot {
+    pub request: Option<String>,
+    /// How it ended; absent while it was judged only as running.
+    pub end: Option<LabelEnd>,
+    /// The label's line about how it ended; absent with `end`, since a
+    /// running turn's line says what it was doing, not how it went.
+    pub line: Option<String>,
+    pub at_unix_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -150,6 +167,11 @@ pub struct AgentRequestSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end: Option<LabelEnd>,
     pub request: Option<RequestLineSnapshot>,
+    /// The shown request in one line (PRD pane-last-request D-02, D-16): the
+    /// label's summary of it, or its own first line until there is one.
+    pub request_summary: Option<String>,
+    /// Up to two turns before the shown request, newest first.
+    pub recent_turns: Vec<TurnSnapshot>,
     /// Who sent a request after the operator's last one (B4).
     pub later_by: Option<RequestSender>,
     pub reply: Option<ReplySnapshot>,
@@ -251,6 +273,28 @@ pub(crate) fn apply<'a>(
                 now_unix_ms
             }
         };
+        let shown_offset = shown.as_ref().and_then(|(request, _)| request.offset);
+        let request_summary = shown
+            .as_ref()
+            .and_then(|(request, _)| request_summary(request, &facts.recent_turns));
+        let recent_turns = facts
+            .recent_turns
+            .iter()
+            .rev()
+            .filter(|turn| shown_offset.is_some_and(|shown| turn.offset < shown))
+            // A turn the label gave no summary has nothing to name it by.
+            .filter(|turn| !turn.request.trim().is_empty())
+            .take(MAX_EARLIER_TURNS)
+            .map(|turn| {
+                let end = turn.end.filter(|end| *end != LabelEnd::Working);
+                TurnSnapshot {
+                    request: display_text::one_line(&turn.request, MAX_LINE_CHARS),
+                    end,
+                    line: end.and_then(|_| display_text::one_line(&turn.line, MAX_LINE_CHARS)),
+                    at_unix_ms: turn.at_unix_ms,
+                }
+            })
+            .collect();
         row.request = Some(AgentRequestSnapshot {
             verb,
             verb_since_unix_ms: since,
@@ -266,6 +310,8 @@ pub(crate) fn apply<'a>(
                 at_unix_ms: request.at_unix_ms,
                 sender,
             }),
+            request_summary,
+            recent_turns,
             later_by,
             reply: facts.reply.as_ref().map(|reply| ReplySnapshot {
                 text: display_text::block(&reply.text),
@@ -308,6 +354,27 @@ pub(crate) fn open_result(
     }
 }
 
+/// The shown request's one line: the label's summary of the message at its
+/// offset, else its first line of text with the spaces folded and a Hide
+/// letter's header left out, cut. `None` for a request with no text (an
+/// image alone, which the shell counts).
+fn request_summary(request: &Request, turns: &[RecentTurn]) -> Option<String> {
+    let summary = request.offset.and_then(|offset| {
+        turns
+            .iter()
+            .find(|turn| turn.offset == offset)
+            .and_then(|turn| display_text::one_line(&turn.request, MAX_LINE_CHARS))
+    });
+    summary.or_else(|| {
+        let first = request
+            .text
+            .lines()
+            .filter(|line| hide_session::envelope_header(line).is_none())
+            .find_map(|line| display_text::one_line(line, MAX_LINE_CHARS))?;
+        Some(truncate_phrase(&first, MAX_FIRST_LINE_CHARS))
+    })
+}
+
 fn sender(request: &Request, delegated: bool, parent: Option<&String>) -> RequestSender {
     let parents_first = request.first && delegated;
     match &request.requester {
@@ -328,6 +395,12 @@ fn sender(request: &Request, delegated: bool, parent: Option<&String>) -> Reques
 const MAX_SENDER_CHARS: usize = 64;
 /// The longest label line a row carries; the label keeps its own to 40.
 const MAX_LINE_CHARS: usize = 200;
+/// The longest first line of a request shown in place of its summary: the
+/// label's own cap in a language written with spaces; the header cuts it to
+/// the row's width.
+const MAX_FIRST_LINE_CHARS: usize = 80;
+/// The turns before the shown request the turn card lists.
+const MAX_EARLIER_TURNS: usize = 2;
 /// What the row writes for the operator and for an unnamed agent, so no
 /// sender can pass as either (a participant name is whatever its sender chose).
 const RESERVED_SENDERS: [&str; 3] = ["나", "에이전트", "operator"];

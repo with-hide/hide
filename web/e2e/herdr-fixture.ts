@@ -287,6 +287,8 @@ export type FixtureLabel = {
   /** How long the provider takes to answer. */
   delayMs?: number;
   progress?: string;
+  /** The label's one-line summary of the turn's request (`context_label.v19`); none by default, when the header shows the request's own first line. */
+  request?: string;
   /** The reply the agent asks for; the label's line when given, with `question` its end. */
   reply?: string;
   question?: boolean;
@@ -333,6 +335,7 @@ export function labelMarker(label: FixtureLabel): string {
   const answer = {
     goal: label.task,
     goal_update: "replace",
+    request: label.request ?? "",
     // One line: the reply asked for when there is one, else the progress.
     line: label.reply ?? label.progress ?? "",
     end: label.end ?? (label.question ? "question" : "done"),

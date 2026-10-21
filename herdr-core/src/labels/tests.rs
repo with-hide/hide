@@ -64,7 +64,7 @@ impl Scripted {
             format!("{goal} 진행")
         };
         self.answers.lock().unwrap().push_back(json!({
-            "goal": goal, "goal_update": "replace", "line": line, "end": end,
+            "goal": goal, "goal_update": "replace", "request": format!("{goal} 요청"), "line": line, "end": end,
             "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
         }));
     }
@@ -72,7 +72,7 @@ impl Scripted {
     /// A turn start's answer, which says nothing of how the turn ends.
     fn begin(&self, goal: &str) {
         self.answers.lock().unwrap().push_back(json!({
-            "goal": goal, "goal_update": "replace", "line": format!("{goal} 진행"),
+            "goal": goal, "goal_update": "replace", "request": format!("{goal} 요청"), "line": format!("{goal} 진행"),
         }));
     }
 
@@ -136,6 +136,11 @@ impl AiBackend for Scripted {
             .unwrap()
             .pop_front()
             .ok_or_else(|| AiError::Transient("no scripted answer".to_owned()))?;
+        // Answers written before v19 asked for a request summary give none.
+        let mut value = value;
+        if let Some(answer) = value.as_object_mut() {
+            answer.entry("request").or_insert(json!(""));
+        }
         Ok(AiResponse {
             value,
             usage: Default::default(),
@@ -2162,6 +2167,193 @@ fn a_new_turn_read_retires_an_old_done_result_that_arrived_first() {
         shown(&worker, &next).unwrap().progress.as_deref(),
         Some("다음 요청의 실제 작업 진행")
     );
+    // The late answer about the first turn never names the next request
+    // (PRD pane-last-request B12); this fixture rewrites the transcript, so
+    // the first turn's own summary went with its offsets.
+    let facts = shown_facts(&worker, &next).unwrap();
+    let shown_request = facts
+        .operator_request
+        .or(facts.other_request)
+        .expect("the next request is shown");
+    assert_eq!(shown_request.text, "다음 요청");
+    let turns: Vec<_> = facts
+        .recent_turns
+        .iter()
+        .map(|turn| {
+            (
+                Some(turn.offset) == shown_request.offset,
+                turn.request.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(turns, [(true, "다음 요청의 실제 작업 요청")]);
+}
+
+/// D-09, B12: each turn keeps its request summary by its message's offset,
+/// with how it ended; the turn start's summary stays when its end is judged,
+/// a new request shows its own once its start is judged, and the turn before
+/// it stays for the turn card.
+#[test]
+fn each_turn_keeps_its_own_request_summary_and_how_it_ended() {
+    let harness = Harness::new();
+    let path = harness.session("a", "native-a", &[("user", "첫 요청")]);
+    harness.backend.begin("첫 요청의 실제 작업");
+    let (mut worker, woken, _source) = harness.worker(harness.store());
+    observe(&mut worker, &agent(&path, "working", 5));
+    settle(&mut worker, &woken);
+    harness.backend.answer("첫 요청을 마침", "done", "");
+    harness.session(
+        "a",
+        "native-a",
+        &[("user", "첫 요청"), ("assistant", "첫 작업 완료")],
+    );
+    observe(&mut worker, &agent(&path, "idle", 6));
+    settle(&mut worker, &woken);
+    harness.backend.begin("다음 요청의 실제 작업");
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "첫 요청"),
+            ("assistant", "첫 작업 완료"),
+            ("user", "다음 요청"),
+        ],
+    );
+    let next = agent(&path, "working", 7);
+    observe(&mut worker, &next);
+    settle(&mut worker, &woken);
+    let facts = shown_facts(&worker, &next).unwrap();
+    let shown_request = facts.operator_request.or(facts.other_request).unwrap();
+    assert_eq!(shown_request.text, "다음 요청");
+    let turns: Vec<_> = facts
+        .recent_turns
+        .iter()
+        .map(|turn| {
+            (
+                Some(turn.offset) == shown_request.offset,
+                turn.request.as_str(),
+                turn.end,
+            )
+        })
+        .collect();
+    assert_eq!(
+        turns,
+        [
+            (
+                false,
+                "첫 요청의 실제 작업 요청",
+                Some(super::analysis::LabelEnd::Done)
+            ),
+            (
+                true,
+                "다음 요청의 실제 작업 요청",
+                Some(super::analysis::LabelEnd::Working)
+            ),
+        ]
+    );
+}
+
+/// D-09, D-10: the header shows the operator's request, so turns other
+/// agents' letters start are not kept beside it, and a lead pane's reports
+/// cannot push the operator's summary out of the three it keeps.
+#[test]
+fn letter_turns_do_not_push_the_operators_request_summary_out() {
+    let harness = Harness::new();
+    let mut messages = vec![("user".to_owned(), "요청 보기 만들어줘".to_owned())];
+    let write = |harness: &Harness, messages: &[(String, String)]| {
+        let borrowed: Vec<_> = messages
+            .iter()
+            .map(|(role, text)| (role.as_str(), text.as_str()))
+            .collect();
+        harness.session("a", "native-a", &borrowed)
+    };
+    let path = write(&harness, &messages);
+    harness.input.record("w1:p1", turn_at(0) - 300, false);
+    harness.backend.begin("요청 보기 화면 작업");
+    let (mut worker, woken, _source) = harness.worker(harness.store());
+    observe(&mut worker, &agent(&path, "working", 5));
+    settle(&mut worker, &woken);
+    let mut sequence = 6;
+    for index in 0..4 {
+        messages.push(("assistant".to_owned(), format!("답 {index}")));
+        write(&harness, &messages);
+        harness
+            .backend
+            .answer(&format!("요청 보기 단계 {index}"), "done", "");
+        observe(&mut worker, &agent(&path, "idle", sequence));
+        settle(&mut worker, &woken);
+        if index == 3 {
+            break;
+        }
+        messages.push((
+            "user".to_owned(),
+            format!("Hide letter r{index} from child (agent-{index}) [report]\n결과 {index}"),
+        ));
+        write(&harness, &messages);
+        harness.backend.begin(&format!("자식 보고 확인 {index}"));
+        observe(&mut worker, &agent(&path, "working", sequence + 1));
+        settle(&mut worker, &woken);
+        sequence += 2;
+    }
+    let last = agent(&path, "idle", sequence);
+    let facts = shown_facts(&worker, &last).unwrap();
+    let operator = facts.operator_request.as_ref().unwrap();
+    assert_eq!(operator.text, "요청 보기 만들어줘");
+    let summaries: Vec<_> = facts
+        .recent_turns
+        .iter()
+        .map(|turn| (Some(turn.offset) == operator.offset, turn.request.as_str()))
+        .collect();
+    assert_eq!(summaries, [(true, "요청 보기 화면 작업 요청")]);
+}
+
+/// D-09: a delegated child's header shows its newest request, so its
+/// parent's follow-up keeps a summary beside its first request.
+#[test]
+fn a_delegated_childs_follow_up_from_its_parent_keeps_its_summary() {
+    use crate::links::ledger::LedgerContext;
+    let harness = Harness::new();
+    let (mut worker, woken, _store, client) = cold_ledger_worker(&harness);
+    client.prime_context_for_test(
+        claude_session("native-a"),
+        LedgerContext {
+            parent_name: Some("ci-lead".into()),
+            ..Default::default()
+        },
+    );
+    let mut turns = vec![("user", "CI 확인해줘")];
+    let path = harness.session("a", "native-a", &turns);
+    // The child's first request counts as the operator's, as a spawned
+    // child's does before Hide watched its input.
+    harness.input.record("w1:p1", turn_at(0) - 300, false);
+    harness.backend.begin("지속적 통합 확인 작업");
+    observe(&mut worker, &agent(&path, "working", 3));
+    settle(&mut worker, &woken);
+    turns.push(("assistant", "확인했습니다"));
+    harness.session("a", "native-a", &turns);
+    harness.backend.answer("지속적 통합 확인 작업", "done", "");
+    observe(&mut worker, &agent(&path, "idle", 4));
+    settle(&mut worker, &woken);
+    turns.push((
+        "user",
+        "Hide letter r1 from ci-lead (claude) [request]\nCI 다시 봐줘",
+    ));
+    harness.session("a", "native-a", &turns);
+    harness.backend.begin("지속적 통합 재확인 작업");
+    let next = agent(&path, "working", 5);
+    observe(&mut worker, &next);
+    settle(&mut worker, &woken);
+    let facts = shown_facts(&worker, &next).unwrap();
+    assert!(facts.operator_request.is_some());
+    let summaries: Vec<_> = facts
+        .recent_turns
+        .iter()
+        .map(|turn| turn.request.as_str())
+        .collect();
+    assert_eq!(
+        summaries,
+        ["지속적 통합 확인 작업 요청", "지속적 통합 재확인 작업 요청"]
+    );
 }
 
 #[test]
@@ -2275,7 +2467,7 @@ fn a_null_goal_is_valid_but_an_absent_or_invalid_goal_is_not() {
     use super::analysis::{AnalysisPhase, LabelEnd};
     use super::context_label::{parse, request};
     for phase in [AnalysisPhase::TurnStart, AnalysisPhase::TurnEnd] {
-        let mut answer = json!({"goal": null, "goal_update": "keep", "line": ""});
+        let mut answer = json!({"goal": null, "goal_update": "keep", "request": "", "line": ""});
         if phase == AnalysisPhase::TurnEnd {
             answer["end"] = json!("done");
             answer["work"] =
@@ -2481,7 +2673,7 @@ fn a_long_line_is_cut_between_words_and_a_question_stays_a_question() {
             AnalysisPhase::TurnEnd,
             language,
             json!({
-                "goal": null, "goal_update": "keep", "line": line, "end": end,
+                "goal": null, "goal_update": "keep", "request": "", "line": line, "end": end,
                 "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
             }),
         )
@@ -2638,11 +2830,14 @@ fn a_label_request_carries_its_language_and_that_languages_lengths() {
         let mut answer = json!({
             "goal": "w".repeat(goal + 5),
             "goal_update": "replace",
+            "request": "r".repeat(line + 5),
             "line": "l".repeat(line + 5),
         });
         let parsed = parse(AnalysisPhase::TurnStart, language, answer.clone()).unwrap();
         assert_eq!(parsed.goal.unwrap().chars().count(), goal);
         assert_eq!(parsed.line.chars().count(), line);
+        // The request summary is drawn in the same one line (D-08).
+        assert_eq!(parsed.request.chars().count(), line);
         answer["goal"] = json!("w".repeat(goal));
         let parsed = parse(AnalysisPhase::TurnStart, language, answer).unwrap();
         assert_eq!(parsed.goal.unwrap(), "w".repeat(goal));

@@ -38,7 +38,7 @@ use super::analysis::{
 };
 use super::analyzer::{AnalysisJob, AnalysisResult, LabelAnalyzer};
 use super::context_label;
-use super::facts::{InputView, LogTarget, PullRequestTimes, ReadFacts};
+use super::facts::{InputView, LogTarget, PullRequestTimes, ReadFacts, Requester};
 use super::generator::{GeneratorLock, LockPlace};
 use super::input::{OperatorInput, Submit};
 use super::overlay::LabelOverlay;
@@ -224,6 +224,9 @@ enum WorkerResult {
 struct AnalysisMeta {
     ledger_session: Option<SessionIdentity>,
     work_author: bool,
+    /// The ledger names the pane's parent, so its header shows its newest
+    /// request, whoever sent it, rather than the operator's.
+    delegated: bool,
     /// The sender of the descendant's report, progress or block that woke
     /// the turn: the one letter that continues its task, the ledger checking
     /// the lineage (PRD task-continuation D-02). A watch alert or a reply
@@ -2134,6 +2137,7 @@ impl LabelWorker {
         let meta = AnalysisMeta {
             ledger_session,
             work_author,
+            delegated: ledger.parent_name.is_some(),
             work_letter,
             turn_witness,
             offset: events
@@ -2297,6 +2301,33 @@ impl LabelWorker {
                         );
                     }
                 }
+                // The summary belongs to the message at its own offset, so a
+                // late answer about an older turn never covers a newer request
+                // (PRD pane-last-request B12), and that older turn keeps how
+                // it ended; a turn the agent resumed since keeps no stale end.
+                // Another agent's letter is not kept beside an operator's
+                // request: the header shows the operator's (D-10), and a lead
+                // pane's letters would push its summary out of the ring. A
+                // delegated child's header shows its newest request, so it
+                // keeps them all.
+                let mut turns_changed = false;
+                if let Some(offset) = outcome.offset {
+                    let shown = outcome.delegated
+                        || record.facts.operator_request.is_none()
+                        || record
+                            .facts
+                            .requester_at(offset)
+                            .is_none_or(Requester::is_operator);
+                    if shown {
+                        let outcome_kept = !stale_display || stale_turn;
+                        turns_changed = record.record_turn(
+                            offset,
+                            &analysis.request,
+                            outcome_kept.then_some((analysis.end, analysis.line.as_str())),
+                            outcome.request_at_unix_ms,
+                        );
+                    }
+                }
                 if stale_display {
                     record.task_input_cursor =
                         outcome.task_input_cursor.or(record.task_input_cursor);
@@ -2313,7 +2344,8 @@ impl LabelWorker {
                         "target": self.target, "pane_id": pane_id,
                         "turn": format!("{:016x}", outcome.turn),
                     }));
-                    return goal_changed;
+                    // A late summary still reaches the header it names.
+                    return goal_changed || turns_changed;
                 }
                 record.line = analysis.line.clone();
                 record.end = Some(analysis.end);
@@ -2340,6 +2372,7 @@ impl LabelWorker {
                     "operator_turn": outcome.operator_turn,
                     "goal_chars": analysis.goal.as_ref().map_or(0, |goal| goal.chars().count()),
                     "line_chars": analysis.line.chars().count(),
+                    "request_chars": analysis.request.chars().count(),
                     "end": analysis.end,
                     "context_chars": outcome.context_chars,
                     "turn": format!("{:016x}", outcome.turn),
@@ -2392,6 +2425,11 @@ impl LabelWorker {
                 if cleared {
                     record.end = None;
                     record.line.clear();
+                    self.dirty = true;
+                }
+                if let Some(offset) = outcome.offset
+                    && record.forget_turn_outcome(offset)
+                {
                     self.dirty = true;
                 }
                 let pane = self.panes.get_mut(pane_id).expect("checked above");

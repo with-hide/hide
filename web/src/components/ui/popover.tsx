@@ -3,8 +3,12 @@ import type { ComponentProps } from "react";
 import { cn } from "../../lib/utils";
 import { useLayerOpen } from "./layer";
 
-function Popover({ open, defaultOpen, onOpenChange, ...props }: ComponentProps<typeof PopoverPrimitive.Root>) {
-  const [current, change] = useLayerOpen(open, defaultOpen, onOpenChange);
+/**
+ * `escape` false leaves Escape to whatever has the keyboard, for a popover the
+ * pointer only shows over a terminal.
+ */
+function Popover({ open, defaultOpen, onOpenChange, escape = true, ...props }: ComponentProps<typeof PopoverPrimitive.Root> & { escape?: boolean }) {
+  const [current, change] = useLayerOpen(open, defaultOpen, onOpenChange, false, escape);
   return <PopoverPrimitive.Root data-slot="popover" open={current} onOpenChange={change} {...props} />;
 }
 

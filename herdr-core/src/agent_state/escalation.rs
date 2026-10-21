@@ -592,6 +592,7 @@ mod tests {
         use crate::request_view::RowFacts;
         let request = |at, requester| Request {
             text: "next".into(),
+            offset: None,
             cut: false,
             images: 0,
             at_unix_ms: at,

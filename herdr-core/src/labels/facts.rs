@@ -85,6 +85,11 @@ impl Requester {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Request {
     pub(crate) text: String,
+    /// Where the message starts in the conversation, which keys its label
+    /// summary (`PaneRecord::recent_turns`); absent on a record read before
+    /// it was kept, which then shows its own first line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) offset: Option<u64>,
     /// The text was longer than [`MAX_TEXT_BYTES`].
     #[serde(default)]
     pub(crate) cut: bool,
@@ -260,6 +265,14 @@ impl SessionFacts {
                 .is_none_or(|verdict| verdict.requester.is_operator())
     }
 
+    /// Who sent the person's message at `offset`, once judged.
+    pub(crate) fn requester_at(&self, offset: u64) -> Option<&Requester> {
+        self.verdicts
+            .iter()
+            .find(|verdict| verdict.offset == offset)
+            .map(|verdict| &verdict.requester)
+    }
+
     /// Work is given by the operator for roots, and by the parent for
     /// delegated sessions. Reuse the kept input verdict and canonical letter.
     pub(crate) fn feeds_work(&self, event: &LabelEvent, parent: Option<&str>) -> bool {
@@ -325,6 +338,7 @@ impl SessionFacts {
         let (text, cut) = capped(&event.text);
         let request = Request {
             text,
+            offset: Some(event.offset),
             cut,
             images: event.images,
             at_unix_ms: event.at_unix_ms,
