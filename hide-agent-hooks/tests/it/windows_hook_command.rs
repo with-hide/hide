@@ -430,9 +430,18 @@ fn retired_cursor_install_is_refused_and_removal_keeps_the_operators_hooks() {
 /// agy's Go process launcher quotes its command argument for CommandLineToArgvW,
 /// although cmd parses quotes differently. agy 1.4.2's real Windows hook run
 /// escapes every embedded quote as backslash-quote (docs/agent-hooks.md).
+///
+/// The command starts Windows PowerShell. Its first start in a CI job, beside
+/// the other tests starting theirs, took from 2 s to past the 15 s these runs
+/// allow (issue 1497), so it is paid here, before a deadline starts.
 fn agy_shell(command: &str) -> Command {
     use std::os::windows::process::CommandExt;
 
+    crate::stand_ins::ready_with_args(
+        &Path::new(&std::env::var_os("SystemRoot").unwrap())
+            .join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
+        &["-NoProfile", "-NonInteractive", "-Command", "exit 0"],
+    );
     let mut shell = Command::new("cmd.exe");
     shell
         .raw_arg("/c")
@@ -527,6 +536,9 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
         .join(HELPER_BINARY_NAME);
     std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
     std::fs::copy(env!("CARGO_BIN_EXE_hide-agent-hooks"), &helper).unwrap();
+    // A copied program's first start is paid before the deadline, as
+    // `programs::hook` does for the build's own.
+    crate::stand_ins::ready(&helper);
     guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
     assert_eq!(
         guidance::installed_helper_path(agent, &home).as_deref(),
