@@ -1073,8 +1073,12 @@ fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcom
         if tally.error.is_some() {
             // Only a provider or account failure reaches the tally: the
             // Project's extraction waits for its backoff with the rest of its
-            // provider work. A card's unusable answer is that card's alone.
+            // provider work, and no later Project asks the same provider in
+            // this pass. A card's unusable answer is that card's alone.
             pending.retain(|task: &PendingAnalysis| task.project_id != project_id);
+            if deferred.is_none_or(|reason| reason == "reserved_for_checks") {
+                deferred = Some("provider_failed");
+            }
         }
         if tally.analyzing || tally.error.is_some() {
             if tally.checked {
@@ -4883,6 +4887,58 @@ mod tests {
         let guard = runtime.lock().unwrap();
         assert_eq!(guard.memory_work.projects[&fixture.project_id].failures, 1);
         assert!(guard.memory_work.projects[&fixture.project_id].retry_at_unix_ms > now_ms());
+    }
+
+    #[test]
+    fn a_provider_failure_in_one_project_asks_nothing_for_the_projects_after_it() {
+        let full = Fixture::new();
+        let peer = Fixture::new();
+        let mut store = full.store();
+        store
+            .ensure_project(&peer.project_id, &peer.root, crate::node::TEST_NODE)
+            .unwrap();
+        store.set_enabled(&peer.project_id, true, true).unwrap();
+        // Each Project holds a card waiting to be checked again: a provider
+        // call.
+        store
+            .apply_candidates(
+                &AnalysisBatch {
+                    id: "peer-seed".into(),
+                    project_id: peer.project_id.clone(),
+                    provider: "codex".into(),
+                    analysis_provider: "codex".into(),
+                    session_id: "peer-seed".into(),
+                    content_hash: "peer-seed".into(),
+                    created_at_unix_ms: 1,
+                },
+                &[Candidate {
+                    text: "Keep the peer hook under 100 ms".into(),
+                    title: String::new(),
+                    aliases: vec![],
+                    kind: CandidateKind::Rule,
+                    confidence: 0.9,
+                    salience: 0.9,
+                    source_offsets: vec![1],
+                    human_offsets: vec![1],
+                    source_times: Default::default(),
+                    cited_paths: vec![],
+                    relation: CandidateRelation::New,
+                }],
+            )
+            .unwrap();
+        for project_id in [&full.project_id, &peer.project_id] {
+            let card = store.item_by_number(project_id, 1).unwrap().unwrap();
+            assert!(store.mark_unverified(&card.id, card.revision).unwrap());
+        }
+        assert_eq!(store.due_checks(None, now_ms(), 10).unwrap(), 2);
+        drop(store);
+        full.fail_with(Some(AiError::Timeout));
+        full.pass(false, false);
+        assert_eq!(
+            full.calls(),
+            1,
+            "the first Project's timeout ends the pass's provider work"
+        );
     }
 
     #[test]

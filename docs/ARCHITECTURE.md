@@ -295,7 +295,7 @@ A request the provider took and never answered (`Timeout`, `CompletionUnknown`, 
 Both are counted in a row: an answer, a changed input or a day without a failure starts the count again.
 The third unusable answer or the fifth unanswered request to the same input sets it aside (`input.set_aside`; each count before it is `input.failed`): a correction is not asked about again until its revision or document changes, a session's group is passed over so the rest of the session is analyzed and its cursor moves, and a card's re-verification or promotion check spends its day.
 The table keeps at most 20,000 rows, prunes rows a day old when the next is written, and counts nothing for a new input past that cap (`input.failures_full`), which is a cap outcome and not a store failure.
-A provider failure after the request was taken (`Timeout`, `CompletionUnknown`, `Transient`, `Internal`) or an account pause (signed out, a usage limit or resource cap, no provider) stops the pass's provider work for that Project and starts its backoff.
+A provider failure after the request was taken (`Timeout`, `CompletionUnknown`, `Transient`, `Internal`) or an account pause (signed out, a usage limit or resource cap, no provider) stops the pass's provider work, for this Project and every Project after it in the pass, and starts this Project's backoff.
 Missing documents retain the correction and rotate the check position; no new poller or automatic document writer exists.
 Completed checks, observed intent failures and a later stopping reason are retained separately.
 Committed card changes refresh the opened Memory reader independently of a same-pass failure; that change report does not clear provider backoff.
