@@ -201,11 +201,16 @@ impl Runtime {
         expected: &Context,
         command: MissionCommand,
     ) -> Result<(Value, bool), String> {
-        let before = self.missions.book.clone();
+        // Only a command that can change the record is measured, and only
+        // it pays for the copy a refusal puts back.
+        let before = command.mutates().then(|| self.missions.book.clone());
         let answer = self.apply_mission_command(device, caller, expected, command)?;
         // A change that would make the saved book larger than a start reads
         // back is refused whole, like a full book (engineering #15).
-        if answer.1 && !crate::missions::fits(&self.missions.book) {
+        if let Some(before) = before
+            && answer.1
+            && !crate::missions::may_keep(&before, &self.missions.book)
+        {
             self.missions.book = before;
             self.save_missions();
             crate::diagnostic!(json!({
@@ -422,6 +427,10 @@ impl Runtime {
                 }
                 target.closed_at_unix_ms = Some(now);
                 target.updated_at_unix_ms = now;
+                if status == MissionStatus::Cancelled {
+                    // A cancelled mission wakes no one (D-51).
+                    target.wakes.clear();
+                }
                 let changed = *target != before;
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.closed",
@@ -938,6 +947,21 @@ impl Runtime {
         let spawned = std::thread::Builder::new()
             .name("hide-mission-wakes".to_owned())
             .spawn(move || {
+                // A send that panics must not leave the record thinking a
+                // sending still runs, or no wake would be sent again.
+                struct Ending(std::sync::Weak<std::sync::Mutex<Runtime>>);
+                impl Drop for Ending {
+                    fn drop(&mut self) {
+                        if std::thread::panicking()
+                            && let Some(runtime) = self.0.upgrade()
+                        {
+                            let mut guard =
+                                runtime.lock().unwrap_or_else(|poison| poison.into_inner());
+                            guard.missions.waking = false;
+                        }
+                    }
+                }
+                let _ending = Ending(context.runtime.clone());
                 let mut batch = batch;
                 let mut tried = Vec::new();
                 loop {

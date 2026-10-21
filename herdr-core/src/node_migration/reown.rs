@@ -1107,7 +1107,11 @@ fn still_naming(value: &Value, change: &OwnerChange, at: &str) -> Option<String>
             if carries(key) || is_alias(key) {
                 return Some(place);
             }
-            if matches!(key.as_str(), "body" | "facts") {
+            // A mission's words are the Conductor's text, like a body.
+            if matches!(
+                key.as_str(),
+                "body" | "facts" | "title" | "line" | "decision" | "delay" | "report" | "criteria"
+            ) {
                 return None;
             }
             still_naming(entry, change, &place)

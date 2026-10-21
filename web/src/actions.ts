@@ -1683,8 +1683,7 @@ export function createActions(send: DispatchFn) {
       });
     },
 
-    /** Settings › Conductor (D-31, B48): the whole value, checked by the core before it is kept. */
-    /** The fields of Settings › Conductor one edit changes; the core keeps the rest. */
+    /** The fields of Settings › Conductor one edit changes (D-31, B48); the core keeps the rest and checks the result before it is kept. */
     setConductorSettings(patch: Partial<import("./snapshot").ConductorSettings>) {
       dispatch({ schema_version: 2, kind: "conductor_settings_set", payload: patch });
     },

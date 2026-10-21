@@ -260,7 +260,10 @@ pub struct Mission {
     /// The main worktree of the project the mission belongs to, on
     /// `device_id`, the key GitHub answers are read by.
     pub project: String,
-    /// The catalog project the map's pull request cards open in.
+    /// The catalog project the map's pull request cards open in. A core
+    /// move that finds the registration gone writes `null`, which reads as
+    /// none rather than making the whole book unreadable.
+    #[serde(default, deserialize_with = "null_is_empty")]
     pub workspace_id: String,
     /// The checkout the mission was created in, where a takeover starts.
     #[serde(default)]
@@ -557,6 +560,11 @@ pub enum MissionCommand {
 }
 
 impl MissionCommand {
+    /// Whether the command can change the record; the others only read it.
+    pub(crate) fn mutates(&self) -> bool {
+        !matches!(self, Self::Show { .. } | Self::List | Self::Settings)
+    }
+
     /// A command small enough and well-formed enough to take to the core.
     pub fn valid(&self) -> bool {
         let id_ok = |id: &Option<String>| id.as_deref().is_none_or(valid_key);
@@ -699,6 +707,10 @@ pub struct NodePatch {
         skip_serializing_if = "Option::is_none"
     )]
     pub worker: Option<Option<Worker>>,
+}
+
+fn null_is_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Option::<String>::deserialize(deserializer).map(Option::unwrap_or_default)
 }
 
 fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
@@ -1137,15 +1149,15 @@ fn decode(bytes: &[u8]) -> Result<MissionBook, String> {
     Ok(stored.book)
 }
 
-/// Whether the book, as it would be saved, stays within what a start reads
-/// back. Counted without keeping the bytes and stopped at the budget, so a
-/// check costs at most one budget's worth of encoding.
-pub(crate) fn fits(book: &MissionBook) -> bool {
-    struct Counter(usize);
+/// The size of the book as it would be saved, counted without keeping the
+/// bytes and stopped just past `limit`, so a check costs at most that much
+/// encoding.
+fn saved_size(book: &MissionBook, limit: usize) -> usize {
+    struct Counter(usize, usize);
     impl std::io::Write for Counter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             self.0 += bytes.len();
-            if self.0 > WRITE_BUDGET {
+            if self.0 > self.1 {
                 return Err(std::io::Error::other("over budget"));
             }
             Ok(bytes.len())
@@ -1154,7 +1166,25 @@ pub(crate) fn fits(book: &MissionBook) -> bool {
             Ok(())
         }
     }
-    serde_json::to_writer(&mut Counter(0), book).is_ok()
+    let mut counter = Counter(0, limit);
+    let _ = serde_json::to_writer(&mut counter, book);
+    counter.0
+}
+
+/// Whether the book, as it would be saved, stays within what a start reads
+/// back.
+pub(crate) fn fits(book: &MissionBook) -> bool {
+    saved_size(book, WRITE_BUDGET) <= WRITE_BUDGET
+}
+
+/// Whether a change from `before` to `after` may be kept: one that stays in
+/// the budget, or one that makes a book already past it no larger, so a
+/// close or a smaller plan is never refused.
+pub(crate) fn may_keep(before: &MissionBook, after: &MissionBook) -> bool {
+    // A book past the budget came from a file the read cap let in, so both
+    // are counted to just past that cap.
+    let limit = READ_CAP as usize;
+    fits(after) || saved_size(after, limit) < saved_size(before, limit)
 }
 
 /// Where a restored book came from: a file this build cannot use is kept
@@ -1260,8 +1290,22 @@ mod tests {
         let mut book = MissionBook::default();
         book.missions.push(large.clone());
         assert!(fits(&book));
+        let before = book.clone();
         book.missions.push(large);
         assert!(!fits(&book));
+        assert!(!may_keep(&before, &book));
+        // A change that makes a book already past the budget smaller is kept.
+        let mut over = book.clone();
+        over.missions.push(over.missions[0].clone());
+        let mut smaller = over.clone();
+        smaller.missions[2].report = Some("x".into());
+        assert!(!fits(&smaller));
+        assert!(may_keep(&over, &smaller));
+        // A move that finds a mission's registration gone writes null.
+        let mut stored = serde_json::to_value(&book.missions[0]).unwrap();
+        stored["workspace_id"] = serde_json::Value::Null;
+        let read: Mission = serde_json::from_value(stored).unwrap();
+        assert_eq!(read.workspace_id, "");
         assert!((WRITE_BUDGET as u64) < READ_CAP);
     }
 
