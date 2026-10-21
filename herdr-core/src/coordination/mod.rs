@@ -397,6 +397,13 @@ pub(crate) enum Mutation {
     AwaitIdentity {
         wait: identity_wait::IdentityWait,
     },
+    /// An agent the caller started through Herdr directly, seen after the
+    /// fact by a passive observation: the operator's root with the caller as
+    /// its origin. Only the core's observation path builds one
+    /// (`executor::link_started`).
+    RegisterStarted {
+        record: AgentRecord,
+    },
 }
 
 impl AgentRecord {
@@ -1094,6 +1101,25 @@ pub(crate) fn apply(
             Ok(json!(spawn))
         }
         Mutation::AwaitIdentity { wait } => identity_wait::reserve(ledger, caller, wait),
+        Mutation::RegisterStarted { record } => {
+            // The caller vouches only for an agent other than itself, as its
+            // origin, never as its parent: nothing watches the start.
+            let callers_own = record.origin.as_ref().is_some_and(|id| {
+                ledger
+                    .agents
+                    .iter()
+                    .any(|p| &p.id == id && !p.ended && p.actor.same_identity(caller))
+            });
+            if !callers_own
+                || record.parent.is_some()
+                || record.forked
+                || record.actor.same_identity(caller)
+            {
+                return Err("parent_authority_required".into());
+            }
+            validate_registration_name(caller, record)?;
+            insert_record(ledger, record, false)
+        }
     }
 }
 
@@ -1363,7 +1389,7 @@ fn allocate(ledger: &mut Ledger, prefix: &str) -> Result<String, String> {
 
 #[cfg(test)]
 pub(crate) use executor::{SPAWN, SPAWN_TURN};
-pub(crate) use executor::{link_fork, register_code_owned, run};
+pub(crate) use executor::{link_fork, link_started, register_code_owned, run};
 
 #[cfg(test)]
 mod tests {
@@ -1563,6 +1589,62 @@ mod tests {
             register_as(&mut ledger, stranger, &source.actor).unwrap_err(),
             "parent_authority_required"
         );
+    }
+
+    // PRD direct-prompt-observation-widen B14, B17: an agent the caller
+    // started through Herdr directly is the operator's root with the caller
+    // as its origin, never its child; nobody else vouches for it.
+    #[test]
+    fn an_observed_start_registers_a_root_whose_origin_is_its_starter() {
+        let mut ledger = Ledger::default();
+        let starter = record("pane-a", "session-a", None);
+        let other = record("pane-b", "session-b", None);
+        let starter_id = register(&mut ledger, starter.clone(), &starter.actor);
+        let other_id = register(&mut ledger, other.clone(), &other.actor);
+        let started = |origin: &str| {
+            let mut child = record("pane-c", "session-c", None);
+            child.origin = Some(origin.into());
+            child
+        };
+        let start = |ledger: &mut Ledger, record: AgentRecord, caller: &Actor| {
+            apply(ledger, caller, &Mutation::RegisterStarted { record }, 1)
+        };
+        let before = ledger.clone();
+        for (record, caller) in [
+            (started(&starter_id), &other.actor),
+            (started(&other_id), &starter.actor),
+            (
+                {
+                    let mut child = started(&starter_id);
+                    child.parent = Some(starter_id.clone());
+                    child.origin = None;
+                    child
+                },
+                &starter.actor,
+            ),
+            (
+                {
+                    let mut own = starter.clone();
+                    own.origin = Some(starter_id.clone());
+                    own
+                },
+                &starter.actor,
+            ),
+        ] {
+            assert_eq!(
+                start(&mut ledger, record, caller).unwrap_err(),
+                "parent_authority_required"
+            );
+        }
+        assert_eq!(ledger, before);
+        let shown = start(&mut ledger, started(&starter_id), &starter.actor).unwrap();
+        assert!(shown["parent"].is_null());
+        assert_eq!(shown["origin"], starter_id);
+        assert!(ledger.watches.is_empty());
+        // The same observation again converges on the one record.
+        let again = start(&mut ledger, started(&starter_id), &starter.actor).unwrap();
+        assert_eq!(again["id"], shown["id"]);
+        assert!(validate_records(&ledger).is_ok());
     }
 
     /// Both ways a registration ends, `hide agent end` and the core finding

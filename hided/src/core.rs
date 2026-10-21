@@ -32,6 +32,7 @@ enum Command {
         expected: Context,
         terminal: String,
         observation: hide_node_link::panes::DirectObservation,
+        start: bool,
         deadline: std::time::Instant,
         reply: Sender<Result<herdr_core::direct_observation::PreparedObservation, String>>,
     },
@@ -171,6 +172,7 @@ struct Running {
 }
 
 impl CoreHandle {
+    #[allow(clippy::too_many_arguments)] // identity facts and deadline cross the authenticated boundary intact
     pub fn prepare_direct_observation(
         &self,
         device: &str,
@@ -178,6 +180,7 @@ impl CoreHandle {
         expected: &Context,
         terminal: String,
         observation: hide_node_link::panes::DirectObservation,
+        start: bool,
         deadline: std::time::Instant,
     ) -> Result<herdr_core::direct_observation::PreparedObservation, String> {
         let (reply, result) = mpsc::channel();
@@ -188,6 +191,7 @@ impl CoreHandle {
                 expected: expected.clone(),
                 terminal,
                 observation,
+                start,
                 deadline,
                 reply,
             })
@@ -788,6 +792,7 @@ fn owner_loop(
                 expected,
                 terminal,
                 observation,
+                start,
                 deadline,
                 reply,
             } => {
@@ -797,6 +802,7 @@ fn owner_loop(
                     &expected,
                     &terminal,
                     observation,
+                    start,
                     deadline,
                 ));
             }

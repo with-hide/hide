@@ -56,6 +56,11 @@ pub struct PreparedObservation {
     pub(crate) observation: DirectObservation,
     pub(crate) sender: Endpoint,
     pub(crate) recipient: Option<Endpoint>,
+    /// The call started an agent: its proof records an origin, not an input.
+    pub(crate) start: bool,
+    /// The session Hide already held in a started pane before the call; that
+    /// agent was there before, so it is not the one the call started.
+    pub(crate) seen_before: Option<String>,
     pub(crate) connector: Arc<dyn hide_herdr_client::ApiConnector>,
     pub(crate) node: Arc<dyn NodeLink>,
     pub(crate) source_server: String,
@@ -67,6 +72,9 @@ pub struct PreparedObservation {
 impl PreparedObservation {
     pub fn run(self) -> Result<(), String> {
         self.prove_sender()?;
+        if self.start {
+            return self.record_start();
+        }
         let recipient = self.recipient.as_ref().filter(|endpoint| {
             self.observation.target.as_ref().is_some_and(|claim| {
                 match self.prove_recipient(endpoint, claim) {
@@ -224,26 +232,75 @@ impl PreparedObservation {
         Ok(())
     }
 
+    /// The server still answers the recipient as projected, and, when Herdr
+    /// reported it, as it reported it then.
     pub(crate) fn prove_recipient(
         &self,
         endpoint: &Endpoint,
         claim: &ServerReportedTarget,
     ) -> Result<(), String> {
-        if self.observation.correlation_kind != ObservationCorrelation::ToolCall
-            || self.observation.status != ObservationStatus::SubmittedObserved
-            || self.observation.reason != ObservationReason::Complete
-        {
-            return Err("observation_recipient_unproven".into());
-        }
         let (_, fresh) = self.fresh(endpoint)?;
-        if fresh.is_none()
-            || fresh.as_ref() != claim.native_session.as_ref()
-            || claim.terminal_id.as_deref() != Some(endpoint.terminal.as_str())
-            || claim.pane_id != endpoint.raw_pane
+        if claim.native_session.as_ref().is_some_and(|native| {
+            fresh.as_ref() != Some(native) || claim.pane_id != endpoint.raw_pane
+        }) || claim
+            .terminal_id
+            .as_deref()
+            .is_some_and(|terminal| terminal != endpoint.terminal)
         {
             return Err("observation_recipient_changed".into());
         }
         Ok(())
+    }
+
+    /// Records the agent the call started, with the sender as its origin
+    /// (PRD direct-prompt-observation-widen D-23). Herdr's current list
+    /// names it: by the pane, terminal and session Herdr reported, else by
+    /// the pane the command wrote, holding an agent Hide had not seen there
+    /// by the observation time. No session yet records nothing.
+    fn record_start(&self) -> Result<(), String> {
+        let claim = self
+            .observation
+            .target
+            .as_ref()
+            .ok_or("observation_recipient_unproven")?;
+        let digest = |native: &hide_agent_hooks::observation::ObservationNativeSession| {
+            crate::wire::session_digest(&native.value)
+        };
+        let started = |agent: &crate::session_sync::ProjectedAgent| {
+            let named = match &claim.terminal_id {
+                Some(terminal) => agent.pane_id == claim.pane_id && &agent.terminal_id == terminal,
+                None => agent.pane_id == claim.pane_id,
+            };
+            named
+                && agent.agent_session.is_some()
+                && agent.lineage_session.is_some()
+                && claim
+                    .native_session
+                    .as_ref()
+                    .is_none_or(|native| agent.lineage_session == digest(native))
+                && (self.seen_before.is_none() || agent.lineage_session != self.seen_before)
+        };
+        let result = crate::coordination::link_started(
+            &self.runtime,
+            &self.sender.actor,
+            &self.sender.raw_pane,
+            started,
+            self.remaining()?,
+        );
+        match result {
+            Ok(agent) => {
+                crate::diagnostic!(serde_json::json!({"component":"observation",
+                    "kind":"observation.start_recorded","agent_id":agent,
+                    "device":self.sender.actor.device_id,"pane":self.sender.actor.pane_id}));
+                Ok(())
+            }
+            Err(reason) => {
+                crate::diagnostic!(serde_json::json!({"component":"observation",
+                    "kind":"observation.start_unrecorded","reason":reason,
+                    "device":self.sender.actor.device_id,"pane":self.sender.actor.pane_id}));
+                Err(reason)
+            }
+        }
     }
 }
 

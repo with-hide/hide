@@ -2,13 +2,15 @@
 the operator sees it, judged by the parser the core uses.
 
 On an agent at rest the cell types a short text, erases it, pastes a block of
-lines, and clears it, with the keys the terminal sends. After each step it
+lines, and clears it, with the keys Hide's terminal sends. After each step it
 reads the pane's visible screen with its styling through Herdr
 (`pane read --source visible --format ansi`) and has `journey_composer`, which
 holds the adapter's own composer declaration and the one parser, say `empty`,
 `not_empty` or `not_found`. A step waits for the verdict it expects and does
 not sleep for a time. Nothing is submitted, so no model turn starts and the
-cell spends no request.
+cell spends no request; after each step Hide's reader counts the session's
+prompts, and a step after which the session holds a new one fails the cell
+there, before the turns it started spend a later cell's requests.
 
 The screen is kept only while one verdict is made, in a private file of the
 run folder; a failed cell keeps the pane capture every failed cell keeps.
@@ -25,8 +27,11 @@ from . import cells
 
 CELL = "composer"
 TEXT = "hello 안녕하세요"
-# Twelve short lines, pasted in one bracketed paste as the terminal sends a paste.
-BLOCK = "\n".join(f"composer check line {number:02d}" for number in range(1, 13))
+# Twelve short lines, pasted as Hide's terminal pastes them: xterm.js turns
+# each line break into CR and brackets the text when the program asked for
+# it (`prepareTextForTerminal`, `bracketTextForPaste`). An LF-separated paste
+# reached Grok 1.0.52 on Windows as eleven prompts (run 39635682277).
+BLOCK = "\r".join(f"composer check line {number:02d}" for number in range(1, 13))
 PASTE = ("\x1b[200~" + BLOCK + "\x1b[201~").encode()
 BACKSPACE = b"\x7f"
 # An erase sends a few Backspaces before each read, up to a cap, since an
@@ -34,7 +39,10 @@ BACKSPACE = b"\x7f"
 # when the composer is empty, not a count.
 BACKSPACES_PER_READ = 8
 MAX_BACKSPACES = 400
-# How long a step waits for the verdict it expects.
+# How long a step waits for the verdict it expects after the last key it
+# sent: an erase is still typing while it sends, and a pane read slower than
+# another system's sends fewer Backspaces in the same time (macOS, 2026-10-22:
+# 248 in 30 s, short of the 275 characters of a paste Codex keeps as text).
 STEP_SECONDS = 30
 POLL_SECONDS = 0.5
 # Each step and the verdict the operator would see after it.
@@ -71,31 +79,43 @@ def send(journey, data):
 
 
 class Backspaces:
-    """Sends a few Backspaces each time it is called, up to the cap."""
+    """Sends a few Backspaces each time it is called, up to the cap, and
+    says whether it sent any."""
 
     def __init__(self, journey):
         self.journey, self.sent = journey, 0
 
     def __call__(self):
-        if self.sent < MAX_BACKSPACES:
-            send(self.journey, BACKSPACE * BACKSPACES_PER_READ)
-            self.sent += BACKSPACES_PER_READ
+        if self.sent >= MAX_BACKSPACES:
+            return False
+        send(self.journey, BACKSPACE * BACKSPACES_PER_READ)
+        self.sent += BACKSPACES_PER_READ
+        return True
 
 
 def wait_for(journey, expected, before_read=None):
-    """Reads until the verdict is `expected` or STEP_SECONDS pass; returns
-    (last verdict, reads, seconds)."""
-    start, reads = time.monotonic(), 0
+    """Reads until the verdict is `expected` or STEP_SECONDS pass after the
+    last key `before_read` sent; returns (last verdict, reads, seconds)."""
+    start = last_key = time.monotonic()
+    reads = 0
     while True:
-        if before_read:
-            before_read()
+        if before_read and before_read():
+            last_key = time.monotonic()
         verdict = read(journey)
         reads += 1
-        seconds = time.monotonic() - start
-        if verdict == expected or seconds > STEP_SECONDS:
-            return verdict, reads, round(seconds, 1)
+        now = time.monotonic()
+        if verdict == expected or now - last_key > STEP_SECONDS:
+            return verdict, reads, round(now - start, 1)
         if journey.runtime.owner.cancelled.wait(POLL_SECONDS):
             raise ProcessError("run_cancelled")
+
+
+def prompts(journey):
+    """How many prompts of the operator the session holds, by Hide's reader."""
+    read = journey.conversation()
+    if "error" in read:
+        raise ProcessError("composer_session_unreadable: " + read["error"][:200])
+    return sum(1 for event in read["events"] if event.get("role") == "user")
 
 
 def measure(journey):
@@ -107,6 +127,7 @@ def measure(journey):
                               + " -> ".join(map(str, record["terminal"])) + ")"), journey.evidence(CELL, record))
         return
     try:
+        before = prompts(journey)
         for name, expected in STEPS:
             backspaces = None
             if name == "typed":
@@ -117,8 +138,9 @@ def measure(journey):
                 backspaces = Backspaces(journey)
             verdict, reads, seconds = wait_for(journey, expected, backspaces)
             record["steps"].append({"name": name, "expected": expected, "verdict": verdict, "reads": reads,
-                                    "seconds": seconds, **({"backspaces": backspaces.sent} if backspaces else {})})
-            if verdict != expected:
+                                    "seconds": seconds, "prompts": prompts(journey) - before,
+                                    **({"backspaces": backspaces.sent} if backspaces else {})})
+            if verdict != expected or record["steps"][-1]["prompts"]:
                 break
     finally:
         # A draft left in the composer would sit in front of the next cell's prompt.

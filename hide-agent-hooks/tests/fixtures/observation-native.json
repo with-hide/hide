@@ -37,9 +37,18 @@
       "session_id": "native-session",
       "call_id": "native-call",
       "correlation_kind": "tool_call",
-      "status": "outcome_unknown",
-      "reason": "tool_error",
-      "target": null
+      "status": "submitted_observed",
+      "reason": "complete",
+      "target": {
+        "pane_id": "w1:p2",
+        "terminal_id": "term-target",
+        "native_session": {
+          "agent": "pi",
+          "source": "herdr:pi",
+          "kind": "path",
+          "value": "/fixture/pi-session.jsonl"
+        }
+      }
     }
   },
   "codex": {
@@ -339,9 +348,18 @@
       "session_id": "native-session",
       "call_id": "native-call",
       "correlation_kind": "tool_call",
-      "status": "outcome_unknown",
-      "reason": "tool_error",
-      "target": null
+      "status": "submitted_observed",
+      "reason": "complete",
+      "target": {
+        "pane_id": "w1:p2",
+        "terminal_id": "term-target",
+        "native_session": {
+          "agent": "pi",
+          "source": "herdr:pi",
+          "kind": "path",
+          "value": "/fixture/pi-session.jsonl"
+        }
+      }
     }
   },
   "antigravity": {
@@ -366,9 +384,13 @@
       "session_id": "native-session",
       "call_id": "step:3:run_command",
       "correlation_kind": "conversation_step",
-      "status": "result_unavailable",
+      "status": "outcome_unknown",
       "reason": "result_missing",
-      "target": null
+      "target": {
+        "pane_id": "worker",
+        "terminal_id": null,
+        "native_session": null
+      }
     }
   }
 }

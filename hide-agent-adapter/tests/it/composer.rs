@@ -85,6 +85,34 @@ fn every_supported_agent_reads_typed_pasted_and_erased_composers() {
     }
 }
 
+/// Grok 1.0.52 under Herdr 0.9.5 at 119 columns on 2026-10-22, after a turn
+/// ended: its predicted next prompt stands in the empty composer as italic
+/// ghost text (`suggest`), and a console Grok takes for Windows' legacy one
+/// (`GROK_FORCE_LEGACY_CONSOLE=1`, as a Herdr pane on Windows is) draws `>`
+/// for `❯` (`legacy`). Each step as above, then typing the start of the
+/// suggestion, which leaves the rest of it as ghost text after the typed
+/// letters.
+#[test]
+fn grok_reads_its_suggestion_as_empty_on_either_console() {
+    use Verdict::{Empty, Holds};
+    let grok = AgentId::Grok.adapter().composer.supported().unwrap();
+    let steps = [
+        ("0-suggested", Empty),
+        ("1-typed", Holds),
+        ("2-erased", Empty),
+        ("3-pasted", Holds),
+        ("4-pasted-bs2", Empty),
+        ("5-cleared", Empty),
+        ("6-typed-prefix", Holds),
+    ];
+    for console in ["suggest", "legacy"] {
+        for (step, want) in steps {
+            let name = format!("grok-{console}-{step}");
+            assert_eq!(grok.judge(&screen(&name)), want, "{name}");
+        }
+    }
+}
+
 #[test]
 fn a_screen_without_the_declared_composer_is_not_found() {
     for row in ADAPTERS {
@@ -141,5 +169,21 @@ fn only_the_declared_signature_reads_empty() {
     assert_eq!(
         codex.judge("› Ask Codex to do anything\r\n\r\n"),
         Verdict::Holds
+    );
+
+    let grok = AgentId::Grok.adapter().composer.supported().unwrap();
+    let boxed = |line: &str| format!("╭────╮\r\n│ {line} │\r\n╰────╯\r\n");
+    // A faint colour is not italic, and italic switched off leaves plain text.
+    assert_eq!(
+        grok.judge(&boxed("❯ \x1b[38;2;88;88;88mhello\x1b[0m")),
+        Verdict::Holds
+    );
+    assert_eq!(
+        grok.judge(&boxed("> \x1b[3mrun the tests\x1b[23m hello")),
+        Verdict::Holds
+    );
+    assert_eq!(
+        grok.judge(&boxed("$ \x1b[3mhello\x1b[0m")),
+        Verdict::NotFound
     );
 }
