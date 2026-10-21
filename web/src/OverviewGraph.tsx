@@ -79,6 +79,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const [foldedProjects, setFoldedProjects] = useState<ReadonlySet<string>>(() => new Set());
   // Each drag step redraws from the live map.
   const [, setMoved] = useState(0);
+  const [pointedProject, setPointedProject] = useState<string | null>(null);
   const projectDrag = useRef<{ project: string; from: { x: number; y: number }; anchor: { x: number; y: number } } | null>(null);
   const [retry, setRetry] = useState(0);
   const host = useRef<HTMLDivElement>(null);
@@ -177,7 +178,10 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   if (size && layout.phase === "ready") {
     nodes.push({ id: OPERATOR, type: "operator", position: { x: -size.operator / 2, y: -size.operator / 2 }, width: size.operator, height: size.operator, measured: { width: size.operator, height: size.operator }, data: { label: t("overviewGraph.operator") }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 3 } satisfies OperatorNode);
     orbs.set(OPERATOR, { x: 0, y: 0, r: size.operator / 2 });
-    const activeProject = activeSession ? agentsById.get(activeSession)?.projectId : undefined;
+    // A project stands out while its name or row is pointed at, or one of its sessions is chosen and its
+    // details are open (PRD D-17); the current pane's highlight at entry is not a choice and lights nothing.
+    const chosenProject = selection ? agentsById.get(selection)?.projectId : undefined;
+    const emphasizedProject = (id: string) => pointedProject === id || chosenProject === id;
     const sessions: SessionNode[] = [];
     for (const group of model.projects) {
       if (!shownProject(group.id)) continue;
@@ -191,16 +195,16 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
         if (!summary) continue;
         const orb = size.root.orb * 1.5;
         const box = { width: size.label.width, height: orb + size.gap * 5 };
-        nodes.push({ id: cluster(group.id), type: "cluster", position: { x: middle.x - box.width / 2, y: middle.y - orb / 2 }, ...box, measured: box, data: { summary, accent, orb, unfold: toggleFoldProject }, dragHandle: ".og-cluster-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 } satisfies ClusterNode);
+        nodes.push({ id: cluster(group.id), type: "cluster", position: { x: middle.x - box.width / 2, y: middle.y - orb / 2 }, ...box, measured: box, data: { summary, accent, orb, emphasized: emphasizedProject(group.id), unfold: toggleFoldProject, point: setPointedProject }, dragHandle: ".og-cluster-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 } satisfies ClusterNode);
         orbs.set(cluster(group.id), { x: middle.x, y: middle.y, r: orb / 2 });
         for (const row of members) endpoint.set(row.id, cluster(group.id));
         clusterProject.set(cluster(group.id), group.id);
         continue;
       }
       const glow = middle.r * 2;
-      nodes.push({ id: `glow:${group.id}`, type: "glow", position: { x: middle.x - middle.r, y: middle.y - middle.r }, width: glow, height: glow, measured: { width: glow, height: glow }, data: { accent }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 0 } satisfies GlowNode);
+      nodes.push({ id: `glow:${group.id}`, type: "glow", position: { x: middle.x - middle.r, y: middle.y - middle.r }, width: glow, height: glow, measured: { width: glow, height: glow }, data: { accent, emphasized: emphasizedProject(group.id) }, draggable: false, connectable: false, focusable: false, selectable: false, style: { pointerEvents: "none" }, zIndex: 0 } satisfies GlowNode);
       const top = Math.min(...members.map((row) => pointOf(row.id)!.y)) - size.root.orb / 2 - size.gap * 2 - size.label.height;
-      nodes.push({ id: group.id, type: "project", position: { x: middle.x - size.label.width / 2, y: top }, width: size.label.width, height: size.label.height, measured: size.label, data: { group, accent, current: current?.projectId === group.id, highlighted: activeProject === group.id }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 1 } satisfies ProjectNode);
+      nodes.push({ id: group.id, type: "project", position: { x: middle.x - size.label.width / 2, y: top }, width: size.label.width, height: size.label.height, measured: size.label, data: { group, accent, current: current?.projectId === group.id, emphasized: emphasizedProject(group.id), fold: toggleFoldProject, point: setPointedProject }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 1 } satisfies ProjectNode);
       const drawnHere = new Set(members.map((row) => row.id));
       for (const row of members) {
         const point = pointOf(row.id)!;
@@ -326,7 +330,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
       <div className="og-canvas">{!showList ? <ReactFlow zIndexMode="manual" colorMode={theme} nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} nodesDraggable onNodeDragStart={dragStart} onNodeDrag={dragging} onNodeDragStop={dragStop} nodesConnectable={false} nodesFocusable={false} edgesFocusable={false} elementsSelectable={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null} panOnDrag panOnScroll zoomOnScroll defaultViewport={{ x: 24, y: 24, zoom: 1 }} minZoom={0.05} maxZoom={2} onPaneClick={() => { close(); setHighlightedSession(null); }} ariaLabelConfig={{ "node.a11yDescription.default": t("overviewGraph.nodeHelp"), "node.a11yDescription.keyboardDisabled": t("overviewGraph.nodeHelp") }}>
         <div className="og-zoom nopan nodrag"><Hint label={t("overviewGraph.zoomOut")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomOut({ duration: 0 })}><MinusIcon /></Button></Hint><Hint label={t("overviewGraph.zoomIn")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomIn({ duration: 0 })}><PlusIcon /></Button></Hint><Hint label={t("overviewGraph.fit")}><Button variant="ghost" size="icon-sm" onClick={fitOperator}><MaximizeIcon /></Button></Hint><Hint label={t("overviewGraph.currentPane")}><Button variant="ghost" size="icon-sm" disabled={!current} onClick={() => { if (current) { setHighlightedSession(current.id); if (orbs.has(current.id)) { const point = positionOf(current.id); void flow.setCenter(point.x, point.y, { zoom: 1, duration: 0 }); } else centerProject(current.projectId); } }}><LocateFixedIcon /></Button></Hint><Hint label={t("overviewGraph.resetLayout")}><Button variant="ghost" size="icon-sm" onClick={() => { layout.reset(); cameraInitialized.current = false; }}><RotateCcwIcon /></Button></Hint></div>
       </ReactFlow> : <SessionList key={`${focus}:${includeResting}`} rows={model.agents} selected={activeSession} choose={chooseSession} />}</div>
-      {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn model={model} query={projectQuery} setQuery={setProjectQuery} hidden={hiddenProjects} toggle={toggleProject} folded={foldedProjects} toggleFold={toggleFoldProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} actions={actions} />}
+      {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn model={model} query={projectQuery} setQuery={setProjectQuery} hidden={hiddenProjects} toggle={toggleProject} folded={foldedProjects} toggleFold={toggleFoldProject} point={setPointedProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} actions={actions} />}
     </div> : null}
   </div>;
 }
@@ -338,7 +342,7 @@ function askingPane(row: GraphAgent, model: OverviewGraphModel): string {
 }
 
 /** With nothing chosen, the side column lists the projects with their states, then what waits on the operator. */
-function ProjectColumn({ model, query, setQuery, hidden, toggle, folded, toggleFold, locate, choose, actions }: { model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; folded: ReadonlySet<string>; toggleFold: (id: string) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; actions: Actions }) {
+function ProjectColumn({ model, query, setQuery, hidden, toggle, folded, toggleFold, point, locate, choose, actions }: { model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; folded: ReadonlySet<string>; toggleFold: (id: string) => void; point: (id: string | null) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const needle = query.trim().toLocaleLowerCase();
   // Every root whose turn it is, drawn, folded or hidden, so the list agrees with the projects' My turn counts.
@@ -348,7 +352,7 @@ function ProjectColumn({ model, query, setQuery, hidden, toggle, folded, toggleF
     <div className="og-project-list">{model.summaries.filter((summary) => summary.project.workspace.label.toLocaleLowerCase().includes(needle)).sort((a, b) => a.project.workspace.label.localeCompare(b.project.workspace.label, undefined, { numeric: true }) || a.id.localeCompare(b.id)).map((summary) => {
       const label = summary.project.workspace.label;
       const off = hidden.has(summary.id);
-      return <div key={summary.id} data-graph-project-row={summary.project.workspace.id} data-hidden={off}>
+      return <div key={summary.id} data-graph-project-row={summary.project.workspace.id} data-hidden={off} onPointerEnter={() => point(summary.id)} onPointerLeave={() => point(null)}>
         <button type="button" aria-label={t("overviewGraph.locateProject", { project: label })} disabled={off} onClick={() => locate(summary)}><strong>{label}</strong><GraphStateCounts summary={summary} /><span className="og-count">{summary.sessions}</span></button>
         <Button variant="ghost" size="sm" aria-pressed={folded.has(summary.id)} aria-label={t(folded.has(summary.id) ? "overviewGraph.unfoldProject" : "overviewGraph.foldProject", { project: label, count: summary.sessions })} disabled={off || !summary.admitted} onClick={() => toggleFold(summary.id)}>{t(folded.has(summary.id) ? "overviewGraph.unfold" : "overviewGraph.fold")}</Button>
         <Button variant="ghost" size="sm" aria-pressed={off} aria-label={t(off ? "overviewGraph.revealProject" : "overviewGraph.hideProject", { project: label })} disabled={!summary.admitted} onClick={() => toggle(summary.id)}>{t(off ? "overviewGraph.reveal" : "overviewGraph.hide")}</Button>

@@ -26,8 +26,17 @@
 
 /* A project is a soft light of its color behind its sessions, with its name above them as the
    project's drag handle. Nothing but the name takes the pointer, so the canvas pans everywhere else. */
-.og-project { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; overflow: hidden; font-size: var(--text-headline); font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; opacity: 0.8; cursor: grab; }
-.og-project[data-current="true"], .og-project[data-highlighted="true"] { opacity: 1; }
+.og-project { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; gap: var(--spacing-xxs); font-size: var(--text-headline); font-weight: 700; line-height: 1.2; opacity: 0.8; transition: opacity calc(var(--graph-motion-ms) * 1ms) ease-out, text-shadow calc(var(--graph-motion-ms) * 1ms) ease-out; }
+.og-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: grab; }
+.og-project[data-current="true"] { opacity: 1; }
+/* Pointed at, or holding the chosen session, the project's name and glow stand out (PRD D-17, B21). */
+.og-project[data-emphasized="true"] { opacity: 1; text-shadow: 0 0 var(--spacing-md) color-mix(in srgb, var(--og-accent) 70%, transparent); }
+/* The in-map fold button is quiet until the name is pointed at (PRD D-19, B25). */
+.og-project-fold { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 1.2em; height: 1.2em; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--og-accent); opacity: var(--opacity-dimmed); cursor: pointer; }
+.og-project-fold svg { width: 85%; height: 85%; }
+.og-project:hover .og-project-fold, .og-project-fold:focus-visible { opacity: 1; }
+.og-project-fold:hover { background: var(--accent); }
+.og-project-fold:focus-visible { outline: var(--size-hairline) solid var(--ring); }
 .og-project-drag:active, .og-cluster-drag:active { cursor: grabbing; }
 .og-glow { display: block; overflow: visible; }
 /* A project's accent, from a stable hash of its id (PRD D-17). */
@@ -38,8 +47,15 @@
 .og-project, .og-cluster strong { color: var(--og-accent); }
 .og-glow-core, .og-glow-edge { stop-color: var(--og-accent); }
 .og-glow-edge { stop-opacity: 0; }
-.og-glow-core { stop-opacity: 0.1; }
+.og-glow-core { stop-opacity: 0.1; transition: stop-opacity calc(var(--graph-motion-ms) * 1ms) ease-out; }
 :root.light .og-glow-core { stop-opacity: 0.14; }
+.og-glow[data-emphasized="true"] .og-glow-core { stop-opacity: 0.26; }
+:root.light .og-glow[data-emphasized="true"] .og-glow-core { stop-opacity: 0.34; }
+.og-cluster[data-emphasized="true"] .og-cluster-orb { box-shadow: 0 0 var(--spacing-md) color-mix(in srgb, var(--og-accent) 60%, transparent); }
+.og-cluster[data-emphasized="true"] strong { text-shadow: 0 0 var(--spacing-md) color-mix(in srgb, var(--og-accent) 70%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  .og-glow-core, .og-project { transition: none; }
+}
 /* A folded project is one circle with its name and counts; choosing the circle unfolds it. */
 .og-cluster { display: flex; width: 100%; height: 100%; flex-direction: column; align-items: center; gap: var(--spacing-xxs); text-align: center; }
 .og-cluster-orb { display: flex; flex-shrink: 0; align-items: center; justify-content: center; border: var(--graph-edge-flow-width) solid var(--og-accent); border-radius: 50%; background: var(--secondary); color: var(--foreground); font-size: var(--text-title); font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; }

@@ -1,4 +1,5 @@
 import { BaseEdge, Handle, Position, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
+import { ChevronsDownUpIcon } from "lucide-react";
 import { useId } from "react";
 import { AgentMark } from "./AgentMark";
 import { badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
@@ -28,11 +29,11 @@ function useRevealNode(id: string) {
 
 export type OperatorNode = Node<{ label: string }, "operator">;
 /** A project's name above its sessions, in the project's color; dragging it moves the whole project. */
-export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; current: boolean; highlighted: boolean }, "project">;
+export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; current: boolean; emphasized: boolean; fold: (id: string) => void; point: (id: string | null) => void }, "project">;
 /** The soft light behind a project's sessions, fading to nothing at its edge. */
-export type GlowNode = Node<{ accent: ProjectAccent }, "glow">;
+export type GlowNode = Node<{ accent: ProjectAccent; emphasized: boolean }, "glow">;
 /** A folded project: one circle with its name and counts. */
-export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent; orb: number; unfold: (id: string) => void }, "cluster">;
+export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent; orb: number; emphasized: boolean; unfold: (id: string) => void; point: (id: string | null) => void }, "cluster">;
 export type TeamNode = Node<{ path: string; width: number; height: number; selected: boolean }, "team">;
 /** A team root's fold: how many descendants, their states, and whether they are folded away. */
 export type TeamFold = { count: number; turn: number; going: number; done: number; folded: boolean; toggle: () => void };
@@ -72,12 +73,17 @@ export function OperatorGraphNode({ data }: NodeProps<OperatorNode>) {
 export function ProjectGraphNode({ data }: NodeProps<ProjectNode>) {
   const { t } = useInterfaceTranslation();
   const label = data.group.project.workspace.label;
-  return <div className="og-project og-project-drag" data-graph-project={data.group.project.workspace.id} data-current={data.current} data-highlighted={data.highlighted} data-accent={data.accent} title={t("overviewGraph.dragProject", { project: label })}>{label}</div>;
+  const id = data.group.id;
+  // The name drags the project; the fold button beside it is not part of the drag handle.
+  return <div className="og-project" data-graph-project={data.group.project.workspace.id} data-current={data.current} data-emphasized={data.emphasized} data-accent={data.accent} onPointerEnter={() => data.point(id)} onPointerLeave={() => data.point(null)}>
+    <span className="og-project-name og-project-drag" title={t("overviewGraph.dragProject", { project: label })}>{label}</span>
+    <button type="button" className="og-project-fold nodrag nopan" aria-label={t("overviewGraph.foldProject", { project: label })} title={t("overviewGraph.foldProject", { project: label })} onClick={() => data.fold(id)}><ChevronsDownUpIcon aria-hidden="true" /></button>
+  </div>;
 }
 
 export function GlowGraphNode({ id, data, width, height }: NodeProps<GlowNode>) {
   const gradient = `og-glow-${useId().replace(/:/g, "")}`;
-  return <svg className="og-glow" width={width} height={height} aria-hidden="true" data-glow={id} data-accent={data.accent}>
+  return <svg className="og-glow" width={width} height={height} aria-hidden="true" data-glow={id} data-accent={data.accent} data-emphasized={data.emphasized}>
     <defs><radialGradient id={gradient}><stop offset="0%" className="og-glow-core" /><stop offset="100%" className="og-glow-edge" /></radialGradient></defs>
     <circle cx={(width ?? 0) / 2} cy={(height ?? 0) / 2} r={(width ?? 0) / 2} fill={`url(#${gradient})`} />
   </svg>;
@@ -88,7 +94,7 @@ export function ClusterGraphNode({ data }: NodeProps<ClusterNode>) {
   const { t } = useInterfaceTranslation();
   const { summary } = data;
   const label = summary.project.workspace.label;
-  return <div className="og-cluster" data-graph-cluster={summary.project.workspace.id} data-turn={summary.turn > 0} data-accent={data.accent}>
+  return <div className="og-cluster" data-graph-cluster={summary.project.workspace.id} data-turn={summary.turn > 0} data-accent={data.accent} data-emphasized={data.emphasized} onPointerEnter={() => data.point(summary.id)} onPointerLeave={() => data.point(null)}>
     <Ports />
     <button type="button" className="og-cluster-orb og-cluster-drag nopan" style={{ width: data.orb, height: data.orb }} aria-label={t("overviewGraph.unfoldProject", { project: label, count: summary.sessions })} onClick={() => data.unfold(summary.id)}>{summary.sessions}</button>
     <strong>{label}</strong>
