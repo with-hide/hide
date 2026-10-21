@@ -43,6 +43,10 @@ pub struct PathFact {
     /// `/` between names: the form two paths of one node are compared in.
     pub comparison: String,
     pub exists: bool,
+    /// Native Project facts from the same owner that answers `Call::Project`.
+    /// Comparison paths are for matching, never for durable Project IDs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<hide_project::ProjectFacts>,
     /// The repository the path is in, read from its `.git` files.
     pub repository: Option<RepositoryPlace>,
 }

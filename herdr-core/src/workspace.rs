@@ -308,13 +308,18 @@ impl PathIndex {
         // made for the root reads the same facts without asking again.
         let roots = paths
             .values()
-            .filter_map(|fact| fact.repository.as_ref())
-            .map(|place| {
+            .filter_map(|fact| {
+                fact.repository
+                    .as_ref()
+                    .map(|place| (place, fact.project.clone()))
+            })
+            .map(|(place, project)| {
                 (
                     place.root.clone(),
                     PathFact {
                         comparison: place.root.clone(),
                         exists: true,
+                        project,
                         repository: Some(place.clone()),
                     },
                 )
@@ -379,6 +384,11 @@ impl PathIndex {
     /// Whether the node answered for `path`.
     pub fn knows(&self, path: &str) -> bool {
         self.paths.contains_key(path)
+    }
+
+    /// The native Project facts prepared by the path's own node.
+    pub(crate) fn project(&self, path: &str) -> Option<&hide_project::ProjectFacts> {
+        self.paths.get(path)?.project.as_ref()
     }
 
     /// `path` in comparison form: the node's, else its names.

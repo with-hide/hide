@@ -1104,24 +1104,15 @@ impl Runtime {
             if !paths.knows(&context.checkout_path) || !paths.exists(&context.checkout_path) {
                 return Err("project_unresolved");
             }
-            let (root, checkout_root, kind) = match paths.place(&context.checkout_path) {
-                Some(place) => (
-                    place.main_root.clone(),
-                    place.root.clone(),
-                    hide_project::ProjectKind::Git,
-                ),
-                None => (
-                    paths.comparison(&context.checkout_path),
-                    paths.comparison(&context.checkout_path),
-                    hide_project::ProjectKind::Folder,
-                ),
-            };
+            let facts = paths
+                .project(&context.checkout_path)
+                .ok_or("project_unresolved")?;
             hide_project::ProjectIdentity {
-                id: hide_project::project_id(node.as_str(), std::path::Path::new(&root)),
-                root: root.into(),
-                checkout_root: checkout_root.into(),
+                id: hide_project::project_id(node.as_str(), &facts.root),
+                root: facts.root.clone(),
+                checkout_root: facts.checkout_root.clone(),
                 device_id: node.as_str().into(),
-                kind,
+                kind: facts.kind,
             }
         } else {
             let facts = self

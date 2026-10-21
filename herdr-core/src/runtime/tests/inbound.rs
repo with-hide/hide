@@ -1244,3 +1244,39 @@ fn a_moved_core_reads_its_own_kit_and_its_node_s_and_each_read_ends() {
     drop(pump);
     drop(release);
 }
+
+#[test]
+fn prepared_memory_identity_matches_the_analysis_owner_for_native_paths() {
+    let mut runtime = runtime();
+    let temp = tempfile::tempdir().unwrap();
+    let folder = temp.path().join("folder");
+    std::fs::create_dir(&folder).unwrap();
+    let file = folder.join("notes.md");
+    std::fs::write(&file, "fixture").unwrap();
+    let own = runtime.node.as_str().to_owned();
+    for path in [&folder, &file] {
+        // On Windows these name the same native path with backslashes and
+        // wire slashes; both must retain the owner's canonical Project ID.
+        for spelling in [
+            path.to_string_lossy().into_owned(),
+            hide_platform::path::to_wire_lossy(path),
+        ] {
+            runtime.catalog_paths = crate::workspace::PathIndex::ask(
+                runtime.own_node().as_ref(),
+                [spelling.clone()].into(),
+            )
+            .unwrap()
+            .into();
+            let scope = runtime
+                .memory_scope(&crate::workspace_control::Context {
+                    device_id: own.clone(),
+                    workspace_id: "w".into(),
+                    checkout_id: "c".into(),
+                    checkout_path: spelling,
+                })
+                .unwrap();
+            let expected = hide_project::resolve(path, &own).unwrap();
+            assert_eq!(scope.project, expected);
+        }
+    }
+}

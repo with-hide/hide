@@ -44,6 +44,7 @@ fn path_facts_within(paths: &[String], answer_limit: usize) -> HostResult<PathFa
             PathFact {
                 comparison: asked.clone(),
                 exists: false,
+                project: None,
                 repository: None,
             }
         };
@@ -64,6 +65,11 @@ fn path_facts_within(paths: &[String], answer_limit: usize) -> HostResult<PathFa
 
 fn fact_bytes(fact: &PathFact) -> usize {
     fact.comparison.len()
+        + fact.project.as_ref().map_or(0, |project| {
+            project.root.to_string_lossy().len()
+                + project.checkout_root.to_string_lossy().len()
+                + project.branch.as_ref().map_or(0, String::len)
+        })
         + fact.repository.as_ref().map_or(0, |place| {
             place.root.len()
                 + place.main_root.len()
@@ -155,6 +161,7 @@ fn read(native: &Path, facts: &mut PathFacts, bytes: &mut usize) -> PathFact {
     PathFact {
         comparison: comparison(native),
         exists: native.exists(),
+        project: hide_project::facts(native).ok(),
         repository,
     }
 }
