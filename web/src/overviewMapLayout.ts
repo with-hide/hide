@@ -116,7 +116,6 @@ export class ForceMap {
     }
   }
 
-  /** The project stays where it was put: its roots' ties to the operator take their new length, so no later settling pulls it back. */
   private readonly anchorX = (body: Body) => this.anchors.get(body.projectId)?.x ?? 0;
   private readonly anchorY = (body: Body) => this.anchors.get(body.projectId)?.y ?? 0;
 
@@ -124,10 +123,11 @@ export class ForceMap {
     return this.ties.find((tie) => tie.kind === "operator" && (tie.target as Body).id === id)?.length;
   }
 
-  dropProject() {
+  /** The project stays where it was put: its roots' ties to the operator take their new length, so no later settling pulls it back. */
+  dropProject(projectId: string) {
     for (const tie of this.ties) {
       const root = tie.target as Body;
-      if (tie.kind === "operator") tie.length = Math.hypot(root.x!, root.y!);
+      if (tie.kind === "operator" && root.projectId === projectId) tie.length = Math.hypot(root.x!, root.y!);
     }
     // d3 reads a force's targets once, so the moved anchor and lengths are read again.
     (this.simulation.force("tie") as ForceLink<Body, Tie>).distance((tie) => tie.length);

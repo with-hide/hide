@@ -304,7 +304,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   };
   const dragStop = (_: unknown, node: Node) => {
     if (node.type === "session") map?.drop(node.id);
-    else if (projectOfHandle(node)) map?.dropProject();
+    else if (projectDrag.current) map?.dropProject(projectDrag.current.project);
     projectDrag.current = null;
     setMoved((value) => value + 1);
   };

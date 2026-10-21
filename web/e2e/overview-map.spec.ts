@@ -22,7 +22,7 @@ test("@platform Overview restores its exact current session and keeps map moveme
   const herdr = await startHerdr();
   let daemon: Daemon | undefined;
   try {
-    daemon = await startHided(herdr, "overview-radial");
+    daemon = await startHided(herdr, "overview-map");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await openOverview(page, "work");

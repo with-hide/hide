@@ -57,7 +57,7 @@ describe("force map", () => {
       else expect(moved).toEqual(point);
     }
     // Dropped, the project stays put; a later settling elsewhere does not pull it back where it was.
-    map.dropProject();
+    map.dropProject("billing");
     expect(map.positions()).toEqual(after);
     map.reduceMotion(true);
     map.grab("d");
