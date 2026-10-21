@@ -2095,13 +2095,11 @@ fn analyze_session(
                     .map_err(|error| local(error.to_string()))?;
                 written
             }
-            // A request the provider never answered never passes words
-            // over: the session waits for the provider, which backs off.
-            Err(AnalysisFailure::Provider(error))
-                if FailureScope::of(&error) != FailureScope::Input =>
-            {
-                return Err(AnalysisFailure::Provider(error));
-            }
+            // An unusable answer always counts against the group; a request
+            // the provider never answered counts only while the provider
+            // answers the Project's other inputs, so an outage passes no
+            // words over while a group that alone never gets an answer
+            // cannot hold the session forever.
             Err(AnalysisFailure::Provider(error)) => {
                 let input = digest(&[&Value::Array(group.clone()).to_string()]);
                 if !count_input_failure(store, project_id, &subject, &input, &error)
@@ -2109,9 +2107,9 @@ fn analyze_session(
                 {
                     return Err(AnalysisFailure::Provider(error));
                 }
-                // The same words were answered unusably every time: what
-                // they could teach is given up and the rest of the session
-                // goes on. A rescan with other words asks again.
+                // The same words failed every time: what they could teach
+                // is given up and the rest of the session goes on. A rescan
+                // with other words asks again.
                 completed = index + 1;
                 store
                     .save_analysis_progress(
@@ -4986,12 +4984,11 @@ mod tests {
     }
 
     #[test]
-    fn timeouts_never_move_a_sessions_cursor_or_set_its_words_aside() {
+    fn an_outage_never_moves_a_sessions_cursor_or_sets_its_words_aside() {
         let fixture = Fixture::new();
         fixture.fail_with(Some(AiError::Timeout));
         let calls = fixture.calls();
-        for pass in 1..=hide_memory::INPUT_UNANSWERED_LIMIT as usize + 1 {
-            fixture.answer_elsewhere();
+        for pass in 1..=2 * hide_memory::INPUT_UNANSWERED_LIMIT as usize {
             fixture.pass(false, true);
             assert_eq!(fixture.calls(), calls + pass, "the words are asked again");
             assert!(
@@ -5005,7 +5002,7 @@ mod tests {
                     )
                     .unwrap()
                     .is_none(),
-                "nothing the session said is given up for a provider that did not answer"
+                "nothing the session said is given up while the provider answers nothing"
             );
         }
         fixture.fail_with(None);
@@ -5013,6 +5010,48 @@ mod tests {
         assert_eq!(fixture.pass(false, true).last(), Some(&"learned one"));
     }
 
+    #[test]
+    fn a_session_group_that_alone_never_gets_an_answer_is_passed_over_after_five() {
+        let fixture = Fixture::new();
+        fixture.fail_with(Some(AiError::Timeout));
+        let cursor = |fixture: &Fixture| {
+            fixture
+                .store()
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION,
+                )
+                .unwrap()
+        };
+        for _ in 1..hide_memory::INPUT_UNANSWERED_LIMIT {
+            // The provider answers the Project's other inputs meanwhile.
+            fixture.answer_elsewhere();
+            fixture.pass(false, true);
+            assert!(cursor(&fixture).is_none(), "the group is asked again");
+        }
+        fixture.answer_elsewhere();
+        fixture.pass(false, true);
+        assert!(
+            cursor(&fixture).is_some(),
+            "the fifth counted timeout passes the group over and the session settles"
+        );
+        fixture.fail_with(None);
+        let mut lines = fixture.lines.clone();
+        lines.push(json!({"type": "user", "sessionId": SESSION,
+            "cwd": fixture.root.to_string_lossy(), "timestamp": "2026-10-11T00:01:00Z",
+            "origin": {"kind": "human"},
+            "message": {"role": "user", "content": "Prefer small pull requests"}}));
+        fixture.write(&lines);
+        fixture.answer(&[]);
+        let calls = fixture.calls();
+        fixture.pass(false, true);
+        assert!(
+            fixture.calls() > calls,
+            "the words after it are asked about"
+        );
+    }
     #[test]
     fn a_correction_timing_out_through_an_outage_is_never_set_aside() {
         let fixture = Fixture::new();
