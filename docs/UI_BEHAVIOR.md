@@ -828,6 +828,7 @@ A confirmed enduring correction says `Correction confirmed · document update pe
 It retains the original human source and document quote; unrelated document commits do not ask the same authority question again.
 When the owning document incorporates it, background reconciliation turns the card into the existing document pointer without another promotion.
 Turning Memory off retains cards and analysis progress; its setting explains that enabling it again catches up on unprocessed conversations, including conversations from the disabled period.
+A Project at its 10,000-card limit shows one warning line under the head, `This Project's Memory is full, so new cards are not kept.`, from the same count that refuses a new card: the new learning from that point is lost, said once, and forgetting cards makes room for later ones; merges and corrections of existing cards still land.
 An Outdated comparison dims its card and names the document and its date, asks nothing and is excluded from injection.
 Document references in card metadata and Compare headers show a single-line filename, truncated when needed, with the full path on hover and the date alongside.
 An unverified card waiting to be checked against the repository again is dimmed; only the card the worker is checking shows `확인 중` in its existing status line, and a promotion keeps priority there.

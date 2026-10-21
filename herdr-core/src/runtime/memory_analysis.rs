@@ -5166,6 +5166,13 @@ mod tests {
             deferred.is_none(),
             "Project capacity is not a global provider pause"
         );
+        assert!(
+            store
+                .project_state(&full.project_id)
+                .unwrap()
+                .capacity_reached,
+            "the rejection is the state the Memory tab reports as full, new cards not kept"
+        );
         assert_eq!(full.calls(), 1);
         assert!(
             store
