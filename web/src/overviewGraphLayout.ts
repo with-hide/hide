@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import type { OverviewGraphModel } from "./overviewGraphModel";
 import { placeOverviewMap, type MapBox } from "./overviewMapLayout";
 import { useShellStore } from "./store";
@@ -48,7 +48,8 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
   const [layout, setLayout] = useState<GraphLayout>({ key: "", phase: "loading", placement: null, size: null });
   const scale = useGraphScale();
   const key = `${model.structure}:${scale}`;
-  useEffect(() => {
+  // Placement is synchronous, so it lands before paint and no loading notice flashes between structures.
+  useLayoutEffect(() => {
     try {
       if (!host.current) throw new Error("overview graph has no layout host");
       const size = dimensions(host.current, scale);

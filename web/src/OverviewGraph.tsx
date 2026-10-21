@@ -165,8 +165,9 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const local = new Map<string, Placed>();
   if (placed && size) {
     nodes.push({ id: OPERATOR, type: "operator", position: placed.operator, width: size.operator, height: size.operator, measured: { width: size.operator, height: size.operator }, data: { label: t("overviewGraph.operator") }, draggable: false, connectable: false, focusable: false, selectable: false, zIndex: 2 } satisfies OperatorNode);
+    const projectsById = new Map(model.projects.map((group) => [group.id, group]));
     for (const row of model.visible) {
-      const group = model.projects.find((group) => group.id === row.projectId);
+      const group = projectsById.get(row.projectId);
       const point = placed.nodes.get(row.id) ?? (group?.revealSlot ? placed.nodes.get(group.revealSlot) : undefined);
       if (!point || !group || !shownProject(row.projectId)) continue;
       placedAt.set(row.id, point);
@@ -174,16 +175,19 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     }
     // A project is its band around the operator with its name outside; sessions stand inside it,
     // so dragging the band or the name moves the whole project.
+    const activeProject = activeSession ? model.allAgents.find((row) => row.id === activeSession)?.projectId : undefined;
+    const visibleByProject = new Map<string, GraphAgent[]>();
+    for (const row of model.visible) visibleByProject.set(row.projectId, [...(visibleByProject.get(row.projectId) ?? []), row]);
     const sessions: SessionNode[] = [];
     for (const group of model.projects) {
       if (!shownProject(group.id)) continue;
-      const members = model.visible.filter((row) => row.projectId === group.id && local.has(row.id));
+      const members = (visibleByProject.get(group.id) ?? []).filter((row) => local.has(row.id));
       if (!members.length) continue;
       const areas = members.map((row) => { const at = local.get(row.id)!; const shape = at.ring ? size.root : size.child; return { left: at.x, top: at.y, right: at.x + shape.width, bottom: at.y + shape.height }; });
       const area = projectArea(areas, size.gap, size.operator / 2 + size.gap, size.label);
       const offset = offsets.get(group.id) ?? { x: 0, y: 0 };
       const frame = { x: area.left + offset.x, y: area.top + offset.y };
-      nodes.push({ id: group.id, type: "project", position: frame, width: area.width, height: area.height, measured: { width: area.width, height: area.height }, data: { group, area: area.path, label: area.label, labelWidth: size.label.width, base: { x: area.left, y: area.top }, current: current?.projectId === group.id, highlighted: Boolean(activeSession && model.allAgents.find((row) => row.id === activeSession)?.projectId === group.id) }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 0 } satisfies ProjectNode);
+      nodes.push({ id: group.id, type: "project", position: frame, width: area.width, height: area.height, measured: { width: area.width, height: area.height }, data: { group, area: area.path, label: area.label, labelWidth: size.label.width, base: { x: area.left, y: area.top }, current: current?.projectId === group.id, highlighted: activeProject === group.id }, dragHandle: ".og-project-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 0 } satisfies ProjectNode);
       for (const row of members) {
         const at = local.get(row.id)!;
         const shape = at.ring ? size.root : size.child;
