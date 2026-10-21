@@ -786,10 +786,16 @@ fn answer_herdr(connection: std::os::unix::net::UnixStream) {
     let Ok(request) = serde_json::from_str::<Value>(&line) else {
         return;
     };
-    if request["params"]["pane_id"] != PROVED_PANE {
+    let pane = if request["method"] == "pane.current" {
+        &request["params"]["caller_pane_id"]
+    } else {
+        &request["params"]["pane_id"]
+    };
+    if pane != PROVED_PANE {
         return;
     }
     let result = match request["method"].as_str() {
+        Some("pane.current") => json!({"pane": {"pane_id": request["params"]["caller_pane_id"]}}),
         Some("pane.process_info") => json!({"process_info": {"shell_pid": std::process::id()}}),
         Some("pane.get") => json!({"pane": {"terminal_id": "t-proved"}}),
         _ => return,

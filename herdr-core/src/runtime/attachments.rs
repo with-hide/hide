@@ -241,6 +241,7 @@ impl Runtime {
 
     pub(super) fn begin_attachment(&mut self, payload: AttachmentPayload) -> bool {
         let mut operation = AsyncOperationSnapshot {
+            related_scope_ids: Vec::new(),
             id: payload.request_id.clone(),
             kind: "terminal.attachment".to_owned(),
             target_id: payload.pane_id.clone(),

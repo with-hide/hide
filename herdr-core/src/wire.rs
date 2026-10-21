@@ -1073,12 +1073,25 @@ pub(crate) fn pane_join_params(
     target_tab_id: &str,
     target_pane_id: &str,
 ) -> Result<Value, String> {
+    pane_insert_params(pane_id, target_tab_id, target_pane_id, false)
+}
+
+pub(crate) fn pane_insert_params(
+    pane_id: &str,
+    target_tab_id: &str,
+    target_pane_id: &str,
+    down: bool,
+) -> Result<Value, String> {
     params(req::PaneMoveParams {
         pane_id: pane_id.into(),
         destination: req::PaneMoveDestination::Tab {
             tab_id: target_tab_id.into(),
             target_pane_id: Some(target_pane_id.into()),
-            split: req::SplitDirection::Right,
+            split: if down {
+                req::SplitDirection::Down
+            } else {
+                req::SplitDirection::Right
+            },
             ratio: Some(0.5),
         },
         focus: false,
@@ -1978,6 +1991,12 @@ pub(crate) fn pane_unzoom_params(pane: &str) -> Result<Value, String> {
     params(req::PaneZoomParams {
         pane_id: Some(pane.into()),
         mode: req::PaneZoomMode::Off,
+    })
+}
+pub(crate) fn pane_restore_zoom_params(pane: &str) -> Result<Value, String> {
+    params(req::PaneZoomParams {
+        pane_id: Some(pane.into()),
+        mode: req::PaneZoomMode::On,
     })
 }
 pub(crate) fn pane_read_params(pane: &str, source: &str, lines: u32) -> Result<Value, String> {

@@ -38,9 +38,13 @@ import { osc8Handler, registerTerminalLinks, terminalLinkAtCell, terminalPathOwn
 import { isHtmlFile } from "./browserViews";
 import { pointerModifiers, wheelRows } from "./wheel";
 import { useShellStore, type TerminalChunk } from "./store";
+import { catalogWorkspaces, type SnapshotRest } from "./snapshot";
 import type { DispatchFn } from "./ws";
 
 type Instance = {
+  /** Mutable routing address; Herdr may rekey it while retaining the terminal. */
+  paneId: string;
+  identity: string | null;
   term: Terminal;
   fit: FitAddon;
   /** Lives with the instance, including while parked; no retry after fallback. */
@@ -98,6 +102,76 @@ type FollowedSelection = {
 };
 
 const instances = new Map<string, Instance>();
+
+let identityCatalog: SnapshotRest | null | undefined;
+const identities = new Map<string, string>();
+let reconciledCatalog: SnapshotRest | null | undefined;
+
+function terminalIdentity(paneId: string): string | null {
+  const rest = useShellStore.getState().rest;
+  if (identityCatalog !== rest) {
+    identityCatalog = rest;
+    identities.clear();
+    for (const workspace of catalogWorkspaces(rest)) {
+      for (const checkout of workspace.checkouts) {
+        for (const tab of checkout.tabs) {
+          for (const pane of tab.panes) {
+            if (pane.terminal_id) identities.set(pane.id, JSON.stringify([workspace.device_id, pane.terminal_id]));
+          }
+        }
+      }
+    }
+  }
+  return identities.get(paneId) ?? null;
+}
+
+/** Readdress once per snapshot, before an old host parks or a new one attaches. */
+function reconcileTerminalIds() {
+  const rest = useShellStore.getState().rest;
+  if (reconciledCatalog === rest) return;
+  reconciledCatalog = rest;
+  const attached = new Set(attachedPaneIds());
+  const addresses = new Map<string, string | null>();
+  for (const paneId of attached) {
+    const identity = terminalIdentity(paneId);
+    if (identity) addresses.set(identity, addresses.has(identity) ? null : paneId);
+  }
+  for (const [previous, instance] of instances) {
+    instance.identity ??= terminalIdentity(previous);
+    if (!instance.identity || attached.has(previous)) continue;
+    const current = addresses.get(instance.identity);
+    if (!current || instances.has(current)) continue;
+    instances.delete(previous);
+    instance.paneId = current;
+    instance.element.dataset.terminal = current;
+    instances.set(current, instance);
+  }
+}
+
+/** One inert image of a cached terminal, without fitting or attaching its PTY. */
+export function mountTerminalPreview(paneId: string, host: HTMLElement): boolean {
+  reconcileTerminalIds();
+  const instance = instances.get(paneId);
+  if (!instance) return false;
+  const canvases = [...instance.element.querySelectorAll("canvas")];
+  if (canvases.reduce((pixels, canvas) => pixels + canvas.width * canvas.height, 0) > 16_777_216) return false;
+  const clone = instance.element.cloneNode(true) as HTMLElement;
+  const copies = [...clone.querySelectorAll("canvas")];
+  for (const [index, canvas] of canvases.entries()) {
+    const copy = copies[index];
+    if (!copy) return false;
+    const context = copy.getContext("2d");
+    if (!context) return false;
+    context.drawImage(canvas, 0, 0);
+  }
+  clone.setAttribute("aria-hidden", "true");
+  clone.inert = true;
+  clone.style.pointerEvents = "none";
+  clone.removeAttribute("data-terminal");
+  for (const element of clone.querySelectorAll("[id]")) element.removeAttribute("id");
+  host.replaceChildren(clone);
+  return true;
+}
 
 /** Keys that end nothing by themselves: the chord they begin may be Copy. */
 const MODIFIER_KEYS = new Set(["Meta", "Control", "Shift", "Alt", "AltGraph", "CapsLock", "Fn", "OS"]);
@@ -170,6 +244,7 @@ function bytesBase64(bytes: Uint8Array): string {
 }
 
 export function feedChunks(chunks: TerminalChunk[]) {
+  reconcileTerminalIds();
   for (const chunk of chunks) {
     const instance = instances.get(chunk.pane_id);
     if (!instance) continue;
@@ -704,7 +779,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
     allowProposedApi: true,
     // A program's own links open like the ones found in the text, never
     // through xterm's confirm dialog.
-    linkHandler: osc8Handler(paneId, link, () => instance.links, () => instance.term.hasSelection()),
+    linkHandler: osc8Handler(() => instance.paneId, link, () => instance.links, () => instance.term.hasSelection()),
     // A right-click opens the pane's menu; it leaves the drag selection as it
     // was, so Copy there copies what the operator selected, not a word.
     rightClickSelectsWord: false,
@@ -712,6 +787,8 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
   const fit = new FitAddon();
   term.loadAddon(fit);
   const instance: Instance = {
+    paneId,
+    identity: terminalIdentity(paneId),
     term,
     fit,
     renderer: null,
@@ -735,10 +812,10 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
   // Right after a new tab or split was asked for, keys go to that request's
   // pane rather than this one (`keyTarget.ts`).
   const send = (bytes: Uint8Array) =>
-    dispatch({
+    instance.dispatch({
       schema_version: 2,
       kind: "key",
-      payload: keyPayload(paneId, bytesBase64(bytes)),
+      payload: keyPayload(instance.paneId, bytesBase64(bytes)),
     });
   const system = keySystem();
   term.attachCustomKeyEventHandler((event) => {
@@ -759,11 +836,11 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
       if (action.kind === "bytes") send(action.bytes);
       // The page's own Ctrl+Shift+V is paste-as-plain-text, which drops an
       // image, so the chord reads the clipboard itself.
-      else if (action.kind === "paste") void pasteClipboard(paneId, "terminal");
+      else if (action.kind === "paste") void pasteClipboard(instance.paneId, "terminal");
       // Clearing the selection once it is copied lets the next Ctrl+C
       // interrupt; a refused copy keeps it. Nothing selected copies nothing.
       else if (hasCopyText(instance)) {
-        void copySelection(paneId, "terminal").then((copied) => {
+        void copySelection(instance.paneId, "terminal").then((copied) => {
           if (!copied) return;
           setKept(instance, null);
           term.clearSelection();
@@ -781,7 +858,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
       instance.keysWaiting += 1;
       setTimeout(() => {
         instance.keysWaiting -= 1;
-        if (instances.get(paneId) === instance) run();
+        if (instances.get(instance.paneId) === instance) run();
       }, 0);
     } else run();
     return false;
@@ -792,10 +869,10 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
     else instance.follow = null;
   });
   term.onData((data) => send(new TextEncoder().encode(data)));
-  const linkProvider = registerTerminalLinks(term, paneId, link, () => instance.links);
-  const wheel = (event: WheelEvent) => onWheel(paneId, instance, event);
+  const linkProvider = registerTerminalLinks(term, () => instance.paneId, link, () => instance.links);
+  const wheel = (event: WheelEvent) => onWheel(instance.paneId, instance, event);
   const down = (event: MouseEvent) => onMouseDown(instance, event);
-  const up = (event: MouseEvent) => onMouseUp(paneId, instance, event);
+  const up = (event: MouseEvent) => onMouseUp(instance.paneId, instance, event);
   const copy = (event: ClipboardEvent) => onCopy(instance, event);
   element.addEventListener("wheel", wheel, { capture: true, passive: false });
   // The press and release are read on the way down and left to xterm, whose
@@ -829,6 +906,7 @@ export function attachTerminal(
   links: TerminalLinkActions,
   scale: number,
 ): () => void {
+  reconcileTerminalIds();
   let instance = instances.get(paneId);
   const fresh = !instance;
   if (!instance) {
@@ -859,23 +937,23 @@ export function attachTerminal(
     // the snapshot, not the click.
     shown.term.textarea?.addEventListener("focus", () => {
       holdKept(shown);
-      noteTerminalFocus(paneId);
+      noteTerminalFocus(shown.paneId);
       if (followingSnapshot) return;
       // A snapshot can lag a newer intent. Core owns focus idempotence and
       // coalescing, so every operator focus must reach it.
       // A remote pane's focus is its host's, so it goes there by the pane's
       // own scoped id; this machine's `focus_pane` never carries it.
-      const targetId = remoteTargetOfPane(useShellStore.getState().rest, paneId);
+      const targetId = remoteTargetOfPane(useShellStore.getState().rest, shown.paneId);
       shown.dispatch(
         targetId
-          ? remoteControl(targetId, { action: "focus_pane", pane_id: paneId })
-          : { schema_version: 2, kind: "focus_pane", payload: { pane_id: paneId, origin: "operator" } },
+          ? remoteControl(targetId, { action: "focus_pane", pane_id: shown.paneId })
+          : { schema_version: 2, kind: "focus_pane", payload: { pane_id: shown.paneId, origin: "operator" } },
       );
     });
   }
   // The observer also fires once when it starts watching, with the grid the
   // attach below just sent; only a grid the host's new size changes goes out.
-  const observer = new ResizeObserver(() => sendGrid(paneId, shown, false, true));
+  const observer = new ResizeObserver(() => sendGrid(shown.paneId, shown, false, true));
   observer.observe(host);
   shown.observer = observer;
   const needsFrame = fresh || shown.stale;
@@ -883,6 +961,7 @@ export function attachTerminal(
   sendGrid(paneId, shown, needsFrame);
   if (!fresh) shown.term.refresh(0, shown.term.rows - 1);
   return () => {
+    reconcileTerminalIds();
     observer.disconnect();
     shown.observer = null;
     shown.host = null;
@@ -894,7 +973,7 @@ export function attachTerminal(
     // A pane closed while shown left the core's list before its view
     // unmounted, so the park decides for itself instead of waiting for a
     // later change to sweep it.
-    if (!attachedPaneIds().includes(paneId)) disposeInstance(paneId, shown);
+    if (!attachedPaneIds().includes(shown.paneId)) disposeInstance(shown.paneId, shown);
   };
 }
 
@@ -904,6 +983,7 @@ export function attachTerminal(
  * skipped here; its park checks the same list when the view unmounts.
  */
 export function retainTerminals() {
+  reconcileTerminalIds();
   const attached = new Set(attachedPaneIds());
   for (const [paneId, instance] of instances) {
     if (attached.has(paneId) || instance.host) continue;

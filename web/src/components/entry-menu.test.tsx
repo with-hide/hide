@@ -107,3 +107,24 @@ it("shows one shared refusal on a disabled group and offers no executable child"
   expect(document.querySelectorAll("[data-menu-reason]")).toHaveLength(1);
   expect(selected).toEqual([]);
 });
+
+
+it("nested destinations close one keyboard level at a time and stay closed after a refusal", async () => {
+  const selected: string[] = [];
+  const items: MenuEntry[] = [{ id: "move", label: "Move", unavailable: null, children: [{ id: "tab", label: "Target tab", unavailable: null, children: [{ id: "left", label: "Left", unavailable: null }] }] }];
+  await open(items, selected);
+  const move = document.querySelector<HTMLElement>('[data-menu-item="move"]')!;
+  await act(async () => move.focus()); await key(move, "ArrowRight");
+  const tab = document.querySelector<HTMLElement>('[data-menu-item="tab"]')!;
+  await key(tab, "ArrowRight");
+  expect(document.querySelectorAll('[role="menu"]')).toHaveLength(3);
+  act(() => { useUiStore.getState().escapeLayers.at(-1)!(); });
+  await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+  expect(document.activeElement).toBe(tab);
+  expect(document.querySelectorAll('[role="menu"]')).toHaveLength(2);
+  await render([{ ...items[0]!, unavailable: "Move pending" }], selected);
+  expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
+  await render(items, selected);
+  expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
+  expect(selected).toEqual([]);
+});

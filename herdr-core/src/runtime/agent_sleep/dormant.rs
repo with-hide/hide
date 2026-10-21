@@ -1309,6 +1309,7 @@ impl Runtime {
             from: registration.actor.clone(),
             to: observed.actor.clone(),
             pane: observed.raw_pane_id.clone(),
+            terminal_id: observed.terminal_id.clone(),
         };
         self.registrations_gone.remove(&registration.id);
         self.registration_rebinds

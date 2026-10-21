@@ -91,6 +91,7 @@ export type AreaAdapter<I extends AreaItem> = {
   resize: (id: string, ratio: number) => void;
   newTab: (areaId: string) => void;
   newTabLabel: string;
+  newTabContent?: React.ReactNode;
   tabListLabel: string;
   actionsLabel: string;
   newTabShortcut?: string;
@@ -559,7 +560,7 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
             className="flex min-w-[var(--size-tab-overflow-control)] shrink-0 items-center justify-center text-subtle-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent"
             onClick={() => tree.adapter.newTab(area.id)}
           >
-            <PlusIcon className="size-(--size-icon)" />
+            {tree.adapter.newTabContent ?? <PlusIcon className="size-(--size-icon)" />}
           </button>
         </Hint>
       </div>
