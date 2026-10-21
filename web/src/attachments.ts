@@ -203,19 +203,27 @@ let readingExplorerImage = false;
 
 export async function submitExplorerImage(paneId: string, item: ExplorerDrag, bracketedPaste: boolean): Promise<void> {
   const state = useShellStore.getState();
+  const target = state.rest?.terminal?.panes?.find((pane) => pane.pane_id === paneId);
+  if (!target || target.closed || typeof target.transport_generation !== "number" || !Number.isSafeInteger(target.transport_generation) || target.transport_generation < 0) {
+    state.setAttachmentRefusal({ pane_id: paneId, reason: "no_pane" });
+    return;
+  }
   if (readingExplorerImage) {
     state.setAttachmentRefusal({ pane_id: paneId, reason: "staging_full" });
     return;
   }
   readingExplorerImage = true;
   const generation = state.viewGeneration;
+  const terminalGeneration = target.transport_generation;
   try {
     const file = await requestFileBytesWithTotal(item.path, { length: MAX_FILE_BYTES + 1 }, { device: item.device, root: item.root });
     if (file.total > MAX_FILE_BYTES) {
       state.setAttachmentRefusal({ pane_id: paneId, reason: "too_large" });
       return;
     }
-    if (useShellStore.getState().viewGeneration !== generation) {
+    const current = useShellStore.getState();
+    const pane = current.rest?.terminal?.panes?.find((candidate) => candidate.pane_id === paneId);
+    if (current.viewGeneration !== generation || !pane || pane.closed || pane.transport_generation !== terminalGeneration) {
       state.setAttachmentRefusal({ pane_id: paneId, reason: "no_pane" });
       return;
     }

@@ -15,6 +15,11 @@ import {
 } from "./attachments";
 import { useShellStore } from "./store";
 import { configureFileBytes, receiveBytes } from "./fileBytes";
+import type { TerminalPane } from "./snapshot";
+
+function pane(pane_id: string, transport_generation = 1): TerminalPane {
+  return { pane_id, closed: false, exit_code: null, transport_state: "controlling", transport_message: null, transport_generation };
+}
 
 function capture() {
   const events: { kind: string; payload: Record<string, unknown> }[] = [];
@@ -50,7 +55,7 @@ beforeAll(async () => {
 
 describe("attachment upload", () => {
   beforeEach(() => {
-    useShellStore.setState({ attachmentRefusal: null });
+    useShellStore.setState({ attachmentRefusal: null, rest: { terminal: { panes: [pane("pane-1"), pane("pane-2")] } } });
   });
 
   it("frames a chunk with its header and bytes", () => {
@@ -118,6 +123,35 @@ describe("attachment upload", () => {
     answerRead(reads[1]!, 1);
     await retry;
     expect(events.at(-1)?.kind).toBe("attachment_commit");
+  });
+
+  it.each([
+    { panes: [] },
+    { panes: [{ ...pane("pane-1"), closed: true }] },
+    { panes: [{ ...pane("pane-1"), transport_generation: undefined }] },
+    { panes: [pane("pane-1", -1)] },
+  ])("refuses an Explorer image before reading when its target is unavailable (%j)", async ({ panes }) => {
+    const { events } = capture();
+    const reads: Record<string, unknown>[] = [];
+    configureFileBytes((event) => { reads.push(event.payload); });
+    useShellStore.setState({ rest: { terminal: { panes } } });
+    await submitExplorerImage("pane-1", { path: "/project/shot.png", directory: false, device: "device-1", root: "/project" }, false);
+    expect(reads).toHaveLength(0);
+    expect(events).toHaveLength(0);
+    expect(useShellStore.getState().attachmentRefusal).toEqual({ pane_id: "pane-1", reason: "no_pane" });
+  });
+
+  it.each([{ panes: [] }, { panes: [{ ...pane("pane-1"), closed: true }] }, { panes: [pane("pane-1", 2)] }])("discards an Explorer image when its original terminal disappears, closes or reconnects (%j)", async ({ panes }) => {
+    const { events } = capture();
+    const reads: Record<string, unknown>[] = [];
+    configureFileBytes((event) => { reads.push(event.payload); });
+    const pending = submitExplorerImage("pane-1", { path: "/project/shot.png", directory: false, device: "device-1", root: "/project" }, false);
+    expect(reads).toHaveLength(1);
+    useShellStore.setState({ rest: { terminal: { panes } } });
+    answerRead(reads[0]!, 1);
+    await pending;
+    expect(events).toHaveLength(0);
+    expect(useShellStore.getState().attachmentRefusal).toEqual({ pane_id: "pane-1", reason: "no_pane" });
   });
 
   it("refuses a batch past the daemon's caps before uploading it", () => {
