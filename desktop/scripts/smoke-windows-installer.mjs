@@ -130,7 +130,7 @@ try {
   check("the daemon starts from the copy", () => {
     if (connected.ok !== true) throw new Error(JSON.stringify(connected));
     // TEMPORARY #1515: the parts of core creation.
-    console.log(`core parts (ms): ${daemonRecords(isolated.HIDE_STATE_DIR).filter((record) => record.kind === "create.part" || record.kind === "runtime_new.part" || record.kind === "owner.before_create").map((record) => `${record.part ?? "owner"} ${record.ms}`).join(", ")}`);
+    console.log(`core parts (ms): ${daemonRecords(isolated.HIDE_STATE_DIR).filter((record) => record.kind === "recover.part").map((record) => `${record.part} ${record.ms} [${record.flushes.join(" ")}]`).join(", ")}`);
     return `daemon ${connected.pid}, Herdr server ${herdrPid}; start steps: ${startSteps(isolated.HIDE_STATE_DIR)}`;
   });
 

@@ -46,7 +46,7 @@ for (let run = 1; run <= runs; run += 1) {
   const steps = records(env.HIDE_STATE_DIR).filter((record) => record.kind === "start.step").map((record) => `${record.stage} ${record.took_ms}`).join(", ");
   console.log(`run ${run}: connect ${took} ms, exit ${connect.status}: ${connect.stdout.trim()}`);
   console.log(`  start steps (ms): ${steps}`);
-  console.log(`  core parts (ms): ${records(env.HIDE_STATE_DIR).filter((record) => record.kind === "create.part" || record.kind === "runtime_new.part" || record.kind === "owner.before_create").map((record) => `${record.part ?? "owner"} ${record.ms}`).join(", ")}`);
+  console.log(`  core parts (ms): ${records(env.HIDE_STATE_DIR).filter((record) => record.kind === "recover.part").map((record) => `${record.part} ${record.ms} [${record.flushes.join(" ")}]`).join(", ")}`);
   if (connect.status !== 0 || took > 3000) {
     if (connect.status !== 0) failed += 1;
     console.log(`  stderr: ${connect.stderr.trim()}`);
