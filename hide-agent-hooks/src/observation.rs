@@ -930,6 +930,11 @@ mod tests {
             "f() { herdr agent prompt peer x; }; echo ok",
             "function f { echo; herdr agent prompt peer x; }",
             "test -f done || r=$(herdr agent prompt peer x)",
+            "test -f done &&\n herdr agent prompt peer x >/dev/null",
+            "test -f done && # why\n herdr agent prompt peer x >/dev/null",
+            "false || { echo x; herdr agent prompt peer x; }",
+            "true && {\n herdr agent prompt peer x\n}",
+            "f() { r=$(herdr agent prompt peer x); }",
         ] {
             let fact = one(observe(call(command, &hidden), 1, &|_| None).unwrap());
             assert!(fact.target.is_none(), "{command}");
@@ -940,6 +945,8 @@ mod tests {
             "(cd /tmp && echo y); herdr agent prompt peer x >/dev/null",
             "h() { echo \"$@\"; }; h y; herdr agent prompt peer x >/dev/null",
             "{ echo y; } >/dev/null; herdr agent prompt peer x >/dev/null",
+            "false || { echo x; }; herdr agent prompt peer x >/dev/null",
+            "echo y |\n tee /dev/null\nherdr agent prompt peer x >/dev/null",
         ] {
             let fact = one(observe(call(command, &hidden), 1, &|_| None).unwrap());
             assert_eq!(fact.target.unwrap().pane_id, "peer", "{command}");

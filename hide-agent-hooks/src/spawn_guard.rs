@@ -302,16 +302,22 @@ struct Lexer {
     /// a line as a syntax error and runs none of it, so nothing in it is a launch.
     unclosed: bool,
     substitutions: Vec<(bool, String)>,
+    /// The current command's substitutions, which take its state when it ends.
+    pending_substitutions: Vec<String>,
     conditional: Vec<bool>,
     /// The current list has passed `&&` or `||`.
     and_or: bool,
+    /// An `&&`, `||` or `|` still waits for its command, which may follow a
+    /// newline.
+    operator_open: bool,
     /// Open `if`, loop and `case` bodies.
     compound: usize,
     /// A function was just named; the group that follows is its body,
     /// which runs only when called.
     function_next: bool,
-    /// Each open `{` group, `true` for a function's body.
-    braces: Vec<bool>,
+    /// Each open `{` group: `and_or` where it opened, and whether it is a
+    /// function's body.
+    braces: Vec<(bool, bool)>,
     /// Each open `(` subshell: `and_or` where it opened, and whether it is
     /// a function's body.
     subshells: Vec<(bool, bool)>,
@@ -333,8 +339,10 @@ impl Lexer {
             heredocs: Vec::new(),
             unclosed: false,
             substitutions: Vec::new(),
+            pending_substitutions: Vec::new(),
             conditional: Vec::new(),
             and_or: false,
+            operator_open: false,
             compound: 0,
             function_next: false,
             braces: Vec::new(),
@@ -345,8 +353,11 @@ impl Lexer {
     fn is_conditional(&self) -> bool {
         self.and_or
             || self.compound > 0
-            || self.braces.contains(&true)
-            || self.subshells.iter().any(|&(and_or, body)| and_or || body)
+            || self
+                .braces
+                .iter()
+                .chain(&self.subshells)
+                .any(|&(and_or, body)| and_or || body)
     }
 
     fn peek(&self, offset: usize) -> Option<char> {
@@ -372,7 +383,7 @@ impl Lexer {
                 }
                 '\n' => {
                     self.end_command();
-                    self.and_or = false;
+                    self.and_or &= self.operator_open;
                     self.at += 1;
                     self.heredoc_bodies();
                 }
@@ -393,6 +404,7 @@ impl Lexer {
                     if doubled {
                         self.at += 1;
                     }
+                    self.operator_open = c == '|';
                     match c {
                         ';' => self.and_or = false,
                         '|' if doubled => self.and_or = true,
@@ -462,6 +474,7 @@ impl Lexer {
         self.drop_next = false;
         self.next_is_file = false;
         self.heredoc_next = None;
+        let mut conditional = self.is_conditional();
         if !self.words.is_empty() {
             let words = std::mem::take(&mut self.words);
             // Words that open or close a body, past the keywords before them.
@@ -481,20 +494,27 @@ impl Lexer {
                     }
                     "{" => {
                         let body = std::mem::take(&mut self.function_next);
-                        self.braces.push(body);
+                        self.braces.push((std::mem::take(&mut self.and_or), body));
                     }
                     "}" => {
-                        self.braces.pop();
+                        if let Some((outer, _)) = self.braces.pop() {
+                            self.and_or = outer;
+                        }
                     }
                     "then" | "else" | "elif" | "do" | "!" | "time" => {}
                     _ => break,
                 }
                 at += 1;
             }
-            self.conditional.push(self.is_conditional());
+            conditional = self.is_conditional();
+            self.conditional.push(conditional);
             self.compound += opens;
             self.commands.push(words);
+            self.operator_open = false;
         }
+        let pending = std::mem::take(&mut self.pending_substitutions);
+        self.substitutions
+            .extend(pending.into_iter().map(|text| (conditional, text)));
     }
 
     fn backslash(&mut self) {
@@ -609,11 +629,8 @@ impl Lexer {
                     depth -= 1;
                     if depth == 0 {
                         // Between this `(` and its `)`.
-                        let conditional = self.is_conditional();
-                        self.substitutions.push((
-                            conditional,
-                            self.word[start + 1..self.word.len() - 1].to_owned(),
-                        ));
+                        self.pending_substitutions
+                            .push(self.word[start + 1..self.word.len() - 1].to_owned());
                         return;
                     }
                 }
@@ -752,6 +769,7 @@ impl Lexer {
             self.end_command();
             self.at += 1;
             self.and_or = self.peek(0) == Some('&');
+            self.operator_open = self.and_or;
             if self.and_or {
                 self.at += 1;
             }
