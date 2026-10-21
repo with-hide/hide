@@ -389,10 +389,19 @@ fn pane_path(herdr: &PrivateHerdr) -> String {
 fn unix_agent(herdr: &PrivateHerdr) {
     let agent = herdr.home.join("agent");
     std::fs::create_dir_all(&agent).unwrap();
-    let sleep = ["/bin/sleep", "/usr/bin/sleep"]
-        .into_iter()
-        .find(|path| Path::new(path).is_file())
-        .unwrap();
+    // Ubuntu ships uutils as sleep: its multicall dispatch rejects a copy
+    // named claude. Its standalone GNU counterpart remains available as
+    // gnusleep. Keep a native executable with the agent's name, not a shell
+    // wrapper whose process identity would change this scenario's oracle.
+    let sleep = [
+        "/usr/bin/gnusleep",
+        "/bin/gnusleep",
+        "/bin/sleep",
+        "/usr/bin/sleep",
+    ]
+    .into_iter()
+    .find(|path| Path::new(path).is_file())
+    .unwrap();
     if cfg!(target_os = "macos") {
         std::os::unix::fs::symlink(sleep, agent.join("claude")).unwrap();
     } else {
