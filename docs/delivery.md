@@ -481,8 +481,8 @@ A report from an unwatched sender is an ordinary letter; the parent can restart 
 The `factory:` name prefix remains reserved for compatibility with historical registrations.
 No Factory recipient is active in this release.
 
-Hide itself is a code-owned identity, `hide:<role>` of kind `hide`, today only `hide:memory`: the origin of the agent a Memory card's promotion starts ([ARCHITECTURE.md: Project sessions and Memory](ARCHITECTURE.md#project-sessions-and-memory)).
-It is registered on its first spawn, sends nothing and receives nothing, and a pane or agent name that starts with `hide:` is refused at registration like `factory:`.
+Hide itself is a code-owned identity, `hide:<role>` of kind `hide`: `hide:memory`, the origin of the agent a Memory card's promotion starts ([ARCHITECTURE.md: Project sessions and Memory](ARCHITECTURE.md#project-sessions-and-memory)), and `hide:conductor`, the sender of a mission's wakes ([Missions](#missions)).
+`hide:memory` is registered on its first spawn, sends nothing and receives nothing; `hide:conductor` sends requests to a mission's Conductor and receives nothing; and and a pane or agent name that starts with `hide:` is refused at registration like `factory:`.
 A spawn is Hide AI's own when it is a handoff whose origin is that identity (`coordination::started::hide_started`): a pane agent's handoff has a pane's identity as its origin, so neither counts, and no branch or worktree name ever decides it.
 Only that identity may give a spawn a `task` (`SpawnTask`: a `kind` code such as `memory_promote` and a `target` such as the card `m72`, the codes the screen words), on a handoff; any other caller that sets one is refused `task_reserved`, and the task is part of the intent, so the same intent with another task is an `intent_conflict`.
 A receipt from before the task existed has none, and its agent and checkout are still Hide AI's, which the screen names `Hide AI` alone.
@@ -666,6 +666,26 @@ A core move carries each wait with the machine it names (`node_migration::KEYS`)
 At most 64 waits are held at once: a spawn past that answers `identity_waits_full`, whose next action is to give one of the waiting agents a first prompt or close its pane, and a fork past it is logged as `registration_failed` with that code.
 The waits ride on the existing one-second agent refresh, with no timer, no Herdr read of their own and no work under `Mutex<Runtime>`; an unchanged list with unchanged waits plans nothing.
 A ledger with no wait writes no `identity_waits` field, and a build from before waits ignores the field.
+
+## Missions
+
+A Conductor's mission (PRD software-factory-conductor) is a record the core keeps in `~/.hide/state/missions.json` and changes only on `hide mission` commands from the Conductor's own pane; `hide mission help` is the Conductor's guide and the `hide-conductor` skill points at it ([agent-hooks.md](agent-hooks.md)).
+Only a pane-bound credential can ask, refused `agent_pane_required` otherwise, and a pane conducts at most one open mission (`mission_already_conducting`).
+A mission belongs to the repository Project of the checkout it was created in (`mission_project_unknown`); asked before the machine's projects are first read, it is refused `mission_projects_loading`, and a retry a few seconds later goes through.
+Every other pane is refused `mission_not_conductor`, and a closed or cancelled mission refuses changes (`mission_closed`, `mission_cancelled`).
+`hide mission take <id>` makes the caller the Conductor only once the previous one is gone; while it is there the answer is `mission_conducted` with its name.
+Each command answers one JSON line, and the same command again changes nothing more.
+
+A spawn by a pane that conducts an open mission is that mission's worker:
+
+- Before `hide mission start` it is refused `mission_not_started`.
+- A worker aimed at a machine other than the one the mission's project is on is refused `mission_machine_refused`.
+- The ledger counts the mission's live workers when it reserves the spawn, under the same lock, and refuses one past the mission's cap `mission_cap_reached` with the cap; the Conductor is not counted.
+
+Pull request changes wake the Conductor: when a node's pull request gets a new head commit, a review asking for changes, or is merged, `hide:conductor` sends the Conductor one request naming the change and `hide mission show`.
+Its intent is `mission:<id>:<node>:<number>:<event>:<head>`, so the same change never wakes twice, and a cancelled mission wakes no one; such a change on a mission closed as `done` reopens it, and a mission with no Conductor present keeps the change for the next one to read (`mission.wake_no_conductor`).
+The wakes are queued under the lock, at most 256 with an overflow recorded as `mission.wake_dropped`, and sent on their own thread, so the lock never waits on a delivery.
+Deleting a Conductor's session from the archive deletes its missions with it.
 
 ## Verification
 

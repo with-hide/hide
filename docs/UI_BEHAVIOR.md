@@ -1142,6 +1142,10 @@ The core owns the lens, the view option and the slot (`herdr-core/src/runtime/de
 
 ### The sidebar's 태스크 list
 
+A Conductor's task row, live or archived, carries the mission chip before its time: `미션 n/m` while the mission runs, `계획 중`, `머지 대기` or `완료` otherwise; pressing it opens the map in the 보기 slot (PRD software-factory-conductor B14, B46).
+A Conductor's record in the Overview carries the same chip, so a mission whose Conductor has closed is still found there.
+No other attention state is added: the Conductor row reads as any agent's does ([status-model.md](status-model.md)).
+
 
 A session title restored from saved conversation history carries the core's connection state on the shared Project, Task and agent-tree rows, the Overview graph/list/preview and project home, live-agent popovers, archive confirmations, feedback recipient menus and PR list heads.
 While checking it is dimmed beside `연결 확인 중`; an unsuccessful or uncertain check keeps it dimmed beside `연결 미확인`, and the worker retries without a new message or a retry button.
@@ -1205,9 +1209,9 @@ A hidden list draws no rows, the elapsed clock updates only its own text, and th
 
 ### The 보기 slot
 
-The lane has one 보기 slot per window, which holds a pull request's card or a session's record and belongs to no checkout and no Agent tab, so changing either leaves it as it was (PRD sidebar-task-lens D-50, B48).
+The lane has one 보기 slot per window, which holds a pull request's card, a session's record or a mission's map and belongs to no checkout and no Agent tab, so changing either leaves it as it was (PRD sidebar-task-lens D-50, B48).
 Whatever opens a card or a record opens it there, and the Workspace in front, its Agent tab and the keyboard stay (B14, B15, B50); no `PR #N` or record tab appears in Files.
-Its head reads `←`, the item's mark and name (`PR #N · <project>` or `기록 · <title>`), `↗` (GitHub) on a card, and `✕` (B47); a card's mark is its PR mark, in its state's icon and colour, here and on the rail.
+Its head reads `←`, the item's mark and name (`PR #N · <project>`, `기록 · <title>` or `미션 · <title>`), `↗` (GitHub) on a card, and `✕` (B47); a card's mark is its PR mark, in its state's icon and colour, here and on the rail.
 The head keeps the lane's surface and what the slot holds sits on the page's background, a card and a record alike, as the 보기 screens draw it.
 Opening another item puts it in front, and `←` steps back through the ones opened before, at most 20, the oldest leaving first; `✕` empties the slot and the lane goes back to the tool it showed, or closes when it had none.
 The close chord (⌘W) is the slot's `✕` while the keyboard is in the lane or nowhere, as the close chord's rule says ([The right lane](#the-right-lane)).
@@ -1215,6 +1219,22 @@ While the slot holds something, the rail carries a fifth button above Memory wit
 A changed file pressed on a card opens its diff in the checkout's Files and the lane turns to Files, the slot staying on the rail (B49).
 At Home, with no Workspace in front, a record opens in the Overview's panel beside the tabs and a PR mark opens the pull request's Workspace with its card in the slot (B17).
 A pane head's agent-tree button and a started backlog item (from ⌘K, a record or a missed line's `· 백로그 #N`) show the sidebar on 태스크 with the row unfolded and selected, and open the agent's record in the slot, or in the Overview's panel at Home (B40).
+
+### A mission's map
+
+A Conductor's mission (PRD software-factory-conductor) is drawn as a map in the 보기 slot, read from the core's mission record; the map edits nothing, and the operator changes a mission by talking to its Conductor.
+The Conductor's first plan opens the map once, widening the lane for it as a page does; after that only the mission chip, the rail's slot button or the Overview opens it again (B14).
+Before the first plan the map is one `계획 중` line (B19).
+A summary row counts the elapsed time, the agents running over the cap, the nodes done over those in the plan, the decisions waiting and, while it is gone, `Conductor 없음` (B21).
+The nodes are drawn top down by what they wait on: every node that waits on nothing starts on the top row, and the edges meet one `보고·인계` card at the bottom.
+A card carries its status mark, title, worker (`<model>·<effort>`, `자동` while the Conductor chooses the effort), elapsed time and one line: its PR mark and number, `↰ #N 위` when it is stacked on another, its branch for a direct change, or its last line (B15, B52).
+A change card's left band is its pull request's state colour and its bar has four steps, work, PR or branch, review, merge or main; a research or verify card has one step (D-42).
+A card that waits on a failed or dropped node says so, and a stacked edge is dashed in the merged colour.
+Pressing a card opens its detail beside it with `터미널로 이동`, `기록` and `PR 카드` where they apply.
+A decision the Conductor waits on is one banner with `대화로 가기`; a mission whose Conductor is gone shows `Conductor 없음` with `이어받기`, which starts a new agent in the mission's checkout told to take the mission, and the core refuses a second Conductor while the first is there (B44).
+More than twelve nodes fold the done ones under one line that unfolds them (B19).
+When the device that runs the mission disconnects, the map keeps its last values dimmed under a note and invents no number (B20).
+A build from before missions opens with an empty 보기 slot when the saved slot held a map; the rest of the saved screen loads as it was.
 
 ### The session record
 
@@ -2500,6 +2520,14 @@ A device whose own record waits gets the saved choice once per run, by what is i
 A device that still waits after it was sent the choice is logged once (`first_run_choice.unanswered`) and not sent it again until it reconnects.
 Under `Continue`, one line names the agent Hide AI will use: the first agent in that fixed order that is switched on in the step and signed in (`firstRunAgent` in `web/src/hideAi.ts`, "Hide AI uses Claude Code"; in Korean the name takes 를, or 을 after Grok, whose reading ends in a consonant, `hideAiFirstRunKey` in `web/src/agentOnboardingRules.ts`), read from `status.background_ai.providers[].state`, which the step asks the core to probe while it is open; with no such agent the line is absent, and it follows each flip of a tile (PRD settings-cleanup D-18, B45, B46).
 An agent installed later appears in these rows off and is never turned on by a pass.
+
+### Conductor
+
+Settings › Conductor, in the machine group after Hide AI, keeps what a Conductor plans with on this machine (PRD software-factory-conductor D-31, B48, B49).
+`동시 실행 상한` is how many agents one mission runs at once, reviewers and verifiers included and the Conductor not counted, from 1 to 16; `기본 범위` is how far a mission goes when the operator does not say, up to ready pull requests or through the merge.
+`작업자 후보` lists the agents a Conductor chooses workers from, at most 16: each row's agent, its model from the start panel's list (disabled with why when that list cannot be read), its effort automatic or fixed, and what it is for; an agent this machine has not installed is dimmed with `설치 안 됨`.
+With no candidates the Conductor chooses among the installed agents.
+Every edit sends the whole value and the core checks it; a refusal shows inline, and a mission already planned keeps the values it was planned with.
 
 ### Hide AI
 

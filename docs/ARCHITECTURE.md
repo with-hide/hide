@@ -1123,6 +1123,18 @@ The snapshot publishes `navigator.archived_sessions` (each record's phase, wheth
 Both are optional fields, so the protocol's version did not move: an older device daemon or phone reads the snapshot as before and simply offers no archive.
 Persistence uses the folder barrier the dormant records use, on every system (The platform layer); the Windows check lane runs `an_archived_session_saves_through_the_folders_barrier_and_loads_back`.
 
+## Conductor missions
+
+A Conductor's mission (PRD software-factory-conductor) is a core-owned record, `herdr-core/src/missions.rs` for the model and the store and `runtime/missions.rs` for the commands, admissions and wakes; the Conductor's own judgement (what to start, retry or ask) stays in its conversation, and the record holds only what the map shows and the contracts Hide enforces: one Conductor per mission, no worker before the plan is approved, a worker only on the project's machine, and the mission's cap.
+Each `hide mission` command is one typed event applied under `Mutex<Runtime>` ([delivery.md: Missions](delivery.md#missions)).
+The book is saved to `missions.json` in the state folder (`hide_kit::layout::missions`) by its own `LatestFile` save thread, read back at launch with an 8 MiB cap, and bounded at 128 missions of at most 64 nodes; a book that cannot be read is logged as `missions.unreadable`, is never overwritten, and every mission command answers `mission_unavailable` until it can be read.
+It is published as its own revisioned rest section, `missions`, and the map is a 보기 slot item, `DetailItem::Mission { mission }`, which draws that section and starts no read.
+A build from before missions does not know that item: it reads a saved slot holding one as unrecognized and starts with an empty slot (`persistence::decode`), keeping the rest of the saved UI state.
+Settings › Conductor is `ui_state.conductor_settings`, saved in `core-state.json`; a stored value this build refuses loads the defaults.
+The cap is enforced where a spawn is reserved: `prepare_delivery` computes the spawn's `MissionAdmission` from the caller's open mission, and the ledger's reserve counts that mission's live workers under the same lock, so two spawns at once cannot both pass.
+Pull request wakes are decided on the GitHub ingest, compared with each node's last seen head, review and merge, and sent by `hide:conductor` from a thread of their own with a queue of at most 256.
+Deleting a Conductor's archived session deletes its missions in the same transition.
+
 ## The link record
 
 The link record (PRD link-graph) keeps which sessions made or worked on which pull request, which issues each pull request is linked to and from where, and which worktrees each branch had, after the panes, the branches and the provider files that said so are gone.
