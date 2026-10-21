@@ -545,17 +545,17 @@ it("draws no second row for a pane with nothing waiting and no children", async 
 });
 
 // PRD pane-last-request B1, B10, B11: the second row leads with the turn's
-// request, `Request <request> → <answer>`, while the core says it shows the
+// request, `<request> → <answer>` with no word before it, while the core says it shows the
 // turn; a request with no words counts its images.
 it("leads the row with the turn's request before its ask, progress or result", async () => {
   const request = { text: "Proceed as proposed + check unclear states", images: 0 };
   const ask: PaneBand = { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 };
   const cases: [PaneHeader, string, string][] = [
-    [{ working: false, notice: null, band: ask, request }, "answer", "RequestProceed as proposed + check unclear states→QuestionBundle questions 1-3 into one PR?"],
-    [{ working: true, notice: null, band: null, progress: "Reading the status model", request }, "progress", "RequestProceed as proposed + check unclear states→Reading the status model"],
-    [{ working: true, notice: null, band: null, request }, "request", "RequestProceed as proposed + check unclear states→Working"],
-    [{ working: false, notice: null, band: null, progress: "Remote reads every 3 s, PR merged", finished: true, request }, "finished", "RequestProceed as proposed + check unclear states→DoneRemote reads every 3 s, PR merged"],
-    [{ working: false, notice: null, band: null, finished: true, request: { text: null, images: 2 } }, "finished", "Request2 images→Done"],
+    [{ working: false, notice: null, band: ask, request }, "answer", "Proceed as proposed + check unclear states→QuestionBundle questions 1-3 into one PR?"],
+    [{ working: true, notice: null, band: null, progress: "Reading the status model", request }, "progress", "Proceed as proposed + check unclear states→Reading the status model"],
+    [{ working: true, notice: null, band: null, request }, "request", "Proceed as proposed + check unclear states→Working"],
+    [{ working: false, notice: null, band: null, progress: "Remote reads every 3 s, PR merged", finished: true, request }, "finished", "Proceed as proposed + check unclear states→DoneRemote reads every 3 s, PR merged"],
+    [{ working: false, notice: null, band: null, finished: true, request: { text: null, images: 2 } }, "finished", "2 images→Done"],
   ];
   for (const [value, kind, text] of cases) {
     const { container, unmount } = await mount(value, [], { paneId: "solo" });
@@ -565,7 +565,7 @@ it("leads the row with the turn's request before its ask, progress or result", a
       // The request and the answer are the row's two parts, so a turn that
       // does not fit one line wraps its answer under the request (B4).
       expect([...row.querySelectorAll("[data-pane-turn-part]")].map((part) => part.getAttribute("data-pane-turn-part"))).toEqual(["request", "answer"]);
-      expect(row.querySelector("[data-pane-turn-request]")?.getAttribute("aria-label")).toBe(`Request ${text.slice("Request".length).split("→")[0]}`);
+      expect(row.querySelector("[data-pane-turn-request]")?.getAttribute("aria-label")).toBe(`Request: ${text.split("→")[0]}`);
     } finally { await unmount(); }
   }
 });

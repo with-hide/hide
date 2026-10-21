@@ -72,7 +72,7 @@ function ForkSourceButton({ paneId, source, actions }: { paneId: string; source:
 /**
  * The pane's second row over its terminal (docs/UI_BEHAVIOR.md, Agent panes and
  * the Agents explorer): the child-tree entry, then the turn the core selects,
- * `요청 <request> → <answer>`, where the answer is an ask, the pane agent's own
+ * `<request> → <answer>`, where the answer is an ask, the pane agent's own
  * progress or a finished turn's result. When the turn does not fit one line
  * the answer wraps under the request, two rows, each cut only when it
  * overflows its own (PRD pane-last-request D-04). Neither the terminal
@@ -130,8 +130,9 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
 }
 
 /**
- * The request half of the turn: the quiet `요청` and the request's one line,
- * a button the keyboard reaches. The pointer or focus on it opens the turn
+ * The request half of the turn: the request's one line in quiet text, with
+ * no word before it on screen (its name still says `요청`), a button the
+ * keyboard reaches. The pointer or focus on it opens the turn
  * card and a press pins it; it never takes the keyboard from the terminal.
  */
 function TurnRequestButton({ paneId, request, state }: { paneId: string; request: NonNullable<PaneHeader["request"]>; state: TurnCardTrigger }) {
@@ -140,7 +141,7 @@ function TurnRequestButton({ paneId, request, state }: { paneId: string; request
   return (
     <button
       type="button"
-      aria-label={`${t("paneTurn.request")} ${words}`}
+      aria-label={`${t("paneTurn.request")}: ${words}`}
       aria-expanded={state.open}
       data-pane-turn-request={paneId}
       data-pinned={state.pinned || undefined}
@@ -154,7 +155,6 @@ function TurnRequestButton({ paneId, request, state }: { paneId: string; request
       onBlur={state.onBlur}
       onKeyDown={state.onKeyDown}
     >
-      <span className="shrink-0 text-subtle-foreground">{t("paneTurn.request")}</span>
       <span className="min-w-0 truncate" data-pane-turn-request-text="true">{words}</span>
     </button>
   );
