@@ -59,8 +59,8 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     await expect(add).toHaveAccessibleName(/Add project/);
     await expect(page.locator("[data-sidebar-new-workspace]")).toHaveCount(1);
     await expect(page.locator("[data-sidebar-title] [data-sidebar-new-workspace], [data-main-add-project]")).toHaveCount(0);
-    await add.hover();
-    await expect(page.locator('[data-slot="tooltip-content"]')).toContainText("Add project");
+    // The row names itself, so it carries no tooltip.
+    await expect(add).toContainText("Add project");
     await add.click();
     await expect(dialog).toHaveAttribute("data-add-project", nodeOf(run.env));
     await expect(dialog.getByRole("heading", { name: "Add a project" })).toBeVisible();
