@@ -309,10 +309,16 @@ impl Runtime {
             self.pane_move_raw(
                 &key.0,
                 "workspace",
-                source
-                    .workspace_id
-                    .as_deref()
-                    .ok_or("The native workspace is unavailable")?,
+                &self
+                    .snapshot
+                    .pane_layouts
+                    .iter()
+                    .find(|layout| {
+                        layout.tab_id == request.source.tab_id
+                            && layout.pane_ids().contains(&request.source.pane_id.as_str())
+                    })
+                    .ok_or("The source native layout is unavailable")?
+                    .workspace_id,
             )?
             .to_owned(),
             source.panes.len() == 1,

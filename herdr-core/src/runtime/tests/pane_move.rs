@@ -77,6 +77,30 @@ fn sole_pane_new_tab_in_own_area_keeps_native_identity_and_title() {
         .unwrap();
     assert_eq!(operation.phase, "completed");
     assert!(!runtime.pane_move_holds_tab(FIRST));
+    // The catalog groups native workspaces by checkout and gives the group
+    // its own ID. A durable move must retain the native layout's identity.
+    let catalog_tab = runtime
+        .snapshot
+        .navigator
+        .workspaces
+        .iter()
+        .flat_map(|workspace| &workspace.checkouts)
+        .flat_map(|checkout| &checkout.tabs)
+        .find(|tab| tab.id.as_deref() == Some(FIRST))
+        .unwrap();
+    assert_ne!(catalog_tab.workspace_id.as_deref(), Some("w-order"));
+    let saved = &runtime
+        .workspace_views
+        .as_ref()
+        .unwrap()
+        .views
+        .get(crate::node::TEST_NODE, CHECKOUT)
+        .unwrap()
+        .pane_moves["sole"];
+    assert_eq!(
+        serde_json::to_value(saved).unwrap()["workspace_id"],
+        "w-order"
+    );
 }
 
 #[test]
