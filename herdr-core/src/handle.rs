@@ -526,6 +526,7 @@ impl Core {
         expected: &crate::workspace_control::Context,
         terminal: &str,
         observation: hide_agent_hooks::observation::DirectObservation,
+        start: bool,
         deadline: std::time::Instant,
     ) -> Result<crate::direct_observation::PreparedObservation, String> {
         if !check_owner_thread(self, "observation.prepare") || std::time::Instant::now() >= deadline
@@ -539,6 +540,7 @@ impl Core {
             expected,
             terminal,
             observation,
+            start,
             deadline,
         )?;
         prepared.runtime = std::sync::Arc::downgrade(&self.runtime);

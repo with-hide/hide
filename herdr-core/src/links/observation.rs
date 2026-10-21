@@ -80,20 +80,32 @@ impl DirectFact {
         serde_json::to_string(self).map_err(|_| "direct_observation_value_invalid".into())
     }
 
-    /// Stable across duplicate terminal events and restarts, without exposing call keys.
+    /// Stable across duplicate terminal events and restarts, without exposing
+    /// call keys. One call has one fact per proven recipient pane; a fact
+    /// without one keeps the key it always had, so earlier rows keep theirs.
     pub(crate) fn id(&self) -> String {
-        let key = serde_json::json!([
-            self.source_server,
-            self.sender.device_id,
-            self.sender.pane_id,
-            self.sender.session,
-            self.call_key
-        ]);
-        format!("{:x}", Sha256::digest(key.to_string().as_bytes()))
+        let mut key = vec![
+            self.source_server.as_str(),
+            self.sender.device_id.as_str(),
+            self.sender.pane_id.as_str(),
+            self.sender.session.as_str(),
+            self.call_key.as_str(),
+        ];
+        key.extend(self.recipient.as_ref().map(|party| party.pane_id.as_str()));
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::json!(key).to_string().as_bytes())
+        )
     }
 
+    /// A proven recipient draws the input whether or not the sender saw
+    /// Herdr's answer (PRD direct-prompt-observation-widen D-09); a refusal,
+    /// timeout or interruption draws nothing.
     pub(crate) fn graph_input(&self) -> Option<GraphDirectInput> {
-        if self.outcome != DirectOutcome::Submitted {
+        if !matches!(
+            self.outcome,
+            DirectOutcome::Submitted | DirectOutcome::Unknown
+        ) {
             return None;
         }
         Some(GraphDirectInput {
@@ -136,11 +148,13 @@ mod tests {
         }
     }
 
+    /// PRD direct-prompt-observation-widen D-09, B13: a proven recipient is
+    /// drawn whether the sender saw Herdr's answer or not; refusals,
+    /// timeouts, interruptions and unproven recipients never are.
     #[test]
-    fn incomplete_results_never_become_model_or_delivery_receipts() {
+    fn only_proven_recipients_of_taken_input_reach_the_graph() {
         let mut input = fact(1_000_000);
         for outcome in [
-            DirectOutcome::Unknown,
             DirectOutcome::Failed,
             DirectOutcome::TimedOut,
             DirectOutcome::Interrupted,
@@ -148,6 +162,8 @@ mod tests {
             input.outcome = outcome;
             assert!(input.graph_input().is_none());
         }
+        input.outcome = DirectOutcome::Unknown;
+        assert!(input.graph_input().is_some());
         input.outcome = DirectOutcome::Submitted;
         input.recipient = None;
         assert!(input.graph_input().is_none());
@@ -162,13 +178,50 @@ mod tests {
         assert!(!json.to_string().contains("source_server"));
     }
 
+    /// D-12, D-16: one fact per proven recipient of a call, keyed by its
+    /// pane; a fact without a recipient keeps the key earlier rows have.
+    #[test]
+    fn each_recipient_of_a_call_is_its_own_fact_and_unproven_keys_are_unchanged() {
+        let mut uncertain = fact(1_000_000);
+        uncertain.recipient = None;
+        let legacy = serde_json::json!([
+            uncertain.source_server,
+            uncertain.sender.device_id,
+            uncertain.sender.pane_id,
+            uncertain.sender.session,
+            uncertain.call_key
+        ]);
+        assert_eq!(
+            uncertain.id(),
+            format!("{:x}", Sha256::digest(legacy.to_string().as_bytes()))
+        );
+        let first = fact(1_000_000);
+        let mut second = fact(1_000_000);
+        second.recipient.as_mut().unwrap().pane_id = "pane-3".into();
+        assert_ne!(first.id(), second.id());
+        assert_ne!(first.id(), uncertain.id());
+        let directory = tempfile::tempdir().unwrap();
+        let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+        for item in [&first, &second, &first, &uncertain] {
+            store.apply_direct_observation(item, 1_000_000).unwrap();
+        }
+        let recorded = store.direct_observations(1_000_000).unwrap();
+        assert_eq!(recorded.len(), 3);
+        assert_eq!(
+            recorded
+                .iter()
+                .filter(|item| item.graph_input().is_some())
+                .count(),
+            2
+        );
+    }
+
     #[test]
     fn duplicate_terminal_events_converge_across_restart_without_losing_uncertainty() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("links.sqlite3");
         let (mut store, _) = LinkStore::open(&path).unwrap();
         let mut uncertain = fact(1_000_000);
-        uncertain.recipient = None;
         uncertain.outcome = DirectOutcome::Unknown;
         uncertain.reason = Some(DirectReason::ResultMissing);
         assert!(
@@ -181,11 +234,6 @@ mod tests {
                 .apply_direct_observation(&uncertain, 1_000_000)
                 .unwrap()
         );
-        assert!(
-            store.direct_observations(1_000_000).unwrap()[0]
-                .graph_input()
-                .is_none()
-        );
         drop(store);
         let (mut store, _) = LinkStore::open(&path).unwrap();
         let proven = fact(1_000_001);
@@ -193,7 +241,7 @@ mod tests {
         let recorded = store.direct_observations(1_000_001).unwrap();
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].at_unix_ms, 1_000_000);
-        assert!(recorded[0].graph_input().is_some());
+        assert_eq!(recorded[0].outcome, DirectOutcome::Submitted);
         assert!(
             !store
                 .apply_direct_observation(&uncertain, 1_000_001)
@@ -262,18 +310,15 @@ mod tests {
         store
             .apply_direct_observation(&submitted_only, 1_000_001)
             .unwrap();
-        assert!(
-            store.direct_observations(1_000_001).unwrap()[0]
-                .graph_input()
-                .is_none()
-        );
         store
             .apply_direct_observation(&target_only, 1_000_001)
             .unwrap();
-        assert!(
-            store.direct_observations(1_000_001).unwrap()[0]
-                .graph_input()
-                .is_none()
-        );
+        // The recipient's fact stays uncertain and the submission's stays
+        // without a recipient: no fact claims a confirmed submission to it.
+        let recorded = store.direct_observations(1_000_001).unwrap();
+        assert_eq!(recorded.len(), 2);
+        assert!(recorded.iter().all(|item| {
+            !(item.outcome == DirectOutcome::Submitted && item.recipient.is_some())
+        }));
     }
 }

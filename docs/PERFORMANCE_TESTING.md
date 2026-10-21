@@ -222,7 +222,7 @@ Regression owners are `hide-agent-hooks/tests/opencode/plugin.test.mjs` and `tes
 
 Claude Code, Codex, Grok and Antigravity add one native helper start per selected shell Post event; their ordinary result pays the bounded input read and local JSON/command filter, with no observation CLI child.
 OpenCode 1/2 and Pi/omp filter the actual shell command inside the existing result handler before starting an observation helper.
-Only a recognized direct prompt candidate starts one owned sibling `hide observation --hook`, carrying at most 8 KiB of typed metadata within a 1.2-second send budget.
+Only a recognized direct prompt or agent start starts an owned sibling `hide observation --hook` (and, for starts, one more with `--start`), carrying one array of at most 64 observations of at most 8 KiB each within one shared 1.2-second send budget; the child asks the daemon once per observation.
 The helper transiently bounds command text to 64 KiB and result text to 128 KiB, discards both after parsing, and never resends the original prompt.
 No observation adds a Pre RPC, spool, timer, polling thread or detached process.
 Plugin/extension helpers share the existing eight-child admission cap, 1.5-second outer budget and shutdown cleanup; saturated helpers report a bounded lost diagnostic and preserve the tool result.

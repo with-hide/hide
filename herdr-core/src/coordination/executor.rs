@@ -1263,6 +1263,101 @@ pub(crate) fn link_fork(
     .map(drop)
 }
 
+/// Records an agent `source` started through Herdr directly, observed after
+/// the fact (PRD direct-prompt-observation-widen D-23, D-25): the operator's
+/// root with `source` as its origin, the shape a handoff's child has, with
+/// no parent, watch or pane tokens. `started` picks the agent out of Herdr's
+/// current list; exactly one must answer, with its session already shown.
+pub(crate) fn link_started(
+    runtime: &std::sync::Weak<std::sync::Mutex<crate::runtime::Runtime>>,
+    source: &crate::delivery::Actor,
+    raw_source: &str,
+    started: impl Fn(&ProjectedAgent) -> bool,
+    within: Duration,
+) -> Result<String, String> {
+    let runtime = runtime.upgrade().ok_or("delivery_unavailable")?;
+    let (client, authority, actor) = runtime
+        .lock()
+        .map_err(|_| "delivery_unavailable")?
+        .coordination_fork_context(&source.pane_id)?;
+    // The pane may hold another agent since the sender was proven.
+    if !actor.same_identity(source) {
+        return Err("observation_native_changed".into());
+    }
+    let CoordinationContext {
+        connector,
+        host_scope,
+        machine: native_machine,
+        on_node,
+        ..
+    } = self::context(&client, &actor.device_id)?;
+    let observed = agents_with_timeout(connector.as_ref(), within)?;
+    let mut matching = observed.iter().filter(|agent| started(agent));
+    let child = matching.next().ok_or("child_unavailable")?;
+    if matching.next().is_some() {
+        return Err("child_ambiguous".into());
+    }
+    let host = || HostIdentity {
+        machine: &actor.device_id,
+        scope: &host_scope,
+        native_machine: &native_machine,
+        on_node,
+    };
+    let ledger = state(&client)?;
+    let source_id = if let Some(existing) = ledger
+        .agents
+        .iter()
+        .find(|record| !record.ended && record.actor.same_identity(&actor))
+    {
+        existing.id.clone()
+    } else {
+        let native_source = observed
+            .iter()
+            .find(|agent| agent.pane_id == raw_source)
+            .ok_or("parent_unavailable")?;
+        let source_record = record(
+            native_source,
+            host(),
+            raw_source.into(),
+            native_source.name.clone(),
+            None,
+            None,
+        )?;
+        mutate(
+            &client,
+            &authority,
+            &actor,
+            Mutation::Register {
+                record: source_record,
+                check: false,
+            },
+        )?["id"]
+            .as_str()
+            .ok_or("parent_unavailable")?
+            .to_owned()
+    };
+    let mut child_record = record(
+        child,
+        host(),
+        child.pane_id.clone(),
+        child.name.clone(),
+        None,
+        child.cwd.clone(),
+    )?;
+    child_record.origin = Some(source_id);
+    mutate(
+        &client,
+        &authority,
+        &actor,
+        Mutation::RegisterStarted {
+            record: child_record,
+        },
+    )?["id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "child_unavailable".into())
+}
+
 /// Whether the existing worktree `existing` of `repo` is one this spawn
 /// made in an attempt whose reply was lost: `worktree.create` names the
 /// workspace it makes `label` (`hide:<spawn id>`). The repository itself,

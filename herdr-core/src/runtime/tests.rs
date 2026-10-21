@@ -77,6 +77,8 @@ mod named_tab;
 mod node_agent_areas;
 #[path = "tests/node_issues.rs"]
 mod node_issues;
+#[path = "tests/observed_start.rs"]
+mod observed_start;
 #[path = "tests/operator_focus.rs"]
 mod operator_focus;
 mod pane_geometry;

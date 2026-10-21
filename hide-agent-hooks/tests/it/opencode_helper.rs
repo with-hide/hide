@@ -112,7 +112,10 @@ impl Machine {
         let path = self.home.parent().unwrap().join("observation");
         let bytes = std::fs::read(&path).expect("declared observation must reach admission");
         std::fs::remove_file(path).unwrap();
-        serde_json::from_slice(&bytes).unwrap()
+        // One observation per recipient; every fixture names one.
+        let items: Vec<Value> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(items.len(), 1);
+        items.into_iter().next().unwrap()
     }
 
     fn run_command(&self, command: &mut Command, input: &[u8], in_pane: bool) -> Vec<u8> {
@@ -175,7 +178,7 @@ fn a_complete_opencode_native_result_reaches_admission_as_metadata() {
     );
     assert_eq!(result["observed"], true);
     let bytes = std::fs::read(machine.home.parent().unwrap().join("observation")).unwrap();
-    let fact: Value = serde_json::from_slice(&bytes).unwrap();
+    let fact = &serde_json::from_slice::<Value>(&bytes).unwrap()[0];
     assert_eq!(fact["runtime_id"], "opencode");
     assert_eq!(fact["session_id"], "ses_native");
     assert_eq!(fact["call_id"], "call-native");
@@ -204,7 +207,7 @@ fn a_complete_omp_timed_result_reaches_admission_as_metadata() {
     );
     assert_eq!(result["observed"], true);
     let bytes = std::fs::read(machine.home.parent().unwrap().join("observation")).unwrap();
-    let fact: Value = serde_json::from_slice(&bytes).unwrap();
+    let fact = &serde_json::from_slice::<Value>(&bytes).unwrap()[0];
     assert_eq!(fact["runtime_id"], "omp");
     assert_eq!(fact["session_id"], "native-omp");
     assert_eq!(fact["call_id"], "call-native");

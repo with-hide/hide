@@ -6,7 +6,8 @@
 //! connection to the core.
 
 pub use hide_agent_hooks::observation::{
-    DirectObservation, ITEM_LIMIT as OBSERVATION_ITEM_LIMIT, SEND_BUDGET as OBSERVATION_SEND_BUDGET,
+    DirectObservation, ITEM_LIMIT as OBSERVATION_ITEM_LIMIT,
+    RECIPIENT_LIMIT as OBSERVATION_RECIPIENT_LIMIT, SEND_BUDGET as OBSERVATION_SEND_BUDGET,
 };
 use serde::{Deserialize, Serialize};
 
@@ -68,6 +69,11 @@ pub enum HookCommand {
     WorkspaceInfo {},
     /// Metadata-only passive observation; never dispatches input or letters.
     Observation {
+        observation: DirectObservation,
+    },
+    /// The same metadata for an agent the caller started through Herdr
+    /// directly: at most an origin, never a parent, watch or letter.
+    StartObservation {
         observation: DirectObservation,
     },
     LetterPull {

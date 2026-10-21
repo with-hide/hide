@@ -16,12 +16,15 @@ import { copyFixtureShim } from "./shims/build";
 /** One `hide` command's exit status and standard output. */
 export type HideAnswer = { status: number; out: string };
 
+/** Another program of this build to run as the agent instead of `hide`, such as the hook helper, and its standard input. */
+export type AgentRun = { program?: string; input?: string };
+
 /**
  * Starts the agent in `pane` of `herdr` and returns the way to run `hide`
  * as it, against the daemon whose state folder is `stateDir`. Waits until
  * Herdr lists the agent with its session.
  */
-export async function agentPane(herdr: HerdrFixture, stateDir: string, pane: string): Promise<(args: string[]) => Promise<HideAnswer>> {
+export async function agentPane(herdr: HerdrFixture, stateDir: string, pane: string): Promise<(args: string[], run?: AgentRun) => Promise<HideAnswer>> {
   const root = herdr.root;
   const runner = path.join(root, "worker-bin", fixtureExecutable("claude"));
   fs.mkdirSync(path.dirname(runner));
@@ -36,10 +39,10 @@ export async function agentPane(herdr: HerdrFixture, stateDir: string, pane: str
   fs.writeFileSync(driver, `
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
-const args = JSON.parse(fs.readFileSync(${JSON.stringify(command)}, "utf8"));
-const ran = spawnSync(${JSON.stringify(hide)}, args, {
+const { args, program, input } = JSON.parse(fs.readFileSync(${JSON.stringify(command)}, "utf8"));
+const ran = spawnSync(program ?? ${JSON.stringify(hide)}, args, {
   env: { ...process.env, HIDE_STATE_DIR: ${JSON.stringify(stateDir)} },
-  encoding: "utf8", timeout: 30000, maxBuffer: 1 << 20,
+  input, encoding: "utf8", timeout: 30000, maxBuffer: 1 << 20,
 });
 fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify({ status: ran.status ?? -1, out: ran.stdout ?? "" }));
 `);
@@ -49,8 +52,8 @@ fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify({ status: ran.status 
     const listed = herdr.run(["agent", "list"]) as { result: { agents: { pane_id: string; agent_session?: { value: string } }[] } };
     return listed.result.agents.find((agent) => agent.pane_id === pane)?.agent_session?.value ?? null;
   }, { message: `${pane} runs a listed Claude Code agent`, timeout: 20_000 }).toBeTruthy();
-  return async (args) => {
-    fs.writeFileSync(command, JSON.stringify(args));
+  return async (args, run = {}) => {
+    fs.writeFileSync(command, JSON.stringify({ args, ...run }));
     fs.rmSync(completed, { force: true });
     fs.rmSync(output, { force: true });
     execFileSync(herdr.bin, ["pane", "send-text", pane, "!"], { env: herdr.env, timeout: 10_000 });
