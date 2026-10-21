@@ -196,7 +196,7 @@ mod tests {
         );
         scope.task_context = Some("테스트 실행기 점검".into());
         let result = answer(&scope, &ask, Instant::now() + WITHIN);
-        assert_eq!(result.outcome, HookOutcome::Provided);
+        assert_eq!(result.outcome, HookOutcome::Provided { count: 1 });
         assert!(
             result
                 .context
