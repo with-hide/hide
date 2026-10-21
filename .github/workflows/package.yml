@@ -169,6 +169,11 @@ jobs:
           fi
           test -x "$app/resources/hide${{ matrix.system == 'windows' && '.exe' || '' }}"
           echo "app=$app" >> "$GITHUB_OUTPUT"
+      - name: TEMPORARY first-start evidence (#1515)
+        if: matrix.system == 'windows'
+        continue-on-error: true
+        timeout-minutes: 15
+        run: node desktop/scripts/evidence-first-start.mjs "${{ steps.installed.outputs.app }}" 8
       - name: Start the installed package without a window
         timeout-minutes: 5
         run: node desktop/scripts/smoke-package.mjs "${{ steps.installed.outputs.app }}"

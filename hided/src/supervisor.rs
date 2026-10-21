@@ -98,6 +98,7 @@ pub async fn run(env: Env) -> Result<(), String> {
     // runs, the move screen included; a request before the first role
     // waits for it (`seat`).
     crate::record_daemon(&state_dir, &seat.parts(), env.herdr_socket_path.clone())?;
+    seat.parts().starting("resume");
     // Whatever role runs, the moves given up here are ended on their
     // machines.
     let ending_abandoned = tokio::spawn(end_abandoned(env.clone(), seat.stop.clone()));
