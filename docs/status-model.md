@@ -797,7 +797,7 @@ A new Herdr hook reference supersedes the locator and clears the previous displa
 No latest-session, cwd or reverse owner-hash guess is made.
 
 The core publishes `record_connection` as `checking`, `confirmed` or `unconfirmed` when a row has display history.
-Checking and unconfirmed history keeps its last title and valid PRs dimmed with the localized connection words; confirmed history removes that treatment.
+Checking and unconfirmed history keeps its last title and valid PRs dimmed, with the localized connection words only in the hint and accessible name; confirmed history removes that treatment.
 A provisional PR participates in the display summary without gaining current work duty or a session-created relation; the normal merged/closed display filter still applies.
 It cannot change a task's stage, and a tab's title provenance follows the core's focused pane even when several panes share a title.
 Failure keeps display history and retries through the existing single reader, at most once per pane per fifteen seconds after an unsuccessful confirmation.

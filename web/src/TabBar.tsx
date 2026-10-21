@@ -190,7 +190,7 @@ const TabButton = memo(function TabButton({
     >
       {mark}
       {editor ?? <span className={`@container/tab-title flex h-full min-w-0 flex-1 items-center gap-xs ${fit.title}`}>
-        {recordAgent ? <AgentRecordTitle agent={recordAgent} stacked /> : <span className="min-w-0 flex-1 truncate">{entry.label}</span>}
+        {recordAgent ? <AgentRecordTitle agent={recordAgent} /> : <span className="min-w-0 flex-1 truncate">{entry.label}</span>}
         {closing ? <span className="text-muted-foreground"> {t("panes.transport.closing")}</span> : null}
         {/* Keep title room and the close/keycap slot even at the title minimum.
             CSS follows the available title slot without another resize observer. */}

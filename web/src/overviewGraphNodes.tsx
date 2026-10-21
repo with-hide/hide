@@ -122,7 +122,7 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
         ? <span className="og-orb og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })}><AgentMark kind={row.agent.agent_kind} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} /></span></span>
         // A delegated session is a small dot in its state's color.
         : <span className="og-dot og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })} />}
-      <strong className="og-session-title"><AgentRecordTitle agent={row.agent} stacked />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong>
+      <strong className="og-session-title"><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong>
       {root || asking ? <GraphLine agent={row.agent} className={asking ? "og-session-line og-asking" : "og-session-line"} /> : null}
     </button>
     {team ? <button type="button" className="og-team-chip nodrag nopan" data-folded={team.folded} data-turn={team.turn > 0} aria-expanded={!team.folded} aria-label={t(team.folded ? "overviewGraph.unfoldTeam" : "overviewGraph.foldTeam", { count: team.count })} onClick={team.toggle}>
