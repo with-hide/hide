@@ -97,7 +97,7 @@ export function ClusterGraphNode({ data }: NodeProps<ClusterNode>) {
   const { t } = useInterfaceTranslation();
   const { summary } = data;
   const label = summary.project.workspace.label;
-  return <div className="og-cluster" data-graph-cluster={summary.project.workspace.id} data-turn={summary.turn > 0} data-accent={data.accent} data-emphasized={data.emphasized} onPointerEnter={() => data.point(summary.id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(summary.id)} onBlur={() => data.point(null)}>
+  return <div className="og-cluster" data-graph-cluster={summary.project.workspace.id} data-accent={data.accent} data-emphasized={data.emphasized} onPointerEnter={() => data.point(summary.id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(summary.id)} onBlur={() => data.point(null)}>
     <Ports />
     <button type="button" className="og-cluster-orb og-cluster-drag nopan" style={{ width: data.orb, height: data.orb }} aria-label={t("overviewGraph.unfoldProject", { project: label, count: summary.sessions })} onClick={() => { data.point(null); data.unfold(summary.id); }}>{summary.sessions}{summary.turn > 0 ? <span className="og-orb-state"><StatusMark mark="turn" /></span> : null}</button>
     <strong>{label}</strong>
