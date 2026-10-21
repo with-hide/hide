@@ -338,6 +338,7 @@ A test whose assertion requires a pipe to have no readers creates and closes tha
    This fixture calls `stand_ins::ready_with_args(&helper, &["node", "--version"])` before its unchanged five-second protocol deadline, using the same file-identity cache and owned 60-second setup guard as `ready`.
    Choose a known one-shot invocation: `hided --help` starts a daemon, whereas `hided node --version` exits without opening daemon state.
    The Unix shell-start fixture (`herdr-core/src/agent_start/real_herdr_tests.rs`) builds its native agent with `cc` and starts that file without arguments before the launch deadline; with arguments it stays alive for Herdr's process detection.
+   A system program pays the same on Windows: Windows PowerShell's first start in a CI job, beside the other tests starting theirs, took from 2 s to past a 15 s run's hang guard (issue 1497), so a test that bounds a run through it starts it once first with `ready_with_args` (`agy_shell` in `hide-agent-hooks/tests/it/windows_hook_command.rs`).
    Do not rename a system utility to stand in for an agent: a multicall utility can choose its implementation from the executable name and reject the agent's name.
 9. **Retries are a classification.**
    CI runs every Rust lane (Linux, macOS, Windows, the OS contract and nightly) with `scripts/verify-cargo.sh nextest --profile ci` (`retries = 1` in `.config/nextest.toml`), so a test that fails once and then passes is reported as flaky and recorded in an issue with an expiry; two failures fail the lane.
