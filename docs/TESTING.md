@@ -102,8 +102,9 @@ When the behavior depends on the order of two events, the test fixes that order;
 ## Writing a fixture
 
 - Set every fixture's `HOME` and Hide state folder to private paths before starting a candidate.
-- The Unix real-shell agent fixture records its launch arguments, then runs the system `sleep` as a long-lived agent process.
-  Linux reads the process name from the copied executable's filename, so keep that agent filename but pass `sleep` as `argv[0]` for multicall coreutils to select the utility; macOS uses the agent name in `argv[0]` instead.
+- The Unix real-shell agent fixture records its launch arguments, then waits in one process for at most 600 seconds.
+  macOS uses a `sleep` symlink with the agent name in `argv[0]`; Linux uses a copied Bash with the agent filename and its `read -r -t 600` builtin, because this scenario sends no input after launch.
+  Do not rename a multicall system utility for the Linux stand-in: its dispatcher can reject the agent filename even when `argv[0]` names the utility.
 - A restart fixture that requires completed native labels waits for the matching session, goal and end in the private `labels.json` before stopping the daemon; a rendered label alone does not prove its asynchronous save completed, and Windows fixture shutdown is forced.
 - The same boundary applies to Workspace views: `web/e2e/right-lane.spec.ts` waits for the expected tool, pin and active document in the private `workspace-views.json` before each restart, then checks the restored screen.
   A rendered pin or selected document alone does not prove the save has landed; a missing save fails the persistence wait rather than racing the forced shutdown.

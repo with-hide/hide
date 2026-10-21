@@ -389,23 +389,23 @@ fn pane_path(herdr: &PrivateHerdr) -> String {
 fn unix_agent(herdr: &PrivateHerdr) {
     let agent = herdr.home.join("agent");
     std::fs::create_dir_all(&agent).unwrap();
-    let sleep = ["/bin/sleep", "/usr/bin/sleep"]
-        .into_iter()
-        .find(|path| Path::new(path).is_file())
-        .unwrap();
-    let argv0 = if cfg!(target_os = "macos") {
+    let arguments = if cfg!(target_os = "macos") {
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .into_iter()
+            .find(|path| Path::new(path).is_file())
+            .unwrap();
         std::os::unix::fs::symlink(sleep, agent.join("claude")).unwrap();
-        "claude"
+        "600"
     } else {
-        std::fs::copy(sleep, agent.join("claude")).unwrap();
-        // Linux keeps the copied filename as the process name; multicall
-        // utilities still need their original argv[0] to select sleep.
-        "sleep"
+        std::fs::copy("/bin/bash", agent.join("claude")).unwrap();
+        // Keep one process named after the copied file, without a multicall
+        // utility or child process. This scenario sends no input after start.
+        "--noprofile --norc -c 'read -r -t 600'"
     };
     let script = herdr.home.join("bin/claude");
     std::fs::write(
         &script,
-        format!("#!/bin/bash\nprintf '%s\\n' \"${{PWD##*/}} $*\" >> \"$HOME/claude-args\"\nexec -a {argv0} \"$HOME/agent/claude\" 600\n"),
+        format!("#!/bin/bash\nprintf '%s\\n' \"${{PWD##*/}} $*\" >> \"$HOME/claude-args\"\nexec -a claude \"$HOME/agent/claude\" {arguments}\n"),
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
