@@ -54,9 +54,12 @@
 .og-session-drag { cursor: grab; }
 .og-session-drag:active { cursor: grabbing; }
 .og-orb-state { position: absolute; right: calc(-1 * var(--spacing-xxs)); bottom: 0; display: flex; border-radius: 50%; background: var(--card); padding: var(--size-hairline); }
-.og-session-title { max-width: 100%; font-size: var(--text-caption); font-weight: 500; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+/* Lines pass behind a circle's words: the title and line sit on the canvas colour. */
+.og-session-title, .og-session-line { max-width: 100%; padding-inline: var(--spacing-xxs); border-radius: var(--radius-sm); background: var(--background); }
+.og-session-title { font-size: var(--text-caption); font-weight: 500; line-height: 1.4; }
+.og-session-title [data-agent-title] { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; text-align: center; }
 .og-session[data-ring="true"] .og-session-title { font-size: var(--text-body); font-weight: 600; }
-.og-session-line { max-width: 100%; justify-content: center; font-size: var(--text-caption); line-height: 1.4; color: var(--subtle-foreground); }
+.og-session-line { justify-content: center; font-size: var(--text-caption); line-height: 1.4; color: var(--subtle-foreground); }
 .og-session-line.og-asking { color: var(--warning); }
 .og-session[data-context="true"] .og-session-target, .og-session[data-muted="true"] .og-session-target { opacity: var(--opacity-dimmed); }
 .og-session[data-highlighted="true"] .og-orb { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
