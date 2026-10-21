@@ -289,6 +289,37 @@ pub struct PathIndex {
 /// How long the core's own node may take to read the paths of one rebuild.
 const PATH_FACTS_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The paths whose Project the node could not read, with the reason, as
+/// last logged: every catalog build reads the same answer, and only a
+/// change is logged. Past the cap a new one is logged on every build.
+static UNREAD_PROJECTS_LOGGED: std::sync::Mutex<BTreeMap<String, String>> =
+    std::sync::Mutex::new(BTreeMap::new());
+const UNREAD_PROJECTS_LOGGED_LIMIT: usize = 512;
+
+fn log_unread_projects(facts: &PathFacts) {
+    let Ok(mut logged) = UNREAD_PROJECTS_LOGGED.lock() else {
+        return;
+    };
+    for (path, fact) in &facts.paths {
+        let Some(reason) = fact.project_unread.as_ref() else {
+            logged.remove(path);
+            continue;
+        };
+        if logged.get(path) == Some(reason) {
+            continue;
+        }
+        crate::diagnostic!(serde_json::json!({
+            "component": "workspace_catalog",
+            "kind": "project_facts.read_failed",
+            "path": path,
+            "message": reason,
+        }));
+        if logged.contains_key(path) || logged.len() < UNREAD_PROJECTS_LOGGED_LIMIT {
+            logged.insert(path.clone(), reason.clone());
+        }
+    }
+}
+
 impl PathIndex {
     /// An index that knows no path: every path is read by its names.
     pub const NONE: Self = Self {
@@ -298,18 +329,7 @@ impl PathIndex {
     };
 
     pub fn new(facts: PathFacts) -> Self {
-        for (path, reason) in facts
-            .paths
-            .iter()
-            .filter_map(|(path, fact)| Some((path, fact.project_unread.as_ref()?)))
-        {
-            crate::diagnostic!(serde_json::json!({
-                "component": "workspace_catalog",
-                "kind": "project_facts.read_failed",
-                "path": path,
-                "message": reason,
-            }));
-        }
+        log_unread_projects(&facts);
         let mut paths = facts.paths;
         let aliases = paths
             .values()
@@ -1118,33 +1138,51 @@ mod tests {
     use std::process::Command;
 
     #[test]
-    fn a_project_its_node_could_not_read_reaches_the_cores_log() {
+    fn a_project_its_node_could_not_read_reaches_the_cores_log_once_per_change() {
+        // Paths of this test alone: the record of what was logged is the
+        // process's.
         let fact = |unread: Option<&str>| PathFact {
-            comparison: "/p".into(),
+            comparison: "/unread-once".into(),
             exists: true,
             project: None,
             project_unread: unread.map(str::to_owned),
             repository: None,
         };
-        let facts = PathFacts {
+        let facts = |unread: Option<&str>| PathFacts {
             paths: BTreeMap::from([
-                ("/p".to_owned(), fact(Some("project_path_not_utf8"))),
-                ("/q".to_owned(), fact(None)),
+                ("/unread-once".to_owned(), fact(unread)),
+                ("/unread-once-fine".to_owned(), fact(None)),
             ]),
             ..PathFacts::default()
         };
-        let (_, records) = crate::diagnostics::capture(|| PathIndex::new(facts));
-        let logged: Vec<_> = records
-            .iter()
-            .filter(|record| record["kind"] == "project_facts.read_failed")
-            .map(|record| (record["path"].clone(), record["message"].clone()))
-            .collect();
+        let logged = |unread: Option<&str>| {
+            let (_, records) = crate::diagnostics::capture(|| PathIndex::new(facts(unread)));
+            records
+                .iter()
+                .filter(|record| record["kind"] == "project_facts.read_failed")
+                .map(|record| (record["path"].clone(), record["message"].clone()))
+                .collect::<Vec<_>>()
+        };
+        let said =
+            |reason: &str| vec![(serde_json::json!("/unread-once"), serde_json::json!(reason))];
         assert_eq!(
-            logged,
-            [(
-                serde_json::json!("/p"),
-                serde_json::json!("project_path_not_utf8")
-            )]
+            logged(Some("project_path_not_utf8")),
+            said("project_path_not_utf8")
+        );
+        assert_eq!(
+            logged(Some("project_path_not_utf8")),
+            [],
+            "the same answer again"
+        );
+        assert_eq!(
+            logged(Some("project_git_link_invalid")),
+            said("project_git_link_invalid")
+        );
+        assert_eq!(logged(None), []);
+        assert_eq!(
+            logged(Some("project_git_link_invalid")),
+            said("project_git_link_invalid"),
+            "read once and then not again is a change"
         );
     }
 
