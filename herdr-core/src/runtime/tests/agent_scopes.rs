@@ -230,6 +230,8 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
         line: None,
         end: None,
         request: None,
+        request_summary: None,
+        recent_turns: Vec::new(),
         later_by: None,
         reply: None,
         pull_requests: vec![pull],

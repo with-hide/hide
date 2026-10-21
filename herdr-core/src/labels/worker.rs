@@ -2297,6 +2297,20 @@ impl LabelWorker {
                         );
                     }
                 }
+                // The summary belongs to the message at its own offset, so a
+                // late answer about an older turn never covers a newer request
+                // (PRD pane-last-request B12); how the turn stood is kept only
+                // while it is still the current one.
+                if let Some(offset) = outcome.offset {
+                    let requester = record.facts.requester_at(offset).cloned();
+                    record.record_turn(
+                        offset,
+                        &analysis.request,
+                        requester,
+                        (!stale_display).then_some((analysis.end, analysis.line.as_str())),
+                        outcome.request_at_unix_ms,
+                    );
+                }
                 if stale_display {
                     record.task_input_cursor =
                         outcome.task_input_cursor.or(record.task_input_cursor);
@@ -2340,6 +2354,7 @@ impl LabelWorker {
                     "operator_turn": outcome.operator_turn,
                     "goal_chars": analysis.goal.as_ref().map_or(0, |goal| goal.chars().count()),
                     "line_chars": analysis.line.chars().count(),
+                    "request_chars": analysis.request.chars().count(),
                     "end": analysis.end,
                     "context_chars": outcome.context_chars,
                     "turn": format!("{:016x}", outcome.turn),
@@ -2392,6 +2407,11 @@ impl LabelWorker {
                 if cleared {
                     record.end = None;
                     record.line.clear();
+                    self.dirty = true;
+                }
+                if let Some(offset) = outcome.offset
+                    && record.forget_turn_outcome(offset)
+                {
                     self.dirty = true;
                 }
                 let pane = self.panes.get_mut(pane_id).expect("checked above");

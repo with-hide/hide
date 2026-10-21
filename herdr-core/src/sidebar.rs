@@ -949,6 +949,7 @@ mod tests {
         use crate::labels::facts::{Request, Requester};
         let request = |at_unix_ms, requester| Request {
             text: "a native request".to_owned(),
+            offset: None,
             cut: false,
             images: 0,
             at_unix_ms,

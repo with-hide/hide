@@ -64,7 +64,7 @@ impl Scripted {
             format!("{goal} 진행")
         };
         self.answers.lock().unwrap().push_back(json!({
-            "goal": goal, "goal_update": "replace", "line": line, "end": end,
+            "goal": goal, "goal_update": "replace", "request": format!("{goal} 요청"), "line": line, "end": end,
             "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
         }));
     }
@@ -72,7 +72,7 @@ impl Scripted {
     /// A turn start's answer, which says nothing of how the turn ends.
     fn begin(&self, goal: &str) {
         self.answers.lock().unwrap().push_back(json!({
-            "goal": goal, "goal_update": "replace", "line": format!("{goal} 진행"),
+            "goal": goal, "goal_update": "replace", "request": format!("{goal} 요청"), "line": format!("{goal} 진행"),
         }));
     }
 
@@ -136,6 +136,11 @@ impl AiBackend for Scripted {
             .unwrap()
             .pop_front()
             .ok_or_else(|| AiError::Transient("no scripted answer".to_owned()))?;
+        // Answers written before v19 asked for a request summary give none.
+        let mut value = value;
+        if let Some(answer) = value.as_object_mut() {
+            answer.entry("request").or_insert(json!(""));
+        }
         Ok(AiResponse {
             value,
             usage: Default::default(),
@@ -2162,6 +2167,89 @@ fn a_new_turn_read_retires_an_old_done_result_that_arrived_first() {
         shown(&worker, &next).unwrap().progress.as_deref(),
         Some("다음 요청의 실제 작업 진행")
     );
+    // The late answer about the first turn never names the next request
+    // (PRD pane-last-request B12); this fixture rewrites the transcript, so
+    // the first turn's own summary went with its offsets.
+    let facts = shown_facts(&worker, &next).unwrap();
+    let shown_request = facts
+        .operator_request
+        .or(facts.other_request)
+        .expect("the next request is shown");
+    assert_eq!(shown_request.text, "다음 요청");
+    let turns: Vec<_> = facts
+        .recent_turns
+        .iter()
+        .map(|turn| {
+            (
+                Some(turn.offset) == shown_request.offset,
+                turn.request.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(turns, [(true, "다음 요청의 실제 작업 요청")]);
+}
+
+/// D-09, B12: each turn keeps its request summary by its message's offset,
+/// with how it ended; a new request shows its own once its start is judged,
+/// and the turn before it stays for the turn card.
+#[test]
+fn each_turn_keeps_its_own_request_summary_and_how_it_ended() {
+    let mut harness = Harness::new();
+    let path = harness.session("a", "native-a", &[("user", "첫 요청")]);
+    harness.backend.begin("첫 요청의 실제 작업");
+    let (mut worker, woken, _source) = harness.worker(harness.store());
+    observe(&mut worker, &agent(&path, "working", 5));
+    settle(&mut worker, &woken);
+    harness.backend.answer("첫 요청을 마침", "done", "");
+    harness.session(
+        "a",
+        "native-a",
+        &[("user", "첫 요청"), ("assistant", "첫 작업 완료")],
+    );
+    observe(&mut worker, &agent(&path, "idle", 6));
+    settle(&mut worker, &woken);
+    harness.backend.begin("다음 요청의 실제 작업");
+    harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "첫 요청"),
+            ("assistant", "첫 작업 완료"),
+            ("user", "다음 요청"),
+        ],
+    );
+    let next = agent(&path, "working", 7);
+    observe(&mut worker, &next);
+    settle(&mut worker, &woken);
+    let facts = shown_facts(&worker, &next).unwrap();
+    let shown_request = facts.operator_request.or(facts.other_request).unwrap();
+    assert_eq!(shown_request.text, "다음 요청");
+    let turns: Vec<_> = facts
+        .recent_turns
+        .iter()
+        .map(|turn| {
+            (
+                Some(turn.offset) == shown_request.offset,
+                turn.request.as_str(),
+                turn.end,
+            )
+        })
+        .collect();
+    assert_eq!(
+        turns,
+        [
+            (
+                false,
+                "첫 요청을 마침 요청",
+                Some(super::analysis::LabelEnd::Done)
+            ),
+            (
+                true,
+                "다음 요청의 실제 작업 요청",
+                Some(super::analysis::LabelEnd::Working)
+            ),
+        ]
+    );
 }
 
 #[test]
@@ -2275,7 +2363,7 @@ fn a_null_goal_is_valid_but_an_absent_or_invalid_goal_is_not() {
     use super::analysis::{AnalysisPhase, LabelEnd};
     use super::context_label::{parse, request};
     for phase in [AnalysisPhase::TurnStart, AnalysisPhase::TurnEnd] {
-        let mut answer = json!({"goal": null, "goal_update": "keep", "line": ""});
+        let mut answer = json!({"goal": null, "goal_update": "keep", "request": "", "line": ""});
         if phase == AnalysisPhase::TurnEnd {
             answer["end"] = json!("done");
             answer["work"] =
@@ -2481,7 +2569,7 @@ fn a_long_line_is_cut_between_words_and_a_question_stays_a_question() {
             AnalysisPhase::TurnEnd,
             language,
             json!({
-                "goal": null, "goal_update": "keep", "line": line, "end": end,
+                "goal": null, "goal_update": "keep", "request": "", "line": line, "end": end,
                 "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
             }),
         )
@@ -2638,11 +2726,14 @@ fn a_label_request_carries_its_language_and_that_languages_lengths() {
         let mut answer = json!({
             "goal": "w".repeat(goal + 5),
             "goal_update": "replace",
+            "request": "r".repeat(line + 5),
             "line": "l".repeat(line + 5),
         });
         let parsed = parse(AnalysisPhase::TurnStart, language, answer.clone()).unwrap();
         assert_eq!(parsed.goal.unwrap().chars().count(), goal);
         assert_eq!(parsed.line.chars().count(), line);
+        // The request summary is drawn in the same one line (D-08).
+        assert_eq!(parsed.request.chars().count(), line);
         answer["goal"] = json!("w".repeat(goal));
         let parsed = parse(AnalysisPhase::TurnStart, language, answer).unwrap();
         assert_eq!(parsed.goal.unwrap(), "w".repeat(goal));

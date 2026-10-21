@@ -68,6 +68,9 @@ pub(crate) struct Analysis {
     /// the operator has asked for work.
     pub(crate) goal: Option<String>,
     pub(crate) goal_update: GoalUpdate,
+    /// The turn's opening message in one line, read against the earlier
+    /// events (PRD pane-last-request D-03); empty when it says nothing.
+    pub(crate) request: String,
     /// This turn's work while it runs, its result once over, or what the
     /// operator is to answer or do when it ended on a question.
     pub(crate) line: String,

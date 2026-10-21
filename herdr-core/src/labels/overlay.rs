@@ -61,6 +61,7 @@ struct Summary {
     goal: Option<String>,
     line: String,
     end: Option<LabelEnd>,
+    recent_turns: Vec<store::RecentTurn>,
 }
 
 impl LabelOverlay {
@@ -81,6 +82,7 @@ impl LabelOverlay {
                         goal: record.goal.clone(),
                         line: record.line.clone(),
                         end: record.end,
+                        recent_turns: record.recent_turns.clone(),
                     }),
                     facts: row_facts(&record.facts),
                     turn: record.turn_read(),
@@ -268,6 +270,7 @@ impl LabelOverlay {
                 });
                 facts.end = summary.end;
                 facts.line = line;
+                facts.recent_turns.clone_from(&summary.recent_turns);
             }
             agent.facts = Some(facts);
         }
@@ -304,6 +307,7 @@ fn row_facts(facts: &SessionFacts) -> RowFacts {
             .collect(),
         end: None,
         line: None,
+        recent_turns: Vec::new(),
         awaiting_operator: false,
         user_turn: None,
         wake_devices: 0,

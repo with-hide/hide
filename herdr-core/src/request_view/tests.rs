@@ -30,6 +30,7 @@ fn rows(agents: &[(&str, &str)]) -> Vec<SidebarAgentSnapshot> {
 fn request(text: &str, requester: Requester, at: u64, first: bool) -> Request {
     Request {
         text: text.to_owned(),
+        offset: None,
         cut: false,
         images: 0,
         at_unix_ms: at,
@@ -853,4 +854,69 @@ fn a_merged_pull_request_of_a_reused_branch_name_is_not_a_rows_result() {
     let current = head_of("feature");
     assert_eq!(on("new-work"), 0);
     assert_eq!(on(&current), 1);
+}
+
+fn turn(offset: u64, request: &str, end: Option<LabelEnd>) -> RecentTurn {
+    RecentTurn {
+        offset,
+        request: request.to_owned(),
+        requester: Some(Requester::Operator),
+        end,
+        line: format!("{request} 결과"),
+        at_unix_ms: offset,
+    }
+}
+
+/// PRD pane-last-request D-02, D-10, D-16: the shown request reads as the
+/// label's summary of the message at its offset, and as its own first line
+/// (a letter's header left out, spaces folded) until there is one. The turn
+/// card gets up to two turns before it, newest first, never a later one.
+#[test]
+fn the_shown_request_reads_as_its_summary_or_its_own_first_line() {
+    let mut rows = rows(&[("w1:p1", "working")]);
+    let facts = rows[0].row_facts.as_mut().unwrap();
+    let mut asked = request(
+        "Hide letter l-1 from lead (claude) [request]\n\n  ㅇㅇ   그렇게 해  \n점검도",
+        Requester::Operator,
+        ASKED,
+        false,
+    );
+    asked.offset = Some(40);
+    facts.operator_request = Some(asked);
+    run(&mut rows, &[], &github(Vec::new()));
+    let view = rows[0].request.as_ref().unwrap();
+    assert_eq!(view.request_summary.as_deref(), Some("ㅇㅇ 그렇게 해"));
+    assert!(view.recent_turns.is_empty());
+
+    let facts = rows[0].row_facts.as_mut().unwrap();
+    facts.recent_turns = vec![
+        turn(10, "첫 요청 요약", Some(LabelEnd::Done)),
+        turn(20, "둘째 요청 요약", Some(LabelEnd::Working)),
+        turn(30, "셋째 요청 요약", Some(LabelEnd::Question)),
+        turn(
+            40,
+            "제안대로 진행 + 애매한 상태 점검",
+            Some(LabelEnd::Working),
+        ),
+        turn(50, "나중 편지 요약", None),
+    ];
+    run(&mut rows, &[], &github(Vec::new()));
+    let view = rows[0].request.as_ref().unwrap();
+    assert_eq!(
+        view.request_summary.as_deref(),
+        Some("제안대로 진행 + 애매한 상태 점검")
+    );
+    let earlier: Vec<_> = view
+        .recent_turns
+        .iter()
+        .map(|turn| (turn.request.as_deref(), turn.end))
+        .collect();
+    assert_eq!(
+        earlier,
+        [
+            (Some("셋째 요청 요약"), Some(LabelEnd::Question)),
+            // A turn judged only while it ran says nothing of how it ended.
+            (Some("둘째 요청 요약"), None),
+        ]
+    );
 }
