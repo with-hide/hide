@@ -947,7 +947,7 @@ Each project gathers around its own place on an ellipse around the operator, so 
 A delegated session is a small dot in its state colour, tied short to its parent by a faint line, and a grandchild sits outside its parent the same way (D-02).
 Behind each project's cluster is a soft glow in the project's accent colour, and its name sits in bold, larger than a session's title, in that colour above the cluster; there is no band or box (D-17).
 The accent is one of sky, violet, lime and amber, chosen by a stable hash of the project's id.
-Pointing at a project's name or its row in the side column, or choosing one of its sessions so its details open, makes that project's glow and name clearly stronger, and they return when the pointer leaves or the choice closes; the current pane's highlight at entry lights nothing, and reduced motion changes them without a transition (B21).
+Pointing at a project's name or its row in the side column, focusing either from the keyboard, or choosing one of its sessions so its details open, makes that project's glow and name clearly stronger, and they return when the pointer leaves or the choice closes; the current pane's highlight at entry lights nothing, and reduced motion changes them without a transition (B21).
 Placement is computed in the web shell and settles before the first paint, so nothing wobbles on open; every start position comes from the session's id, so the same sessions open in the same shape (D-13).
 Status, labels, letters, filters, selection, hiding and folding never enter the layout key.
 When a session appears, every placed session holds still while only the new one finds a place beside its parent or in its project; a session that leaves takes only itself away.

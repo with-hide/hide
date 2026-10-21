@@ -27,7 +27,8 @@
 /* A project is a soft light of its color behind its sessions, with its name above them as the
    project's drag handle. Nothing but the name takes the pointer, so the canvas pans everywhere else. */
 .og-project { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; gap: var(--spacing-xxs); font-size: var(--text-headline); font-weight: 700; line-height: 1.2; opacity: 0.8; transition: opacity calc(var(--graph-motion-ms) * 1ms) ease-out, text-shadow calc(var(--graph-motion-ms) * 1ms) ease-out; }
-.og-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: grab; }
+/* The name clips for its ellipsis, so it keeps room inside for its glow's blur. */
+.og-project-name { min-width: 0; overflow: hidden; padding: var(--spacing-md); margin: calc(var(--spacing-md) * -1); text-overflow: ellipsis; white-space: nowrap; cursor: grab; }
 .og-project[data-current="true"] { opacity: 1; }
 /* Pointed at, or holding the chosen session, the project's name and glow stand out (PRD D-17, B21). */
 .og-project[data-emphasized="true"] { opacity: 1; text-shadow: 0 0 var(--spacing-md) color-mix(in srgb, var(--og-accent) 70%, transparent); }

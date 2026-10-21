@@ -99,8 +99,11 @@ test("@platform Overview restores its exact current session and keeps map moveme
     await graph.locator("[data-graph-project] .og-project-fold").first().click();
     await expect(graph.locator("[data-graph-cluster]")).toHaveCount(1);
     await expect(graph.locator("[data-graph-session]")).toHaveCount(0);
+    // The fold replaced the name under the pointer; the folded circle is not left lit.
+    await expect(graph.locator("[data-graph-cluster]")).toHaveAttribute("data-emphasized", "false");
     await graph.locator("[data-graph-cluster] .og-cluster-orb").click();
     await expect(graph.locator("[data-graph-cluster]")).toHaveCount(0);
+    await expect(glow).toHaveAttribute("data-emphasized", "false");
     await expect.poll(positions).toEqual(before);
     // B25/B26: folding all turns the project into one circle; unfolding brings every session back to its place.
     await graph.getByRole("button", { name: "Fold all", exact: true }).click();
