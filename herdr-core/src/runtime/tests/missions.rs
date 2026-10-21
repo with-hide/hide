@@ -444,28 +444,90 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
         vec!["mission:mission-1:fix:7:changes_requested:b2:2:sender"]
     );
 
-    // A merge of a done mission's pull request reopens it with the wake.
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "close", "end": "merge_wait"}),
-    )
-    .unwrap();
+    // A new commit on a done mission's pull request opens it again.
     command(
         &mut runtime,
         "sender",
         json!({"op": "close", "end": "done"}),
     )
     .unwrap();
-    let merged = github(vec![pull(7, "b2", PullRequestBadge::Merged, None)], false);
-    assert_eq!(
-        runtime.note_mission_pulls(node, &merged),
-        vec!["mission:mission-1:fix:7:merged:-:3:sender"]
+    let status = |runtime: &Runtime, id: &str| runtime.missions.book.get(id).unwrap().status;
+    let pushed_again = github(vec![pull(7, "c3", PullRequestBadge::Open, None)], false);
+    assert_eq!(runtime.note_mission_pulls(node, &pushed_again).len(), 1);
+    assert_eq!(status(&runtime, "mission-1"), MissionStatus::Running);
+
+    // Its merge is the end it was waiting for: no wake, and it stays done.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    let merged = github(vec![pull(7, "c3", PullRequestBadge::Merged, None)], false);
+    assert!(runtime.note_mission_pulls(node, &merged).is_empty());
+    assert_eq!(status(&runtime, "mission-1"), MissionStatus::Done);
+}
+
+/// A Conductor conducts one open mission, which its commands and starts
+/// mean when they name none: a change to a done one while it conducts
+/// another tells it, and neither that change nor `reopen` opens a second.
+#[test]
+fn a_done_mission_does_not_open_beside_its_conductors_open_one() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "First"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
+    )
+    .unwrap();
+    let node = crate::node::TEST_NODE;
+    runtime.note_mission_pulls(
+        node,
+        &github(vec![pull(7, "a1", PullRequestBadge::Open, None)], false),
     );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Second"}),
+    )
+    .unwrap();
+
+    let pushed = github(vec![pull(7, "b2", PullRequestBadge::Open, None)], false);
     assert_eq!(
-        runtime.missions.book.get("mission-1").unwrap().status,
-        MissionStatus::Running
+        runtime.note_mission_pulls(node, &pushed),
+        vec!["mission:mission-1:fix:7:new_head:b2:1:sender"],
+        "the Conductor is still told"
     );
+    let status = |runtime: &Runtime, id: &str| runtime.missions.book.get(id).unwrap().status;
+    assert_eq!(status(&runtime, "mission-1"), MissionStatus::Done);
+    assert_eq!(
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "reopen", "mission": "mission-1"})
+        )
+        .unwrap_err(),
+        "mission_already_conducting"
+    );
+    assert_eq!(status(&runtime, "mission-1"), MissionStatus::Done);
+    // What names no mission still means the open one.
+    let (shown, _) = command(&mut runtime, "sender", json!({"op": "show"})).unwrap();
+    assert_eq!(shown["mission"]["id"], "mission-2");
 }
 
 /// A wake is kept in the record until its letter is in the Conductor's
@@ -839,6 +901,104 @@ fn a_merge_wait_mission_closes_when_its_whole_stack_is_merged() {
             .closed_at_unix_ms
             .is_some()
     );
+}
+
+/// A waiting mission stands only behind the pull requests still in its
+/// stack: a node that failed is out of it, a pull request closed without
+/// its merge leaves nothing to wait on, and a mission with none closes at
+/// once.
+#[test]
+fn a_merge_wait_mission_waits_only_on_the_pull_requests_left_in_its_stack() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Stack"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "api", "title": "API", "kind": "change", "delivery": "pr"},
+            {"key": "screen", "title": "Screen", "kind": "change", "delivery": "pr"},
+            {"key": "docs", "title": "Docs", "kind": "change", "delivery": "pr"},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    for (node, pr, status) in [
+        ("api", 7, "done"),
+        ("screen", 8, "failed"),
+        ("docs", 9, "done"),
+    ] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": node, "patch": {"pr": pr, "status": status}}),
+        )
+        .unwrap();
+    }
+    let node = crate::node::TEST_NODE;
+    let answer = |api, docs| {
+        github(
+            vec![
+                pull(7, "a1", api, None),
+                pull(8, "b1", PullRequestBadge::Open, None),
+                pull(9, "c1", docs, None),
+            ],
+            false,
+        )
+    };
+    runtime.note_mission_pulls(
+        node,
+        &answer(PullRequestBadge::Open, PullRequestBadge::Open),
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    let status = |runtime: &Runtime, id: &str| runtime.missions.book.get(id).unwrap().status;
+    runtime.note_mission_pulls(
+        node,
+        &answer(PullRequestBadge::Merged, PullRequestBadge::Open),
+    );
+    assert_eq!(status(&runtime, "mission-1"), MissionStatus::MergeWait);
+    runtime.note_mission_pulls(
+        node,
+        &answer(PullRequestBadge::Merged, PullRequestBadge::Closed),
+    );
+    assert_eq!(
+        status(&runtime, "mission-1"),
+        MissionStatus::Done,
+        "the failed node's open pull request is not waited on"
+    );
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Research"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "cause", "title": "Find the cause", "kind": "research"},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let (closed, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    assert_eq!(closed["mission"]["status"], "done");
 }
 
 /// With worker candidates set, a Conductor's worker outside them is refused

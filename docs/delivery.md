@@ -483,7 +483,7 @@ The `factory:` name prefix remains reserved for compatibility with historical re
 No Factory recipient is active in this release.
 
 Hide itself is a code-owned identity, `hide:<role>` of kind `hide`: `hide:memory`, the origin of the agent a Memory card's promotion starts ([ARCHITECTURE.md: Project sessions and Memory](ARCHITECTURE.md#project-sessions-and-memory)), and `hide:conductor`, the sender of a mission's wakes ([Missions](#missions)).
-`hide:memory` is registered on its first spawn, sends nothing and receives nothing; `hide:conductor` sends requests to a mission's Conductor and receives nothing; and and a pane or agent name that starts with `hide:` is refused at registration like `factory:`.
+`hide:memory` is registered on its first spawn, sends nothing and receives nothing; `hide:conductor` sends progress letters to a mission's Conductor and receives nothing; and a pane or agent name that starts with `hide:` is refused at registration like `factory:`.
 A spawn is Hide AI's own when it is a handoff whose origin is that identity (`coordination::started::hide_started`): a pane agent's handoff has a pane's identity as its origin, so neither counts, and no branch or worktree name ever decides it.
 Only that identity may give a spawn a `task` (`SpawnTask`: a `kind` code such as `memory_promote` and a `target` such as the card `m72`, the codes the screen words), on a handoff; any other caller that sets one is refused `task_reserved`, and the task is part of the intent, so the same intent with another task is an `intent_conflict`.
 A receipt from before the task existed has none, and its agent and checkout are still Hide AI's, which the screen names `Hide AI` alone.
@@ -678,6 +678,8 @@ Only a pane-bound credential can ask, refused `agent_pane_required` otherwise, a
 A mission belongs to the repository Project of the checkout it was created in (`mission_project_unknown`); asked before the machine's projects are first read, it is refused `mission_projects_loading`, and a retry a few seconds later goes through.
 Every other pane is refused `mission_not_conductor`, and a closed or cancelled mission refuses changes (`mission_closed`, `mission_cancelled`).
 `hide mission take <id>` makes the caller the Conductor only once the previous one is gone; while it is there the answer is `mission_conducted` with its name.
+A take hands the mission's workers to the caller's registration before it answers: each worker's start, its child record and the watch on it become the new Conductor's, so the same intent asked again answers the worker it already has, and the worker's reports and warnings reach the new Conductor.
+`hide mission reopen` of a done mission while its Conductor conducts another open one is refused `mission_already_conducting`, so a command or a start that names no mission always means the one open mission.
 Each command answers one JSON line, and the same command again changes nothing more.
 
 A spawn by a pane that conducts an open mission is that mission's worker:
@@ -689,10 +691,11 @@ A spawn by a pane that conducts an open mission is that mission's worker:
   A reserved spawn that has made no step for ten minutes and has no child stopped partway and is no longer counted, so a retry under a new intent can start; asked again later under its own intent, it takes a place under the cap again or is refused `mission_cap_reached`, so it never runs one worker past the cap.
 - While the record cannot be read nothing counts the workers, and the guide tells the Conductor that answers `mission_unavailable` to start none and tell the operator.
 
-Pull request changes wake the Conductor: when a node's pull request gets a new head commit, a review asking for changes, or is merged, the core records a wake on the mission and `hide:conductor` sends the Conductor one request naming the change and `hide mission show`.
+Pull request changes wake the Conductor: when a node's pull request gets a new head commit, a review asking for changes, or is merged, the core records a wake on the mission and `hide:conductor` sends the Conductor one progress letter, which waits for no answer, naming the change and `hide mission show`.
 A wake stays in the record until its letter is in the Conductor's inbox: a failed send, a restart and a mission whose Conductor is gone keep it, and the next GitHub read or `hide mission take` sends it.
-Its intent is `mission:<id>:<node>:<number>:<event>:<head>:<n>:<conductor>`, where `n` counts the mission's wakes and `conductor` is the Conductor's registration (its pane when it has none), so a wake sent again after a restart is the same letter, the same change asked for twice is two, and a Conductor that took the mission over gets its own; a cancelled mission wakes no one, and such a change on a mission closed as `done` reopens it.
-A `merge_wait` mission closes as `done` on the GitHub read that finds every pull request of its stack merged, whether or not its Conductor is there, and a close `--as merge_wait` of a stack already merged is `done` at once; a pull request closed without merging keeps it waiting.
+Its intent is `mission:<id>:<node>:<number>:<event>:<head>:<n>:<conductor>`, where `n` counts the mission's wakes and `conductor` is the Conductor's registration (its pane when it has none), so a wake sent again after a restart is the same letter, the same change asked for twice is two, and a Conductor that took the mission over gets its own; a cancelled mission wakes no one.
+On a mission closed as `done`, a new head or a review asking for changes reopens it, unless its Conductor conducts another open mission then, which gets the letter and leaves the mission done; its merge is the end it waited for and wakes no one.
+A `merge_wait` mission closes as `done` on the GitHub read that finds every pull request of its stack merged or closed, whether or not its Conductor is there, and a close `--as merge_wait` of a stack that is already so, or of a mission with no pull request, is `done` at once; a node that failed or was dropped is out of the stack.
 The intent carries the first 12 characters of the head, which `n` already makes unique, so it stays under the 256-byte intent limit.
 A mission keeps at most 32 unsent wakes, dropping the oldest as `mission.wake_dropped`; one thread sends them, at most 256 at once, so the lock never waits on a delivery.
 A change that would make the saved record larger than a start reads back is refused `mission_full`, as a full book is.

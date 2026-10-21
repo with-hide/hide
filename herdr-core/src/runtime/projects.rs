@@ -3456,6 +3456,7 @@ impl Runtime {
     }
 
     pub(super) fn apply_pull_requests(&mut self) -> bool {
+        self.mission_pulls_moved();
         let mut changed = false;
         let github = self.github.clone();
         let awaiting: HashSet<String> = self

@@ -140,10 +140,12 @@ When every node reached the scope, report in conversation and close: `hide missi
 - For each node, the evidence it is done (CI, review, check output, screenshot).
 
 A `pr`-scope mission that leaves a stack waiting for the operator's merge closes `--as merge_wait` after the report and stays open quietly; when the operator merges the lower pull request, move the one above and check it; once every pull request of the stack is merged Hide closes the mission as done itself, with or without you there.
-A further instruction to a done mission, or a change to one of its pull requests, opens it again (`hide mission reopen`).
+A further instruction to a done mission opens it again (`hide mission reopen`), and so does a new commit or a review asking for changes on one of its pull requests; its merge does not.
+You conduct one open mission at a time: while another is open, a done one stays done, `reopen` is refused `mission_already_conducting`, and a letter about it is news to take up after the open one.
 
 ## 8. Taking over
 
 If a mission has no Conductor, the map offers 이어받기, which starts a new pane and asks it to take the mission.
 Run `hide mission take <id>`, then `hide mission show` and `hide inbox`, read each worker's state (`hide agent list`, its record), and go on from there.
+The take makes the mission's workers yours: asking a start again under its intent answers the worker it already has, and their reports and warnings come to you. A worker still addresses the Conductor it was started by, so send each live worker one letter saying you conduct the mission now.
 Hide refuses a second session while the mission's Conductor is still present (`mission_conducted`).

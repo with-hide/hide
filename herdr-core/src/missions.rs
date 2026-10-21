@@ -153,6 +153,9 @@ pub struct PrSeen {
     pub merged: bool,
     #[serde(default)]
     pub changes_requested: bool,
+    /// Closed without its merge: nothing is left to wait on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
 }
 
 /// One change of a node's pull request the Conductor is still to be told
@@ -838,8 +841,14 @@ pub(crate) fn apply_plan(
     }
     // A node that ran keeps its record; one that is gone from the plan must
     // be dropped first, so a replan cannot hide work that was done (B28).
+    // A planned node that already names its worker, pull request or branch
+    // was started too, whatever its status still says.
     for node in &mission.nodes {
-        if node.status != NodeStatus::Planned && !keys.contains(node.key.as_str()) {
+        let started = node.status != NodeStatus::Planned
+            || node.agent_id.is_some()
+            || node.pr.is_some()
+            || node.branch.is_some();
+        if started && !keys.contains(node.key.as_str()) {
             return Err("mission_node_in_progress".into());
         }
     }
@@ -1435,6 +1444,12 @@ mod tests {
         assert!(again.node("b").is_none(), "a planned node left out goes");
         let without = apply_plan(&running, &plan(vec![node("c", NodeKind::Research, &[])]), 4);
         assert_eq!(without.unwrap_err(), "mission_node_in_progress");
+        // A node whose status still says planned but that names its pull
+        // request ran too.
+        let mut named = first.clone();
+        named.nodes[1].pr = Some(8);
+        let dropped = apply_plan(&named, &plan(vec![node("a", NodeKind::Change, &[])]), 4);
+        assert_eq!(dropped.unwrap_err(), "mission_node_in_progress");
     }
 
     #[test]

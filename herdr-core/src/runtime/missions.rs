@@ -5,6 +5,7 @@
 //! Conductor; and the record going with its Conductor's archived session.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -144,18 +145,56 @@ pub(crate) struct MissionRuntime {
     /// A wake was recorded or a Conductor arrived while it ran, so it looks
     /// again before it ends.
     rewake: bool,
+    /// Counts the book's changes; every change is saved, so the save counts
+    /// it.
+    book_edit: u64,
+    /// Counts the GitHub answers and the pull request lists replaced since.
+    github_edit: u64,
+    /// What the published missions were made from, so a snapshot read whose
+    /// inputs did not move makes nothing (docs/PERFORMANCE_TESTING.md).
+    views: ViewsMadeFrom,
 }
 
-/// Every pull request the mission's live nodes made is merged, as GitHub
-/// last answered; a mission with none has no stack to wait on.
-fn stack_merged(mission: &Mission) -> bool {
-    let mut pulls = mission
+#[derive(Default)]
+struct ViewsMadeFrom {
+    book_edit: u64,
+    github_edit: u64,
+    /// Held weakly, so the ledger it names is never kept alive by it and its
+    /// address is never another ledger's.
+    ledger: Option<std::sync::Weak<crate::delivery::ledger::Ledger>>,
+    /// Per mission in book order: whether its Conductor is there, for an
+    /// open one, and whether its device answers.
+    present: Vec<bool>,
+    stale: Vec<bool>,
+    /// The earliest time a worker still being made stops counting against
+    /// its mission's cap (`MISSION_RESERVATION_HOLD_MS`).
+    until: u64,
+    made: bool,
+}
+
+/// Every pull request the mission still stands behind is merged or closed,
+/// as GitHub last answered: a node that failed or was dropped is out of its
+/// stack, and a mission with no pull request has none to wait on.
+fn stack_settled(mission: &Mission) -> bool {
+    mission
         .nodes
         .iter()
-        .filter(|node| node.status != NodeStatus::Dropped && node.pr.is_some())
-        .peekable();
-    pulls.peek().is_some()
-        && pulls.all(|node| node.pr_seen.as_ref().is_some_and(|seen| seen.merged))
+        .filter(|node| !matches!(node.status, NodeStatus::Dropped | NodeStatus::Failed))
+        .filter(|node| node.pr.is_some())
+        .all(|node| {
+            node.pr_seen
+                .as_ref()
+                .is_some_and(|seen| seen.merged || seen.closed)
+        })
+}
+
+fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
+    PrSeen {
+        head: pull.head_oid.clone(),
+        merged: pull.badge == PullRequestBadge::Merged,
+        changes_requested: pull.review == Some(ReviewDecision::ChangesRequested),
+        closed: pull.badge == PullRequestBadge::Closed,
+    }
 }
 
 /// The letter intent of one recorded wake to the mission's Conductor now:
@@ -204,9 +243,16 @@ impl Runtime {
             }
         }
         self.missions.store = Some(store);
+        self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
     }
 
-    pub(super) fn save_missions(&self) {
+    /// The pull request lists the missions' maps read were replaced.
+    pub(super) fn mission_pulls_moved(&mut self) {
+        self.missions.github_edit = self.missions.github_edit.wrapping_add(1);
+    }
+
+    pub(super) fn save_missions(&mut self) {
+        self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
         // A book that could not be read is kept as it is on disk: the empty
         // one in memory is not the operator's missions.
         if self.missions.unreadable.is_some() {
@@ -440,7 +486,7 @@ impl Runtime {
                     }
                     (_, MissionEnd::Done) => MissionStatus::Done,
                     // A stack already merged has nothing to wait on (B41).
-                    (_, MissionEnd::MergeWait) if stack_merged(target) => MissionStatus::Done,
+                    (_, MissionEnd::MergeWait) if stack_settled(target) => MissionStatus::Done,
                     (_, MissionEnd::MergeWait) => MissionStatus::MergeWait,
                     (_, MissionEnd::Cancelled) => MissionStatus::Cancelled,
                 };
@@ -498,6 +544,7 @@ impl Runtime {
                     return Err("mission_already_conducting".into());
                 }
                 let conductor = self.conductor_of(device, &pane, actor);
+                self.adopt_mission_workers(&mission, conductor.agent_id.as_deref());
                 let target = self
                     .missions
                     .book
@@ -612,16 +659,57 @@ impl Runtime {
     }
 
     fn reopen_mission(&mut self, id: &str, now: u64) -> Result<bool, String> {
-        let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        let target = self.missions.book.get(id).ok_or("mission_unknown")?;
         match target.status {
-            MissionStatus::Cancelled => Err("mission_cancelled".into()),
-            MissionStatus::Done | MissionStatus::MergeWait => {
-                target.status = MissionStatus::Running;
-                target.closed_at_unix_ms = None;
-                target.updated_at_unix_ms = now;
-                Ok(true)
-            }
-            MissionStatus::Planning | MissionStatus::Running => Ok(false),
+            MissionStatus::Cancelled => return Err("mission_cancelled".into()),
+            MissionStatus::Planning | MissionStatus::Running => return Ok(false),
+            MissionStatus::Done | MissionStatus::MergeWait => {}
+        }
+        // Its Conductor's commands and starts name no mission and mean the
+        // one open mission it conducts, so it never has two.
+        if self
+            .missions
+            .book
+            .conducted_open(&target.conductor.actor)
+            .is_some_and(|open| open.id != id)
+        {
+            return Err("mission_already_conducting".into());
+        }
+        let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        target.status = MissionStatus::Running;
+        target.closed_at_unix_ms = None;
+        target.updated_at_unix_ms = now;
+        Ok(true)
+    }
+
+    /// Hands the workers of `mission` to the registration that took it over,
+    /// so the heir's retry of a start finds the worker it made, and the
+    /// workers' reports and watches reach the Conductor there now. It is
+    /// queued before the takeover answers, so it lands before any command
+    /// the heir sends next.
+    fn adopt_mission_workers(&self, mission: &str, conductor: Option<&str>) {
+        let Some(conductor) = conductor else {
+            // A session with no registration cannot have started a worker,
+            // and its starts are refused until it registers.
+            return;
+        };
+        let queued = self
+            .hide_delivery(CONDUCTOR_ROLE)
+            .and_then(|(client, authority, actor)| {
+                client.post(crate::delivery::worker::Effect::Agents {
+                    authority,
+                    actor,
+                    mutation: Box::new(crate::coordination::Mutation::AdoptMissionWorkers {
+                        mission: mission.to_owned(),
+                        conductor: conductor.to_owned(),
+                    }),
+                })
+            });
+        if let Err(code) = queued {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.adopt_failed",
+                "mission": mission, "code": code,
+            }));
         }
     }
 
@@ -691,11 +779,7 @@ impl Runtime {
             .pull_requests
             .iter()
             .find(|pull| pull.number == number)?;
-        Some(PrSeen {
-            head: pull.head_oid.clone(),
-            merged: pull.badge == PullRequestBadge::Merged,
-            changes_requested: pull.review == Some(ReviewDecision::ChangesRequested),
-        })
+        Some(seen_of(pull))
     }
 
     pub(crate) fn conductor_present(&self, actor: &Actor) -> bool {
@@ -787,8 +871,10 @@ impl Runtime {
     /// Compares a new GitHub answer with the facts each mission's pull
     /// request was last seen with, and records a wake for every change that
     /// is its Conductor's to act on (D-39, B36): a merge, a review asking
-    /// for changes, a new head. A done mission reopens with the wake; a
-    /// cancelled one is not woken (D-51). A stale read wakes nothing.
+    /// for changes, a new head. A done mission reopens with a new head or a
+    /// review, unless its Conductor conducts another open mission then, and
+    /// its merge wakes no one; a cancelled one is not woken (D-51). A stale
+    /// read wakes nothing.
     /// Returns the intents of the wakes it records; each is sent as soon as
     /// the Conductor is there and stays recorded until it is.
     pub(crate) fn note_mission_pulls(
@@ -796,6 +882,7 @@ impl Runtime {
         device: &str,
         github: &crate::model::GithubSnapshot,
     ) -> Vec<String> {
+        self.mission_pulls_moved();
         let now = super::memory::now_ms();
         let mut recorded = Vec::new();
         let mut reopened = Vec::new();
@@ -822,11 +909,7 @@ impl Runtime {
                 else {
                     continue;
                 };
-                let now_seen = PrSeen {
-                    head: pull.head_oid.clone(),
-                    merged: pull.badge == PullRequestBadge::Merged,
-                    changes_requested: pull.review == Some(ReviewDecision::ChangesRequested),
-                };
+                let now_seen = seen_of(pull);
                 match &node.pr_seen {
                     // The first answer about a pull request is where its
                     // wakes start from; it reports nothing of its own.
@@ -862,12 +945,27 @@ impl Runtime {
             // waiting stack, as when it was merged before the wait began.
             if seen_updates.is_empty()
                 && events.is_empty()
-                && !(mission.status == MissionStatus::MergeWait && stack_merged(mission))
+                && !(mission.status == MissionStatus::MergeWait && stack_settled(mission))
             {
                 continue;
             }
             changed = true;
             let done = mission.status == MissionStatus::Done;
+            // A done mission's merge is the end it was waiting for, not work
+            // for its Conductor (B41).
+            if done {
+                events.retain(|(_, _, event, _)| *event != WakeEvent::Merged);
+            }
+            // A Conductor conducts one open mission at a time, so a change
+            // to a done one while it conducts another wakes it with the
+            // news and leaves the mission done.
+            let reopen = done
+                && !events.is_empty()
+                && self
+                    .missions
+                    .book
+                    .conducted_open(&mission.conductor.actor)
+                    .is_none();
             let mission = &mut self.missions.book.missions[index];
             for (node_index, seen) in seen_updates {
                 mission.nodes[node_index].pr_seen = Some(seen);
@@ -875,7 +973,7 @@ impl Runtime {
             // A mission waiting on the operator's merges is done once every
             // pull request of its stack is merged, whether or not a Conductor
             // is there to say so (B41).
-            if mission.status == MissionStatus::MergeWait && stack_merged(mission) {
+            if mission.status == MissionStatus::MergeWait && stack_settled(mission) {
                 mission.status = MissionStatus::Done;
                 mission.closed_at_unix_ms = Some(now);
                 mission.updated_at_unix_ms = now;
@@ -888,7 +986,7 @@ impl Runtime {
             if events.is_empty() {
                 continue;
             }
-            if done {
+            if reopen {
                 reopened.push(mission.id.clone());
             }
             for (node, pr, event, head) in events {
@@ -1039,7 +1137,9 @@ impl Runtime {
                                 target: wake.target.actor.pane_id.clone(),
                                 intent: wake.intent.clone(),
                                 body: wake.body,
-                                kind: "request".into(),
+                                // Hide reads no answer, so the letter waits
+                                // for none.
+                                kind: "progress".into(),
                                 now: false,
                             },
                         );
@@ -1110,17 +1210,20 @@ impl Runtime {
     fn mission_view_of(&self, id: &str) -> Option<MissionView> {
         let mission = self.missions.book.get(id)?;
         let ledger = self.delivery_state().ok();
-        let agents: HashMap<&str, &crate::coordination::AgentRecord> = ledger
-            .as_deref()
-            .map(|ledger| {
-                ledger
-                    .agents
-                    .iter()
-                    .map(|record| (record.id.as_str(), record))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let agents = worker_records(ledger.as_deref(), std::iter::once(mission));
         Some(self.view_mission(mission, &agents, ledger.as_deref()))
+    }
+
+    /// The mission's device does not answer, so its map shows the last
+    /// value (B20).
+    fn mission_stale(&self, mission: &Mission) -> bool {
+        mission.device_id != self.node.as_str()
+            && !self
+                .snapshot
+                .status
+                .remote
+                .iter()
+                .any(|remote| remote.target_id == mission.device_id && remote.state == "connected")
     }
 
     fn view_mission(
@@ -1214,10 +1317,7 @@ impl Runtime {
             started_at_unix_ms: mission.started_at_unix_ms,
             closed_at_unix_ms: mission.closed_at_unix_ms,
             running: u32::try_from(running).unwrap_or(u32::MAX),
-            stale: !on_core
-                && !self.snapshot.status.remote.iter().any(|remote| {
-                    remote.target_id == mission.device_id && remote.state == "connected"
-                }),
+            stale: self.mission_stale(mission),
             github_stale: github.is_some_and(|github| github.status.stale),
             github_read_at_unix_ms: github.and_then(|github| github.status.last_success_at_unix_ms),
         }
@@ -1225,36 +1325,131 @@ impl Runtime {
 
     /// Makes the published missions what the record and the facts beside
     /// it say now; the snapshot sends them again only when they moved.
+    ///
+    /// It runs on every snapshot read, under the lock. With no mission it
+    /// does nothing; otherwise it compares two counters, one ledger pointer
+    /// and two bits per mission, and makes views again only when one moved
+    /// or a worker being made stops counting. A closed mission's view is
+    /// made again only when the book, its pull requests or its device's
+    /// answer moved, since its Conductor and its cap no longer change it.
     pub(super) fn refresh_missions(&mut self) {
+        let failed = self
+            .missions
+            .unreadable
+            .as_ref()
+            .map(|_| "unreadable".to_owned());
+        if self.missions.book.missions.is_empty() {
+            if !self.snapshot.missions.items.is_empty() || self.snapshot.missions.failed != failed {
+                self.snapshot.missions = MissionsSnapshot {
+                    items: Vec::new(),
+                    failed,
+                };
+            }
+            self.missions.views = ViewsMadeFrom::default();
+            return;
+        }
         let ledger = self.delivery_state().ok();
-        let agents: HashMap<&str, &crate::coordination::AgentRecord> = ledger
-            .as_deref()
-            .map(|ledger| {
-                ledger
-                    .agents
-                    .iter()
-                    .map(|record| (record.id.as_str(), record))
-                    .collect()
+        let now = crate::delivery::worker::now();
+        let present: Vec<bool> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| {
+                mission.status.open() && self.conductor_present(&mission.conductor.actor)
             })
-            .unwrap_or_default();
-        let next = MissionsSnapshot {
-            items: self
-                .missions
-                .book
-                .missions
-                .iter()
-                .map(|mission| self.view_mission(mission, &agents, ledger.as_deref()))
-                .collect(),
-            failed: self
-                .missions
-                .unreadable
-                .as_ref()
-                .map(|_| "unreadable".to_owned()),
+            .collect();
+        let stale: Vec<bool> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| self.mission_stale(mission))
+            .collect();
+        let before = &self.missions.views;
+        let same_ledger = match (&before.ledger, &ledger) {
+            (Some(weak), Some(ledger)) => std::ptr::eq(weak.as_ptr(), Arc::as_ptr(ledger)),
+            (None, None) => true,
+            _ => false,
         };
+        let closed_kept = before.made
+            && before.book_edit == self.missions.book_edit
+            && before.github_edit == self.missions.github_edit
+            && before.stale == stale;
+        if closed_kept
+            && same_ledger
+            && before.present == present
+            && now < before.until
+            && self.snapshot.missions.failed == failed
+        {
+            return;
+        }
+        let made: Vec<&Mission> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter(|mission| !closed_kept || mission.status.open())
+            .collect();
+        let agents = worker_records(ledger.as_deref(), made.iter().copied());
+        let items = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| {
+                let kept = (closed_kept && !mission.status.open())
+                    .then(|| {
+                        self.snapshot
+                            .missions
+                            .items
+                            .iter()
+                            .find(|view| view.id == mission.id)
+                    })
+                    .flatten();
+                match kept {
+                    Some(view) => view.clone(),
+                    None => self.view_mission(mission, &agents, ledger.as_deref()),
+                }
+            })
+            .collect();
+        let until = ledger.as_deref().map_or(u64::MAX, |ledger| {
+            crate::coordination::mission_reservations_end(ledger, now)
+        });
+        let next = MissionsSnapshot { items, failed };
         if self.snapshot.missions != next {
             self.snapshot.missions = next;
         }
+        self.missions.views = ViewsMadeFrom {
+            book_edit: self.missions.book_edit,
+            github_edit: self.missions.github_edit,
+            ledger: ledger.as_ref().map(Arc::downgrade),
+            present,
+            stale,
+            until,
+            made: true,
+        };
     }
+}
+
+/// The registrations of the workers `missions` name, read in one pass.
+fn worker_records<'a, 'm>(
+    ledger: Option<&'a crate::delivery::ledger::Ledger>,
+    missions: impl Iterator<Item = &'m Mission>,
+) -> HashMap<&'a str, &'a crate::coordination::AgentRecord> {
+    let wanted: std::collections::HashSet<&str> = missions
+        .flat_map(|mission| &mission.nodes)
+        .filter_map(|node| node.agent_id.as_deref())
+        .collect();
+    let Some(ledger) = ledger.filter(|_| !wanted.is_empty()) else {
+        return HashMap::new();
+    };
+    ledger
+        .agents
+        .iter()
+        .filter(|record| wanted.contains(record.id.as_str()))
+        .map(|record| (record.id.as_str(), record))
+        .collect()
 }
 
 /// The node's step on its four-step bar (D-42, D-48): a pull request's is
