@@ -70,10 +70,10 @@ const PANE_HEADER_CASES: [string, string, Omit<PaneHeader, "working">][] = [
   ["popover", "11 · 자식 목록 열기", { ...NO_NOTICE, progress: "검토 결과를 정리하고 있어요" }],
   ["narrow", "12 · 좁은 패널 · 긴 progress", { ...NO_NOTICE, progress: "헤더 상태별 표시와 요청 우선순위를 검토하고 있어요" }],
   // PRD pane-last-request: the row leads with the turn's request (state=turn).
-  ["turn-question", "13 · 요청 → 질문", { ...NO_NOTICE, request: TURN_REQUEST, band: { kind: "answer", reason: "질문 1~3번을 한 PR로 묶어 진행할지 답해 주세요.", since_unix_ms: null, read: false, action: null, more: 0 } }],
+  ["turn-question", "13 · 요청 → 질문", { ...NO_NOTICE, request: TURN_REQUEST, band: { kind: "answer", reason: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", since_unix_ms: null, read: false, action: null, more: 0 } }],
   ["turn-working", "14 · 요청 → 작업 중", { ...NO_NOTICE, request: { text: "탭을 넘는 종합 뷰 + AI 작업 구상", images: 0 }, progress: "종합 뷰의 구성 요소를 고민하고 있어요" }],
   ["turn-finished", "15 · 끝났는데 아직 안 봄", { ...NO_NOTICE, request: { text: "원격 조회 3초로 바꿔 PR·머지", images: 0 }, finished: true, progress: "원격 조회 주기를 3초로 바꾸고 머지함" }],
-  ["turn-narrow", "16 · 좁은 pane · 두 줄", { ...NO_NOTICE, request: TURN_REQUEST, band: { kind: "answer", reason: "질문 1~3번을 한 PR로 묶어 진행할지 답해 주세요.", since_unix_ms: null, read: false, action: null, more: 0 } }],
+  ["turn-narrow", "16 · 좁은 pane · 두 줄", { ...NO_NOTICE, request: TURN_REQUEST, band: { kind: "answer", reason: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", since_unix_ms: null, read: false, action: null, more: 0 } }],
   ["turn-image", "17 · 이미지만 보낸 요청", { ...NO_NOTICE, request: { text: null, images: 2 }, progress: "보낸 화면의 여백을 맞추고 있어요" }],
 ];
 const TURN_CASES = ["turn-question", "turn-working", "turn-finished", "turn-narrow", "turn-image"];
@@ -173,7 +173,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       lineage_child_pane_ids: ["idle", "approval", "merge", "solo", "empty", "turn-question", "turn-working", "turn-finished", "turn-image"].includes(id) ? [] : id === "raised-case" ? [raisedChild.pane_id, ...childExamples.slice(1, 3).map((child) => child.pane_id)] : id === "popover" ? popoverChildren.map((child) => child.pane_id) : id === "narrow" ? narrowChildren.map((child) => child.pane_id) : ["children", "progress", "question", "approval-case", "blocked-case", "stopped", "tree-only", "finished", "turn-narrow"].includes(id) ? childExamples.slice(0, 3).map((child) => child.pane_id) : id === "unknown" ? ["b2-unknown"] : ["a1c1", "a1c2"],
       direct_child_counts: id === "narrow" ? { error: 0, approval: 0, question: 0, working: 12, done: 0 } : ["children", "progress", "question", "approval-case", "blocked-case", "raised-case", "stopped", "tree-only", "finished", "popover", "turn-narrow"].includes(id) ? { error: 0, approval: 0, question: 1, working: 1, done: 1 } : id === "unknown" ? { error: 0, approval: 0, question: 0, working: 0, done: 0 } : { error: 0, approval: 0, question: 0, working: 1, done: 0 },
       ...(id === "fix" || id === "merge" ? ownPr(id) : {}),
-      ...(TURN_CASES.includes(id) ? { session_id: `turn-${id}`, state: { ...seed.state, pr: null }, request: { verb: "answer" as const, verb_since_unix_ms: Date.now(), line: "질문 1~3번을 한 PR로 묶어 진행할지 답해 주세요.", end: "question" as const, pull_requests: [], ...TURN_VIEW } } : {}) }));
+      ...(TURN_CASES.includes(id) ? { session_id: `turn-${id}`, state: { ...seed.state, pr: null }, request: { verb: "answer" as const, verb_since_unix_ms: Date.now(), line: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", end: "question" as const, pull_requests: [], ...TURN_VIEW } } : {}) }));
     base.rest.terminal = { headers };
     base.rest.status = { ...base.rest.status, remote: [{ target_id: "mini", state: "not_connected", message: "Mac mini 연결되지 않음", herdr_version: null, session: null }] };
     return { ...base, agents: [...agents, ...children, ...childExamples, raisedChild, ...popoverChildren, ...narrowChildren, ...headerAgents], pane };

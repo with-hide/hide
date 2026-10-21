@@ -142,8 +142,8 @@ function TurnRequestButton({ paneId, request, state }: { paneId: string; request
       type="button"
       aria-label={`${t("paneTurn.request")} ${words}`}
       aria-expanded={state.open}
-      aria-pressed={state.pinned}
       data-pane-turn-request={paneId}
+      data-pinned={state.pinned || undefined}
       data-state={state.open ? "open" : "closed"}
       className="flex min-w-0 items-center gap-xxs rounded-xs px-xxs -mx-xxs text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:text-foreground"
       onMouseDown={(event) => event.preventDefault()}
@@ -152,6 +152,7 @@ function TurnRequestButton({ paneId, request, state }: { paneId: string; request
       onPointerLeave={state.onPointerLeave}
       onFocus={state.onFocus}
       onBlur={state.onBlur}
+      onKeyDown={state.onKeyDown}
     >
       <span className="shrink-0 text-subtle-foreground">{t("paneTurn.request")}</span>
       <span className="min-w-0 truncate" data-pane-turn-request-text="true">{words}</span>
@@ -273,6 +274,7 @@ export function PaneRecordButton({ paneId, title, product, actions, children, pl
         onPointerLeave={state.onPointerLeave}
         onFocus={state.onFocus}
         onBlur={state.onBlur}
+        onKeyDown={state.onKeyDown}
         data-pane-record={session.session_id}
       >
         {children}

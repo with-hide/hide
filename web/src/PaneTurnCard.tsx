@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { askWhat } from "./components/agent-tree";
@@ -21,7 +21,9 @@ export type TurnCardTrigger = {
   onPointerEnter: () => void;
   onPointerLeave: () => void;
   onFocus: () => void;
-  onBlur: () => void;
+  onBlur: (event: FocusEvent) => void;
+  /** Moves the keyboard into an open card on Tab. */
+  onKeyDown: (event: KeyboardEvent) => void;
   /** Pins or unpins the card; absent on a trigger whose press does something else. */
   onToggle?: () => void;
   /** Closes the card, for a trigger whose press opens something in its place. */
@@ -42,6 +44,7 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
   const [pinned, setPinned] = useState(false);
   const leave = useRef<number | null>(null);
   const anchor = useRef<HTMLSpanElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   useEffect(() => () => {
     if (leave.current !== null) window.clearTimeout(leave.current);
   }, []);
@@ -63,13 +66,28 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
     setHovered(false);
     setFocused(false);
   };
+  // The keyboard moves between the trigger and the card as one place, so the
+  // card stays open while focus is in either; only a Tab moves it in, so the
+  // pointer never takes the terminal's keyboard.
+  const inside = (node: EventTarget | null) => node instanceof Node && (anchor.current?.contains(node) || content.current?.contains(node)) === true;
+  const blur = (event: FocusEvent) => {
+    if (!inside(event.relatedTarget)) setFocused(false);
+  };
+  const focusable = () => [...(content.current?.querySelectorAll<HTMLElement>("button, a[href]") ?? [])];
+  const toTrigger = () => anchor.current?.querySelector<HTMLElement>("button")?.focus();
   const state: TurnCardTrigger = {
     open,
     pinned,
     onPointerEnter: enter,
     onPointerLeave: exit,
     onFocus: () => setFocused(true),
-    onBlur: () => setFocused(false),
+    onBlur: blur,
+    onKeyDown: (event) => {
+      const first = focusable()[0];
+      if (event.key !== "Tab" || event.shiftKey || !open || !first) return;
+      event.preventDefault();
+      first.focus();
+    },
     onToggle: pinnable ? () => (pinned ? close() : setPinned(true)) : undefined,
     close,
   };
@@ -81,6 +99,7 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
       </PopoverAnchor>
       {agent ? (
         <PopoverContent
+          ref={content}
           side="bottom"
           align="start"
           collisionPadding={8}
@@ -90,6 +109,17 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
           onCloseAutoFocus={(event) => event.preventDefault()}
           onPointerEnter={enter}
           onPointerLeave={exit}
+          onFocus={() => setFocused(true)}
+          onBlur={blur}
+          onKeyDown={(event) => {
+            // The card sits at the end of the page, so Tab past its last
+            // control and Shift+Tab before its first go back to the trigger.
+            const items = focusable();
+            const edge = event.shiftKey ? items[0] : items[items.length - 1];
+            if (event.key !== "Tab" || document.activeElement !== edge) return;
+            event.preventDefault();
+            toTrigger();
+          }}
           // The trigger is outside the card, so its own press would dismiss
           // the card before its click toggles the pin; the click alone decides.
           onInteractOutside={(event) => {
@@ -101,7 +131,9 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
             // card the pointer only shows leaves Esc to the terminal.
             if (!pinned && !focused) return event.preventDefault();
             event.stopPropagation();
+            const returns = content.current?.contains(document.activeElement) === true;
             close();
+            if (returns) toTrigger();
           }}
         >
           <TurnCard agent={agent} header={header} head={head} onRecord={session ? () => {
