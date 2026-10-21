@@ -13,8 +13,11 @@
 pub struct Composer {
     pub region: Region,
     /// What the composer's first line begins with, after its border and
-    /// indentation; a region whose first line lacks it is not the composer.
-    pub marker: Option<&'static str>,
+    /// indentation: any one of these, since an agent may draw another glyph
+    /// on another terminal. A region whose first line begins with none of
+    /// them is not the composer; none declared means the region alone
+    /// places it.
+    pub marker: &'static [&'static str],
     /// Lines of the agent's own chrome at the end of the region, such as
     /// OpenCode's agent and model line, which are never content.
     pub trailer: usize,
@@ -36,9 +39,9 @@ pub enum Region {
     /// The lines beginning with `side` directly above the last line beginning
     /// with `close`, each stripped of that border.
     Bar { side: char, close: char },
-    /// From the last line beginning with the marker to the first blank line.
+    /// From the last line beginning with a marker to the first blank line.
     ToBlank,
-    /// The last line beginning with the marker, alone.
+    /// The last line beginning with a marker, alone.
     Line,
 }
 
@@ -56,6 +59,8 @@ pub enum Style {
     Any,
     /// The terminal's dim attribute (SGR 2), never merely a faint colour.
     Dim,
+    /// The terminal's italic attribute (SGR 3).
+    Italic,
     /// This exact 24-bit foreground colour.
     Rgb(u8, u8, u8),
 }
@@ -85,6 +90,7 @@ impl Verdict {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Pen {
     dim: bool,
+    italic: bool,
     rgb: Option<(u8, u8, u8)>,
 }
 
@@ -101,15 +107,15 @@ impl Composer {
         let Some(mut region) = self.region(&lines) else {
             return Verdict::NotFound;
         };
-        if let Some(marker) = self.marker {
+        if !self.marker.is_empty() {
             let Some(first) = region.first_mut() else {
                 return Verdict::NotFound;
             };
             let start = first.iter().take_while(|(c, _)| c.is_whitespace()).count();
             let text: String = first[start..].iter().map(|(c, _)| *c).collect();
-            if !text.starts_with(marker) {
+            let Some(marker) = self.marker.iter().find(|marker| text.starts_with(**marker)) else {
                 return Verdict::NotFound;
-            }
+            };
             first.drain(..start + marker.chars().count());
         }
         for _ in 0..self.trailer {
@@ -130,7 +136,11 @@ impl Composer {
     }
 
     fn region(&self, lines: &[Cells]) -> Option<Vec<Cells>> {
-        let starts = |line: &Cells, prefix: &str| visible(line).trim_start().starts_with(prefix);
+        let marked = |line: &Cells| {
+            let text = visible(line);
+            let text = text.trim_start();
+            self.marker.iter().any(|marker| text.starts_with(marker))
+        };
         match self.region {
             Region::BetweenRules => {
                 let mut rules = lines
@@ -165,8 +175,7 @@ impl Composer {
                     .collect()
             }
             Region::ToBlank => {
-                let marker = self.marker?;
-                let top = lines.iter().rposition(|line| starts(line, marker))?;
+                let top = lines.iter().rposition(marked)?;
                 let end = lines[top + 1..]
                     .iter()
                     .position(blank)
@@ -174,8 +183,7 @@ impl Composer {
                 Some(lines[top..end].to_vec())
             }
             Region::Line => {
-                let marker = self.marker?;
-                let line = lines.iter().rposition(|line| starts(line, marker))?;
+                let line = lines.iter().rposition(marked)?;
                 Some(vec![lines[line].clone()])
             }
         }
@@ -196,6 +204,7 @@ impl Placeholder {
                 .all(|(_, pen)| match self.style {
                     Style::Any => true,
                     Style::Dim => pen.dim,
+                    Style::Italic => pen.italic,
                     Style::Rgb(r, g, b) => pen.rgb == Some((r, g, b)),
                 })
     }
@@ -290,7 +299,9 @@ fn apply(pen: &mut Pen, parameters: &str) {
         match codes[index] {
             0 => *pen = Pen::default(),
             2 => pen.dim = true,
+            3 => pen.italic = true,
             22 => pen.dim = false,
+            23 => pen.italic = false,
             30..=37 | 39 | 90..=97 => pen.rgb = None,
             38 => match codes.get(index + 1) {
                 Some(2) => {

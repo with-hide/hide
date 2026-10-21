@@ -275,8 +275,12 @@ def composer_verdict(steps):
     """The composer cell: every step of the typed, erased, pasted and cleared
     draft read the verdict the operator would see. `steps` is one dict per
     step, in order, with its name, the verdict it expected and the last
-    verdict read (the example's code, or None when nothing was read)."""
+    verdict read (the example's code, or None when nothing was read), and
+    how many prompts the session gained since the cell began."""
     for step in steps:
+        if step.get("prompts"):
+            return FAIL, (f"after {step['name']} the session holds {step['prompts']} new prompt(s): "
+                          "the keys started a turn")
         if step["verdict"] != step["expected"]:
             return FAIL, (f"after {step['name']} the composer read {step['verdict']}, "
                           f"not {step['expected']} (last of {step['reads']} reads in {step['seconds']:.1f} s)")
