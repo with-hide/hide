@@ -5,6 +5,7 @@ import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { openOverview } from "./overview-entry";
 import { enterWorkspace } from "./wire";
+import { unchangedForFrames } from "./wait";
 
 async function drag(page: Page, handle: Locator, dx: number, dy: number) {
   const box = await handle.boundingBox();
@@ -66,6 +67,8 @@ test("@platform Overview restores its exact current session and keeps map moveme
     // Every member inside the packed footprint must travel with its center.
     const group = graph.locator(".react-flow__node-project").first();
     await graph.getByRole("button", { name: "Fit graph", exact: true }).click();
+    // Fit commits its viewport on a frame; measure the drag target after it settles.
+    await unchangedForFrames(page, () => graph.locator(".react-flow__viewport").getAttribute("style"), 3);
     // Read all bounds together: Fit graph can update the camera between awaits.
     const members = await graph.locator(".react-flow__node").evaluateAll(nodes => {
       const project = nodes.find(node => node.classList.contains("react-flow__node-project"));
