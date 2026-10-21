@@ -14,7 +14,7 @@ import type { SceneParams } from "./SidebarScene";
 
 type Example = { title: string; group: SessionGroup; line: string | null; ask?: NonNullable<AgentState["ask"]>; pr?: PrState; unfinished?: boolean; mark?: AgentRow["descendant_mark"] };
 /** Each example's task: its row's index and the state the core gave it. */
-const TASKS: [number, TaskState][] = [[0, "needs_you"], [1, "needs_you"], [2, "needs_you"], [4, "working"], [5, "waiting"], [3, "done"], [6, "resting"], [7, "resting"], [8, "resting"]];
+const TASKS: [number, TaskState][] = [[0, "needs_you"], [1, "needs_you"], [2, "needs_you"], [4, "working"], [5, "waiting"], [3, "done"], [6, "revisit"], [7, "resting"], [8, "resting"]];
 const EXAMPLES: Example[] = [
   { title: "입력과 세션 복귀 흐름 검토", group: "needs_you", line: null, ask: { verb: "approval", what: "검증 명령 실행 권한이 필요합니다", more: 0 } },
   { title: "한국어 입력 경계 검토", group: "needs_you", line: null, ask: { verb: "answer", what: "기존 stdin 종료 경로도 남길까요?", more: 0 } },
@@ -88,6 +88,8 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
           request_since: Date.now() - 180_000, line: example.line ? { text: example.line, mode: "request", tone: { kind: "subtle", read: false } } : null },
         request: { verb, verb_since_unix_ms: Date.now(), line: example.line ?? undefined, request: null, later_by: null, reply: null, pull_requests: example.pr ? [{ number: 220 + index, title: example.title, url: `https://example.invalid/pull/${220 + index}`, badge: example.pr === "merged" ? "merged" : "open", checks: example.pr === "failed" ? "failed" : example.pr === "pending" ? "pending" : "passing", review: example.pr === "mergeable" ? "approved" : "review_required", head_branch: "prd/session-ui", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }] : [] },
         resolved: example.group === "resolved" ? { at_unix_ms: Date.now(), source: "operator" } : null,
+        // A quiet task starred to revisit, and a working one that keeps its group with a ★ (PRD revisit-group B6, B7).
+        revisit: index === 6 || index === 4 ? { starred: true, read_ask: false, since_unix_ms: Date.now() - 600_000 } : null,
       };
     });
     const feature = { ...checkout, id: "session-ui", label: "prd/session-ui", branch: "prd/session-ui" };

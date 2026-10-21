@@ -6,6 +6,7 @@ import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
 import { markWords, rowAccessibleName, rowSentence } from "./agentRow";
 import { AgentRecordTitle } from "./components/agent-record-title";
+import { RevisitStar, starred } from "./components/revisit-mark";
 import { Button } from "./components/ui/button";
 import { useEscapeLayer, useReturnFocus } from "./components/ui/layer";
 import { Hint } from "./components/ui/tooltip";
@@ -311,7 +312,7 @@ function SessionList({ rows, selected, choose }: { selected: string | null; rows
   return <div className="og-list" data-graph-session-list="true">
     <Input aria-label={t("overviewGraph.findSession")} placeholder={t("overviewGraph.findSession")} value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); }} />
     {filtered.length === 0 ? <p>{t("overviewGraph.filteredEmpty")}</p> : null}
-    {filtered.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE).map((row) => <button key={row.id} type="button" aria-label={[rowAccessibleName(t, row.agent, row.device), row.project.label, row.checkout.label].filter(Boolean).join(", ")} aria-pressed={selected === row.id} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} /><span className="og-list-name"><strong><AgentRecordTitle agent={row.agent} /></strong><small>{row.project.label} · {row.checkout.label}</small></span><StatusMark mark={row.agent.mark} /><span>{markWords(t, row.agent)}</span></button>)}
+    {filtered.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE).map((row) => <button key={row.id} type="button" aria-label={[rowAccessibleName(t, row.agent, row.device), row.project.label, row.checkout.label].filter(Boolean).join(", ")} aria-pressed={selected === row.id} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} /><span className="og-list-name"><strong><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong><small>{row.project.label} · {row.checkout.label}</small></span><StatusMark mark={row.agent.mark} /><span>{markWords(t, row.agent)}</span></button>)}
     {pages > 1 ? <div className="og-pagination"><Button variant="ghost" size="sm" disabled={current === 0} onClick={() => setPage(current - 1)}>{t("overviewGraph.previous")}</Button><span>{t("overviewGraph.page", { page: current + 1, pages })}</span><Button variant="ghost" size="sm" disabled={current + 1 === pages} onClick={() => setPage(current + 1)}>{t("overviewGraph.next")}</Button></div> : null}
   </div>;
 }
@@ -322,7 +323,7 @@ function SessionPreview({ row, family, progress, actions, openRecord, close }: {
   const children = row.agent.direct_child_counts;
   const sentence = rowSentence(t, row.agent);
   return <aside className="og-details overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:shadow-lg" aria-label={t("overviewGraph.preview")} data-graph-preview="true">
-    <div className="og-details-head"><strong><AgentRecordTitle agent={row.agent} /></strong><Hint label={t("overviewGraph.close")}><Button variant="ghost" size="icon-sm" onClick={close}><XIcon /></Button></Hint></div>
+    <div className="og-details-head"><strong><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong><Hint label={t("overviewGraph.close")}><Button variant="ghost" size="icon-sm" onClick={close}><XIcon /></Button></Hint></div>
     <p className="og-detail-status"><StatusMark mark={row.agent.mark} />{markWords(t, row.agent)}</p>
     {sentence ? <p className="og-work">{sentence}</p> : null}
     <p className="og-context">{row.project.label} · {row.checkout.label}{row.device ? ` · ${row.device}` : ""}</p>

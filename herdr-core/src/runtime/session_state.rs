@@ -169,7 +169,7 @@ impl Runtime {
             self.set_error(
                 "revisit.capacity",
                 format!(
-                    "다시 볼 것은 {}개까지 둘 수 있어요",
+                    "At most {} tasks can be starred to revisit",
                     sessions::MAX_STARRED_SESSIONS
                 ),
                 false,
@@ -224,7 +224,7 @@ impl Runtime {
         self.push_diagnostic("revisit.save_failed", message.to_owned());
         self.set_error(
             "revisit.save_failed",
-            "다시 볼 것을 바꾸지 못했어요. 다시 시도해 주세요",
+            "The revisit mark could not be saved",
             true,
         );
     }

@@ -1,6 +1,7 @@
 import { AgentRecordTitle } from "./components/agent-record-title";
-import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, FileTextIcon, GitBranchIcon, PlusIcon, ServerIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, FileTextIcon, GitBranchIcon, PlusIcon, ServerIcon, StarIcon } from "lucide-react";
 import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { deviceScope } from "./agentScope";
 import { AgentRowMark } from "./AgentRowMark";
@@ -8,6 +9,7 @@ import { useAgentLogosShown } from "./agentLogoMode";
 import { agentProductName } from "./agentAdapters";
 import { backgroundTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
+import { RevisitStar, starred } from "./components/revisit-mark";
 import { askParts, DescendantMark, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
 import { childrenOf } from "./components/agent-tree-popover";
 import { Elapsed } from "./components/elapsed";
@@ -348,7 +350,10 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
   // The ⋯ and a right-click on the row open the same menu (PRD session-archive B1, D-27).
   const menu = useTaskMenu(agent, record, go, !agent.resolved, disabled, actions, true);
   // The row's own mark words, as the sidebar row says them (status-marks B3, B33); a fold's rows say the fold.
-  const words = card.state === "resting" || card.state === "cleanup" ? t(`taskLens.state.${card.state}`) : markWords(t, agent);
+  // A starred task waiting in 다시 볼 것 wears the ★ in its mark's slot; a read ask keeps its own mark (PRD revisit-group B2, B6).
+  const starMark = card.state === "revisit" && starred(agent) && !agent.revisit?.read_ask;
+  const revisitWords = card.state === "revisit" ? t(starMark ? "taskLens.revisit.starred" : "taskLens.revisit.readAsk") : starred(agent) ? t("taskLens.revisit.starred") : null;
+  const words = [card.state === "resting" || card.state === "cleanup" ? t(`taskLens.state.${card.state}`) : markWords(t, agent), revisitWords].filter(Boolean).join(" · ");
   const sentence = rowSentence(t, agent);
   // The visible second line follows the button and is read after it, so the name leaves the sentence to it.
   const name = [agent.identity_label, forkLabel(t, agent), agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, words, hideAiWords(t, agent.hide_ai)].filter(Boolean).join(", ");
@@ -364,14 +369,15 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
-            <StatusMark mark={agent.mark} className={markTone(agent)} />
+            {starMark ? <RevisitStar slot /> : <StatusMark mark={agent.mark} className={markTone(agent)} />}
             <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai ? "card" : null} />
             <AgentRecordTitle agent={agent} className="text-caption font-medium" />
             <AgentForkMark agent={agent} />
+            {starred(agent) && !starMark ? <RevisitStar /> : null}
           </button>
           {open ? null : <DescendantMark agent={agent} />}
           <AgentPrMark agent={agent} family={family} staleness={staleness} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
-          <TimeSlot agent={agent} record={record} menu={menu} />
+          <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: card.state === "revisit" || starred(agent), disabled, actions }} />
         </div>
         <SecondLine entry={entry} showProject={showProject} />
       </div>
@@ -427,13 +433,14 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
         <TreeChevron name={root.title} open={null} onToggle={() => {}} hangs={false} />
         <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
           <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
-            <button type="button" data-task-focus="row" aria-label={[root.title, agentProductName(root.agent_kind), t("archive.state"), state].filter(Boolean).join(", ")}
+            <button type="button" data-task-focus="row" aria-label={[root.title, agentProductName(root.agent_kind), t("archive.state"), row.starred ? t("taskLens.revisit.starred") : null, state].filter(Boolean).join(", ")}
               title={[root.title, agentProductName(root.agent_kind), root.last_line].filter(Boolean).join("\n")}
               onClick={(event) => { event.stopPropagation(); record(); }}
               onKeyDown={(event) => { if (event.key === " ") { event.preventDefault(); record(); } }}
               className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring">
               <AgentRowMark kind={root.agent_kind} hideAi={null} />
               <span className="min-w-0 truncate text-caption font-medium text-muted-foreground">{root.title}</span>
+              {row.starred ? <RevisitStar /> : null}
             </button>
             {parts ? <PartsMark parts={parts} /> : null}
             <span className="grid shrink-0 items-center justify-items-end" onClick={(event) => event.stopPropagation()}>
@@ -460,7 +467,7 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
   );
 }
 
-type TaskMenuId = "record" | "pane" | "resolve" | "archive";
+type TaskMenuId = "record" | "pane" | "revisit" | "resolve" | "archive";
 type TaskMenu = { items: () => MenuEntry<TaskMenuId>[]; select: (id: TaskMenuId) => void };
 
 /**
@@ -475,6 +482,8 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
       { id: "record", icon: "record", label: t("taskLens.menu.record"), unavailable: record ? null : "", shortcut: "Space" },
       { id: "pane", icon: "terminal", label: t("taskLens.menu.pane"), unavailable: disabled ? "" : null, shortcut: "↩" },
     ];
+    // Before 해결 and 세션 보관 on a root task (PRD revisit-group D-08, B9).
+    if (root) entries.push(revisitEntry(agent, disabled, t));
     if (resolvable) entries.push({ id: "resolve", icon: "check", label: t("agentSessions.resolve"), unavailable: disabled ? "" : null });
     const archive = root ? archiveOffer(useShellStore.getState().rest, agent, t) : { kind: "hidden" as const };
     if (archive.kind === "offered") entries.push({ id: "archive", icon: "archive", label: t("archive.menu.archive"), unavailable: archive.unavailable, separated: true });
@@ -483,10 +492,39 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
   const select = (id: TaskMenuId) => {
     if (id === "record") return record?.();
     if (id === "pane") return onPane();
+    if (id === "revisit") return revisitOn(agent) ? actions.finishRevisit(agent.pane_id) : actions.starSession(agent.pane_id);
     if (id === "resolve") return actions.resolveSession(agent.pane_id);
     return actions.archiveSession(agent.pane_id);
   };
   return { items, select };
+}
+
+/** Whether the task waits in 다시 볼 것 or wears the ★: its menu and button then say 다 봤음. */
+function revisitOn(agent: AgentRow): boolean {
+  return agent.revisit != null;
+}
+
+function revisitEntry(agent: AgentRow, disabled: boolean, t: TFunction<"translation">): MenuEntry<TaskMenuId> {
+  const on = revisitOn(agent);
+  return { id: "revisit", icon: on ? "unstar" : "star", label: t(on ? "taskLens.menu.revisitDone" : "taskLens.menu.revisit"), unavailable: disabled ? "" : null, separated: true };
+}
+
+/**
+ * The ☆/★ beside the record button (PRD revisit-group D-08, B8): ☆ stars the
+ * task, ★ on a starred task or one waiting in 다시 볼 것 is 다 봤음.
+ */
+function RevisitButton({ agent, on, disabled, actions }: { agent: AgentRow; on: boolean; disabled: boolean; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const label = t(on ? "taskLens.menu.revisitDone" : "taskLens.menu.revisit");
+  return (
+    <Hint label={label}>
+      <button type="button" aria-label={label} aria-pressed={on} disabled={disabled} data-task-revisit={agent.pane_id}
+        className={cn("rounded-xs p-xxs outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50", on ? "text-warning" : "text-muted-foreground")}
+        onClick={() => (on ? actions.finishRevisit(agent.pane_id) : actions.starSession(agent.pane_id))}>
+        <StarIcon className={cn("size-(--size-icon-sm)", on && "fill-current")} />
+      </button>
+    </Hint>
+  );
 }
 
 /**
@@ -494,7 +532,7 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
  * and `⋯` (B15, B18). Both share one cell, so the slot is as wide as the
  * wider and neither is drawn over the title.
  */
-function TimeSlot({ agent, record, menu }: { agent: AgentRow; record: (() => void) | null; menu: TaskMenu }) {
+function TimeSlot({ agent, record, menu, revisit }: { agent: AgentRow; record: (() => void) | null; menu: TaskMenu; revisit?: { on: boolean; disabled: boolean; actions: Actions } }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
   const shown = open ? "opacity-100" : "opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100 hoverless:opacity-100";
@@ -503,6 +541,7 @@ function TimeSlot({ agent, record, menu }: { agent: AgentRow; record: (() => voi
     <span className="grid shrink-0 items-center justify-items-end" onClick={(event) => event.stopPropagation()}>
       <Elapsed since={agent.last_prompt_at_unix_ms} data-agent-elapsed="true" className={cn("pointer-events-none col-start-1 row-start-1 text-micro text-muted-foreground tabular-nums", hidden)} />
       <span className={cn("col-start-1 row-start-1 flex items-center gap-xxs", shown)}>
+        {revisit ? <RevisitButton agent={agent} {...revisit} /> : null}
         {record ? (
           <Hint label={t("taskLens.menu.record")} shortcut="Space">
             <button type="button" aria-label={t("taskLens.menu.record")} data-task-record={agent.pane_id} className="rounded-xs p-xxs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring" onClick={record}>

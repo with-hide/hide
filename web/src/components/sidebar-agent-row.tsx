@@ -11,6 +11,7 @@ import { AgentRecordTitle } from "./agent-record-title";
 import { RowLineText } from "./row-line-text";
 import { homeTurnLine, originLine } from "../hideAiOrigin";
 import { AgentForkMark } from "./fork-mark";
+import { RevisitStar, starred } from "./revisit-mark";
 import { RowLetterMark } from "./letter-mark";
 import { cn } from "../lib/utils";
 import type { AgentRow } from "../snapshot";
@@ -210,6 +211,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
             {/* The row button's name already reads all of this out. */}
             <AgentRecordTitle agent={agent} className={cn("pointer-events-none", titleTone)} />
             <AgentForkMark agent={agent} />
+            {starred(agent) ? <RevisitStar /> : null}
             {closing ? (
               <span aria-hidden="true" className="pointer-events-none shrink-0 text-caption text-muted-foreground" data-agent-closing="true">
                 {t("agents.closing")}
