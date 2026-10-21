@@ -977,6 +977,14 @@ fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcom
             pending.retain(|task: &PendingAnalysis| task.project_id != project_id);
         }
         if tally.analyzing || tally.error.is_some() {
+            if tally.checked {
+                // A committed card change must reach the open reader even
+                // when the same pass failed. It is no provider recovery.
+                report(PassReport::Checked {
+                    project_id: project_id.clone(),
+                    answered: false,
+                });
+            }
             report(PassReport::Analyzed {
                 project_id: project_id.clone(),
                 learned: tally.learned,
@@ -4458,6 +4466,117 @@ mod tests {
                 .is_none(),
             "a failed attempt never certifies the unchanged document fingerprint"
         );
+    }
+
+    #[test]
+    fn reflected_correction_refreshes_the_open_card_despite_a_later_failure() {
+        use crate::runtime::tests::{SharedRuntime, context_payload, wait_for};
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        confirm_fixture_correction(&fixture, 1);
+        confirm_fixture_correction(&fixture, 2);
+        let mut runtime = crate::runtime::tests::runtime();
+        runtime.state_path = fixture._temp.path().join("state.json");
+        let mut payload = context_payload();
+        for agent in &mut payload.agents {
+            agent.cwd = Some(fixture.root.to_string_lossy().into_owned());
+        }
+        for pane in &mut payload.panes {
+            pane.cwd = Some(fixture.root.to_string_lossy().into_owned());
+        }
+        runtime.ingest_session(Ok(payload));
+        let workspace = runtime.snapshot.navigator.workspaces[0].id.clone();
+        let runtime = SharedRuntime::new(runtime);
+        {
+            let mut guard = runtime.lock().unwrap();
+            guard.install_worker_context(runtime.weak(), crate::handle::ChangeNotifier::noop());
+            guard.open_project_memory(Some(workspace.clone()));
+            guard.expand_memory_card(&workspace, Some(1));
+        }
+        wait_for("the original expanded correction", || {
+            runtime
+                .lock()
+                .unwrap()
+                .snapshot
+                .memory
+                .as_ref()
+                .and_then(|memory| memory.project.as_ref())
+                .and_then(|project| project.expanded.as_ref())
+                .is_some_and(|card| card.document_comparison.is_some())
+        });
+        fixture.backend.answers.lock().unwrap().extend([
+            json!({"results":[]}),
+            json!({"results":[]}),
+            json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}),
+        ]);
+        let input = PassInput {
+            nodes: vec![(crate::node::test_node(), fixture.node.clone())],
+            unreached: vec![],
+            database: fixture.database.clone(),
+            router: Some(AiRouter::new(
+                vec![fixture.backend.clone()],
+                RouterConfig {
+                    priority: vec![ProviderId::CLAUDE],
+                    max_transient_attempts: 1,
+                    ..RouterConfig::default()
+                },
+                Arc::new(NoopLogSink),
+            )),
+            live: BTreeSet::from([("claude", SESSION.to_owned())]),
+            closed: BTreeSet::new(),
+            held: HashSet::new(),
+            home: None,
+            delegated: HashSet::new(),
+            language: hide_ai::OutputLanguage::English,
+            cancel: CancelToken::new(),
+            failed_reads: Default::default(),
+        };
+        let outcome = run_pass(&input, &mut |report| {
+            runtime.lock().unwrap().apply_memory_report(report);
+        });
+        runtime.lock().unwrap().finish_memory_pass(outcome);
+        assert!(
+            fixture
+                .store()
+                .document_comparison(&fixture.project_id, 1)
+                .unwrap()
+                .is_none()
+        );
+        {
+            let guard = runtime.lock().unwrap();
+            let work = &guard.memory_work.projects[&fixture.project_id];
+            assert_eq!(work.failures, 1);
+            assert!(work.retry_at_unix_ms > now_ms());
+        }
+        wait_for(
+            "the reflected expanded correction and its promotion row",
+            || {
+                let guard = runtime.lock().unwrap();
+                let project = guard
+                    .snapshot
+                    .memory
+                    .as_ref()
+                    .unwrap()
+                    .project
+                    .as_ref()
+                    .unwrap();
+                project
+                    .expanded
+                    .as_ref()
+                    .is_some_and(|card| card.document_comparison.is_none())
+                    && project.rows.iter().any(|row| {
+                        row.number == 1
+                            && row.document_comparison.is_none()
+                            && row.promotion.as_ref().is_some_and(|promotion| {
+                                promotion.state == crate::model::MemoryPromotionState::Merged
+                            })
+                    })
+            },
+        );
+        let guard = runtime.lock().unwrap();
+        assert_eq!(guard.memory_work.projects[&fixture.project_id].failures, 1);
+        assert!(guard.memory_work.projects[&fixture.project_id].retry_at_unix_ms > now_ms());
     }
 
     #[test]

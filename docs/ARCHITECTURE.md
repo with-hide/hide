@@ -291,6 +291,7 @@ It fingerprints the bounded owning document and, after a usable answer, asks aga
 A failed attempt records its time without certifying a new fingerprint; an intent-local failure rotates the card and continues other maintenance stages, while account-level refusals stop provider work.
 Missing documents retain the correction and rotate the check position; no new poller or automatic document writer exists.
 Completed checks, observed intent failures and a later stopping reason are retained separately.
+Committed card changes refresh the opened Memory reader independently of a same-pass failure; that change report does not clear provider backoff.
 A maintenance failure leaves that Project's discovered extraction pending until its existing runtime backoff, while peer Projects remain eligible.
 Preferences stay injectable but never become repository pointers or promotion candidates.
 An Undo of any of these verdicts restores the old text as verified and drops the evidence rows of that revision, so the evidence walk does not unverify it again at once.
