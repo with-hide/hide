@@ -1178,7 +1178,7 @@ pub(crate) fn fits(book: &MissionBook) -> bool {
 }
 
 /// Whether a change from `before` to `after` may be kept: one that stays in
-/// the budget, or one that makes a book already past it no larger, so a
+/// the budget, or one that makes a book already past it smaller, so a
 /// close or a smaller plan is never refused.
 pub(crate) fn may_keep(before: &MissionBook, after: &MissionBook) -> bool {
     // A book past the budget came from a file the read cap let in, so both
