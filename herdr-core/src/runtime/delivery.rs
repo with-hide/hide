@@ -641,16 +641,27 @@ impl Runtime {
     /// prompt being taken up, not the composer being sent: the operator's
     /// newer draft is still there, and the turn's own entry to `working`
     /// already covers whatever was typed before it.
+    ///
+    /// Herdr can report the turn `working` before the hook that started it
+    /// reaches the core. A hook within `HOOK_AFTER_WORK_MS` of that entry,
+    /// with no key since it, is that turn's own prompt, so it marks the
+    /// moment an agent version's composer is checked at (`composer_check_due`)
+    /// as a hook at rest does; a queued prompt was typed after the entry.
     fn note_prompt_submitted(&mut self, pane_id: &str) {
+        const HOOK_AFTER_WORK_MS: u64 = 10_000;
         self.reopen_resolved_session(pane_id);
-        if let Some(observation) = self
-            .delivery_observations
-            .get_mut(pane_id)
-            .filter(|observation| observation.status != "working")
+        let now = unix_milliseconds();
+        let Some(observation) = self.delivery_observations.get_mut(pane_id) else {
+            return;
+        };
+        if observation.status != "working" {
+            observation.last_submit_at_unix_ms = now;
+            observation.hook_submit_at_unix_ms = now;
+            self.sync_composer_mark(pane_id, now);
+        } else if observation.last_input_at_unix_ms <= observation.entered_working_at_unix_ms
+            && now.saturating_sub(observation.entered_working_at_unix_ms) <= HOOK_AFTER_WORK_MS
         {
-            observation.last_submit_at_unix_ms = unix_milliseconds();
-            observation.hook_submit_at_unix_ms = observation.last_submit_at_unix_ms;
-            self.sync_composer_mark(pane_id, unix_milliseconds());
+            observation.hook_submit_at_unix_ms = observation.entered_working_at_unix_ms;
         }
     }
 
@@ -851,8 +862,8 @@ impl Runtime {
         self.delivery_observations.values().find_map(|observation| {
             let hook = observation.hook_submit_at_unix_ms;
             let known_empty = hook > 0
-                && observation.last_input_at_unix_ms < hook
-                && observation.entered_working_at_unix_ms > hook
+                && observation.last_input_at_unix_ms <= hook
+                && observation.entered_working_at_unix_ms >= hook
                 && observation.status_changed_at_unix_ms >= observation.entered_working_at_unix_ms
                 && !observation.unsent_draft()
                 && Self::composer_at_rest(observation, now);
@@ -1988,6 +1999,18 @@ pub(crate) mod tests {
         observation.hook_submit_at_unix_ms = hook;
         observation.entered_working_at_unix_ms = hook + 1;
         observation.status_changed_at_unix_ms = hook + 2;
+    }
+
+    /// The pane's turn ends at `at`: Herdr reports it idle from then on.
+    pub(crate) fn end_turn(runtime: &mut Runtime, pane: &str, at: u64) {
+        let observation = runtime.delivery_observations.get_mut(pane).unwrap();
+        observation.status = "idle".into();
+        observation.status_changed_at_unix_ms = at;
+    }
+
+    /// A prompt hook of the pane's own session reaching the core now.
+    pub(crate) fn submit_prompt(runtime: &mut Runtime, pane: &str) {
+        runtime.note_prompt_submitted(pane);
     }
 
     /// The core's Herdr link, as a device's connection makes and drops it.

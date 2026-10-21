@@ -2089,6 +2089,37 @@ mod tests {
         }
     }
 
+    /// Herdr reported the turn `working` before its prompt hook reached the
+    /// core (seen live on Codex 0.163.0's first turn, 2026-10-21): the hook
+    /// still marks the moment, so the version is checked once the turn ends.
+    /// A hook after a key typed during the work is a queued prompt, and the
+    /// composer may hold the operator's newer draft, so it marks nothing.
+    #[test]
+    fn a_hook_after_herdr_reports_work_still_marks_the_check_moment() {
+        use crate::runtime::delivery::tests::{observe_working_since, submit_prompt};
+        for (key_during_work, checked) in [(false, 1), (true, 0)] {
+            let bell = Bell::start(json!({}));
+            bell.know_version(None);
+            *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+            let start = now();
+            {
+                let mut guard = bell.runtime.lock().unwrap();
+                observe_working_since(&mut guard, "recipient", start - 1_000);
+                if key_during_work {
+                    guard.note_delivery_key_at("recipient", start - 500);
+                }
+                submit_prompt(&mut guard, "recipient");
+                crate::runtime::delivery::tests::end_turn(&mut guard, "recipient", start);
+            }
+            let logged = pass_logged(&bell, &mut Doorbell::default(), start + 60_000);
+            let count = logged
+                .iter()
+                .filter(|record| record["kind"] == "composer.version_checked")
+                .count();
+            assert_eq!(count, checked, "key during work: {key_during_work}");
+        }
+    }
+
     #[test]
     fn the_bell_targets_match_the_reviewed_adapter_declarations() {
         for kind in ["claude", "claude-code", "claude_code", "codex", "grok"] {
