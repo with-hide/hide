@@ -445,6 +445,7 @@ mod tests {
             project: None,
             actor: actor(pane, session),
             ended: false,
+            terminal_id: None,
             forked: false,
         }
     }

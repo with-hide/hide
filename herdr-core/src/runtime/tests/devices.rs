@@ -160,6 +160,7 @@ fn removing_devices_retires_only_their_pane_reads_and_rejects_late_publications(
             project: None,
             actor: child.clone(),
             ended: false,
+            terminal_id: None,
             forked: false,
         });
         ledger.next_id += 1;

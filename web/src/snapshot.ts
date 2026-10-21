@@ -659,6 +659,7 @@ export type CheckoutAgentSummary = {
 export type MarkCounts = { turn: number; going: number; done: number; unread: number };
 
 export type PaneRow = {
+  terminal_id?: string | null;
   failed_terminal_id?: string;
   ports?: number[];
   servers?: { host: string; port: number }[];
@@ -993,6 +994,7 @@ export type InputRequest = {
 };
 
 export type AsyncOperation = {
+  related_scope_ids?: string[];
   id: string;
   kind: string;
   target_id: string;
@@ -2115,6 +2117,8 @@ export type SnapshotRest = {
     herdr_profiles?: HerdrProfiles;
     diagnostics?: CoreDiagnostic[];
     async_operations?: AsyncOperation[];
+    /** Bounded read-only hover text; never an attachment or a focus request. */
+    pane_move_preview?: { request_id: string; tab_id: string; phase: "preparing" | "ready" | "failed"; panes: { pane_id: string; text: string }[]; message?: string | null } | null;
     tab_rename?: { request_id: string; tab_id: string; label: string; phase: "pending" | "succeeded" | "failed" } | null;
     pane_focus_request?: PaneFocusRequest | null;
     /** The answers to the latest `browser_open` events that named themselves, oldest first and bounded. */

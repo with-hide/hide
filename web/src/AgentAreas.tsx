@@ -1,3 +1,5 @@
+import { movingTab } from "./paneMove";
+import { PaneMoveProvider, PaneMovePreview, PaneMovePlus } from "./PaneMoveControls";
 import { useMemo, useState } from "react";
 import type { Actions } from "./actions";
 import { AreaEmpty } from "./AreaEmpty";
@@ -36,6 +38,7 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
   const owner = useKeyboardOwner();
   const entries = agentEntries(checkout);
   const paneLayouts = useShellStore((s) => s.rest?.pane_layouts);
+  const operations = useShellStore(s => s.rest?.status?.async_operations);
   const remoteSessions = useShellStore((s) => s.rest?.status?.remote);
   const node = useShellStore((s) => localDeviceId(s.rest));
   const device = deviceId ?? node;
@@ -94,6 +97,7 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
         return receipt ? <div className="absolute inset-0 z-20 flex bg-background">{startForm(item.id, area.id, receipt.add_pane, receiptTarget(receipt))}</div> : null;
       })()}
       {area.id === layout.active_area ? <><RelationStatus actions={actions} visiblePaneIds={visiblePaneIds} /><FindBar actions={actions} /></> : null}
+      <PaneMovePreview areaId={area.id} />
       {remote ? remoteBody?.(single ? null : item.id) : <PaneCanvas key={item.id} tab={checkout.tabs.find((tab) => tab.id === item.id) ?? null} actions={actions} />}
     </div>,
     empty: (area) => layout.groups ? startForm(null, area.id) : <AreaEmpty state="no-agent-tab" text={t("panes.agent.noTab")}><Button variant="secondary" onClick={() => actions.createTab(area.id)} data-empty-new-tab="true">{t("panes.area.newTab")}</Button></AreaEmpty>,
@@ -104,6 +108,7 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
         items.splice(1, 0, { id: "group:new", label: t("groups.newWithTab"), unavailable: null }, { id: "group:move", label: t("groups.move"), unavailable: null, choices: layout.groups.map((group) => ({ id: `group:to:${group.id ?? ""}`, label: group.name ?? t("groups.ungrouped"), checked: group.id === (layout.group_id ?? null) })) });
         if (layout.group_id) items.splice(3, 0, { id: "group:remove", label: t("groups.remove"), unavailable: null });
       }
+      if (movingTab(operations, id)) for (const item of items) if (item.id !== "copy_name") item.unavailable = t("menus.paneMove.busy");
       return items;
     },
     runMenu: (command, id) => {
@@ -128,10 +133,11 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
     split: (id, areaId, edge) => actions.agentLayout({ action: "split", tab_id: id, area_id: areaId, edge, request_id: crypto.randomUUID() }),
     resize: (id, ratio) => actions.agentLayout({ action: "resize", split_id: id, ratio }),
     newTab: (areaId) => actions.createTab(areaId),
+    newTabContent: <PaneMovePlus />,
     newTabLabel: layout.groups ? t("groups.newTab") : t("panes.agent.newTabNamed", { label: checkout.next_tab_label }),
     tabListLabel: t("panes.agent.tabList"), actionsLabel: t("panes.agent.tabActions"),
     newTabShortcut: commandLabel("new_tab"),
     onDraw: (frame) => noteAreaFrame("agent", frame ? { ...frame, layout, workspace, remote: single } : null),
   };
-  return <SharedAgentTree key={`${deviceId}\0${checkout.path}\0${layout.group_id ?? ""}`} layout={layout} adapter={adapter} />;
+  return <PaneMoveProvider key={`${device}\0${checkout.path}\0${layout.group_id ?? ""}`} checkout={checkout} layout={layout} deviceId={device} actions={actions}><SharedAgentTree layout={layout} adapter={adapter} /></PaneMoveProvider>;
 }

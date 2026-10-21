@@ -360,6 +360,8 @@ pub(crate) enum CoordinatorMessage {
     /// The runtime drew something ahead of Herdr, or took it back, and the
     /// session has to be read again with it (`RepublishWaker`).
     Republish,
+    /// Rebootstrap the event replica after a multi-step topology transaction.
+    RefreshTopology,
     /// A socket read the sync-read worker made for the subscription of
     /// `generation` (`sync_reads.rs`).
     SyncRead {
@@ -381,6 +383,11 @@ pub(crate) struct RepublishWaker {
 }
 
 impl RepublishWaker {
+    pub(crate) fn refresh_topology(&self) -> bool {
+        self.sender
+            .send(CoordinatorMessage::RefreshTopology)
+            .is_ok()
+    }
     pub(crate) fn wake(&self) {
         if !self.pending.swap(true, Ordering::AcqRel) {
             let _ = self.sender.send(CoordinatorMessage::Republish);
@@ -437,3 +444,15 @@ pub(crate) use subscription::{
     fetch_workspace_active_tab, log_sync_failure, stop_subscription,
 };
 use sync_reads::{SyncRead, SyncReadAnswer, SyncReader};
+
+/// A worker's authoritative read uses the same device projection as the replica.
+pub(crate) fn project_remote_read(
+    value: Value,
+    device: &str,
+) -> Result<(SessionSnapshotPayload, RemoteSessionSnapshot), SessionFetchError> {
+    let state = wire::snapshot_response(value)?;
+    let payload = state.project();
+    let (remote, _) =
+        replica::SessionReplica::project_remote_state(&state, device, payload.clone())?;
+    Ok((payload, remote))
+}

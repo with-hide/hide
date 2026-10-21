@@ -56,6 +56,8 @@ pub struct Capability {
     /// The caller id the core resolves: a pane id, or the encoded checkout
     /// caller (`workspace_control::Caller`) for a checkout-bound capability.
     pub pane_id: String,
+    /// The proved caller reference inherited by the running shell.
+    caller_alias: String,
     pub context: Context,
     binding: Binding,
     pub one_shot: bool,
@@ -75,10 +77,25 @@ impl Capability {
         }
     }
 
+    /// Only the reference proved when this capability was issued can be
+    /// translated; arbitrary hints still reach the core's conflict check.
+    pub(crate) fn canonical_hint(&self, hint: Option<String>) -> Option<String> {
+        hint.map(|hint| {
+            let qualified = if self.remote.is_some() && !hint.starts_with("remote:") {
+                format!("remote:{}:pane:{hint}", self.context.device_id)
+            } else {
+                hint.clone()
+            };
+            if self.pane_terminal().is_some() && qualified == self.caller_alias {
+                self.pane_id.clone()
+            } else {
+                hint
+            }
+        })
+    }
+
     pub(crate) fn same_identity(&self, other: &Self) -> bool {
-        (self.binding == Binding::Checkout || self.pane_id == other.pane_id)
-            && self.context == other.context
-            && self.binding == other.binding
+        self.context == other.context && self.binding == other.binding
     }
 
     /// Whether this credential was issued for a pane of `node`, vouched for
@@ -194,12 +211,7 @@ fn entry_alive(entry: &Capability) -> bool {
 /// pane caller is the same pane with the same shell; a checkout caller is any
 /// caller bound to the same checkout, whatever nonce its bootstrap carried.
 fn same_caller(entry: &Capability, attestation: &Attestation) -> bool {
-    entry.context == attestation.context
-        && entry.binding == attestation.binding
-        && match attestation.binding {
-            Binding::Pane { .. } => entry.pane_id == attestation.pane_id,
-            Binding::Checkout => true,
-        }
+    entry.context == attestation.context && entry.binding == attestation.binding
 }
 
 fn remove_local_reference(entry: &Capability) {
@@ -326,6 +338,7 @@ impl Registry {
             token.clone(),
             Capability {
                 pane_id: attestation.pane_id.clone(),
+                caller_alias: attestation.pane_id.clone(),
                 context: attestation.context.clone(),
                 binding: attestation.binding.clone(),
                 one_shot: holder.is_some(),
@@ -372,6 +385,7 @@ impl Registry {
             token.clone(),
             Capability {
                 pane_id: attestation.pane_id.clone(),
+                caller_alias: attestation.pane_id.clone(),
                 context: attestation.context.clone(),
                 binding: attestation.binding.clone(),
                 one_shot: grant.one_shot,
@@ -486,7 +500,7 @@ impl Registry {
         core: &CoreHandle,
         attested: Option<&StreamAttestation>,
     ) -> Result<Capability, &'static str> {
-        let cap = self.get(token).ok_or("credential_expired")?;
+        let mut cap = self.get(token).ok_or("credential_expired")?;
         if cap.binding == Binding::Checkout {
             // Only registration and connection are rechecked: the checkout
             // must still resolve, on the same device, to the same context.
@@ -521,12 +535,29 @@ impl Registry {
                 self.revoke(token);
                 return Err("pane_changed");
             }
-            let context = core
-                .workspace_query(&cap.context.device_id, &cap.pane_id, Query::Info)
-                .map_err(|_| "pane_not_connected")?
-                .context;
+            let (pane_id, context) =
+                match core.workspace_query(&cap.context.device_id, &cap.pane_id, Query::Info) {
+                    Ok(actual) => (cap.pane_id.clone(), actual.context),
+                    Err(_) => {
+                        let connector = core
+                            .remote_herdr_api(&cap.context.device_id)
+                            .map_err(|_| "remote_unavailable")?
+                            .ok_or("pane_not_connected")?;
+                        let current = hide_node::pane_proof::current_address(
+                            connector.as_ref(),
+                            &remote.source_pane_id,
+                            Instant::now() + PANE_INSPECT_TIMEOUT,
+                        )?;
+                        let pane = format!("remote:{}:pane:{current}", cap.context.device_id);
+                        let context = core
+                            .workspace_query(&cap.context.device_id, &pane, Query::Info)
+                            .map_err(|_| "pane_not_connected")?
+                            .context;
+                        (pane, context)
+                    }
+                };
             Attestation {
-                pane_id: cap.pane_id.clone(),
+                pane_id,
                 context,
                 binding,
             }
@@ -537,6 +568,15 @@ impl Registry {
         if actual.context != cap.context || actual.binding != cap.binding {
             self.revoke(token);
             return Err("pane_changed");
+        }
+        if actual.pane_id != cap.pane_id {
+            let mut entries = self.entries.lock().map_err(|_| "credential_expired")?;
+            let stored = entries.get_mut(token).ok_or("credential_expired")?;
+            if !stored.same_identity(&cap) {
+                return Err("pane_changed");
+            }
+            stored.pane_id.clone_from(&actual.pane_id);
+            cap.pane_id = actual.pane_id;
         }
         Ok(cap)
     }
@@ -759,13 +799,27 @@ pub fn attest_remote(
     if device_id.is_empty() || source_pane_id.is_empty() || source_pane_id.len() > 256 {
         return Err("invalid_request");
     }
-    let pane_id = format!("remote:{device_id}:pane:{source_pane_id}");
-    let context = core
-        .workspace_query(device_id, &pane_id, Query::Info)
-        .map_err(|_| "pane_not_connected")?
-        .context;
+    let mut pane_id = format!("remote:{device_id}:pane:{source_pane_id}");
+    let context = match core.workspace_query(device_id, &pane_id, Query::Info) {
+        Ok(actual) => actual.context,
+        Err(_) => {
+            let connector = core
+                .remote_herdr_api(device_id)
+                .map_err(|_| "remote_unavailable")?
+                .ok_or("pane_not_connected")?;
+            let current = hide_node::pane_proof::current_address(
+                connector.as_ref(),
+                source_pane_id,
+                Instant::now() + PANE_INSPECT_TIMEOUT,
+            )?;
+            pane_id = format!("remote:{device_id}:pane:{current}");
+            core.workspace_query(device_id, &pane_id, Query::Info)
+                .map_err(|_| "pane_not_connected")?
+                .context
+        }
+    };
     Ok(Attestation {
-        pane_id,
+        pane_id: format!("remote:{device_id}:pane:{source_pane_id}"),
         context,
         binding: Binding::Pane {
             terminal_id: identity.terminal_id.clone(),
@@ -813,13 +867,16 @@ pub fn attest_local(
     herdr_socket: &Path,
     core: &CoreHandle,
 ) -> Result<Attestation, &'static str> {
-    let attestation = inspect_pane(pane_id, herdr_socket, core)?;
+    let mut attestation = inspect_pane(pane_id, herdr_socket, core)?;
     let Binding::Pane { shell_pid, .. } = &attestation.binding else {
         return Err("pane_unavailable");
     };
     if !descends_from(peer, *shell_pid) {
         return Err("caller_not_in_pane");
     }
+    // Preserve only the caller reference just proved, so inherited CLI
+    // hints can be normalized after validation resolves its current route.
+    attestation.pane_id = pane_id.to_owned();
     Ok(attestation)
 }
 
@@ -828,12 +885,12 @@ fn inspect_pane(
     herdr_socket: &Path,
     core: &CoreHandle,
 ) -> Result<Attestation, &'static str> {
-    let identity = hide_node::pane_proof::inspect(herdr_socket, pane_id)?;
+    let (pane_id, identity) = hide_node::pane_proof::inspect_address(herdr_socket, pane_id)?;
     let context = core
-        .workspace_query(core.node().as_str(), pane_id, Query::Info)
+        .workspace_query(core.node().as_str(), &pane_id, Query::Info)
         .map_err(|_| "pane_not_connected")?;
     Ok(Attestation {
-        pane_id: pane_id.to_owned(),
+        pane_id,
         context: context.context,
         binding: Binding::Pane {
             terminal_id: identity.terminal_id,
@@ -1226,7 +1283,17 @@ mod tests {
         let cap = registry.get(&token).unwrap();
         let mut other = cap.clone();
         other.pane_id = "remote:node-a:pane:w1:p2".to_owned();
-        assert!(!cap.same_identity(&other));
+        // A native caller alias may acquire a new routing address; the
+        // attested terminal and shell incarnation still constrain it.
+        assert!(cap.same_identity(&other));
+        assert_eq!(
+            other.canonical_hint(Some("w1:p1".into())),
+            Some(other.pane_id.clone())
+        );
+        assert_eq!(
+            other.canonical_hint(Some("w1:p9".into())),
+            Some("w1:p9".into())
+        );
         other = cap.clone();
         other.binding = Binding::Pane {
             terminal_id: "replaced".to_owned(),

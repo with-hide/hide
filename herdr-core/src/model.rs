@@ -608,6 +608,8 @@ pub struct RecentClosedPendingSnapshot {
 /// server confirmation from the transport response alone.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AsyncOperationSnapshot {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub related_scope_ids: Vec<String>,
     pub id: String,
     pub kind: String,
     pub target_id: String,
@@ -2254,8 +2256,8 @@ pub struct PaneSnapshot {
     /// Exact creation descriptor used only for start reconciliation, never a title.
     #[serde(skip_serializing)]
     pub start_claim: Option<String>,
-    /// Internal incarnation used to bind a close approval to its terminal.
-    #[serde(skip_serializing)]
+    /// Stable terminal incarnation shared by close approval and pane relocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_id: Option<String>,
     /// Herdr could not restore this terminal. Never inferred from its cwd or agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5692,6 +5694,20 @@ pub struct TextRangeSnapshot {
     pub length: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PaneMovePreviewPaneSnapshot {
+    pub pane_id: String,
+    pub text: String,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PaneMovePreviewSnapshot {
+    pub request_id: String,
+    pub tab_id: String,
+    pub phase: String,
+    pub panes: Vec<PaneMovePreviewPaneSnapshot>,
+    pub message: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StatusSnapshot {
     pub server_discovery: ServerDiscoverySnapshot,
@@ -5710,6 +5726,8 @@ pub struct StatusSnapshot {
     /// authoritative Herdr event. Keeping these beside status lets every
     /// surface show the same bounded, target-scoped state.
     pub async_operations: Vec<AsyncOperationSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_move_preview: Option<PaneMovePreviewSnapshot>,
     /// The core-owned outcome of the latest explicitly correlated pane-focus
     /// request. Ordinary focus events have no request id and do not replace
     /// this receipt, so a relationship control never mistakes another pane's
@@ -6298,6 +6316,7 @@ impl Snapshot {
                 diagnostics: Vec::new(),
                 last_error: None,
                 async_operations: Vec::new(),
+                pane_move_preview: None,
                 pane_focus_request: None,
                 browser_opens: Vec::new(),
                 server_discovery: ServerDiscoverySnapshot {

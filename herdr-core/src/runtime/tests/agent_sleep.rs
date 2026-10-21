@@ -2135,6 +2135,7 @@ impl SleepingChild {
                 project: None,
                 actor: runtime.delivery_observations[pane].actor.clone(),
                 ended: false,
+                terminal_id: None,
                 forked: false,
             });
         }

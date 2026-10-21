@@ -1568,6 +1568,7 @@ mod tests {
             project: None,
             actor: sender.clone(),
             ended: false,
+            terminal_id: None,
             forked: false,
         });
         assert_eq!(

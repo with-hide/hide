@@ -1,3 +1,4 @@
+import { usePaneMove } from "./PaneMoveControls";
 import { useState } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -112,6 +113,7 @@ export function RelationStatus({ actions, visiblePaneIds }: { actions: Actions; 
 }
 
 type PaneMenuId =
+  | `pane_move${string}`
   | `open:${string}`
   | "sleep_agent"
   | "archive_session"
@@ -244,7 +246,9 @@ type MenuOpen = { x: number; y: number; terminal: TerminalMenuContext | null };
 export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState<MenuOpen | null>(null);
+  const move = usePaneMove();
   const select = (id: PaneMenuId) => {
+    if (move?.select(id)) return;
     if (id.startsWith("link_")) {
       const link = open?.terminal?.link;
       if (!link) return;
@@ -300,6 +304,10 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
   // menu says what the header says now.
   const archive = useArchiveOffer(pane.id, open !== null);
   const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive) : paneMenuItems(pane, title, archive);
+  if (move?.mutationBlocked(pane.id)) {
+    for (const item of items) if (["close_pane", "split_right", "split_down", "toggle_zoom", "sleep_agent", "archive_session", "fork_agent", "fork_agent_side"].includes(item.id)) item.unavailable = t("menus.paneMove.busy");
+  }
+  if (open && move) items.splice(Math.max(0, items.length - 1), 0, ...move.menu(pane.id) as MenuEntry<PaneMenuId>[]);
   const menu = <EntryPointMenu title={title} label={t("panes.menu.aria", { name: title })} items={items} onSelect={select} at={open} onClose={() => setOpen(null)} />;
   return {
     menu,
