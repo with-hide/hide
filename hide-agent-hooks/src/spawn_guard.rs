@@ -307,10 +307,14 @@ struct Lexer {
     and_or: bool,
     /// Open `if`, loop and `case` bodies.
     compound: usize,
-    /// A function was defined; its body runs only when called.
-    function: bool,
-    /// `and_or` as each open `(` subshell found it.
-    subshells: Vec<bool>,
+    /// A function was just named; the group that follows is its body,
+    /// which runs only when called.
+    function_next: bool,
+    /// Each open `{` group, `true` for a function's body.
+    braces: Vec<bool>,
+    /// Each open `(` subshell: `and_or` where it opened, and whether it is
+    /// a function's body.
+    subshells: Vec<(bool, bool)>,
 }
 
 impl Lexer {
@@ -332,13 +336,17 @@ impl Lexer {
             conditional: Vec::new(),
             and_or: false,
             compound: 0,
-            function: false,
+            function_next: false,
+            braces: Vec::new(),
             subshells: Vec::new(),
         }
     }
 
     fn is_conditional(&self) -> bool {
-        self.and_or || self.compound > 0 || self.function || self.subshells.contains(&true)
+        self.and_or
+            || self.compound > 0
+            || self.braces.contains(&true)
+            || self.subshells.iter().any(|&(and_or, body)| and_or || body)
     }
 
     fn peek(&self, offset: usize) -> Option<char> {
@@ -371,11 +379,13 @@ impl Lexer {
                 '#' if !self.in_word => {
                     self.comment();
                 }
+                // `name()` names a function; the group after it is its body.
+                '(' if self.peek(1) == Some(')') => {
+                    self.end_command();
+                    self.function_next = true;
+                    self.at += 2;
+                }
                 ';' | '|' | '(' | ')' => {
-                    // `name()` defines a function.
-                    self.function |= c == '('
-                        && self.peek(1) == Some(')')
-                        && (self.in_word || !self.words.is_empty());
                     self.end_command();
                     self.at += 1;
                     // `&&`-style doubling of the same character is one operator.
@@ -386,9 +396,13 @@ impl Lexer {
                     match c {
                         ';' => self.and_or = false,
                         '|' if doubled => self.and_or = true,
-                        '(' => self.subshells.push(std::mem::take(&mut self.and_or)),
+                        '(' => {
+                            let body = std::mem::take(&mut self.function_next);
+                            self.subshells
+                                .push((std::mem::take(&mut self.and_or), body));
+                        }
                         ')' => {
-                            if let Some(outer) = self.subshells.pop() {
+                            if let Some((outer, _)) = self.subshells.pop() {
                                 self.and_or = outer;
                             }
                         }
@@ -450,18 +464,35 @@ impl Lexer {
         self.heredoc_next = None;
         if !self.words.is_empty() {
             let words = std::mem::take(&mut self.words);
-            self.conditional.push(self.is_conditional());
             // Words that open or close a body, past the keywords before them.
-            for word in &words {
+            // A group opens before its first command; an `if` or loop body
+            // opens after the command that tests it.
+            let mut opens = 0;
+            let mut at = 0;
+            while let Some(word) = words.get(at) {
                 match word.as_str() {
-                    "if" | "while" | "until" | "for" | "select" | "case" => self.compound += 1,
+                    "if" | "while" | "until" | "for" | "select" | "case" => opens += 1,
                     "fi" | "done" | "esac" => self.compound = self.compound.saturating_sub(1),
-                    "function" => self.function = true,
-                    "then" | "else" | "elif" | "do" | "{" | "!" | "time" => continue,
-                    _ => {}
+                    "function" => {
+                        self.function_next = true;
+                        // `function name {`: the name, then the group.
+                        at += 2;
+                        continue;
+                    }
+                    "{" => {
+                        let body = std::mem::take(&mut self.function_next);
+                        self.braces.push(body);
+                    }
+                    "}" => {
+                        self.braces.pop();
+                    }
+                    "then" | "else" | "elif" | "do" | "!" | "time" => {}
+                    _ => break,
                 }
-                break;
+                at += 1;
             }
+            self.conditional.push(self.is_conditional());
+            self.compound += opens;
             self.commands.push(words);
         }
     }
