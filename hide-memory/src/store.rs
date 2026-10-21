@@ -1334,7 +1334,9 @@ impl MemoryStore {
     }
 
     /// The Memory tab said how many cards were forgotten to make room, the
-    /// newest at `through_unix_ms`: those are no longer counted.
+    /// newest at `through_unix_ms`: those are no longer counted. A time past
+    /// the Project's newest such card is read as that card's, so a later
+    /// one is never taken as seen.
     pub fn mark_evictions_seen(
         &self,
         project_id: &str,
@@ -1342,7 +1344,7 @@ impl MemoryStore {
     ) -> Result<(), MemoryError> {
         self.require_writer()?;
         self.connection.execute(
-            "UPDATE projects SET evictions_seen_at_ms=MAX(COALESCE(evictions_seen_at_ms,0),?2) WHERE id=?1",
+            "UPDATE projects SET evictions_seen_at_ms=MAX(COALESCE(evictions_seen_at_ms,0),MIN(?2,COALESCE((SELECT MAX(r.created_at_ms) FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE i.project_id=?1 AND i.lifecycle='tombstoned' AND r.batch_id LIKE 'evict:%'),0))) WHERE id=?1",
             params![project_id, through_unix_ms],
         )?;
         Ok(())
@@ -6382,9 +6384,11 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             (seen.evicted_count, seen.evicted_through_unix_ms),
             (0, None)
         );
-        // A marker from before is never moved back.
+        // A marker from before is never moved back, and one from the future
+        // is read as the newest card's, so a card cleared later still counts.
         store.mark_evictions_seen(&project, through - 1).unwrap();
         assert_eq!(store.project_state(&project).unwrap().evicted_count, 0);
+        store.mark_evictions_seen(&project, u64::MAX / 2).unwrap();
 
         grow(&mut store, "Card four");
         assert_eq!(
