@@ -1886,6 +1886,12 @@ impl Runtime {
         own_node: Arc<dyn crate::node_access::NodeLink>,
         devices: Arc<dyn DeviceConnector>,
     ) -> Self {
+        // TEMPORARY #1515: time each part of Runtime::new.
+        let mut __at = std::time::Instant::now();
+        let __t = |at: &mut std::time::Instant, part: &str| {
+            crate::diagnostic!(serde_json::json!({"component":"core","kind":"runtime_new.part","part":part,"ms":at.elapsed().as_millis() as u64}));
+            *at = std::time::Instant::now();
+        };
         let state_path = PathBuf::from(&options.app_state_path);
         let delivery_path =
             hide_kit::layout::delivery_ledger(state_path.parent().unwrap_or(Path::new(".")));
@@ -1898,6 +1904,7 @@ impl Runtime {
                 }));
                 error.code().to_owned()
             });
+        __t(&mut __at, "ledger_recover"); // TEMPORARY #1515
         let (host_helper_root, host_cli_dir) = Self::helper_places_from(&options);
         let mut snapshot = Snapshot::initial(&options);
         if let Ok(ledger) = &delivery_ledger {
@@ -1905,8 +1912,10 @@ impl Runtime {
             snapshot.overview_graph =
                 crate::model::OverviewGraphSnapshot::from_ledger(ledger, unix_milliseconds());
         }
+        __t(&mut __at, "snapshot_initial"); // TEMPORARY #1515
         snapshot.status.environment = environment.statuses;
         let (ui_state, pane_terminal_sizes, disposition) = persistence::load(&state_path);
+        __t(&mut __at, "persistence_load"); // TEMPORARY #1515
         let local_issues_path = options.local_issues_path.as_ref().map(PathBuf::from);
         snapshot.ui_state = ui_state;
         snapshot.navigator.sleeping_sessions = snapshot.ui_state.agent_sleep.dormant_snapshots();
@@ -1940,6 +1949,7 @@ impl Runtime {
                 .unwrap_or_else(|| options.node_id.to_string()),
         );
         snapshot.navigator.focused_checkout_id = snapshot.ui_state.focused_checkout_id.clone();
+        __t(&mut __at, "navigator"); // TEMPORARY #1515
         // Built before any lock exists, so the own node is asked here.
         let wanted = workspace::PathIndex::wanted(
             &options.node_id,
@@ -1957,6 +1967,7 @@ impl Runtime {
                 workspace::PathIndex::default()
             }),
         );
+        __t(&mut __at, "path_index"); // TEMPORARY #1515
         snapshot.navigator.workspaces = workspace::build_catalog(
             &options.node_id,
             &snapshot.ui_state.workspace_registrations,
@@ -1964,6 +1975,7 @@ impl Runtime {
             &crate::model::WorktreeCatalogSnapshot::default(),
             &catalog_paths,
         );
+        __t(&mut __at, "build_catalog"); // TEMPORARY #1515
         let diagnostics: Vec<(&str, &str)> = match disposition {
             persistence::LoadDisposition::Loaded => Vec::new(),
             persistence::LoadDisposition::Unrecognized(fields) => fields
@@ -2053,6 +2065,7 @@ impl Runtime {
             });
             snapshot.ui_state.sidebar_width = crate::model::default_sidebar_width();
         }
+        __t(&mut __at, "load_diagnostics"); // TEMPORARY #1515
         let workspace_views = options.workspace_views_path.as_ref().map(|path| {
             let (store, diagnostics) = WorkspaceViewStore::open(
                 PathBuf::from(path),
@@ -2076,6 +2089,7 @@ impl Runtime {
             }
             store
         });
+        __t(&mut __at, "workspace_views"); // TEMPORARY #1515
         let mut runtime = Self {
             snapshot,
             hide_started: delivery_ledger
@@ -2373,12 +2387,17 @@ impl Runtime {
             #[cfg(test)]
             test_dirs: Vec::new(),
         };
+        __t(&mut __at, "struct_literal"); // TEMPORARY #1515
         runtime.resync_navigator_focus();
         runtime.apply_persisted_pet_state();
+        __t(&mut __at, "resync_and_pet_state"); // TEMPORARY #1515
         runtime.refresh_pet();
+        __t(&mut __at, "refresh_pet"); // TEMPORARY #1515
         runtime.refresh_agent_scopes();
+        __t(&mut __at, "refresh_agent_scopes"); // TEMPORARY #1515
         // A sleep saved before this start is as closed as it was.
         runtime.sync_input_gate();
+        __t(&mut __at, "sync_input_gate"); // TEMPORARY #1515
         if shortcuts_imported {
             runtime.persist_ui_state();
         }
