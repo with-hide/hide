@@ -1,5 +1,5 @@
 use hide_ai::{AiRequest, OutputLanguage, RequestId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
@@ -23,7 +23,7 @@ You keep long-term memory cards for one software project. Agents of several runt
 - similar_memories: existing cards that share words with the new events, each with an id such as "m12", its kind, title and text. An entry with reported true was reported by an agent of this conversation as contradicted by what the operator says now: check the new_events for that reversal and judge it by the rules below like any other card.
 
 ## What becomes a card
-Many sessions yield no card. Return at most 2 cards with relation "new" for a session, and none when nothing below applies. A card exists only for something an agent working in this project later needs and cannot find in the code, the docs, git history, a pull request or the files that instruct agents (AGENTS.md, CLAUDE.md and the documents they point to). Ask of every candidate: could an agent learn this by reading the repository or its pull requests? If yes, discard it.
+Many exchanges yield no card. Even one brief human exchange can contain an important durable decision. Rank candidates by lasting significance and human evidence, returning at most 8 new cards for this group; later groups remain eligible. A card exists for something an agent working in this project later needs. Discard ordinary duplicates of repository documentation or pull requests, but retain an enduring human correction that disagrees with the owning document, including its reason and scope. Planned or unimplemented behavior must be explicitly described as planned, never as shipped.
 Keep:
 - preference: the operator's personal taste in language, communication or tools, independent of this repository. It stays personal and must never be offered for repository documents.
 - rule: the operator's standing project instruction, stated in "human" events, about how the work is done, reviewed, merged, verified or communicated, which holds for every later task. An instruction that only applies to the current task is not a rule.
@@ -31,7 +31,7 @@ Keep:
 - decision: the operator's product principle or boundary that later work must respect, or a choice between real alternatives whose reason no repository file records. How one piece of work was designed or built is not a decision: its pull request records it.
 - fact: a durable fact about the environment or the operator's setup that cannot be read from the repository.
 Never keep: how a feature was designed or built in this session, progress, status or what is waiting on what, plans and next steps, the course of a debugging session, one-off errors, who was asked to do what, a run, pane, branch, issue or pull request identifier that will stop mattering, a command or path that exists only in this session, anything a parent_agent or assistant said that the operator did not say, and anything the files that instruct agents already say.
-Each card stands alone: one subject, written so an agent who never saw this conversation can act on it, a few sentences at most, and without session-local names. Related cards stay separate; fold two into one only when one restates the other.
+Each card stands alone: one subject, its rationale and scope, written so an agent who never saw this conversation can understand it, a few sentences at most, and without session-local names. Interpret corrections and frustrated tone semantically in any language. One clear enduring correction suffices, without repetition. A one-task exception stays in that task's conversation and must not replace a standing rule. Direct requests to save or edit a file belong to the terminal agent; do not treat the request alone as a durable rule or perform the edit. Related cards stay separate; fold two into one only when one restates the other.
 
 ## Fields
 - text: the card.
@@ -78,7 +78,7 @@ impl std::error::Error for HideNativeOutputError {}
 
 /// A title and aliases the analysis wrote for an existing card that had none
 /// (D-23), by the card's item id.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AliasBackfill {
     pub target_id: String,
     pub title: String,
@@ -86,7 +86,7 @@ pub struct AliasBackfill {
 }
 
 /// One analysis answer: the candidates and the existing cards' aliases.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnalysisOutput {
     pub candidates: Vec<Candidate>,
     pub backfill: Vec<AliasBackfill>,

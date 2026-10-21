@@ -284,10 +284,38 @@ pub struct PathIndex {
     notes: BTreeMap<String, Result<BTreeMap<String, BranchNote>, String>>,
     /// Each repository's remotes, by main root (`PathFacts::remotes`).
     remotes: BTreeMap<String, Vec<String>>,
+    /// The asked paths whose Project the node could not read, with why.
+    unread: BTreeMap<String, String>,
 }
 
 /// How long the core's own node may take to read the paths of one rebuild.
 const PATH_FACTS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The Projects one node could not read, as its path reader last logged
+/// them: that reader asks the same paths again and again, so only a change
+/// reaches the log. It keeps only the latest answer's, so it is as large as
+/// one request.
+#[derive(Debug, Default)]
+pub(crate) struct UnreadProjects(BTreeMap<String, String>);
+
+impl UnreadProjects {
+    /// Logs each path of `index` whose Project became unreadable, or
+    /// unreadable for another reason, and forgets every path `index` does
+    /// not carry as unread.
+    pub(crate) fn record(&mut self, index: &PathIndex) {
+        for (path, reason) in &index.unread {
+            if self.0.get(path) != Some(reason) {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "workspace_catalog",
+                    "kind": "project_facts.read_failed",
+                    "path": path,
+                    "message": reason,
+                }));
+            }
+        }
+        self.0.clone_from(&index.unread);
+    }
+}
 
 impl PathIndex {
     /// An index that knows no path: every path is read by its names.
@@ -295,9 +323,15 @@ impl PathIndex {
         paths: BTreeMap::new(),
         notes: BTreeMap::new(),
         remotes: BTreeMap::new(),
+        unread: BTreeMap::new(),
     };
 
     pub fn new(facts: PathFacts) -> Self {
+        let unread = facts
+            .paths
+            .iter()
+            .filter_map(|(path, fact)| Some((path.clone(), fact.project_unread.clone()?)))
+            .collect();
         let mut paths = facts.paths;
         let aliases = paths
             .values()
@@ -308,13 +342,19 @@ impl PathIndex {
         // made for the root reads the same facts without asking again.
         let roots = paths
             .values()
-            .filter_map(|fact| fact.repository.as_ref())
-            .map(|place| {
+            .filter_map(|fact| {
+                fact.repository
+                    .as_ref()
+                    .map(|place| (place, fact.project.clone()))
+            })
+            .map(|(place, project)| {
                 (
                     place.root.clone(),
                     PathFact {
                         comparison: place.root.clone(),
                         exists: true,
+                        project,
+                        project_unread: None,
                         repository: Some(place.clone()),
                     },
                 )
@@ -339,6 +379,7 @@ impl PathIndex {
             paths,
             notes: facts.repositories,
             remotes: facts.remotes,
+            unread,
         }
     }
 
@@ -379,6 +420,11 @@ impl PathIndex {
     /// Whether the node answered for `path`.
     pub fn knows(&self, path: &str) -> bool {
         self.paths.contains_key(path)
+    }
+
+    /// The native Project facts prepared by the path's own node.
+    pub(crate) fn project(&self, path: &str) -> Option<&hide_project::ProjectFacts> {
+        self.paths.get(path)?.project.as_ref()
     }
 
     /// `path` in comparison form: the node's, else its names.
@@ -1093,6 +1139,69 @@ mod tests {
     use crate::model::{ProjectWorktreesSnapshot, WorktreeSnapshot};
     use std::fs;
     use std::process::Command;
+
+    #[test]
+    fn a_project_its_node_could_not_read_reaches_the_cores_log_once_per_change() {
+        let facts = |paths: &[(&str, Option<&str>)]| PathFacts {
+            paths: paths
+                .iter()
+                .map(|(path, unread)| {
+                    let fact = PathFact {
+                        comparison: (*path).into(),
+                        exists: true,
+                        project: None,
+                        project_unread: unread.map(str::to_owned),
+                        repository: None,
+                    };
+                    ((*path).to_owned(), fact)
+                })
+                .collect(),
+            ..PathFacts::default()
+        };
+        let logged = |log: &mut UnreadProjects, paths: &[(&str, Option<&str>)]| {
+            let index = PathIndex::new(facts(paths));
+            let (_, records) = crate::diagnostics::capture(|| log.record(&index));
+            records
+                .iter()
+                .filter(|record| record["kind"] == "project_facts.read_failed")
+                .map(|record| (record["path"].clone(), record["message"].clone()))
+                .collect::<Vec<_>>()
+        };
+        let said = |reason: &str| vec![(serde_json::json!("/p"), serde_json::json!(reason))];
+        let (mut one, mut other) = (UnreadProjects::default(), UnreadProjects::default());
+        assert_eq!(
+            logged(
+                &mut one,
+                &[("/p", Some("project_path_not_utf8")), ("/q", None)]
+            ),
+            said("project_path_not_utf8")
+        );
+        assert_eq!(
+            logged(&mut one, &[("/p", Some("project_path_not_utf8"))]),
+            [],
+            "the same answer again"
+        );
+        assert_eq!(
+            logged(&mut other, &[("/p", None)]),
+            [],
+            "another node reads its own /p"
+        );
+        assert_eq!(
+            logged(&mut one, &[("/p", Some("project_path_not_utf8"))]),
+            [],
+            "and leaves this node's record as it was"
+        );
+        assert_eq!(
+            logged(&mut one, &[("/p", Some("project_git_link_invalid"))]),
+            said("project_git_link_invalid")
+        );
+        assert_eq!(logged(&mut one, &[("/q", None)]), []);
+        assert_eq!(
+            logged(&mut one, &[("/p", Some("project_git_link_invalid"))]),
+            said("project_git_link_invalid"),
+            "a path no longer asked is forgotten, so asking it again is a change"
+        );
+    }
 
     /// `build_catalog` with the paths the node in this process answers.
     fn catalog(

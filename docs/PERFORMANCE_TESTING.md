@@ -852,6 +852,14 @@ That query can scan more existing rows than the matches it returns; its cost dep
 Checking start, completion and an actionable deferral publish only a changed core state; each of the existing four re-verifications and three promotion checks per Project can request one coalesced open-Memory refresh as its answer lands.
 Cancellation and worker completion clear the active card, while budget holds clear when work resumes or no check is due, and provider holds also clear when settings change.
 The daily cap counts a call when it is admitted, so a failing provider spends it too; that is the runaway bound, and the provider's backoff keeps failures to a few dozen a day.
+An intent-local session failure keeps its unfinished cursor but rotates its durable queue turn; the existing Project failure record and backoff throttle retry without keeping other Projects behind that session.
+Account/provider readiness, usage and resource-cap pauses preserve the durable next position; intent-local failures yield to peers.
+Hide AI off still permits receipt and evidence reads, but creates no analysis queue entry and requests no usage refresh for analysis.
+A reader-rejected native record is diagnosed and skipped while valid later records and the source checkpoint continue.
+Normalized event text is capped at 256 KiB before chunk allocation; an event past it records its Project/session/offset, measured bytes and limit without content, and is skipped rather than retried forever.
+Accepted events preserve their complete text through 36 KiB groups and the four-group session quantum.
+At the active-card cap, only new growth is rejected: accepted merges and corrections commit with the batch, its cursor advances, and `analysis.session_cards` reports the rejection count.
+
 With no window attached, the usage reader runs on its own 5-minute schedule for 30 minutes after a pass last had a session due, so the usage limit has a figure headless (the usage reader also runs headless while Hide AI is paused by the limit or an agent worked in the last 30 minutes, at the same one read per provider every 5 minutes); that is at most one usage read per provider every 5 minutes, and none while no session is due.
 Session file discovery, incremental reads, SQLite work, redaction, provider requests, hook-config writes, and JSON serialization stay outside `Mutex<Runtime>`.
 One incremental transcript read takes at most 1 MiB, one retained JSONL line is capped at 256 KiB, and catalog or archive detail parsing rejects a complete session above 64 MiB.
@@ -879,12 +887,14 @@ Overview History searches retained canonical requests on demand through the exis
 The old `session-search.sqlite3` is opened read-only only to read each project's retention choice, and a missing file or table costs nothing beyond that open.
 
 `UserPromptSubmit` is a separate high-frequency boundary.
-The hook accepts at most 256 KiB of input and asks the core with one `hide workspace memory` beside its letter pull, carrying the prompt's first 8 KiB; the core asks the checkout's node for its Project, opens its store read-only, checks schema and active-projection integrity, requests at most sixty local FTS candidates within the store's 100 ms retrieval deadline, and returns at most three whole items and 600 estimated tokens, off the runtime lock.
-The core sets a one-second Memory answer deadline, but `CoreHandle::memory_scope` waits for its owner reply without a receive timeout, and a remote node call applies its timeout separately to admission, write and answer.
-Those boundaries do not enforce a one-second end-to-end execution cutoff for the daemon job; the CLI/hook can stop waiting while admitted work remains.
+The hook accepts at most 256 KiB of input and asks the core with one `hide workspace memory` beside its letter pull, carrying the prompt's first 8 KiB; the core uses the attested checkout's prepared Project and at most 1024 bytes of confirmed task context, opens its store read-only, checks schema and the writer's indexed projection certificate, and requests at most sixty local FTS candidates within the earlier of the caller expiry and the 100 ms retrieval deadline.
+The body selector keeps at most three whole items and 600 estimated body tokens; the final escaped envelope, including wrappers and receipts, is trimmed to a shared 1200 estimated rendered-token limit, off the runtime lock.
+These are local estimates, not provider billing tokens.
+The core sets a one-second Memory answer deadline; `CoreHandle::memory_scope` bounds its owner reply with the remaining expiry, and remote admission, write and answer share one absolute deadline.
+SQLite's progress handler observes the invocation expiry, and retrieval also enforces its local 100 ms allowance.
 Memory and letter reads run beside each other: Memory waits until 1,250 ms after the inner hook starts, and the 1,650 ms intake budget reserves its last 400 ms for confirmation after a successful stdout flush.
 The prompt supervisor bounds the inner helper at 1,850 ms from the outer helper's start; 1,250 ms is a Memory read budget, not the whole hook duration.
-The core's lookup starts no model, embedding, transcript scan, child process, network request beyond the node call, or database write.
+The core's lookup starts no model, embedding, transcript scan, child process, network request, repository discovery, full-store scan, or database write.
 Missing, locked, corrupt, stale, unresolved, unreachable or over-deadline inputs exit successfully with empty context so prompt submission continues.
 `SessionStart` reads the Project's index under the same read-only and fail-open ownership and the same Memory read budget: at most 20 one-line rule, decision, lesson and preference cards and no body.
 Its separate Workspace probe has a two-second CLI timeout and runs beside Memory when its thread starts; later count-report calls also have their own two-second timeouts.

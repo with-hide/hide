@@ -3,19 +3,20 @@
 //! core-host-node-move D-12, B14).
 //!
 //! The Project is the one holding the checkout the caller's pane is attested
-//! to, read by that checkout's own node (`Call::Project`); nothing the hook
-//! sends names it. The store path and the node's link are taken under the
-//! lock as owned values ([`Scope`]); the node call, the read-only open, the
-//! retrieval and the receipt tag run off it, inside the caller's deadline.
+//! to, from the catalog facts already prepared by that checkout's node;
+//! nothing the hook sends names it. The Project, bounded confirmed task and
+//! store path are taken under the lock as owned values ([`Scope`]); the
+//! read-only lookup and receipt tag run off it, inside the caller's deadline.
 //! Every linked device uses this store; no Memory database is copied to it.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hide_memory::hook::{HookContext, HookEvent, HookOutcome, HookRequest};
 use hide_node_link::protocol::Call;
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 
 pub use hide_memory::hook::{PROMPT_LIMIT_BYTES, prefix};
 
@@ -29,9 +30,8 @@ pub const WITHIN: Duration = Duration::from_millis(1_000);
 /// What the core answers a hook's Memory read from.
 pub struct Scope {
     pub(crate) store: PathBuf,
-    pub(crate) node: NodeId,
-    pub(crate) checkout_path: String,
-    pub(crate) link: Arc<dyn NodeLink>,
+    pub(crate) project: hide_project::ProjectIdentity,
+    pub(crate) task_context: Option<String>,
 }
 
 /// What one hook asks, as the CLI sent it.
@@ -96,38 +96,19 @@ pub fn answer(scope: &Scope, ask: &Ask, deadline: Instant) -> HookContext {
     if !scope.store.is_file() {
         return without(HookOutcome::Unavailable);
     }
-    let Some(within) = deadline.checked_duration_since(Instant::now()) else {
+    if Instant::now() >= deadline {
         return without(HookOutcome::Deadline);
-    };
-    let project = match project_identity(
-        scope.link.as_ref(),
-        &scope.node,
-        &scope.checkout_path,
-        within,
-    ) {
-        Ok(project) => project,
-        Err(reason) => {
-            crate::diagnostic!(json!({
-                "component": "memory",
-                "kind": "hook.project_unresolved",
-                "device": scope.node.as_str(),
-                "reason": reason,
-            }));
-            return without(if Instant::now() >= deadline {
-                HookOutcome::Deadline
-            } else {
-                HookOutcome::ProjectUnresolved
-            });
-        }
-    };
+    }
+    let prompt = hide_memory::hook::prompt_prefix(ask.prompt.as_deref().unwrap_or_default());
     hide_memory::hook::context_for(
         &scope.store,
-        &project,
+        &scope.project,
         HookRequest {
             runtime_id: &ask.runtime,
             event: ask.event,
             session_id: &ask.session,
-            prompt: ask.prompt.as_deref(),
+            prompt: Some(prompt),
+            task_context: scope.task_context.as_deref(),
         },
         move || Instant::now() >= deadline,
     )
@@ -162,6 +143,119 @@ pub(crate) fn project_identity(
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn short_continuations_use_only_the_prepared_confirmed_task() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = hide_project::resolve(temp.path(), "local").unwrap();
+        let path = hide_memory::database_path(temp.path());
+        let mut store = hide_memory::MemoryStore::open(&path).unwrap();
+        store
+            .ensure_project(&project.id, &project.root, "local")
+            .unwrap();
+        store.set_enabled(&project.id, true, true).unwrap();
+        store
+            .apply_candidates(
+                &hide_memory::AnalysisBatch {
+                    id: "seed".into(),
+                    project_id: project.id.clone(),
+                    provider: "claude".into(),
+                    analysis_provider: "claude".into(),
+                    session_id: "source".into(),
+                    content_hash: "seed".into(),
+                    created_at_unix_ms: 1,
+                },
+                &[
+                    hide_memory::Candidate {
+                        text: "Use nextest for test execution".into(),
+                        title: "Repository test runner".into(),
+                        aliases: vec!["테스트 실행기".into()],
+                        kind: hide_memory::CandidateKind::Rule,
+                        confidence: 0.9,
+                        salience: 0.9,
+                        source_offsets: vec![1],
+                        human_offsets: vec![1],
+                        source_times: Default::default(),
+                        cited_paths: vec![],
+                        relation: hide_memory::CandidateRelation::New,
+                    },
+                    hide_memory::Candidate {
+                        text: "Granite slabs are catalogued by quarry".into(),
+                        title: "Granite catalogue".into(),
+                        aliases: vec!["화강암".into()],
+                        kind: hide_memory::CandidateKind::Rule,
+                        confidence: 0.9,
+                        salience: 0.9,
+                        source_offsets: vec![2],
+                        human_offsets: vec![2],
+                        source_times: Default::default(),
+                        cited_paths: vec![],
+                        relation: hide_memory::CandidateRelation::New,
+                    },
+                ],
+            )
+            .unwrap();
+        drop(store);
+        let mut scope = Scope {
+            store: path,
+            project,
+            task_context: None,
+        };
+        let ask = Ask::from_wire(&json!({"event":"UserPromptSubmit","runtime":"claude","session":"task-session","prompt":"계속해 주세요"})).unwrap();
+        assert_eq!(
+            answer(&scope, &ask, Instant::now() + WITHIN).outcome,
+            HookOutcome::Empty
+        );
+        scope.task_context = Some("테스트 실행기 점검".into());
+        let unrelated = Ask::from_wire(&json!({"event":"UserPromptSubmit","runtime":"claude","session":"other-task","prompt":"Investigate the basalt specimen archive and document the geological history of the volcanic rocks collected last year."})).unwrap();
+        assert_eq!(
+            answer(&scope, &unrelated, Instant::now() + WITHIN).outcome,
+            HookOutcome::Empty
+        );
+
+        let own_topic = Ask::from_wire(&json!({"event":"UserPromptSubmit","runtime":"claude","session":"short-own-topic","prompt":"granite 목록 정리해줘"})).unwrap();
+        let result = answer(&scope, &own_topic, Instant::now() + WITHIN);
+        assert_eq!(
+            result.outcome,
+            HookOutcome::Provided { count: 1 },
+            "a short prompt that finds its own card spends nothing on the task's"
+        );
+        assert!(result.context.unwrap().contains("Granite slabs"));
+        hide_memory::MemoryStore::open(&scope.store)
+            .unwrap()
+            .record_receipt(
+                &scope.project.id,
+                "claude",
+                "short-own-topic",
+                "event:1",
+                "m2@1",
+                5,
+            )
+            .unwrap();
+        assert_eq!(
+            answer(&scope, &own_topic, Instant::now() + WITHIN).outcome,
+            HookOutcome::Empty,
+            "a prompt whose own card was already given gets nothing, never the task's"
+        );
+
+        let result = answer(&scope, &ask, Instant::now() + WITHIN);
+        assert_eq!(result.outcome, HookOutcome::Provided { count: 1 });
+        assert!(
+            result
+                .context
+                .unwrap()
+                .contains("Use nextest for test execution")
+        );
+        scope.task_context = Some(format!(
+            "{}테스트 실행기",
+            "basalt ".repeat(hide_memory::hook::PROMPT_LIMIT_BYTES / 7 + 1)
+        ));
+        assert_eq!(
+            answer(&scope, &ask, Instant::now() + WITHIN).outcome,
+            HookOutcome::Empty,
+            "ranking context beyond the combined 8 KiB limit is never searched"
+        );
+    }
 
     #[test]
     fn the_memory_wire_admits_exactly_the_runtimes_whose_adapter_declares_memory() {

@@ -344,21 +344,28 @@ fn an_oversized_event_and_a_later_turn_are_both_preserved() {
 }
 
 #[test]
-fn one_event_over_the_analysis_cap_keeps_its_start_in_a_few_requests() {
-    // A 256 KiB message neither stalls its session nor costs a call per
-    // slice of it.
+fn one_event_over_the_analysis_cap_preserves_every_chunk_with_bounded_groups() {
+    // A 256 KiB Korean message keeps its entire text. The worker's persisted
+    // four-group quantum bounds calls per pass, not the total source length.
+    let text = "가".repeat(256 * 1024 / 3);
     let events = vec![serde_json::json!({
         "offset": 1,
         "kind": "human",
-        "text": "가".repeat(256 * 1024 / 3),
+        "text": text,
     })];
 
     let groups = crate::runtime::memory_analysis::event_groups(&events).unwrap();
-    assert!((1..=3).contains(&groups.len()), "{} groups", groups.len());
+    assert!(groups.len() > hide_memory::ANALYSIS_GROUP_QUANTUM);
+    assert_eq!(
+        groups
+            .iter()
+            .flatten()
+            .map(|event| event["text"].as_str().unwrap())
+            .collect::<String>(),
+        text
+    );
     for group in &groups {
-        assert!(
-            serde_json::to_vec(group).unwrap().len() <= hide_memory::ANALYSIS_INPUT_LIMIT_BYTES
-        );
+        assert!(serde_json::to_vec(group).unwrap().len() <= 36 * 1024);
     }
 }
 

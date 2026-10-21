@@ -48,10 +48,18 @@ The comparison set is bounded by cards and serialized bytes so it and one event 
 Background analysis counts against a machine-wide 1,000 calls a UTC day and is asked only of an agent under the operator's usage limit (see [The usage limit](#the-usage-limit)); `hide memory add` counts against the daily cap only, and its provider tries end within 50 s.
 The feature layer verifies the relation and provenance before the single-writer store changes anything; provider output never has direct write authority.
 The `preference` kind records personal choices without proposing repository changes.
-`project_memory_creation_docs` is one comparison batch call for lexically matched new candidates: one repository excerpt per candidate, at most 3 KiB each, with the complete input capped at 15% of extraction input characters and bytes.
-Its same/differs/unrelated verdict suppresses duplicates, withholds differing claims before injection and leaves unrelated claims ordinary, without an extra initial check; conflicting quotes must appear in the exact excerpt sent.
+`project_memory_creation_docs` is one comparison batch call for lexically matched new or superseding candidates: one repository excerpt per candidate, at most 3 KiB each, with the complete input capped at 15% of the 64 KiB extraction-input ceiling in characters and bytes.
+Its same/differs/correction/exception/unrelated verdict distinguishes duplicate documentation, an unresolved disagreement, an enduring operator correction and a task-local exception.
+A confirmed enduring correction remains available as untrusted context with its pending document update, while unresolved disagreements are withheld and task exceptions do not revise standing rules.
+Reconciliation records each admitted attempt before asking and certifies a document fingerprint only after a usable answer.
+An intent-local failure rotates the correction and lets remaining card verification and suggestion checks continue within the same maintenance quantum; the runtime retains the failure for its normal Project backoff.
+Authentication, account usage and resource-cap refusals still stop provider work.
+Completed check changes and observed failures survive a later admission, local or cancellation stop.
+A Project with an observed maintenance failure leaves its discovered extraction pending for runtime backoff, so a same-pass success cannot clear the failure.
+
+Conflicting quotes must appear in the exact excerpt sent, and direct operator evidence is required to confirm correction authority.
 The call uses the existing analysis admission and router usage limit; `analysis.session_cards` reports Project/session IDs, counts and both input sizes without content.
-Two more features use the same boundary and the same call cap and usage limit (PRD memory-card-quality D-07, D-08, D-11): `project_memory_verify` asks whether a card whose evidence moved still holds, and `project_memory_promote_check` asks whether a rule or lesson about to be suggested for the repository's documents is already said there (`hide-memory/src/verify.rs`).
+Two more features use the same boundary and the same call cap and usage limit (PRD memory-card-quality D-07, D-08, D-11): `project_memory_verify` asks whether a card whose evidence moved still holds, and `project_memory_promote_check` asks whether a rule, lesson or durable decision about to be suggested for the repository's documents is already said there (`hide-memory/src/verify.rs`).
 Each sends the card, what the repository answers now for its evidence, and bounded excerpts (at most five cited files of 8 KiB for the first; at most five instruction documents of 8 KiB and three of the operator's own global instruction files of 5 KiB for the second), each a whole file when it fits and otherwise the sections (a heading and what follows) that share the most words with the card, read from at most the first 96 KiB of the file, all passed through the local redactor, within the 64 KiB request input (the last excerpts are dropped before a request is refused); a file named for credentials (`.env*`, keys and certificates, names containing `secret` or `credential`) is never read into a request, whatever a card cites; an answer that arrives but cannot be used (not the schema, a correction with no text, a document never shown) spends the card's day and the pass goes on to the next card, while a provider failure spends nothing and holds the Project; the answer is a strict-schema verdict and a corrected card when it is outdated, and a document named by an `in_docs` verdict must be one the request carried.
 A card is asked about at most once a day.
 The logs carry card numbers and verdicts, never card text, file text or a path.
@@ -62,7 +70,8 @@ Not-authenticated, unavailable, usage-limited, and exhausted outcomes pause new 
 Logs retain request, feature, provider, Project/session subject IDs, counts, duration, and outcome, but never transcript text, prompt text, Memory body, file path, credential, or provider thread ID.
 
 The existing verification and promotion-check answers include `docs_disagree` with a shown repository path and exact conflicting quote; no extra conflict call is made.
-Authority is decided outside the provider from operator-source and file commit times, and an unknown or equal time needs an operator answer.
+Authority is decided from direct operator evidence and semantic scope; source and file times are provenance and never select the winner.
+An unresolved disagreement needs an operator answer.
 
 ## Providers
 

@@ -14,6 +14,39 @@ use crate::{Injection, InjectionKind, InjectionOutcome, MemoryStore, RetrievalQu
 /// which names the task, and few enough bytes that the request stays one
 /// small message whichever machine the core runs on.
 pub const PROMPT_LIMIT_BYTES: usize = 8 * 1024;
+/// Estimated rendered tokens, including escaping, wrappers and receipts.
+/// This is a local estimate, not provider billing.
+pub const RENDERED_TOKEN_LIMIT: usize = 1_200;
+
+pub fn estimated_tokens(text: &str) -> usize {
+    // Per character class, never per byte, with a tenth on top so the
+    // estimate stays at or above what current tokenizers spend:
+    // - ASCII letters and spaces about four characters a token (never fewer
+    //   tokens than words);
+    // - ASCII digits and symbols, as in ids, hashes, paths and escapes, about
+    //   two characters a token;
+    // - a Hangul syllable, a Han or kana character, or any other character
+    //   of the Basic Multilingual Plane, one token;
+    // - a character beyond it (an emoji, a rare Han), two tokens.
+    let (mut prose, mut symbols, mut wide) = (0, 0, 0);
+    for ch in text.chars() {
+        if ch.is_ascii_alphabetic() || ch.is_ascii_whitespace() {
+            prose += 1;
+        } else if ch.is_ascii() {
+            symbols += 1;
+        } else if u32::from(ch) > 0xFFFF {
+            wide += 2;
+        } else {
+            wide += 1;
+        }
+    }
+    let words = text
+        .split(|ch: char| !ch.is_ascii_alphabetic())
+        .filter(|word| !word.is_empty())
+        .count();
+    let tokens = words.max(usize::div_ceil(prose, 4)) + usize::div_ceil(symbols, 2) + wide;
+    tokens + tokens.div_ceil(10)
+}
 
 /// `prompt`'s first [`PROMPT_LIMIT_BYTES`] bytes at most, cut on a character
 /// boundary.
@@ -67,7 +100,13 @@ pub struct HookRequest<'a> {
     pub event: HookEvent,
     pub session_id: &'a str,
     pub prompt: Option<&'a str>,
+    /// The confirmed task of the caller's checkout, which a brief prompt
+    /// with no Memory of its own, such as "go on", is ranked with.
+    pub task_context: Option<&'a str>,
 }
+
+/// The longest prompt read as continuing its task rather than naming one.
+pub const CONTINUATION_PROMPT_CHARS: usize = 80;
 
 /// The Memory context for one hook, with its receipt, or none.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -97,6 +136,25 @@ pub fn context_for<E>(
 where
     E: Fn() -> bool + Clone + Send + 'static,
 {
+    let started = std::time::Instant::now();
+    let caller_expired = expired;
+    let expired = move || {
+        caller_expired()
+            || started.elapsed() >= std::time::Duration::from_millis(crate::HOOK_DEADLINE_MS)
+    };
+    context_until(store_path, project, request, expired)
+}
+
+/// One absolute invocation expiry owns opening, SQL work and rendering.
+fn context_until<E>(
+    store_path: &Path,
+    project: &hide_project::ProjectIdentity,
+    request: HookRequest<'_>,
+    expired: E,
+) -> HookContext
+where
+    E: Fn() -> bool + Clone + Send + 'static,
+{
     let base = || HookContext::without(HookOutcome::Unavailable);
     let deadline = || HookContext::without(HookOutcome::Deadline);
     let Ok(store) = MemoryStore::open_hook_read_only_with_expiry(store_path, expired.clone())
@@ -112,7 +170,7 @@ where
     if request.session_id.is_empty() {
         return base();
     }
-    let query = match request.event {
+    let mut query = match request.event {
         HookEvent::SessionStart => RetrievalQuery::session_start(&project.id),
         HookEvent::UserPromptSubmit => {
             let excluded = match store.session_given_ids(
@@ -128,15 +186,66 @@ where
             RetrievalQuery::prompt(&project.id, request.prompt.unwrap_or_default(), excluded)
         }
     };
+    // The public entry already composed the caller and 100 ms budgets before
+    // opening. Keep that absolute expiry through retrieval rather than starting
+    // a second wall clock; tests can own the same boundary with a logical clock.
+    query.deadline = std::time::Duration::MAX;
     if expired() {
         return deadline();
     }
-    let Ok(injection) = store.retrieve_with_expiry(&query, &expired) else {
+    let Ok(mut injection) = store.retrieve_with_expiry(&query, expired.clone()) else {
         if expired() {
             return deadline();
         }
         return base();
     };
+    // Native hooks give text, not a continuation flag: a prompt that matches
+    // any card, even one the session was already given, has its own topic.
+    // Only a brief one that matches none is ranked again, on the same open
+    // store, with its task. No language-specific words decide it.
+    let prompt = request.prompt.unwrap_or_default();
+    let continues = request.event == HookEvent::UserPromptSubmit
+        && injection.matched == 0
+        && !prompt.trim().is_empty()
+        && prompt.chars().count() <= CONTINUATION_PROMPT_CHARS;
+    if let Some(task) = request.task_context.filter(|_| continues) {
+        query.text = prompt_prefix(&format!("{prompt}\n{task}")).to_owned();
+        let Ok(continued) = store.retrieve_with_expiry(&query, expired.clone()) else {
+            if expired() {
+                return deadline();
+            }
+            return base();
+        };
+        injection = continued;
+    }
+    let Ok(generation) =
+        store.context_generation(&project.id, request.runtime_id, request.session_id)
+    else {
+        return base();
+    };
+    // Budget the exact escaped envelope and a fixed-width authentication tag
+    // before signing; removed items can never appear in its receipt.
+    while !injection.items.is_empty() {
+        let preview = render(
+            request.event,
+            injection.clone(),
+            (injection.kind == InjectionKind::Bodies)
+                .then_some("0000000000000000000000000000000000000000000000000000000000000000"),
+            generation,
+            &expired,
+        );
+        if preview
+            .context
+            .as_deref()
+            .is_some_and(|text| estimated_tokens(text) <= RENDERED_TOKEN_LIMIT)
+        {
+            break;
+        }
+        injection.items.pop();
+    }
+    if injection.items.is_empty() && injection.outcome == InjectionOutcome::Provided {
+        injection.outcome = InjectionOutcome::Empty;
+    }
     // The index is not a delivery and leaves no receipt; only cards given in
     // full are recorded, so a session's prompts do not repeat them (B12).
     let receipt_auth = match injection.kind {
@@ -145,20 +254,27 @@ where
             &project.id,
             request.runtime_id,
             request.session_id,
-            request.event.name(),
+            &MemoryStore::context_receipt_event(request.event.name(), generation),
             &injection.item_key(),
         ) {
             Ok(tag) => Some(tag),
             Err(_) => return base(),
         },
     };
-    render(request.event, injection, receipt_auth.as_deref(), &expired)
+    render(
+        request.event,
+        injection,
+        receipt_auth.as_deref(),
+        generation,
+        &expired,
+    )
 }
 
 fn render(
     event: HookEvent,
     injection: Injection,
     receipt_auth: Option<&str>,
+    generation: u64,
     expired: &impl Fn() -> bool,
 ) -> HookContext {
     if expired() {
@@ -177,12 +293,18 @@ fn render(
         return HookContext::without(outcome);
     };
     if let Some(auth) = receipt_auth {
+        let generation_attribute = if generation == 0 {
+            String::new()
+        } else {
+            format!(" generation=\"{generation}\"")
+        };
         context.push_str(&format!(
-            "<hide-memory-receipt event=\"{}\" count=\"{}\" items=\"{}\" auth=\"{}\" />\n",
+            "<hide-memory-receipt event=\"{}\" count=\"{}\" items=\"{}\" auth=\"{}\"{} />\n",
             event.name(),
             injection.items.len(),
             injection.item_key(),
             auth,
+            generation_attribute,
         ));
     }
     HookContext {
@@ -194,6 +316,9 @@ fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Policy checks own a logical invocation clock. The real SQL interruption
+    // test below explicitly exercises the public wall-clock entry instead.
+    use super::context_until as context_for;
     use crate::{AnalysisBatch, Candidate, CandidateKind, CandidateRelation};
     use std::fs;
     use std::path::PathBuf;
@@ -275,7 +400,86 @@ mod tests {
             event,
             session_id: session,
             prompt,
+            task_context: None,
         }
+    }
+
+    #[test]
+    fn multilingual_render_estimates_do_not_discount_unspaced_cjk_text() {
+        for text in ["한글".repeat(700), "漢字".repeat(700), "かな".repeat(700)] {
+            assert!(estimated_tokens(&text) >= text.chars().count());
+        }
+    }
+
+    #[test]
+    fn a_realistic_korean_card_is_delivered_within_the_budget() {
+        // The operator writes mostly Korean: a card of 350 to 600 Hangul
+        // characters, a few paragraphs of a rule, is one prompt's Memory.
+        let sentence = "훅 응답은 백 밀리초 안에 끝나야 하고 느린 작업은 워커 스레드로 넘긴다. ";
+        for sentences in [9, 12, 14] {
+            let body = sentence.repeat(sentences);
+            let characters = body.trim().chars().count();
+            assert!((350..=600).contains(&characters), "{characters}");
+            let temp = tempfile::tempdir().unwrap();
+            let (path, project) = enabled_store(
+                temp.path(),
+                &temp.path().join("project"),
+                &[rule(body.trim(), 0.9)],
+            );
+            let answer = context_for(
+                &path,
+                &project,
+                ask(
+                    HookEvent::UserPromptSubmit,
+                    "s",
+                    Some("훅 응답 시간을 줄여줘"),
+                ),
+                frozen(),
+            );
+            assert_eq!(
+                answer.outcome,
+                HookOutcome::Provided { count: 1 },
+                "{characters} Hangul characters"
+            );
+        }
+    }
+
+    #[test]
+    fn non_ascii_punctuation_in_english_costs_a_token_per_character_not_per_byte() {
+        let plain = "Don't merge before \"the tests\" pass - ask first.";
+        let typographic = "Don’t merge before “the tests” pass — ask first.";
+        let extra = typographic.chars().filter(|ch| !ch.is_ascii()).count();
+        assert_eq!(extra, 4);
+        assert!(
+            estimated_tokens(typographic) <= estimated_tokens(plain) + extra,
+            "{} against {}",
+            estimated_tokens(typographic),
+            estimated_tokens(plain)
+        );
+    }
+
+    #[test]
+    fn ids_paths_escapes_and_emoji_are_not_counted_as_prose() {
+        // Lower bounds a BPE tokenizer meets or exceeds: a hex digest
+        // splits into pieces of about two or three characters, an emoji is
+        // at least two tokens, an escape is at least two.
+        let digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+        assert!(estimated_tokens(digest) >= digest.len() / 3);
+        let emoji = "🚀✅".repeat(50);
+        assert!(estimated_tokens(&emoji) >= 2 * 50 + 50);
+        let escaped = "&lt;hide-memory&gt; &amp; ".repeat(20);
+        assert!(estimated_tokens(&escaped) >= escaped.len() / 3);
+        let card = format!(
+            "{} 경로는 `hide-memory/src/store/progress.rs:182`, 커밋 {digest} 🚀",
+            "입력 실패는 하루 안에서만 연속으로 센다.".repeat(10)
+        );
+        let lower = card.chars().filter(|ch| !ch.is_ascii()).count()
+            + card
+                .chars()
+                .filter(|ch| ch.is_ascii() && !ch.is_ascii_alphabetic() && *ch != ' ')
+                .count()
+                / 3;
+        assert!(estimated_tokens(&card) >= lower);
     }
 
     #[test]
@@ -452,6 +656,162 @@ mod tests {
     }
 
     #[test]
+    fn receipt_suppression_follows_revisions_and_native_context_boundaries() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, project) = enabled_store(
+            temp.path(),
+            &temp.path().join("project"),
+            &[rule("Keep durable hooks bounded", 0.9)],
+        );
+        let mut writer = MemoryStore::open(&path).unwrap();
+        let provided = || {
+            context_for(
+                &path,
+                &project,
+                ask(HookEvent::UserPromptSubmit, "s", Some("durable hooks")),
+                frozen(),
+            )
+        };
+        assert_eq!(provided().outcome, HookOutcome::Provided { count: 1 });
+        writer
+            .record_receipt(&project.id, "codex", "s", "event:1", "m1@1", 2)
+            .unwrap();
+        assert_eq!(provided().outcome, HookOutcome::Empty);
+        let item = writer.item_by_number(&project.id, 1).unwrap().unwrap();
+        writer
+            .apply_candidates(
+                &AnalysisBatch {
+                    id: "revision".into(),
+                    project_id: project.id.clone(),
+                    provider: "codex".into(),
+                    analysis_provider: "codex".into(),
+                    session_id: "source-session".into(),
+                    content_hash: "revision".into(),
+                    created_at_unix_ms: 3,
+                },
+                &[Candidate {
+                    relation: CandidateRelation::Supersedes { target_id: item.id },
+                    ..rule("Keep durable hooks bounded after restart", 0.9)
+                }],
+            )
+            .unwrap();
+        assert_eq!(provided().outcome, HookOutcome::Provided { count: 1 });
+        writer
+            .record_receipt(&project.id, "codex", "s", "event:2", "m1@2", 4)
+            .unwrap();
+        assert_eq!(provided().outcome, HookOutcome::Empty);
+        writer
+            .observe_context_reset(&project.id, "codex", "s", 50)
+            .unwrap();
+        writer
+            .observe_context_reset(&project.id, "codex", "s", 10)
+            .unwrap();
+        assert_eq!(
+            writer
+                .context_generation(&project.id, "codex", "s")
+                .unwrap(),
+            51
+        );
+        let context = provided().context.unwrap();
+        assert!(context.contains("generation=\"51\""));
+        let auth = context
+            .split("auth=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        assert!(
+            writer
+                .verify_receipt_auth(
+                    &project.id,
+                    "codex",
+                    "s",
+                    &MemoryStore::context_receipt_event("UserPromptSubmit", 51),
+                    "m1@2",
+                    auth
+                )
+                .unwrap()
+        );
+        assert!(
+            !writer
+                .verify_receipt_auth(&project.id, "codex", "s", "UserPromptSubmit", "m1@2", auth)
+                .unwrap()
+        );
+        writer
+            .record_receipt(&project.id, "codex", "s", "event:52", "m1@2", 5)
+            .unwrap();
+        writer
+            .record_receipt_context(&project.id, "codex", "s", "event:52", 51)
+            .unwrap();
+        assert_eq!(provided().outcome, HookOutcome::Empty);
+        assert_eq!(
+            context_for(
+                &path,
+                &project,
+                ask(HookEvent::UserPromptSubmit, "other", Some("durable hooks")),
+                frozen()
+            )
+            .outcome,
+            HookOutcome::Provided { count: 1 }
+        );
+    }
+
+    #[test]
+    fn escaped_index_and_bodies_include_the_envelope_in_the_shared_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let cards = (0..22)
+            .map(|index| Candidate {
+                // Escapes cost about a token per two symbols, so an
+                // escape-heavy card is sized to fit the budget alone.
+                title: format!("{index} {}", "<durable&hooks>".repeat(8)),
+                ..rule(&format!("durable hooks {}", "<&>".repeat(60)), 0.9)
+            })
+            .collect::<Vec<_>>();
+        let (path, project) = enabled_store(temp.path(), &temp.path().join("project"), &cards);
+        for event in [HookEvent::SessionStart, HookEvent::UserPromptSubmit] {
+            let answer = context_for(
+                &path,
+                &project,
+                ask(event, "s", Some("durable hooks")),
+                frozen(),
+            );
+            let text = answer.context.expect("actual Provided context");
+            assert!(
+                estimated_tokens(&text) <= RENDERED_TOKEN_LIMIT,
+                "{}",
+                estimated_tokens(&text)
+            );
+            assert!(matches!(answer.outcome,HookOutcome::Provided{count} if count>0));
+        }
+    }
+
+    #[test]
+    fn unspaced_korean_and_cjk_bodies_share_the_exact_rendered_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let cards = (0..12)
+            .map(|index| {
+                rule(
+                    &format!("durable hooks {index} {}", "한글漢字かな".repeat(25)),
+                    0.9,
+                )
+            })
+            .collect::<Vec<_>>();
+        let (path, project) = enabled_store(temp.path(), &temp.path().join("project"), &cards);
+        for event in [HookEvent::SessionStart, HookEvent::UserPromptSubmit] {
+            let answer = context_for(
+                &path,
+                &project,
+                ask(event, "s", Some("durable hooks")),
+                frozen(),
+            );
+            let text = answer.context.expect("a bounded multilingual capsule");
+            assert!(estimated_tokens(&text) <= RENDERED_TOKEN_LIMIT);
+            assert!(text.chars().filter(|ch| !ch.is_ascii()).count() <= RENDERED_TOKEN_LIMIT);
+        }
+    }
+
+    #[test]
     fn an_empty_session_start_adds_nothing() {
         // B10: no card for the index, no index.
         let result = render(
@@ -461,8 +821,10 @@ mod tests {
                 kind: InjectionKind::Index,
                 items: Vec::new(),
                 token_count: 0,
+                matched: 0,
             },
             None,
+            0,
             &frozen(),
         );
 
@@ -541,11 +903,38 @@ mod tests {
             HookEvent::UserPromptSubmit,
             injection,
             Some(&auth),
+            0,
             &expired,
         );
 
         assert_eq!(result.outcome, HookOutcome::Deadline);
         assert_eq!(result.context, None);
+    }
+
+    #[test]
+    fn a_real_sql_query_is_interrupted_by_the_inner_budget_before_the_outer_expiry() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, project) = enabled_store(
+            temp.path(),
+            &temp.path().join("project"),
+            &[rule("Use bounded hooks", 0.9)],
+        );
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute_batch("ALTER TABLE projects RENAME TO projects_base; CREATE VIEW projects AS SELECT * FROM projects_base WHERE (WITH RECURSIVE slow(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM slow WHERE n<100000000) SELECT sum(n) FROM slow)>0;").unwrap();
+        drop(connection);
+        let outer = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let result = super::context_for(
+            &path,
+            &project,
+            ask(HookEvent::SessionStart, "slow-sql", None),
+            move || std::time::Instant::now() >= outer,
+        );
+        assert!(matches!(result.outcome, HookOutcome::Deadline));
+        assert!(result.context.is_none());
+        assert!(
+            std::time::Instant::now() < outer,
+            "the inner SQL interrupt precedes the outer expiry"
+        );
     }
 
     #[test]

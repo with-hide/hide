@@ -777,6 +777,14 @@ pub(super) struct MemoryExpandPayload {
     pub(super) number: Option<u64>,
 }
 
+/// The Memory tab said how many older cards were cleared to make room, the
+/// newest at `through_unix_ms`.
+#[derive(Debug, Deserialize)]
+pub(super) struct MemoryEvictionsSeenPayload {
+    pub(super) workspace_id: String,
+    pub(super) through_unix_ms: u64,
+}
+
 /// Searches the opened Project's cards; empty words clear the search.
 #[derive(Debug, Deserialize)]
 pub(super) struct MemorySearchPayload {
@@ -1555,6 +1563,7 @@ pub(super) enum Event {
     MemoryOpen(MemoryOpenPayload),
     ProjectMemoryNavigate(ProjectMemoryNavigatePayload),
     MemoryExpand(MemoryExpandPayload),
+    MemoryEvictionsSeen(MemoryEvictionsSeenPayload),
     MemorySearch(MemorySearchPayload),
     RetryConnect(RetryConnectPayload),
     CloneRepository(CloneRepositoryPayload),
@@ -1828,6 +1837,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "memory_open" => decode!(MemoryOpenPayload, MemoryOpen),
         "project_memory_navigate" => decode!(ProjectMemoryNavigatePayload, ProjectMemoryNavigate),
         "memory_expand" => decode!(MemoryExpandPayload, MemoryExpand),
+        "memory_evictions_seen" => decode!(MemoryEvictionsSeenPayload, MemoryEvictionsSeen),
         "memory_search" => decode!(MemorySearchPayload, MemorySearch),
         "retry_connect" => decode!(RetryConnectPayload, RetryConnect),
         "clone_repository" => decode!(CloneRepositoryPayload, CloneRepository),
@@ -2077,6 +2087,9 @@ impl Runtime {
             Event::ProjectMemoryNavigate(payload) => self.navigate_project_memory(payload),
             Event::MemoryExpand(payload) => {
                 self.expand_memory_card(&payload.workspace_id, payload.number)
+            }
+            Event::MemoryEvictionsSeen(payload) => {
+                self.memory_evictions_seen(&payload.workspace_id, payload.through_unix_ms)
             }
             Event::MemorySearch(payload) => {
                 self.search_project_memory(&payload.workspace_id, payload.query)

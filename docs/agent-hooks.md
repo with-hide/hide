@@ -145,14 +145,28 @@ The request's stream carries its deadline ([ARCHITECTURE.md](ARCHITECTURE.md#the
 Each step that can fail answers its own reason, which the hook records under a cause of its own ([What a hook records when it fails](#what-a-hook-records-when-it-fails)).
 Requests and responses are capped at 16 KiB and 64 KiB, and the existing bootstrap and node proof worker caps still apply.
 The letter and Memory children run independently and in parallel under their existing caller deadlines and fail-open outcomes.
-The core takes the Project from the caller's attested checkout, read by that checkout's own node, never from anything the hook sends.
+The core takes the Project from the caller's attested checkout and already-prepared catalog facts, never from anything the hook sends.
+Only an explicit checkout purpose or branch description contributes at most 1024 bytes of prepared task context; absent facts fail open without discovery.
+Native hooks have no continuation flag, so a prompt ranks by its own text first; only a nonempty brief prompt of at most 80 characters that matches no card at all is asked again with that context, on the same open store, so an unrelated short prompt that finds its own cards never spends the budget or its receipts on the task's, and one whose matches were all given earlier gets nothing rather than the task's cards.
+The combined ranking input is capped at 8 KiB on a UTF-8 boundary after composition.
+
 The lookup performs no provider or embedding call, transcript scan, child-process launch, or database write, and runs off the core's runtime lock.
 Missing, locked, corrupt, stale, over-limit, unresolved-Project, and over-deadline stores return no Memory context, and the hook still exits zero.
 Memory waits for its answer until 1,250 ms after the inner hook starts; the 1,650 ms intake budget reserves its last 400 ms for letter confirmation after a successful stdout flush.
 The prompt supervisor bounds the inner helper at 1,850 ms from the outer helper's start, so the Memory read budget is not the entire prompt hook duration.
 SessionStart has the same Memory read budget, a separate two-second Workspace CLI probe asked beside it when its thread starts, and later count-report calls with their own two-second timeouts; its installed runtime entry has an eight-second timeout.
-The core sets a one-second Memory answer deadline, but owner-scope reply waiting has no receive timeout and a remote call applies its timeout separately to admission, write and answer.
-That deadline is not an enforced end-to-end execution cutoff: the caller can continue without Memory while an admitted daemon job still runs.
+The core sets a one-second Memory answer deadline: owner-scope reply waiting uses the remaining expiry and remote admission, write and answer share an absolute deadline.
+Retrieval expires at the earlier of that invocation expiry and its own 100 ms allowance.
+The escaped index or body envelope, including receipts, shares a 1200 estimated rendered-token cap; this is not a provider billing count.
+The local estimator counts ASCII letters and spaces at one token per four characters (never fewer than one per word), ASCII digits and symbols at one per two, so ids, paths and escapes are not counted as prose, each other character of the Basic Multilingual Plane at one, and a character past it, such as an emoji, at two, then adds a tenth as margin; unspaced Korean, Chinese and Japanese text is not discounted as English words.
+
+Receipts suppress only a current revision delivered in the same Project/runtime/session/context generation.
+The existing background receipt reader advances context generation from Claude Code's native `SessionStart:clear` and `SessionStart:compact` hook attachments, Codex's native top-level `compacted` records, and Pi/omp native compaction records.
+A Codex replacement context can retain some content, but its metadata does not certify which delivered Memory bodies survived, so the boundary permits bounded revision-aware recall again without reading the retained payload.
+A normal Claude Code resume preserves delivery history because it restores the conversation rather than proving context loss.
+Other runtimes retain revision-aware delivery but have no proven context-reset signal here; prompt text never implies compaction, and delivery history does not prove present model context.
+Generation-bound tags preserve old generation-zero receipt authentication and never assign old deliveries to a new context.
+Native evidence becomes usable after the existing reader observes it; the submitting prompt does not scan a transcript.
 Candidate, item and token counts remain hard bounded; [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#project-memory-cost-contract) owns the measurement conditions and this limit.
 A node whose link to the core is down refuses at once with `hide_unavailable`; the hook then records `memory.unavailable`, or `memory.deadline` for an answer that did not come in time, at most once per ten minutes in its private diagnostics, and the turn goes on without Memory.
 A panic on the thread that asks is recorded the same way as `memory.panicked`.
@@ -1015,3 +1029,6 @@ Plugin helper concurrency and shutdown reuse their existing eight-child cap, whi
 
 Provider fixtures prove payload parsing and original-result preservation, not that a native runtime loaded the candidate hook or emitted an event.
 Native event delivery, provider versions and performance evidence are reported separately in the implementation run.
+
+On a plugin first prompt, the combined session index and prompt bodies share the same 1200 estimated-token Memory quota.
+If both envelopes do not fit, the complete signed prompt-body envelope takes priority and the index is retried on a later prompt; letters remain outside that Memory quota.

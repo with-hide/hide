@@ -21,7 +21,7 @@ use super::memory::{
     session_conversation, session_stat, trusted_memory_receipt,
 };
 use super::memory_evidence::{CheckoutFacts, check_evidence};
-use super::memory_verify::{check_before_suggestion, reverify_pending};
+use super::memory_verify::{CheckProgress, check_before_suggestion, reverify_pending};
 use super::*;
 use crate::labels::worker::{MemoryHandoff, MemorySession, SightedMemoryReceipt};
 use crate::model::MemoryAnalysisState;
@@ -145,6 +145,12 @@ enum PassReport {
         learned: usize,
         error: Option<AiError>,
     },
+    /// The Project's analysis in this pass ended on an unusable answer to
+    /// one input, counted against that input: no failure of the Project's,
+    /// and no sign that an earlier provider failure is over either.
+    Unusable {
+        project_id: String,
+    },
     /// Cards of the Project were checked against the repository and some
     /// changed state (`확인 중` came or went, a card was corrected or
     /// forgotten): the open screen reads them again, and nothing else moves.
@@ -220,6 +226,83 @@ pub(crate) enum AnalysisFailure {
     Cancelled,
     /// The Project's Memory was turned off while the card was being made.
     Disabled,
+}
+
+/// Whose failure a provider error is: the one model every Memory call
+/// branches on, so a pass never decides it a call at a time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FailureScope {
+    /// The provider answered this one input with something unusable (an
+    /// answer of the wrong shape, a refused input). It is counted against
+    /// that input, which is set aside at [`hide_memory::INPUT_FAILURE_LIMIT`]
+    /// until it changes; other work goes on in the same pass.
+    Input,
+    /// The provider failed after taking the request (a timeout, a lost
+    /// completion, a transient or internal failure): no more provider work
+    /// this pass, the Project backs off, and its session yields the turn.
+    Provider,
+    /// The account or provider takes no requests now (signed out, a usage
+    /// limit or resource cap, none chosen): no more provider work, and the
+    /// session keeps its turn until readiness or budget is back.
+    Account,
+}
+
+impl FailureScope {
+    pub(super) fn of(error: &AiError) -> Self {
+        match error {
+            AiError::InvalidOutput(_) | AiError::Rejected(_) => Self::Input,
+            AiError::Timeout
+            | AiError::CompletionUnknown(_)
+            | AiError::Transient(_)
+            | AiError::Internal(_) => Self::Provider,
+            _ => Self::Account,
+        }
+    }
+}
+
+/// Counts `error` against `input` of `subject` and answers whether the input
+/// is now set aside, with a diagnostic either way. An unusable answer and a
+/// request the provider took and never answered are each counted in a row;
+/// a refusal before any model work or an account pause is not the input's
+/// and counts nothing. A set-aside input's count ends with it.
+pub(super) fn count_input_failure(
+    store: &MemoryStore,
+    project_id: &str,
+    subject: &str,
+    input: &str,
+    error: &AiError,
+) -> Result<bool, String> {
+    use hide_memory::InputFailure;
+    let kind = match (FailureScope::of(error), error) {
+        (FailureScope::Input, _) => InputFailure::Unusable,
+        (_, AiError::Timeout | AiError::CompletionUnknown(_) | AiError::Internal(_)) => {
+            InputFailure::Unanswered
+        }
+        _ => return Ok(false),
+    };
+    let counted = store
+        .record_input_failure(project_id, subject, input, kind, now_ms())
+        .map_err(|error| error.to_string())?;
+    let set_aside = counted.is_some_and(|count| count >= kind.limit());
+    crate::diagnostic!(json!({
+        "component": "memory",
+        "kind": match counted {
+            None => "input.failures_full",
+            Some(_) if set_aside => "input.set_aside",
+            Some(_) => "input.failed",
+        },
+        "project_id": project_id,
+        "subject": subject,
+        "failures": counted,
+        "limit": kind.limit(),
+        "error_class": error.class(),
+    }));
+    if set_aside {
+        store
+            .clear_input_failure(project_id, subject)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(set_aside)
 }
 
 impl Runtime {
@@ -644,6 +727,7 @@ impl Runtime {
             PassReport::Analyzing { project_id }
             | PassReport::CheckState { project_id, .. }
             | PassReport::Analyzed { project_id, .. }
+            | PassReport::Unusable { project_id }
             | PassReport::Checked { project_id, .. } => project_id.clone(),
         };
         if let PassReport::Checked { answered, .. } = report {
@@ -704,6 +788,14 @@ impl Runtime {
                     .then(|| hide_memory::memory_call_reset_at(now));
             }
             PassReport::Checked { .. } => return false,
+            PassReport::Unusable { project_id } => {
+                let project = self.memory_work.projects.entry(project_id).or_default();
+                if project.analysis == MemoryAnalysisState::Analyzing {
+                    project.analysis = MemoryAnalysisState::Idle;
+                }
+                project.checking_card = None;
+                project.check_resume_at_unix_ms = None;
+            }
             PassReport::Analyzing { project_id } => {
                 let project = self.memory_work.projects.entry(project_id).or_default();
                 project.analysis = MemoryAnalysisState::Analyzing;
@@ -862,6 +954,33 @@ struct PassInput {
     failed_reads: FailedReads,
 }
 
+// At most eight maintenance admissions and one four-group extraction quantum
+// (each group may add one document comparison): sixteen calls across all Projects.
+const MAINTENANCE_CALLS_PER_PASS: usize = 8;
+const EVENT_TEXT_LIMIT_BYTES: usize = 256 * 1024;
+/// What an event past [`EVENT_TEXT_LIMIT_BYTES`] keeps from each end: a
+/// pasted log rarely hides the operator's own words in its middle, and the
+/// two ends fit one extraction group.
+const EVENT_KEPT_END_BYTES: usize = 16 * 1024;
+
+/// `text` whole up to the cap, else its first and last
+/// [`EVENT_KEPT_END_BYTES`] around a line saying how much was left out, so
+/// an instruction beside a pasted log is still read while the paste costs
+/// one bounded group.
+fn bounded_event_text(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.len() <= EVENT_TEXT_LIMIT_BYTES {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let head = hide_memory::hook::prefix(text, EVENT_KEPT_END_BYTES);
+    let mut start = text.len() - EVENT_KEPT_END_BYTES;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    let tail = &text[start..];
+    let omitted = text.len() - head.len() - tail.len();
+    std::borrow::Cow::Owned(format!("{head}\n[{omitted} bytes left out]\n{tail}"))
+}
+
 fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcome {
     let mut outcome = PassOutcome {
         failed_reads: input.failed_reads.clone(),
@@ -914,6 +1033,8 @@ fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcom
             .enabled_projects(node.as_str())
             .map_or(true, |enabled| !enabled.is_empty())
     });
+    let mut pending = Vec::new();
+    let mut maintenance_calls = 0;
     for (node, link, project_id, root) in projects {
         if input.cancel.is_cancelled() {
             walked_all = false;
@@ -930,6 +1051,8 @@ fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcom
             &mut tally,
             &mut outcome,
             &mut reached,
+            &mut pending,
+            &mut maintenance_calls,
             report,
         );
         if let Err(message) = walked {
@@ -947,7 +1070,25 @@ fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcom
         // A failure with no session analyzed (a check's call failed) is
         // reported too: the hold and backoff throttle the next pass, which
         // would otherwise ask again at once.
+        if tally.error.is_some() {
+            // Only a provider or account failure reaches the tally: the
+            // Project's extraction waits for its backoff with the rest of its
+            // provider work, and no later Project asks the same provider in
+            // this pass. A card's unusable answer is that card's alone.
+            pending.retain(|task: &PendingAnalysis| task.project_id != project_id);
+            if deferred.is_none_or(|reason| reason == "reserved_for_checks") {
+                deferred = Some("provider_failed");
+            }
+        }
         if tally.analyzing || tally.error.is_some() {
+            if tally.checked {
+                // A committed card change must reach the open reader even
+                // when the same pass failed. It is no provider recovery.
+                report(PassReport::Checked {
+                    project_id: project_id.clone(),
+                    answered: false,
+                });
+            }
             report(PassReport::Analyzed {
                 project_id: project_id.clone(),
                 learned: tally.learned,
@@ -973,6 +1114,14 @@ fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcom
             });
         }
     }
+    run_analysis_turn(
+        input,
+        &mut store,
+        pending,
+        &mut deferred,
+        &mut outcome,
+        report,
+    );
     if walked_all {
         outcome
             .settled
@@ -1005,6 +1154,149 @@ struct ProjectTally {
     error: Option<AiError>,
 }
 
+struct PendingAnalysis {
+    node: NodeId,
+    project_id: String,
+    root: String,
+    session: ProjectSession,
+    stat: hide_node_link::sessions::SessionStat,
+}
+
+/// One admitted session quantum per pass, at most four extraction and four
+/// creation-comparison calls. Discovery and maintenance keep their existing
+/// owners; new arrivals cannot replace the persisted FIFO opportunity.
+fn run_analysis_turn(
+    input: &PassInput,
+    store: &mut MemoryStore,
+    pending: Vec<PendingAnalysis>,
+    deferred: &mut Option<&'static str>,
+    outcome: &mut PassOutcome,
+    report: &mut dyn FnMut(PassReport),
+) {
+    let Some(router) = input.router.as_ref() else {
+        return;
+    };
+    if deferred.is_some() || input.cancel.is_cancelled() {
+        return;
+    }
+    let ordered = match store.analysis_order() {
+        Ok(ordered) => ordered,
+        Err(error) => {
+            crate::diagnostic!(
+                json!({"component":"memory","kind":"analysis.queue_unavailable","message":error.to_string()})
+            );
+            return;
+        }
+    };
+    let Some(task) = ordered.iter().find_map(|(project, provider, session)| {
+        pending.iter().find(|task| {
+            task.project_id == *project
+                && task.session.agent.as_str() == provider
+                && task.session.id == *session
+        })
+    }) else {
+        return;
+    };
+    let Some((_, link)) = input.nodes.iter().find(|(node, _)| *node == task.node) else {
+        return;
+    };
+    let project_id = &task.project_id;
+    let mut analyzing = false;
+    let mut admit = |store: &MemoryStore| {
+        admit_call(store)?;
+        if !analyzing {
+            analyzing = true;
+            report(PassReport::Analyzing {
+                project_id: project_id.clone(),
+            });
+        }
+        Ok(())
+    };
+    let result = analyze_session(
+        store,
+        link.as_ref(),
+        router,
+        input.language,
+        project_id,
+        &task.root,
+        &task.session,
+        input.delegated.contains(&task.session.id),
+        &task.stat,
+        &input.cancel,
+        &mut admit,
+    );
+    let mut unusable = false;
+    let (learned, error, rotate) = match result {
+        Ok(learned) => {
+            outcome.read_succeeded(ANALYSIS_FAILED, &task.session);
+            (learned, None, true)
+        }
+        // An input's failure was counted against that input and is no
+        // Project failure; a provider failure backs the Project off and
+        // yields the turn; an account pause keeps it. Unfinished work stays.
+        Err(AnalysisFailure::Provider(error)) => match FailureScope::of(&error) {
+            FailureScope::Input => {
+                unusable = true;
+                (0, None, true)
+            }
+            FailureScope::Provider => (0, Some(error), true),
+            FailureScope::Account => (0, Some(error), false),
+        },
+        Err(AnalysisFailure::Deferred(reason)) => {
+            *deferred = Some(reason);
+            (0, None, false)
+        }
+        Err(AnalysisFailure::Cancelled | AnalysisFailure::Disabled) => (0, None, false),
+        Err(AnalysisFailure::Local(message)) => {
+            outcome.read_failed(
+                ANALYSIS_FAILED,
+                project_id,
+                &task.session,
+                (task.stat.size, task.stat.modified_unix_ms),
+                &message,
+            );
+            (0, None, true)
+        }
+    };
+    if unusable {
+        report(PassReport::Unusable {
+            project_id: project_id.clone(),
+        });
+    } else if analyzing || error.is_some() {
+        report(PassReport::Analyzed {
+            project_id: project_id.clone(),
+            learned,
+            error,
+        });
+    }
+    if rotate {
+        let result =
+            analysis_pending(store, project_id, &task.session, &task.stat).and_then(|pending| {
+                store
+                    .finish_analysis_turn(
+                        project_id,
+                        task.session.agent.as_str(),
+                        &task.session.id,
+                        pending,
+                    )
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(message) = result {
+            crate::diagnostic!(
+                json!({"component":"memory","kind":"analysis.queue_checkpoint_failed","project_id":project_id,"message":message})
+            );
+        }
+    }
+    if let Some(state) = deferred.and_then(visible_deferral) {
+        outcome.check_budget_exhausted.insert(project_id.clone());
+        report(PassReport::CheckState {
+            project_id: project_id.clone(),
+            state,
+            card: None,
+        });
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk_project(
     input: &PassInput,
@@ -1016,6 +1308,8 @@ fn walk_project(
     tally: &mut ProjectTally,
     outcome: &mut PassOutcome,
     reached: &mut BTreeSet<MemorySession>,
+    analysis: &mut Vec<PendingAnalysis>,
+    maintenance_calls: &mut usize,
     report: &mut dyn FnMut(PassReport),
 ) -> Result<(), String> {
     let identity = project_identity(sessions_node, node, root)?;
@@ -1118,10 +1412,11 @@ fn walk_project(
         if closed && !pending {
             outcome.settled.insert(key.clone());
         }
-        let Some(router) = input.router.as_ref() else {
-            continue;
-        };
-        if deferred.is_some() || input.held.contains(project_id) || tally.error.is_some() {
+        if input.router.is_none()
+            || deferred.is_some()
+            || input.held.contains(project_id)
+            || tally.error.is_some()
+        {
             continue;
         }
         let quiet = stat
@@ -1137,44 +1432,21 @@ fn walk_project(
             *deferred = Some(reason);
             continue;
         }
-        // The Project turns "analyzing" at the session's first provider call,
-        // so a session that asks nothing (too short, an agent's) never does.
-        let mut admit = |store: &MemoryStore| {
-            admit_call(store)?;
-            if !tally.analyzing {
-                tally.analyzing = true;
-                report(PassReport::Analyzing {
-                    project_id: project_id.to_owned(),
-                });
-            }
-            Ok(())
-        };
-        match analyze_session(
-            store,
-            sessions_node,
-            router,
-            input.language,
-            project_id,
-            root,
-            &session,
-            input.delegated.contains(&session.id),
-            &stat,
-            &input.cancel,
-            &mut admit,
-        ) {
-            Ok(learned) => {
-                tally.learned += learned;
-                outcome.read_succeeded(ANALYSIS_FAILED, &session);
-            }
-            // One provider failure stops this Project's analysis for the pass;
-            // its receipts are still walked.
-            Err(AnalysisFailure::Provider(error)) => tally.error = Some(error),
-            Err(AnalysisFailure::Deferred(reason)) => *deferred = Some(reason),
-            Err(AnalysisFailure::Cancelled | AnalysisFailure::Disabled) => break,
-            Err(AnalysisFailure::Local(message)) => {
-                outcome.read_failed(ANALYSIS_FAILED, project_id, &session, version, &message);
-            }
-        }
+        store
+            .enqueue_analysis(
+                project_id,
+                session.agent.as_str(),
+                &session.id,
+                session.updated_at_unix_ms,
+            )
+            .map_err(|error| error.to_string())?;
+        analysis.push(PendingAnalysis {
+            node: node.clone(),
+            project_id: project_id.into(),
+            root: root.into(),
+            session,
+            stat,
+        });
     }
     // The operator's own instruction files are this machine's.
     let home = input
@@ -1193,6 +1465,7 @@ fn walk_project(
         deferred,
         tally,
         outcome,
+        maintenance_calls,
         report,
     );
     Ok(())
@@ -1214,6 +1487,7 @@ fn maintain_cards(
     deferred: &mut Option<&'static str>,
     tally: &mut ProjectTally,
     outcome: &mut PassOutcome,
+    maintenance_calls: &mut usize,
     report: &mut dyn FnMut(PassReport),
 ) {
     let Some(router) = input.router.as_ref() else {
@@ -1225,6 +1499,45 @@ fn maintain_cards(
         || input.cancel.is_cancelled()
     {
         return;
+    }
+    let mut admit = |store: &MemoryStore| {
+        if *maintenance_calls >= MAINTENANCE_CALLS_PER_PASS {
+            return Err(AnalysisFailure::Deferred("pass_quantum"));
+        }
+        admit_budget(store, hide_memory::MemoryCallKind::Check)?;
+        *maintenance_calls += 1;
+        Ok(())
+    };
+    let reconciled = super::memory_verify::reconcile_corrections(
+        store,
+        sessions_node,
+        router,
+        input.language,
+        project_id,
+        root,
+        &input.cancel,
+        &mut admit,
+    );
+    tally.checked |= reconciled.checked.changed > 0;
+    tally.answered |= reconciled.checked.answered > 0;
+    outcome.wants_usage |= reconciled.checked.answered + reconciled.checked.unusable > 0;
+    match reconciled.stopped {
+        None => {}
+        Some(AnalysisFailure::Provider(error)) => {
+            tally.error = Some(error);
+            return;
+        }
+        Some(AnalysisFailure::Deferred(reason)) => {
+            tally.waiting = visible_deferral(reason);
+            return;
+        }
+        Some(AnalysisFailure::Cancelled | AnalysisFailure::Disabled) => return,
+        Some(AnalysisFailure::Local(message)) => {
+            crate::diagnostic!(
+                json!({"component":"memory","kind":"correction.reconcile_failed","project_id":project_id,"message":message})
+            );
+            return;
+        }
     }
     // The usage reader runs for a pass only when there is a card to ask
     // about, as it does for a session.
@@ -1247,12 +1560,15 @@ fn maintain_cards(
         return;
     }
     outcome.wants_usage = true;
-    let mut admit = |store: &MemoryStore| admit_budget(store, hide_memory::MemoryCallKind::Check);
-    let mut progress = |card: Option<u64>| {
+    let mut progress = |step: CheckProgress| {
+        let card = match step {
+            CheckProgress::Checking(card) => Some(card),
+            CheckProgress::Answered | CheckProgress::Unusable => None,
+        };
         if card.is_none() {
             report(PassReport::Checked {
                 project_id: project_id.to_owned(),
-                answered: true,
+                answered: step == CheckProgress::Answered,
             });
         }
         report(PassReport::CheckState {
@@ -1420,6 +1736,11 @@ fn read_receipts(
     let read = session_conversation(sessions_node, session, saved.as_ref())?;
     let checkpoint = serde_json::to_vec(&read.checkpoint).map_err(|error| error.to_string())?;
     for (event, offset) in read.events.iter().zip(&read.event_offsets) {
+        if event.context_reset {
+            store
+                .observe_context_reset(project_id, provider, &session.id, *offset)
+                .map_err(|error| error.to_string())?;
+        }
         if event.kind != EventKind::Injected {
             continue;
         }
@@ -1527,7 +1848,17 @@ fn record_receipt(
         receipt.item_key(),
         now_ms(),
     ) {
-        Ok(ReceiptRecord::Recorded) => {}
+        Ok(ReceiptRecord::Recorded) => {
+            store
+                .record_receipt_context(
+                    project_id,
+                    provider,
+                    session_id,
+                    &MemoryReceipt::turn_id(offset),
+                    receipt.generation,
+                )
+                .map_err(|error| error.to_string())?;
+        }
         Ok(ReceiptRecord::Capped) => crate::diagnostic!(json!({
             "component": "memory",
             "kind": "receipts.project_capped",
@@ -1593,6 +1924,18 @@ fn record_sighted_receipts(
             refused += 1;
             continue;
         };
+        if sighted.context_reset {
+            match store.observe_context_reset(
+                &identity.id,
+                sighted.provider,
+                &sighted.session_id,
+                sighted.offset,
+            ) {
+                Ok(()) => recorded += 1,
+                Err(_) => refused += 1,
+            }
+            continue;
+        }
         if matches!(
             record_receipt(
                 &mut store,
@@ -1652,6 +1995,18 @@ fn analyze_session(
         .zip(&read.event_offsets)
         .filter(|(event, _)| matches!(event.kind, EventKind::Human | EventKind::Assistant))
         .map(|(event, offset)| {
+            let text = bounded_event_text(&event.text);
+            if text.len() < event.text.len() {
+                crate::diagnostic!(
+                    json!({"component":"memory","kind":"analysis.event_shortened",
+                    "project_id":project_id,"session_id":session.id,"offset":offset,
+                    "reason":"event_text_capacity","bytes":event.text.len(),"kept":text.len(),
+                    "limit":EVENT_TEXT_LIMIT_BYTES})
+                );
+            }
+            (event, offset, text)
+        })
+        .map(|(event, offset, text)| {
             // What another agent sent a session it started is that agent's
             // instruction, not the operator's word (D-04).
             let kind = match event.kind {
@@ -1663,29 +2018,54 @@ fn analyze_session(
                 "role": event.role,
                 "kind": kind,
                 "at_unix_ms": event.at_unix_ms,
-                "text": event.text,
+                "text": text,
             })
         })
         .collect::<Vec<_>>();
     let checkout = session.checkout_path.to_string_lossy().into_owned();
     let mut learned = 0;
-    let mut left_out = BTreeMap::new();
-    let (mut last_hash, earlier) = saved.map_or((None, 0), |record| {
-        (record.last_content_hash, record.operator_events)
-    });
+    let base_offset = if read.rescanned {
+        0
+    } else {
+        saved.as_ref().map_or(0, |cursor| cursor.byte_offset)
+    };
+    if read.rescanned {
+        store
+            .clear_analysis_progress(project_id, provider, &session.id)
+            .map_err(|error| local(error.to_string()))?;
+    }
+    let (next_group, unsent) = store
+        .analysis_progress(project_id, provider, &session.id, base_offset)
+        .map_err(|error| local(error.to_string()))?;
+    let mut left_out = unsent
+        .into_iter()
+        .map(|id| (id, 0))
+        .collect::<BTreeMap<_, _>>();
+    let (mut last_hash, earlier) = saved
+        .filter(|_| !read.rescanned)
+        .map_or((None, 0), |record| {
+            (record.last_content_hash, record.operator_events)
+        });
     let operator_events = earlier
         + events
             .iter()
             .filter(|event| event["kind"] == EventKind::Human.as_str())
             .count() as u64;
-    // A session with fewer than three operator words makes no new card; its
-    // receipts are read apart from this (D-03).
-    let groups = if operator_events < hide_memory::OPERATOR_EVENTS_MINIMUM {
+    // Delegated instructions never count as human evidence. A single human
+    // exchange is eligible; significance is judged by extraction.
+    let groups = if operator_events == 0 {
         Vec::new()
     } else {
         event_groups(&events).map_err(local)?
     };
-    for group in groups {
+    let total_groups = groups.len();
+    let mut completed = next_group;
+    for (index, group) in groups
+        .into_iter()
+        .enumerate()
+        .skip(next_group)
+        .take(hide_memory::ANALYSIS_GROUP_QUANTUM)
+    {
         if cancel.is_cancelled() {
             return Err(AnalysisFailure::Cancelled);
         }
@@ -1700,13 +2080,51 @@ fn analyze_session(
                 session_id: &session.id,
                 checkout_path: &checkout,
                 evidence_root: root,
-                new_card_limit: Some(hide_memory::NEW_CARDS_PER_SESSION),
+                new_card_limit: Some(hide_memory::NEW_CARDS_PER_GROUP),
                 deadline: None,
             },
             &group,
             cancel,
             admit,
-        )?;
+        );
+        let subject = format!("analysis:{provider}:{}", session.id);
+        let written = match written {
+            Ok(written) => {
+                store
+                    .input_answered(project_id, &subject, now_ms())
+                    .map_err(|error| local(error.to_string()))?;
+                written
+            }
+            // An unusable answer always counts against the group; a request
+            // the provider never answered counts only while the provider
+            // answers the Project's other inputs, so an outage passes no
+            // words over while a group that alone never gets an answer
+            // cannot hold the session forever.
+            Err(AnalysisFailure::Provider(error)) => {
+                let input = digest(&[&Value::Array(group.clone()).to_string()]);
+                if !count_input_failure(store, project_id, &subject, &input, &error)
+                    .map_err(local)?
+                {
+                    return Err(AnalysisFailure::Provider(error));
+                }
+                // The same words failed every time: what they could teach
+                // is given up and the rest of the session goes on. A rescan
+                // with other words asks again.
+                completed = index + 1;
+                store
+                    .save_analysis_progress(
+                        project_id,
+                        provider,
+                        &session.id,
+                        base_offset,
+                        completed,
+                        &left_out.keys().cloned().collect::<Vec<_>>(),
+                    )
+                    .map_err(|error| local(error.to_string()))?;
+                continue;
+            }
+            Err(failure) => return Err(failure),
+        };
         last_hash = Some(written.content_hash);
         for card in written.left_out {
             left_out.insert(card.id, card.number);
@@ -1714,6 +2132,20 @@ fn analyze_session(
         if !written.summary.duplicate_batch {
             learned += written.summary.created + written.summary.superseded;
         }
+        completed = index + 1;
+        store
+            .save_analysis_progress(
+                project_id,
+                provider,
+                &session.id,
+                base_offset,
+                completed,
+                &left_out.keys().cloned().collect::<Vec<_>>(),
+            )
+            .map_err(|error| local(error.to_string()))?;
+    }
+    if completed < total_groups {
+        return Ok(learned);
     }
     for number in left_out.values() {
         crate::diagnostic!(json!({
@@ -1744,6 +2176,9 @@ fn analyze_session(
     for ended in &settled {
         log_ended_hold(project_id, ended, "analyzed");
     }
+    store
+        .clear_analysis_progress(project_id, provider, &session.id)
+        .map_err(|error| local(error.to_string()))?;
     log_skipped("analysis.records_skipped", project_id, session, &read);
     Ok(learned)
 }
@@ -1834,6 +2269,9 @@ pub(crate) fn write_cards(
         .has_batch(&batch_id)
         .map_err(|error| local(error.to_string()))?
     {
+        store
+            .clear_analysis_proposal(&batch_id)
+            .map_err(|error| local(error.to_string()))?;
         return Ok(WrittenCards {
             summary: ApplySummary {
                 duplicate_batch: true,
@@ -1862,208 +2300,254 @@ pub(crate) fn write_cards(
             language,
         )
         .map_err(|error| local(error.to_string()))?;
-    admit(store)?;
-    let answer = router
-        .execute(&request, cancel)
-        .map_err(|error| match error {
-            AiError::Cancelled => AnalysisFailure::Cancelled,
-            error => AnalysisFailure::Provider(error),
-        })?;
-    let output = analyzer
-        .parse(answer.value, &similar)
-        .map_err(|error| AnalysisFailure::Provider(AiError::InvalidOutput(format!("{error:?}"))))?;
-    let mut candidates = output.candidates;
-    let unsourced = validate_candidates(&mut candidates, group);
-    if unsourced + output.secret_rejected > 0 {
-        crate::diagnostic!(json!({
-            "component": "memory",
-            "kind": "analysis.candidates_left_out",
-            "project_id": source.project_id,
-            "provider": source.provider,
-            "unsourced": unsourced,
-            "secret": output.secret_rejected,
-        }));
-    }
-    keep_cited_paths(sessions_node, source.checkout_path, &mut candidates);
-    let mut facts = CheckoutFacts::new(sessions_node, source.evidence_root);
-    let documents =
-        super::memory_verify::repository_sources(sessions_node, &facts, source.evidence_root);
-    let matches = candidates
-        .iter()
-        .enumerate()
-        .filter(|(_, candidate)| {
-            candidate.relation == CandidateRelation::New
-                && candidate.kind != hide_memory::CandidateKind::Preference
-        })
-        .filter_map(|(index, candidate)| {
-            let words = hide_memory::query_words(&[
-                &candidate.title,
-                &candidate.text,
-                &candidate.aliases.join(" "),
-            ]);
-            let document = documents
-                .iter()
-                .map(|document| {
-                    let lower = document.text.to_lowercase();
-                    let score = words
-                        .iter()
-                        .filter(|word| lower.contains(word.as_str()))
-                        .count();
-                    (score, document)
-                })
-                .filter(|(score, _)| *score >= 2)
-                .max_by_key(|(score, _)| *score)?
-                .1;
-            Some((
-                index,
-                candidate.text.clone(),
-                hide_memory::relevant_excerpt(
-                    &document.path,
-                    &document.text,
-                    document.truncated,
-                    &words,
-                    hide_memory::COMPARISON_EXCERPT_BYTES,
-                ),
-            ))
-        })
-        .take(hide_memory::NEW_CARDS_PER_SESSION)
-        .collect::<Vec<_>>();
+    let cached = store
+        .analysis_proposal(&batch_id)
+        .map_err(|error| local(error.to_string()))?;
+    let (analysis_provider, output) = match cached {
+        Some(cached) => cached,
+        None => {
+            admit(store)?;
+            let answer = router
+                .execute(&request, cancel)
+                .map_err(|error| match error {
+                    AiError::Cancelled => AnalysisFailure::Cancelled,
+                    error => AnalysisFailure::Provider(error),
+                })?;
+            let output = analyzer.parse(answer.value, &similar).map_err(|error| {
+                AnalysisFailure::Provider(AiError::InvalidOutput(format!("{error:?}")))
+            })?;
+            let provider = answer.provider.as_str().to_owned();
+            store
+                .save_analysis_proposal(&batch_id, source.project_id, &provider, &output)
+                .map_err(|error| local(error.to_string()))?;
+            (provider, output)
+        }
+    };
     let mut document_input = 0;
     let mut duplicates = 0;
-    let mut document_comparisons = vec![None; candidates.len()];
-    if let Some(check) = hide_memory::creation_docs_request(
-        digest(&["creation-docs", &batch_id]),
-        source.project_id,
-        &matches,
-        request.input.chars().count().min(request.input.len()),
-        language,
-    ) {
-        admit(store)?;
-        document_input = check.input.chars().count();
-        let answer = router
-            .execute(&check, cancel)
-            .map_err(AnalysisFailure::Provider)?;
-        let results = answer.value["results"].as_array().ok_or_else(|| {
-            AnalysisFailure::Provider(AiError::InvalidOutput("creation_docs_results".into()))
-        })?;
-        let sent: Value =
-            serde_json::from_str(&check.input).map_err(|error| local(error.to_string()))?;
-        let expected = sent["candidates"]
-            .as_array()
-            .ok_or_else(|| local("creation_docs_input".into()))?;
-        let mut seen = BTreeSet::new();
-        for result in results {
-            let index = result["candidate"].as_u64().ok_or_else(|| {
-                AnalysisFailure::Provider(AiError::InvalidOutput("creation_docs_candidate".into()))
-            })? as usize;
-            if !seen.insert(index)
-                || !expected
-                    .iter()
-                    .any(|entry| entry["candidate"].as_u64() == Some(index as u64))
-            {
-                return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
-                    "creation_docs_unknown_candidate".into(),
-                )));
+    let (candidates, options) = match store
+        .prepared_analysis(&batch_id)
+        .map_err(|error| local(error.to_string()))?
+    {
+        Some(prepared) => prepared,
+        None => {
+            let mut candidates = output.candidates;
+            let unsourced = validate_candidates(&mut candidates, group);
+            if unsourced + output.secret_rejected > 0 {
+                crate::diagnostic!(json!({
+                    "component": "memory",
+                    "kind": "analysis.candidates_left_out",
+                    "project_id": source.project_id,
+                    "provider": source.provider,
+                    "unsourced": unsourced,
+                    "secret": output.secret_rejected,
+                }));
             }
-            let entry = expected
+            keep_cited_paths(sessions_node, source.checkout_path, &mut candidates);
+            let mut facts = CheckoutFacts::new(sessions_node, source.evidence_root);
+            let documents = super::memory_verify::repository_sources(
+                sessions_node,
+                &facts,
+                source.evidence_root,
+            );
+            let matches = candidates
                 .iter()
-                .find(|entry| entry["candidate"].as_u64() == Some(index as u64))
-                .expect("the candidate was validated against the sent input");
-            match result["verdict"].as_str() {
-                Some("same") => {
-                    candidates[index].relation = CandidateRelation::Discard;
-                    duplicates += 1;
-                }
-                Some("unrelated") => {}
-                Some("differs") => {
-                    let quote = result["quote"]
-                        .as_str()
-                        .filter(|quote| {
-                            !quote.trim().is_empty()
-                                && quote.len() <= hide_memory::COMPARISON_EXCERPT_BYTES
-                                && entry["excerpt"]
-                                    .as_str()
-                                    .is_some_and(|text| text.contains(*quote))
-                        })
-                        .ok_or_else(|| {
-                            AnalysisFailure::Provider(AiError::InvalidOutput(
-                                "creation_docs_unseen_quote".into(),
-                            ))
-                        })?;
-                    let candidate = &candidates[index];
-                    let human = candidate.human_offsets.iter().max_by_key(|offset| {
-                        candidate.source_times.get(offset).copied().unwrap_or(0)
-                    });
-                    let at = human.and_then(|offset| candidate.source_times.get(offset).copied());
-                    let words = human
-                        .and_then(|offset| {
-                            group
+                .enumerate()
+                .filter(|(_, candidate)| {
+                    matches!(candidate.relation, CandidateRelation::New | CandidateRelation::Supersedes { .. } | CandidateRelation::Conflicts { .. })
+                        && candidate.kind != hide_memory::CandidateKind::Preference
+                })
+                .filter_map(|(index, candidate)| {
+                    let words = hide_memory::query_words(&[
+                        &candidate.title,
+                        &candidate.text,
+                        &candidate.aliases.join(" "),
+                    ]);
+                    let document = documents
+                        .iter()
+                        .map(|document| {
+                            let lower = document.text.to_lowercase();
+                            let score = words
                                 .iter()
-                                .find(|event| event["offset"].as_u64() == Some(*offset))
+                                .filter(|word| lower.contains(word.as_str()))
+                                .count();
+                            (score, document)
                         })
-                        .and_then(|event| event["text"].as_str())
-                        .unwrap_or_default();
-                    let words = hide_memory::redact(words)
-                        .text
-                        .chars()
-                        .take(hide_memory::COMPARISON_EXCERPT_BYTES / 4)
-                        .collect();
-                    document_comparisons[index] = Some(super::memory_verify::compare_document(
-                        sessions_node,
-                        source.evidence_root,
-                        entry["document"]
-                            .as_str()
-                            .expect("the request carries a document path"),
-                        quote,
-                        at,
-                        words,
-                        human.map(|_| source.session_id.to_owned()),
-                    ));
+                        .filter(|(score, _)| *score >= 2)
+                        .max_by_key(|(score, _)| *score)?
+                        .1;
+                    Some((
+                        index,
+                        json!({"claim": candidate.text, "human_evidence": comparison_human_evidence(candidate,group)}).to_string(),
+                        hide_memory::relevant_excerpt(
+                            &document.path,
+                            &document.text,
+                            document.truncated,
+                            &words,
+                            hide_memory::COMPARISON_EXCERPT_BYTES,
+                        ),
+                    ))
+                })
+                .take(hide_memory::NEW_CARDS_PER_GROUP)
+                .collect::<Vec<_>>();
+            document_input = 0;
+            duplicates = 0;
+            let mut document_comparisons = vec![None; candidates.len()];
+            if let Some(check) = hide_memory::creation_docs_request(
+                digest(&["creation-docs", &batch_id]),
+                source.project_id,
+                &matches,
+                hide_memory::ANALYSIS_INPUT_LIMIT_BYTES,
+                language,
+            ) {
+                admit(store)?;
+                document_input = check.input.chars().count();
+                let answer = router
+                    .execute(&check, cancel)
+                    .map_err(AnalysisFailure::Provider)?;
+                let results = answer.value["results"].as_array().ok_or_else(|| {
+                    AnalysisFailure::Provider(AiError::InvalidOutput(
+                        "creation_docs_results".into(),
+                    ))
+                })?;
+                let sent: Value =
+                    serde_json::from_str(&check.input).map_err(|error| local(error.to_string()))?;
+                let expected = sent["candidates"]
+                    .as_array()
+                    .ok_or_else(|| local("creation_docs_input".into()))?;
+                let mut seen = BTreeSet::new();
+                for result in results {
+                    let index = result["candidate"].as_u64().ok_or_else(|| {
+                        AnalysisFailure::Provider(AiError::InvalidOutput(
+                            "creation_docs_candidate".into(),
+                        ))
+                    })? as usize;
+                    if !seen.insert(index)
+                        || !expected
+                            .iter()
+                            .any(|entry| entry["candidate"].as_u64() == Some(index as u64))
+                    {
+                        return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
+                            "creation_docs_unknown_candidate".into(),
+                        )));
+                    }
+                    let entry = expected
+                        .iter()
+                        .find(|entry| entry["candidate"].as_u64() == Some(index as u64))
+                        .expect("the candidate was validated against the sent input");
+                    match result["verdict"].as_str() {
+                        Some("same") if candidates[index].relation == CandidateRelation::New => {
+                            candidates[index].relation = CandidateRelation::Discard;
+                            duplicates += 1;
+                        }
+                        Some("exception") => {
+                            candidates[index].relation = CandidateRelation::Discard;
+                        }
+                        Some("same" | "unrelated") => {}
+                        Some("differs" | "correction") => {
+                            let quote = result["quote"]
+                                .as_str()
+                                .filter(|quote| {
+                                    !quote.trim().is_empty()
+                                        && quote.len() <= hide_memory::COMPARISON_EXCERPT_BYTES
+                                        && entry["excerpt"]
+                                            .as_str()
+                                            .is_some_and(|text| text.contains(*quote))
+                                })
+                                .ok_or_else(|| {
+                                    AnalysisFailure::Provider(AiError::InvalidOutput(
+                                        "creation_docs_unseen_quote".into(),
+                                    ))
+                                })?;
+                            let candidate = &candidates[index];
+                            let human = candidate.human_offsets.iter().max_by_key(|offset| {
+                                candidate.source_times.get(offset).copied().unwrap_or(0)
+                            });
+                            let at = human
+                                .and_then(|offset| candidate.source_times.get(offset).copied());
+                            let words = human
+                                .and_then(|offset| {
+                                    group
+                                        .iter()
+                                        .find(|event| event["offset"].as_u64() == Some(*offset))
+                                })
+                                .and_then(|event| event["text"].as_str())
+                                .unwrap_or_default();
+                            let words = hide_memory::redact(words)
+                                .text
+                                .chars()
+                                .take(hide_memory::COMPARISON_EXCERPT_BYTES / 4)
+                                .collect();
+                            let mut comparison = super::memory_verify::compare_document(
+                                sessions_node,
+                                source.evidence_root,
+                                entry["document"]
+                                    .as_str()
+                                    .expect("the request carries a document path"),
+                                quote,
+                                at,
+                                words,
+                                human.map(|_| source.session_id.to_owned()),
+                            );
+                            if result["verdict"] == "correction"
+                                && candidate.direct_human_source()
+                                && !comparison.operator_text.is_empty()
+                            {
+                                comparison.authority = hide_memory::DocumentAuthority::CardNewer;
+                            }
+                            document_comparisons[index] = Some(comparison);
+                        }
+                        _ => {
+                            return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
+                                "creation_docs_verdict".into(),
+                            )));
+                        }
+                    }
                 }
-                _ => {
+                if results.len() != expected.len() {
                     return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
-                        "creation_docs_verdict".into(),
+                        "creation_docs_incomplete".into(),
                     )));
                 }
             }
+            let evidence = candidates
+                .iter()
+                .map(|candidate| match candidate.relation {
+                    CandidateRelation::Same { .. } | CandidateRelation::Discard => Vec::new(),
+                    _ => facts.gather(&candidate.text, &candidate.cited_paths),
+                })
+                .collect();
+            if source
+                .deadline
+                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            {
+                return Err(AnalysisFailure::Cancelled);
+            }
+            let options = ApplyOptions {
+                new_card_limit: source.new_card_limit,
+                evidence,
+                document_comparisons,
+                reverify_superseded: !documents.is_empty(),
+            };
+            store
+                .prepare_analysis(&batch_id, &candidates, &options)
+                .map_err(|error| local(error.to_string()))?;
+            (candidates, options)
         }
-        if results.len() != expected.len() {
-            return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
-                "creation_docs_incomplete".into(),
-            )));
-        }
-    }
-    let evidence = candidates
-        .iter()
-        .map(|candidate| match candidate.relation {
-            CandidateRelation::Same { .. } | CandidateRelation::Discard => Vec::new(),
-            _ => facts.gather(&candidate.text, &candidate.cited_paths),
-        })
-        .collect();
-    if source
-        .deadline
-        .is_some_and(|deadline| std::time::Instant::now() >= deadline)
-    {
-        return Err(AnalysisFailure::Cancelled);
-    }
+    };
     let summary = store
         .apply_candidates_with(
             &AnalysisBatch {
                 id: batch_id.clone(),
                 project_id: source.project_id.to_owned(),
                 provider: source.provider.to_owned(),
-                analysis_provider: answer.provider.as_str().to_owned(),
+                analysis_provider,
                 session_id: source.session_id.to_owned(),
                 content_hash: content_hash.clone(),
                 created_at_unix_ms: now_ms(),
             },
             &candidates,
-            &ApplyOptions {
-                new_card_limit: source.new_card_limit,
-                evidence,
-                document_comparisons,
-                reverify_superseded: !documents.is_empty(),
-            },
+            &options,
         )
         .map_err(|error| match error {
             hide_memory::MemoryError::Disabled => AnalysisFailure::Disabled,
@@ -2071,8 +2555,13 @@ pub(crate) fn write_cards(
         })?;
     crate::diagnostic!(
         json!({"component":"memory", "kind":"analysis.session_cards", "project_id":source.project_id, "session_id":source.session_id, "batch_id":batch_id,
-        "created":summary.created, "superseded":summary.superseded, "duplicates_in_docs":duplicates, "extraction_input_chars":request.input.chars().count(), "document_input_chars":document_input })
+        "created":summary.created, "superseded":summary.superseded, "capacity_rejections":summary.capacity_rejections, "evicted":summary.evicted.len(), "evictions_purged":summary.evictions_purged, "duplicates_in_docs":duplicates, "extraction_input_chars":request.input.chars().count(), "document_input_chars":document_input })
     );
+    for number in &summary.evicted {
+        crate::diagnostic!(
+            json!({"component":"memory", "kind":"card.evicted", "project_id":source.project_id, "batch_id":batch_id, "card":number, "reason":"card_capacity"})
+        );
+    }
     for backfill in output.backfill {
         if let Err(error) = store.fill_aliases(
             source.project_id,
@@ -2088,12 +2577,46 @@ pub(crate) fn write_cards(
             }));
         }
     }
+    store
+        .clear_analysis_proposal(&batch_id)
+        .map_err(|error| local(error.to_string()))?;
     Ok(WrittenCards {
         summary,
         batch_id,
         content_hash,
         left_out,
     })
+}
+
+/// Extraction saw the whole group. A comparison carries bounded excerpts of
+/// those same native human offsets; full source/provenance remains local.
+fn comparison_human_evidence(candidate: &hide_memory::Candidate, group: &[Value]) -> Vec<Value> {
+    let events = group
+        .iter()
+        .filter(|event| {
+            candidate
+                .human_offsets
+                .contains(&event["offset"].as_u64().unwrap_or(u64::MAX))
+        })
+        .collect::<Vec<_>>();
+    let per_event = 800 / events.len().max(1);
+    events
+        .into_iter()
+        .map(|event| {
+            let text = event["text"].as_str().unwrap_or_default();
+            let chars = text.chars().collect::<Vec<_>>();
+            let truncated = chars.len() > per_event;
+            let excerpt = if truncated {
+                chars[..per_event / 2]
+                    .iter()
+                    .chain(chars[chars.len() - per_event / 2..].iter())
+                    .collect::<String>()
+            } else {
+                text.into()
+            };
+            json!({"offset":event["offset"],"text":excerpt,"truncated":truncated})
+        })
+        .collect()
 }
 
 /// The cards one group is compared against, and the reported cards that did
@@ -2281,14 +2804,17 @@ pub(crate) fn paths_inside(
 }
 
 /// The new events cut into groups, each sent in one provider call.
-/// The most text of one event analysis reads.
-const EVENT_TEXT_LIMIT_BYTES: usize = 48 * 1024;
-
 pub(super) fn event_groups(events: &[Value]) -> Result<Vec<Vec<Value>>, String> {
     const EVENT_BUDGET: usize = 36 * 1024;
     let mut groups = Vec::new();
     let mut current = Vec::new();
     for event in events {
+        if event["text"]
+            .as_str()
+            .is_some_and(|text| text.len() > EVENT_TEXT_LIMIT_BYTES)
+        {
+            return Err("Memory event exceeds event_text_capacity".into());
+        }
         for event in bounded_event_chunks(event, EVENT_BUDGET)? {
             current.push(event);
             let measured = serde_json::to_vec(&current)
@@ -2321,12 +2847,8 @@ fn bounded_event_chunks(event: &Value, budget: usize) -> Result<Vec<Value>, Stri
         .get("text")
         .and_then(Value::as_str)
         .ok_or_else(|| "Oversized Memory event has no text to split".to_owned())?;
-    // A message far past one request, a paste or a dump, keeps its start:
-    // a few requests' worth, never one call per slice of it.
-    let text = split_utf8(text, EVENT_TEXT_LIMIT_BYTES)
-        .into_iter()
-        .next()
-        .unwrap_or_default();
+    // Preserve the entire source event. Durable group progress and the
+    // per-session quantum bound provider work, rather than discarding tails.
     let mut base = object.clone();
     base.remove("text");
     let base_size = serde_json::to_vec(&base)
@@ -2401,6 +2923,8 @@ mod tests {
         calls: AtomicUsize,
         /// What each request carried, oldest first.
         inputs: Mutex<Vec<String>>,
+        /// While set, every request fails with it and no answer is used.
+        failing: Mutex<Option<AiError>>,
     }
 
     impl AiBackend for Scripted {
@@ -2416,7 +2940,16 @@ mod tests {
         fn execute(&self, request: &AiRequest, _: &CancelToken) -> Result<AiResponse, AiError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.inputs.lock().unwrap().push(request.input.clone());
+            if let Some(error) = self.failing.lock().unwrap().clone() {
+                return Err(error);
+            }
             let value = self.answers.lock().unwrap().pop();
+            if value
+                .as_ref()
+                .is_some_and(|value| value["fail"] == "timeout")
+            {
+                return Err(AiError::Timeout);
+            }
             value
                 .map(|value| AiResponse {
                     value,
@@ -2531,6 +3064,7 @@ mod tests {
                     answers: Mutex::new(Vec::new()),
                     calls: AtomicUsize::new(0),
                     inputs: Mutex::new(Vec::new()),
+                    failing: Mutex::new(None),
                 }),
                 node,
                 failed_reads: Default::default(),
@@ -2633,6 +3167,7 @@ mod tests {
                         RouterConfig {
                             priority: vec![ProviderId::CLAUDE],
                             max_transient_attempts: 1,
+                            backoff_base: std::time::Duration::ZERO,
                             ..RouterConfig::default()
                         },
                         Arc::new(NoopLogSink),
@@ -2662,6 +3197,7 @@ mod tests {
                     PassReport::Analyzed { error: Some(_), .. } => "failed",
                     PassReport::Analyzed { learned: 1, .. } => "learned one",
                     PassReport::Analyzed { .. } => "analyzed",
+                    PassReport::Unusable { .. } => "unusable",
                 };
                 if reports.last() != Some(&result) {
                     reports.push(result);
@@ -2673,6 +3209,71 @@ mod tests {
 
         fn store(&self) -> MemoryStore {
             MemoryStore::open(&self.database).unwrap()
+        }
+
+        /// One Project's card maintenance alone, as a pass runs it after
+        /// `calls` maintenance admissions, with one try per request.
+        fn maintain(&self, calls: &mut usize) -> (ProjectTally, PassOutcome) {
+            let backend: Arc<dyn AiBackend> = self.backend.clone();
+            let input = PassInput {
+                nodes: vec![],
+                unreached: vec![],
+                database: self.database.clone(),
+                router: Some(AiRouter::new(
+                    vec![backend],
+                    RouterConfig {
+                        priority: vec![ProviderId::CLAUDE],
+                        max_transient_attempts: 1,
+                        max_invalid_output_attempts: 1,
+                        ..RouterConfig::default()
+                    },
+                    Arc::new(NoopLogSink),
+                )),
+                live: BTreeSet::new(),
+                closed: BTreeSet::new(),
+                held: HashSet::new(),
+                home: None,
+                delegated: HashSet::new(),
+                language: hide_ai::OutputLanguage::English,
+                cancel: CancelToken::new(),
+                failed_reads: Default::default(),
+            };
+            let mut store = self.store();
+            let root = self.root.to_string_lossy();
+            let mut facts = CheckoutFacts::new(self.node.as_ref(), &root);
+            let mut tally = ProjectTally::default();
+            let mut outcome = PassOutcome::default();
+            maintain_cards(
+                &input,
+                self.node.as_ref(),
+                None,
+                &mut store,
+                &mut facts,
+                &self.project_id,
+                &root,
+                &mut None,
+                &mut tally,
+                &mut outcome,
+                calls,
+                &mut |_| {},
+            );
+            (tally, outcome)
+        }
+
+        /// The provider answered another input of the Project, as it does
+        /// when it is up and only one input keeps failing.
+        fn answer_elsewhere(&self) {
+            self.store()
+                .input_answered(&self.project_id, "elsewhere", now_ms() + 1)
+                .unwrap();
+        }
+
+        fn fail_with(&self, error: Option<AiError>) {
+            *self.backend.failing.lock().unwrap() = error;
+        }
+
+        fn push(&self, answer: Value) {
+            self.backend.answers.lock().unwrap().push(answer);
         }
 
         fn calls(&self) -> usize {
@@ -2691,15 +3292,17 @@ mod tests {
 
     #[test]
     fn creation_classifies_new_decision_conflicts_with_no_initial_reverification() {
-        for (date, authority) in [
-            (None, hide_memory::DocumentAuthority::Ask),
+        for (date, verdict, authority) in [
+            (None, "differs", hide_memory::DocumentAuthority::Ask),
             (
                 Some("2026-10-10T00:00:00Z"),
+                "correction",
                 hide_memory::DocumentAuthority::CardNewer,
             ),
             (
                 Some("2026-10-12T00:00:00Z"),
-                hide_memory::DocumentAuthority::Outdated,
+                "correction",
+                hide_memory::DocumentAuthority::CardNewer,
             ),
         ] {
             let mut fixture = Fixture::new();
@@ -2738,7 +3341,7 @@ mod tests {
                 }
             }
             fixture.backend.answers.lock().unwrap().push(json!({"results":[{
-                "candidate":0,"verdict":"differs", "quote":"Run tests with the ordinary runner before a merge."
+                "candidate":0,"verdict":verdict, "quote":"Run tests with the ordinary runner before a merge."
             }]}));
             fixture.answer(&[]);
             fixture.backend.answers.lock().unwrap().last_mut().unwrap()["candidates"][0]["kind"] =
@@ -2761,7 +3364,7 @@ mod tests {
                     .contains("Always run tests with nextest")
             );
             assert!(
-                !store
+                store
                     .retrieve(&hide_memory::RetrievalQuery::session_start(
                         &fixture.project_id
                     ))
@@ -2769,6 +3372,7 @@ mod tests {
                     .items
                     .iter()
                     .any(|card| card.number == 2)
+                    == (authority == hide_memory::DocumentAuthority::CardNewer)
             );
             assert_eq!(
                 fixture.calls(),
@@ -2776,19 +3380,94 @@ mod tests {
                 "one extraction and one creation comparison, no initial reverify"
             );
             let inputs = fixture.backend.inputs.lock().unwrap();
-            assert!(inputs[1].chars().count() * 100 <= inputs[0].chars().count() * 15);
+            assert!(inputs[1].len() * 100 <= hide_memory::ANALYSIS_INPUT_LIMIT_BYTES * 15);
             println!(
                 "memory-fixture-inputs extraction={} creation_docs={} authority={authority:?} calls=2",
                 inputs[0].chars().count(),
                 inputs[1].chars().count()
             );
             drop(inputs);
+            if authority == hide_memory::DocumentAuthority::CardNewer {
+                fixture.backend.answers.lock().unwrap().push(json!({"results":[{"candidate":0,"verdict":"differs","quote":"Run tests with the ordinary runner before a merge."}]}));
+            }
+            let _ = fixture.pass(false, false);
+            let after = fixture.calls();
             let _ = fixture.pass(false, false);
             assert_eq!(
                 fixture.calls(),
-                2,
-                "an unresolved comparison spends no further call"
+                after,
+                "an unchanged document does not reopen settled authority"
             );
+            assert_eq!(
+                fixture
+                    .store()
+                    .document_comparison(&fixture.project_id, 2)
+                    .unwrap()
+                    .unwrap()
+                    .authority,
+                authority
+            );
+            if authority == hide_memory::DocumentAuthority::CardNewer {
+                // A different edit in the same file must not revoke the correction.
+                std::fs::write(
+                    fixture.root.join("AGENTS.md"),
+                    "Run tests with the ordinary runner before a merge.\nUse small commits.\n",
+                )
+                .unwrap();
+                fixture.age_evidence_checks();
+                fixture.backend.answers.lock().unwrap().push(json!({"results":[{"candidate":0,"verdict":"differs","quote":"Run tests with the ordinary runner before a merge."}]}));
+                fixture.pass(false, false);
+                let store = fixture.store();
+                assert_eq!(
+                    store
+                        .document_comparison(&fixture.project_id, 2)
+                        .unwrap()
+                        .unwrap()
+                        .authority,
+                    authority
+                );
+                assert!(
+                    store
+                        .retrieve(&hide_memory::RetrievalQuery::session_start(
+                            &fixture.project_id
+                        ))
+                        .unwrap()
+                        .items
+                        .iter()
+                        .any(|card| card.number == 2)
+                );
+                drop(store);
+                // A terminal agent can incorporate it without spawning a promotion.
+                std::fs::write(
+                    fixture.root.join("AGENTS.md"),
+                    "Run tests with nextest before a merge.\nUse small commits.\n",
+                )
+                .unwrap();
+                fixture
+                    .backend
+                    .answers
+                    .lock()
+                    .unwrap()
+                    .push(json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}));
+                fixture.pass(false, false);
+                let store = fixture.store();
+                assert!(
+                    store
+                        .document_comparison(&fixture.project_id, 2)
+                        .unwrap()
+                        .is_none()
+                );
+                let promotion = store
+                    .promotions(&fixture.project_id)
+                    .unwrap()
+                    .into_iter()
+                    .find(|(number, _)| *number == 2)
+                    .unwrap()
+                    .1;
+                assert_eq!(promotion.state, hide_memory::PromotionState::Merged);
+                assert_eq!(promotion.target_path.as_deref(), Some("AGENTS.md"));
+                assert!(promotion.pr_number.is_none());
+            }
         }
     }
 
@@ -2822,7 +3501,7 @@ mod tests {
         );
         assert_eq!(fixture.calls(), 2);
         let inputs = fixture.backend.inputs.lock().unwrap();
-        assert!(inputs[1].chars().count() * 100 <= inputs[0].chars().count() * 15);
+        assert!(inputs[1].len() * 100 <= hide_memory::ANALYSIS_INPUT_LIMIT_BYTES * 15);
         println!(
             "memory-fixture-inputs extraction={} creation_docs={} created=0",
             inputs[0].chars().count(),
@@ -3013,6 +3692,15 @@ mod tests {
                         helper_path: None,
                     },
                 },
+            );
+            let prepared = runtime
+                .device_facts
+                .entry(crate::node::TEST_NODE.into())
+                .or_default();
+            prepared.reread = false;
+            prepared.facts.insert(
+                context.checkout_path.clone(),
+                crate::device_catalog::Fact::Known(hide_project::facts(&fixture.root).unwrap()),
             );
             let scope = runtime
                 .memory_scope(&context)
@@ -3715,6 +4403,1231 @@ mod tests {
     }
 
     #[test]
+    fn oversized_human_work_resumes_four_groups_at_a_time_across_off_on_and_reopen() {
+        let mut fixture = Fixture::new();
+        fixture.lines.truncate(1);
+        let text = format!("{} retain_tail_nextest", "한글 context ".repeat(15_000));
+        fixture.lines[0]["message"]["content"] = json!(text);
+        fixture.write(&fixture.lines);
+        let key = ("claude", SESSION.to_owned());
+        for _ in 0..4 {
+            fixture
+                .backend
+                .answers
+                .lock()
+                .unwrap()
+                .push(json!({"candidates":[],"alias_backfill":[]}));
+        }
+        let (_, first) = fixture.pass_for(key.clone(), false, true);
+        assert_eq!(fixture.calls(), 4);
+        assert!(!first.settled.contains(&key));
+        let store = fixture.store();
+        assert!(
+            store
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION
+                )
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .analysis_progress(&fixture.project_id, "claude", SESSION, 0)
+                .unwrap()
+                .0,
+            4
+        );
+        store
+            .set_enabled(&fixture.project_id, false, false)
+            .unwrap();
+        drop(store);
+        fixture.pass(false, true);
+        assert_eq!(fixture.calls(), 4);
+        fixture
+            .store()
+            .set_enabled(&fixture.project_id, true, true)
+            .unwrap();
+        for _ in 0..40 {
+            fixture
+                .backend
+                .answers
+                .lock()
+                .unwrap()
+                .push(json!({"candidates":[],"alias_backfill":[]}));
+        }
+        for _ in 0..10 {
+            let before = fixture.calls();
+            let (_, outcome) = fixture.pass_for(key.clone(), false, true);
+            assert!(fixture.calls() - before <= 4);
+            if outcome.settled.contains(&key) {
+                break;
+            }
+        }
+        let store = fixture.store();
+        assert!(
+            store
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION
+                )
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            store
+                .analysis_progress(&fixture.project_id, "claude", SESSION, 0)
+                .unwrap()
+                .0,
+            0
+        );
+        let inputs = fixture.backend.inputs.lock().unwrap();
+        assert_eq!(
+            inputs
+                .iter()
+                .filter(|input| input.contains("retain_tail_nextest"))
+                .count(),
+            1
+        );
+        assert!(
+            inputs
+                .iter()
+                .all(|input| input.len() <= hide_memory::ANALYSIS_INPUT_LIMIT_BYTES)
+        );
+        drop(inputs);
+        let calls = fixture.calls();
+        fixture.pass(false, true);
+        assert_eq!(
+            fixture.calls(),
+            calls,
+            "completed groups never ask the provider again"
+        );
+    }
+
+    fn confirm_fixture_correction(fixture: &Fixture, number: u64) {
+        std::fs::write(
+            fixture.root.join("AGENTS.md"),
+            "Keep the old hook budget.\n",
+        )
+        .unwrap();
+        fixture
+            .store()
+            .set_document_comparison(
+                &fixture.project_id,
+                number,
+                1,
+                &hide_memory::DocumentComparison {
+                    authority: hide_memory::DocumentAuthority::CardNewer,
+                    document: "AGENTS.md".into(),
+                    document_text: "Keep the old hook budget.".into(),
+                    document_at_unix_ms: None,
+                    operator_text: "Keep the hook under 100 ms".into(),
+                    operator_at_unix_ms: Some(20),
+                    source_session: Some("seed".into()),
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn an_unusable_correction_answer_is_no_project_failure_when_the_quantum_ends() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        confirm_fixture_correction(&fixture, 1);
+        confirm_fixture_correction(&fixture, 2);
+        fixture.push(json!({"results":[]}));
+        let mut calls = 7;
+        let (tally, outcome) = fixture.maintain(&mut calls);
+        assert_eq!(calls, 8, "the ninth admission is held by the pass quantum");
+        assert!(
+            tally.error.is_none(),
+            "one card's unusable answer backs off no Project"
+        );
+        assert!(
+            !tally.answered && outcome.wants_usage,
+            "an unusable answer spends a call but is no sign the provider recovered"
+        );
+    }
+
+    #[test]
+    fn a_provider_failure_while_reconciling_a_correction_asks_the_provider_nothing_more() {
+        for error in [
+            AiError::Timeout,
+            AiError::Transient("busy".into()),
+            AiError::CompletionUnknown("lost".into()),
+            AiError::Internal("panicked".into()),
+        ] {
+            let fixture = Fixture::new();
+            fixture.answer(&[]);
+            fixture.pass(false, true);
+            confirm_fixture_correction(&fixture, 1);
+            confirm_fixture_correction(&fixture, 2);
+            // A card the re-verification would otherwise ask about next.
+            let mut store = fixture.store();
+            let other = store
+                .item_by_number(&fixture.project_id, 2)
+                .unwrap()
+                .unwrap();
+            store.mark_unverified(&other.id, other.revision).unwrap();
+            drop(store);
+            fixture.fail_with(Some(error.clone()));
+            let before = fixture.calls();
+            let (tally, _) = fixture.maintain(&mut 0);
+            assert_eq!(
+                fixture.calls(),
+                before + 1,
+                "{error:?} ends the pass's provider work at the first correction"
+            );
+            assert_eq!(
+                tally.error.as_ref().map(FailureScope::of),
+                Some(FailureScope::Provider),
+                "{error:?} backs the Project off"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unusable_correction_answer_leaves_the_same_pass_extraction_running() {
+        let fixture = Fixture::new();
+        confirm_fixture_correction(&fixture, 1);
+        fixture.answer(&[]);
+        fixture
+            .backend
+            .answers
+            .lock()
+            .unwrap()
+            .extend([json!({"results":[]}), json!({"results":[]})]);
+        let reports = fixture.pass(false, true);
+        assert_eq!(reports.last(), Some(&"learned one"));
+        assert!(
+            fixture
+                .store()
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION
+                )
+                .unwrap()
+                .is_some(),
+            "a correction that keeps failing never starves the Project's sessions"
+        );
+    }
+
+    #[test]
+    fn a_correction_answered_unusably_three_times_is_set_aside_until_its_document_changes() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        confirm_fixture_correction(&fixture, 1);
+        let reconciles = |fixture: &Fixture| {
+            fixture
+                .backend
+                .inputs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|input| input.contains("Keep the old hook budget"))
+                .count()
+        };
+        for attempt in 1..=hide_memory::INPUT_FAILURE_LIMIT as usize {
+            fixture.push(json!({"results":[]}));
+            let (tally, _) = fixture.maintain(&mut 0);
+            assert!(tally.error.is_none());
+            assert_eq!(reconciles(&fixture), attempt);
+        }
+        fixture.push(json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}));
+        fixture.maintain(&mut 0);
+        assert_eq!(
+            reconciles(&fixture),
+            hide_memory::INPUT_FAILURE_LIMIT as usize,
+            "a set-aside correction is not asked about again for the same document"
+        );
+        std::fs::write(
+            fixture.root.join("AGENTS.md"),
+            "Keep the old hook budget.\nA new line.\n",
+        )
+        .unwrap();
+        fixture.maintain(&mut 0);
+        assert_eq!(
+            reconciles(&fixture),
+            hide_memory::INPUT_FAILURE_LIMIT as usize + 1,
+            "a changed document is asked about again"
+        );
+    }
+
+    #[test]
+    fn a_session_group_answered_unusably_three_times_is_passed_over() {
+        let fixture = Fixture::new();
+        fixture.fail_with(Some(AiError::InvalidOutput("schema".into())));
+        let cursor = |fixture: &Fixture| {
+            fixture
+                .store()
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION,
+                )
+                .unwrap()
+        };
+        for _ in 1..hide_memory::INPUT_FAILURE_LIMIT {
+            let reports = fixture.pass(false, true);
+            assert_eq!(
+                reports.last(),
+                Some(&"unusable"),
+                "an input's failure is reported as its own, no Project failure"
+            );
+            assert!(cursor(&fixture).is_none(), "the group is asked again");
+        }
+        fixture.pass(false, true);
+        assert!(
+            cursor(&fixture).is_some(),
+            "the third unusable answer passes the group over and the session settles"
+        );
+        let calls = fixture.calls();
+        fixture.pass(false, true);
+        assert_eq!(
+            fixture.calls(),
+            calls,
+            "a passed-over group costs no more calls"
+        );
+        fixture.fail_with(None);
+        let mut lines = fixture.lines.clone();
+        lines.push(json!({"type": "user", "sessionId": SESSION,
+            "cwd": fixture.root.to_string_lossy(), "timestamp": "2026-10-11T00:01:00Z",
+            "origin": {"kind": "human"},
+            "message": {"role": "user", "content": "Prefer small pull requests"}}));
+        fixture.write(&lines);
+        fixture.answer(&[]);
+        let calls = fixture.calls();
+        fixture.pass(false, true);
+        assert!(fixture.calls() > calls, "new words are asked about");
+    }
+
+    #[test]
+    fn failed_correction_reconciliation_records_the_attempt_and_continues_card_checks() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        std::fs::write(
+            fixture.root.join("AGENTS.md"),
+            "Keep the old hook budget.\n",
+        )
+        .unwrap();
+        let mut store = fixture.store();
+        store
+            .set_document_comparison(
+                &fixture.project_id,
+                1,
+                1,
+                &hide_memory::DocumentComparison {
+                    authority: hide_memory::DocumentAuthority::CardNewer,
+                    document: "AGENTS.md".into(),
+                    document_text: "Keep the old hook budget.".into(),
+                    document_at_unix_ms: None,
+                    operator_text: "Keep the hook under 100 ms".into(),
+                    operator_at_unix_ms: Some(20),
+                    source_session: Some("seed".into()),
+                },
+            )
+            .unwrap();
+        let other = store
+            .item_by_number(&fixture.project_id, 2)
+            .unwrap()
+            .unwrap();
+        store.mark_unverified(&other.id, other.revision).unwrap();
+        drop(store);
+        fixture
+            .backend
+            .answers
+            .lock()
+            .unwrap()
+            .push(json!({"verdict":"valid","text":null,"title":null,"aliases":[],"document":null}));
+        fixture
+            .backend
+            .answers
+            .lock()
+            .unwrap()
+            .push(json!({"results":[]}));
+        fixture.pass(true, false);
+        let store = fixture.store();
+        assert!(
+            !store
+                .item_by_number(&fixture.project_id, 2)
+                .unwrap()
+                .unwrap()
+                .verifying
+        );
+        assert!(
+            store.correction_checks(&fixture.project_id, 4).unwrap()[0]
+                .fingerprint
+                .is_some()
+        );
+        assert_eq!(
+            fixture.check_states.borrow().last().unwrap().0,
+            MemoryAnalysisState::Idle
+        );
+        drop(store);
+        fixture
+            .backend
+            .answers
+            .lock()
+            .unwrap()
+            .push(json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}));
+        fixture.pass(true, false);
+        assert!(
+            fixture
+                .store()
+                .document_comparison(&fixture.project_id, 1)
+                .unwrap()
+                .is_none(),
+            "a failed attempt never certifies the unchanged document fingerprint"
+        );
+    }
+
+    #[test]
+    fn reflected_correction_refreshes_the_open_card_despite_a_later_failure() {
+        use crate::runtime::tests::{SharedRuntime, context_payload, wait_for};
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        confirm_fixture_correction(&fixture, 1);
+        confirm_fixture_correction(&fixture, 2);
+        let mut runtime = crate::runtime::tests::runtime();
+        runtime.state_path = fixture._temp.path().join("state.json");
+        let mut payload = context_payload();
+        for agent in &mut payload.agents {
+            agent.cwd = Some(fixture.root.to_string_lossy().into_owned());
+        }
+        for pane in &mut payload.panes {
+            pane.cwd = Some(fixture.root.to_string_lossy().into_owned());
+        }
+        runtime.ingest_session(Ok(payload));
+        let workspace = runtime.snapshot.navigator.workspaces[0].id.clone();
+        let runtime = SharedRuntime::new(runtime);
+        {
+            let mut guard = runtime.lock().unwrap();
+            guard.install_worker_context(runtime.weak(), crate::handle::ChangeNotifier::noop());
+            guard.open_project_memory(Some(workspace.clone()));
+            guard.expand_memory_card(&workspace, Some(1));
+        }
+        wait_for("the original expanded correction", || {
+            runtime
+                .lock()
+                .unwrap()
+                .snapshot
+                .memory
+                .as_ref()
+                .and_then(|memory| memory.project.as_ref())
+                .and_then(|project| project.expanded.as_ref())
+                .is_some_and(|card| card.document_comparison.is_some())
+        });
+        // The first correction is reflected; asking about the second the
+        // provider times out, which ends the pass's provider work.
+        fixture.backend.answers.lock().unwrap().extend([
+            json!({"fail":"timeout"}),
+            json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}),
+        ]);
+        let input = PassInput {
+            nodes: vec![(crate::node::test_node(), fixture.node.clone())],
+            unreached: vec![],
+            database: fixture.database.clone(),
+            router: Some(AiRouter::new(
+                vec![fixture.backend.clone()],
+                RouterConfig {
+                    priority: vec![ProviderId::CLAUDE],
+                    max_transient_attempts: 1,
+                    ..RouterConfig::default()
+                },
+                Arc::new(NoopLogSink),
+            )),
+            live: BTreeSet::from([("claude", SESSION.to_owned())]),
+            closed: BTreeSet::new(),
+            held: HashSet::new(),
+            home: None,
+            delegated: HashSet::new(),
+            language: hide_ai::OutputLanguage::English,
+            cancel: CancelToken::new(),
+            failed_reads: Default::default(),
+        };
+        let outcome = run_pass(&input, &mut |report| {
+            runtime.lock().unwrap().apply_memory_report(report);
+        });
+        runtime.lock().unwrap().finish_memory_pass(outcome);
+        assert!(
+            fixture
+                .store()
+                .document_comparison(&fixture.project_id, 1)
+                .unwrap()
+                .is_none()
+        );
+        {
+            let guard = runtime.lock().unwrap();
+            let work = &guard.memory_work.projects[&fixture.project_id];
+            assert_eq!(work.failures, 1);
+            assert!(work.retry_at_unix_ms > now_ms());
+        }
+        wait_for(
+            "the reflected expanded correction and its promotion row",
+            || {
+                let guard = runtime.lock().unwrap();
+                let project = guard
+                    .snapshot
+                    .memory
+                    .as_ref()
+                    .unwrap()
+                    .project
+                    .as_ref()
+                    .unwrap();
+                project
+                    .expanded
+                    .as_ref()
+                    .is_some_and(|card| card.document_comparison.is_none())
+                    && project.rows.iter().any(|row| {
+                        row.number == 1
+                            && row.document_comparison.is_none()
+                            && row.promotion.as_ref().is_some_and(|promotion| {
+                                promotion.state == crate::model::MemoryPromotionState::Merged
+                            })
+                    })
+            },
+        );
+        let guard = runtime.lock().unwrap();
+        assert_eq!(guard.memory_work.projects[&fixture.project_id].failures, 1);
+        assert!(guard.memory_work.projects[&fixture.project_id].retry_at_unix_ms > now_ms());
+    }
+
+    #[test]
+    fn a_provider_failure_in_one_project_asks_nothing_for_the_projects_after_it() {
+        let full = Fixture::new();
+        let peer = Fixture::new();
+        let mut store = full.store();
+        store
+            .ensure_project(&peer.project_id, &peer.root, crate::node::TEST_NODE)
+            .unwrap();
+        store.set_enabled(&peer.project_id, true, true).unwrap();
+        // Each Project holds a card waiting to be checked again: a provider
+        // call.
+        store
+            .apply_candidates(
+                &AnalysisBatch {
+                    id: "peer-seed".into(),
+                    project_id: peer.project_id.clone(),
+                    provider: "codex".into(),
+                    analysis_provider: "codex".into(),
+                    session_id: "peer-seed".into(),
+                    content_hash: "peer-seed".into(),
+                    created_at_unix_ms: 1,
+                },
+                &[Candidate {
+                    text: "Keep the peer hook under 100 ms".into(),
+                    title: String::new(),
+                    aliases: vec![],
+                    kind: CandidateKind::Rule,
+                    confidence: 0.9,
+                    salience: 0.9,
+                    source_offsets: vec![1],
+                    human_offsets: vec![1],
+                    source_times: Default::default(),
+                    cited_paths: vec![],
+                    relation: CandidateRelation::New,
+                }],
+            )
+            .unwrap();
+        for project_id in [&full.project_id, &peer.project_id] {
+            let card = store.item_by_number(project_id, 1).unwrap().unwrap();
+            assert!(store.mark_unverified(&card.id, card.revision).unwrap());
+        }
+        assert_eq!(store.due_checks(None, now_ms(), 10).unwrap(), 2);
+        drop(store);
+        full.fail_with(Some(AiError::Timeout));
+        full.pass(false, false);
+        assert_eq!(
+            full.calls(),
+            1,
+            "the first Project's timeout ends the pass's provider work"
+        );
+    }
+
+    #[test]
+    fn a_correction_the_provider_never_answers_is_set_aside_after_five_tries() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        confirm_fixture_correction(&fixture, 1);
+        fixture.fail_with(Some(AiError::Timeout));
+        let calls = fixture.calls();
+        for attempt in 1..=hide_memory::INPUT_UNANSWERED_LIMIT as usize {
+            // The provider answers the Project's other inputs meanwhile:
+            // this one, not the provider, is what keeps failing.
+            fixture.answer_elsewhere();
+            let (tally, _) = fixture.maintain(&mut 0);
+            assert_eq!(fixture.calls(), calls + attempt);
+            assert_eq!(
+                tally.error.as_ref().map(FailureScope::of),
+                Some(FailureScope::Provider),
+                "every timeout still backs the Project off"
+            );
+        }
+        fixture.maintain(&mut 0);
+        assert_eq!(
+            fixture.calls(),
+            calls + hide_memory::INPUT_UNANSWERED_LIMIT as usize,
+            "the input that always times out no longer holds its Project"
+        );
+    }
+
+    #[test]
+    fn an_outage_never_moves_a_sessions_cursor_or_sets_its_words_aside() {
+        let fixture = Fixture::new();
+        fixture.fail_with(Some(AiError::Timeout));
+        let calls = fixture.calls();
+        for pass in 1..=2 * hide_memory::INPUT_UNANSWERED_LIMIT as usize {
+            fixture.pass(false, true);
+            assert_eq!(fixture.calls(), calls + pass, "the words are asked again");
+            assert!(
+                fixture
+                    .store()
+                    .load_cursor(
+                        CursorReader::Analysis,
+                        &fixture.project_id,
+                        "claude",
+                        SESSION
+                    )
+                    .unwrap()
+                    .is_none(),
+                "nothing the session said is given up while the provider answers nothing"
+            );
+        }
+        fixture.fail_with(None);
+        fixture.answer(&[]);
+        assert_eq!(fixture.pass(false, true).last(), Some(&"learned one"));
+    }
+
+    #[test]
+    fn a_session_group_that_alone_never_gets_an_answer_is_passed_over_after_five() {
+        let fixture = Fixture::new();
+        fixture.fail_with(Some(AiError::Timeout));
+        let cursor = |fixture: &Fixture| {
+            fixture
+                .store()
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION,
+                )
+                .unwrap()
+        };
+        for _ in 1..hide_memory::INPUT_UNANSWERED_LIMIT {
+            // The provider answers the Project's other inputs meanwhile.
+            fixture.answer_elsewhere();
+            fixture.pass(false, true);
+            assert!(cursor(&fixture).is_none(), "the group is asked again");
+        }
+        fixture.answer_elsewhere();
+        fixture.pass(false, true);
+        assert!(
+            cursor(&fixture).is_some(),
+            "the fifth counted timeout passes the group over and the session settles"
+        );
+        fixture.fail_with(None);
+        let mut lines = fixture.lines.clone();
+        lines.push(json!({"type": "user", "sessionId": SESSION,
+            "cwd": fixture.root.to_string_lossy(), "timestamp": "2026-10-11T00:01:00Z",
+            "origin": {"kind": "human"},
+            "message": {"role": "user", "content": "Prefer small pull requests"}}));
+        fixture.write(&lines);
+        fixture.answer(&[]);
+        let calls = fixture.calls();
+        fixture.pass(false, true);
+        assert!(
+            fixture.calls() > calls,
+            "the words after it are asked about"
+        );
+    }
+    #[test]
+    fn a_correction_timing_out_through_an_outage_is_never_set_aside() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        confirm_fixture_correction(&fixture, 1);
+        fixture.fail_with(Some(AiError::Timeout));
+        let calls = fixture.calls();
+        let rounds = 2 * hide_memory::INPUT_UNANSWERED_LIMIT as usize;
+        for _ in 0..rounds {
+            fixture.maintain(&mut 0);
+        }
+        assert_eq!(
+            fixture.calls(),
+            calls + rounds,
+            "with nothing answered, every timeout is the provider's and the correction is asked again"
+        );
+    }
+
+    #[test]
+    fn an_answered_check_starts_the_count_of_unanswered_requests_again() {
+        let fixture = Fixture::new();
+        let due_again = |fixture: &Fixture| {
+            let mut store = fixture.store();
+            let card = store
+                .item_by_number(&fixture.project_id, 1)
+                .unwrap()
+                .unwrap();
+            assert!(store.mark_unverified(&card.id, card.revision).unwrap());
+            rusqlite::Connection::open(&fixture.database)
+                .unwrap()
+                .execute("UPDATE memory_items SET reverify_at_ms=NULL", [])
+                .unwrap();
+        };
+        let short = hide_memory::INPUT_UNANSWERED_LIMIT as usize - 1;
+        let time_out = |fixture: &Fixture| {
+            fixture.fail_with(Some(AiError::Timeout));
+            let before = fixture.calls();
+            for _ in 0..short {
+                fixture.answer_elsewhere();
+                fixture.maintain(&mut 0);
+            }
+            fixture.fail_with(None);
+            fixture.calls() - before
+        };
+        due_again(&fixture);
+        assert_eq!(time_out(&fixture), short);
+        fixture
+            .push(json!({"verdict":"valid","text":null,"title":null,"aliases":[],"document":null}));
+        fixture.maintain(&mut 0);
+        due_again(&fixture);
+        assert_eq!(
+            time_out(&fixture),
+            short,
+            "the answer between the runs reset the count, so the card is still asked"
+        );
+    }
+
+    #[test]
+    fn an_unusable_answer_neither_backs_off_nor_clears_an_earlier_provider_failure() {
+        let mut runtime = crate::runtime::tests::runtime();
+        let project_id = "project:unusable".to_owned();
+        runtime.apply_memory_report(PassReport::Analyzed {
+            project_id: project_id.clone(),
+            learned: 0,
+            error: Some(AiError::Timeout),
+        });
+        let failed = runtime.memory_work.projects[&project_id].clone();
+        assert_eq!(failed.failures, 1);
+        runtime.apply_memory_report(PassReport::Analyzing {
+            project_id: project_id.clone(),
+        });
+        runtime.apply_memory_report(PassReport::Unusable {
+            project_id: project_id.clone(),
+        });
+        runtime.apply_memory_report(PassReport::Checked {
+            project_id: project_id.clone(),
+            answered: false,
+        });
+        let after = &runtime.memory_work.projects[&project_id];
+        assert_eq!(after.analysis, MemoryAnalysisState::Idle);
+        assert_eq!(after.failures, failed.failures);
+        assert_eq!(after.retry_at_unix_ms, failed.retry_at_unix_ms);
+    }
+
+    #[test]
+    fn invalid_output_rotates_the_durable_turn_to_another_project() {
+        let full = Fixture::new();
+        let peer = Fixture::new();
+        let mut store = full.store();
+        store
+            .ensure_project(&peer.project_id, &peer.root, crate::node::TEST_NODE)
+            .unwrap();
+        store.set_enabled(&peer.project_id, true, true).unwrap();
+        let peer_node = NodeId::parse("node-peer").unwrap();
+        let input = PassInput {
+            nodes: vec![
+                (crate::node::test_node(), full.node.clone()),
+                (peer_node.clone(), peer.node.clone()),
+            ],
+            unreached: vec![],
+            database: full.database.clone(),
+            router: Some(AiRouter::new(
+                vec![full.backend.clone()],
+                RouterConfig {
+                    priority: vec![ProviderId::CLAUDE],
+                    max_transient_attempts: 1,
+                    max_invalid_output_attempts: 1,
+                    ..RouterConfig::default()
+                },
+                Arc::new(NoopLogSink),
+            )),
+            live: BTreeSet::new(),
+            closed: BTreeSet::new(),
+            held: HashSet::new(),
+            home: None,
+            delegated: HashSet::new(),
+            language: hide_ai::OutputLanguage::English,
+            cancel: CancelToken::new(),
+            failed_reads: Default::default(),
+        };
+        let tasks = || {
+            [&full, &peer]
+                .into_iter()
+                .zip([crate::node::test_node(), peer_node.clone()])
+                .map(|(fixture, node)| {
+                    let identity = project_identity(
+                        fixture.node.as_ref(),
+                        &crate::node::test_node(),
+                        &fixture.root.to_string_lossy(),
+                    )
+                    .unwrap();
+                    let session =
+                        project_sessions(fixture.node.as_ref(), &identity, SESSION_CALL_TIMEOUT)
+                            .unwrap()
+                            .remove(0);
+                    let stat = session_stat(fixture.node.as_ref(), &session, SESSION_CALL_TIMEOUT)
+                        .unwrap();
+                    PendingAnalysis {
+                        node,
+                        project_id: fixture.project_id.clone(),
+                        root: fixture.root.to_string_lossy().into_owned(),
+                        session,
+                        stat,
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        store
+            .enqueue_analysis(&full.project_id, "claude", SESSION, 1)
+            .unwrap();
+        store
+            .enqueue_analysis(&peer.project_id, "claude", SESSION, 2)
+            .unwrap();
+        full.backend
+            .answers
+            .lock()
+            .unwrap()
+            .push(json!({"invalid":true}));
+        let mut deferred = None;
+        run_analysis_turn(
+            &input,
+            &mut store,
+            tasks(),
+            &mut deferred,
+            &mut PassOutcome::default(),
+            &mut |_| {},
+        );
+        assert!(
+            deferred.is_none(),
+            "an intent failure does not pause other Projects"
+        );
+        assert_eq!(full.calls(), 1);
+        drop(store);
+        let mut store = full.store();
+        assert_eq!(store.analysis_order().unwrap()[0].0, peer.project_id);
+        full.answer(&[]);
+        run_analysis_turn(
+            &input,
+            &mut store,
+            tasks(),
+            &mut deferred,
+            &mut PassOutcome::default(),
+            &mut |_| {},
+        );
+        assert_eq!(store.list_memories(&peer.project_id).unwrap().len(), 1);
+        assert_eq!(full.calls(), 2);
+    }
+
+    #[test]
+    fn router_admission_pause_preserves_the_durable_turn() {
+        for pause in 0..3 {
+            let full = Fixture::new();
+            let peer = Fixture::new();
+            let mut store = full.store();
+            store
+                .ensure_project(&peer.project_id, &peer.root, crate::node::TEST_NODE)
+                .unwrap();
+            store.set_enabled(&peer.project_id, true, true).unwrap();
+            let peer_node = NodeId::parse("node-peer").unwrap();
+            let limits = Arc::new(hide_ai::UsageLimits::new());
+            limits.set(
+                hide_ai::UsageLimit::Percent(90),
+                &std::collections::BTreeMap::from([(
+                    ProviderId::CLAUDE,
+                    hide_ai::UsageReading {
+                        used_percent: 93.0,
+                        resets_at_unix_ms: Some(now_ms() + 3_600_000),
+                    },
+                )]),
+            );
+            let input = PassInput {
+                nodes: vec![
+                    (crate::node::test_node(), full.node.clone()),
+                    (peer_node.clone(), peer.node.clone()),
+                ],
+                unreached: vec![],
+                database: full.database.clone(),
+                router: Some(AiRouter::new(
+                    if pause == 1 {
+                        vec![]
+                    } else {
+                        vec![full.backend.clone()]
+                    },
+                    RouterConfig {
+                        priority: vec![ProviderId::CLAUDE],
+                        max_transient_attempts: 1,
+                        max_invalid_output_attempts: 1,
+                        max_per_minute: if pause == 0 { 0 } else { 30 },
+                        usage_gate: (pause == 2).then_some(limits),
+                        ..RouterConfig::default()
+                    },
+                    Arc::new(NoopLogSink),
+                )),
+                live: BTreeSet::new(),
+                closed: BTreeSet::new(),
+                held: HashSet::new(),
+                home: None,
+                delegated: HashSet::new(),
+                language: hide_ai::OutputLanguage::English,
+                cancel: CancelToken::new(),
+                failed_reads: Default::default(),
+            };
+            let tasks = || {
+                [&full, &peer]
+                    .into_iter()
+                    .zip([crate::node::test_node(), peer_node.clone()])
+                    .map(|(fixture, node)| {
+                        let identity = project_identity(
+                            fixture.node.as_ref(),
+                            &crate::node::test_node(),
+                            &fixture.root.to_string_lossy(),
+                        )
+                        .unwrap();
+                        let session = project_sessions(
+                            fixture.node.as_ref(),
+                            &identity,
+                            SESSION_CALL_TIMEOUT,
+                        )
+                        .unwrap()
+                        .remove(0);
+                        let stat =
+                            session_stat(fixture.node.as_ref(), &session, SESSION_CALL_TIMEOUT)
+                                .unwrap();
+                        PendingAnalysis {
+                            node,
+                            project_id: fixture.project_id.clone(),
+                            root: fixture.root.to_string_lossy().into_owned(),
+                            session,
+                            stat,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+            store
+                .enqueue_analysis(&full.project_id, "claude", SESSION, 1)
+                .unwrap();
+            store
+                .enqueue_analysis(&peer.project_id, "claude", SESSION, 2)
+                .unwrap();
+            full.backend
+                .answers
+                .lock()
+                .unwrap()
+                .push(json!({"invalid":true}));
+            let previous_order = store.analysis_order().unwrap();
+            let mut failure = None;
+            let mut deferred = None;
+            run_analysis_turn(
+                &input,
+                &mut store,
+                tasks(),
+                &mut deferred,
+                &mut PassOutcome::default(),
+                &mut |report| {
+                    if let PassReport::Analyzed { error, .. } = report {
+                        failure = error;
+                    }
+                },
+            );
+            assert!(
+                deferred.is_none(),
+                "an intent failure does not pause other Projects"
+            );
+            assert_eq!(full.calls(), 0);
+            assert!(
+                matches!(
+                    (pause, failure),
+                    (0, Some(AiError::OverBudget { .. }))
+                        | (1, Some(AiError::NoProvider(_)))
+                        | (2, Some(AiError::UsageLimited { .. }))
+                ),
+                "the fixture must reach the intended router pause"
+            );
+            drop(store);
+            let store = full.store();
+            assert_eq!(store.analysis_order().unwrap(), previous_order);
+        }
+    }
+
+    #[test]
+    fn a_full_project_makes_room_for_new_cards_and_does_not_block_another_projects_turn() {
+        let full = Fixture::new();
+        let peer = Fixture::new();
+        let mut store = full.store();
+        let filler = "Archive basalt specimens";
+        let cards = (1..10_000)
+            .map(|_| Candidate {
+                text: filler.into(),
+                title: filler.into(),
+                aliases: vec![],
+                kind: CandidateKind::Rule,
+                confidence: 0.5,
+                salience: 0.1,
+                source_offsets: vec![1],
+                human_offsets: vec![1],
+                source_times: Default::default(),
+                cited_paths: vec![],
+                relation: CandidateRelation::New,
+            })
+            .collect::<Vec<_>>();
+        store
+            .apply_candidates(
+                &AnalysisBatch {
+                    id: "capacity-fill".into(),
+                    project_id: full.project_id.clone(),
+                    provider: "test".into(),
+                    analysis_provider: "test".into(),
+                    session_id: "fill".into(),
+                    content_hash: "fill".into(),
+                    created_at_unix_ms: 1,
+                },
+                &cards,
+            )
+            .unwrap();
+        store
+            .ensure_project(&peer.project_id, &peer.root, crate::node::TEST_NODE)
+            .unwrap();
+        store.set_enabled(&peer.project_id, true, true).unwrap();
+        let peer_node = NodeId::parse("node-peer").unwrap();
+        let input = PassInput {
+            nodes: vec![
+                (crate::node::test_node(), full.node.clone()),
+                (peer_node.clone(), peer.node.clone()),
+            ],
+            unreached: vec![],
+            database: full.database.clone(),
+            router: Some(AiRouter::new(
+                vec![full.backend.clone()],
+                RouterConfig {
+                    priority: vec![ProviderId::CLAUDE],
+                    max_transient_attempts: 1,
+                    ..RouterConfig::default()
+                },
+                Arc::new(NoopLogSink),
+            )),
+            live: BTreeSet::new(),
+            closed: BTreeSet::new(),
+            held: HashSet::new(),
+            home: None,
+            delegated: HashSet::new(),
+            language: hide_ai::OutputLanguage::English,
+            cancel: CancelToken::new(),
+            failed_reads: Default::default(),
+        };
+        let tasks = || {
+            [&full, &peer]
+                .into_iter()
+                .zip([crate::node::test_node(), peer_node.clone()])
+                .map(|(fixture, node)| {
+                    let identity = project_identity(
+                        fixture.node.as_ref(),
+                        &crate::node::test_node(),
+                        &fixture.root.to_string_lossy(),
+                    )
+                    .unwrap();
+                    let session =
+                        project_sessions(fixture.node.as_ref(), &identity, SESSION_CALL_TIMEOUT)
+                            .unwrap()
+                            .remove(0);
+                    let stat = session_stat(fixture.node.as_ref(), &session, SESSION_CALL_TIMEOUT)
+                        .unwrap();
+                    PendingAnalysis {
+                        node,
+                        project_id: fixture.project_id.clone(),
+                        root: fixture.root.to_string_lossy().into_owned(),
+                        session,
+                        stat,
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        store
+            .enqueue_analysis(&full.project_id, "claude", SESSION, 1)
+            .unwrap();
+        store
+            .enqueue_analysis(&peer.project_id, "claude", SESSION, 2)
+            .unwrap();
+        full.answer(&[]);
+        let mut deferred = None;
+        run_analysis_turn(
+            &input,
+            &mut store,
+            tasks(),
+            &mut deferred,
+            &mut PassOutcome::default(),
+            &mut |_| {},
+        );
+        assert!(
+            deferred.is_none(),
+            "Project capacity is not a global provider pause"
+        );
+        let state = store.project_state(&full.project_id).unwrap();
+        assert!(!state.capacity_reached, "older cards made room");
+        assert_eq!(
+            store.list_memories(&full.project_id).unwrap().len(),
+            hide_memory::ACTIVE_MEMORY_LIMIT
+        );
+        assert!(
+            state.evicted_count > 0
+                && store
+                    .list_memories(&full.project_id)
+                    .unwrap()
+                    .iter()
+                    .any(|item| item.body != filler),
+            "the new learning is kept in place of a filler card"
+        );
+        assert_eq!(full.calls(), 1);
+        assert!(
+            store
+                .load_cursor(CursorReader::Analysis, &full.project_id, "claude", SESSION)
+                .unwrap()
+                .is_some()
+        );
+        full.answer(&[]);
+        run_analysis_turn(
+            &input,
+            &mut store,
+            tasks(),
+            &mut deferred,
+            &mut PassOutcome::default(),
+            &mut |_| {},
+        );
+        assert_eq!(store.list_memories(&peer.project_id).unwrap().len(), 1);
+        assert_eq!(full.calls(), 2);
+        run_analysis_turn(
+            &input,
+            &mut store,
+            tasks(),
+            &mut deferred,
+            &mut PassOutcome::default(),
+            &mut |_| {},
+        );
+        assert_eq!(
+            full.calls(),
+            2,
+            "a completed session is never extracted again"
+        );
+    }
+
+    #[test]
+    fn an_oversized_native_record_is_skipped_without_blocking_later_work() {
+        let mut fixture = Fixture::new();
+        fixture.lines[1]["message"]["content"] = json!("important later decision ".repeat(20_000));
+        fixture.write(&fixture.lines);
+        fixture.answer(&[]);
+        let key = ("claude", SESSION.to_owned());
+        let (_, diagnostics) =
+            crate::diagnostics::capture(|| fixture.pass_for(key.clone(), false, true));
+        assert_eq!(
+            fixture
+                .store()
+                .list_memories(&fixture.project_id)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            fixture
+                .store()
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION
+                )
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|row| row["kind"] == "analysis.records_skipped")
+        );
+        assert!(fixture.backend.inputs.lock().unwrap()[0].contains("Never force-push main"));
+        let (_, outcome) = fixture.pass_for(key.clone(), false, true);
+        assert!(outcome.settled.contains(&key));
+        assert_eq!(fixture.calls(), 1);
+    }
+
+    #[test]
+    fn ai_off_keeps_analysis_out_of_the_queue_and_does_not_request_usage() {
+        let fixture = Fixture::new();
+        let (_, outcome) = fixture.run(("claude", SESSION.into()), false, true, &[], false);
+        assert!(!outcome.wants_usage);
+        assert!(fixture.store().analysis_order().unwrap().is_empty());
+        assert_eq!(fixture.calls(), 0);
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        assert_eq!(
+            fixture
+                .store()
+                .list_memories(&fixture.project_id)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn an_oversized_event_keeps_its_two_ends_and_the_instruction_beside_a_paste() {
+        // A JSONL line past the reader's cap never becomes an event; an
+        // OpenCode message read from its database can.
+        let paste = format!(
+            "Always run tests with nextest before a merge. Here is the log:\n{}\n끝까지 한글",
+            "log line ".repeat(40 * 1024)
+        );
+        assert!(paste.len() > EVENT_TEXT_LIMIT_BYTES);
+        let kept = bounded_event_text(&paste);
+        assert!(kept.starts_with("Always run tests with nextest before a merge."));
+        assert!(kept.ends_with("끝까지 한글"), "cut on a character boundary");
+        assert!(kept.contains(" bytes left out]"));
+        assert!(kept.len() <= 2 * EVENT_KEPT_END_BYTES + 64);
+        let event = json!({"offset":0,"kind":"human","text":kept});
+        assert_eq!(
+            event_groups(&[event]).unwrap().len(),
+            1,
+            "one bounded group"
+        );
+        let whole = "a".repeat(EVENT_TEXT_LIMIT_BYTES);
+        assert_eq!(
+            bounded_event_text(&whole),
+            whole.as_str(),
+            "the cap itself is kept whole"
+        );
+    }
+
+    #[test]
+    fn an_event_above_the_explicit_analysis_cap_is_reported_before_chunking() {
+        let event = json!({"offset":0,"kind":"human","text":"a".repeat(256 * 1024 + 1)});
+        assert!(event_groups(&[event]).is_err());
+        let event = json!({"offset":0,"kind":"human","text":"a".repeat(256 * 1024)});
+        assert!(event_groups(&[event]).is_ok());
+    }
+
+    #[test]
     fn a_closed_session_stays_closed_until_a_pass_analyzes_it() {
         // B2: a failed pass does not drop the session into the 30 minute wait.
         let fixture = Fixture::new();
@@ -4155,7 +6068,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_with_fewer_than_three_operator_words_or_started_by_an_agent_makes_no_card() {
+    fn one_human_exchange_is_analyzed_but_a_delegated_instruction_is_not() {
         // B2, B4: no provider call, and the session is settled all the same.
         let fixture = Fixture::new();
         fixture.answer(&[]);
@@ -4167,8 +6080,15 @@ mod tests {
             .to_owned();
         std::fs::write(&fixture.locator, format!("{first_line}\n")).unwrap();
 
-        assert!(closed_pass(&fixture, &[], true).is_empty());
-        assert_eq!(fixture.calls(), 0, "one operator word is too few");
+        assert_eq!(
+            closed_pass(&fixture, &[], true),
+            ["analyzing", "learned one"]
+        );
+        assert_eq!(
+            fixture.calls(),
+            1,
+            "one significant human exchange is eligible"
+        );
 
         // The same three words in a session an agent started are that
         // agent's, not the operator's.

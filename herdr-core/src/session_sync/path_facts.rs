@@ -23,6 +23,9 @@ impl PathReader {
         let owner = context.runtime.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&cancelled);
+        // This reader asks its node's paths on every refresh, so it owns
+        // what was logged of the Projects that node could not read.
+        let unread = std::sync::Mutex::new(workspace::UnreadProjects::default());
         let mut reader = BackgroundRead::new(
             CATALOG_REFRESH_INTERVAL,
             Duration::ZERO,
@@ -40,6 +43,9 @@ impl PathReader {
                             },
                         )
                     });
+                if let (Ok(index), Ok(mut unread)) = (&result, unread.lock()) {
+                    unread.record(index);
+                }
                 (request.clone(), result)
             },
         );
