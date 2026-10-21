@@ -55,7 +55,7 @@ const EXPANDED: ProjectMemory["expanded"] = {
 
 export function memorySceneProject(state: MemorySceneState): ProjectMemory {
   const base: ProjectMemory = {
-    workspace_id: "herdr-ide", unavailable: null, loading: false, enabled: true, capacity_reached: false,
+    workspace_id: "herdr-ide", unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0,
     rows: ROWS, questions: [], analysis: "idle", consent_required: false, usable_cards: 2, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null, expanded: null, search: null,
   };
   switch (state) {

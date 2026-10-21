@@ -2554,8 +2554,13 @@ pub(crate) fn write_cards(
         })?;
     crate::diagnostic!(
         json!({"component":"memory", "kind":"analysis.session_cards", "project_id":source.project_id, "session_id":source.session_id, "batch_id":batch_id,
-        "created":summary.created, "superseded":summary.superseded, "capacity_rejections":summary.capacity_rejections, "duplicates_in_docs":duplicates, "extraction_input_chars":request.input.chars().count(), "document_input_chars":document_input })
+        "created":summary.created, "superseded":summary.superseded, "capacity_rejections":summary.capacity_rejections, "evicted":summary.evicted.len(), "duplicates_in_docs":duplicates, "extraction_input_chars":request.input.chars().count(), "document_input_chars":document_input })
     );
+    for number in &summary.evicted {
+        crate::diagnostic!(
+            json!({"component":"memory", "kind":"card.evicted", "project_id":source.project_id, "batch_id":batch_id, "card":number, "reason":"card_capacity"})
+        );
+    }
     for backfill in output.backfill {
         if let Err(error) = store.fill_aliases(
             source.project_id,
@@ -5267,7 +5272,7 @@ mod tests {
     }
 
     #[test]
-    fn a_full_project_finishes_rejected_growth_and_does_not_block_another_projects_turn() {
+    fn a_full_project_makes_room_for_new_cards_and_does_not_block_another_projects_turn() {
         let full = Fixture::new();
         let peer = Fixture::new();
         let mut store = full.store();
@@ -5378,12 +5383,20 @@ mod tests {
             deferred.is_none(),
             "Project capacity is not a global provider pause"
         );
+        let state = store.project_state(&full.project_id).unwrap();
+        assert!(!state.capacity_reached, "older cards made room");
+        assert_eq!(
+            store.list_memories(&full.project_id).unwrap().len(),
+            hide_memory::ACTIVE_MEMORY_LIMIT
+        );
         assert!(
-            store
-                .project_state(&full.project_id)
-                .unwrap()
-                .capacity_reached,
-            "the rejection is the state the Memory tab reports as full, new cards not kept"
+            state.evicted_count > 0
+                && store
+                    .list_memories(&full.project_id)
+                    .unwrap()
+                    .iter()
+                    .any(|item| item.body != filler),
+            "the new learning is kept in place of a filler card"
         );
         assert_eq!(full.calls(), 1);
         assert!(
@@ -5414,7 +5427,7 @@ mod tests {
         assert_eq!(
             full.calls(),
             2,
-            "a completed capacity rejection is never extracted again"
+            "a completed session is never extracted again"
         );
     }
 

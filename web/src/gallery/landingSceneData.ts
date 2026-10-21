@@ -263,7 +263,7 @@ export function landingMemory(nowMs: number, workspaceId: string): ProjectMemory
     card(7, "Invoices live in the billing schema, not public", "fact", 7, 5, 0, 4 * DAY),
   ];
   return {
-    workspace_id: workspaceId, unavailable: null, loading: false, enabled: true, capacity_reached: false,
+    workspace_id: workspaceId, unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0,
     rows,
     questions: [{ kind: "promote", number: 13, title: rows[0]!.title, human_session_count: 2, pulled_session_count: 4 }],
     analysis: "idle", consent_required: false, usable_cards: rows.length, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null,

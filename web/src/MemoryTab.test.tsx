@@ -36,7 +36,7 @@ const row = (number: number, overrides: Partial<MemoryRow> = {}): MemoryRow => (
   pull_count: 3, updated_at_unix_ms: Date.now(), verifying: false, promotion: null, ...overrides,
 });
 const memory = (overrides: Partial<ProjectMemory> = {}): ProjectMemory => ({
-  workspace_id: "p", unavailable: null, loading: false, enabled: true, capacity_reached: false,
+  workspace_id: "p", unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0,
   rows: [row(3), row(7)], questions: [], analysis: "idle", consent_required: false, usable_cards: 2, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null,
   expanded: null, search: null, ...overrides,
 });
@@ -381,6 +381,16 @@ describe("the Memory tab", () => {
     expect(document.body.textContent).toContain("Delete herdr-ide's Memory data?");
     await click("[data-memory-delete='confirm']");
     expect(sent("memory_action")).toEqual([{ workspace_id: "p", action: "delete", number: null }]);
+  });
+
+  it("says how many older cards made room, and says full only when nothing can", async () => {
+    await render(memory({ evicted_cards: 2 }));
+    expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("2 older cards were cleared to make room for new ones.");
+    expect(container.textContent).not.toContain("Memory is full");
+
+    await render(memory({ evicted_cards: 2, capacity_reached: true }));
+    expect(container.querySelector("[data-memory-evicted]")).toBeNull();
+    expect(container.textContent).toContain("This Project's Memory is full, so new cards are not kept.");
   });
 
   it("offers a forgotten card back and a replaced text's undo by card number", async () => {

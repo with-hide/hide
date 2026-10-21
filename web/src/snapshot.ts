@@ -1813,6 +1813,8 @@ export type ProjectMemory = {
   loading: boolean;
   enabled: boolean;
   capacity_reached: boolean;
+  /** Cards forgotten automatically to make room for new ones. */
+  evicted_cards: number;
   rows: MemoryRow[];
   questions: MemoryQuestion[];
   /** `memory_analysis_state`. */

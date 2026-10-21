@@ -574,6 +574,7 @@ impl Runtime {
             .state
             .as_ref()
             .is_some_and(|state| state.capacity_reached);
+        project.evicted_cards = load.state.as_ref().map_or(0, |state| state.evicted_count);
         let project_id = self.project_memory.project_id.clone().unwrap_or_default();
         let mut rows = load.rows;
         let mut questions = Vec::new();

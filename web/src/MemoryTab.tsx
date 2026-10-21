@@ -131,6 +131,7 @@ function MemoryBody({ project, actions }: { project: ProjectMemory; actions: Act
           </div>
         ) : null}
         {project.enabled && project.capacity_reached ? <p className="-mt-sm break-keep text-caption text-warning">{t("memory.capacity")}</p> : null}
+        {project.enabled && !project.capacity_reached && project.evicted_cards > 0 ? <p className="-mt-sm break-keep text-caption text-subtle-foreground" data-memory-evicted={project.evicted_cards}>{t("memory.evicted", { count: project.evicted_cards })}</p> : null}
         {project.enabled && (project.questions.length > 0 || memoryProgress(project).length > 0) ? <Questions project={project} actions={actions} busy={busy} /> : null}
         {project.enabled ? <Cards project={project} actions={actions} busy={busy} onDelete={() => setDeleting(true)} /> : null}
       </div>

@@ -3049,8 +3049,10 @@ pub struct ProjectMemorySnapshot {
     pub consent_required: bool,
     /// Cards currently eligible for injection, excluding merged promotions.
     pub usable_cards: usize,
-    /// Live cards against the store's cap.
+    /// At the store's cap with no card it may forget: new cards are refused.
     pub capacity_reached: bool,
+    /// Older cards forgotten automatically to make room, still forgotten.
+    pub evicted_cards: usize,
     /// Live cards, the most recently changed first.
     #[serde(serialize_with = "serialize_memory_rows")]
     pub rows: Arc<Vec<MemoryRowSnapshot>>,

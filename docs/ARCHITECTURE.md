@@ -328,6 +328,10 @@ The operator's events are the session's `human` events; in a session some agent 
 An `add` is one batch per Project and text, so the same text added again answers the card it made and asks no provider; once every card of that batch is gone (forgotten, undone or never kept), the same text starts the next batch and is added again.
 Its provider tries end within 50 s and the cards are not written past 55 s, before the caller's minute runs out, so a refused or timed-out `add` has written nothing.
 `forget` tombstones a card the operator asked the agent to drop, and `undo` steps one card back one change: a forgotten card comes back, a replaced text gives way to the one before it, an added card goes.
+A Project holds at most 10,000 live cards; a new card at that limit forgets one other card in the same transaction, as a Forget its `undo` takes back, so new learning is never lost to an old card no one uses.
+The card forgotten is the least recently used: never given or read first, oldest written first, then by last use, then by number; a card the operator brought back counts as used.
+A confirmed correction, a card with a promotion, and a card the same batch writes or names are never forgotten; with none left to forget the new card is refused, merges and corrections in the batch still commit, and the Memory tab says the Memory is full.
+Each forgotten card is a `card.evicted` diagnostic with its batch.
 Every write reports to the core, which reads the opened Project's Memory again; a forget names its card on the Memory tab with its Undo.
 A card write checks the Project's switch inside its own transaction, so a card analyzed or added while the operator turned Memory off is never written after the switch.
 
