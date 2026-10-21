@@ -33,6 +33,8 @@ pub(super) struct Checked {
     pub(super) changed: usize,
     /// Calls the provider answered, usably or not.
     pub(super) answered: usize,
+    /// An intent-local failure, retained for the runtime's existing backoff.
+    pub(super) error: Option<AiError>,
 }
 
 type Admit<'a> = &'a mut dyn FnMut(&MemoryStore) -> Result<(), AnalysisFailure>;
@@ -628,27 +630,66 @@ pub(super) fn reconcile_corrections(
             continue;
         };
         admit(store)?;
-        let answer = router.execute(&request, cancel).map_err(provider_failure)?;
-        let results = answer.value["results"]
-            .as_array()
-            .filter(|rows| rows.len() == 1)
-            .ok_or_else(|| {
-                AnalysisFailure::Provider(AiError::InvalidOutput(
-                    "correction_reconcile_shape".into(),
-                ))
-            })?;
-        if results[0]["candidate"] != 0
-            || !matches!(
-                results[0]["verdict"].as_str(),
-                Some("same" | "differs" | "correction" | "unrelated" | "exception")
+        // A failed attempt rotates this card without certifying an unseen
+        // document fingerprint. It remains eligible on the next retry.
+        store
+            .record_correction_check(
+                project,
+                number,
+                revision,
+                previous.as_deref().unwrap_or(""),
+                now_ms(),
             )
-        {
-            return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
-                "correction_reconcile_verdict".into(),
-            )));
-        }
+            .map_err(local)?;
+        let verdict = (|| {
+            let answer = router.execute(&request, cancel).map_err(provider_failure)?;
+            let results = answer.value["results"]
+                .as_array()
+                .filter(|rows| rows.len() == 1)
+                .ok_or_else(|| {
+                    AnalysisFailure::Provider(AiError::InvalidOutput(
+                        "correction_reconcile_shape".into(),
+                    ))
+                })?;
+            if results[0]["candidate"] != 0
+                || !matches!(
+                    results[0]["verdict"].as_str(),
+                    Some("same" | "differs" | "correction" | "unrelated" | "exception")
+                )
+            {
+                return Err(AnalysisFailure::Provider(AiError::InvalidOutput(
+                    "correction_reconcile_verdict".into(),
+                )));
+            }
+            Ok(results[0]["verdict"]
+                .as_str()
+                .expect("validated verdict")
+                .to_owned())
+        })();
+        let verdict = match verdict {
+            Ok(verdict) => verdict,
+            Err(AnalysisFailure::Provider(error))
+                if matches!(
+                    error,
+                    AiError::InvalidOutput(_)
+                        | AiError::Rejected(_)
+                        | AiError::Timeout
+                        | AiError::CompletionUnknown(_)
+                        | AiError::Transient(_)
+                        | AiError::Internal(_)
+                ) =>
+            {
+                crate::diagnostic!(
+                    json!({"component":"memory","kind":"correction.reconcile_failed","project_id":project,"card":number,"error_class":error.class()})
+                );
+                checked.answered += 1;
+                checked.error = Some(error);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         checked.answered += 1;
-        if results[0]["verdict"] == "same"
+        if verdict == "same"
             && store
                 .item_by_number(project, number)
                 .map_err(local)?

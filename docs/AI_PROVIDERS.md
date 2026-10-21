@@ -49,6 +49,10 @@ The `preference` kind records personal choices without proposing repository chan
 `project_memory_creation_docs` is one comparison batch call for lexically matched new or superseding candidates: one repository excerpt per candidate, at most 3 KiB each, with the complete input capped at 15% of the 64 KiB extraction-input ceiling in characters and bytes.
 Its same/differs/correction/exception/unrelated verdict distinguishes duplicate documentation, an unresolved disagreement, an enduring operator correction and a task-local exception.
 A confirmed enduring correction remains available as untrusted context with its pending document update, while unresolved disagreements are withheld and task exceptions do not revise standing rules.
+Reconciliation records each admitted attempt before asking and certifies a document fingerprint only after a usable answer.
+An intent-local failure rotates the correction and lets remaining card verification and suggestion checks continue within the same maintenance quantum; the runtime retains the failure for its normal Project backoff.
+Authentication, account usage and resource-cap refusals still stop provider work.
+
 Conflicting quotes must appear in the exact excerpt sent, and direct operator evidence is required to confirm correction authority.
 The call uses the existing analysis admission and router usage limit; `analysis.session_cards` reports Project/session IDs, counts and both input sizes without content.
 Two more features use the same boundary and the same call cap and usage limit (PRD memory-card-quality D-07, D-08, D-11): `project_memory_verify` asks whether a card whose evidence moved still holds, and `project_memory_promote_check` asks whether a rule, lesson or durable decision about to be suggested for the repository's documents is already said there (`hide-memory/src/verify.rs`).

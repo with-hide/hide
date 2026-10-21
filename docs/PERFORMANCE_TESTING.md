@@ -852,6 +852,13 @@ That query can scan more existing rows than the matches it returns; its cost dep
 Checking start, completion and an actionable deferral publish only a changed core state; each of the existing four re-verifications and three promotion checks per Project can request one coalesced open-Memory refresh as its answer lands.
 Cancellation and worker completion clear the active card, while budget holds clear when work resumes or no check is due, and provider holds also clear when settings change.
 The daily cap counts a call when it is admitted, so a failing provider spends it too; that is the runaway bound, and the provider's backoff keeps failures to a few dozen a day.
+A failed session keeps its unfinished cursor but rotates its durable queue turn; the existing Project failure record and backoff throttle retry without keeping other Projects behind that session.
+Hide AI off still permits receipt and evidence reads, but creates no analysis queue entry and requests no usage refresh for analysis.
+A reader-rejected native record is diagnosed and skipped while valid later records and the source checkpoint continue.
+Normalized event text is capped at 256 KiB before chunk allocation; an event past it records its Project/session/offset, measured bytes and limit without content, and is skipped rather than retried forever.
+Accepted events preserve their complete text through 36 KiB groups and the four-group session quantum.
+At the active-card cap, only new growth is rejected: accepted merges and corrections commit with the batch, its cursor advances, and `analysis.session_cards` reports the rejection count.
+
 With no window attached, the usage reader runs on its own 5-minute schedule for 30 minutes after a pass last had a session due, so the usage limit has a figure headless (the usage reader also runs headless while Hide AI is paused by the limit or an agent worked in the last 30 minutes, at the same one read per provider every 5 minutes); that is at most one usage read per provider every 5 minutes, and none while no session is due.
 Session file discovery, incremental reads, SQLite work, redaction, provider requests, hook-config writes, and JSON serialization stay outside `Mutex<Runtime>`.
 One incremental transcript read takes at most 1 MiB, one retained JSONL line is capped at 256 KiB, and catalog or archive detail parsing rejects a complete session above 64 MiB.

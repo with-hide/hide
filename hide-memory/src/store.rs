@@ -1787,12 +1787,6 @@ impl MemoryStore {
             };
             summary.outcomes.push(outcome);
         }
-        if summary.capacity_rejections > 0 {
-            return Ok(ApplySummary {
-                capacity_rejections: summary.capacity_rejections,
-                ..ApplySummary::default()
-            });
-        }
         transaction.commit()?;
         certify_projection(&self.connection)?;
         Ok(summary)
@@ -6793,29 +6787,45 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
     }
 
     #[test]
-    fn a_capacity_refusal_leaves_the_entire_batch_retryable() {
+    fn capacity_rejects_only_new_cards_and_commits_the_rest_of_the_batch() {
         let (_temp, mut store, project) = store();
-        let batch = batch(&project, "capacity-retry", "content");
+        store
+            .apply_candidates(
+                &batch(&project, "seed", "seed"),
+                &[candidate(
+                    "Keep the first significant choice",
+                    CandidateRelation::New,
+                )],
+            )
+            .unwrap();
+        let id = store.list_memories(&project).unwrap()[0].id.clone();
+        let batch = batch(&project, "capacity-mixed", "content");
         let cards = [
-            candidate("Keep the first significant choice", CandidateRelation::New),
-            candidate("Keep the later significant choice", CandidateRelation::New),
+            candidate("A new item beyond capacity", CandidateRelation::New),
+            candidate(
+                "Keep the first significant choice",
+                CandidateRelation::Same {
+                    target_id: id.clone(),
+                },
+            ),
+            candidate(
+                "Keep the corrected significant choice",
+                CandidateRelation::Supersedes { target_id: id },
+            ),
         ];
-        let refused = store
+        let result = store
             .apply_candidates_with_limit(&batch, &cards, 1)
             .unwrap();
-        assert_eq!(refused.capacity_rejections, 1);
-        assert!(!store.has_batch(&batch.id).unwrap());
-        assert!(store.list_memories(&project).unwrap().is_empty());
-        assert_eq!(
-            store
-                .apply_candidates_with_limit(&batch, &cards, 2)
-                .unwrap()
-                .created,
-            2
-        );
+        assert_eq!(result.capacity_rejections, 1);
+        assert_eq!(result.merged_sources, 1);
+        assert_eq!(result.superseded, 1);
+        assert!(store.has_batch(&batch.id).unwrap());
+        let items = store.list_memories(&project).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].body, "Keep the corrected significant choice");
         assert!(
             store
-                .apply_candidates_with_limit(&batch, &cards, 2)
+                .apply_candidates_with_limit(&batch, &cards, 1)
                 .unwrap()
                 .duplicate_batch
         );

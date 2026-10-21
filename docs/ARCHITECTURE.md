@@ -224,9 +224,9 @@ One pass at a time walks every Memory-enabled Project of this machine and of eac
 A core whose move has not committed starts no pass, since a pass asks the provider (PRD core-host-node-move amendment 3).
 A session's new conversation is analyzed once it has been quiet for 30 minutes (its file's modification time, or an OpenCode session's newest write to its row or any of its messages) or within a minute of its pane closing; a session still being written waits.
 A closed session stays queued (at most 256, past which the log names the one left to the quiet rule) until a pass finds nothing left to analyze in it, so a pass that was cancelled, held back by a deferral or a provider failure, or ended early does not drop it into the 30 minute wait; one no Memory-enabled Project lists is let go after a pass that walked them all.
-An oversized native conversation record beyond the reader line cap keeps its analysis cursor and stale holds.
-The content-free `conversation_capacity` failure identifies a recoverable source-size problem; splitting that record below the line cap lets the next pass retry it.
-Project-local capacity and read failures retain pending work and rotate its fair queue opportunity, so another Project can advance.
+An oversized native conversation record beyond the reader line cap is skipped with a content-free `conversation_capacity` diagnostic; valid later records and their source checkpoint continue.
+Normalized events above the separate 256 KiB analysis text cap are diagnosed and skipped before allocating chunks, while accepted events retain their complete text.
+Other local read failures retain pending work and rotate its fair queue opportunity, so another Project can advance.
 A pass records a session's row only when it changed, so an idle pass writes nothing.
 It reads only complete events after the durable analysis cursor and sends bounded groups through `hide-ai`; the cursor moves only when every group was written, and the same provider, session and content hash converge on one batch instead of repeating revisions.
 The durable cursor stores file identity and the safe start offset of an incomplete final line, never that line's bytes; a later read resumes from the provider-owned session file.
@@ -287,7 +287,8 @@ One-task exceptions are discarded as standing rules, and direct save-to-file req
 An unsettled or outdated comparison is withheld from injection; a confirmed correction remains a scoped untrusted reference marked as awaiting its document update.
 An unrelated document commit cannot reopen that settled authority, and a changed card revision invalidates its old comparison.
 The existing maintenance worker checks at most four confirmed corrections a Project per pass, within the shared eight-check pass cap and daily maintenance share.
-It fingerprints the bounded owning document and asks again only when its contents change; when the correction is reflected, including after a terminal-agent edit, the existing promotion pointer records the document without spawning another promotion.
+It fingerprints the bounded owning document and, after a usable answer, asks again only when its contents change; when the correction is reflected, including after a terminal-agent edit, the existing promotion pointer records the document without spawning another promotion.
+A failed attempt records its time without certifying a new fingerprint; an intent-local failure rotates the card and continues other maintenance stages, while account-level refusals stop provider work.
 Missing documents retain the correction and rotate the check position; no new poller or automatic document writer exists.
 Preferences stay injectable but never become repository pointers or promotion candidates.
 An Undo of any of these verdicts restores the old text as verified and drops the evidence rows of that revision, so the evidence walk does not unverify it again at once.
@@ -305,9 +306,10 @@ One meaningful human exchange is eligible for analysis; instructions from a dele
 Each extraction group admits at most eight new cards ranked by significance and confidence, so earlier groups cannot exhaust a conversation's lifetime admission.
 The worker stores completed group progress separately from its source cursor and handles at most four groups from one session in a pass.
 A persisted machine-wide queue alternates FIFO and recent opportunities across Projects; every stable eligible member receives an opportunity within twice the number of pending sessions, even with new arrivals.
-A provider or spending pause preserves the queue position.
+A spending deferral preserves the queue position; a failed admitted request rotates its session and retains unfinished work for the existing Project backoff.
 At most eight maintenance calls and eight extraction/document-comparison calls are admitted per pass across all Projects, within the unchanged daily and maintenance reservations.
-Validated redacted extraction proposals and prepared document verdicts survive local retries; a capacity refusal rolls back the batch and retains its pending proposal.
+Validated redacted extraction proposals and prepared document verdicts survive local retries.
+At the Project card cap, a batch rejects only new growth, commits accepted merges and corrections, reports its rejection count and advances its source cursor.
 The private schema migration reopens only legacy one-or-two-human-event cursors without an analysis batch; unrelated completed history is not replayed.
 The operator's events are the session's `human` events; in a session some agent started, which the coordination ledger records with a `parent` (a handoff has an `origin` and is the operator's), they are sent as `parent_agent` instead (D-04); such a session counts no operator events, so it makes no cards.
 

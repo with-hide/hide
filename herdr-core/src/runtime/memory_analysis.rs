@@ -865,6 +865,7 @@ struct PassInput {
 // At most eight maintenance admissions and one four-group extraction quantum
 // (each group may add one document comparison): sixteen calls across all Projects.
 const MAINTENANCE_CALLS_PER_PASS: usize = 8;
+const EVENT_TEXT_LIMIT_BYTES: usize = 256 * 1024;
 
 fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcome {
     let mut outcome = PassOutcome {
@@ -1097,8 +1098,9 @@ fn run_analysis_turn(
             outcome.read_succeeded(ANALYSIS_FAILED, &task.session);
             (learned, None, true)
         }
-        Err(AnalysisFailure::Provider(error)) => (0, Some(error), false),
-        Err(AnalysisFailure::Deferred("card_capacity")) => (0, None, true),
+        // The failed intent remains pending, but owns no future turn. The
+        // runtime records the provider failure and applies its existing backoff.
+        Err(AnalysisFailure::Provider(error)) => (0, Some(error), true),
         Err(AnalysisFailure::Deferred(reason)) => {
             *deferred = Some(reason);
             (0, None, false)
@@ -1265,7 +1267,11 @@ fn walk_project(
         if closed && !pending {
             outcome.settled.insert(key.clone());
         }
-        if deferred.is_some() || input.held.contains(project_id) || tally.error.is_some() {
+        if input.router.is_none()
+            || deferred.is_some()
+            || input.held.contains(project_id)
+            || tally.error.is_some()
+        {
             continue;
         }
         let quiet = stat
@@ -1371,6 +1377,7 @@ fn maintain_cards(
             tally.checked |= checked.changed > 0;
             tally.answered |= checked.answered > 0;
             outcome.wants_usage |= checked.answered > 0;
+            tally.error = checked.error;
         }
         Err(AnalysisFailure::Provider(error)) => {
             tally.error = Some(error);
@@ -1831,15 +1838,6 @@ fn analyze_session(
         .load_cursor(CursorReader::Analysis, project_id, provider, &session.id)
         .map_err(|error| local(error.to_string()))?;
     let read = session_conversation(sessions_node, session, saved.as_ref()).map_err(local)?;
-    if read.skipped_reasons.contains_key("conversation_capacity") {
-        // Keep the source cursor and existing holds. Splitting the native
-        // record below the reader's line cap makes the same work retryable.
-        log_skipped("analysis.records_skipped", project_id, session, &read);
-        return Err(local(
-            "conversation_capacity: split the oversized native conversation record before retrying"
-                .into(),
-        ));
-    }
     let checkpoint =
         serde_json::to_vec(&read.checkpoint).map_err(|error| local(error.to_string()))?;
     let byte_offset = read_through(&read, stat);
@@ -1848,6 +1846,15 @@ fn analyze_session(
         .iter()
         .zip(&read.event_offsets)
         .filter(|(event, _)| matches!(event.kind, EventKind::Human | EventKind::Assistant))
+        .filter(|(event, offset)| {
+            if event.text.len() <= EVENT_TEXT_LIMIT_BYTES {
+                return true;
+            }
+            crate::diagnostic!(json!({"component":"memory","kind":"analysis.event_skipped",
+                "project_id":project_id,"session_id":session.id,"offset":offset,
+                "reason":"event_text_capacity","bytes":event.text.len(),"limit":EVENT_TEXT_LIMIT_BYTES}));
+            false
+        })
         .map(|(event, offset)| {
             // What another agent sent a session it started is that agent's
             // instruction, not the operator's word (D-04).
@@ -2359,11 +2366,8 @@ pub(crate) fn write_cards(
         })?;
     crate::diagnostic!(
         json!({"component":"memory", "kind":"analysis.session_cards", "project_id":source.project_id, "session_id":source.session_id, "batch_id":batch_id,
-        "created":summary.created, "superseded":summary.superseded, "duplicates_in_docs":duplicates, "extraction_input_chars":request.input.chars().count(), "document_input_chars":document_input })
+        "created":summary.created, "superseded":summary.superseded, "capacity_rejections":summary.capacity_rejections, "duplicates_in_docs":duplicates, "extraction_input_chars":request.input.chars().count(), "document_input_chars":document_input })
     );
-    if summary.capacity_rejections > 0 {
-        return Err(AnalysisFailure::Deferred("card_capacity"));
-    }
     for backfill in output.backfill {
         if let Err(error) = store.fill_aliases(
             source.project_id,
@@ -2611,6 +2615,12 @@ pub(super) fn event_groups(events: &[Value]) -> Result<Vec<Vec<Value>>, String> 
     let mut groups = Vec::new();
     let mut current = Vec::new();
     for event in events {
+        if event["text"]
+            .as_str()
+            .is_some_and(|text| text.len() > EVENT_TEXT_LIMIT_BYTES)
+        {
+            return Err("Memory event exceeds event_text_capacity".into());
+        }
         for event in bounded_event_chunks(event, EVENT_BUDGET)? {
             current.push(event);
             let measured = serde_json::to_vec(&current)
@@ -4226,7 +4236,192 @@ mod tests {
     }
 
     #[test]
-    fn a_full_project_keeps_its_proposal_but_does_not_block_another_projects_turn() {
+    fn failed_correction_reconciliation_records_the_attempt_and_continues_card_checks() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        std::fs::write(
+            fixture.root.join("AGENTS.md"),
+            "Keep the old hook budget.\n",
+        )
+        .unwrap();
+        let mut store = fixture.store();
+        store
+            .set_document_comparison(
+                &fixture.project_id,
+                1,
+                1,
+                &hide_memory::DocumentComparison {
+                    authority: hide_memory::DocumentAuthority::CardNewer,
+                    document: "AGENTS.md".into(),
+                    document_text: "Keep the old hook budget.".into(),
+                    document_at_unix_ms: None,
+                    operator_text: "Keep the hook under 100 ms".into(),
+                    operator_at_unix_ms: Some(20),
+                    source_session: Some("seed".into()),
+                },
+            )
+            .unwrap();
+        let other = store
+            .item_by_number(&fixture.project_id, 2)
+            .unwrap()
+            .unwrap();
+        store.mark_unverified(&other.id, other.revision).unwrap();
+        drop(store);
+        fixture
+            .backend
+            .answers
+            .lock()
+            .unwrap()
+            .push(json!({"verdict":"valid","text":null,"title":null,"aliases":[],"document":null}));
+        fixture
+            .backend
+            .answers
+            .lock()
+            .unwrap()
+            .push(json!({"results":[]}));
+        fixture.pass(true, false);
+        let store = fixture.store();
+        assert!(
+            !store
+                .item_by_number(&fixture.project_id, 2)
+                .unwrap()
+                .unwrap()
+                .verifying
+        );
+        assert!(
+            store.correction_checks(&fixture.project_id, 4).unwrap()[0]
+                .fingerprint
+                .is_some()
+        );
+        assert_eq!(
+            fixture.check_states.borrow().last().unwrap().0,
+            MemoryAnalysisState::Idle
+        );
+        drop(store);
+        fixture
+            .backend
+            .answers
+            .lock()
+            .unwrap()
+            .push(json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}));
+        fixture.pass(true, false);
+        assert!(
+            fixture
+                .store()
+                .document_comparison(&fixture.project_id, 1)
+                .unwrap()
+                .is_none(),
+            "a failed attempt never certifies the unchanged document fingerprint"
+        );
+    }
+
+    #[test]
+    fn invalid_output_rotates_the_durable_turn_to_another_project() {
+        let full = Fixture::new();
+        let peer = Fixture::new();
+        let mut store = full.store();
+        store
+            .ensure_project(&peer.project_id, &peer.root, crate::node::TEST_NODE)
+            .unwrap();
+        store.set_enabled(&peer.project_id, true, true).unwrap();
+        let peer_node = NodeId::parse("node-peer").unwrap();
+        let input = PassInput {
+            nodes: vec![
+                (crate::node::test_node(), full.node.clone()),
+                (peer_node.clone(), peer.node.clone()),
+            ],
+            unreached: vec![],
+            database: full.database.clone(),
+            router: Some(AiRouter::new(
+                vec![full.backend.clone()],
+                RouterConfig {
+                    priority: vec![ProviderId::CLAUDE],
+                    max_transient_attempts: 1,
+                    max_invalid_output_attempts: 1,
+                    ..RouterConfig::default()
+                },
+                Arc::new(NoopLogSink),
+            )),
+            live: BTreeSet::new(),
+            closed: BTreeSet::new(),
+            held: HashSet::new(),
+            home: None,
+            delegated: HashSet::new(),
+            language: hide_ai::OutputLanguage::English,
+            cancel: CancelToken::new(),
+            failed_reads: Default::default(),
+        };
+        let tasks = || {
+            [&full, &peer]
+                .into_iter()
+                .zip([crate::node::test_node(), peer_node.clone()])
+                .map(|(fixture, node)| {
+                    let identity = project_identity(
+                        fixture.node.as_ref(),
+                        &crate::node::test_node(),
+                        &fixture.root.to_string_lossy(),
+                    )
+                    .unwrap();
+                    let session =
+                        project_sessions(fixture.node.as_ref(), &identity, SESSION_CALL_TIMEOUT)
+                            .unwrap()
+                            .remove(0);
+                    let stat = session_stat(fixture.node.as_ref(), &session, SESSION_CALL_TIMEOUT)
+                        .unwrap();
+                    PendingAnalysis {
+                        node,
+                        project_id: fixture.project_id.clone(),
+                        root: fixture.root.to_string_lossy().into_owned(),
+                        session,
+                        stat,
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        store
+            .enqueue_analysis(&full.project_id, "claude", SESSION, 1)
+            .unwrap();
+        store
+            .enqueue_analysis(&peer.project_id, "claude", SESSION, 2)
+            .unwrap();
+        full.backend
+            .answers
+            .lock()
+            .unwrap()
+            .push(json!({"invalid":true}));
+        let mut deferred = None;
+        run_analysis_turn(
+            &input,
+            &mut store,
+            tasks(),
+            &mut deferred,
+            &mut PassOutcome::default(),
+            &mut |_| {},
+        );
+        assert!(
+            deferred.is_none(),
+            "an intent failure does not pause other Projects"
+        );
+        assert_eq!(full.calls(), 1);
+        drop(store);
+        let mut store = full.store();
+        assert_eq!(store.analysis_order().unwrap()[0].0, peer.project_id);
+        full.answer(&[]);
+        run_analysis_turn(
+            &input,
+            &mut store,
+            tasks(),
+            &mut deferred,
+            &mut PassOutcome::default(),
+            &mut |_| {},
+        );
+        assert_eq!(store.list_memories(&peer.project_id).unwrap().len(), 1);
+        assert_eq!(full.calls(), 2);
+    }
+
+    #[test]
+    fn a_full_project_finishes_rejected_growth_and_does_not_block_another_projects_turn() {
         let full = Fixture::new();
         let peer = Fixture::new();
         let mut store = full.store();
@@ -4342,7 +4537,7 @@ mod tests {
             store
                 .load_cursor(CursorReader::Analysis, &full.project_id, "claude", SESSION)
                 .unwrap()
-                .is_none()
+                .is_some()
         );
         full.answer(&[]);
         run_analysis_turn(
@@ -4366,35 +4561,19 @@ mod tests {
         assert_eq!(
             full.calls(),
             2,
-            "capacity retry reuses the redacted proposal"
+            "a completed capacity rejection is never extracted again"
         );
     }
 
     #[test]
-    fn a_native_record_over_the_reader_cap_keeps_its_cursor_until_repaired() {
+    fn an_oversized_native_record_is_skipped_without_blocking_later_work() {
         let mut fixture = Fixture::new();
         fixture.lines[1]["message"]["content"] = json!("important later decision ".repeat(20_000));
         fixture.write(&fixture.lines);
-        let key = ("claude", SESSION.to_owned());
-        let (_, outcome) = fixture.pass_for(key.clone(), false, true);
-        assert!(!outcome.settled.contains(&key));
-        assert_eq!(fixture.calls(), 0);
-        assert!(
-            fixture
-                .store()
-                .load_cursor(
-                    CursorReader::Analysis,
-                    &fixture.project_id,
-                    "claude",
-                    SESSION
-                )
-                .unwrap()
-                .is_none()
-        );
-        fixture.lines[1]["message"]["content"] = json!("Run tests with nextest before a merge.");
-        fixture.write(&fixture.lines);
         fixture.answer(&[]);
-        fixture.pass(false, true);
+        let key = ("claude", SESSION.to_owned());
+        let (_, diagnostics) =
+            crate::diagnostics::capture(|| fixture.pass_for(key.clone(), false, true));
         assert_eq!(
             fixture
                 .store()
@@ -4415,6 +4594,42 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|row| row["kind"] == "analysis.records_skipped")
+        );
+        assert!(fixture.backend.inputs.lock().unwrap()[0].contains("Never force-push main"));
+        let (_, outcome) = fixture.pass_for(key.clone(), false, true);
+        assert!(outcome.settled.contains(&key));
+        assert_eq!(fixture.calls(), 1);
+    }
+
+    #[test]
+    fn ai_off_keeps_analysis_out_of_the_queue_and_does_not_request_usage() {
+        let fixture = Fixture::new();
+        let (_, outcome) = fixture.run(("claude", SESSION.into()), false, true, &[], false);
+        assert!(!outcome.wants_usage);
+        assert!(fixture.store().analysis_order().unwrap().is_empty());
+        assert_eq!(fixture.calls(), 0);
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        assert_eq!(
+            fixture
+                .store()
+                .list_memories(&fixture.project_id)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn an_event_above_the_explicit_analysis_cap_is_reported_before_chunking() {
+        let event = json!({"offset":0,"kind":"human","text":"a".repeat(256 * 1024 + 1)});
+        assert!(event_groups(&[event]).is_err());
+        let event = json!({"offset":0,"kind":"human","text":"a".repeat(256 * 1024)});
+        assert!(event_groups(&[event]).is_ok());
     }
 
     #[test]
