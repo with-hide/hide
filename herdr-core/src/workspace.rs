@@ -1117,6 +1117,37 @@ mod tests {
     use std::fs;
     use std::process::Command;
 
+    #[test]
+    fn a_project_its_node_could_not_read_reaches_the_cores_log() {
+        let fact = |unread: Option<&str>| PathFact {
+            comparison: "/p".into(),
+            exists: true,
+            project: None,
+            project_unread: unread.map(str::to_owned),
+            repository: None,
+        };
+        let facts = PathFacts {
+            paths: BTreeMap::from([
+                ("/p".to_owned(), fact(Some("project_path_not_utf8"))),
+                ("/q".to_owned(), fact(None)),
+            ]),
+            ..PathFacts::default()
+        };
+        let (_, records) = crate::diagnostics::capture(|| PathIndex::new(facts));
+        let logged: Vec<_> = records
+            .iter()
+            .filter(|record| record["kind"] == "project_facts.read_failed")
+            .map(|record| (record["path"].clone(), record["message"].clone()))
+            .collect();
+        assert_eq!(
+            logged,
+            [(
+                serde_json::json!("/p"),
+                serde_json::json!("project_path_not_utf8")
+            )]
+        );
+    }
+
     /// `build_catalog` with the paths the node in this process answers.
     fn catalog(
         registrations: &[WorkspaceRegistration],
