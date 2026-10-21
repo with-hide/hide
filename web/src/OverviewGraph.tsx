@@ -284,7 +284,8 @@ function askingPane(row: GraphAgent, model: OverviewGraphModel): string {
 function ProjectColumn({ model, query, setQuery, hidden, toggle, locate, choose, actions }: { model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const needle = query.trim().toLocaleLowerCase();
-  const waiting = model.visible.filter((row) => model.roots.has(row.id) && graphActivity(row.agent) === "turn" && !hidden.has(row.projectId));
+  // Every root whose turn it is, drawn or not, so the list agrees with the projects' My turn counts.
+  const waiting = model.allAgents.filter((row) => model.roots.has(row.id) && graphActivity(row.agent) === "turn" && !hidden.has(row.projectId));
   return <aside className="og-navigator" aria-label={t("overviewGraph.projects")} data-graph-projects="true">
     <Input aria-label={t("overviewGraph.findProject")} placeholder={t("overviewGraph.findProject")} value={query} onChange={(event) => setQuery(event.target.value)} />
     <div className="og-project-list">{model.summaries.filter((summary) => summary.project.workspace.label.toLocaleLowerCase().includes(needle)).sort((a, b) => a.project.workspace.label.localeCompare(b.project.workspace.label, undefined, { numeric: true }) || a.id.localeCompare(b.id)).map((summary) => {

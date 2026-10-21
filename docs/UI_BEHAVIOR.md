@@ -965,7 +965,7 @@ Choosing a project's name moves the camera to that project's sessions; a project
 Hide removes that project's sessions, names, outlines and lines from the map without moving any other circle; its row stays, dimmed, keeps its counts, and offers Show again, which returns the sessions to the same places.
 Hiding lasts while the view is mounted, survives the graph/list switch and scope changes, and never affects the list view or the filter counts.
 Hiding the project of the selected or highlighted session clears that selection.
-Below the project list, Waiting on you lists each visible root whose turn it is with its project, title and question, and Go answer focuses the asking pane: the root when it asks, else its first asking descendant.
+Below the project list, Waiting on you lists each root whose turn it is, drawn on the map or not, in a project that is not hidden, with its project, title and question, and Go answer focuses the asking pane: the root when it asks, else its first asking descendant.
 Choosing a session by click, Enter or Space replaces the column with its panel: title, state, project and branch, provider and proved launch model, what it does now, what it asks the operator when it asks, its team (every descendant with its state; choosing one selects it), its counterparts with sent and received counts only, and `세션 열기 · 기록 보기`.
 Below the Overview breakpoint the panel overlays the graph; Escape closes the panel first, and changing filter or scope clears a selection that no longer matches.
 Hover and keyboard focus outline the pointed session and its counterparts and never open details.
