@@ -814,7 +814,7 @@ The first five show, the rest fold under `그 외 N`, and a card shown in full i
 A searched promotion card also shows its running status and the name that opens its pane, with no name before the session appears; expanding a progress row does not duplicate it in Cards.
 Once merged, its ordinary card dims and shows the file it went into, or the merged pull request's mark when no file was named, with `파일로 올라감 · 주입 안 함`.
 A personal preference carries `Personal`, remains available to agents and never appears as a document suggestion.
-Fact disagreements remain withheld and readable in ordinary card detail, with no unsupported document correction action; rule, lesson and decision disagreements are eligible for correction.
+Unresolved fact disagreements remain withheld and readable in ordinary card detail, with no unsupported document correction action; rule, lesson and decision disagreements are eligible for correction.
 A confirmed enduring correction says `Correction confirmed · document update pending` in the existing comparison row and remains available to agents as untrusted reference data.
 It retains the original human source and document quote; unrelated document commits do not ask the same authority question again.
 When the owning document incorporates it, background reconciliation turns the card into the existing document pointer without another promotion.
