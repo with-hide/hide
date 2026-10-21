@@ -99,7 +99,11 @@ type Fixture = {
 };
 
 /** Starts the isolated stack and leaves the Explorer showing `src/main.ts`. */
-async function openCheckout(page: Page, beforeLoad?: (page: Page) => Promise<void>): Promise<Fixture> {
+async function openCheckout(
+  page: Page,
+  beforeLoad?: (page: Page) => Promise<void>,
+  extraFiles: Record<string, string> = {},
+): Promise<Fixture> {
   const herdr = await startHerdr();
   let daemon: Daemon | null = null;
   try {
@@ -107,8 +111,8 @@ async function openCheckout(page: Page, beforeLoad?: (page: Page) => Promise<voi
     fs.mkdirSync(path.join(repoDir, "src"), { recursive: true });
     fs.writeFileSync(path.join(repoDir, "src", "main.ts"), SOURCE);
     fs.writeFileSync(path.join(repoDir, "README.md"), "# repo\n");
-    for (const name of ["리포트 1.html", "report.HTM", "report.xhtml"]) {
-      fs.writeFileSync(path.join(repoDir, name), '<!doctype html><meta charset="utf-8"><title>Report</title><h1>리포트</h1>');
+    for (const [name, contents] of Object.entries(extraFiles)) {
+      fs.writeFileSync(path.join(repoDir, name), contents);
     }
     fs.writeFileSync(
       path.join(repoDir, "notes.md"),
@@ -225,11 +229,13 @@ function close(fixture: Fixture): void {
 test.describe.configure({ timeout: 90_000 });
 
 test("Explorer opens HTML as a browser page and keeps source editing explicit", async ({ page }) => {
-  const fixture = await openCheckout(page);
+  const names = ["리포트 1.html", "report.HTM", "report.xhtml"];
+  const fixture = await openCheckout(page, undefined, Object.fromEntries(names.map((name) => [
+    name, '<!doctype html><meta charset="utf-8"><title>Report</title><h1>리포트</h1>',
+  ])));
   const { repo, sent, lastSent } = fixture;
   try {
     const filesBefore = sent.get("file_open") ?? 0;
-    const names = ["리포트 1.html", "report.HTM", "report.xhtml"];
     for (const [index, name] of names.entries()) {
       const row = page.locator(`[data-explorer-row="${repo}/${name}"]`);
       if (index === 0) await row.click();
