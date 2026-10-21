@@ -63,13 +63,12 @@ type Instance = {
   /** Wheel rows accumulated toward the next flush, and the pending flush. */
   wheel: { held: boolean; rows: number; remainder: number; column: number; row: number; modifiers: number; frame: number | null };
   /**
-   * The selection a wheel scrolled and the text it covered, until the frame
-   * that moved that text under it has been found; null when none waits.
+   * The selection a wheel scrolled, including its original offscreen ends.
+   * Retained while clipped so a reverse wheel restores the complete range.
    */
   follow: FollowedSelection | null;
   /**
-   * The copy text of a selection the wheel carried off the screen: nothing is
-   * drawn for it, and Copy still takes it until the next drag, click or key.
+   * The original copy text while a selection is partly or wholly offscreen.
    */
   kept: string | null;
   /** The cell of a primary press that may still become a click, or null once it dragged or was not one. */
@@ -89,6 +88,8 @@ type Instance = {
 type FollowedSelection = {
   start: { x: number; y: number };
   end: { x: number; y: number };
+  /** The clipped range xterm currently draws, separate from the original ends. */
+  drawn: { start: { x: number; y: number }; end: { x: number; y: number } };
   rows: string[];
   /** What Copy takes from it. */
   text: string;
@@ -181,7 +182,7 @@ export function feedChunks(chunks: TerminalChunk[]) {
         noteWriteComplete(term);
       });
     } else {
-      instance.term.write(bytes, instance.follow ? () => followSelection(instance) : undefined);
+      instance.term.write(bytes, instance.follow?.expected ? () => followSelection(instance) : undefined);
     }
   }
 }
@@ -335,12 +336,10 @@ function armFollow(instance: Instance, rows: number) {
     return;
   }
   const known = instance.follow;
-  const same = known && known.start.x === range.start.x && known.start.y === range.start.y && known.end.x === range.end.x && known.end.y === range.end.y;
+  const same = known && known.drawn.start.x === range.start.x && known.drawn.start.y === range.start.y && known.drawn.end.x === range.end.x && known.drawn.end.y === range.end.y;
   const shift = rows > 0 ? -Math.abs(rows) : Math.abs(rows);
   if (same) {
     known.expected += shift;
-    // Wheels that cancel out before any frame moved nothing.
-    if (known.expected === 0) instance.follow = null;
     return;
   }
   // A selection ending at column 0 does not take that row.
@@ -348,6 +347,7 @@ function armFollow(instance: Instance, rows: number) {
   instance.follow = {
     start: { ...range.start },
     end: { ...range.end },
+    drawn: range,
     rows: screenRows(term).slice(range.start.y, last),
     text: selectedText(instance) ?? "",
     expected: shift,
@@ -361,7 +361,7 @@ function keepOffscreen(instance: Instance, follow: FollowedSelection) {
 }
 
 /**
- * Keeps or drops the text of a selection that left the screen. The terminal's
+ * Keeps or drops the text of a selection clipped by the screen. The terminal's
  * input textarea holds it selected while kept, since the browser fires a copy
  * event (⌘C, the Edit menu) only for a selection to copy; `onCopy` then puts
  * the text on the clipboard.
@@ -391,23 +391,25 @@ function hasCopyText(instance: Instance): boolean {
 /**
  * Runs after a frame is drawn: moves a waiting selection onto the text it
  * covered. It waits while the wheel's rows are not all accounted for, so
- * several frames of one fast scroll each move it, and ends when they are, when
- * the selection is cleared, replaced or moved by xterm, or when text it
- * cannot find changed under it.
+ * several frames of one fast scroll each move it. A clipped selection keeps
+ * its original ends after the move, until restored, cleared or replaced.
  */
 function followSelection(instance: Instance) {
   const follow = instance.follow;
-  if (!follow) return;
+  if (!follow || follow.expected === 0) return;
   const { term } = instance;
   const range = term.getSelectionPosition();
-  if (!range || range.start.x !== follow.start.x || range.start.y !== follow.start.y || range.end.x !== follow.end.x || range.end.y !== follow.end.y) {
+  if (!range || range.start.x !== follow.drawn.start.x || range.start.y !== follow.drawn.start.y || range.end.x !== follow.drawn.end.x || range.end.y !== follow.drawn.end.y) {
     instance.follow = null;
     return;
   }
   // Only the selected rows are read while they are unchanged, which is every
   // chunk of output elsewhere on the screen.
   const buffer = term.buffer.active;
-  const unchanged = follow.rows.every((text, index) => (buffer.getLine(follow.start.y + index)?.translateToString(true) ?? "") === text);
+  const unchanged = follow.rows.every((text, index) => {
+    const row = follow.start.y + index;
+    return row < 0 || row >= term.rows || (buffer.getLine(row)?.translateToString(true) ?? "") === text;
+  });
   if (unchanged) return;
   const screen = screenRows(term);
   const shift = followScroll(follow.rows, follow.start.y, screen, follow.expected);
@@ -429,17 +431,17 @@ function followSelection(instance: Instance) {
   term.select(moved.column, moved.row, moved.length);
   const now = term.getSelectionPosition();
   const remaining = follow.expected - shift;
-  if (!now || remaining === 0 || Math.sign(remaining) !== Math.sign(follow.expected)) {
+  if (!now) {
     instance.follow = null;
     return;
   }
-  instance.follow = {
-    start: { ...now.start },
-    end: { ...now.end },
-    rows: screen.slice(now.start.y, now.end.x === 0 && now.end.y > now.start.y ? now.end.y : now.end.y + 1),
-    text: follow.text,
-    expected: remaining,
-  };
+  follow.start.y += shift;
+  follow.end.y += shift;
+  follow.drawn = now;
+  follow.expected = Math.sign(remaining) === Math.sign(follow.expected) ? remaining : 0;
+  const clipped = follow.start.y < 0 || follow.end.y >= term.rows;
+  setKept(instance, clipped ? follow.text : null);
+  if (!clipped && follow.expected === 0) instance.follow = null;
 }
 
 function flushWheel(paneId: string, instance: Instance) {
@@ -531,7 +533,10 @@ function onMouseDown(instance: Instance, event: MouseEvent) {
   instance.press = null;
   // A right-click opens the menu, whose Copy still takes the kept text.
   // On macOS a ctrl-press is a right-click too.
-  if (event.button === 0 && !(event.ctrlKey && keySystem() === "mac")) setKept(instance, null);
+  if (event.button === 0 && !(event.ctrlKey && keySystem() === "mac")) {
+    instance.follow = null;
+    setKept(instance, null);
+  }
   // The primary button alone can become a click; ⌥ + press and a second
   // click of a multi-click are the `application` and `localSelection`
   // routes, and neither is replayed to the program. A press on a link is the
@@ -572,7 +577,7 @@ function selectedText(instance: Instance): string | null {
 /** The copy text of the pane's selection, for the probe; null without a selection or an instance. */
 export function terminalSelectionText(paneId: string): string | null {
   const instance = instances.get(paneId);
-  return instance ? (selectedText(instance) ?? instance.kept) : null;
+  return instance ? (instance.kept ?? selectedText(instance)) : null;
 }
 
 /** Resolves only the cell right-clicked, using the link provider's existing bounds and cache. */
@@ -665,11 +670,14 @@ export async function pasteClipboard(paneId: string, where: string): Promise<voi
 
 /** Selects the pane's whole text, for Copy to take; the pane keeps no scrollback, so that is what it shows. */
 export function selectAllText(paneId: string) {
-  instances.get(paneId)?.term.selectAll();
+  const instance = instances.get(paneId);
+  if (!instance) return;
+  instance.follow = null;
+  instance.term.selectAll();
 }
 
 function onCopy(instance: Instance, event: ClipboardEvent) {
-  const text = selectedText(instance) ?? instance.kept;
+  const text = instance.kept ?? selectedText(instance);
   if (text === null || !event.clipboardData) return;
   // One owner again: xterm's own copy handler would put its padded,
   // hard-broken rows on the clipboard from the same event.
@@ -741,7 +749,10 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
     // On macOS ⌘C is the browser's own copy, which `terminalKey` leaves alone.
     const copying = action?.kind === "copy"
       || (system === "mac" && event.metaKey && !event.shiftKey && !event.altKey && (event.code === "KeyC" || event.key.toLowerCase() === "c"));
-    if (!copying && !MODIFIER_KEYS.has(event.key)) setKept(instance, null);
+    if (!copying && !MODIFIER_KEYS.has(event.key)) {
+      instance.follow = null;
+      setKept(instance, null);
+    }
     if (!action) return true;
     event.preventDefault();
     const run = () => {
@@ -778,6 +789,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
   // A selection drawn again, a drag or select-all, replaces the kept text.
   term.onSelectionChange(() => {
     if (term.hasSelection()) setKept(instance, null);
+    else instance.follow = null;
   });
   term.onData((data) => send(new TextEncoder().encode(data)));
   const linkProvider = registerTerminalLinks(term, paneId, link, () => instance.links);
@@ -876,6 +888,7 @@ export function attachTerminal(
     shown.host = null;
     // Text kept off screen is the shown pane's; coming back to it later must
     // not find Ctrl+C taken for a copy nobody can see.
+    shown.follow = null;
     setKept(shown, null);
     parkingLot().append(shown.element);
     // A pane closed while shown left the core's list before its view
