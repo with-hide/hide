@@ -223,6 +223,9 @@ One pass at a time walks every Memory-enabled Project of this machine and of eac
 A core whose move has not committed starts no pass, since a pass asks the provider (PRD core-host-node-move amendment 3).
 A session's new conversation is analyzed once it has been quiet for 30 minutes (its file's modification time, or an OpenCode session's newest write to its row or any of its messages) or within a minute of its pane closing; a session still being written waits.
 A closed session stays queued (at most 256, past which the log names the one left to the quiet rule) until a pass finds nothing left to analyze in it, so a pass that was cancelled, held back by a deferral or a provider failure, or ended early does not drop it into the 30 minute wait; one no Memory-enabled Project lists is let go after a pass that walked them all.
+An oversized native conversation record beyond the reader line cap keeps its analysis cursor and stale holds.
+The content-free `conversation_capacity` failure identifies a recoverable source-size problem; splitting that record below the line cap lets the next pass retry it.
+Project-local capacity and read failures retain pending work and rotate its fair queue opportunity, so another Project can advance.
 A pass records a session's row only when it changed, so an idle pass writes nothing.
 It reads only complete events after the durable analysis cursor and sends bounded groups through `hide-ai`; the cursor moves only when every group was written, and the same provider, session and content hash converge on one batch instead of repeating revisions.
 The durable cursor stores file identity and the safe start offset of an incomplete final line, never that line's bytes; a later read resumes from the provider-owned session file.

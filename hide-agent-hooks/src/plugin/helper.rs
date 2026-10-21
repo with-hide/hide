@@ -320,8 +320,61 @@ fn prompt_memory(
         context.push_str(index.context.as_deref().unwrap_or_default());
     }
     let prompt = memory_context_until(request(HookEvent::UserPromptSubmit), home, deadline);
-    context.push_str(prompt.context.as_deref().unwrap_or_default());
-    ((!context.is_empty()).then_some(context), start)
+    let body = prompt.context.as_deref().unwrap_or_default();
+    let (context, index_kept) = bounded_memory_capsule(&context, body);
+    (context, start && index_kept)
+}
+
+/// Keep complete envelopes so a signed receipt never names a cut card.
+/// Prompt bodies take priority; a deferred index is asked again next turn.
+/// Letters are appended by the caller after this Memory-only quota.
+fn bounded_memory_capsule(index: &str, bodies: &str) -> (Option<String>, bool) {
+    use hide_memory::hook::{RENDERED_TOKEN_LIMIT, estimated_tokens};
+    if estimated_tokens(bodies) > RENDERED_TOKEN_LIMIT {
+        return (
+            (!index.is_empty() && estimated_tokens(index) <= RENDERED_TOKEN_LIMIT)
+                .then(|| index.to_owned()),
+            true,
+        );
+    }
+    let combined = format!("{index}{bodies}");
+    if estimated_tokens(&combined) <= RENDERED_TOKEN_LIMIT {
+        ((!combined.is_empty()).then_some(combined), true)
+    } else {
+        ((!bodies.is_empty()).then(|| bodies.to_owned()), false)
+    }
+}
+
+#[cfg(test)]
+mod memory_budget_tests {
+    use super::bounded_memory_capsule;
+
+    #[test]
+    fn a_first_prompt_keeps_its_whole_signed_body_within_the_shared_quota() {
+        let index = format!(
+            "<hide-memory-index>{}</hide-memory-index>",
+            "index ".repeat(600)
+        );
+        let bodies = format!(
+            "<hide-memory-context>{}</hide-memory-context><hide-memory-receipt items=\"m1@2\" auth=\"synthetic\" />",
+            "body ".repeat(600)
+        );
+        let (capsule, index_kept) = bounded_memory_capsule(&index, &bodies);
+        let capsule = capsule.unwrap();
+        assert!(!index_kept);
+        assert_eq!(capsule, bodies);
+        assert!(hide_memory::hook::estimated_tokens(&capsule) <= 1200);
+        let (capsule, index_kept) = bounded_memory_capsule(
+            "<hide-memory-index>one</hide-memory-index>",
+            "<hide-memory-context>two</hide-memory-context>",
+        );
+        assert!(index_kept);
+        assert!(
+            capsule
+                .unwrap()
+                .contains("one</hide-memory-index><hide-memory-context>two")
+        );
+    }
 }
 
 /// The letters due while the pane's agent works, asked at one of its tool

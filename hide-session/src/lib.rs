@@ -1849,6 +1849,17 @@ fn image_blocks(content: Option<&Value>, kind: &str) -> u32 {
 }
 
 fn parse_codex_line(item: &Value) -> LineResult {
+    if item.get("type").and_then(Value::as_str) == Some("compacted") {
+        // A native boundary proves a replacement context, not which Memory
+        // bodies survived in retained_context. Never ingest that payload.
+        return match timestamp_ms(item.get("timestamp")) {
+            Ok(at) => LineResult::Event(
+                ConversationEvent::new("system", EventKind::Injected, at, "")
+                    .with_context_reset(true),
+            ),
+            Err(_) => LineResult::Ignore,
+        };
+    }
     if item.get("type").and_then(Value::as_str) != Some("response_item") {
         return LineResult::Ignore;
     }

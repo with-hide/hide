@@ -3085,7 +3085,8 @@ impl MemoryStore {
 
     pub fn retrieve(&self, query: &RetrievalQuery) -> Result<Injection, MemoryError> {
         let started = Instant::now();
-        self.retrieve_with_expiry(query, || started.elapsed() >= query.deadline)
+        let deadline = query.deadline;
+        self.retrieve_with_expiry(query, move || started.elapsed() >= deadline)
     }
 
     /// Retrieves within a caller-owned invocation deadline instead of starting
@@ -3097,7 +3098,8 @@ impl MemoryStore {
     ) -> Result<Injection, MemoryError> {
         let started = Instant::now();
         let caller_expired = expired;
-        let expired = || caller_expired() || started.elapsed() >= query.deadline;
+        let duration = query.deadline;
+        let expired = move || caller_expired() || started.elapsed() >= duration;
         let empty = |outcome| Injection {
             outcome,
             kind: query.kind,
@@ -7951,6 +7953,61 @@ PRAGMA user_version=14;"#,
     }
 
     #[test]
+    fn retry_caches_redact_metadata_and_reopen_as_typed_payloads() {
+        let (temp, store, project) = store();
+        let secret = "sk-ant-api03-syntheticcredentialvalue12345678901234567890";
+        let mut card = candidate("Keep durable provenance", CandidateRelation::New);
+        card.title = format!("credential={secret}\" title");
+        card.aliases = vec![secret.to_owned()];
+        card.cited_paths = vec![format!("docs/{secret}.md")];
+        let output = crate::engine::AnalysisOutput {
+            candidates: vec![card.clone()],
+            backfill: vec![crate::engine::AliasBackfill {
+                target_id: "one".into(),
+                title: secret.into(),
+                aliases: vec![secret.into()],
+            }],
+            secret_rejected: 0,
+        };
+        store
+            .save_analysis_proposal("cache", &project, "test", &output)
+            .unwrap();
+        store
+            .prepare_analysis("cache", &[card], &ApplyOptions::default())
+            .unwrap();
+        let stored: (String, String) = store
+            .connection
+            .query_row(
+                "SELECT output,prepared FROM analysis_proposals WHERE batch_id='cache'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(!stored.0.contains(secret) && !stored.1.contains(secret));
+        drop(store);
+        let reopened = MemoryStore::open(&temp.path().join("memory.sqlite3")).unwrap();
+        assert_eq!(
+            reopened
+                .analysis_proposal("cache")
+                .unwrap()
+                .unwrap()
+                .1
+                .candidates
+                .len(),
+            1
+        );
+        assert_eq!(
+            reopened
+                .prepared_analysis("cache")
+                .unwrap()
+                .unwrap()
+                .0
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn retrieval_honors_the_consumed_invocation_deadline_without_restarting_it() {
         let (_temp, mut store, project) = store();
         let body = "Keep the caller-owned deadline";
@@ -7965,7 +8022,7 @@ PRAGMA user_version=14;"#,
         let (elapsed, expired) = invocation_clock();
         elapsed.fetch_add(99, Ordering::SeqCst);
 
-        let provided = store.retrieve_with_expiry(&query, &expired).unwrap();
+        let provided = store.retrieve_with_expiry(&query, expired.clone()).unwrap();
         assert_eq!(provided.outcome, InjectionOutcome::Provided);
         assert_eq!(provided.items.len(), 1);
         assert_eq!(provided.items[0].text, body);
@@ -7973,7 +8030,7 @@ PRAGMA user_version=14;"#,
         elapsed.fetch_add(1, Ordering::SeqCst);
 
         assert_eq!(
-            store.retrieve_with_expiry(&query, &expired).unwrap(),
+            store.retrieve_with_expiry(&query, expired.clone()).unwrap(),
             Injection {
                 outcome: InjectionOutcome::Deadline,
                 kind: InjectionKind::Index,

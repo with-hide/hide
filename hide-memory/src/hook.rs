@@ -106,6 +106,10 @@ pub fn context_for<E>(
 where
     E: Fn() -> bool + Clone + Send + 'static,
 {
+    let started = std::time::Instant::now();
+    let caller_expired = expired;
+    let expired =
+        move || caller_expired() || started.elapsed() >= std::time::Duration::from_millis(100);
     let base = || HookContext::without(HookOutcome::Unavailable);
     let deadline = || HookContext::without(HookOutcome::Deadline);
     let Ok(store) = MemoryStore::open_hook_read_only_with_expiry(store_path, expired.clone())
@@ -140,7 +144,7 @@ where
     if expired() {
         return deadline();
     }
-    let Ok(mut injection) = store.retrieve_with_expiry(&query, &expired) else {
+    let Ok(mut injection) = store.retrieve_with_expiry(&query, expired.clone()) else {
         if expired() {
             return deadline();
         }
@@ -727,6 +731,32 @@ mod tests {
 
         assert_eq!(result.outcome, HookOutcome::Deadline);
         assert_eq!(result.context, None);
+    }
+
+    #[test]
+    fn a_real_sql_query_is_interrupted_by_the_inner_budget_before_the_outer_expiry() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, project) = enabled_store(
+            temp.path(),
+            &temp.path().join("project"),
+            &[rule("Use bounded hooks", 0.9)],
+        );
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute_batch("ALTER TABLE projects RENAME TO projects_base; CREATE VIEW projects AS SELECT * FROM projects_base WHERE (WITH RECURSIVE slow(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM slow WHERE n<100000000) SELECT sum(n) FROM slow)>0;").unwrap();
+        drop(connection);
+        let outer = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let result = context_for(
+            &path,
+            &project,
+            ask(HookEvent::SessionStart, "slow-sql", None),
+            move || std::time::Instant::now() >= outer,
+        );
+        assert!(matches!(result.outcome, HookOutcome::Deadline));
+        assert!(result.context.is_none());
+        assert!(
+            std::time::Instant::now() < outer,
+            "the inner SQL interrupt precedes the outer expiry"
+        );
     }
 
     #[test]

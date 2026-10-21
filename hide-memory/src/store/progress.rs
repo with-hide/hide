@@ -30,6 +30,23 @@ CREATE TRIGGER memory_projection_memory_fts_content_update AFTER UPDATE ON memor
 CREATE TRIGGER memory_projection_memory_fts_content_delete AFTER DELETE ON memory_fts_content BEGIN UPDATE memory_projection_state SET generation=generation+1 WHERE id=1; END;"#)
 }
 
+// Sanitize typed strings before serializing: redacting JSON source directly
+// can consume an escape and leave a cache that cannot be replayed.
+fn private_json(value: &impl serde::Serialize) -> Result<String, MemoryError> {
+    fn scrub(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::String(text) => *text = redact(text).text,
+            serde_json::Value::Array(values) => values.iter_mut().for_each(scrub),
+            serde_json::Value::Object(values) => values.values_mut().for_each(scrub),
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(value)
+        .map_err(|error| MemoryError::InvalidState(error.to_string()))?;
+    scrub(&mut value);
+    serde_json::to_string(&value).map_err(|error| MemoryError::InvalidState(error.to_string()))
+}
+
 impl MemoryStore {
     /// Latest native context boundary observed by the existing receipt reader.
     pub fn context_generation(
@@ -163,8 +180,7 @@ impl MemoryStore {
         output: &crate::engine::AnalysisOutput,
     ) -> Result<(), MemoryError> {
         self.require_writer()?;
-        let output = serde_json::to_string(output)
-            .map_err(|error| MemoryError::InvalidState(error.to_string()))?;
+        let output = private_json(output)?;
         if output.len() > crate::ANALYSIS_INPUT_LIMIT_BYTES {
             return Err(MemoryError::InvalidState("analysis_proposal_size".into()));
         }
@@ -209,8 +225,7 @@ impl MemoryStore {
         options: &ApplyOptions,
     ) -> Result<(), MemoryError> {
         self.require_writer()?;
-        let json = serde_json::to_string(&(candidates, options))
-            .map_err(|error| MemoryError::InvalidState(error.to_string()))?;
+        let json = private_json(&(candidates, options))?;
         if json.len() > 4 * crate::ANALYSIS_INPUT_LIMIT_BYTES {
             return Err(MemoryError::InvalidState("analysis_prepared_size".into()));
         }

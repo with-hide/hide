@@ -639,7 +639,7 @@ Web owners: `web/src/PaneView.tsx`, `web/src/PaneHeaderBand.tsx`, `web/src/PaneR
 ### Work Hide AI does for a home
 
 Hide AI starts agents for the operator by itself (today a Memory card's `올리기`), and the work belongs to a screen, its home, not to the operator's agent lists (PRD hide-ai-work-home).
-The Memory tab's To ask row is the home of a promotion: it shows the progress, the pull request, the failure and the agent link, and it is where the work is read and acted on.
+The Memory tab's To resolve row is the home of a promotion: it shows the progress, the pull request, the failure and the agent link, and it is where the work is read and acted on.
 The fact that Hide AI started an agent comes only from the coordination record of the spawn (`docs/delivery.md`), never from a branch or worktree name: a checkout the operator made by hand on a branch called `hide-memory-m9` is an ordinary checkout.
 The work is named in words, `Memory 올리기 · m72`, and never by an icon of its own, because Hide AI will start other work, each kind with its own home.
 `docs/status-model.md`, Work Hide AI does for a home, owns the ownership value, the group rule and the turn table; this section owns what the screen draws.
@@ -657,7 +657,7 @@ A row has one line, and its second line is the agent's ask or its block's cause,
 The row's accessible name carries `Hide AI`, the task and the turn (`Hide AI · Memory 올리기 · m72 · PR #924 리뷰`).
 An attempt with no live agent (a failure with no pull request, an open pull request after the operator closed the pane) never has a row; the Memory tab alone shows it, as it did.
 
-Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the Tools lane on the Memory tab of the row's Project with that attempt's To ask row open, and the `Agent ↗` link there opens the pane.
+Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the Tools lane on the Memory tab of the row's Project with that attempt's To resolve row open, and the `Agent ↗` link there opens the pane.
 A row whose Project the core has not yet named opens the pane as any row does.
 The phone's Needs You row opens the agent's detail.
 The digits that number agent rows follow the drawn order, so a Hide AI row is numbered with the Needs You rows above the tree and no checkout of its own takes a digit.
@@ -780,7 +780,7 @@ While a pass analyzes the Project, a small `분석 중` chip sits beside the swi
 A Project on any linked device shows the same Memory controls and cards as this machine's Projects, read from the core's store with the device's own Project identity.
 The disclosure says cards stay in Hide's Memory, and the delete confirmation removes them from this Project's Memory; neither claims the screen's device owns the store.
 An unavailable link or Memory reader uses the existing unreadable state; its reason is recorded in the diagnostic log.
-`물어볼 것` appears, and the tab's name carries a dot, while the Project has a suggestion, an unresolved document comparison, a failed placement or a decision nothing builds yet.
+`처리할 것` appears, and the tab's name carries a dot, while the Project has a suggestion, an unresolved document comparison, a failed placement or a decision nothing builds yet.
 Each compact row has a one-line title and one-line reason, truncating long text; `Compare` reads and opens the document excerpt and original operator words with their dates only when requested.
 A newer operator decision offers `Fix the doc` and `Card is wrong`; unknown or equal dates first offer `Card is right` and `Doc is right`, and cannot be selected until answered.
 Choosing the document marks the card Outdated; choosing the card turns the row into a document correction proposal.
@@ -788,24 +788,24 @@ Eligible rows have checkboxes; selecting one to five shows `N selected · up to 
 The row's single-card action uses the same batch path.
 While any row is selected, per-row promotion and dismissal buttons are hidden; unknown-authority answer buttons remain so those comparisons can be settled before selection.
 Promotion reasons omit zero counts and use short source-session counts.
-Started single or batch promotions remain in To ask, in the same two-line format as the questions: a PR mark in the checkbox slot, the first title and `+N` for additional cards with the disclosure indicator, then the status, elapsed time where measured, subdued card numbers and links.
+Started single or batch promotions remain in To resolve, in the same two-line format as the questions: a PR mark in the checkbox slot, the first title and `+N` for additional cards with the disclosure indicator, then the status, elapsed time where measured, subdued card numbers and links.
 Before a PR exists the row says Writing PR with the durable attempt's elapsed time; cards bound to the same running agent and attempt share a row.
 After confirmation, cards with the same PR number share a row, and `PR <number>` opens the existing PR panel.
 The catalog's failed checks use destructive text, requested changes and an agent asking the operator use warning text, and writing or awaiting review is neutral.
 `Agent ↗` appears only while writing or needing attention and only when a real pane is known; a quiet review row keeps only its disclosure indicator.
 After PR creation the agent link requires a Hide AI promotion origin and that agent's live PR association with the catalog's full repository-qualified URL, rather than a name or branch guess.
 This applies equally to promotions already open before upgrade; PR numbers remain plain identifier digits in all four languages.
-Every To ask row expands from its title, reason or empty space, or its single disclosure button with Enter or Space; the chevron only indicates expansion.
+Every To resolve row expands from its title, reason or empty space, or its single disclosure button with Enter or Space; the chevron only indicates expansion.
 Checkboxes, links and action buttons perform only their own actions.
 An ordinary question opens its current body, cited files and sources below its action buttons, while a document disagreement opens Compare content.
 A progress row opens a two-line body preview aligned with its title and status; a single card does not repeat its title, while a batch labels each preview with its card number and title.
 The progress row keeps medium inset spacing around its header and preview, with a small gap above the expanded body, so its content stays clear of the hover surface and bottom rule.
 PR and agent actions appear once, in the status line, and an expanded row also exposes its known agent there when the collapsed status does not need that link.
-Merged promotions leave To ask and become document pointers; closed-unmerged promotions leave To ask as ordinary cards and are not suggested again at that revision.
+Merged promotions leave To resolve and become document pointers; closed-unmerged promotions leave To resolve as ordinary cards and are not suggested again at that revision.
 A promotion row whose agent is alive is also in Needs You while the operator has something to do (`PR #n 리뷰` or `CI 실패`), and choosing that row opens this tab with it open (Work Hide AI does for a home); the row here still shows the progress, the pull request and the agent link whether or not it is in Needs You.
 When the pull request merges or closes, its agent ends and its worktree goes with the branch kept, so a closed attempt's `Agent ↗` link leaves with the pane.
 A card that was not processed returns with `Card was not processed · Ended without a PR` in warning text and the agent's reason behind the row; every failed row offers Retry, continuing the shared branch and PR, and `Don't promote`, which leaves an ordinary card.
-A card whose decision the code does not have yet, which another branch builds, stays in To ask as a progress row, `Goes in with the PR that builds it`, with `Agent ↗` to that branch's agent and `PR <number>` once its pull request is open; it asks nothing, puts no dot on the tab and is still given to agents, and that pull request's merge makes it a document pointer like any merged promotion.
+A card whose decision the code does not have yet, which another branch builds, stays in To resolve as a progress row, `Goes in with the PR that builds it`, with `Agent ↗` to that branch's agent and `PR <number>` once its pull request is open; it asks nothing, puts no dot on the tab and is still given to agents, and that pull request's merge makes it a document pointer like any merged promotion.
 When nothing builds it, one row says `Not built yet · nothing builds it` with a clock mark in the checkbox slot and the agent's reason behind the row, and offers only `Keep as is`, which leaves an ordinary card that is not asked about again, its document disagreement included, until its text changes.
 A new rule, lesson or decision suggestion keeps its source-session counts and dismissal until its revision changes; at most three new suggestions are open.
 `카드 N` lists the other cards, two lines each: the number and title, then the kind, how many sessions it was given to, how many times it was pulled, how many of its sources are the operator's words, and when it changed.
@@ -829,7 +829,7 @@ With Memory off, stored cards are retained but the list and its empty slot stay 
 An older consent shows a short re-consent explanation under the existing off disclosure and points to the switch above; it never enables or injects on its own.
 The core supplies the usable count, current card and reasons, and the shell only draws them; no banner, alert, toast or panel is added.
 The checking mark is one line in the lane at its 360px minimum in all four languages, and the card is still listed and opens in full; an unverified card is not given to agents until the check ends (PRD memory-card-quality D-13, B6, B19).
-When the agent is gone and GitHub cannot say whether its pull request came (gh missing or logged out, or GitHub not answering), the line reads `PR 확인 못 함 · <reason>` with no spinner and nothing to press, since restoring GitHub settles it; it is not asked about in `물어볼 것`.
+When the agent is gone and GitHub cannot say whether its pull request came (gh missing or logged out, or GitHub not answering), the line reads `PR 확인 못 함 · <reason>` with no spinner and nothing to press, since restoring GitHub settles it; it is not asked about in `처리할 것`.
 A card on its way into the repository is never folded under `그 외 N`, and a card opened from a conversation clears a search that leaves it out.
 A card opens in place: `N분 전에 바뀜 · 이전 내용` when a text replaced another (the earlier text with `되돌리기`), its body, its cited files, its sources with their runtime, time and whether they are the operator's words, and `지우기`.
 A forgotten card leaves `mN 지움 · 되돌리기` at the bottom of the tab until it is undone or another card is forgotten.

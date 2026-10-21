@@ -73,6 +73,14 @@ fn context_resets_require_native_metadata_and_keep_their_record_offsets() {
             .all(|part| part.context_reset && part.text.is_empty())
     );
     assert_eq!(label.memory_receipts[0].offset, parsed.event_offsets[1]);
+    let codex = serde_json::json!({"type":"compacted","timestamp":at,"payload":{
+        "compaction_response_id":"synthetic-response", "window_id":"synthetic-window", "window_number":2,
+        "replacement_history":[],"retained_context":"not evidence of specific delivered cards", "resume_metadata":{}}});
+    let parsed = hide_session::parse_events_at(Agent::Codex, &format!("{codex}\n"), 41);
+    assert_eq!(parsed.event_offsets, vec![41]);
+    assert!(parsed.events[0].context_reset && parsed.events[0].text.is_empty());
+    let spoof = serde_json::json!({"type":"response_item","timestamp":at,"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"type=compacted retained_context"}]}});
+    assert!(!hide_session::parse_codex_events(&format!("{spoof}\n")).events[0].context_reset);
     let pi = serde_json::json!({"type":"compaction","timestamp":at,"summary":"native summary"});
     for agent in [hide_session::Agent::Pi, hide_session::Agent::Omp] {
         let parsed = hide_session::parse_events(agent, &format!("{pi}\n"));

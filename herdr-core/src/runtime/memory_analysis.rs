@@ -1096,6 +1096,7 @@ fn run_analysis_turn(
             (learned, None, true)
         }
         Err(AnalysisFailure::Provider(error)) => (0, Some(error), false),
+        Err(AnalysisFailure::Deferred("card_capacity")) => (0, None, true),
         Err(AnalysisFailure::Deferred(reason)) => {
             *deferred = Some(reason);
             (0, None, false)
@@ -1109,7 +1110,7 @@ fn run_analysis_turn(
                 (task.stat.size, task.stat.modified_unix_ms),
                 &message,
             );
-            (0, None, false)
+            (0, None, true)
         }
     };
     if analyzing || error.is_some() {
@@ -1828,6 +1829,15 @@ fn analyze_session(
         .load_cursor(CursorReader::Analysis, project_id, provider, &session.id)
         .map_err(|error| local(error.to_string()))?;
     let read = session_conversation(sessions_node, session, saved.as_ref()).map_err(local)?;
+    if read.skipped_reasons.contains_key("conversation_capacity") {
+        // Keep the source cursor and existing holds. Splitting the native
+        // record below the reader's line cap makes the same work retryable.
+        log_skipped("analysis.records_skipped", project_id, session, &read);
+        return Err(local(
+            "conversation_capacity: split the oversized native conversation record before retrying"
+                .into(),
+        ));
+    }
     let checkpoint =
         serde_json::to_vec(&read.checkpoint).map_err(|error| local(error.to_string()))?;
     let byte_offset = read_through(&read, stat);
@@ -4210,6 +4220,198 @@ mod tests {
             fixture.calls(),
             calls,
             "completed groups never ask the provider again"
+        );
+    }
+
+    #[test]
+    fn a_full_project_keeps_its_proposal_but_does_not_block_another_projects_turn() {
+        let full = Fixture::new();
+        let peer = Fixture::new();
+        let mut store = full.store();
+        let filler = "Archive basalt specimens";
+        let cards = (1..10_000)
+            .map(|_| Candidate {
+                text: filler.into(),
+                title: filler.into(),
+                aliases: vec![],
+                kind: CandidateKind::Rule,
+                confidence: 0.5,
+                salience: 0.1,
+                source_offsets: vec![1],
+                human_offsets: vec![1],
+                source_times: Default::default(),
+                cited_paths: vec![],
+                relation: CandidateRelation::New,
+            })
+            .collect::<Vec<_>>();
+        store
+            .apply_candidates(
+                &AnalysisBatch {
+                    id: "capacity-fill".into(),
+                    project_id: full.project_id.clone(),
+                    provider: "test".into(),
+                    analysis_provider: "test".into(),
+                    session_id: "fill".into(),
+                    content_hash: "fill".into(),
+                    created_at_unix_ms: 1,
+                },
+                &cards,
+            )
+            .unwrap();
+        store
+            .ensure_project(&peer.project_id, &peer.root, crate::node::TEST_NODE)
+            .unwrap();
+        store.set_enabled(&peer.project_id, true, true).unwrap();
+        let peer_node = NodeId::parse("node-peer").unwrap();
+        let input = PassInput {
+            nodes: vec![
+                (crate::node::test_node(), full.node.clone()),
+                (peer_node.clone(), peer.node.clone()),
+            ],
+            unreached: vec![],
+            database: full.database.clone(),
+            router: Some(AiRouter::new(
+                vec![full.backend.clone()],
+                RouterConfig {
+                    priority: vec![ProviderId::CLAUDE],
+                    max_transient_attempts: 1,
+                    ..RouterConfig::default()
+                },
+                Arc::new(NoopLogSink),
+            )),
+            live: BTreeSet::new(),
+            closed: BTreeSet::new(),
+            held: HashSet::new(),
+            home: None,
+            delegated: HashSet::new(),
+            language: hide_ai::OutputLanguage::English,
+            cancel: CancelToken::new(),
+            failed_reads: Default::default(),
+        };
+        let tasks = || {
+            [&full, &peer]
+                .into_iter()
+                .zip([crate::node::test_node(), peer_node.clone()])
+                .map(|(fixture, node)| {
+                    let identity = project_identity(
+                        fixture.node.as_ref(),
+                        &crate::node::test_node(),
+                        &fixture.root.to_string_lossy(),
+                    )
+                    .unwrap();
+                    let session =
+                        project_sessions(fixture.node.as_ref(), &identity, SESSION_CALL_TIMEOUT)
+                            .unwrap()
+                            .remove(0);
+                    let stat = session_stat(fixture.node.as_ref(), &session, SESSION_CALL_TIMEOUT)
+                        .unwrap();
+                    PendingAnalysis {
+                        node,
+                        project_id: fixture.project_id.clone(),
+                        root: fixture.root.to_string_lossy().into_owned(),
+                        session,
+                        stat,
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        store
+            .enqueue_analysis(&full.project_id, "claude", SESSION, 1)
+            .unwrap();
+        store
+            .enqueue_analysis(&peer.project_id, "claude", SESSION, 2)
+            .unwrap();
+        full.answer(&[]);
+        let mut deferred = None;
+        run_analysis_turn(
+            &input,
+            &mut store,
+            tasks(),
+            &mut deferred,
+            &mut PassOutcome::default(),
+            &mut |_| {},
+        );
+        assert!(
+            deferred.is_none(),
+            "Project capacity is not a global provider pause"
+        );
+        assert_eq!(full.calls(), 1);
+        assert!(
+            store
+                .load_cursor(CursorReader::Analysis, &full.project_id, "claude", SESSION)
+                .unwrap()
+                .is_none()
+        );
+        full.answer(&[]);
+        run_analysis_turn(
+            &input,
+            &mut store,
+            tasks(),
+            &mut deferred,
+            &mut PassOutcome::default(),
+            &mut |_| {},
+        );
+        assert_eq!(store.list_memories(&peer.project_id).unwrap().len(), 1);
+        assert_eq!(full.calls(), 2);
+        run_analysis_turn(
+            &input,
+            &mut store,
+            tasks(),
+            &mut deferred,
+            &mut PassOutcome::default(),
+            &mut |_| {},
+        );
+        assert_eq!(
+            full.calls(),
+            2,
+            "capacity retry reuses the redacted proposal"
+        );
+    }
+
+    #[test]
+    fn a_native_record_over_the_reader_cap_keeps_its_cursor_until_repaired() {
+        let mut fixture = Fixture::new();
+        fixture.lines[1]["message"]["content"] = json!("important later decision ".repeat(20_000));
+        fixture.write(&fixture.lines);
+        let key = ("claude", SESSION.to_owned());
+        let (_, outcome) = fixture.pass_for(key.clone(), false, true);
+        assert!(!outcome.settled.contains(&key));
+        assert_eq!(fixture.calls(), 0);
+        assert!(
+            fixture
+                .store()
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION
+                )
+                .unwrap()
+                .is_none()
+        );
+        fixture.lines[1]["message"]["content"] = json!("Run tests with nextest before a merge.");
+        fixture.write(&fixture.lines);
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        assert_eq!(
+            fixture
+                .store()
+                .list_memories(&fixture.project_id)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            fixture
+                .store()
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION
+                )
+                .unwrap()
+                .is_some()
         );
     }
 
