@@ -2245,24 +2245,35 @@ impl MemoryStore {
         item_limit: usize,
     ) -> Result<Option<MemoryItem>, MemoryError> {
         self.require_writer()?;
-        let Some(item) = self.item_by_number(project_id, number)? else {
+        // Taken before the card is read, so no eviction lands between the
+        // check against the limit and the undo.
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let Some((item_id, lifecycle)) = transaction
+            .query_row(
+                "SELECT id,lifecycle FROM memory_items WHERE project_id=?1 AND number=?2",
+                params![project_id, number],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+        else {
             return Ok(None);
         };
-        let transaction = self.connection.transaction()?;
         let change: Option<(String, Option<String>, Option<u64>)> = transaction
             .query_row(
                 "SELECT c.batch_id,c.previous_lifecycle,c.previous_revision FROM memory_items i \
                  JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
                  JOIN batch_changes c ON c.batch_id=r.batch_id AND c.item_id=i.id \
                  WHERE i.id=?1 AND i.project_id=?2",
-                params![item.id, project_id],
+                params![item_id, project_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
         let Some((batch_id, previous_state, previous_revision)) = change else {
             return Ok(None);
         };
-        let returns = item.lifecycle == MemoryLifecycle::Tombstoned
+        let returns = lifecycle == MemoryLifecycle::Tombstoned.as_str()
             && previous_state
                 .as_deref()
                 .is_some_and(|state| state != MemoryLifecycle::Tombstoned.as_str());
@@ -2273,7 +2284,7 @@ impl MemoryStore {
             &transaction,
             project_id,
             &batch_id,
-            &item.id,
+            &item_id,
             previous_state,
             previous_revision,
         )? {
@@ -2283,7 +2294,7 @@ impl MemoryStore {
         // undo finds nothing rather than repeating.
         transaction.execute(
             "DELETE FROM batch_changes WHERE batch_id=?1 AND item_id=?2",
-            params![batch_id, item.id],
+            params![batch_id, item_id],
         )?;
         transaction.commit()?;
         certify_projection(&self.connection)?;
