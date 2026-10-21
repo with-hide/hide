@@ -42,6 +42,8 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
       const who = verb.parentElement?.querySelector(`[data-pane-band-who="${childPaneId}"]`);
       return !!who && !!(verb.compareDocumentPosition(who) & Node.DOCUMENT_POSITION_FOLLOWING);
     }, child)).toBe(true);
+    // The raised ask leads with the parent's request, its own first line while the label gave no summary (PRD pane-last-request B1, B3).
+    await expect(raisedRow.locator(`[data-pane-turn-request="${parent}"]`)).toContainText("한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목 진행해줘");
     const terminal = await host.boundingBox();
     const facts = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: path.resolve(__dirname, "../.."), encoding: "utf8" }).trim(), parent, child, home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR, provider: "synthetic agent transcript and lifecycle" };
     for (const theme of ["light", "dark"] as const) {
@@ -68,8 +70,6 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     }
     await setFixtureLifecycle(herdr, child, "working");
     await expect(pane.locator('[data-pane-header-band="raised"]')).toHaveCount(0);
-    // The ask leads with the request's own first line until the label has summarized it (PRD pane-last-request B3).
-    await expect(pane.locator(`[data-pane-turn-request="${parent}"]`)).toContainText("한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목 진행해줘");
     continueFixtureTranscript(herdr, parentSession, { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중", request: "자식 검토 결과 정리와 세션 복귀 확인" });
     await setFixtureLifecycle(herdr, parent, "working");
     await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveText("자식 검토 결과를 기다리는 중", { timeout: 25_000 });
