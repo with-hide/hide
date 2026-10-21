@@ -254,51 +254,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends zsh fish
           export HIDE_TEST_ZSH_BIN=$(command -v zsh) HIDE_TEST_FISH_BIN=$(command -v fish) HIDE_TEST_BASH_BIN=$(command -v bash)
           export HIDE_E2E_HERDR_BIN=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64)
-          # Record why a renamed native fixture needs GNU sleep on uutils
-          # images, without changing its name, argv or foreground lifetime.
-          python3 - <<'PY'
-          from pathlib import Path
-          import shutil
-          import subprocess
-          import tempfile
-          import time
-
-          default = Path('/bin/sleep')
-          selected = next(path for name in ('/usr/bin/gnusleep', '/bin/gnusleep', '/bin/sleep', '/usr/bin/sleep') if (path := Path(name)).is_file())
-          print(next(line for line in Path('/etc/os-release').read_text().splitlines() if line.startswith('PRETTY_NAME=')), flush=True)
-          version = subprocess.run([str(default), '--version'], capture_output=True, text=True, check=True, timeout=5).stdout.splitlines()[0]
-          print(f'default sleep: {version}; selected fixture: {selected}', flush=True)
-          with tempfile.TemporaryDirectory(prefix='native-agent-') as directory:
-              agent = Path(directory) / 'claude'
-              shutil.copy2(default, agent)
-              baseline = subprocess.run(['claude', '0'], executable=str(agent), capture_output=True, text=True, timeout=5)
-              print(f'default renamed fixture: returncode={baseline.returncode}, stderr={baseline.stderr.strip()!r}', flush=True)
-              shutil.copy2(selected, agent)
-              result = subprocess.run(['claude', '0'], executable=str(agent), capture_output=True, text=True, timeout=5)
-              assert result.returncode == 0, result
-              child = subprocess.Popen(['claude', '600'], executable=str(agent), stdin=subprocess.DEVNULL)
-              try:
-                  # exec can close the launch pipe before updating comm.
-                  deadline = time.monotonic() + 5
-                  while True:
-                      assert child.poll() is None, child.returncode
-                      name = Path(f'/proc/{child.pid}/comm').read_text().strip()
-                      argv = Path(f'/proc/{child.pid}/cmdline').read_bytes().split(b'\0')[:2]
-                      if name == 'claude' and argv == [b'claude', b'600']:
-                          break
-                      assert time.monotonic() < deadline, (name, argv)
-                      time.sleep(0.01)
-                  assert child.poll() is None, child.returncode
-                  print(f'renamed GNU fixture: name={name}, argv={argv}, alive=True', flush=True)
-              finally:
-                  child.terminate()
-                  try:
-                      child.wait(timeout=5)
-                  except subprocess.TimeoutExpired:
-                      child.kill()
-                      child.wait(timeout=5)
-                  print(f'fixture child reaped: returncode={child.returncode}', flush=True)
-          PY
           bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p herdr-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^agent_start::real_herdr_tests::/)' --run-ignored only --no-capture
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
