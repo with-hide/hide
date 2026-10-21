@@ -9,7 +9,7 @@
 // ones find a place. Drags move bodies and, unless motion is reduced, let the
 // physics pull a team along and settle on release.
 
-import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type ForceLink, type Simulation, type SimulationLinkDatum, type SimulationNodeDatum } from "d3-force";
+import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type ForceLink, type ForceX, type ForceY, type Simulation, type SimulationLinkDatum, type SimulationNodeDatum } from "d3-force";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
 
 /** `parent` names a placed session, or null for a root; `radius` is how much room the session's circle and words need. */
@@ -33,12 +33,14 @@ const OPERATOR = "\u0000operator";
 const SETTLE = 120;
 const DECAY = 1 - Math.pow(0.001, 1 / SETTLE);
 
-/** A stable angle from an id, so a start position never depends on order or chance. */
-function angleOf(id: string): number {
+/** FNV-1a of an id: the map's starts and a project's accent depend on identity alone, never on order or chance. */
+export function idHash(id: string): number {
   let hash = 2166136261;
   for (let index = 0; index < id.length; index += 1) hash = Math.imul(hash ^ id.charCodeAt(index), 16777619);
-  return ((hash >>> 0) / 4294967296) * Math.PI * 2;
+  return hash >>> 0;
 }
+
+const angleOf = (id: string) => (idHash(id) / 4294967296) * Math.PI * 2;
 
 export class ForceMap {
   private readonly bodies = new Map<string, Body>();
@@ -90,6 +92,12 @@ export class ForceMap {
     if (this.bodies.has(id)) this.settle();
   }
 
+  /** Where a project gathers; a project drag reads it at the start and moves it by the hand's travel. */
+  anchorOf(projectId: string): Point | undefined {
+    const anchor = this.anchors.get(projectId);
+    return anchor ? { ...anchor } : undefined;
+  }
+
   /** Every session of a project moves together, with the place the project gathers around. */
   moveProject(projectId: string, by: Point) {
     const anchor = this.anchors.get(projectId);
@@ -109,12 +117,22 @@ export class ForceMap {
   }
 
   /** The project stays where it was put: its roots' ties to the operator take their new length, so no later settling pulls it back. */
+  private readonly anchorX = (body: Body) => this.anchors.get(body.projectId)?.x ?? 0;
+  private readonly anchorY = (body: Body) => this.anchors.get(body.projectId)?.y ?? 0;
+
+  private operatorTie(id: string): number | undefined {
+    return this.ties.find((tie) => tie.kind === "operator" && (tie.target as Body).id === id)?.length;
+  }
+
   dropProject() {
     for (const tie of this.ties) {
       const root = tie.target as Body;
       if (tie.kind === "operator") tie.length = Math.hypot(root.x!, root.y!);
     }
+    // d3 reads a force's targets once, so the moved anchor and lengths are read again.
     (this.simulation.force("tie") as ForceLink<Body, Tie>).distance((tie) => tie.length);
+    (this.simulation.force("x") as ForceX<Body>).x(this.anchorX);
+    (this.simulation.force("y") as ForceY<Body>).y(this.anchorY);
     this.listener?.();
   }
 
@@ -193,15 +211,15 @@ export class ForceMap {
     this.ties = ties;
     for (const body of this.bodies.values()) {
       if (body.parent !== null && body.parent !== body.id) ties.push({ source: body.parent, target: body.id, kind: "team", length: this.bodies.get(body.parent)!.radius + body.radius });
-      else if (body.parent === null) ties.push({ source: OPERATOR, target: body.id, kind: "operator", length: reach * 0.63 });
+      else if (body.parent === null) ties.push({ source: OPERATOR, target: body.id, kind: "operator", length: previous?.operatorTie(body.id) ?? reach * 0.63 });
     }
     this.simulation
       .nodes([this.operator, ...this.bodies.values()])
-      .force("tie", forceLink<Body, Tie>(ties).id((body) => body.id).distance((tie) => tie.length).strength((tie) => (tie.kind === "team" ? 0.9 : 0.12)))
-      .force("charge", forceManyBody<Body>().strength((body) => (body.id === OPERATOR ? -600 : body.root ? -700 : -180)))
+      .force("tie", forceLink<Body, Tie>(ties).id((body) => body.id).distance((tie) => tie.length).strength((tie) => (tie.kind === "team" ? 0.9 : 0.04)))
+      .force("charge", forceManyBody<Body>().strength((body) => (body.id === OPERATOR ? -600 : body.root ? -320 : -140)))
       .force("collide", forceCollide<Body>((body) => body.radius).iterations(3))
-      .force("x", forceX<Body>((body) => this.anchors.get(body.projectId)?.x ?? 0).strength((body) => (body.id === OPERATOR ? 0 : body.root ? 0.12 : 0.02)))
-      .force("y", forceY<Body>((body) => this.anchors.get(body.projectId)?.y ?? 0).strength((body) => (body.id === OPERATOR ? 0 : body.root ? 0.12 : 0.02)))
+      .force("x", forceX<Body>(this.anchorX).strength((body) => (body.id === OPERATOR ? 0 : body.root ? 0.28 : 0.02)))
+      .force("y", forceY<Body>(this.anchorY).strength((body) => (body.id === OPERATOR ? 0 : body.root ? 0.28 : 0.02)))
       .alpha(1).alphaTarget(0);
     for (let step = 0; step < SETTLE; step += 1) this.simulation.tick();
     for (const body of held) { body.fx = null; body.fy = null; }

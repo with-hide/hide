@@ -950,7 +950,7 @@ The accent is one of sky, violet, lime and amber, chosen by a stable hash of the
 Placement is computed in the web shell and settles before the first paint, so nothing wobbles on open; every start position comes from the session's id, so the same sessions open in the same shape (D-13).
 Status, labels, letters, filters, selection, hiding and folding never enter the layout key.
 When a session appears, every placed session holds still while only the new one finds a place beside its parent or in its project; a session that leaves takes only itself away.
-A map over the 400-node budget, or one the layout cannot place, fails into the existing Retry and session list.
+Admission keeps the map within the 400-node budget (below); a map the layout cannot place fails into the existing Retry and session list.
 A root's circle shows its title and its sidebar second line (what it is doing, what it asks, what it waits for); a descendant shows only its title, plus what it asks in amber while it is the operator's turn.
 Provider, proved launch model, state words and judged tasks are not drawn under circles; the accessible name still reads title, state, provider and proved launch model.
 The ring colour and shape of each circle encode its mark (working, waiting, my turn, unread result, quiet), with the StatusMark beside it and a dashed outline on the current pane's session.
@@ -975,7 +975,7 @@ Below the project list, Waiting on you lists each root whose turn it is, drawn o
 A root in a hidden project stays in the list with a `그래프에서 숨김` mark, because hiding a project from the map does not make its question wait less (D-21).
 Folding a team leaves its root circle with a chip that counts its descendants and shows their My turn, Working and Unread marks; choosing the chip unfolds it, and the descendants come back to their places (B24).
 Folding a project turns its cluster into one circle in the project's place, with its name, session count and nonzero counts; a line between that project and another ends on the circle, and choosing it unfolds the cluster to its old shape (B25).
-Fold all folds every project and Unfold all opens every project and every team; both sit in the toolbar of the graph view (B26).
+Fold all folds every project into its circle and leaves each team's own fold as it was; Unfold all opens every project and every team; both sit in the toolbar of the graph view (B26).
 Choosing a session by click, Enter or Space replaces the column with its panel: title, state, project and branch, provider and proved launch model, what it does now, what it asks the operator when it asks, its team (every descendant with its state; choosing one selects it), its counterparts with sent and received counts only, and `세션 열기 · 기록 보기`.
 Below the Overview breakpoint the panel overlays the graph; Escape closes the panel first, and changing filter or scope clears a selection that no longer matches.
 Hover and keyboard focus outline the pointed session and its counterparts and never open details.

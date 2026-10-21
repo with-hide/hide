@@ -79,6 +79,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const [foldedProjects, setFoldedProjects] = useState<ReadonlySet<string>>(() => new Set());
   // Each drag step redraws from the live map.
   const [, setMoved] = useState(0);
+  const projectDrag = useRef<{ project: string; from: { x: number; y: number }; anchor: { x: number; y: number } } | null>(null);
   const [retry, setRetry] = useState(0);
   const host = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -168,6 +169,8 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const summariesById = new Map(model.summaries.map((summary) => [summary.id, summary]));
   // What each placed session is drawn as: itself, its folded team's root, or its folded project's circle.
   const endpoint = new Map<string, string>();
+  const drawnRoots = new Set<string>();
+  const clusterProject = new Map<string, string>();
   const cluster = (id: string) => `cluster:${id}`;
   const visibleByProject = new Map<string, GraphAgent[]>();
   for (const row of model.visible) visibleByProject.set(row.projectId, [...(visibleByProject.get(row.projectId) ?? []), row]);
@@ -191,6 +194,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
         nodes.push({ id: cluster(group.id), type: "cluster", position: { x: middle.x - box.width / 2, y: middle.y - orb / 2 }, ...box, measured: box, data: { summary, accent, orb, unfold: toggleFoldProject }, dragHandle: ".og-cluster-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 } satisfies ClusterNode);
         orbs.set(cluster(group.id), { x: middle.x, y: middle.y, r: orb / 2 });
         for (const row of members) endpoint.set(row.id, cluster(group.id));
+        clusterProject.set(cluster(group.id), group.id);
         continue;
       }
       const glow = middle.r * 2;
@@ -204,6 +208,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
         // A folded team's descendants are drawn as their root.
         if (!root && drawnHere.has(point.team) && teamFolded(point.team)) { endpoint.set(row.id, point.team); continue; }
         endpoint.set(row.id, row.id);
+        if (root) drawnRoots.add(row.id);
         const shape = root ? size.root : size.child;
         orbs.set(row.id, { x: point.x, y: point.y, r: shape.orb / 2 });
         const descendants = root ? members.filter((member) => member.id !== row.id && pointOf(member.id)!.team === row.id) : [];
@@ -213,7 +218,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
         // The layout owns these fixed dimensions. Retaining them also preserves React Flow's
         // measured handle bounds when hover/focus replaces a controlled node object.
         const measured = { width: shape.width, height: shape.height };
-        sessions.push({ id: row.id, type: "session", position: { x: point.x - shape.width / 2, y: point.y - shape.orb / 2 }, ...measured, measured, selected: activeSession === row.id, data: { row, ring: root, context: model.context.has(row.id), muted: selection !== null && !related, highlighted: pointedRelated.has(row.id), current: current?.id === row.id, team, highlight, choose: chooseSession }, dragHandle: ".og-session-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 });
+        sessions.push({ id: row.id, type: "session", position: { x: point.x - shape.width / 2, y: point.y - shape.orb / 2 }, ...measured, measured, selected: activeSession === row.id, data: { row, root, context: model.context.has(row.id), muted: selection !== null && !related, highlighted: pointedRelated.has(row.id), current: current?.id === row.id, team, highlight, choose: chooseSession }, dragHandle: ".og-session-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 });
       }
     }
     // The chosen team's dashed outline goes round its circles and words.
@@ -240,45 +245,67 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   // operator's turn, its own or a folded member's, points at it in amber instead, muted outside the chosen team.
   const tied = new Map<string, boolean>();
   for (const [id, at] of endpoint) {
-    if (at === id && pointOf(id)?.team !== id) continue;
+    if (at === id && !drawnRoots.has(id)) continue;
     tied.set(at, (tied.get(at) ?? false) || graphActivity(agentsById.get(id)!.agent) === "turn");
   }
   const turns = new Map(turnLines([...tied].map(([id, turn]) => ({ id, turn })), new Set(tied.keys()), lineState).map((turn) => [turn.id, turn.muted]));
+  const selectedProject = selection ? agentsById.get(selection)?.projectId : undefined;
   for (const id of tied.keys()) {
-    const muted = turns.get(id);
+    // A folded project's arrow stays bright while the chosen session is inside it.
+    const project = clusterProject.get(id);
+    const muted = project !== undefined && turns.has(id) ? selection !== null && selectedProject !== project : turns.get(id);
     if (muted === undefined) line(`mine:${id}`, OPERATOR, id, "og-mine");
     else line(`turn:${id}`, id, OPERATOR, `og-turn${muted ? " og-muted" : ""}`, { markerEnd: arrow("var(--warning)") });
   }
   for (const { parent, child, emphasized } of lineageLines(model.visible.filter((row) => endpoint.get(row.id) === row.id).map((row) => row.id), model.layoutParents, teamOf, chosenTeam)) {
     if (endpoint.get(parent) === parent) line(`lineage:${parent}:${child}`, parent, child, `og-lineage${emphasized ? " og-emphasized" : ""}`);
   }
-  // A pair is drawn between what its sessions are drawn as; two ends folded into one draw nothing.
-  const pairsDrawn = new Set<string>();
+  // A pair is drawn between what its sessions are drawn as; pairs folded onto the same two ends are
+  // one line that is emphasised, lettered or two-way when any of them is; two ends folded into one draw nothing.
+  const merged = new Map<string, { id: string; from: string; to: string; active: boolean; muted: boolean; letters: boolean; directions: Set<string> }>();
   for (const { pair, active, muted } of communicationLines(model.communication, (id) => endpoint.has(id), lineState)) {
     const from = endpoint.get(pair.source)!;
     const to = endpoint.get(pair.target)!;
+    if (from === to) continue;
     const key = JSON.stringify([from, to].sort());
-    if (from === to || pairsDrawn.has(key)) continue;
-    pairsDrawn.add(key);
+    const entry = merged.get(key) ?? { id: pair.id, from, to, active: false, muted: true, letters: false, directions: new Set<string>() };
+    entry.active ||= active;
+    entry.muted &&= muted;
+    entry.letters ||= pair.letters > 0;
+    for (const direction of pair.directions) entry.directions.add(`${endpoint.get(direction.from)}>${endpoint.get(direction.to)}`);
+    merged.set(key, entry);
+  }
+  for (const { id, from, to, active, muted, letters, directions } of merged.values()) {
     const marker = arrow("var(--subtle-foreground)");
-    line(pair.id, from, to, `og-communication${pair.letters === 0 ? " og-direct-input" : ""}${active ? " og-emphasized" : muted ? " og-muted" : ""}`, { markerEnd: marker, markerStart: pair.directions.length > 1 ? marker : undefined });
+    const forward = directions.has(`${from}>${to}`);
+    const [start, end] = forward ? [from, to] : [to, from];
+    line(id, start, end, `og-communication${letters ? "" : " og-direct-input"}${active ? " og-emphasized" : muted ? " og-muted" : ""}`, { markerEnd: marker, markerStart: directions.size > 1 ? marker : undefined });
   }
   const positionOf = (id: string) => orbs.get(id) ?? { x: 0, y: 0 };
   // A session follows the hand through the physics; a project's name or folded circle carries every session of the project.
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const projectOfHandle = (node: Node) => node.type === "project" ? node.id : node.type === "cluster" ? (node as ClusterNode).data.summary.id : null;
-  const dragStart = (_: unknown, node: Node) => { if (node.type === "session") map?.grab(node.id); };
+  const dragStart = (_: unknown, node: Node) => {
+    if (node.type === "session") map?.grab(node.id);
+    const project = projectOfHandle(node);
+    const anchor = project ? map?.anchorOf(project) : undefined;
+    projectDrag.current = project && anchor ? { project, from: { ...node.position }, anchor } : null;
+  };
   const dragging = (_: unknown, node: Node) => {
     const shown = nodeById.get(node.id);
     if (!map || !shown) return;
     if (node.type === "session") map.drag(node.id, { x: node.position.x + (orbs.get(node.id)!.x - shown.position.x), y: node.position.y + (orbs.get(node.id)!.y - shown.position.y) });
-    const project = projectOfHandle(node);
-    if (project) map.moveProject(project, { x: node.position.x - shown.position.x, y: node.position.y - shown.position.y });
+    // The project follows the hand's whole travel since the grab, measured against the live map, so a
+    // step that arrives before the last one was drawn is never counted twice.
+    const held = projectDrag.current;
+    const now = held ? map.anchorOf(held.project) : undefined;
+    if (held && now) map.moveProject(held.project, { x: held.anchor.x + node.position.x - held.from.x - now.x, y: held.anchor.y + node.position.y - held.from.y - now.y });
     setMoved((value) => value + 1);
   };
   const dragStop = (_: unknown, node: Node) => {
     if (node.type === "session") map?.drop(node.id);
     else if (projectOfHandle(node)) map?.dropProject();
+    projectDrag.current = null;
     setMoved((value) => value + 1);
   };
   const showList = mode === "list" || layout.phase === "failed" || !size;

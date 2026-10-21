@@ -63,6 +63,14 @@ describe("force map", () => {
     map.grab("d");
     map.drop("d");
     for (const id of ["c", "c1"]) expect(near(map.positions().get(id)!, after.get(id)!)).toBeLessThan(near(map.positions().get(id)!, before.get(id)!));
+    // A new session arriving later keeps the moved project's ties too.
+    const placedAgain = new ForceMap(input([...scene, session("e", "site")]), map);
+    placedAgain.reduceMotion(true);
+    const moved = placedAgain.positions();
+    placedAgain.grab("d");
+    placedAgain.drop("d");
+    for (const id of ["c", "c1"]) expect(near(placedAgain.positions().get(id)!, moved.get(id)!)).toBeLessThan(near(placedAgain.positions().get(id)!, before.get(id)!));
+    placedAgain.stop();
     map.stop();
   });
 

@@ -33,7 +33,7 @@ export type OverviewGraphModel = {
   quietBranches: ReadonlyMap<string, number>;
   /** Each current session's verified lineage parent and lineage root. */
   parents: ReadonlyMap<string, string>; teams: ReadonlyMap<string, string>;
-  /** Each drawn session's nearest drawn ancestor, or null on the first ring. */
+  /** Each drawn session's nearest drawn ancestor, or null for a root. */
   layoutParents: ReadonlyMap<string, string | null>;
   counts: Record<GraphFocus, number>; summaries: ProjectSummary[];
   communication: Communication[];

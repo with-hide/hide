@@ -76,6 +76,10 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
   const reduced = useReducedMotion();
   const key = `${model.structure}:${scale}`;
   const [state, setState] = useState<{ key: string; phase: GraphLayout["phase"]; size: Dimensions | null; map: ForceMap | null; points: ReadonlyMap<string, MapPoint> }>({ key: "", phase: "loading", size: null, map: null, points: new Map() });
+  // Each animated step only asks for a redraw; the view reads the live map itself.
+  const [, setSteps] = useState(0);
+  const reducedNow = useRef(reduced);
+  reducedNow.current = reduced;
   const current = useRef<{ map: ForceMap; scale: number } | null>(null);
   // Reset layout counts up; a placement for a count not yet placed starts afresh.
   const [resets, setResets] = useState(0);
@@ -98,8 +102,8 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
       }, keep);
       current.current?.map.stop();
       current.current = { map, scale };
-      map.reduceMotion(reduced);
-      map.listen(() => setState((previous) => (previous.map === map ? { ...previous, points: map.positions() } : previous)));
+      map.reduceMotion(reducedNow.current);
+      map.listen(() => { if (current.current?.map === map) setSteps((value) => value + 1); });
       setState({ key, phase: "ready", size, map, points: map.positions() });
     } catch (error: unknown) {
       useShellStore.getState().noteDiagnostic(`overview_graph.layout_failed projects=${latest.current.projects.length} visible=${latest.current.visible.length} cause=${error instanceof Error ? error.message : String(error)}`);
@@ -107,10 +111,13 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
       current.current = null;
       setState({ key, phase: "failed", size: null, map: null, points: new Map() });
     }
-  }, [key, host, retry, scale, resets, reduced]);
+  }, [key, host, retry, scale, resets]);
+  // A change of the motion setting reaches the live map; it never places the map again.
+  useEffect(() => { state.map?.reduceMotion(reduced); }, [state.map, reduced]);
   useEffect(() => () => { current.current?.map.stop(); current.current = null; }, []);
   const reset = useCallback(() => setResets((value) => value + 1), []);
-  if (state.key !== key) return { phase: "loading", size: state.size, points: state.points, map: null, reset };
+  // Until a new structure is placed, the placed map stays on screen, so React Flow keeps its nodes.
+  if (state.key !== key && state.phase !== "ready") return { phase: "loading", size: state.size, points: state.points, map: null, reset };
   return { phase: state.phase, size: state.size, points: state.points, map: state.map, reset };
 }
 

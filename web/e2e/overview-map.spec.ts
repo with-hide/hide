@@ -1,6 +1,6 @@
-// Approved radial-map B4-B11/B17/B24 and PRD overview-main-map B1, B13, B14, B17,
-// B22, B23, B25, B26: the private runtime supplies identity and topology; camera,
-// drags, folding and hiding stay local to the mounted graph.
+// PRD overview-main-map B1, B13, B14, B17, B22, B23, B25, B26: the private
+// runtime supplies identity and topology; camera, drags, folding and hiding stay
+// local to the mounted force map.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
@@ -69,8 +69,15 @@ test("@platform Overview restores its exact current session and keeps map moveme
     // B22: dragging a project's name moves every one of its sessions.
     const name = graph.locator("[data-graph-project]").first();
     expect(before).toHaveLength(2);
+    const grabbed = await name.boundingBox();
+    if (!grabbed) throw new Error("project name has no bounds");
     await drag(page, name, 40, 24);
     await expect.poll(async () => (await positions()).filter((row, i) => JSON.stringify(row) !== JSON.stringify(before[i])).length).toBe(2);
+    // The name lands where the hand let go, however many steps the drag took.
+    await expect.poll(async () => {
+      const dropped = await name.boundingBox();
+      return dropped ? Math.hypot(dropped.x - grabbed.x - 40, dropped.y - grabbed.y - 24) < 8 : false;
+    }).toBe(true);
     await graph.getByRole("button", { name: "Reset layout", exact: true }).click();
     await expect.poll(positions).toEqual(before);
     // B25/B26: folding all turns the project into one circle; unfolding brings every session back to its place.

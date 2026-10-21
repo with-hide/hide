@@ -2,6 +2,7 @@
 // D-03, D-04, D-06, D-17) and the geometry of its lines, team outlines and
 // project glows. Pure, so the rules are tested apart from React Flow.
 
+import { idHash } from "./overviewMapLayout";
 import type { Communication } from "./overviewGraphModel";
 
 type Point = { x: number; y: number };
@@ -89,9 +90,7 @@ export function lineageLines(rows: readonly string[], parents: ReadonlyMap<strin
 const PROJECT_ACCENTS = ["sky", "violet", "lime", "amber"] as const;
 export type ProjectAccent = (typeof PROJECT_ACCENTS)[number];
 export function projectAccent(id: string): ProjectAccent {
-  let hash = 2166136261;
-  for (let index = 0; index < id.length; index += 1) hash = Math.imul(hash ^ id.charCodeAt(index), 16777619);
-  return PROJECT_ACCENTS[(hash >>> 0) % PROJECT_ACCENTS.length]!;
+  return PROJECT_ACCENTS[idHash(id) % PROJECT_ACCENTS.length]!;
 }
 
 /** The middle of a project's sessions and how far its glow reaches past the farthest one. */
