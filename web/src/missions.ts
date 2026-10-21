@@ -119,8 +119,9 @@ export function chipWords(mission: Mission): { key: MessageKey; counts: string |
       return { key: "mission.chip.mergeWait", counts: null };
     case "done":
       return { key: "mission.chip.done", counts: null };
-    case "running":
     case "cancelled":
+      return { key: "mission.chip.cancelled", counts: null };
+    case "running":
       return { key: "mission.chip", counts: `${done}/${total}` };
   }
 }

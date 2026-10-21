@@ -80,7 +80,8 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
           data-mission-banner="decision"
         />
       ) : null}
-      <Summary mission={mission} />
+      {/* Before the first plan the map is one line (B19). */}
+      {mission.nodes.length > 0 ? <Summary mission={mission} /> : null}
       {mission.delay && missionOpen(mission) ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{t("mission.delay", { line: mission.delay })}</p> : null}
       {device ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
       <div className={cn("min-h-0 flex-1 overflow-auto px-md pb-md pt-xs", mission.stale && "opacity-(--opacity-dimmed)")} data-mission-scroll="true">

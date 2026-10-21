@@ -33,7 +33,7 @@ Running a command again changes nothing more, so after a timeout read `hide miss
 - Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope and the worker candidates.
 - Run `hide agent catalog` for the agents installed here, their models, their efforts and their weekly usage.
 - Run `gh auth status` and note the account; the plan names it (`GitHub: <account> (gh)`), and approving the plan approves that account.
-  Check the account can do what the scope needs: push and open pull requests for `pr`, and merge as well for `merge`.
+  Check the account can do what the scope needs: push and open pull requests for `pr`, and merge as well for `merge`; `gh api repos/<owner>/<repo> --jq .permissions` answers it (`push` for `pr`, `push` and `maintain` or `admin`, or a merge the branch rules allow, for `merge`).
   If `gh` is not signed in or lacks a permission, ask the operator now and do no GitHub work.
 - If the goal, the finish line or your permissions are unclear, ask before you plan.
 - Create the mission with `hide mission create --title <short title>` (add `--scope` or `--cap` only when the operator said so).
@@ -63,6 +63,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
 - A node is one of three kinds, each finished by its own rule:
   - `change` changes code and has a `delivery`: `pr` (a pull request) or `direct` (a branch merged into main by you).
     By default a pull request is done when its CI passes and an agent other than its author reviewed it, with a screenshot when it changes a screen; a direct change is done when the plan's check command passes and it was reviewed.
+    In a repository with no CI, the plan's check command, run on the pull request's branch, stands in for its CI.
     A node's own `criteria` replaces that default for that node only.
   - `research` reads and decides; it changes no code, runs in the project checkout without a worktree, and is done when its conclusion is in the plan.
     A conclusion that changes the goal or the scope is asked about before it is applied.
@@ -88,6 +89,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
 - Then record it: `hide mission node <key> --status working --agent-id <agent-N>`.
 - A worker runs only on the machine the project is on (`mission_machine_refused`).
 - At most the mission's cap of workers run at once, reviewers and verifiers included and you not counted; Hide refuses one more (`mission_cap_reached`).
+  Start every reviewer and verifier yourself, as a worker of the mission, so the cap counts it; tell a worker not to start agents of its own.
   End a finished worker with `hide agent end <id>` to free its place, and start the next node then.
 - When the usage `hide agent catalog` reports is close to a limit, start nothing new, say why with `hide mission delay --line <why>`, and tell the operator in conversation if it holds for long. Clear it when you go on.
 
