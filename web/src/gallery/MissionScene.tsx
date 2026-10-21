@@ -1,6 +1,6 @@
 // The real mission map and Settings › Conductor over invented values (PRD
 // software-factory-conductor), one state per `state` parameter: plan,
-// running, decision, stack, no-conductor, failed, settings. Nothing leaves
+// running, decision, stack, no-conductor, stale, failed, settings. Nothing leaves
 // this scene.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
@@ -67,7 +67,8 @@ function scene(state: string, now: number): { mission: Mission; rest: SnapshotRe
     delay: null, report: null,
     created_at_unix_ms: now - 50 * MINUTE, started_at_unix_ms: state === "plan" ? null : now - (state === "stack" ? 72 : 44) * MINUTE, closed_at_unix_ms: state === "stack" ? now : null,
     running: state === "decision" ? 1 : state === "running" ? 4 : 0,
-    stale: false, github_stale: false, github_read_at_unix_ms: now,
+    // A device that disconnected leaves its last values, dimmed (B20).
+    stale: state === "stale", github_stale: state === "stale", github_read_at_unix_ms: state === "stale" ? now - 25 * MINUTE : now,
   };
   const rest = {
     missions: state === "failed" ? { items: [], failed: "unreadable" } : { items: [mission] },

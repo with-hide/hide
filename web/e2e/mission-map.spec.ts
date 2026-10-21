@@ -34,7 +34,7 @@ const PLAN = {
   check: "true",
   nodes: [
     { key: "cause", title: "원인 조사", kind: "research" },
-    { key: "api", title: "API 추가", kind: "change", delivery: "pr" },
+    { key: "api", title: "API 추가", kind: "change", delivery: "pr", worker: { agent: "claude" } },
     { key: "screen", title: "API 쓰는 화면", kind: "change", delivery: "pr", depends_on: ["api"] },
   ],
 };
@@ -81,6 +81,9 @@ test("the Conductor's commands draw the mission map once, the map follows the re
     const node = map.locator('[data-mission-node="api"]');
     await expect(node).toHaveAttribute("data-node-status", "working");
     await expect(node.locator("[data-node-line]")).toHaveText("엔드포인트 작성 중");
+    // Its worker row names the agent the plan chose, with the time it has worked.
+    await expect(node.locator("[data-node-worker]")).toHaveAttribute("data-node-worker", "claude");
+    await expect(node.locator("[data-mission-duration]")).toBeVisible();
     await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
     await expect(map.locator('[data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
     await screenshot(page, "mission-map-running");

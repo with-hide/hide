@@ -590,29 +590,62 @@ pub struct NodeInput {
     pub change: Option<String>,
 }
 
-/// A change to one node. An absent field is kept, `null` clears it.
+/// A change to one node. An absent field is kept, `null` clears it, so a
+/// field the sender leaves unset is never written: `null` would clear it.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodePatch {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<NodeStatus>,
-    #[serde(default, deserialize_with = "double")]
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub agent_id: Option<Option<String>>,
-    #[serde(default, deserialize_with = "double")]
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub pr: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "double")]
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub base_pr: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "double")]
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub branch: Option<Option<String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempts: Option<u8>,
-    #[serde(default, deserialize_with = "double")]
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub line: Option<Option<String>>,
-    #[serde(default, deserialize_with = "double")]
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub change: Option<Option<String>>,
-    #[serde(default, deserialize_with = "double")]
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub review: Option<Option<String>>,
-    #[serde(default, deserialize_with = "double")]
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub worker: Option<Option<Worker>>,
 }
 
@@ -987,7 +1020,9 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_cap_reached" => {
             "Wait for a worker to finish (end its registration with hide agent end <id>) and retry"
         }
-        "mission_projects_loading" => "Retry in a few seconds; Hide is still reading this machine's projects",
+        "mission_projects_loading" => {
+            "Retry in a few seconds; Hide is still reading this machine's projects"
+        }
         "mission_project_unknown" => {
             "Run the command from a pane in a checkout of a registered project"
         }
@@ -1260,6 +1295,50 @@ mod tests {
         let cleared = apply_patch(&after, &clear, 4).unwrap();
         assert_eq!(cleared.line, None);
         assert_eq!(cleared.pr, Some(3));
+    }
+
+    #[test]
+    fn a_patch_sent_as_the_cli_sends_it_keeps_what_it_does_not_name() {
+        let mut planned = node("a", NodeKind::Change, &[]);
+        planned.worker = Some(Worker {
+            agent: "claude".into(),
+            model: None,
+            effort: None,
+            effort_auto: false,
+        });
+        let m = apply_plan(&mission(), &plan(vec![planned]), 2).unwrap();
+        // The CLI builds the patch in Rust and the daemon reads it back from JSON.
+        let wire = |patch: NodePatch| -> NodePatch {
+            serde_json::from_value(serde_json::to_value(patch).unwrap()).unwrap()
+        };
+        let set = wire(NodePatch {
+            pr: Some(Some(3)),
+            agent_id: Some(Some("agent-3".into())),
+            ..Default::default()
+        });
+        let after = apply_patch(&m.nodes[0], &set, 3).unwrap();
+        let status = wire(NodePatch {
+            status: Some(NodeStatus::Review),
+            ..Default::default()
+        });
+        let reviewed = apply_patch(&after, &status, 4).unwrap();
+        assert_eq!(
+            reviewed.worker.as_ref().map(|worker| worker.agent.as_str()),
+            Some("claude")
+        );
+        assert_eq!(reviewed.pr, Some(3));
+        assert_eq!(reviewed.agent_id.as_deref(), Some("agent-3"));
+        let cleared = apply_patch(
+            &reviewed,
+            &wire(NodePatch {
+                pr: Some(None),
+                ..Default::default()
+            }),
+            5,
+        )
+        .unwrap();
+        assert_eq!(cleared.pr, None);
+        assert_eq!(cleared.agent_id.as_deref(), Some("agent-3"));
     }
 
     #[test]
