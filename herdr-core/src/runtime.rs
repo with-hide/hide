@@ -1136,6 +1136,10 @@ pub struct Runtime {
     /// When each observed pane's input was last traced (`delivery.input`).
     delivery_input_traced: HashMap<String, u64>,
     composer_store: Option<crate::composer_store::ComposerStore>,
+    /// The agent versions whose composer was checked against its
+    /// declaration (`composer_checks.rs`), and the store that keeps them.
+    composer_checks: Vec<crate::composer_checks::Check>,
+    composer_checks_store: Option<crate::composer_checks::ComposerChecks>,
     delivery_overflow: HashSet<String>,
     delivery_connected: HashSet<String>,
     /// Each host's Herdr panes as its in-sync replica last published them.
@@ -2083,6 +2087,8 @@ impl Runtime {
             composer_marks: Vec::new(),
             delivery_input_traced: HashMap::new(),
             composer_store: None,
+            composer_checks: Vec::new(),
+            composer_checks_store: None,
             delivery_overflow: HashSet::new(),
             delivery_connected: HashSet::new(),
             delivery_panes: HashMap::new(),

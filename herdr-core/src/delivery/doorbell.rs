@@ -1,8 +1,11 @@
 //! The doorbell submits one short line through Herdr's `agent.prompt` so a
 //! pending letter wakes its idle agent. Herdr has no atomic composer guard, so the rule is
 //! conservative: a letter waits unless every fact hide owns says the pane is
-//! at rest. Nothing here reads the terminal, and nothing clears or restores
+//! at rest. The verdict reads no terminal, and nothing clears or restores
 //! input; a TUI that redraws its footer or statusline cannot change a verdict.
+//! The one screen read is the composer of a pane held on a possible draft,
+//! whose positive "empty" releases that draft before the next verdict
+//! (`composer.rs`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -306,6 +309,8 @@ pub(crate) struct Doorbell {
     rung: HashMap<String, Rung>,
     /// Why each letter waits, logged once per change.
     held: HashMap<String, Hold>,
+    /// The composer reads made for panes held on a possible draft.
+    composer: super::composer::Reader,
 }
 
 /// How one attempt ended without failing.
@@ -361,6 +366,11 @@ impl Doorbell {
                 .iter()
                 .any(|letter| &letter.recipient.pane_id == pane)
         });
+        self.composer.retain(|pane| {
+            pending
+                .iter()
+                .any(|letter| letter.recipient.pane_id == pane)
+        });
         let mut count = 0;
         for &letter in &pending {
             if stop.load(Ordering::Acquire) || count >= WORK_PER_PASS {
@@ -380,6 +390,14 @@ impl Doorbell {
                         self.link_lost(&letter.id);
                     }
                     self.hold(&letter.id, pane, reason);
+                    // A draft the screen shows empty is released here, and
+                    // the next pass rings with every guard.
+                    if reason == Hold::Draft
+                        && targets.insert(pane.clone())
+                        && self.composer.release(owner, &letter.recipient, now)
+                    {
+                        count += 1;
+                    }
                     continue;
                 }
             };
@@ -477,6 +495,9 @@ impl Doorbell {
                     );
                 }
             }
+        }
+        if count < WORK_PER_PASS && !stop.load(Ordering::Acquire) {
+            self.composer.check(owner, now);
         }
         let mut guard = owner.lock().unwrap_or_else(|error| error.into_inner());
         guard.publish_delivery_holds(
@@ -727,6 +748,7 @@ mod tests {
             last_submit_at_unix_ms: NOW - 60_000,
             entered_working_at_unix_ms: NOW - 120_000,
             released_input_at_unix_ms: 0,
+            hook_submit_at_unix_ms: 0,
             session: None,
             host_scope: None,
             turn: if kind == "codex" {
@@ -1015,6 +1037,8 @@ mod tests {
         herdr: crate::fake_herdr::FakeHerdr,
         flags: Arc<Mutex<Value>>,
         letter: String,
+        /// What the pane's visible screen shows when Herdr reads it.
+        screen: Arc<Mutex<String>>,
         _worker: crate::delivery::worker::Worker,
         _root: tempfile::TempDir,
     }
@@ -1031,9 +1055,15 @@ mod tests {
             let (runtime, sender, _, path) = fixture(root.path());
             let flags = Arc::new(Mutex::new(flags));
             let answer = Arc::clone(&flags);
+            let screen = Arc::new(Mutex::new(String::new()));
+            let shown = Arc::clone(&screen);
             let herdr =
                 crate::fake_herdr::FakeHerdr::start_with_errors("doorbell", move |method, _| {
                     match method {
+                        "pane.read" => Ok(json!({"type": "pane_read", "read": {
+                            "pane_id": "recipient", "workspace_id": "w1", "tab_id": "w1:t1",
+                            "source": "visible", "format": "ansi", "revision": 1,
+                            "truncated": false, "text": *shown.lock().unwrap()}})),
                         "agent.get" | "agent.prompt" => {
                             if method == "agent.prompt"
                                 && let Some(code) = submission_error
@@ -1104,6 +1134,7 @@ mod tests {
                 client,
                 herdr,
                 flags,
+                screen,
                 letter: sent["id"].as_str().unwrap().to_owned(),
                 _worker: worker,
                 _root: root,
@@ -1174,6 +1205,44 @@ mod tests {
                 .filter(|(method, _)| method == "agent.prompt")
                 .map(|(_, params)| params)
                 .collect()
+        }
+
+        /// How many times the pane's screen was read.
+        fn reads(&self) -> usize {
+            self.herdr
+                .methods()
+                .iter()
+                .filter(|method| *method == "pane.read")
+                .count()
+        }
+
+        /// Hide knows the recipient's Codex as `0.163.0`, as the hook
+        /// diagnosis reads it, and that version's composer check passed or
+        /// failed, or has not run.
+        fn know_version(&self, checked: Option<bool>) {
+            use hide_agent_hooks::{
+                AgentRuntime, Diagnosis, HOOK_ENTRY_VERSION, HookStatus, MemoryCompatibility,
+                RuntimeDiagnosis,
+            };
+            let mut guard = self.runtime.lock().unwrap();
+            guard.ingest_hook_diagnosis(Diagnosis {
+                runtimes: vec![RuntimeDiagnosis {
+                    runtime: AgentRuntime::Codex,
+                    label: "Codex".into(),
+                    path: String::new(),
+                    status: HookStatus::Installed {
+                        version: HOOK_ENTRY_VERSION,
+                    },
+                    current_version: HOOK_ENTRY_VERSION,
+                    memory_compatibility: MemoryCompatibility::Supported {
+                        version: "0.163.0".into(),
+                    },
+                }],
+                last_report_failure: None,
+            });
+            if let Some(passed) = checked {
+                guard.record_composer_check("codex", "0.163.0", passed);
+            }
         }
 
         fn asked(&self) -> usize {
@@ -1766,9 +1835,11 @@ mod tests {
         })
         .1;
         assert_eq!(held(&passes), ["draft"]);
+        // The doorbell knows no version of this Codex, so its composer is
+        // not read (docs/delivery.md, Reading the composer).
         assert_eq!(
             kinds(&passes),
-            ["letter_mark.shown"],
+            ["composer.not_read", "letter_mark.shown"],
             "one change, not one per pass"
         );
         assert_eq!(mark(), Some(1));
@@ -1832,6 +1903,190 @@ mod tests {
             "a draft holds the letter before Herdr is asked"
         );
         assert_eq!(bell.attempts(), 0);
+    }
+
+    /// Codex's composer as the screen shows it empty and holding a draft,
+    /// cut from captures of Codex 0.163.0 (`hide-agent-adapter`'s
+    /// `tests/fixtures/composer`).
+    const CODEX_EMPTY: &str =
+        "\x1b[0m\x1b[1m› \x1b[0m\x1b[2mAsk Codex to do anything\x1b[0m\r\n\r\n  footer\r\n";
+    const CODEX_DRAFT: &str = "\x1b[0m\x1b[1m› \x1b[0mhello 안녕하세요\r\n\r\n  footer\r\n";
+
+    fn kinds_of(records: &[Value]) -> Vec<String> {
+        records
+            .iter()
+            .filter(|record| record["pane_id"] == "recipient")
+            .filter_map(|record| record["kind"].as_str())
+            .filter(|kind| kind.starts_with("composer."))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn pass_logged(bell: &Bell, doorbell: &mut Doorbell, at: u64) -> Vec<Value> {
+        crate::diagnostics::capture(|| {
+            doorbell.pass(&bell.runtime, &bell.client, &AtomicBool::new(false), at)
+        })
+        .1
+    }
+
+    /// docs/delivery.md, Reading the composer: the operator typed and erased
+    /// with Backspace, so a key holds the letter as a draft; once the pane
+    /// rests the screen is read, shows the composer empty, and the letter
+    /// rings with the doorbell's line, with no Deliver now.
+    #[test]
+    fn a_draft_the_screen_shows_empty_is_released_and_rung() {
+        let bell = Bell::start(json!({}));
+        bell.know_version(Some(true));
+        *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+        let start = now();
+        bell.runtime
+            .lock()
+            .unwrap()
+            .note_delivery_key_at("recipient", start - 40_000);
+        let mut doorbell = Doorbell::default();
+        let first = pass_logged(&bell, &mut doorbell, start);
+        assert_eq!(kinds_of(&first), ["composer.read", "composer.released"]);
+        let read = first
+            .iter()
+            .find(|record| record["kind"] == "composer.read")
+            .unwrap();
+        assert_eq!(read["verdict"], "empty");
+        assert_eq!(read["agent"], "codex");
+        assert!(read.get("text").is_none(), "no screen text is logged");
+        assert_eq!(bell.reads(), 1);
+        pass_logged(&bell, &mut doorbell, start + 250);
+        let typed = bell.typed();
+        assert_eq!(typed.len(), 1);
+        assert_eq!(typed[0]["text"], "🦉 Codex 보고: private · hide inbox");
+        assert_eq!(bell.reads(), 1, "a released draft is not read again");
+    }
+
+    /// A composer that shows text keeps the hold, and the screen is read
+    /// once per draft: passes over the same draft read nothing more, and the
+    /// next key makes a new draft, read once the pane rests again.
+    #[test]
+    fn a_draft_the_screen_shows_is_held_and_read_once_per_draft() {
+        let bell = Bell::start(json!({}));
+        bell.know_version(Some(true));
+        *bell.screen.lock().unwrap() = CODEX_DRAFT.into();
+        let start = now();
+        let key = |at: u64| {
+            bell.runtime
+                .lock()
+                .unwrap()
+                .note_delivery_key_at("recipient", at)
+        };
+        key(start - 40_000);
+        let mut doorbell = Doorbell::default();
+        let mut logged = Vec::new();
+        for at in [start, start + 250, start + 1_000] {
+            logged.extend(pass_logged(&bell, &mut doorbell, at));
+        }
+        assert_eq!(kinds_of(&logged), ["composer.read"]);
+        assert_eq!(
+            logged
+                .iter()
+                .find(|r| r["kind"] == "composer.read")
+                .unwrap()["verdict"],
+            "not_empty"
+        );
+        assert_eq!(bell.reads(), 1);
+        // A key in the quiet period is no rest yet.
+        key(start - 10_000);
+        pass_logged(&bell, &mut doorbell, start + 2_000);
+        assert_eq!(bell.reads(), 1);
+        // Once it rests, the new draft is read: now the operator erased it.
+        *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+        let rested = pass_logged(&bell, &mut doorbell, start + 20_000);
+        assert_eq!(kinds_of(&rested), ["composer.read", "composer.released"]);
+        assert_eq!(bell.reads(), 2);
+    }
+
+    /// The screen is judged only for a version whose composer check passed:
+    /// a version Hide does not know, has not checked or saw fail keeps
+    /// today's hold, and says why once per draft.
+    #[test]
+    fn a_version_not_known_checked_or_passed_holds_without_reading() {
+        for (known, checked, reason) in [
+            (false, None, "version_unknown"),
+            (true, None, "version_unchecked"),
+            (true, Some(false), "version_failed"),
+        ] {
+            let bell = Bell::start(json!({}));
+            if known {
+                bell.know_version(checked);
+            }
+            *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+            let start = now();
+            bell.runtime
+                .lock()
+                .unwrap()
+                .note_delivery_key_at("recipient", start - 40_000);
+            let mut doorbell = Doorbell::default();
+            let mut logged = Vec::new();
+            for at in [start, start + 250] {
+                logged.extend(pass_logged(&bell, &mut doorbell, at));
+            }
+            let skipped: Vec<_> = logged
+                .iter()
+                .filter(|record| record["kind"] == "composer.not_read")
+                .collect();
+            assert_eq!(skipped.len(), 1, "{reason}: logged once");
+            assert_eq!(skipped[0]["reason"], reason);
+            assert_eq!(bell.reads(), 0, "{reason}");
+            assert!(bell.typed().is_empty(), "{reason}");
+        }
+    }
+
+    /// docs/delivery.md, Catching an agent's screen change: the first time
+    /// Hide sees a version, at a moment its composer is known empty (a turn a
+    /// prompt hook started has ended, no key since), the screen is read
+    /// once. An empty screen passes the version, and its drafts are read; a
+    /// screen that does not read empty fails it, and its drafts hold.
+    #[test]
+    fn a_new_version_is_checked_once_at_a_known_empty_moment() {
+        for (screen, verdict, then) in [
+            (CODEX_EMPTY, "empty", "composer.read"),
+            (CODEX_DRAFT, "not_empty", "composer.not_read"),
+        ] {
+            let bell = Bell::start(json!({}));
+            bell.know_version(None);
+            *bell.screen.lock().unwrap() = screen.into();
+            let start = now();
+            crate::runtime::delivery::tests::observe_turn_ended(
+                &mut bell.runtime.lock().unwrap(),
+                "recipient",
+                start - 60_000,
+            );
+            let mut doorbell = Doorbell::default();
+            let logged = pass_logged(&bell, &mut doorbell, start);
+            let checked: Vec<_> = logged
+                .iter()
+                .filter(|record| record["kind"] == "composer.version_checked")
+                .collect();
+            assert_eq!(checked.len(), 1, "{verdict}");
+            assert_eq!(checked[0]["verdict"], verdict);
+            assert_eq!(checked[0]["version"], "0.163.0");
+            assert_eq!(bell.reads(), 1);
+            // The same moment is not checked again, nor is a checked version.
+            pass_logged(
+                &bell,
+                &mut doorbell,
+                start + super::super::composer::CHECK_EVERY_MS,
+            );
+            assert_eq!(bell.reads(), 1, "{verdict}");
+            // A draft after the check is read only when the version passed.
+            *bell.screen.lock().unwrap() = CODEX_EMPTY.into();
+            bell.runtime
+                .lock()
+                .unwrap()
+                .note_delivery_key_at("recipient", start - 40_000);
+            let later = pass_logged(&bell, &mut doorbell, start + 20_000);
+            assert!(
+                kinds_of(&later).contains(&then.to_owned()),
+                "{verdict}: {later:?}"
+            );
+        }
     }
 
     #[test]
