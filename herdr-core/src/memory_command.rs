@@ -281,8 +281,8 @@ impl PreparedMemory {
                 }));
                 "memory_unavailable".to_owned()
             })?;
-        let enabled = match store.project_state(&identity.id) {
-            Ok(state) => state.enabled,
+        let enabled = match store.project_enabled(&identity.id) {
+            Ok(enabled) => enabled,
             Err(hide_memory::MemoryError::ProjectMissing) => false,
             Err(error) => return Err(store_failure(&identity.id, &error)),
         };

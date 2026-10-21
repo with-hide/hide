@@ -1316,6 +1316,20 @@ impl MemoryStore {
         self.project_state_limited(project_id, ACTIVE_MEMORY_LIMIT)
     }
 
+    /// Whether the Project's Memory is on, read alone: the prompt hook and
+    /// the commands ask only this, never the Memory tab's counts.
+    pub fn project_enabled(&self, project_id: &str) -> Result<bool, MemoryError> {
+        self.connection
+            .query_row(
+                "SELECT enabled FROM projects WHERE id=?1",
+                [project_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|enabled| enabled != 0)
+            .ok_or(MemoryError::ProjectMissing)
+    }
+
     /// The Memory tab said how many cards were forgotten to make room, the
     /// newest at `through_unix_ms`: those are no longer counted.
     pub fn mark_evictions_seen(
@@ -3228,8 +3242,7 @@ impl MemoryStore {
             token_count: 0,
             matched: 0,
         };
-        let state = self.project_state(&query.project_id)?;
-        if !state.enabled {
+        if !self.project_enabled(&query.project_id)? {
             return Ok(empty(InjectionOutcome::Disabled));
         }
         let mut matched = 0;
@@ -6330,6 +6343,60 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
         assert_eq!(version, SCHEMA_VERSION);
         store.mark_evictions_seen(&project, 5).unwrap();
         assert_eq!(store.project_state(&project).unwrap().evicted_count, 0);
+    }
+
+    #[test]
+    fn the_prompt_hook_reads_none_of_the_memory_tabs_counts() {
+        // A full Project stays full, so the hook must not sort its cards or
+        // scan its forgotten ones on every prompt: a read of what only the
+        // Memory tab's counts use refuses to prepare.
+        let (_temp, mut store, project) = store();
+        store
+            .apply_candidates(
+                &batch(&project, "b1", "b1"),
+                &[candidate(
+                    "Run the linter before a merge",
+                    CandidateRelation::New,
+                )],
+            )
+            .unwrap();
+        let card = store.list_memories(&project).unwrap().remove(0);
+        store
+            .confirm_card(&card.id, card.revision, None, &[], 1)
+            .unwrap();
+        store.connection.authorizer(Some(
+            |context: rusqlite::hooks::AuthContext<'_>| match context.action {
+                rusqlite::hooks::AuthAction::Read {
+                    table_name,
+                    column_name,
+                } if (table_name == "projects" && column_name == "evictions_seen_at_ms")
+                    || (table_name == "memory_items" && column_name == "last_used_at_ms")
+                    || (table_name == "memory_revisions" && column_name == "batch_id") =>
+                {
+                    rusqlite::hooks::Authorization::Deny
+                }
+                _ => rusqlite::hooks::Authorization::Allow,
+            },
+        ));
+        let injection = store
+            .retrieve_with_expiry(
+                &RetrievalQuery {
+                    project_id: project.clone(),
+                    kind: InjectionKind::Bodies,
+                    text: "linter merge".into(),
+                    excluded_memory_ids: Vec::new(),
+                    maximum_items: 3,
+                    maximum_tokens: 1_200,
+                    deadline: Duration::from_secs(5),
+                },
+                || false,
+            )
+            .unwrap();
+        assert_eq!(injection.items.len(), 1);
+        assert!(
+            store.project_state(&project).is_err(),
+            "the tab's counts do read them"
+        );
     }
 
     #[test]
