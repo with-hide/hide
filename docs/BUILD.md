@@ -254,25 +254,32 @@ The command installs nothing; [The Installed App Is The Operator's](../AGENTS.md
 `release-candidate.yml` is a manual preparation workflow on protected `main`.
 It creates no tag or release and reads no signing credential.
 Its four required string inputs are `public_sha` (a full lowercase commit SHA), `tag` (`vX.Y.Z` or `vX.Y.Z-rc.N`), `verification_run_id` (the successful `pr.yml` push/main run of that exact source), and `build_order` (a positive decimal integer no larger than 9007199254740991).
+The optional boolean `live_agents` defaults to `true`; select `false` to defer signed-in provider calls when accounts are unavailable.
 The source must already be an ancestor of main; a branch, fork, PR run, incomplete run or different source is refused before building or using provider keys.
 The workflow revision is main's dispatch revision and may differ from the source revision it builds.
 
 The workflow reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks.
-It runs the full existing `agent-journey.yml` on the same source, with stand-ins, fake and signed-in lanes on all three systems and agy signed in on Linux only, under the journey's existing missing-key and quota policy.
+It runs the existing `agent-journey.yml` on the same source, with stand-ins on Linux and macOS, Windows form checks, and fake-model lanes on all three systems.
+With `live_agents=true`, it also requests signed-in lanes on all three systems and agy signed in on Linux only, under the journey's existing missing-key and quota policy.
+With `live_agents=false`, signed-in checks are **not measured**, as recorded in the receipt and workflow summary; package, stand-in and fake-model failures still block the receipt.
+The selection never changes an earlier failure into a pass, and a successful candidate does not establish that every provider answered.
 The reusable workflows' optional `source-sha` defaults to the caller commit, and `package.yml`'s optional `build-order` defaults to its existing history-based ordering, so existing callers keep their behavior.
 An explicit order allows separately prepared packages of one numeric version to share one build identity.
 The operator assigns a strictly increasing order within that numeric version, including release-candidate to stable transitions; a private-only change takes a new patch version.
 
-Only after packaging and the full journey succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`:
+Only after packaging and the selected journey succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`:
 
 ```json
-{"schema":1,"repository":"with-hide/hide","public_sha":"<source SHA>","tag":"vX.Y.Z","build_order":"<decimal>","verification_run_id":"<decimal>","workflow_sha":"<workflow SHA>","run_id":"<decimal>","run_attempt":1}
+{"schema":2,"repository":"with-hide/hide","public_sha":"<source SHA>","tag":"vX.Y.Z","build_order":"<decimal>","verification_run_id":"<decimal>","workflow_sha":"<workflow SHA>","run_id":"<decimal>","run_attempt":1,"live_agents":false}
 ```
 
 The installer artifacts keep the names `hide-package-linux` and `hide-package-windows`; candidate artifacts expire after seven days.
 All receipt fields describe public facts, with IDs and order as decimal strings and `schema` and `run_attempt` as integers.
+Schema 2 adds the boolean `live_agents`, which records whether provider checks were requested, not their per-cell verdicts.
+Consumers retaining schema 1 support must treat its missing selection as the original live-enabled workflow, never as evidence that all providers passed.
 A consumer verifies the successful manual main run, its trusted workflow revision, current attempt, matching receipt and artifact inventory before consuming it; a receipt alone proves neither GitHub origin nor that a package is signed.
 Run evidence and reports remain workflow artifacts, separate from distributable files.
+Release approval must disclose deferred or otherwise unmeasured provider coverage; this option does not waive signing, installation, update checks or version approval.
 This preparation path does not change the active tag-triggered publisher or release approval procedure below.
 
 ## Release asset gate

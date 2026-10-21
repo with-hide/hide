@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from urllib.parse import parse_qs, urlsplit
 
 SCRIPT = Path(__file__).parents[1] / "ci-flaky-report.py"
 SPEC = importlib.util.spec_from_file_location("ci_flaky_report", SCRIPT)
@@ -81,10 +82,12 @@ class Filing(unittest.TestCase):
         def call(args, body=None):
             self.calls.append((args, body))
             path = args[0]
+            page = int(parse_qs(urlsplit(path).query).get("page", [1])[0])
+            start = (page - 1) * 100
             if "/issues?labels=" in path:
-                return list(existing)
-            if path.endswith("/comments?per_page=100"):
-                return list(comments)
+                return list(existing)[start:start + 100]
+            if "/comments?" in path:
+                return list(comments)[start:start + 100]
             if path.endswith("/issues"):
                 return {"number": 50, "html_url": "https://example/50", "body": body["body"]}
             return {}
@@ -110,6 +113,55 @@ class Filing(unittest.TestCase):
         test = {"file": "web/e2e/a.spec.ts", "name": "wobbles", "error": "boom"}
         issue = {"number": 5, "body": '`web/e2e/a.spec.ts` "wobbles"'}
         r.report([test], "Linux", ENV, self.call([issue], [{"body": "<!-- flaky-run:77:1 -->"}]), TODAY)
+        self.assertEqual([c for c in self.calls if c[1] is not None], [])
+
+    def test_a_tracked_test_beyond_the_first_issue_page_gets_no_duplicate_issue(self):
+        test = {"file": "web/e2e/a.spec.ts", "name": "wobbles", "error": "boom"}
+        for count in (99, 100, 101):
+            with self.subTest(issues=count):
+                self.calls.clear()
+                existing = [{"number": n + 1, "body": "another test"} for n in range(count - 1)]
+                existing.append({"number": 500, "body": '`web/e2e/a.spec.ts` "wobbles"'})
+                r.report([test], "Linux", ENV, self.call(existing), TODAY)
+                posts = [(args[0], body) for args, body in self.calls if body is not None]
+                self.assertEqual([path for path, _ in posts], ["repos/o/r/issues/500/comments"])
+
+    def test_the_same_run_beyond_the_first_comment_page_is_not_added_twice(self):
+        test = {"file": "web/e2e/a.spec.ts", "name": "wobbles", "error": "boom"}
+        issue = {"number": 5, "body": '`web/e2e/a.spec.ts` "wobbles"'}
+        for count in (99, 100, 101):
+            with self.subTest(comments=count):
+                self.calls.clear()
+                comments = [{"body": "an older run"} for _ in range(count - 1)]
+                comments.append({"body": "<!-- flaky-run:77:1 -->"})
+                r.report([test], "Linux", ENV, self.call([issue], comments), TODAY)
+                self.assertEqual([c for c in self.calls if c[1] is not None], [])
+
+    def test_an_incomplete_issue_listing_makes_no_new_issue(self):
+        test = {"file": None, "name": "wobbles", "error": "boom"}
+        for cause in ("page limit", "GitHub failure"):
+            with self.subTest(cause=cause):
+                self.calls.clear()
+                def call(args, body=None):
+                    self.calls.append((args, body))
+                    if body is not None:
+                        return {"number": 50, "html_url": "https://example/50", "body": body["body"]}
+                    if cause == "GitHub failure" and "page=2" in args[0]:
+                        raise RuntimeError("GitHub unavailable")
+                    return [{"number": n, "body": "another test"} for n in range(100)]
+                with self.assertRaises(RuntimeError):
+                    r.report([test], "Linux", ENV, call, TODAY)
+                self.assertEqual([c for c in self.calls if c[1] is not None], [])
+
+    def test_an_incomplete_comment_listing_makes_no_duplicate_comment(self):
+        test = {"file": None, "name": "wobbles", "error": "boom"}
+        def call(args, body=None):
+            self.calls.append((args, body))
+            if "/issues?" in args[0]:
+                return [{"number": 5, "body": "`wobbles`"}]
+            return [{"body": "an older run"} for _ in range(100)]
+        with self.assertRaises(RuntimeError):
+            r.report([test], "Linux", ENV, call, TODAY)
         self.assertEqual([c for c in self.calls if c[1] is not None], [])
 
     def test_a_flake_past_its_expiry_says_so(self):
@@ -381,6 +433,39 @@ def nightly(github, lane_input=""):
 
 
 class NightlyFailures(unittest.TestCase):
+    def test_moved_suites_continue_the_existing_issue_instead_of_opening_another(self):
+        moved = (
+            ("web e2e (Windows @platform) / build hided nightly-windows", "verify / windows e2e / build hided windows"),
+            ("web e2e (Windows @platform) / web e2e nightly-windows", "verify / windows e2e / web e2e windows"),
+            ("desktop e2e (macos full) / desktop e2e nightly-macos", "verify / desktop e2e / desktop e2e macos"),
+            ("desktop e2e (windows @platform) / desktop e2e nightly-windows", "verify / windows desktop / desktop e2e windows"),
+        )
+        for old, new in moved:
+            for existing, current in ((old, new), (new, old)):
+                with self.subTest(existing=existing, current=current):
+                    issue = {"number": 5, "body": f"<!-- nightly-failure:{existing}:step Compile -->"}
+                    github = nightly(FakeGitHub(
+                        [job(1, current + " 1/1", "failure", [("Compile", "failure")])],
+                        issues=[issue], logs={1: "compiler error"}))
+                    self.assertEqual(github.opened(), [])
+                    self.assertEqual(github.commented(), [5])
+                    self.assertEqual(github.closed(), [])
+
+    def test_a_moved_suites_old_issue_closes_only_after_a_measured_green_run(self):
+        old = "desktop e2e (macos full) / desktop e2e nightly-macos"
+        new = "verify / desktop e2e / desktop e2e macos"
+        issue = {"number": 5, "body": f"<!-- nightly-failure:{old}:desktop/e2e/a.spec.ts > input -->"}
+        for conclusion in ("success", "failure", "cancelled", "skipped"):
+            with self.subTest(second_shard=conclusion):
+                github = nightly(FakeGitHub(
+                    [job(1, new + " 1/2", "success"), job(2, new + " 2/2", conclusion)],
+                    issues=[issue], logs={2: "a shard failed"}))
+                self.assertEqual(github.closed(), [5] if conclusion == "success" else [])
+        github = nightly(FakeGitHub(
+            [job(1, new + " 1/1", "success")], issues=[issue],
+            annotations={1: [{"title": "Not measured", "message": "input\nrunner unavailable"}]}))
+        self.assertEqual(github.closed(), [])
+
     def package_failed(self, **extra):
         github = FakeGitHub(
             [job(1, PACKAGE, "failure", [("Packaged app launch", "failure")]), job(2, "desktop e2e (macos full)", "success")],

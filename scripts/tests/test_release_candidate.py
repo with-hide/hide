@@ -52,7 +52,10 @@ class ReleaseCandidate(unittest.TestCase):
         workflow = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())
         self.assertEqual(set(workflow[True]), {"workflow_dispatch"})
         self.assertEqual(set(workflow[True]["workflow_dispatch"]["inputs"]),
-                         {"public_sha", "tag", "verification_run_id", "build_order"})
+                         {"public_sha", "tag", "verification_run_id", "build_order", "live_agents"})
+        live = workflow[True]["workflow_dispatch"]["inputs"]["live_agents"]
+        self.assertEqual(live["type"], "boolean")
+        self.assertIs(live["default"], True)
         for permissions in [workflow["permissions"], *[
             job["permissions"] for job in workflow["jobs"].values() if "permissions" in job
         ]]:
@@ -63,7 +66,7 @@ class ReleaseCandidate(unittest.TestCase):
         self.assertEqual(packages["with"]["macos-signing"], "adhoc")
         self.assertNotIn("secrets", packages)
 
-    def test_receipt_waits_for_packages_and_full_journey_of_the_same_commit(self):
+    def test_receipt_waits_for_packages_and_selected_journey_of_the_same_commit(self):
         jobs = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]
         receipt = jobs["receipt"]
         self.assertEqual(set(receipt["needs"]), {"validate", "packages", "agent-journey"})
@@ -74,7 +77,7 @@ class ReleaseCandidate(unittest.TestCase):
         self.assertEqual(jobs["packages"]["with"]["build-order"], "${{ inputs.build_order }}")
         journey = jobs["agent-journey"]["with"]
         self.assertEqual(journey["systems"], '["linux","macos","windows"]')
-        self.assertTrue(journey["live"])
+        self.assertEqual(journey["live"], "${{ inputs.live_agents }}")
         self.assertTrue(journey["fake"])
         self.assertEqual(journey["agy"], "linux")
         for filename in ["package.yml", "agent-journey.yml"]:

@@ -7,6 +7,9 @@ import { CircleAlertIcon, EllipsisIcon, Maximize2Icon, MoonIcon, TerminalSquareI
 import { memo, useEffect, useRef } from "react";
 import type { Actions } from "./actions";
 import { refusalText, submitFiles } from "./attachments";
+import { explorerDrag } from "./explorerDrag";
+import { remoteTargetOfPane } from "./remote";
+import { localDeviceId } from "./snapshot";
 import { agentsByPane } from "./paneAgents";
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { AgentMark } from "./AgentMark";
@@ -29,7 +32,7 @@ import type { AgentSleep, AgentStatusCode, PaneRow, RowMark, TerminalPane } from
 import { PaneNoticeBody } from "./PaneNotice";
 import { caughtUp } from "./operatorFocus";
 import { useShellStore } from "./store";
-import { attachTerminal, bracketedPaste, focusTerminal, requestView, setTextScale, terminalLinkAt, terminalSelectionText } from "./terminals";
+import { attachTerminal, bracketedPaste, focusTerminal, pasteExplorerCopy, pasteExplorerFile, requestView, setTextScale, terminalLinkAt, terminalSelectionText } from "./terminals";
 
 /**
  * Transport states with a live stream; anything else is drawn as a caption in
@@ -201,10 +204,27 @@ export const PaneView = memo(function PaneView({
   // A dropped file or a pasted image stages through hided and reaches the
   // terminal as the core's own `terminal_attachment` (B14).
   const drop = (event: React.DragEvent) => {
+    const item = explorerDrag.current;
+    if (item) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!acceptsExplorerDrag()) return;
+      actions.focusPane(paneId);
+      focusTerminal(paneId);
+      pasteExplorerFile(paneId, item);
+      return;
+    }
     const files = Array.from(event.dataTransfer.files);
     if (files.length === 0) return;
     event.preventDefault();
     void submitFiles(paneId, files, false, bracketedPaste(paneId));
+  };
+
+  const acceptsExplorerDrag = () => {
+    const item = explorerDrag.current;
+    const rest = useShellStore.getState().rest;
+    const device = remoteTargetOfPane(rest, paneId) ?? localDeviceId(rest);
+    return item !== null && !item.directory && item.device === device;
   };
 
   // The terminal is shown here and parked on unmount, not disposed: the
@@ -268,6 +288,12 @@ export const PaneView = memo(function PaneView({
     const host = hostRef.current;
     if (!host) return undefined;
     const onPaste = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (text && pasteExplorerCopy(paneId, text)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       const items = Array.from(event.clipboardData?.items ?? []).filter((item) => item.type.startsWith("image/"));
       if (items.length === 0) return;
       const files = items.map((item) => item.getAsFile()).filter((file): file is File => file !== null);
@@ -305,6 +331,11 @@ export const PaneView = memo(function PaneView({
       data-menu-open={paneMenu.open ? "true" : "false"}
       data-transport={transport?.transport_state ?? ""}
       onDragOver={(event) => {
+        if (explorerDrag.current) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = acceptsExplorerDrag() ? "copy" : "none";
+          return;
+        }
         if (event.dataTransfer.types.includes("Files")) event.preventDefault();
       }}
       onDrop={drop}

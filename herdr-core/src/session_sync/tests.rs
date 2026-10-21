@@ -55,6 +55,53 @@ fn every_session_sync_snapshot_fixture_obeys_the_generated_contract() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // The peer's response latency is the subject of this test.
+fn remote_session_sync_accepts_responses_after_the_local_read_deadline() {
+    let herdr =
+        crate::fake_herdr::FakeHerdr::start_with_errors("remote-sync-latency", |method, _| {
+            // Exercise real socket deadlines, beyond the unchanged local
+            // one second and within the remote three-second allowance.
+            thread::sleep(Duration::from_millis(1250));
+            Ok(match method {
+                "events.subscribe" => json!({"type": "subscription_started"}),
+                "session.snapshot" => {
+                    json!({"type": "session_snapshot", "snapshot": snapshot()})
+                }
+                "agent.list" => json!({"type": "agent_list", "agents": []}),
+                "workspace.get" => {
+                    json!({"type": "workspace_info", "workspace": snapshot()["workspaces"][0]})
+                }
+                "pane.get" => json!({"type": "pane_info", "pane": snapshot()["panes"][0]}),
+                "agent.get" => return Err(("agent_not_found".into(), "no agent".into())),
+                other => panic!("unexpected request {other}"),
+            })
+        });
+    let context = SessionSyncContext::remote(
+        "fixture-device",
+        "Fixture device",
+        Arc::new(herdr.connector()),
+        Weak::new(),
+        ChangeNotifier::noop(),
+    );
+    let (sender, _messages) = channel();
+    let connected = subscription::connect(&context, &sender, &mut 0, false)
+        .expect("delayed remote subscription and snapshot are accepted");
+    assert_eq!(connected.replica.state.panes[0].pane_id, "w1:p1");
+    assert!(subscription::fetch_agents(&context).unwrap().is_empty());
+    assert_eq!(
+        subscription::fetch_workspace_active_tab(&context, "w1").unwrap(),
+        "w1:t1"
+    );
+    assert_eq!(
+        subscription::fetch_pane_cwd(&context, "w1:p1").unwrap(),
+        Some("/tmp/fixture".into())
+    );
+    subscription::fetch_agent_launch(&context, "w1:p1")
+        .expect("an answered absent agent is not a transport failure");
+    connected.subscription.stop();
+}
+
+#[test]
 fn unconfirmed_telemetry_preserves_identity_but_never_claims_activity_or_demand() {
     let mut value = snapshot();
     value["agents"] = json!([{

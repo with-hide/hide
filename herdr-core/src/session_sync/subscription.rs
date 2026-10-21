@@ -27,7 +27,7 @@ pub(crate) fn connect(
     let subscription = hide_herdr_client::subscribe_with_connector(
         context.api_connector.as_ref(),
         params,
-        SYNC_REQUEST_TIMEOUT,
+        context.request_timeout(),
     )
     .map_err(|error| connect_failure_from_api(error, has_projection))?;
     *generation = generation.saturating_add(1);
@@ -107,7 +107,7 @@ fn fetch_replica(context: &SessionSyncContext) -> Result<SessionReplica, Session
         context.api_connector.as_ref(),
         "session.snapshot",
         json!({}),
-        SYNC_REQUEST_TIMEOUT,
+        context.request_timeout(),
     )
     .map_err(session_error_from_api)?;
     SessionReplica::from_decoded(wire::snapshot_response(result)?)
@@ -120,7 +120,7 @@ pub(crate) fn fetch_agents(
         context.api_connector.as_ref(),
         "agent.list",
         json!({}),
-        SYNC_REQUEST_TIMEOUT,
+        context.request_timeout(),
     )
     .map_err(|error| match error {
         // A server refusal is an answered query, not a delayed transport.
@@ -144,7 +144,7 @@ pub(crate) fn fetch_workspace_active_tab(
         context.api_connector.as_ref(),
         "workspace.get",
         wire::workspace_target_params(workspace_id).map_err(SessionFetchError::Malformed)?,
-        SYNC_REQUEST_TIMEOUT,
+        context.request_timeout(),
     )
     .map_err(session_error_from_api)?;
     wire::workspace_active_tab(result).map_err(SessionFetchError::Malformed)
@@ -162,7 +162,7 @@ pub(crate) fn fetch_pane_cwd(
         context.api_connector.as_ref(),
         "pane.get",
         wire::pane_target_params(pane_id).map_err(SessionFetchError::Malformed)?,
-        SYNC_REQUEST_TIMEOUT,
+        context.request_timeout(),
     ) {
         Ok(result) => result,
         Err(error) if error.code() == Some("pane_not_found") => return Ok(None),
@@ -184,7 +184,7 @@ pub(crate) fn fetch_agent_launch(
         context.api_connector.as_ref(),
         "agent.get",
         wire::agent_target_params(pane_id).map_err(SessionFetchError::Malformed)?,
-        SYNC_REQUEST_TIMEOUT,
+        context.request_timeout(),
     ) {
         Ok(result) => result,
         Err(error) if error.code() == Some("agent_not_found") => return Ok(()),
