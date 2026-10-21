@@ -361,6 +361,7 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
   const openRow = (row: ExplorerRow, preview: boolean) => {
     setSelection(row.path);
     if (row.isDirectory) toggleFolder(row.path);
+    else if (isHtmlFile(row.path)) actions.openInBrowser(row.path);
     else actions.openFile(row.path, preview);
   };
 
@@ -777,6 +778,11 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
             setMenu(null);
             actions.openInBrowser(path);
           }}
+          onOpenSource={(path) => {
+            setMenu(null);
+            setSelection(path);
+            actions.openFile(path, false);
+          }}
           onRevealExternal={(path) => {
             setMenu(null);
             actions.revealExternal(path);
@@ -887,6 +893,7 @@ function ExplorerContextMenu({
   onClose,
   onOpenBeside,
   onOpenBrowser,
+  onOpenSource,
   onRevealExternal,
   onCopyPath,
   canPaste,
@@ -905,6 +912,8 @@ function ExplorerContextMenu({
   onOpenBeside: (path: string) => void;
   /** An HTML file as a page in a browser display (issue 155). */
   onOpenBrowser: (path: string) => void;
+  /** Open HTML in the editor instead of its default Browser View. */
+  onOpenSource: (path: string) => void;
   /** The file or folder selected in the OS file manager (issue 324). */
   onRevealExternal: (path: string) => void;
   /** The path (or the path below the checkout root) put on the clipboard. */
@@ -946,6 +955,7 @@ function ExplorerContextMenu({
         else if (id === "new-folder") onNewFile(menu.path, "folder");
         else if (row && id === "open-beside") onOpenBeside(row.path);
         else if (row && id === "open-browser") onOpenBrowser(row.path);
+        else if (row && id === "open-source") onOpenSource(row.path);
         else if (id === "reveal_external") onRevealExternal(menu.path);
         else if (row && id === "cut") onCut(row);
         else if (row && id === "copy") onCopy(row);

@@ -36,6 +36,7 @@ describe("the Explorer's context menu", () => {
     expect(drawn(explorerMenuItems({ ...base, isDirectory: false, row: file, html: true }))).toEqual([
       "Open to the side",
       "Open in Browser",
+      "Open source",
       "─",
       "Reveal in Finder",
       "─",
