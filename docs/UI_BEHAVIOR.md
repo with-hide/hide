@@ -840,7 +840,7 @@ Web owner: `web/src/attachments.ts`, `web/src/PaneView.tsx`, `web/src/explorerDr
 
 Dragging an Explorer file onto a terminal focuses that pane and inserts the original absolute path as quoted text, without submitting it.
 Image files instead read through the checkout's existing bounded file-bytes stream and enter the same binary attachment flow as an external image drop, retaining their original format and filename.
-One Explorer image read is admitted at a time, capped at 20 MiB, and a reconnection during that read discards the result.
+One Explorer image read is admitted at a time, capped at 20 MiB, and a page reconnection, receiving pane closure, or terminal transport generation change during that read discards the result.
 Folders and files from another device show the forbidden drop cursor and insert nothing; moving files inside Explorer keeps its existing behavior.
 Image acceptance and display remain the receiving program's responsibility, as for other terminal attachments.
 
