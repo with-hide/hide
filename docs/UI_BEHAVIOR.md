@@ -508,6 +508,18 @@ The browser display's toolbar and its loading, load failed, and plain browser ta
 ### Agent panes and the Agents explorer
 
 A pane header is a quiet identity row: the ancestor path, the status mark, the agent's logo, title, the fork mark, the letters-waiting pill, the task chip, the PR mark, the limited-integration icon, and the retained overflow, zoom and close controls at the right end.
+Dragging the title or unused space in the first header row moves that pane after the pointer crosses the ordinary drag threshold; a short title click still opens its record.
+Header buttons, relationship rows and terminal text keep their existing actions.
+A pane drops on another pane's left, right, top or bottom edge in the selected group's Agent areas, on a tab title to join beside its selected pane, or on that area's New tab button to separate into a tab.
+A centre, self, Files, other checkout, device or group is not a destination.
+Hovering a tab shows an inert preview without selecting or reading it, waking its session, moving the keyboard, or changing a terminal's grid; Escape, blur, outside release and a changed source or target cancel it.
+The pane menu offers the same destination tabs, panes, edges and New tab action without a new shortcut.
+A sole pane dropped on its own area's New tab button keeps its tab; in another area it moves that existing tab.
+A successful move focuses the destination and removes an empty source tab, including a named tab, collapsing an empty non-root area without opening a replacement shell.
+The operation keeps the running terminal, conversation and responsibility relationships; a manually placed delegated pane stays where it was put.
+Related tabs cannot start another geometry operation while the move is pending, while other tabs and terminal input remain available.
+A definitive failure offers Retry locally; an uncertain result offers a status check and exposes the confirmed live placement before another move can be tried.
+
 The task chip (PRD task-split-checklist D-05, D-06) is a checklist icon and `<done>/<tasks>` in figures, drawn from the pane session's first task (`0/1`) and never for a session with no task, whatever children it has, a plain shell, or with Agent summaries off; it carries no child count, and the second row with the child badge does not move it.
 The pointer on the chip or the keyboard's focus on it opens the checklist below the header, which never covers the header it belongs to and stays inside the window at narrow widths: `시킨 일 <done>/<total>`, each task's checkbox, name (Korean wrapping between words) and right-hand word with a split request's PR marks once on its first task; right under the tasks this pane session's own `지금` box, the record's state box part with its words, `지금 · 질문 <line>` edged and written in the warning colour behind `!` while it asks or is blocked and `지금 · 작업 중 <line>` quiet otherwise, drawn only while the agent has a current line; then `맡긴 일 N · 끝남 k` in one line (`맡긴 일 N` while a child has no judgment, nothing without children), never a child's words and never a bar; and `기록 열기` with the chord, which opens the session record on the same task list (PRD record-card-readability D-08, B15); the task marks are the record's checkboxes, and nothing turns in the list.
 Leaving the chip and the list, or blurring the chip, closes it; a press on the chip or Show task list (⇧⌘U, Alt+Shift+U on Windows and Linux, remappable) pins the focused pane's list, and a second press, the chord again or Esc closes it; Esc on a pinned list stops there, so an agent CLI in the focused terminal is not interrupted, and opening the list never takes the keyboard from the terminal (`web/src/PaneTaskChip.tsx`).
