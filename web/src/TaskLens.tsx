@@ -376,7 +376,7 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
             <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai ? "card" : null} />
             <AgentRecordTitle agent={agent} className="text-caption font-medium" />
             <AgentForkMark agent={agent} />
-            {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:invisible group-focus-within/task:invisible hoverless:invisible" /> : null}
+            {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
           {open ? null : <DescendantMark agent={agent} />}
           <AgentPrMark agent={agent} family={family} staleness={staleness} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
