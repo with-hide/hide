@@ -348,7 +348,9 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
   const record = session ? () => actions.openSessionRecord(session) : null;
   const toggle = () => actions.toggleSessionTree(agent.pane_id);
   // The ⋯ and a right-click on the row open the same menu (PRD session-archive B1, D-27).
-  const menu = useTaskMenu(agent, record, go, !agent.resolved, disabled, actions, true);
+  // The core refuses to resolve work that runs or waits, or an approval prompt (`sessions::resolve_refusal`), so the menu does not offer it.
+  const resolvable = !agent.resolved && agent.activity !== "working" && agent.group !== "working" && agent.demand !== "approval";
+  const menu = useTaskMenu(agent, record, go, resolvable, disabled, actions, true);
   // The row's own mark words, as the sidebar row says them (status-marks B3, B33); a fold's rows say the fold.
   // A starred task waiting in 다시 볼 것 wears the ★ in its mark's slot; a read ask keeps its own mark (PRD revisit-group B2, B6).
   const starMark = card.state === "revisit" && starred(agent) && !agent.revisit?.read_ask;

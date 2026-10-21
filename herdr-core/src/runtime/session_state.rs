@@ -54,6 +54,10 @@ impl Runtime {
             );
             return false;
         };
+        if let Some(reason) = sessions::resolve_refusal(row) {
+            self.push_diagnostic("session.resolve.refused", format!("Pane {pane}: {reason}"));
+            return false;
+        }
         if self.snapshot.ui_state.resolved_sessions.contains_key(pane)
             || self.pending_session_resolutions.contains_key(pane)
         {
@@ -86,8 +90,14 @@ impl Runtime {
         // A standalone runtime has already acknowledged its synchronous write.
         self.sync_session_state();
         self.refresh_agent_scopes();
-        self.snapshot.ui_state.resolved_sessions.contains_key(pane)
-            || self.pending_session_resolutions.contains_key(pane)
+        let resolved = self.snapshot.ui_state.resolved_sessions.contains_key(pane)
+            || self.pending_session_resolutions.contains_key(pane);
+        // The operator who resolves a row has dealt with it, so it is read:
+        // 쉬는 중 never holds a row that still says it is unread.
+        if resolved && source == sessions::ResolveSource::Operator {
+            self.open_result(pane);
+        }
+        resolved
     }
 
     pub(super) fn acknowledge_session_save(

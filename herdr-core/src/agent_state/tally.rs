@@ -188,7 +188,11 @@ pub fn sync_checkout_agent_summaries(
             continue;
         }
         let summary = &mut summaries[index];
-        RowMark::of(agent).count_into(&mut summary.marks);
+        // A resolved row rests in every list, so the badge does not count
+        // its mark either.
+        if agent.resolved.is_none() {
+            RowMark::of(agent).count_into(&mut summary.marks);
+        }
         let group = group_of(agent);
         match group {
             AgentGroup::NeedsYou => summary.needs_you += 1,

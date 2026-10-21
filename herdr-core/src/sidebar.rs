@@ -1247,6 +1247,22 @@ mod tests {
                 .as_deref(),
             Some("working")
         );
+        // The read error and the read question are both the operator's turn;
+        // once the error's task is resolved it rests in every list, and the
+        // badge stops counting it too.
+        assert_eq!(workspaces[0].checkouts[0].agent_summary.marks.turn, 2);
+        agents
+            .iter_mut()
+            .find(|a| a.pane_id == "error")
+            .unwrap()
+            .resolved = Some(crate::agent_state::sessions::Resolution {
+            at_unix_ms: 1,
+            source: crate::agent_state::sessions::ResolveSource::Operator,
+            session: None,
+            activity: String::new(),
+        });
+        sync_checkout_agent_summaries(&mut workspaces, &agents);
+        assert_eq!(workspaces[0].checkouts[0].agent_summary.marks.turn, 1);
     }
 
     fn payload(agents: Value) -> SessionSnapshotPayload {
