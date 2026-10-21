@@ -23,7 +23,7 @@ use hide_memory::{
 use serde_json::json;
 
 use super::memory::{digest, now_ms};
-use super::memory_analysis::AnalysisFailure;
+use super::memory_analysis::{AnalysisFailure, FailureScope};
 use super::memory_evidence::CheckoutFacts;
 use crate::node_access::{NodeLink, read_bytes};
 
@@ -39,7 +39,6 @@ pub(super) struct Checked {
 #[derive(Default)]
 pub(super) struct Reconciled {
     pub(super) checked: Checked,
-    pub(super) error: Option<AiError>,
     pub(super) stopped: Option<AnalysisFailure>,
 }
 
@@ -199,7 +198,7 @@ pub(super) fn reverify_pending(
         });
         let verdict = match verdict {
             Ok(verdict) => verdict,
-            Err(AiError::InvalidOutput(_) | AiError::Rejected(_)) => {
+            Err(error) if FailureScope::of(&error) == FailureScope::Input => {
                 checked.answered += 1;
                 spend_unusable(store, &card.item_id, project_id, card.number)?;
                 progress(None);
@@ -482,7 +481,7 @@ pub(super) fn check_before_suggestion(
         });
         let verdict = match verdict {
             Ok(verdict) => verdict,
-            Err(AiError::InvalidOutput(_) | AiError::Rejected(_)) => {
+            Err(error) if FailureScope::of(&error) == FailureScope::Input => {
                 checked.answered += 1;
                 spend_unusable(store, &item.id, project_id, item.number)?;
                 progress(None);
@@ -673,20 +672,53 @@ pub(super) fn reconcile_corrections(
                     .expect("validated verdict")
                     .to_owned())
             })();
+            let subject = format!("correction:{}", item.id);
             let verdict = match verdict {
                 Ok(verdict) => verdict,
+                // This card's unusable answer is counted against this
+                // revision and document version and stops nothing else; a
+                // provider or account failure stops the pass's provider work.
                 Err(AnalysisFailure::Provider(error))
-                    if super::memory_analysis::intent_local_failure(&error) =>
+                    if FailureScope::of(&error) == FailureScope::Input =>
                 {
-                    crate::diagnostic!(
-                        json!({"component":"memory","kind":"correction.reconcile_failed","project_id":project,"card":number,"error_class":error.class()})
-                    );
                     result.checked.answered += 1;
-                    result.error = Some(error);
+                    let attempts = store
+                        .record_input_failure(
+                            project,
+                            &subject,
+                            &format!("{revision}:{fingerprint}"),
+                            now_ms(),
+                        )
+                        .map_err(local)?;
+                    let set_aside = attempts >= hide_memory::INPUT_FAILURE_LIMIT;
+                    crate::diagnostic!(json!({
+                        "component": "memory",
+                        "kind": if set_aside { "correction.set_aside" } else { "correction.reconcile_failed" },
+                        "project_id": project,
+                        "card": number,
+                        "attempts": attempts,
+                        "error_class": error.class(),
+                    }));
+                    if set_aside {
+                        // Not asked about again until the card or its
+                        // document changes.
+                        store
+                            .record_correction_check(
+                                project,
+                                number,
+                                revision,
+                                &fingerprint,
+                                now_ms(),
+                            )
+                            .map_err(local)?;
+                    }
                     continue;
                 }
                 Err(error) => return Err(error),
             };
+            store
+                .clear_input_failure(project, &subject)
+                .map_err(local)?;
             result.checked.answered += 1;
             if verdict == "same"
                 && store

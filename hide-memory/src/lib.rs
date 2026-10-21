@@ -58,6 +58,10 @@ pub fn database_path(state_dir: &std::path::Path) -> std::path::PathBuf {
 }
 
 pub const ACTIVE_MEMORY_LIMIT: usize = 10_000;
+/// Unusable answers one unchanged input gets before it is set aside: a
+/// session group is passed over and a correction's document version is not
+/// asked about again, each with a diagnostic, until that input changes.
+pub const INPUT_FAILURE_LIMIT: u32 = 3;
 pub const MEMORY_BODY_LIMIT_CHARS: usize = 4_000;
 pub const ANALYSIS_INPUT_LIMIT_BYTES: usize = 64 * 1024;
 pub const HOOK_INPUT_LIMIT_BYTES: usize = 256 * 1024;

@@ -288,11 +288,15 @@ An unsettled or outdated comparison is withheld from injection; a confirmed corr
 An unrelated document commit cannot reopen that settled authority, and a changed card revision invalidates its old comparison.
 The existing maintenance worker checks at most four confirmed corrections a Project per pass, within the shared eight-check pass cap and daily maintenance share.
 It fingerprints the bounded owning document and, after a usable answer, asks again only when its contents change; when the correction is reflected, including after a terminal-agent edit, the existing promotion pointer records the document without spawning another promotion.
-A failed attempt records its time without certifying a new fingerprint; an intent-local failure rotates the card and continues other maintenance stages, while account-level refusals stop provider work.
+A failed attempt records its time without certifying a new fingerprint.
+Every Memory call sorts a provider error by one scope (`FailureScope` in `memory_analysis.rs`).
+An unusable answer to one input (`InvalidOutput`, `Rejected`) is that input's: it is counted per subject and input (`input_failures`), other cards and the Project's sessions go on in the same pass, and no Project backoff starts.
+The third unusable answer to the same input sets it aside with a `correction.set_aside` or `analysis.group_set_aside` diagnostic: a correction is not asked about again until its revision or document changes, and a session's group is passed over so the rest of the session is analyzed and its cursor moves; other words are counted afresh.
+A provider failure after the request was taken (`Timeout`, `CompletionUnknown`, `Transient`, `Internal`) or an account pause (signed out, a usage limit or resource cap, no provider) stops the pass's provider work for that Project and starts its backoff.
 Missing documents retain the correction and rotate the check position; no new poller or automatic document writer exists.
 Completed checks, observed intent failures and a later stopping reason are retained separately.
 Committed card changes refresh the opened Memory reader independently of a same-pass failure; that change report does not clear provider backoff.
-A maintenance failure leaves that Project's discovered extraction pending until its existing runtime backoff, while peer Projects remain eligible.
+A provider or account failure in maintenance leaves that Project's discovered extraction pending until its runtime backoff, while peer Projects remain eligible; a card's unusable answer never does.
 Preferences stay injectable but never become repository pointers or promotion candidates.
 An Undo of any of these verdicts restores the old text as verified and drops the evidence rows of that revision, so the evidence walk does not unverify it again at once.
 An `in_docs` answer naming a file the request did not carry is refused.
@@ -309,7 +313,7 @@ One meaningful human exchange is eligible for analysis; instructions from a dele
 Each extraction group admits at most eight new cards ranked by significance and confidence, so earlier groups cannot exhaust a conversation's lifetime admission.
 The worker stores completed group progress separately from its source cursor and handles at most four groups from one session in a pass.
 A persisted machine-wide queue alternates FIFO and recent opportunities across Projects; every stable eligible member receives an opportunity within twice the number of pending sessions, even with new arrivals.
-A spending or account/provider-readiness pause preserves the queue position; an intent-local failure rotates its session and retains unfinished work for the existing Project backoff.
+A spending or account pause preserves the queue position; a provider failure rotates its session and backs its Project off, and an unusable answer rotates it with no backoff, both retaining unfinished work.
 At most eight maintenance calls and eight extraction/document-comparison calls are admitted per pass across all Projects, within the unchanged daily and maintenance reservations.
 Validated redacted extraction proposals and prepared document verdicts survive local retries.
 At the Project card cap, a batch rejects only new growth, commits accepted merges and corrections, reports its rejection count and advances its source cursor.

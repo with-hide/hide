@@ -222,18 +222,36 @@ pub(crate) enum AnalysisFailure {
     Disabled,
 }
 
-/// Failures owned by one intent may yield to a peer. Account/provider pauses
-/// retain the durable next position until readiness or budget recovers.
-pub(super) fn intent_local_failure(error: &AiError) -> bool {
-    matches!(
-        error,
-        AiError::InvalidOutput(_)
-            | AiError::Rejected(_)
-            | AiError::Timeout
+/// Whose failure a provider error is: the one model every Memory call
+/// branches on, so a pass never decides it a call at a time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FailureScope {
+    /// The provider answered this one input with something unusable (an
+    /// answer of the wrong shape, a refused input). It is counted against
+    /// that input, which is set aside at [`hide_memory::INPUT_FAILURE_LIMIT`]
+    /// until it changes; other work goes on in the same pass.
+    Input,
+    /// The provider failed after taking the request (a timeout, a lost
+    /// completion, a transient or internal failure): no more provider work
+    /// this pass, the Project backs off, and its session yields the turn.
+    Provider,
+    /// The account or provider takes no requests now (signed out, a usage
+    /// limit or resource cap, none chosen): no more provider work, and the
+    /// session keeps its turn until readiness or budget is back.
+    Account,
+}
+
+impl FailureScope {
+    pub(super) fn of(error: &AiError) -> Self {
+        match error {
+            AiError::InvalidOutput(_) | AiError::Rejected(_) => Self::Input,
+            AiError::Timeout
             | AiError::CompletionUnknown(_)
             | AiError::Transient(_)
-            | AiError::Internal(_)
-    )
+            | AiError::Internal(_) => Self::Provider,
+            _ => Self::Account,
+        }
+    }
 }
 
 impl Runtime {
@@ -971,9 +989,9 @@ fn run_pass(input: &PassInput, report: &mut dyn FnMut(PassReport)) -> PassOutcom
         // reported too: the hold and backoff throttle the next pass, which
         // would otherwise ask again at once.
         if tally.error.is_some() {
-            // A Project's observed maintenance failure owns this pass's outcome.
-            // Its already-discovered extraction waits for runtime backoff rather
-            // than emitting a later success that clears that failure.
+            // Only a provider or account failure reaches the tally: the
+            // Project's extraction waits for its backoff with the rest of its
+            // provider work. A card's unusable answer is that card's alone.
             pending.retain(|task: &PendingAnalysis| task.project_id != project_id);
         }
         if tally.analyzing || tally.error.is_some() {
@@ -1126,12 +1144,14 @@ fn run_analysis_turn(
             outcome.read_succeeded(ANALYSIS_FAILED, &task.session);
             (learned, None, true)
         }
-        // Intent-local failures yield to peers; account/provider pauses keep
-        // their durable position. Both retain unfinished work and runtime backoff.
-        Err(AnalysisFailure::Provider(error)) => {
-            let rotate = intent_local_failure(&error);
-            (0, Some(error), rotate)
-        }
+        // An input's failure was counted against that input and is no
+        // Project failure; a provider failure backs the Project off and
+        // yields the turn; an account pause keeps it. Unfinished work stays.
+        Err(AnalysisFailure::Provider(error)) => match FailureScope::of(&error) {
+            FailureScope::Input => (0, None, true),
+            FailureScope::Provider => (0, Some(error), true),
+            FailureScope::Account => (0, Some(error), false),
+        },
         Err(AnalysisFailure::Deferred(reason)) => {
             *deferred = Some(reason);
             (0, None, false)
@@ -1407,7 +1427,6 @@ fn maintain_cards(
     tally.checked |= reconciled.checked.changed > 0;
     tally.answered |= reconciled.checked.answered > 0;
     outcome.wants_usage |= reconciled.checked.answered > 0;
-    tally.error = reconciled.error;
     match reconciled.stopped {
         None => {}
         Some(AnalysisFailure::Provider(error)) => {
@@ -1966,7 +1985,54 @@ fn analyze_session(
             &group,
             cancel,
             admit,
-        )?;
+        );
+        let subject = format!("analysis:{provider}:{}", session.id);
+        let written = match written {
+            Ok(written) => {
+                store
+                    .clear_input_failure(project_id, &subject)
+                    .map_err(|error| local(error.to_string()))?;
+                written
+            }
+            Err(AnalysisFailure::Provider(error))
+                if FailureScope::of(&error) == FailureScope::Input =>
+            {
+                let input = digest(&[&Value::Array(group.clone()).to_string()]);
+                let attempts = store
+                    .record_input_failure(project_id, &subject, &input, now_ms())
+                    .map_err(|error| local(error.to_string()))?;
+                let set_aside = attempts >= hide_memory::INPUT_FAILURE_LIMIT;
+                crate::diagnostic!(json!({
+                    "component": "memory",
+                    "kind": if set_aside { "analysis.group_set_aside" } else { "analysis.group_failed" },
+                    "project_id": project_id,
+                    "provider": provider,
+                    "session_id": session.id,
+                    "group": index,
+                    "attempts": attempts,
+                    "error_class": error.class(),
+                }));
+                if !set_aside {
+                    return Err(AnalysisFailure::Provider(error));
+                }
+                // The same words were answered unusably every time: what
+                // they could teach is given up, and the rest of the session
+                // goes on. A rescan with other words asks again.
+                completed = index + 1;
+                store
+                    .save_analysis_progress(
+                        project_id,
+                        provider,
+                        &session.id,
+                        base_offset,
+                        completed,
+                        &left_out.keys().cloned().collect::<Vec<_>>(),
+                    )
+                    .map_err(|error| local(error.to_string()))?;
+                continue;
+            }
+            Err(failure) => return Err(failure),
+        };
         last_hash = Some(written.content_hash);
         for card in written.left_out {
             left_out.insert(card.id, card.number);
@@ -2760,6 +2826,8 @@ mod tests {
         calls: AtomicUsize,
         /// What each request carried, oldest first.
         inputs: Mutex<Vec<String>>,
+        /// While set, every request fails with it and no answer is used.
+        failing: Mutex<Option<AiError>>,
     }
 
     impl AiBackend for Scripted {
@@ -2775,7 +2843,16 @@ mod tests {
         fn execute(&self, request: &AiRequest, _: &CancelToken) -> Result<AiResponse, AiError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.inputs.lock().unwrap().push(request.input.clone());
+            if let Some(error) = self.failing.lock().unwrap().clone() {
+                return Err(error);
+            }
             let value = self.answers.lock().unwrap().pop();
+            if value
+                .as_ref()
+                .is_some_and(|value| value["fail"] == "timeout")
+            {
+                return Err(AiError::Timeout);
+            }
             value
                 .map(|value| AiResponse {
                     value,
@@ -2890,6 +2967,7 @@ mod tests {
                     answers: Mutex::new(Vec::new()),
                     calls: AtomicUsize::new(0),
                     inputs: Mutex::new(Vec::new()),
+                    failing: Mutex::new(None),
                 }),
                 node,
                 failed_reads: Default::default(),
@@ -2992,6 +3070,7 @@ mod tests {
                         RouterConfig {
                             priority: vec![ProviderId::CLAUDE],
                             max_transient_attempts: 1,
+                            backoff_base: std::time::Duration::ZERO,
                             ..RouterConfig::default()
                         },
                         Arc::new(NoopLogSink),
@@ -3032,6 +3111,63 @@ mod tests {
 
         fn store(&self) -> MemoryStore {
             MemoryStore::open(&self.database).unwrap()
+        }
+
+        /// One Project's card maintenance alone, as a pass runs it after
+        /// `calls` maintenance admissions, with one try per request.
+        fn maintain(&self, calls: &mut usize) -> (ProjectTally, PassOutcome) {
+            let backend: Arc<dyn AiBackend> = self.backend.clone();
+            let input = PassInput {
+                nodes: vec![],
+                unreached: vec![],
+                database: self.database.clone(),
+                router: Some(AiRouter::new(
+                    vec![backend],
+                    RouterConfig {
+                        priority: vec![ProviderId::CLAUDE],
+                        max_transient_attempts: 1,
+                        max_invalid_output_attempts: 1,
+                        ..RouterConfig::default()
+                    },
+                    Arc::new(NoopLogSink),
+                )),
+                live: BTreeSet::new(),
+                closed: BTreeSet::new(),
+                held: HashSet::new(),
+                home: None,
+                delegated: HashSet::new(),
+                language: hide_ai::OutputLanguage::English,
+                cancel: CancelToken::new(),
+                failed_reads: Default::default(),
+            };
+            let mut store = self.store();
+            let root = self.root.to_string_lossy();
+            let mut facts = CheckoutFacts::new(self.node.as_ref(), &root);
+            let mut tally = ProjectTally::default();
+            let mut outcome = PassOutcome::default();
+            maintain_cards(
+                &input,
+                self.node.as_ref(),
+                None,
+                &mut store,
+                &mut facts,
+                &self.project_id,
+                &root,
+                &mut None,
+                &mut tally,
+                &mut outcome,
+                calls,
+                &mut |_| {},
+            );
+            (tally, outcome)
+        }
+
+        fn fail_with(&self, error: Option<AiError>) {
+            *self.backend.failing.lock().unwrap() = error;
+        }
+
+        fn push(&self, answer: Value) {
+            self.backend.answers.lock().unwrap().push(answer);
         }
 
         fn calls(&self) -> usize {
@@ -4292,70 +4428,62 @@ mod tests {
     }
 
     #[test]
-    fn correction_failure_survives_the_next_maintenance_admission_stop() {
+    fn an_unusable_correction_answer_is_no_project_failure_when_the_quantum_ends() {
         let fixture = Fixture::new();
         fixture.answer(&[]);
         fixture.pass(false, true);
         confirm_fixture_correction(&fixture, 1);
         confirm_fixture_correction(&fixture, 2);
-        fixture
-            .backend
-            .answers
-            .lock()
-            .unwrap()
-            .push(json!({"results":[]}));
-        let input = PassInput {
-            nodes: vec![],
-            unreached: vec![],
-            database: fixture.database.clone(),
-            router: Some(AiRouter::new(
-                vec![fixture.backend.clone()],
-                RouterConfig {
-                    priority: vec![ProviderId::CLAUDE],
-                    max_invalid_output_attempts: 1,
-                    ..RouterConfig::default()
-                },
-                Arc::new(NoopLogSink),
-            )),
-            live: BTreeSet::new(),
-            closed: BTreeSet::new(),
-            held: HashSet::new(),
-            home: None,
-            delegated: HashSet::new(),
-            language: hide_ai::OutputLanguage::English,
-            cancel: CancelToken::new(),
-            failed_reads: Default::default(),
-        };
-        let mut store = fixture.store();
-        let root = fixture.root.to_string_lossy();
-        let mut facts = CheckoutFacts::new(fixture.node.as_ref(), &root);
-        let mut tally = ProjectTally::default();
-        let mut outcome = PassOutcome::default();
+        fixture.push(json!({"results":[]}));
         let mut calls = 7;
-        maintain_cards(
-            &input,
-            fixture.node.as_ref(),
-            None,
-            &mut store,
-            &mut facts,
-            &fixture.project_id,
-            &fixture.root.to_string_lossy(),
-            &mut None,
-            &mut tally,
-            &mut outcome,
-            &mut calls,
-            &mut |_| {},
-        );
-        assert_eq!(calls, 8);
+        let (tally, outcome) = fixture.maintain(&mut calls);
+        assert_eq!(calls, 8, "the ninth admission is held by the pass quantum");
         assert!(
-            matches!(tally.error, Some(AiError::InvalidOutput(_))),
-            "the failed eighth attempt must still reach runtime backoff when the ninth is held"
+            tally.error.is_none(),
+            "one card's unusable answer backs off no Project"
         );
         assert!(tally.answered && outcome.wants_usage);
     }
 
     #[test]
-    fn correction_failure_keeps_same_pass_extraction_pending_for_backoff() {
+    fn a_provider_failure_while_reconciling_a_correction_asks_the_provider_nothing_more() {
+        for error in [
+            AiError::Timeout,
+            AiError::Transient("busy".into()),
+            AiError::CompletionUnknown("lost".into()),
+            AiError::Internal("panicked".into()),
+        ] {
+            let fixture = Fixture::new();
+            fixture.answer(&[]);
+            fixture.pass(false, true);
+            confirm_fixture_correction(&fixture, 1);
+            confirm_fixture_correction(&fixture, 2);
+            // A card the re-verification would otherwise ask about next.
+            let mut store = fixture.store();
+            let other = store
+                .item_by_number(&fixture.project_id, 2)
+                .unwrap()
+                .unwrap();
+            store.mark_unverified(&other.id, other.revision).unwrap();
+            drop(store);
+            fixture.fail_with(Some(error.clone()));
+            let before = fixture.calls();
+            let (tally, _) = fixture.maintain(&mut 0);
+            assert_eq!(
+                fixture.calls(),
+                before + 1,
+                "{error:?} ends the pass's provider work at the first correction"
+            );
+            assert_eq!(
+                tally.error.as_ref().map(FailureScope::of),
+                Some(FailureScope::Provider),
+                "{error:?} backs the Project off"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unusable_correction_answer_leaves_the_same_pass_extraction_running() {
         let fixture = Fixture::new();
         confirm_fixture_correction(&fixture, 1);
         fixture.answer(&[]);
@@ -4366,14 +4494,10 @@ mod tests {
             .unwrap()
             .extend([json!({"results":[]}), json!({"results":[]})]);
         let reports = fixture.pass(false, true);
-        assert_eq!(
-            reports.last(),
-            Some(&"failed"),
-            "a successful extraction must not erase a correction failure in the same pass"
-        );
-        let store = fixture.store();
+        assert_eq!(reports.last(), Some(&"learned one"));
         assert!(
-            store
+            fixture
+                .store()
                 .load_cursor(
                     CursorReader::Analysis,
                     &fixture.project_id,
@@ -4381,10 +4505,100 @@ mod tests {
                     SESSION
                 )
                 .unwrap()
-                .is_none(),
-            "failed Project waits for its runtime backoff before extraction"
+                .is_some(),
+            "a correction that keeps failing never starves the Project's sessions"
         );
-        assert_eq!(store.analysis_order().unwrap()[0].0, fixture.project_id);
+    }
+
+    #[test]
+    fn a_correction_answered_unusably_three_times_is_set_aside_until_its_document_changes() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        confirm_fixture_correction(&fixture, 1);
+        let reconciles = |fixture: &Fixture| {
+            fixture
+                .backend
+                .inputs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|input| input.contains("Keep the old hook budget"))
+                .count()
+        };
+        for attempt in 1..=hide_memory::INPUT_FAILURE_LIMIT as usize {
+            fixture.push(json!({"results":[]}));
+            let (tally, _) = fixture.maintain(&mut 0);
+            assert!(tally.error.is_none());
+            assert_eq!(reconciles(&fixture), attempt);
+        }
+        fixture.push(json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}));
+        fixture.maintain(&mut 0);
+        assert_eq!(
+            reconciles(&fixture),
+            hide_memory::INPUT_FAILURE_LIMIT as usize,
+            "a set-aside correction is not asked about again for the same document"
+        );
+        std::fs::write(
+            fixture.root.join("AGENTS.md"),
+            "Keep the old hook budget.\nA new line.\n",
+        )
+        .unwrap();
+        fixture.maintain(&mut 0);
+        assert_eq!(
+            reconciles(&fixture),
+            hide_memory::INPUT_FAILURE_LIMIT as usize + 1,
+            "a changed document is asked about again"
+        );
+    }
+
+    #[test]
+    fn a_session_group_answered_unusably_three_times_is_passed_over() {
+        let fixture = Fixture::new();
+        fixture.fail_with(Some(AiError::InvalidOutput("schema".into())));
+        let cursor = |fixture: &Fixture| {
+            fixture
+                .store()
+                .load_cursor(
+                    CursorReader::Analysis,
+                    &fixture.project_id,
+                    "claude",
+                    SESSION,
+                )
+                .unwrap()
+        };
+        for _ in 1..hide_memory::INPUT_FAILURE_LIMIT {
+            let reports = fixture.pass(false, true);
+            assert_ne!(
+                reports.last(),
+                Some(&"failed"),
+                "an input's failure is no Project failure"
+            );
+            assert!(cursor(&fixture).is_none(), "the group is asked again");
+        }
+        fixture.pass(false, true);
+        assert!(
+            cursor(&fixture).is_some(),
+            "the third unusable answer passes the group over and the session settles"
+        );
+        let calls = fixture.calls();
+        fixture.pass(false, true);
+        assert_eq!(
+            fixture.calls(),
+            calls,
+            "a passed-over group costs no more calls"
+        );
+        fixture.fail_with(None);
+        let mut lines = fixture.lines.clone();
+        lines.push(json!({"type": "user", "sessionId": SESSION,
+            "cwd": fixture.root.to_string_lossy(), "timestamp": "2026-10-11T00:01:00Z",
+            "origin": {"kind": "human"},
+            "message": {"role": "user", "content": "Prefer small pull requests"}}));
+        fixture.write(&lines);
+        fixture.answer(&[]);
+        let calls = fixture.calls();
+        fixture.pass(false, true);
+        assert!(fixture.calls() > calls, "new words are asked about");
     }
 
     #[test]
@@ -4505,9 +4719,10 @@ mod tests {
                 .and_then(|project| project.expanded.as_ref())
                 .is_some_and(|card| card.document_comparison.is_some())
         });
+        // The first correction is reflected; asking about the second the
+        // provider times out, which ends the pass's provider work.
         fixture.backend.answers.lock().unwrap().extend([
-            json!({"results":[]}),
-            json!({"results":[]}),
+            json!({"fail":"timeout"}),
             json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}),
         ]);
         let input = PassInput {

@@ -30,7 +30,7 @@ DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_update;
 DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_delete;
 DROP TABLE IF EXISTS receipt_contexts;
 DROP TABLE IF EXISTS memory_contexts;
-DROP TABLE correction_checks; DROP TABLE memory_projection_state; DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals; DROP TABLE analysis_schedule; DROP TRIGGER card_holds_follow_card; DROP TABLE card_holds; DROP TABLE stale_reports;";
+DROP TABLE correction_checks; DROP TABLE memory_projection_state; DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals; DROP TABLE analysis_schedule; DROP TABLE input_failures; DROP TRIGGER card_holds_follow_card; DROP TABLE card_holds; DROP TABLE stale_reports;";
 
 /// Schema 16 adds the hold. The writer runs it after keeping the v15 store
 /// as a backup; a read-only hook refuses the store until it has run.

@@ -24,6 +24,7 @@ CREATE TABLE memory_contexts(project_id TEXT NOT NULL REFERENCES projects(id) ON
 CREATE TABLE receipt_contexts(receipt_id TEXT PRIMARY KEY REFERENCES injection_receipts(id) ON DELETE CASCADE,generation INTEGER NOT NULL);
 CREATE TABLE analysis_schedule(id INTEGER PRIMARY KEY CHECK(id=1),turn INTEGER NOT NULL);
 INSERT INTO analysis_schedule VALUES(1,0);
+CREATE TABLE input_failures(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,subject TEXT NOT NULL,input TEXT NOT NULL,attempts INTEGER NOT NULL,failed_at_ms INTEGER NOT NULL,PRIMARY KEY(project_id,subject));
 ";
 
 pub(super) fn install_projection_tracking(connection: &Connection) -> rusqlite::Result<()> {
@@ -156,6 +157,41 @@ impl MemoryStore {
     ) -> Result<(), MemoryError> {
         self.require_writer()?;
         self.connection.execute("INSERT INTO correction_checks SELECT id,current_revision,?4,?5 FROM memory_items WHERE project_id=?1 AND number=?2 AND current_revision=?3 ON CONFLICT(item_id) DO UPDATE SET revision=excluded.revision,fingerprint=excluded.fingerprint,checked_at_ms=excluded.checked_at_ms",params![project,number,revision,fingerprint,now])?;
+        Ok(())
+    }
+
+    /// Counts one unusable answer to `input` of `subject` and answers how
+    /// many the same input has had; a changed input starts again at one.
+    /// The caller sets the input aside at [`crate::INPUT_FAILURE_LIMIT`].
+    pub fn record_input_failure(
+        &self,
+        project: &str,
+        subject: &str,
+        input: &str,
+        now: u64,
+    ) -> Result<u32, MemoryError> {
+        self.require_writer()?;
+        let count: u64 =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM input_failures", [], |row| row.get(0))?;
+        let exists: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM input_failures WHERE project_id=?1 AND subject=?2)",
+            params![project, subject],
+            |row| row.get(0),
+        )?;
+        if count >= PENDING_LIMIT && !exists {
+            return Err(MemoryError::InvalidState("input_failure_capacity".into()));
+        }
+        Ok(self.connection.query_row("INSERT INTO input_failures VALUES(?1,?2,?3,1,?4) ON CONFLICT(project_id,subject) DO UPDATE SET attempts=CASE WHEN input=excluded.input THEN attempts+1 ELSE 1 END,input=excluded.input,failed_at_ms=excluded.failed_at_ms RETURNING attempts", params![project,subject,input,now], |row| row.get(0))?)
+    }
+
+    /// The subject's input was answered: its count is over.
+    pub fn clear_input_failure(&self, project: &str, subject: &str) -> Result<(), MemoryError> {
+        self.require_writer()?;
+        self.connection.execute(
+            "DELETE FROM input_failures WHERE project_id=?1 AND subject=?2",
+            params![project, subject],
+        )?;
         Ok(())
     }
 

@@ -1660,7 +1660,7 @@ DROP TRIGGER memory_projection_memory_fts_content_update;
 DROP TRIGGER memory_projection_memory_fts_content_delete;
 DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals;
 DROP TABLE correction_checks; DROP TABLE memory_contexts; DROP TABLE receipt_contexts;
-DROP TABLE memory_projection_state; DROP TABLE analysis_schedule;
+DROP TABLE memory_projection_state; DROP TABLE analysis_schedule; DROP TABLE input_failures;
 PRAGMA user_version=16;",
                 )
                 .unwrap();
