@@ -1176,7 +1176,12 @@ fn mutate_memory(
             let number = named()?;
             store
                 .undo_card(&identity.id, number)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| match error {
+                    hide_memory::MemoryError::Full => format!(
+                        "m{number} cannot come back while this Project's Memory is full; forget another card first"
+                    ),
+                    error => error.to_string(),
+                })?
                 .ok_or_else(|| format!("m{number} has no change to undo"))?;
             Ok(outcome())
         }

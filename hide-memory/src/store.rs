@@ -896,6 +896,9 @@ pub enum MemoryError {
     Integrity(String),
     /// The Project's Memory was turned off before the write committed.
     Disabled,
+    /// Bringing a forgotten card back would take the Project past its card
+    /// limit; another card has to be forgotten first.
+    Full,
 }
 
 impl Display for MemoryError {
@@ -912,6 +915,7 @@ impl Display for MemoryError {
             Self::CrossProjectTarget => formatter.write_str("memory_cross_project_target"),
             Self::Integrity(value) => write!(formatter, "memory_integrity:{value}"),
             Self::Disabled => formatter.write_str("memory_project_disabled"),
+            Self::Full => formatter.write_str("memory_project_full"),
         }
     }
 }
@@ -2189,10 +2193,21 @@ impl MemoryStore {
     /// wrote its current revision did to it, whatever else that batch wrote.
     /// Answers the card as it is after, or `None` when it has no change Hide
     /// can undo.
+    /// A forgotten card is not brought back while the Project is at its card
+    /// limit ([`MemoryError::Full`]): the operator forgets another first.
     pub fn undo_card(
         &mut self,
         project_id: &str,
         number: u64,
+    ) -> Result<Option<MemoryItem>, MemoryError> {
+        self.undo_card_limited(project_id, number, ACTIVE_MEMORY_LIMIT)
+    }
+
+    fn undo_card_limited(
+        &mut self,
+        project_id: &str,
+        number: u64,
+        item_limit: usize,
     ) -> Result<Option<MemoryItem>, MemoryError> {
         self.require_writer()?;
         let Some(item) = self.item_by_number(project_id, number)? else {
@@ -2212,6 +2227,13 @@ impl MemoryStore {
         let Some((batch_id, previous_state, previous_revision)) = change else {
             return Ok(None);
         };
+        let returns = item.lifecycle == MemoryLifecycle::Tombstoned
+            && previous_state
+                .as_deref()
+                .is_some_and(|state| state != MemoryLifecycle::Tombstoned.as_str());
+        if returns && count_live(&transaction, project_id)? >= item_limit {
+            return Err(MemoryError::Full);
+        }
         if !undo_item(
             &transaction,
             project_id,
@@ -6199,6 +6221,48 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             next.evicted,
             [3],
             "a card the operator brought back counts as used, so it is not the next to go"
+        );
+    }
+
+    #[test]
+    fn a_forgotten_card_does_not_come_back_past_the_card_limit() {
+        let (_temp, mut store, project) = store();
+        for (name, text) in [("b1", "Card one"), ("b2", "Card two")] {
+            store
+                .apply_candidates(
+                    &batch(&project, name, name),
+                    &[candidate(text, CandidateRelation::New)],
+                )
+                .unwrap();
+        }
+        let full = store
+            .apply_candidates_with_limit(
+                &batch(&project, "b3", "b3"),
+                &[candidate("Card three", CandidateRelation::New)],
+                2,
+            )
+            .unwrap();
+        assert_eq!(full.evicted, [1]);
+        assert!(matches!(
+            store.undo_card_limited(&project, 1, 2),
+            Err(MemoryError::Full)
+        ));
+        let card = store.item_by_number(&project, 1).unwrap().unwrap();
+        assert_eq!(card.lifecycle, MemoryLifecycle::Tombstoned);
+        assert_eq!(store.list_memories(&project).unwrap().len(), 2);
+
+        let other = store.item_by_number(&project, 2).unwrap().unwrap();
+        store.forget(&project, &other.id).unwrap();
+        let back = store.undo_card_limited(&project, 1, 2).unwrap().unwrap();
+        assert_eq!(back.lifecycle, MemoryLifecycle::Active);
+        assert_eq!(
+            store
+                .undo_card_limited(&project, 3, 2)
+                .unwrap()
+                .unwrap()
+                .lifecycle,
+            MemoryLifecycle::Tombstoned,
+            "an undo that removes a card is never refused"
         );
     }
 

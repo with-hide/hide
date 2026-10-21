@@ -341,7 +341,10 @@ impl PreparedMemory {
             MemoryCommand::Undo { number } => {
                 let item = store
                     .undo_card(&identity.id, number)
-                    .map_err(|error| store_failure(&identity.id, &error))?
+                    .map_err(|error| match error {
+                        hide_memory::MemoryError::Full => "memory_full".to_owned(),
+                        error => store_failure(&identity.id, &error),
+                    })?
                     .ok_or("memory_nothing_to_undo")?;
                 self.report(&identity.id, MemoryChange::Undid(number));
                 Ok(json!({
@@ -874,6 +877,9 @@ pub fn next_action(code: &str) -> &'static str {
         "memory_daily_cap" => "Retry tomorrow; this machine reached its daily Memory calls",
         "memory_add_timeout" => "Nothing was saved; retry with shorter text",
         "memory_card_not_found" => "Find the card with hide memory search <words>",
+        "memory_full" => {
+            "This Project's Memory is full; forget another card with hide memory forget <card>, then retry"
+        }
         "memory_card_forgotten" => {
             "The card was forgotten; find another with hide memory search <words>"
         }
