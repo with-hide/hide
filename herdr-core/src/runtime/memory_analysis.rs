@@ -2091,9 +2091,16 @@ fn analyze_session(
         let written = match written {
             Ok(written) => {
                 store
-                    .clear_input_failure(project_id, &subject)
+                    .input_answered(project_id, &subject, now_ms())
                     .map_err(|error| local(error.to_string()))?;
                 written
+            }
+            // A request the provider never answered never passes words
+            // over: the session waits for the provider, which backs off.
+            Err(AnalysisFailure::Provider(error))
+                if FailureScope::of(&error) != FailureScope::Input =>
+            {
+                return Err(AnalysisFailure::Provider(error));
             }
             Err(AnalysisFailure::Provider(error)) => {
                 let input = digest(&[&Value::Array(group.clone()).to_string()]);
@@ -2102,10 +2109,9 @@ fn analyze_session(
                 {
                     return Err(AnalysisFailure::Provider(error));
                 }
-                // The same words failed every time: what they could teach is
-                // given up and the rest of the session goes on. A rescan with
-                // other words asks again. A provider failure still stops the
-                // pass and backs the Project off.
+                // The same words were answered unusably every time: what
+                // they could teach is given up and the rest of the session
+                // goes on. A rescan with other words asks again.
                 completed = index + 1;
                 store
                     .save_analysis_progress(
@@ -2117,9 +2123,6 @@ fn analyze_session(
                         &left_out.keys().cloned().collect::<Vec<_>>(),
                     )
                     .map_err(|error| local(error.to_string()))?;
-                if FailureScope::of(&error) != FailureScope::Input {
-                    return Err(AnalysisFailure::Provider(error));
-                }
                 continue;
             }
             Err(failure) => return Err(failure),
@@ -3257,6 +3260,14 @@ mod tests {
                 &mut |_| {},
             );
             (tally, outcome)
+        }
+
+        /// The provider answered another input of the Project, as it does
+        /// when it is up and only one input keeps failing.
+        fn answer_elsewhere(&self) {
+            self.store()
+                .input_answered(&self.project_id, "elsewhere", now_ms() + 1)
+                .unwrap();
         }
 
         fn fail_with(&self, error: Option<AiError>) {
@@ -4955,6 +4966,9 @@ mod tests {
         fixture.fail_with(Some(AiError::Timeout));
         let calls = fixture.calls();
         for attempt in 1..=hide_memory::INPUT_UNANSWERED_LIMIT as usize {
+            // The provider answers the Project's other inputs meanwhile:
+            // this one, not the provider, is what keeps failing.
+            fixture.answer_elsewhere();
             let (tally, _) = fixture.maintain(&mut 0);
             assert_eq!(fixture.calls(), calls + attempt);
             assert_eq!(
@@ -4968,6 +4982,53 @@ mod tests {
             fixture.calls(),
             calls + hide_memory::INPUT_UNANSWERED_LIMIT as usize,
             "the input that always times out no longer holds its Project"
+        );
+    }
+
+    #[test]
+    fn timeouts_never_move_a_sessions_cursor_or_set_its_words_aside() {
+        let fixture = Fixture::new();
+        fixture.fail_with(Some(AiError::Timeout));
+        let calls = fixture.calls();
+        for pass in 1..=hide_memory::INPUT_UNANSWERED_LIMIT as usize + 1 {
+            fixture.answer_elsewhere();
+            fixture.pass(false, true);
+            assert_eq!(fixture.calls(), calls + pass, "the words are asked again");
+            assert!(
+                fixture
+                    .store()
+                    .load_cursor(
+                        CursorReader::Analysis,
+                        &fixture.project_id,
+                        "claude",
+                        SESSION
+                    )
+                    .unwrap()
+                    .is_none(),
+                "nothing the session said is given up for a provider that did not answer"
+            );
+        }
+        fixture.fail_with(None);
+        fixture.answer(&[]);
+        assert_eq!(fixture.pass(false, true).last(), Some(&"learned one"));
+    }
+
+    #[test]
+    fn a_correction_timing_out_through_an_outage_is_never_set_aside() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        confirm_fixture_correction(&fixture, 1);
+        fixture.fail_with(Some(AiError::Timeout));
+        let calls = fixture.calls();
+        let rounds = 2 * hide_memory::INPUT_UNANSWERED_LIMIT as usize;
+        for _ in 0..rounds {
+            fixture.maintain(&mut 0);
+        }
+        assert_eq!(
+            fixture.calls(),
+            calls + rounds,
+            "with nothing answered, every timeout is the provider's and the correction is asked again"
         );
     }
 
@@ -4991,6 +5052,7 @@ mod tests {
             fixture.fail_with(Some(AiError::Timeout));
             let before = fixture.calls();
             for _ in 0..short {
+                fixture.answer_elsewhere();
                 fixture.maintain(&mut 0);
             }
             fixture.fail_with(None);

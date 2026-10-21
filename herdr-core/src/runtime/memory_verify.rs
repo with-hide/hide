@@ -233,7 +233,7 @@ pub(super) fn reverify_pending(
         };
         // An answer ends the run of requests the provider never answered.
         store
-            .clear_input_failure(project_id, &format!("verify:{}", card.item_id))
+            .input_answered(project_id, &format!("verify:{}", card.item_id), now_ms())
             .map_err(|error| local(error.to_string()))?;
         checked.answered += 1;
         // The day is spent by an answer, not by a call: a provider that
@@ -534,7 +534,7 @@ pub(super) fn check_before_suggestion(
         };
         // An answer ends the run of requests the provider never answered.
         store
-            .clear_input_failure(project_id, &format!("promote:{}", item.id))
+            .input_answered(project_id, &format!("promote:{}", item.id), now_ms())
             .map_err(|error| local(error.to_string()))?;
         checked.answered += 1;
         // The day's one answer about the card, so a card the check keeps
@@ -750,7 +750,7 @@ pub(super) fn reconcile_corrections(
                 Err(error) => return Err(error),
             };
             store
-                .clear_input_failure(project, &subject)
+                .input_answered(project, &subject, now_ms())
                 .map_err(local)?;
             result.checked.answered += 1;
             if verdict == "same"

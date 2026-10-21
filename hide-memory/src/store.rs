@@ -3794,16 +3794,19 @@ COMMIT;"#,
         version = 18;
     }
     if version == 18 {
-        // Adds one empty column, so no backup is kept.
+        // Adds two empty columns, so no backup is kept.
         let transaction = connection.unchecked_transaction()?;
-        let present: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name='evictions_seen_at_ms')",
-            [],
-            |row| row.get(0),
-        )?;
-        if !present {
-            transaction
-                .execute_batch("ALTER TABLE projects ADD COLUMN evictions_seen_at_ms INTEGER;")?;
+        for column in ["evictions_seen_at_ms", "answered_at_ms"] {
+            let present: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name=?1)",
+                [column],
+                |row| row.get(0),
+            )?;
+            if !present {
+                transaction.execute_batch(&format!(
+                    "ALTER TABLE projects ADD COLUMN {column} INTEGER;"
+                ))?;
+            }
         }
         transaction.execute_batch("PRAGMA user_version=19;")?;
         transaction.commit()?;
@@ -4509,7 +4512,7 @@ fn check_projection_integrity(connection: &Connection) -> Result<(), MemoryError
 
 /// A new store's tables.
 const SCHEMA: &str = r#"
-CREATE TABLE projects(id TEXT PRIMARY KEY,root TEXT NOT NULL,device_id TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 0,disclosure_accepted_at_ms INTEGER,created_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,disclosure_version INTEGER NOT NULL DEFAULT 0,next_number INTEGER NOT NULL DEFAULT 1,evictions_seen_at_ms INTEGER);
+CREATE TABLE projects(id TEXT PRIMARY KEY,root TEXT NOT NULL,device_id TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 0,disclosure_accepted_at_ms INTEGER,created_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,disclosure_version INTEGER NOT NULL DEFAULT 0,next_number INTEGER NOT NULL DEFAULT 1,evictions_seen_at_ms INTEGER,answered_at_ms INTEGER);
 CREATE TABLE project_receipt_keys(project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,auth_key BLOB NOT NULL);
 CREATE TABLE session_sources(id TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,locator TEXT NOT NULL,checkout_path TEXT NOT NULL,started_at_ms INTEGER,updated_at_ms INTEGER NOT NULL,unavailable_reason TEXT,PRIMARY KEY(project_id,provider,id));
 CREATE TABLE session_cursors(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,session_id TEXT NOT NULL,byte_offset INTEGER NOT NULL,pending_bytes BLOB NOT NULL,last_content_hash TEXT,updated_at_ms INTEGER NOT NULL,operator_events INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(project_id,provider,session_id));
@@ -7284,14 +7287,27 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
                 .unwrap()
         };
         assert_eq!(record("a", InputFailure::Unusable, 10), Some(1));
+        assert_eq!(record("a", InputFailure::Unusable, 15), Some(2));
         assert_eq!(record("a", InputFailure::Unanswered, 20), Some(1));
-        assert_eq!(record("a", InputFailure::Unusable, 30), Some(2));
+        assert_eq!(
+            record("a", InputFailure::Unusable, 30),
+            Some(1),
+            "a failure of the other kind breaks the row"
+        );
+        // The provider answers elsewhere, so an unanswered request would
+        // count on from an unbroken row.
+        store.input_answered(&project, "other", 31).unwrap();
+        assert_eq!(
+            record("a", InputFailure::Unanswered, 32),
+            Some(1),
+            "an unusable answer breaks a row of unanswered ones"
+        );
         assert_eq!(
             record("b", InputFailure::Unusable, 40),
             Some(1),
             "a changed input"
         );
-        store.clear_input_failure(&project, "s").unwrap();
+        store.input_answered(&project, "s", 45).unwrap();
         assert_eq!(
             record("b", InputFailure::Unusable, 50),
             Some(1),
@@ -7303,6 +7319,22 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             Some(1),
             "a day apart"
         );
+    }
+
+    #[test]
+    fn a_request_never_answered_counts_again_only_after_the_provider_answered_the_project() {
+        let (_temp, store, project) = store();
+        let timeout = |now| {
+            store
+                .record_input_failure(&project, "s", "a", InputFailure::Unanswered, now)
+                .unwrap()
+        };
+        assert_eq!(timeout(10), Some(1));
+        assert_eq!(timeout(20), Some(1), "an outage: nothing answered since");
+        assert_eq!(timeout(30), Some(1));
+        store.input_answered(&project, "other", 35).unwrap();
+        assert_eq!(timeout(40), Some(2), "another input was answered between");
+        assert_eq!(timeout(50), Some(2));
     }
 
     #[test]

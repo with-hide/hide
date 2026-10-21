@@ -184,8 +184,8 @@ impl MemoryStore {
 
     /// Counts one failure of `kind` for `input` of `subject` and answers
     /// how many of that kind the same input has had in a row: a changed
-    /// input, a success ([`Self::clear_input_failure`]) or a day without
-    /// failure starts again. `None` when the table is full: the failure is
+    /// input, a failure of the other kind, an answer
+    /// ([`Self::input_answered`]) or a day without failure starts again. `None` when the table is full: the failure is
     /// not counted and the caller treats the input as not yet set aside.
     pub fn record_input_failure(
         &self,
@@ -218,24 +218,52 @@ impl MemoryStore {
                 return Ok(None);
             }
         }
-        let (mut unusable, mut unanswered) = row
+        let (unusable, unanswered) = row
             .filter(|(kept, ..)| kept == input)
             .map_or((0, 0), |(_, unusable, unanswered)| (unusable, unanswered));
-        let count = match kind {
-            InputFailure::Unusable => {
-                unusable += 1;
-                unusable
-            }
+        // A failure of the other kind breaks the row, so the other count
+        // starts again. A request the provider never answered counts against
+        // its input only when the provider answered this Project since the
+        // last one: with no answer between, it is the provider failing, not
+        // this input, and an outage sets nothing aside.
+        let (unusable, unanswered) = match kind {
+            InputFailure::Unusable => (unusable + 1, 0),
+            InputFailure::Unanswered if unanswered == 0 => (0, 1),
             InputFailure::Unanswered => {
-                unanswered += 1;
-                unanswered
+                let answered_since: bool = self.connection.query_row(
+                    "SELECT COALESCE(p.answered_at_ms,-1)>f.failed_at_ms FROM projects p JOIN input_failures f ON f.project_id=p.id WHERE p.id=?1 AND f.subject=?2",
+                    params![project, subject],
+                    |row| row.get(0),
+                )?;
+                (0, unanswered + u32::from(answered_since))
             }
+        };
+        let count = match kind {
+            InputFailure::Unusable => unusable,
+            InputFailure::Unanswered => unanswered,
         };
         self.connection.execute("INSERT INTO input_failures VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(project_id,subject) DO UPDATE SET input=excluded.input,unusable=excluded.unusable,unanswered=excluded.unanswered,failed_at_ms=excluded.failed_at_ms", params![project,subject,input,unusable,unanswered,now])?;
         Ok(Some(count))
     }
 
-    /// The subject's input was answered, or set aside: its count is over.
+    /// The provider answered the subject's input: its count is over, and
+    /// the Project's provider is known to answer
+    /// ([`Self::record_input_failure`]).
+    pub fn input_answered(
+        &self,
+        project: &str,
+        subject: &str,
+        now: u64,
+    ) -> Result<(), MemoryError> {
+        self.clear_input_failure(project, subject)?;
+        self.connection.execute(
+            "UPDATE projects SET answered_at_ms=MAX(COALESCE(answered_at_ms,0),?2) WHERE id=?1",
+            params![project, now],
+        )?;
+        Ok(())
+    }
+
+    /// The subject's input was set aside: its count is over.
     pub fn clear_input_failure(&self, project: &str, subject: &str) -> Result<(), MemoryError> {
         self.require_writer()?;
         self.connection.execute(

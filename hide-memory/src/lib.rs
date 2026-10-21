@@ -63,9 +63,10 @@ pub const ACTIVE_MEMORY_LIMIT: usize = 10_000;
 /// is not asked about again, each with a diagnostic, until that input changes.
 pub const INPUT_FAILURE_LIMIT: u32 = 3;
 /// Requests in a row the provider took for one unchanged input and never
-/// answered before it is set aside the same way. Higher than
-/// [`INPUT_FAILURE_LIMIT`]: an outage fails innocent inputs too, and the
-/// provider's backoff, not this count, is what waits it out.
+/// answered before a correction or a card check is set aside the same way.
+/// One counts only when the provider answered the Project since the last,
+/// so an outage, which the provider's backoff waits out, sets nothing
+/// aside; a session's group is never passed over for it.
 pub const INPUT_UNANSWERED_LIMIT: u32 = 5;
 /// Failures further apart than this are not in a row.
 pub const INPUT_FAILURE_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
