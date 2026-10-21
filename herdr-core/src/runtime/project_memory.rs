@@ -682,7 +682,9 @@ impl Runtime {
             rows.iter()
                 .filter(|row| {
                     !row.verifying
-                        && row.document_comparison.is_none()
+                        && row.document_comparison.as_ref().is_none_or(|comparison| {
+                            comparison.authority == hide_memory::DocumentAuthority::CardNewer
+                        })
                         && !row.promotion.as_ref().is_some_and(|promotion| {
                             promotion.state == crate::model::MemoryPromotionState::Merged
                         })
@@ -1641,24 +1643,130 @@ mod tests {
             .items;
         let before_suggestions = store.promotion_suggestions(&identity.id, 1000, 3).unwrap();
         drop(store);
-        // Reproduce the historical v11 shape before the first docs check.
-        let connection = rusqlite::Connection::open(&database).unwrap();
-        connection.execute_batch("DROP TRIGGER card_holds_follow_card; DROP TABLE card_holds; DROP TABLE stale_reports; DROP TABLE card_comparisons; DROP TABLE promotion_batches; ALTER TABLE memory_revisions DROP COLUMN docs_compared; ALTER TABLE card_promotions DROP COLUMN repository; PRAGMA user_version=11;").unwrap();
-        drop(connection);
-        let store = super::memory::open_memory_store(&database).unwrap();
-        assert_eq!(
-            store
-                .retrieve(&hide_memory::RetrievalQuery::session_start(&identity.id))
-                .unwrap()
-                .items,
-            before_index
-        );
-        assert_eq!(
-            store.promotion_suggestions(&identity.id, 1000, 3).unwrap(),
-            before_suggestions
-        );
-        assert_eq!(store.pending_cards(&identity.id, 1000, 4).unwrap().len(), 4);
-        drop(store);
+        // Reproduce each historical schema, including removal of every v17
+        // addition. A version number alone is not a migration fixture.
+        for version in [16, 11] {
+            let connection = rusqlite::Connection::open(&database).unwrap();
+            connection
+                .execute_batch(
+                    "DROP TRIGGER memory_projection_memory_items_insert;
+DROP TRIGGER memory_projection_memory_items_update;
+DROP TRIGGER memory_projection_memory_items_delete;
+DROP TRIGGER memory_projection_memory_revisions_insert;
+DROP TRIGGER memory_projection_memory_revisions_update;
+DROP TRIGGER memory_projection_memory_revisions_delete;
+DROP TRIGGER memory_projection_memory_fts_content_insert;
+DROP TRIGGER memory_projection_memory_fts_content_update;
+DROP TRIGGER memory_projection_memory_fts_content_delete;
+DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals;
+DROP TABLE correction_checks; DROP TABLE memory_contexts; DROP TABLE receipt_contexts;
+DROP TABLE memory_projection_state; DROP TABLE analysis_schedule;
+PRAGMA user_version=16;",
+                )
+                .unwrap();
+            if version == 16 {
+                // Recover only skipped short analysis, preserving completed
+                // analysis and the independent receipt reader's cursor.
+                for (session, humans) in [("short", 2), ("s-1", 2), ("empty", 0), ("long", 3)] {
+                    connection.execute(
+                        "INSERT INTO session_cursors(project_id,provider,session_id,byte_offset,pending_bytes,last_content_hash,updated_at_ms,operator_events) VALUES(?1,'codex',?2,64,x'','source-hash',1,?3)",
+                        rusqlite::params![identity.id, session, humans],
+                    ).unwrap();
+                }
+                connection.execute(
+                    "INSERT INTO receipt_cursors(project_id,provider,session_id,byte_offset,pending_bytes,last_content_hash,updated_at_ms,operator_events) VALUES(?1,'codex','short',64,x'','receipt-hash',1,2)",
+                    [&identity.id],
+                ).unwrap();
+            }
+            if version == 11 {
+                connection.execute_batch("DROP TRIGGER card_holds_follow_card; DROP TABLE card_holds; DROP TABLE stale_reports; DROP TABLE card_comparisons; DROP TABLE promotion_batches; ALTER TABLE memory_revisions DROP COLUMN docs_compared; ALTER TABLE card_promotions DROP COLUMN repository; PRAGMA user_version=11;").unwrap();
+            }
+            drop(connection);
+            let store = super::memory::open_memory_store(&database).unwrap();
+            assert_eq!(
+                store
+                    .retrieve(&hide_memory::RetrievalQuery::session_start(&identity.id))
+                    .unwrap()
+                    .items,
+                before_index
+            );
+            assert_eq!(
+                store.promotion_suggestions(&identity.id, 1000, 3).unwrap(),
+                before_suggestions
+            );
+            assert_eq!(
+                store.pending_cards(&identity.id, 1000, 4).unwrap().len(),
+                if version == 11 { 4 } else { 0 }
+            );
+            assert!(
+                store
+                    .load_cursor(
+                        hide_memory::CursorReader::Analysis,
+                        &identity.id,
+                        "codex",
+                        "short"
+                    )
+                    .unwrap()
+                    .is_none()
+            );
+            for session in ["s-1", "empty", "long"] {
+                assert_eq!(
+                    store
+                        .load_cursor(
+                            hide_memory::CursorReader::Analysis,
+                            &identity.id,
+                            "codex",
+                            session
+                        )
+                        .unwrap()
+                        .unwrap()
+                        .byte_offset,
+                    64
+                );
+            }
+            assert_eq!(
+                store
+                    .load_cursor(
+                        hide_memory::CursorReader::Receipts,
+                        &identity.id,
+                        "codex",
+                        "short"
+                    )
+                    .unwrap()
+                    .unwrap()
+                    .byte_offset,
+                64
+            );
+            drop(store);
+            let backup = rusqlite::Connection::open_with_flags(
+                database.with_file_name("memory.sqlite3.v16-backup"),
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            assert_eq!(
+                backup
+                    .pragma_query_value(None, "user_version", |row| row.get::<_, u64>(0))
+                    .unwrap(),
+                16
+            );
+            assert_eq!(
+                backup
+                    .query_row("SELECT COUNT(*) FROM memory_items", [], |row| row
+                        .get::<_, u64>(0))
+                    .unwrap(),
+                4
+            );
+            assert_eq!(
+                backup
+                    .query_row(
+                        "SELECT byte_offset FROM session_cursors WHERE session_id='short'",
+                        [],
+                        |row| row.get::<_, u64>(0)
+                    )
+                    .unwrap(),
+                64
+            );
+        }
         let load = load_opened_memory(
             &crate::node::test_node(),
             node.as_ref(),
@@ -1758,7 +1866,8 @@ mod tests {
         assert_eq!(project.usable_cards, 4);
         let mut store = MemoryStore::open(&database).unwrap();
         // D08 permits rule/lesson/decision corrections, never an unsupported
-        // Fact action. Its comparison remains readable and withheld (D04).
+        // Fact action. Confirmed corrections remain usable while unresolved
+        // comparisons are withheld, including a fact without a promotion action.
         for number in [2, 3] {
             store
                 .set_promotion(
@@ -1826,18 +1935,23 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(numbers.len(), 3);
             assert!(numbers.iter().all(|number| [1, 2, 3].contains(number)));
-            assert_eq!(project.usable_cards, 0);
-            assert!(
-                store
-                    .retrieve(&hide_memory::RetrievalQuery::prompt(
-                        &identity.id,
-                        "service port",
-                        vec![]
-                    ))
-                    .unwrap()
-                    .items
-                    .is_empty()
-            );
+            let confirmed = authority == hide_memory::DocumentAuthority::CardNewer;
+            assert_eq!(project.usable_cards, if confirmed { 4 } else { 0 });
+            let injected = store
+                .retrieve(&hide_memory::RetrievalQuery::prompt(
+                    &identity.id,
+                    "service port",
+                    vec![],
+                ))
+                .unwrap();
+            assert_eq!(injected.items.len(), usize::from(confirmed));
+            if confirmed {
+                assert!(
+                    injected.items[0]
+                        .text
+                        .contains("Pending document update: AGENTS.md")
+                );
+            }
         }
         store
             .set_promotion(

@@ -19,6 +19,7 @@ use crate::{
 
 pub(crate) mod hold;
 mod progress;
+pub use progress::CorrectionCheck;
 
 const SCHEMA_VERSION: i64 = 17;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any

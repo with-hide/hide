@@ -32,7 +32,7 @@ pub use store::hold::{
 };
 pub use store::{
     AnalysisBatch, ApplyOptions, ApplySummary, Candidate, CandidateKind, CandidateOutcome,
-    CandidateRelation, CardEvidence, ComparisonCard, Conversion, CursorReader,
+    CandidateRelation, CardEvidence, ComparisonCard, Conversion, CorrectionCheck, CursorReader,
     DeleteProjectOutcome, InjectedItem, Injection, InjectionKind, InjectionOutcome, MemoryDetail,
     MemoryError, MemoryItem, MemoryLifecycle, MemorySource, MemoryStore, PendingCard,
     PreviousRevision, ProjectMemoryState, Promotion, PromotionState, PromotionSuggestion,

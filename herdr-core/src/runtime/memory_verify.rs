@@ -572,8 +572,12 @@ pub(super) fn reconcile_corrections(
 ) -> Result<Checked, AnalysisFailure> {
     let local = |error: hide_memory::MemoryError| AnalysisFailure::Local(error.to_string());
     let mut checked = Checked::default();
-    for (number, revision, comparison, previous) in
-        store.correction_checks(project, 4).map_err(local)?
+    for hide_memory::CorrectionCheck {
+        number,
+        revision,
+        comparison,
+        fingerprint: previous,
+    } in store.correction_checks(project, 4).map_err(local)?
     {
         if cancel.is_cancelled() {
             return Err(AnalysisFailure::Cancelled);

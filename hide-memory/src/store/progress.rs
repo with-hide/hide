@@ -5,6 +5,14 @@ use super::*;
 
 const PENDING_LIMIT: u64 = 20_000;
 
+/// A confirmed correction awaiting a check of its owning document.
+pub struct CorrectionCheck {
+    pub number: u64,
+    pub revision: u64,
+    pub comparison: crate::DocumentComparison,
+    pub fingerprint: Option<String>,
+}
+
 pub(super) const TABLES: &str = "
 CREATE TABLE analysis_progress(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,session_id TEXT NOT NULL,base_offset INTEGER NOT NULL,next_group INTEGER NOT NULL,unsent TEXT NOT NULL DEFAULT '[]',PRIMARY KEY(project_id,provider,session_id));
 CREATE TABLE analysis_queue(position INTEGER PRIMARY KEY AUTOINCREMENT,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,session_id TEXT NOT NULL,activity_ms INTEGER NOT NULL,UNIQUE(project_id,provider,session_id));
@@ -113,7 +121,7 @@ impl MemoryStore {
         &self,
         project: &str,
         limit: usize,
-    ) -> Result<Vec<(u64, u64, crate::DocumentComparison, Option<String>)>, MemoryError> {
+    ) -> Result<Vec<CorrectionCheck>, MemoryError> {
         let mut statement = self.connection.prepare("SELECT i.number,i.current_revision,c.data,k.fingerprint FROM card_comparisons c JOIN memory_items i ON i.id=c.item_id AND i.current_revision=c.revision LEFT JOIN correction_checks k ON k.item_id=i.id AND k.revision=i.current_revision WHERE i.project_id=?1 AND i.lifecycle='active' AND json_extract(c.data,'$.authority')='card_newer' AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state IN ('merged','running','pr_open','building')) ORDER BY COALESCE(k.checked_at_ms,0),i.number LIMIT ?2")?;
         let rows = statement
             .query_map(params![project, limit.min(4) as u64], |row| {
@@ -127,13 +135,13 @@ impl MemoryStore {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
             .map(|(number, revision, json, fingerprint)| {
-                Ok((
+                Ok(CorrectionCheck {
                     number,
                     revision,
-                    serde_json::from_str(&json)
+                    comparison: serde_json::from_str(&json)
                         .map_err(|error| MemoryError::InvalidState(error.to_string()))?,
                     fingerprint,
-                ))
+                })
             })
             .collect()
     }
