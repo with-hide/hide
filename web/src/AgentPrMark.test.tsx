@@ -37,7 +37,9 @@ it.each([
   const root = createRoot(container);
   try {
     await act(async () => root.render(<TooltipProvider><AgentRecordTitle agent={agent} /><AgentPrMark agent={agent} family={[{pull,state:"pending",owners:[agent]}]} onOpen={p => opened.push(p)} /></TooltipProvider>));
-    expect(container.querySelector("[data-record-connection]")?.textContent).toBe(words);
+    // A check in progress only dims; the words show once it has not confirmed.
+    expect(container.querySelector("[data-record-connection]")?.textContent ?? null).toBe(connection === "checking" ? null : words);
+    expect(container.querySelector("[data-agent-title]")?.parentElement?.getAttribute("title")).toContain(words);
     expect(container.querySelector("[data-agent-title]")?.textContent).toBe(agent.identity_label);
     const button = container.querySelector("button")!;
     expect(button.getAttribute("aria-label")).toContain(words);

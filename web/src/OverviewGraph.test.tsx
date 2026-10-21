@@ -66,7 +66,7 @@ it.each([
     if (connection) {
       const row = container.querySelector("[data-graph-session-list] > button")!;
       expect(row.getAttribute("aria-label")).toContain("Retained conversation summary");
-      expect(row.querySelector("[data-record-connection]")?.getAttribute("data-record-connection") ?? null).toBe(connection === "confirmed" ? null : connection);
+      expect(row.querySelector("[data-record-connection]")?.getAttribute("data-record-connection") ?? null).toBe(connection === "unconfirmed" ? connection : null);
     }
     // B4/D09: a matching confirmed entry highlights without opening a panel.
     expect(container.querySelector("[data-graph-preview]")).toBeNull();
@@ -88,7 +88,7 @@ it.each([
       return;
     }
     await act(async () => container.querySelector<HTMLButtonElement>("[data-graph-session-list] button")!.click());
-    if (connection) expect(container.querySelector("[data-graph-preview] [data-record-connection]")?.getAttribute("data-record-connection") ?? null).toBe(connection === "confirmed" ? null : connection);
+    if (connection) expect(container.querySelector("[data-graph-preview] [data-record-connection]")?.getAttribute("data-record-connection") ?? null).toBe(connection === "unconfirmed" ? connection : null);
     const open = [...container.querySelectorAll<HTMLButtonElement>("[data-graph-preview] button")].find((button) => button.textContent === "Open session")!;
     expect(open).toBeDefined();
     await act(async () => open.click());
