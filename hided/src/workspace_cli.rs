@@ -503,6 +503,7 @@ pub fn request_hook(
     } else if matches!(
         command,
         hide_node_link::panes::HookCommand::Observation { .. }
+            | hide_node_link::panes::HookCommand::StartObservation { .. }
     ) {
         hide_node_link::panes::OBSERVATION_SEND_BUDGET
     } else {

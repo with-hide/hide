@@ -163,7 +163,12 @@ fn every_native_observation_has_installed_events_and_expected_metadata() {
                     } else {
                         &fixture["expected"]
                     };
-                    assert_fact(serde_json::to_value(fact).unwrap(), row.id, expected);
+                    assert_eq!(fact.prompts.len(), 1, "{}", row.id);
+                    assert_fact(
+                        serde_json::to_value(&fact.prompts[0]).unwrap(),
+                        row.id,
+                        expected,
+                    );
                 }
             }
         }

@@ -269,10 +269,9 @@ fn simple_commands(text: &str) -> Vec<Vec<String>> {
 pub(crate) struct ShellLine {
     pub commands: Vec<Vec<String>>,
     pub targets: Vec<(usize, String)>,
-    /// A single static invocation, with no shell control, expansion or I/O
-    /// redirection. Observation uses this stricter claim; guards still read
-    /// all commands, as before.
-    pub plain: bool,
+    /// The text of each `$(...)` command substitution, which the shell runs
+    /// as a line of its own. Only the observation reads them.
+    pub substitutions: Vec<String>,
 }
 
 pub(crate) fn shell_line(text: &str) -> ShellLine {
@@ -297,7 +296,7 @@ struct Lexer {
     /// A quote, backtick or `$(` that the text ended inside. A shell reads such
     /// a line as a syntax error and runs none of it, so nothing in it is a launch.
     unclosed: bool,
-    plain: bool,
+    substitutions: Vec<String>,
 }
 
 impl Lexer {
@@ -315,7 +314,7 @@ impl Lexer {
             heredoc_next: None,
             heredocs: Vec::new(),
             unclosed: false,
-            plain: true,
+            substitutions: Vec::new(),
         }
     }
 
@@ -329,12 +328,8 @@ impl Lexer {
                 '\\' => self.backslash(),
                 '\'' => self.single_quoted(),
                 '"' => self.double_quoted(),
-                '`' => {
-                    self.plain = false;
-                    self.backtick();
-                }
+                '`' => self.backtick(),
                 '$' if self.peek(1) == Some('(') => {
-                    self.plain = false;
                     self.word.push('$');
                     self.in_word = true;
                     self.at += 1;
@@ -345,17 +340,14 @@ impl Lexer {
                     self.at += 1;
                 }
                 '\n' => {
-                    self.plain = false;
                     self.end_command();
                     self.at += 1;
                     self.heredoc_bodies();
                 }
                 '#' if !self.in_word => {
-                    self.plain = false;
                     self.comment();
                 }
                 ';' | '|' | '(' | ')' => {
-                    self.plain = false;
                     self.end_command();
                     self.at += 1;
                     // `&&`-style doubling of the same character is one operator.
@@ -364,17 +356,12 @@ impl Lexer {
                     }
                 }
                 '&' => {
-                    self.plain = false;
                     self.ampersand();
                 }
                 '<' | '>' => {
-                    self.plain = false;
                     self.redirection(c);
                 }
                 other => {
-                    if matches!(other, '$' | '*' | '?' | '[' | ']' | '{' | '}') {
-                        self.plain = false;
-                    }
                     self.word.push(other);
                     self.in_word = true;
                     self.at += 1;
@@ -386,13 +373,13 @@ impl Lexer {
             return ShellLine {
                 commands: Vec::new(),
                 targets: Vec::new(),
-                plain: false,
+                substitutions: Vec::new(),
             };
         }
         ShellLine {
             commands: self.commands,
             targets: self.targets,
-            plain: self.plain,
+            substitutions: self.substitutions,
         }
     }
 
@@ -472,19 +459,12 @@ impl Lexer {
                     }
                 }
                 '$' if self.peek(1) == Some('(') => {
-                    self.plain = false;
                     self.word.push('$');
                     self.at += 1;
                     self.parenthesized();
                 }
-                '`' => {
-                    self.plain = false;
-                    self.backtick();
-                }
+                '`' => self.backtick(),
                 other => {
-                    if other == '$' {
-                        self.plain = false;
-                    }
                     self.word.push(other);
                     self.at += 1;
                 }
@@ -518,6 +498,7 @@ impl Lexer {
     /// `(...)` after a `$`, copied into the word as written, to its matching
     /// parenthesis; quotes inside it keep their own parentheses out of the count.
     fn parenthesized(&mut self) {
+        let start = self.word.len();
         let mut depth = 0usize;
         // The heredocs this substitution opened: their bodies are text, so a
         // quote or a parenthesis in one does not count.
@@ -541,6 +522,9 @@ impl Lexer {
                 ')' => {
                     depth -= 1;
                     if depth == 0 {
+                        // Between this `(` and its `)`.
+                        self.substitutions
+                            .push(self.word[start + 1..self.word.len() - 1].to_owned());
                         return;
                     }
                 }
@@ -816,7 +800,7 @@ fn kind_of(word: &str) -> Option<&'static str> {
 /// ones after it talk to: a bare assignment, `export`, `declare` or `typeset` of
 /// a target variable to something other than the pane's own value, or an
 /// `unset` of one.
-fn aims_away(words: &[String], env: &dyn Fn(&str) -> Option<String>) -> bool {
+pub(crate) fn aims_away(words: &[String], env: &dyn Fn(&str) -> Option<String>) -> bool {
     let (rest, assigned_away) = command_words(words, env, true);
     let Some((first, arguments)) = rest.split_first() else {
         return assigned_away;
@@ -835,7 +819,11 @@ fn aims_away(words: &[String], env: &dyn Fn(&str) -> Option<String>) -> bool {
     }
 }
 
-fn launch_of(words: &[String], env: &dyn Fn(&str) -> Option<String>, away: bool) -> Option<Launch> {
+pub(crate) fn launch_of(
+    words: &[String],
+    env: &dyn Fn(&str) -> Option<String>,
+    away: bool,
+) -> Option<Launch> {
     let (words, foreign) = command_words(words, env, true);
     let (first, rest) = words.split_first()?;
     if foreign || away || !is_herdr(first) {
