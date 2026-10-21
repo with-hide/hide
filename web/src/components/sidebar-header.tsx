@@ -40,19 +40,21 @@ export function DeviceTitle({ rail, title, deviceMenu }: { rail: boolean; title:
 /**
  * The top of the sidebar under the window's top row (PRD
  * sidebar-titlebar-refresh D-08): a visible Search row with the ⌘K chord as
- * bound, then the shared Overview row and the Factory place, with the project
- * tree directly below (whose Projects title carries Add project, PRD
- * first-run-onboarding D-27). Drawn from what the caller reads out of the
+ * bound, then the shared Overview row and, where the host can pick a folder,
+ * the Add project row under it (PRD first-run-onboarding B51), with the
+ * project tree directly below. Drawn from what the caller reads out of the
  * stores, so a test renders it without them.
  */
 export function SidebarHeader({
   overview,
+  addProject,
   compact = false,
   searchChord,
   onSearch,
 }: {
   compact?: boolean;
   overview?: { selected: boolean; count: number; chord: string | null; onOpen: () => void };
+  addProject?: { chord: string | null; onOpen: () => void };
   searchChord: string | null;
   onSearch: () => void;
 }) {
@@ -74,7 +76,7 @@ export function SidebarHeader({
       {overview ? (
         <Hint label={overview.count > 0 ? t("overview.needsYouHint", { count: overview.count }) : t("overview.title")} shortcut={overview.chord}>
           <button type="button" aria-current={overview.selected ? "page" : undefined} data-sidebar-overview="true" onClick={overview.onOpen}
-            className={`flex h-(--size-tab-strip) shrink-0 items-center gap-sm border-b border-border px-md text-body outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${overview.selected ? "bg-selected text-foreground" : "text-subtle-foreground hover:bg-accent"}`}>
+            className={`flex h-(--size-tab-strip) shrink-0 items-center gap-sm px-md text-body outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${addProject ? "" : "border-b border-border"} ${overview.selected ? "bg-selected text-foreground" : "text-subtle-foreground hover:bg-accent"}`}>
             <LayoutDashboardIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
             <span className="min-w-0 flex-1 truncate text-left">{t("overview.title")}</span>
             {overview.count > 0 ? <span data-overview-count="true" className="text-caption text-warning">{t("overview.askingCount", { count: overview.count })}</span> : null}
@@ -82,7 +84,18 @@ export function SidebarHeader({
           </button>
         </Hint>
       ) : null}
-
+      {addProject ? (
+        <button
+          type="button"
+          data-sidebar-new-workspace="true"
+          onClick={addProject.onOpen}
+          className="flex h-(--size-tab-strip) shrink-0 items-center gap-sm border-b border-border px-md text-body text-subtle-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+        >
+          <PlusIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-left">{t("commands.new_workspace")}</span>
+          {addProject.chord && !compact ? <Kbd className="sidebar-command-keycap">{addProject.chord}</Kbd> : null}
+        </button>
+      ) : null}
     </>
   );
 }

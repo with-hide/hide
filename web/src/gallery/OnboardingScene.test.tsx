@@ -49,7 +49,7 @@ it("with no project, says what to do with Add project and its chord in the middl
   const button = home.querySelector('[data-main-empty-home-action="new_workspace"]') as HTMLButtonElement;
   expect(button.textContent).toBe(english["firstRun.home.addProject"]);
   expect(button.nextElementSibling?.textContent).toBe("⇧⌘N");
-  // The sidebar's only other way to add one is the + on its Projects title (B51, B52).
+  // The sidebar's only other way to add one is the Add project row under Overview (B51, B52).
   expect(container.querySelectorAll("[data-sidebar-new-workspace]")).toHaveLength(1);
   await act(async () => button.click());
   expect(useUiStore.getState().overlay).toBe("add_project");
