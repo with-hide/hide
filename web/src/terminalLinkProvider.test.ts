@@ -4,7 +4,7 @@ import type { CellRow } from "./selection";
 import { useShellStore } from "./store";
 import { linkCandidates } from "./terminalLinks";
 import type { SnapshotRest } from "./snapshot";
-import { PROBE_CACHE_CAP, PROBE_NEW_LIMIT, PROBE_TTL_MS, clearProbeCache, owningCheckout, paneContext, pathLookups, probePaths, resolveGroups } from "./terminalLinkProvider";
+import { PROBE_CACHE_CAP, PROBE_NEW_LIMIT, PROBE_TTL_MS, clearProbeCache, osc8Handler, owningCheckout, paneContext, pathLookups, probePaths, resolveGroups } from "./terminalLinkProvider";
 
 function row(text: string, width: number): CellRow {
   const cells: CellRow = [];
@@ -283,4 +283,13 @@ describe("original spelling and bounded hover work", () => {
     expect(answers.size).toBe(513);
     expect(probe).toHaveBeenCalledExactlyOnceWith(["/new"]);
   });
+});
+
+it("a retained terminal link opens under its current address after a native move", () => {
+  let pane = "w1:p1";
+  const actions = { openLink: vi.fn(), openTerminalPath: vi.fn() };
+  const handler = osc8Handler(() => pane, { hovered: false }, () => actions, () => false);
+  pane = "w2:p2";
+  handler.activate({ metaKey: false, ctrlKey: false } as MouseEvent, "https://example.test/moved", { start: { x: 1, y: 1 }, end: { x: 27, y: 1 } });
+  expect(actions.openLink).toHaveBeenCalledWith("https://example.test/moved", false, "w2:p2");
 });

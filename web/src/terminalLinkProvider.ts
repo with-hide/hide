@@ -279,14 +279,16 @@ export async function terminalLinkAtCell(term: Terminal, paneId: string, state: 
  * Offers the links of the hovered row. `actions` is read at click time, so a
  * terminal that moves between panes' hosts always opens with the current one.
  */
-export function registerTerminalLinks(term: Terminal, paneId: string, state: LinkState, actions: () => TerminalLinkActions): { dispose(): void } {
+export function registerTerminalLinks(term: Terminal, pane: string | (() => string), state: LinkState, actions: () => TerminalLinkActions): { dispose(): void } {
+  const currentPane = () => typeof pane === "string" ? pane : pane();
   return term.registerLinkProvider({
     provideLinks(y, callback) {
+      const paneId = currentPane();
       void linksOnRow(term, paneId, y).then((chosen) => {
         const links: ILink[] = chosen.map(({ candidate, resolved, range }) => ({
           range,
           text: candidate.text,
-          activate: (event) => open(actions(), resolved, event, term.hasSelection(), paneId),
+          activate: (event) => open(actions(), resolved, event, term.hasSelection(), currentPane()),
           hover: () => {
             state.hovered = true;
             state.link = { range, resolved };
@@ -307,10 +309,11 @@ export function registerTerminalLinks(term: Terminal, paneId: string, state: Lin
  * confirm dialog. `file://` and `vscode://file/` addresses are paths and go
  * the way a detected path does; any other address is left alone and logged.
  */
-export function osc8Handler(paneId: string, state: LinkState, actions: () => TerminalLinkActions, hasSelection: () => boolean): ILinkHandler {
+export function osc8Handler(pane: string | (() => string), state: LinkState, actions: () => TerminalLinkActions, hasSelection: () => boolean): ILinkHandler {
   return {
     allowNonHttpProtocols: true,
     activate(event, uri) {
+      const paneId = typeof pane === "string" ? pane : pane();
       if (hasSelection()) return;
       const target = osc8Target(uri);
       const diagnostic = useShellStore.getState().noteDiagnostic;
@@ -334,7 +337,7 @@ export function osc8Handler(paneId: string, state: LinkState, actions: () => Ter
         // An unanswered path was logged by the check itself.
         if (!answers.has(target.path)) return;
         const found = answers.get(target.path) ?? null;
-        if (found) open(actions(), { target, found }, event, false, paneId);
+        if (found) open(actions(), { target, found }, event, false, typeof pane === "string" ? pane : pane());
         else diagnostic("terminal link: the linked file does not exist");
       });
     },
