@@ -42,8 +42,12 @@ use super::facts::{InputView, LogTarget, PullRequestTimes, ReadFacts};
 use super::generator::{GeneratorLock, LockPlace};
 use super::input::{OperatorInput, Submit};
 use super::overlay::LabelOverlay;
+use super::record::{MetadataWrite, RecordBinding, RecordConnection};
 use super::store::{LabelStore, PaneRecord};
-use crate::links::ledger::{LedgerUpdate, RecordedRequest, SessionIdentity, WorkAuthor};
+use crate::links::ledger::{
+    LedgerAnswer, LedgerCall, LedgerUpdate, RecordedRequest, SessionIdentity, SessionMetadata,
+    WorkAuthor,
+};
 use crate::links::worker::LinkClient;
 
 /// The minimum interval between native-file current-metadata reads, also
@@ -83,6 +87,8 @@ const READ_STALE: &str = "session_read_stale";
 /// The most sighted pull requests waiting between two takes; a read that
 /// finds more keeps the newest.
 const SIGHTED_LIMIT: usize = 32;
+/// Native-proven short records waiting for the existing ledger writer.
+const METADATA_WRITE_LIMIT: usize = 512;
 /// The most Memory receipts waiting between two takes; a hook writes at most
 /// one a prompt, so more means the core stopped taking them.
 const RECEIPT_LIMIT: usize = 64;
@@ -120,6 +126,9 @@ pub(crate) enum ReadFailure {
 /// device's through its helper. Blocks; called only on the reader thread.
 pub(crate) trait TranscriptSource: Send + Sync {
     fn read(&self, request: &LabelTranscriptRequest) -> Result<LabelTranscript, ReadFailure>;
+    fn resolve(&self, _pane: &str, _agent: Agent) -> Result<Option<(String, String)>, ReadFailure> {
+        Ok(None)
+    }
 }
 
 /// A pull request address a read found in a session's tool output that the
@@ -197,12 +206,18 @@ enum WorkerResult {
         pane: String,
         generation: u64,
         reference: String,
+        resolved_reference: Option<(String, String)>,
+        metadata: Box<MetadataRead>,
         from_start: bool,
         /// Herdr's `state_change_seq` the read was asked under.
         state_change_seq: Option<u64>,
         result: Box<Result<LabelTranscript, ReadFailure>>,
     },
     Analysis(Box<AnalysisOutcome>),
+    Metadata {
+        write: Box<MetadataWrite>,
+        result: Result<SessionMetadata, String>,
+    },
 }
 
 /// What an analysis was asked under, carried back with its answer.
@@ -242,6 +257,13 @@ struct AnalysisOutcome {
     result: AnalysisResult,
 }
 
+#[derive(Default)]
+struct MetadataRead {
+    value: Option<SessionMetadata>,
+    persisted: Option<SessionMetadata>,
+    failure: Option<String>,
+}
+
 struct ReadJob {
     pane: String,
     generation: u64,
@@ -249,6 +271,9 @@ struct ReadJob {
     from_start: bool,
     state_change_seq: Option<u64>,
     request: LabelTranscriptRequest,
+    discover: bool,
+    metadata: Option<(String, SessionMetadata)>,
+    import_legacy: bool,
 }
 
 /// Whether a refused read says only that the session is not there yet. The
@@ -263,6 +288,14 @@ struct PaneState {
     status: String,
     reference: Option<(String, String)>,
     reference_token: Option<String>,
+    reported_reference: Option<String>,
+    record_connection: RecordConnection,
+    metadata: Option<SessionMetadata>,
+    metadata_saved: Option<SessionMetadata>,
+    /// Last desired value considered for saving, independent of another
+    /// pane's acknowledgement of this same conversation.
+    metadata_observed: Option<SessionMetadata>,
+    metadata_loaded: bool,
     cwd: Option<String>,
     generation: u64,
     /// The conversation since the anchor, bounded; empty until the first
@@ -322,6 +355,8 @@ pub(crate) struct LabelWorker {
     wake: Wake,
     read_in_flight: Option<String>,
     analysis_in_flight: Option<String>,
+    metadata_in_flight: bool,
+    pending_metadata: BTreeMap<SessionIdentity, MetadataWrite>,
     /// Panes owing an analysis while another runs, in arrival order.
     waiting: VecDeque<String>,
     next_generation: u64,
@@ -358,10 +393,18 @@ impl LabelWorker {
         wake: Wake,
     ) -> Result<Self, String> {
         let (sender, results) = channel();
-        let reader = Reader::spawn(source, sender.clone(), Arc::clone(&wake))?;
+        let records = store.target(&config.target);
+        let reader = Reader::spawn(
+            source,
+            sender.clone(),
+            Arc::clone(&wake),
+            Arc::clone(&config.ledger),
+            config.target.clone(),
+            &records,
+        )?;
         Ok(Self {
             ledger: config.ledger,
-            records: store.target(&config.target),
+            records,
             generator: GeneratorLock::new(config.lock, &config.target, Arc::clone(&wake)),
             target: config.target,
             input: config.input,
@@ -374,6 +417,8 @@ impl LabelWorker {
             wake,
             read_in_flight: None,
             analysis_in_flight: None,
+            metadata_in_flight: false,
+            pending_metadata: BTreeMap::new(),
             waiting: VecDeque::new(),
             next_generation: 0,
             dirty: false,
@@ -403,6 +448,7 @@ impl LabelWorker {
         // Settled before anything is laid on a payload, so the first
         // projection already shows what the store proves.
         let mut changed = self.ensure_generator(now);
+        let has_ledger = self.ledger.lock().is_ok_and(|ledger| ledger.is_some());
         let mut seen = HashSet::new();
         for observed in agents {
             seen.insert(observed.pane_id.as_str());
@@ -482,6 +528,9 @@ impl LabelWorker {
             };
             match self.panes.get_mut(&observed.pane_id) {
                 None => {
+                    // Import a resumable legacy record even if no lifecycle
+                    // or transcript content changed since the last daemon.
+                    self.dirty = true;
                     // A restart resumes where it stopped: an unchanged pane
                     // whose position belongs to its current reference is
                     // not read until something moves (B10).
@@ -504,11 +553,28 @@ impl LabelWorker {
                             status,
                             reference: observed.reference.clone(),
                             reference_token: reference_token.clone(),
+                            reported_reference: reference_token.clone(),
+                            record_connection: if resumable {
+                                RecordConnection::Confirmed
+                            } else {
+                                RecordConnection::Checking
+                            },
+                            metadata: (record.proven_for(reference_token.as_deref())
+                                || (reference_token.is_none()
+                                    && record.native_session_id.as_deref().is_some_and(|id| {
+                                        label_reference_token(agent.as_str(), "id", id)
+                                            == record.owner
+                                    })
+                                    && record.owner.is_some()))
+                            .then(|| SessionMetadata::of_label(record)),
+                            metadata_saved: None,
+                            metadata_observed: None,
+                            metadata_loaded: false,
                             cwd: observed.cwd.clone(),
                             generation: self.next_generation,
                             events: VecDeque::new(),
                             events_loaded: false,
-                            needs_read: reference_token.is_some() && !resumable,
+                            needs_read: !resumable || has_ledger,
                             next_analysis_at: None,
                             start_held: None,
                             // Native-file titles and waits can change without
@@ -527,7 +593,7 @@ impl LabelWorker {
                     );
                 }
                 Some(pane) => {
-                    if pane.reference_token != reference_token || pane.agent != agent {
+                    if pane.reported_reference != reference_token || pane.agent != agent {
                         // Another session, or none: everything in flight
                         // for the old one is dropped when it lands.
                         self.next_generation += 1;
@@ -537,7 +603,19 @@ impl LabelWorker {
                         pane.next_analysis_at = None;
                         pane.follow_up_at = None;
                         pane.read_retries = 0;
-                        pane.needs_read = reference_token.is_some();
+                        pane.needs_read = true;
+                        pane.record_connection = RecordConnection::Checking;
+                        // A newly reported session supersedes the provisional
+                        // locator at once, before its asynchronous read lands.
+                        // Missing hook identity keeps the last display only.
+                        if pane.agent != agent || reference_token.is_some() {
+                            pane.metadata = None;
+                        }
+                        pane.metadata_saved = None;
+                        pane.metadata_observed = None;
+                        pane.metadata_loaded = false;
+                        pane.reference_token = reference_token.clone();
+                        pane.reference = observed.reference.clone();
                         self.waiting.retain(|id| id != &observed.pane_id);
                         changed = true;
                         crate::diagnostic!(json!({
@@ -551,7 +629,7 @@ impl LabelWorker {
                     }
                     if seq_moved || status_moved {
                         pane.read_retries = 0;
-                        pane.needs_read |= reference_token.is_some();
+                        pane.needs_read = true;
                         pane.follow_up_armed = status == "working";
                     }
                     // The turn works again: its end, when it comes, waits
@@ -561,8 +639,7 @@ impl LabelWorker {
                     }
                     pane.agent = agent;
                     pane.status = status;
-                    pane.reference = observed.reference.clone();
-                    pane.reference_token = reference_token;
+                    pane.reported_reference = reference_token;
                     pane.cwd = observed.cwd.clone();
                 }
             }
@@ -587,7 +664,7 @@ impl LabelWorker {
             }
         }
         self.schedule(now);
-        self.persist();
+        self.persist(now);
         changed
     }
 
@@ -605,7 +682,7 @@ impl LabelWorker {
         }
         if changed {
             self.dirty = true;
-            self.persist();
+            self.persist(Instant::now());
         }
         changed
     }
@@ -735,7 +812,7 @@ impl LabelWorker {
             let pane = self.panes.get_mut(&id).expect("listed above");
             if pane.follow_up_at.is_some_and(|at| now >= at) {
                 pane.follow_up_at = None;
-                pane.needs_read |= pane.reference_token.is_some();
+                pane.needs_read = true;
             }
             if pane.next_analysis_at.is_some_and(|at| now >= at) {
                 pane.next_analysis_at = None;
@@ -747,7 +824,7 @@ impl LabelWorker {
             }
         }
         self.schedule(now);
-        self.persist();
+        self.persist(now);
         changed
     }
 
@@ -762,28 +839,90 @@ impl LabelWorker {
                     pane,
                     generation,
                     reference,
+                    resolved_reference,
+                    metadata,
                     from_start,
                     state_change_seq,
                     result,
-                } => self.handle_read(
+                } => self.accept_read(
                     &pane,
                     generation,
                     &reference,
+                    resolved_reference,
+                    *metadata,
                     (from_start, state_change_seq),
                     *result,
                     (now, now_unix_ms),
                 ),
                 WorkerResult::Analysis(outcome) => self.handle_analysis(*outcome, now),
+                WorkerResult::Metadata { write, result } => {
+                    self.metadata_in_flight = false;
+                    match result {
+                        Ok(_) => {
+                            if self
+                                .pending_metadata
+                                .get(&write.session)
+                                .is_some_and(|current| {
+                                    current.at_unix_ms == write.at_unix_ms
+                                        && current.metadata == write.metadata
+                                })
+                            {
+                                self.pending_metadata.remove(&write.session);
+                            }
+                            for (id, pane) in &mut self.panes {
+                                if self.records.get(id).is_some_and(|record| {
+                                    record.owner.as_deref() == Some(write.owner.as_str())
+                                        && record.proven_for(pane.reference_token.as_deref())
+                                        && pane.record_connection == RecordConnection::Confirmed
+                                }) {
+                                    pane.metadata_saved = Some(write.metadata.clone());
+                                }
+                            }
+                            self.dirty = true;
+                        }
+                        Err(code) => {
+                            if let Some(current) = self.pending_metadata.get_mut(&write.session) {
+                                current.due = now + UNAVAILABLE_RETRY;
+                            }
+                            crate::diagnostic!(
+                                json!({"component":"labels","kind":"record.write_failed","target":self.target,"code":code})
+                            );
+                        }
+                    }
+                    false
+                }
             };
         }
         self.schedule(now);
-        self.persist();
+        self.persist(now);
         changed
     }
 
     /// What these labels lay onto a projection; see [`LabelOverlay`].
     pub(crate) fn overlay(&self) -> LabelOverlay {
         LabelOverlay::of_records(&self.records, self.generator.shows(), self.summaries)
+            .with_bindings(
+                self.panes
+                    .iter()
+                    .filter(|_| self.generator.shows())
+                    .filter_map(|(id, pane)| {
+                        pane.metadata.clone().map(|mut metadata| {
+                            if !self.summaries {
+                                metadata.goal = None;
+                                metadata.summary.clear();
+                            }
+                            (
+                                id.clone(),
+                                RecordBinding {
+                                    provider: pane.agent.as_str().into(),
+                                    reported_reference: pane.reported_reference.clone(),
+                                    connection: pane.record_connection,
+                                    metadata,
+                                },
+                            )
+                        })
+                    }),
+            )
     }
 
     /// Takes what the core says labels follow: the operator's agent-summary
@@ -833,6 +972,7 @@ impl LabelWorker {
     pub(crate) fn settled(&self) -> bool {
         self.read_in_flight.is_none()
             && self.analysis_in_flight.is_none()
+            && !self.metadata_in_flight
             && self.waiting.is_empty()
             && !self
                 .panes
@@ -883,8 +1023,91 @@ impl LabelWorker {
         }
     }
 
-    fn persist(&mut self) {
+    fn persist(&mut self, now: Instant) {
         if std::mem::take(&mut self.dirty) {
+            for (id, pane) in &mut self.panes {
+                let Some(record) = self
+                    .records
+                    .get(id)
+                    .filter(|r| r.proven_for(pane.reference_token.as_deref()))
+                else {
+                    continue;
+                };
+                if pane.record_connection != RecordConnection::Confirmed {
+                    continue;
+                }
+                let Some(_) = record.native_session_id.as_ref() else {
+                    continue;
+                };
+                let mut metadata = SessionMetadata::of_label(record);
+                if metadata.summary.is_empty() {
+                    metadata.summary = pane
+                        .metadata
+                        .as_ref()
+                        .map(|m| m.summary.clone())
+                        .unwrap_or_default();
+                }
+                if let Some(old) = &pane.metadata {
+                    for pr in &old.created_prs {
+                        if !metadata
+                            .created_prs
+                            .iter()
+                            .any(|(repo, number, _)| repo == &pr.0 && *number == pr.1)
+                        {
+                            metadata.created_prs.push(pr.clone());
+                        }
+                    }
+                }
+                metadata.created_prs.truncate(20);
+                pane.metadata = Some(metadata.clone());
+                if pane.metadata_observed.as_ref() == Some(&metadata) {
+                    continue;
+                }
+                let session = SessionIdentity {
+                    device_id: self
+                        .target
+                        .strip_prefix("device:")
+                        .unwrap_or(&self.target)
+                        .into(),
+                    agent: pane.agent.as_str().into(),
+                    session_id: record.native_session_id.clone().expect("checked above"),
+                };
+                if pane.metadata_saved.as_ref() != Some(&metadata)
+                    || self
+                        .pending_metadata
+                        .get(&session)
+                        .is_some_and(|write| write.metadata != metadata)
+                {
+                    if self
+                        .pending_metadata
+                        .get(&session)
+                        .is_some_and(|write| write.metadata == metadata)
+                    {
+                        pane.metadata_observed = Some(metadata);
+                        continue;
+                    }
+                    if !self.pending_metadata.contains_key(&session)
+                        && self.pending_metadata.len() >= METADATA_WRITE_LIMIT
+                    {
+                        crate::diagnostic!(
+                            json!({"component":"labels","kind":"record.write_capacity","target":self.target,"limit":METADATA_WRITE_LIMIT})
+                        );
+                        continue;
+                    }
+                    self.pending_metadata.insert(
+                        session.clone(),
+                        MetadataWrite {
+                            session,
+                            owner: record.owner.clone().expect("proven record"),
+                            metadata: metadata.clone(),
+                            at_unix_ms: super::overlay::unix_milliseconds(),
+                            due: now,
+                            merge_history: !pane.metadata_loaded,
+                        },
+                    );
+                }
+                pane.metadata_observed = Some(metadata);
+            }
             self.store.save_target(&self.target, &self.records);
         }
     }
@@ -894,17 +1117,36 @@ impl LabelWorker {
             return;
         }
         self.schedule_read();
+        self.schedule_metadata(now);
         self.schedule_analysis(now);
     }
 
+    fn schedule_metadata(&mut self, now: Instant) {
+        if self.metadata_in_flight || self.read_in_flight.is_some() {
+            return;
+        }
+        let Some(write) = self
+            .pending_metadata
+            .values()
+            .find(|write| write.due <= now)
+        else {
+            return;
+        };
+        if !self.ledger.lock().is_ok_and(|ledger| ledger.is_some()) {
+            return;
+        }
+        self.metadata_in_flight = true;
+        self.reader.write(write.clone());
+    }
+
     fn schedule_read(&mut self) {
-        if self.read_in_flight.is_some() {
+        if self.read_in_flight.is_some() || self.metadata_in_flight {
             return;
         }
         let next = self
             .panes
             .iter()
-            .find(|(_, pane)| pane.needs_read && pane.reference_token.is_some())
+            .find(|(_, pane)| pane.needs_read)
             .map(|(id, _)| id.clone());
         let Some(id) = next else {
             return;
@@ -912,7 +1154,7 @@ impl LabelWorker {
         let pane = self.panes.get_mut(&id).expect("found above");
         pane.needs_read = false;
         let record = self.records.get(&id);
-        let reference = pane.reference_token.clone().expect("filtered above");
+        let reference = pane.reference_token.clone().unwrap_or_default();
         let same_file =
             record.is_some_and(|record| record.read_reference.as_ref() == Some(&reference));
         // An in-memory reader appends after the checkpoint; a reader that
@@ -930,7 +1172,7 @@ impl LabelWorker {
         } else {
             record.and_then(|record| record.anchor.clone())
         };
-        let (kind, value) = pane.reference.clone().expect("a token has a reference");
+        let (kind, value) = pane.reference.clone().unwrap_or_default();
         let subagents = record
             .filter(|_| same_file)
             .map(|record| record.facts.subagents.clone())
@@ -953,6 +1195,13 @@ impl LabelWorker {
                 subagents,
                 turns,
             },
+            discover: pane.reported_reference.is_none(),
+            import_legacy: !pane.metadata_loaded,
+            metadata: record
+                .filter(|record| {
+                    pane.metadata_loaded && record.proven_for(pane.reference_token.as_deref())
+                })
+                .and_then(|record| Some((record.owner.clone()?, pane.metadata.clone()?))),
         };
         self.read_in_flight = Some(id);
         self.reader.submit(job);
@@ -987,6 +1236,174 @@ impl LabelWorker {
         }));
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn accept_read(
+        &mut self,
+        pane_id: &str,
+        generation: u64,
+        requested: &str,
+        resolved: Option<(String, String)>,
+        metadata: MetadataRead,
+        position: (bool, Option<u64>),
+        result: Result<LabelTranscript, ReadFailure>,
+        clock: (Instant, u64),
+    ) -> bool {
+        if self.read_in_flight.as_deref() == Some(pane_id) {
+            self.read_in_flight = None;
+        }
+        let Some(pane) = self
+            .panes
+            .get_mut(pane_id)
+            .filter(|p| p.generation == generation)
+        else {
+            return false;
+        };
+        let previous = (pane.record_connection, pane.metadata.clone());
+        let success = result.as_ref().is_ok_and(|read| {
+            read.confirmed
+                .native_session_id
+                .as_deref()
+                .is_some_and(|id| {
+                    label_reference_token(pane.agent.as_str(), "id", id).as_deref()
+                        == Some(read.confirmed.owner.as_str())
+                })
+        });
+        if !success {
+            pane.record_connection = RecordConnection::Unconfirmed;
+            pane.follow_up_at = Some(clock.0 + UNAVAILABLE_RETRY);
+            let changed = previous.0 != pane.record_connection;
+            let current = pane.reference_token.clone();
+            if let Err(error) = &result {
+                let reason = match error {
+                    ReadFailure::Unavailable(v)
+                    | ReadFailure::Pending(v)
+                    | ReadFailure::Refused(v) => v,
+                };
+                self.log_failure(pane_id, "session.unconfirmed", reason);
+            }
+            // Retain display history even when the current native read
+            // revokes turn/control proof. A missing locator has no such proof.
+            return if current.as_deref() == Some(requested) {
+                changed
+                    | self.handle_read(
+                        pane_id, generation, requested, position, result, None, clock,
+                    )
+            } else {
+                changed
+            };
+        }
+        let reference = resolved
+            .as_ref()
+            .and_then(|(kind, value)| label_reference_token(pane.agent.as_str(), kind, value))
+            .or_else(|| pane.reference_token.clone());
+        let Some(reference) = reference else {
+            return false;
+        };
+        if pane.reference_token.as_ref() != Some(&reference) {
+            // A newly discovered B invalidates A's analyzer too, even on an
+            // A -> B -> A walk with no hook reporting either transition.
+            self.next_generation += 1;
+            pane.generation = self.next_generation;
+            pane.events.clear();
+            pane.events_loaded = false;
+            pane.next_analysis_at = None;
+            pane.metadata_saved = None;
+            pane.metadata_observed = None;
+            pane.metadata_loaded = false;
+            self.waiting.retain(|id| id != pane_id);
+        }
+        pane.reference_token = Some(reference.clone());
+        if let Some(resolved) = resolved {
+            pane.reference = Some(resolved);
+        }
+        let current_generation = pane.generation;
+        let same_owner = self.records.get(pane_id).is_some_and(|record| {
+            result
+                .as_ref()
+                .is_ok_and(|read| record.owner.as_ref() == Some(&read.confirmed.owner))
+        });
+        let metadata_failed = metadata.failure.is_some();
+        pane.metadata_loaded = !metadata_failed;
+        if let Some(written) = metadata.persisted {
+            pane.metadata_saved = Some(written.clone());
+        }
+        if let Some(code) = metadata.failure {
+            crate::diagnostic!(
+                json!({"component":"labels","kind":"record.read_failed","pane_id":pane_id,"code":code})
+            );
+        }
+        let saved = metadata
+            .value
+            .or_else(|| same_owner.then(|| pane.metadata.clone()).flatten());
+        // A resume argv is launch intent, not live identity: an agent can
+        // choose another conversation without replacing its process. Read
+        // the intended record, but grant no current facts or analysis until
+        // Herdr reports the conversation its hooks witnessed.
+        if pane.reported_reference.is_none() {
+            let read = result.as_ref().expect("native identity checked above");
+            let mut display = saved
+                .or_else(|| same_owner.then(|| pane.metadata.clone()).flatten())
+                .unwrap_or_default();
+            if read.title.is_some() {
+                display.native_title = read.title.clone().filter(|value| !value.trim().is_empty());
+            }
+            if read.custom_title.is_some() {
+                display.manual_title = read
+                    .custom_title
+                    .clone()
+                    .filter(|value| !value.trim().is_empty());
+            }
+            pane.record_connection = RecordConnection::Unconfirmed;
+            pane.metadata = Some(display);
+            pane.follow_up_at = Some(clock.0 + UNAVAILABLE_RETRY);
+            return previous != (pane.record_connection, pane.metadata.clone());
+        }
+        let mut changed = self.handle_read(
+            pane_id,
+            current_generation,
+            &reference,
+            position,
+            result,
+            saved.as_ref(),
+            clock,
+        );
+        let record = &self.records[pane_id];
+        let mut display = saved.unwrap_or_else(|| SessionMetadata::of_label(record));
+        display.native_title.clone_from(&record.facts.title);
+        display.manual_title.clone_from(&record.facts.custom_title);
+        if record.goal.is_some() {
+            display.goal.clone_from(&record.goal);
+        }
+        if !record.line.is_empty() {
+            display.summary.clone_from(&record.line);
+        }
+        for pr in &record.facts.created_prs {
+            if !display
+                .created_prs
+                .iter()
+                .any(|(repo, number, _)| *repo == pr.repository && *number == pr.number)
+            {
+                display
+                    .created_prs
+                    .push((pr.repository.clone(), pr.number, pr.sighted_at_unix_ms));
+            }
+        }
+        display
+            .created_prs
+            .sort_by_key(|(_, _, at)| std::cmp::Reverse(*at));
+        display.created_prs.truncate(20);
+        let pane = self.panes.get_mut(pane_id).expect("accepted pane");
+        pane.record_connection = RecordConnection::Confirmed;
+        pane.metadata = Some(display);
+        if metadata_failed {
+            let retry = clock.0 + UNAVAILABLE_RETRY;
+            pane.follow_up_at = Some(pane.follow_up_at.map_or(retry, |due| due.min(retry)));
+        }
+        changed |= previous != (pane.record_connection, pane.metadata.clone());
+        changed
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn handle_read(
         &mut self,
         pane_id: &str,
@@ -994,6 +1411,7 @@ impl LabelWorker {
         reference: &str,
         (from_start, asked_seq): (bool, Option<u64>),
         result: Result<LabelTranscript, ReadFailure>,
+        saved: Option<&SessionMetadata>,
         (now, now_unix_ms): (Instant, u64),
     ) -> bool {
         if self.read_in_flight.as_deref() == Some(pane_id) {
@@ -1088,6 +1506,24 @@ impl LabelWorker {
             record.reset_analysis();
             verdicts_forgotten = true;
             changed = true;
+        }
+        record.provider = Some(pane.agent.as_str().into());
+        if let Some(saved) = saved {
+            if record.facts.title.is_none() {
+                record.facts.title.clone_from(&saved.native_title);
+            }
+            if record.facts.custom_title.is_none() {
+                record.facts.custom_title.clone_from(&saved.manual_title);
+            }
+            if record.goal.is_none() {
+                record.goal.clone_from(&saved.goal);
+            }
+            if record.analysis_turn_start.is_none() {
+                record.analysis_turn_start = saved.analysed_start;
+            }
+            if record.analysis_turn_end.is_none() {
+                record.analysis_turn_end = saved.analysed_end;
+            }
         }
         if record.proven_reference.as_deref() != Some(reference) {
             record.proven_reference = Some(reference.to_owned());
@@ -2047,8 +2483,13 @@ fn provider(kind: Option<&str>) -> Option<Agent> {
 
 /// The worker's one reader thread: reads run one at a time, in the order
 /// the worker hands them in, and each answer wakes the coordinator.
+enum ReaderJob {
+    Read(Box<ReadJob>),
+    Write(Box<MetadataWrite>),
+}
+
 struct Reader {
-    jobs: Option<Sender<ReadJob>>,
+    jobs: Option<Sender<ReaderJob>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -2057,25 +2498,203 @@ impl Reader {
         source: Arc<dyn TranscriptSource>,
         results: Sender<WorkerResult>,
         wake: Wake,
+        ledger: Arc<std::sync::Mutex<Option<LinkClient>>>,
+        target: String,
+        records: &BTreeMap<String, PaneRecord>,
     ) -> Result<Self, String> {
-        let (jobs, receiver) = channel::<ReadJob>();
+        // Compatibility candidates keep only the existing short metadata,
+        // never raw facts or a path. They need an explicit native id and a
+        // matching provider digest at the eventual native-proven read.
+        let mut legacy: Vec<_> = records
+            .values()
+            .filter_map(|record| {
+                Some((
+                    record.native_session_id.clone()?,
+                    record.owner.clone()?,
+                    SessionMetadata::of_label(record),
+                    record.changed_unix_ms,
+                ))
+            })
+            .collect();
+        legacy.sort_by_key(|(_, _, _, at)| std::cmp::Reverse(*at));
+        if legacy.len() > 512 {
+            crate::diagnostic!(
+                json!({"component":"labels","kind":"record.import_capacity","dropped":legacy.len()-512})
+            );
+            legacy.truncate(512);
+        }
+        let (jobs, receiver) = channel::<ReaderJob>();
         let thread = std::thread::Builder::new()
             .name("herdr-core-labels-reader".to_owned())
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
+                    let job = match job {
+                        ReaderJob::Read(job) => *job,
+                        ReaderJob::Write(write) => {
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    let client = ledger
+                                        .lock()
+                                        .ok()
+                                        .and_then(|value| value.clone())
+                                        .ok_or("record_ledger_unavailable")?;
+                                    write.save(&client)
+                                }))
+                                .unwrap_or_else(|_| Err("reader_panicked".into()));
+                            if results
+                                .send(WorkerResult::Metadata { write, result })
+                                .is_err()
+                            {
+                                return;
+                            }
+                            wake();
+                            continue;
+                        }
+                    };
                     // The answer must arrive whatever happens here: a panic
                     // that escaped would leave this server's reads in flight
                     // forever.
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        source.read(&job.request)
+                    let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut request = job.request.clone();
+                        let mut from_start = job.from_start;
+                        let resolved = if job.discover {
+                            match source.resolve(&job.pane, request.agent)? {
+                                Some((kind, value)) => {
+                                    if kind != request.reference_kind
+                                        || value != request.reference_value
+                                    {
+                                        from_start = true;
+                                        request.checkpoint = None;
+                                        request.subagents = Default::default();
+                                        request.turns = None;
+                                    }
+                                    request.reference_kind = kind.clone();
+                                    request.reference_value = value.clone();
+                                    Some((kind, value))
+                                }
+                                None => {
+                                    return Err(ReadFailure::Unavailable(
+                                        "session_reference_unconfirmed".into(),
+                                    ));
+                                }
+                            }
+                        } else {
+                            None
+                        };
+                        let transcript = source.read(&request)?;
+                        let old = legacy.iter().find(|(native, owner, _, _)| {
+                            Some(native) == transcript.confirmed.native_session_id.as_ref()
+                                && *owner == transcript.confirmed.owner
+                        });
+                        let mut written = None;
+                        let metadata = (|| {
+                            let id = transcript
+                                .confirmed
+                                .native_session_id
+                                .as_ref()
+                                .ok_or("record_identity_unavailable")?;
+                            if label_reference_token(request.agent.as_str(), "id", id).as_deref()
+                                != Some(transcript.confirmed.owner.as_str())
+                            {
+                                return Err("record_identity_mismatch".into());
+                            }
+                            let session = SessionIdentity {
+                                device_id: target.strip_prefix("device:").unwrap_or(&target).into(),
+                                agent: request.agent.as_str().into(),
+                                session_id: id.clone(),
+                            };
+                            let Some(client) = ledger.lock().ok().and_then(|l| l.clone()) else {
+                                return Err("record_ledger_unavailable".into());
+                            };
+                            if client.ledger_started_at().is_none() {
+                                return Err("record_ledger_unavailable".into());
+                            }
+                            if let Some((owner, saved)) = &job.metadata
+                                && *owner == transcript.confirmed.owner
+                            {
+                                return Ok(Some(saved.clone()));
+                            }
+                            let LedgerAnswer::Metadata(saved) =
+                                client.call(LedgerCall::Metadata(session.clone()))?
+                            else {
+                                return Err("record_answer_mismatch".into());
+                            };
+                            if let Some((_, _, display, at)) = old.filter(|_| job.import_legacy) {
+                                // A pre-migration title row is not proof that
+                                // its legacy goal/summary was imported. Fill
+                                // only missing history, under the legacy time
+                                // so a newer committed record still wins.
+                                let mut imported = saved.clone().unwrap_or_default();
+                                imported.native_title = imported
+                                    .native_title
+                                    .or_else(|| display.native_title.clone());
+                                imported.manual_title = imported
+                                    .manual_title
+                                    .or_else(|| display.manual_title.clone());
+                                imported.goal = imported.goal.or_else(|| display.goal.clone());
+                                if imported.summary.is_empty() {
+                                    imported.summary.clone_from(&display.summary);
+                                }
+                                imported.analysed_start =
+                                    imported.analysed_start.or(display.analysed_start);
+                                imported.analysed_end =
+                                    imported.analysed_end.or(display.analysed_end);
+                                for pr in &display.created_prs {
+                                    if !imported
+                                        .created_prs
+                                        .iter()
+                                        .any(|(repo, number, _)| repo == &pr.0 && *number == pr.1)
+                                    {
+                                        imported.created_prs.push(pr.clone());
+                                    }
+                                }
+                                imported.created_prs.truncate(20);
+                                if saved.as_ref() == Some(&imported) {
+                                    return Ok(saved);
+                                }
+                                let LedgerAnswer::Metadata(saved) =
+                                    client.call(LedgerCall::SaveMetadata {
+                                        session,
+                                        metadata: Box::new(imported),
+                                        at_unix_ms: *at,
+                                    })?
+                                else {
+                                    return Err("record_answer_mismatch".into());
+                                };
+                                written = saved.clone();
+                                return Ok(saved);
+                            }
+                            Ok(saved)
+                        })();
+                        let metadata = match metadata {
+                            Ok(value) => MetadataRead {
+                                value,
+                                persisted: written,
+                                failure: None,
+                            },
+                            Err(code) => MetadataRead {
+                                value: old.map(|(_, _, display, _)| display.clone()),
+                                persisted: None,
+                                failure: Some(code),
+                            },
+                        };
+                        Ok((resolved, transcript, metadata, from_start))
                     }))
                     .unwrap_or_else(|_| Err(ReadFailure::Refused("reader_panicked".to_owned())));
+                    let (resolved_reference, result, metadata, from_start) = match answer {
+                        Ok((resolved, transcript, metadata, from_start)) => {
+                            (resolved, Ok(transcript), metadata, from_start)
+                        }
+                        Err(error) => (None, Err(error), MetadataRead::default(), job.from_start),
+                    };
                     if results
                         .send(WorkerResult::Read {
                             pane: job.pane,
                             generation: job.generation,
                             reference: job.reference,
-                            from_start: job.from_start,
+                            resolved_reference,
+                            metadata: Box::new(metadata),
+                            from_start,
                             state_change_seq: job.state_change_seq,
                             result: Box::new(result),
                         })
@@ -2095,7 +2714,12 @@ impl Reader {
 
     fn submit(&self, job: ReadJob) {
         if let Some(jobs) = self.jobs.as_ref() {
-            let _ = jobs.send(job);
+            let _ = jobs.send(ReaderJob::Read(Box::new(job)));
+        }
+    }
+    fn write(&self, write: MetadataWrite) {
+        if let Some(jobs) = &self.jobs {
+            let _ = jobs.send(ReaderJob::Write(Box::new(write)));
         }
     }
 }

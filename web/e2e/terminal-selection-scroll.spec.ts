@@ -59,6 +59,24 @@ test("a selection stays on the text it covers when the wheel scrolls the pane", 
     await expect.poll(() => paneText(page, pane), { timeout: 10_000 }).toBe(textBefore);
     await expect.poll(() => selection(page, pane)).toBe(before);
 
+    // Crossing the edge clips only the drawing, never the original selection.
+    // Returning while part remains visible restores its complete highlight.
+    const highlight = page.locator(`[data-pane-view="${pane}"] .xterm-selection div`);
+    const drawn = () => highlight.evaluateAll((nodes) => nodes.map((node) => node.getAttribute("style")));
+    await expect.poll(() => highlight.count()).toBeGreaterThan(0);
+    const originalHighlight = await drawn();
+    await page.mouse.wheel(0, -(grid.rows - 6) * (screen.height / grid.rows));
+    await expect.poll(() => paneText(page, pane)).not.toBe(textBefore);
+    await expect.poll(() => selection(page, pane)).toBe(before);
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    // Menu Copy preserves the selection on every OS; Ctrl+Shift+C clears it.
+    await page.mouse.click(cell(20, 10).x, cell(20, 10).y, { button: "right" });
+    await page.locator('[data-menu-item="copy"]').click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(before);
+    await page.mouse.wheel(0, (grid.rows - 6) * (screen.height / grid.rows));
+    await expect.poll(() => paneText(page, pane)).toBe(textBefore);
+    await expect.poll(drawn).toEqual(originalHighlight);
+
     // Several wheels in a row, answered by several frames, move it each time.
     for (let turn = 0; turn < 4; turn += 1) await page.mouse.wheel(0, -(screen.height / grid.rows));
     await expect.poll(() => paneText(page, pane), { timeout: 10_000 }).not.toBe(textBefore);
@@ -73,7 +91,6 @@ test("a selection stays on the text it covers when the wheel scrolls the pane", 
     await expect.poll(() => paneText(page, pane), { timeout: 10_000 }).not.toContain("row-12");
     await expect(page.locator(`[data-pane-view="${pane}"] .xterm-selection div`)).toHaveCount(0);
     expect(await selection(page, pane)).toBe(before);
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.keyboard.press(mod("KeyC"));
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(before);
 

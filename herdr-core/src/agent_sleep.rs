@@ -292,6 +292,7 @@ impl SleepRecord {
             .then(|| self.last_activity.parse().ok())
             .flatten();
         SessionAgentPayload {
+            record: None,
             telemetry_stale: false,
             id: Some(
                 self.agent_name
@@ -665,6 +666,9 @@ mod tests {
 
     fn agent(pane_id: &str) -> SidebarAgentSnapshot {
         SidebarAgentSnapshot {
+            record_connection: None,
+            record_summary: None,
+            record_metadata: None,
             telemetry_stale: false,
             close_session: None,
             state: Default::default(),

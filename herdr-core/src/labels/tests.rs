@@ -24,6 +24,9 @@ use super::store::{LOCAL_TARGET, LabelStore};
 use super::worker::{LabelWorker, ObservedAgent, ReadFailure, TranscriptSource, WorkerConfig};
 use crate::sidebar::{AgentLabel, SessionSnapshotPayload};
 
+#[path = "record_tests.rs"]
+mod record_tests;
+
 /// A provider that answers from a queue and can hold an answer back.
 struct Scripted {
     answers: Mutex<VecDeque<Value>>,
@@ -352,14 +355,13 @@ fn agent(path: &Path, status: &str, seq: u64) -> ObservedAgent {
 }
 
 fn observe(worker: &mut LabelWorker, agent: &ObservedAgent) {
+    observe_at(worker, agent, Instant::now());
+}
+
+fn observe_at(worker: &mut LabelWorker, agent: &ObservedAgent, now: Instant) {
     let live = HashSet::from([agent.pane_id.clone()]);
-    worker.observe(
-        std::slice::from_ref(agent),
-        Some(&live),
-        Instant::now(),
-        1_000,
-    );
-    worker.tick(Instant::now());
+    worker.observe(std::slice::from_ref(agent), Some(&live), now, 1_000);
+    worker.tick(now);
 }
 
 fn unix_now_ms() -> u64 {
@@ -395,12 +397,22 @@ fn drain_until(
     woken: &Receiver<()>,
     ready: impl Fn(&LabelWorker) -> bool,
 ) {
+    drain_until_with_clock(worker, woken, Instant::now, "worker result", ready);
+}
+
+fn drain_until_with_clock(
+    worker: &mut LabelWorker,
+    woken: &Receiver<()>,
+    clock: impl Fn() -> Instant,
+    expected: &str,
+    ready: impl Fn(&LabelWorker) -> bool,
+) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !ready(worker) {
         let left = deadline.saturating_duration_since(Instant::now());
-        assert!(!left.is_zero(), "the expected worker result did not arrive");
+        assert!(!left.is_zero(), "the expected {expected} did not arrive");
         let _ = woken.recv_timeout(left.min(Duration::from_millis(200)));
-        worker.drain(Instant::now(), unix_now_ms());
+        worker.drain(clock(), unix_now_ms());
     }
 }
 
@@ -2026,10 +2038,11 @@ fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
     harness.start_delay = Duration::from_secs(15);
     let path = harness.session("a", "native-a", &[("user", "첫 요청")]);
     harness.backend.begin("첫 요청의 실제 작업");
-    let (mut worker, woken, source) = harness.worker(harness.store());
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    let first_at = Instant::now();
     let first = agent(&path, "working", 5);
-    observe(&mut worker, &first);
-    settle(&mut worker, &woken);
+    observe_at(&mut worker, &first, first_at);
+    settle_with_clock(&mut worker, &woken, || first_at);
     assert_eq!(
         shown(&worker, &first).unwrap().progress.as_deref(),
         Some("첫 요청의 실제 작업 진행")
@@ -2042,11 +2055,21 @@ fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
     );
     harness.backend.begin("둘째 요청의 실제 작업");
     harness.backend.hold();
+    let second_at = first_at + Duration::from_secs(1);
     let second = agent(&path, "working", 6);
-    observe(&mut worker, &second);
-    settle(&mut worker, &woken);
-    worker.tick(Instant::now() + Duration::from_secs(20));
-    drain_until(&mut worker, &woken, |_| harness.backend.calls() == 2);
+    observe_at(&mut worker, &second, second_at);
+    settle_with_clock(&mut worker, &woken, || second_at);
+    let second_due = second_at + harness.start_delay;
+    worker.tick(second_due);
+    // The tick also starts a periodic read. Finish that second-turn read
+    // before replacing its file, while its analysis remains held.
+    drain_until_with_clock(
+        &mut worker,
+        &woken,
+        || second_due,
+        "held second analysis and completed second-turn read",
+        |worker| harness.backend.calls() == 2 && worker.reader_idle(),
+    );
 
     harness.session(
         "a",
@@ -2058,18 +2081,33 @@ fn an_old_analysis_cannot_restore_progress_after_a_new_turn_was_read() {
         ],
     );
     harness.backend.begin("셋째 요청의 실제 작업");
+    let third_at = second_due + Duration::from_secs(1);
     let third = agent(&path, "working", 7);
-    observe(&mut worker, &third);
-    drain_until(&mut worker, &woken, |worker| {
-        source.completed.load(Ordering::SeqCst) >= 3 && worker.reader_idle()
-    });
+    observe_at(&mut worker, &third, third_at);
+    drain_until_with_clock(
+        &mut worker,
+        &woken,
+        || third_at,
+        "completed third-turn request read",
+        |worker| {
+            worker.reader_idle()
+                && shown_facts(worker, &third).is_some_and(|facts| {
+                    facts
+                        .operator_request
+                        .iter()
+                        .chain(facts.other_request.iter())
+                        .any(|request| request.text == "셋째 요청")
+                })
+        },
+    );
     assert_eq!(shown(&worker, &third).unwrap().progress, None);
 
     harness.backend.release();
-    settle(&mut worker, &woken);
+    settle_with_clock(&mut worker, &woken, || third_at);
     assert_eq!(shown(&worker, &third).unwrap().progress, None);
-    worker.tick(Instant::now() + Duration::from_secs(20));
-    settle(&mut worker, &woken);
+    let third_due = third_at + harness.start_delay;
+    worker.tick(third_due);
+    settle_with_clock(&mut worker, &woken, || third_due);
     assert_eq!(
         shown(&worker, &third).unwrap().progress.as_deref(),
         Some("셋째 요청의 실제 작업 진행")
@@ -2189,6 +2227,7 @@ fn a_second_daemon_on_the_same_server_stands_by_and_shows_no_labels() {
     let (mut second, second_woken, source) = harness.worker(harness.store());
     observe(&mut second, &idle);
     assert_eq!(shown(&second, &idle), None);
+    assert!(record_tests::projection(&second, &idle).record.is_none());
     assert_eq!(source.reads.load(Ordering::SeqCst), 0);
     assert_eq!(harness.backend.calls(), 1);
 
@@ -3816,6 +3855,16 @@ fn an_omp_title_and_question_refresh_without_state_changes_or_repeated_analysis(
                 .as_deref(),
             expected
         );
+        let binding = record_tests::projection(&worker, &current).record;
+        assert_eq!(
+            binding
+                .as_ref()
+                .and_then(|b| b.metadata.manual_title.as_deref()),
+            expected
+        );
+        if expected.is_none() {
+            assert!(binding.is_none_or(|b| b.metadata.native_title.is_none()));
+        }
     }
     let mut file = std::fs::OpenOptions::new()
         .append(true)
@@ -4694,24 +4743,27 @@ fn a_session_file_that_never_appears_is_retried_a_bounded_number_of_times() {
     );
 }
 
-/// Only a file that is not there yet clears by itself: a refusal that waiting
-/// cannot change (a session outside the agent's own folder) is read again on
-/// the pane's next state change and on no timer.
+/// An unconfirmed binding retries automatically at the bounded cadence,
+/// without trusting even a permanently refused path or spending analysis.
 #[test]
-fn a_refusal_that_waiting_cannot_change_is_not_retried() {
+fn an_unconfirmed_refusal_retries_without_restoring_authority() {
     let harness = Harness::new();
     let (mut worker, woken, source) = harness.worker(harness.store());
     let outside = harness.home.path().join("elsewhere.jsonl");
     std::fs::write(&outside, "{}\n").unwrap();
     observe(&mut worker, &agent(&outside, "working", 1));
     settle(&mut worker, &woken);
-    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    let initial = source.reads.load(Ordering::SeqCst);
+    assert_eq!(initial, 1);
 
     for step in [16, 31, 61, 121, 10_000] {
         worker.tick(Instant::now() + Duration::from_secs(step));
         settle(&mut worker, &woken);
     }
-    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(source.reads.load(Ordering::SeqCst), initial + 5);
+    let refused = agent(&outside, "working", 1);
+    assert!(shown(&worker, &refused).is_none());
+    assert_eq!(harness.backend.calls(), 0);
 }
 
 /// A Claude Code session whose process started and whose turn launched a

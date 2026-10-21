@@ -107,6 +107,54 @@ fn verb(row: &SidebarAgentSnapshot) -> RequestVerb {
 }
 
 #[test]
+fn saved_pr_is_drawn_before_confirmation_without_assigning_current_work() {
+    use crate::labels::record::RecordConnection;
+    use crate::links::ledger::SessionMetadata;
+    let mut rows = rows(&[("resumed", "idle")]);
+    rows[0].row_facts = None;
+    rows[0].record_connection = Some(RecordConnection::Unconfirmed);
+    rows[0].record_metadata = Some(SessionMetadata {
+        created_prs: vec![
+            ("acme/app".into(), 32, ASKED),
+            ("acme/app".into(), 31, ASKED),
+        ],
+        ..Default::default()
+    });
+    let mut merged = pull_request(
+        31,
+        "old",
+        PullRequestBadge::Merged,
+        PullRequestChecks::Passing,
+    );
+    merged.merged_at_unix_ms = Some(ASKED + 1);
+    let github = github(vec![
+        pull_request(
+            32,
+            "another-branch",
+            PullRequestBadge::Open,
+            PullRequestChecks::Failed,
+        ),
+        merged,
+    ]);
+    run(&mut rows, &[("resumed", "main")], &github);
+    assert_eq!(verb(&rows[0]), RequestVerb::Idle);
+    let shown = crate::agent_state::sessions::own_prs(&rows[0]).unwrap();
+    assert_eq!(shown.count, 1, "the merged historical PR stays filtered");
+    let pull = &rows[0].request.as_ref().unwrap().pull_requests[shown.pulls[0].index];
+    assert_eq!(pull.number, 32);
+    assert!(pull.provisional);
+    assert!(!pull.duty && !pull.created);
+
+    rows[0].record_connection = Some(RecordConnection::Confirmed);
+    run(&mut rows, &[("resumed", "main")], &github);
+    let shown = crate::agent_state::sessions::own_prs(&rows[0]).unwrap();
+    let pull = &rows[0].request.as_ref().unwrap().pull_requests[shown.pulls[0].index];
+    assert_eq!(pull.number, 32);
+    assert!(!pull.provisional);
+    assert!(pull.duty && pull.created);
+}
+
+#[test]
 fn a_rows_verb_follows_its_demand_its_activity_and_its_pull_requests() {
     let mut rows = rows(&[
         ("asks", "blocked"),

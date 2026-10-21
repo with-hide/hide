@@ -629,6 +629,7 @@ impl Runtime {
                 project.forgotten = None;
             }
             MemoryChange::Undid(_) | MemoryChange::Other => {}
+            MemoryChange::Promotion => self.outdated_promotion_moved(),
         }
         if self.named_memory_project() == Some(project_id) {
             self.sync_project_memory();
@@ -804,6 +805,7 @@ fn apply_pass_report(context: &RuntimeWorkerContext, report: PassReport) {
 /// What a `hide memory` command did, for the card the Memory tab offers to
 /// bring back.
 pub(crate) enum MemoryChange {
+    Promotion,
     Forgot(u64),
     Undid(u64),
     Other,

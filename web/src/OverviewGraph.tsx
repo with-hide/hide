@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
-import { markWords, rowSentence } from "./agentRow";
+import { markWords, rowAccessibleName, rowSentence } from "./agentRow";
+import { AgentRecordTitle } from "./components/agent-record-title";
 import { Button } from "./components/ui/button";
 import { useEscapeLayer, useReturnFocus } from "./components/ui/layer";
 import { Hint } from "./components/ui/tooltip";
@@ -53,6 +54,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const rest = useShellStore((state) => state.rest);
   const summaries = useShellStore((state) => state.linkSummaries);
   const [expanded, setExpanded] = useState(() => initialGraphExpansion(projects, projectId, (rest?.ui_state?.recent_checkouts ?? []).filter((row) => row.device_id === deviceId).map((row) => row.checkout_id)));
+  const [preferredProject, setPreferredProject] = useState<string | null>(null);
   const initialized = useRef(projects.length > 0);
   useEffect(() => {
     if (initialized.current || projects.length === 0) return;
@@ -89,13 +91,14 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const opener = useRef<HTMLElement | null>(null);
   const reduced = useGraphReducedMotion();
   const theme = useGraphTheme();
-  const model = useMemo(() => overviewGraphModel(projects, rest?.overview_graph, expanded, projectId, { focus, includeResting, folded, pinned: entry ? [entry.id] : [], selected: highlightedSession }), [projects, rest?.overview_graph, expanded, projectId, focus, includeResting, folded, entry, highlightedSession]);
+  const model = useMemo(() => overviewGraphModel(projects, rest?.overview_graph, expanded, projectId, { focus, includeResting, folded, pinned: entry ? [entry.id] : [], selected: highlightedSession, preferredProject }), [projects, rest?.overview_graph, expanded, projectId, focus, includeResting, folded, entry, highlightedSession, preferredProject]);
   useEffect(() => { if ([...folded].some((id) => !model.folded.has(id))) setFolded(new Set(model.folded)); }, [folded, model.folded]);
   const layout = useOverviewGraphLayout(model, host, retry);
   const flow = useReactFlow();
   const { fitView, zoomIn, zoomOut } = flow;
   const nodesInitialized = useNodesInitialized();
   const cameraInitialized = useRef(false);
+  const requestedCamera = useRef<string | "fit" | null>(null);
   const current = model.allAgents.find((row) => row.id === entry?.id && row.agent.session_id === entry.native);
   const centerProject = useCallback((id: string) => {
     const box = layout.placement?.groups.get(id);
@@ -122,10 +125,18 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     } else if (model.projects[0]) centerProject(model.projects[0].id);
   }, [current, model.projects, centerProject, layout.placement, layout.size, offsets, flow]);
   useEffect(() => {
-    if (cameraInitialized.current || !nodesInitialized || layout.phase !== "ready") return;
+    if (!nodesInitialized || layout.phase !== "ready") return;
+    if (requestedCamera.current) {
+      const target = requestedCamera.current;
+      requestedCamera.current = null;
+      if (target === "fit") void fitView({ padding: 0.08, duration: 0, maxZoom: 1 });
+      else centerProject(target);
+      return;
+    }
+    if (cameraInitialized.current) return;
     cameraInitialized.current = true;
     restoreCamera();
-  }, [nodesInitialized, layout.phase, restoreCamera]);
+  }, [nodesInitialized, layout.phase, restoreCamera, centerProject, fitView]);
   useEffect(() => {
     const admitted = new Set([...model.projects.map((group) => group.id), ...model.allAgents.map((row) => row.id)]);
     setOffsets((previous) => [...previous.keys()].some((id) => !admitted.has(id)) ? new Map([...previous].filter(([id]) => admitted.has(id))) : previous);
@@ -140,7 +151,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     return () => clearTimeout(timer);
   }, [playback, motion, reduced]);
   const progress = useMemo(() => new Map((summariesEnabled(rest?.status?.background_ai) ? summaries?.progress ?? [] : []).map((row) => [workKey(row.session), row])), [summaries, rest?.status?.background_ai]);
-  const toggle = useCallback((id: string) => setExpanded((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }), []);
+  const toggle = useCallback((id: string) => { requestedCamera.current = id; setPreferredProject(id); setExpanded((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }, []);
   const rememberOpener = useCallback((target?: HTMLElement) => {
     const active = target ?? document.activeElement;
     if (active instanceof HTMLElement && active !== document.body && !active.closest(".og-details")) opener.current = active;
@@ -152,6 +163,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     // An omitted project's uncapped list row has a deterministic route back to a graph.
     // Scope navigation is explicit user selection and does not move the existing map.
     if (row && !model.projects.some((group) => group.id === row.projectId)) { revealProjectSession(row); return; }
+    if (row) { setPreferredProject(row.projectId); setExpanded((previous) => new Set([...previous, row.projectId])); }
     rememberOpener(target); setHighlightedSession(id); setSelection({ kind: "session", id }); setPlayback((value) => value + 1);
   }, [rememberOpener, model.agents, model.projects, revealProjectSession]);
   const highlightLetter = useCallback((id: string | null, keyboard: boolean) => { if (keyboard) setEdgeFocus(id); else setEdgeHover(id); }, []);
@@ -257,7 +269,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   return <div className="overview-graph" ref={host} data-overview-graph="true" data-graph-phase={layout.phase} data-playing={playing} data-motion={motion && !reduced}>
     <div className="og-toolbar">
       <div><h2>{t("overviewGraph.title")}</h2></div>
-      <div className="og-toolbar-actions">{projectId ? <Button variant="ghost" size="sm" onClick={() => useUiStore.getState().setOverview({ projectId: null })}>{t("overviewGraph.allProjects")}</Button> : null}<Button variant="ghost" size="sm" onClick={() => setExpanded(new Set())}>{t("overviewGraph.collapseAll")}</Button><div role="group" aria-label={t("overviewGraph.title")}><Button variant={mode === "graph" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>{t("overviewGraph.graph")}</Button><Button variant={mode === "list" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "list"} onClick={() => setMode("list")}>{t("overviewGraph.list")}</Button></div></div>
+      <div className="og-toolbar-actions">{projectId ? <Button variant="ghost" size="sm" onClick={() => useUiStore.getState().setOverview({ projectId: null })}>{t("overviewGraph.allProjects")}</Button> : null}<Button variant="ghost" size="sm" onClick={() => { if (expanded.size === 0) void fitView({ padding: 0.08, duration: 0, maxZoom: 1 }); else { requestedCamera.current = "fit"; setExpanded(new Set()); } }}>{t("overviewGraph.collapseAll")}</Button><div role="group" aria-label={t("overviewGraph.title")}><Button variant={mode === "graph" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>{t("overviewGraph.graph")}</Button><Button variant={mode === "list" ? "secondary" : "ghost"} size="sm" aria-pressed={mode === "list"} onClick={() => setMode("list")}>{t("overviewGraph.list")}</Button></div></div>
     </div>
     <div className="og-filters">
       <div role="group" aria-label={t("overviewGraph.filter")}>{(["all", "turn", "working", "results"] as const).map((value) => <Button key={value} variant={focus === value ? "secondary" : "ghost"} size="sm" aria-pressed={focus === value} onClick={() => setFocus(value)}>{t(`overviewGraph.focus.${value}`)} <span>{model.counts[value]}</span></Button>)}</div>
@@ -299,7 +311,7 @@ function SessionList({ rows, selected, choose }: { selected: string | null; rows
   return <div className="og-list" data-graph-session-list="true">
     <Input aria-label={t("overviewGraph.findSession")} placeholder={t("overviewGraph.findSession")} value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); }} />
     {filtered.length === 0 ? <p>{t("overviewGraph.filteredEmpty")}</p> : null}
-    {filtered.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE).map((row) => <button key={row.id} type="button" aria-pressed={selected === row.id} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} /><span className="og-list-name"><strong>{row.agent.identity_label}</strong><small>{row.project.label} · {row.checkout.label}</small></span><StatusMark mark={row.agent.mark} /><span>{markWords(t, row.agent)}</span></button>)}
+    {filtered.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE).map((row) => <button key={row.id} type="button" aria-label={[rowAccessibleName(t, row.agent, row.device), row.project.label, row.checkout.label].filter(Boolean).join(", ")} aria-pressed={selected === row.id} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} /><span className="og-list-name"><strong><AgentRecordTitle agent={row.agent} /></strong><small>{row.project.label} · {row.checkout.label}</small></span><StatusMark mark={row.agent.mark} /><span>{markWords(t, row.agent)}</span></button>)}
     {pages > 1 ? <div className="og-pagination"><Button variant="ghost" size="sm" disabled={current === 0} onClick={() => setPage(current - 1)}>{t("overviewGraph.previous")}</Button><span>{t("overviewGraph.page", { page: current + 1, pages })}</span><Button variant="ghost" size="sm" disabled={current + 1 === pages} onClick={() => setPage(current + 1)}>{t("overviewGraph.next")}</Button></div> : null}
   </div>;
 }
@@ -310,7 +322,7 @@ function SessionPreview({ row, family, progress, actions, openRecord, close }: {
   const children = row.agent.direct_child_counts;
   const sentence = rowSentence(t, row.agent);
   return <aside className="og-details overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:shadow-lg" aria-label={t("overviewGraph.preview")} data-graph-preview="true">
-    <div className="og-details-head"><strong>{row.agent.identity_label}</strong><Hint label={t("overviewGraph.close")}><Button variant="ghost" size="icon-sm" onClick={close}><XIcon /></Button></Hint></div>
+    <div className="og-details-head"><strong><AgentRecordTitle agent={row.agent} /></strong><Hint label={t("overviewGraph.close")}><Button variant="ghost" size="icon-sm" onClick={close}><XIcon /></Button></Hint></div>
     <p className="og-detail-status"><StatusMark mark={row.agent.mark} />{markWords(t, row.agent)}</p>
     {sentence ? <p className="og-work">{sentence}</p> : null}
     <p className="og-context">{row.project.label} · {row.checkout.label}{row.device ? ` · ${row.device}` : ""}</p>

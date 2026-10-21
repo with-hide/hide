@@ -1805,6 +1805,104 @@ pub(crate) fn foreground_process(value: Value, pane_id: &str) -> Result<Option<S
     }
 }
 
+/// An explicit native resume selector in the current foreground argv is
+/// only a locator. The label reader must still prove its native owner.
+/// Never parses shell commands, terminal text, cwd or a latest-session hint.
+pub(crate) fn resumed_session_reference(
+    value: Value,
+    pane_id: &str,
+    agent: hide_session::Agent,
+) -> Result<Option<(String, String)>, String> {
+    let res::ResponseResult::PaneProcessInfo { process_info, .. } =
+        response(value, "session_process_missing")?
+    else {
+        return Err("session_process_missing".into());
+    };
+    if process_info.pane_id != pane_id {
+        return Err("session_process_pane_mismatch".into());
+    }
+    let adapter = agent.format().adapter();
+    let Some(dialect) = adapter.resume else {
+        return Ok(None);
+    };
+    let mut found = None;
+    for process in process_info.foreground_processes {
+        let Some(argv) = process.argv else {
+            continue;
+        };
+        if argv.len() > 64 || argv.iter().map(String::len).sum::<usize>() > 8192 {
+            return Err("session_process_argv_capacity".into());
+        }
+        let Some(executable) = argv.first() else {
+            continue;
+        };
+        let name = executable.rsplit(['/', '\\']).next().unwrap_or_default();
+        let name = name.strip_suffix(".exe").unwrap_or(name);
+        if !adapter.executables.contains(&name) {
+            continue;
+        }
+        // A fork's selector names its source, not the running conversation.
+        if argv
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--fork" | "--fork-session" | "fork"))
+        {
+            continue;
+        }
+        let selector = dialect.resume_flag();
+        let mut args = argv.iter().skip(1);
+        while let Some(arg) = args.next() {
+            if arg == "--" {
+                break;
+            }
+            if arg == selector {
+                let Some(value) = args.next() else {
+                    break;
+                };
+                let kind = if hide_session::valid_native_id(value) {
+                    "id"
+                } else {
+                    "path"
+                };
+                if value.starts_with('-')
+                    || value.is_empty()
+                    || value.len() > 4096
+                    || value.chars().any(char::is_control)
+                {
+                    break;
+                }
+                let reference = (kind.to_owned(), value.clone());
+                if found.as_ref().is_some_and(|old| old != &reference) {
+                    return Err("session_process_ambiguous".into());
+                }
+                found = Some(reference);
+                break;
+            }
+            // Known options that consume a value cannot turn their value
+            // into a selector. Unknown positional commands are refused.
+            if matches!(
+                arg.as_str(),
+                "-c" | "--config"
+                    | "-m"
+                    | "--model"
+                    | "-p"
+                    | "--profile"
+                    | "-s"
+                    | "--sandbox"
+                    | "-C"
+                    | "--cd"
+                    | "--add-dir"
+                    | "-i"
+                    | "--image"
+            ) {
+                args.next();
+            } else if !arg.starts_with('-') {
+                break;
+            }
+        }
+    }
+    Ok(found)
+}
+
 pub(crate) fn pane_process_group(value: Value) -> Result<PaneProcessGroup, String> {
     let missing = "pane.process_info response is missing process_info";
     match response(value, missing)? {
@@ -2446,6 +2544,74 @@ mod tests {
         assert_eq!(
             super::tab_rename_params("w1:t1", "").unwrap(),
             serde_json::json!({"tab_id":"w1:t1","label":""})
+        );
+    }
+
+    #[test]
+    fn resume_locators_use_explicit_argv_and_refuse_shell_text_forks_and_other_panes() {
+        use hide_session::Agent;
+        let reply = |argv: Value| {
+            serde_json::json!({"type":"pane_process_info","process_info":{
+                "pane_id":"w1:p1","foreground_processes":[{"pid":41,"name":"codex","argv":argv}],
+                "terminal_title":"codex resume invented-session"
+            }})
+        };
+        for (kind, argv, expected_kind, expected_value) in [
+            (
+                Agent::Codex,
+                json!([
+                    "/usr/bin/codex",
+                    "-c",
+                    "model=fixture",
+                    "resume",
+                    "native-a"
+                ]),
+                "id",
+                "native-a",
+            ),
+            (
+                Agent::Claude,
+                json!(["C:\\bin\\claude.exe", "--resume", "native-a"]),
+                "id",
+                "native-a",
+            ),
+            (
+                Agent::Pi,
+                json!(["pi", "--session", "/private/session.jsonl"]),
+                "path",
+                "/private/session.jsonl",
+            ),
+            (
+                Agent::OpenCode,
+                json!(["opencode", "-s", "ses_test"]),
+                "id",
+                "ses_test",
+            ),
+        ] {
+            assert_eq!(
+                super::resumed_session_reference(reply(argv), "w1:p1", kind).unwrap(),
+                Some((expected_kind.into(), expected_value.into()))
+            );
+        }
+        for argv in [
+            json!(["sh", "-c", "codex resume native-a"]),
+            json!(["codex", "--fork", "resume", "native-a"]),
+            json!(["codex", "exec", "resume", "native-a"]),
+            json!(["codex", "--", "resume", "native-a"]),
+            json!(["codex", "--config", "resume", "native-a"]),
+        ] {
+            assert_eq!(
+                super::resumed_session_reference(reply(argv), "w1:p1", Agent::Codex).unwrap(),
+                None
+            );
+        }
+        assert!(
+            super::resumed_session_reference(
+                reply(json!(["codex", "resume", "native-a"])),
+                "w2:p1",
+                Agent::Codex
+            )
+            .is_err()
         );
     }
 

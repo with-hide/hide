@@ -29,11 +29,12 @@ See [the build input](BUILD.md#product-analytics-build-input) and [Settings](UI_
 
 The front Workspace's Git header is ephemeral core state (`runtime/checkout_git.rs`), projected only into that device/path's `workspace_view.git`, never persisted or inferred from visibility-gated Changes rows.
 The existing Changes pump drives two single-flight `BackgroundRead` readers (`checkout_git.rs`): one owning-node `Call::CheckoutGit` for the whole checkout, and one core-node exact-SHA GitHub read using fixed allowlisted arguments.
-Changing the target or channel advances a generation; ingests compare that identity and the CI repository/SHA before publishing, while a HEAD change immediately clears the preceding CI result.
+Changing the target or channel advances a generation; ingests compare that identity and the CI repository and complete ordered SHA list before publishing, while a HEAD change immediately clears the preceding CI result.
 The core consumes the node's configured origin URL into a private validated provider repository identity and removes the raw URL before retaining or publishing header facts, so URL userinfo never reaches the renderer.
-The node performs one porcelain-v2 no-renames status and one log read of its captured exact HEAD, with no base comparison or inactive checkout scan; status output is capped at 8 MiB, the commit at 64 KiB, and overflow is unavailable, never clean.
+The node performs one porcelain-v2 no-renames status and one log read of its captured exact HEAD, with no base comparison or inactive checkout scan; status output is capped at 8 MiB, the newest five commits together at 64 KiB, and overflow is unavailable, never clean.
 Git reads run off-lock at two-second intervals and a three-second node budget; only changed facts, failure/recovery, target changes or freshness transitions notify, and successful identical reads renew an internal deadline without publishing a frame.
-CI uses both check-runs and combined statuses, at most 100 check-runs per read, with an incomplete list remaining unknown; one request every 30 seconds is retained only for the front target, with each node `gh` command bounded at 15 seconds and each link wait at 20 seconds.
+CI reads GitHub's aggregate statusCheckRollup for at most five exact SHAs in one fixed allowlisted GraphQL query, with oid and returned commit URL validated against each request identity; provider errors remain unavailable.
+One request every 30 seconds is retained only for the front target, with one node `gh` command bounded at 15 seconds and one link wait at 20 seconds.
 The pump joins both admitted readers outside Runtime's mutex on shutdown; a superseded read may finish within that bound and its answer is discarded, with no additional job queued for each intermediate selection.
 Five seconds without a successful Git observation marks retained data stale; CI ages at 90 seconds and a disconnected shell also labels retained state stale locally.
 
@@ -354,6 +355,11 @@ The ask lives in memory and is made again after a restart; like every GitHub rea
 A pull request that falls out of the 200 the catalog reads stays `pr_open` until it comes back.
 `hide memory skipped` uses the same attempt and agent checks as `placed`, records a reason up to 500 characters, and leaves the card in the failed state for retry on the shared branch.
 `hide memory outdated` is answered on the same conditions as `placed`, to the attempt's own agent only, and ends the attempt as `outdated`: no pull request, no `failed` question on the tab, the card unverified and its reason (at most 500 characters) kept for the next check.
+Outdated attempts join the existing bounded retirement queue with an empty-only policy: through the Project's own node, they release only clean branches with no own commits, no live or reserved agent and no active sibling promotion.
+An active agent, an unreachable device or a refused cleanup stays queued for a later check; committed, dirty or primary worktrees stay, and retry reuses the same branch and known PR under the original repository identity.
+A batch's outdated card defers cleanup while a sibling runs, has an open PR or follows a building branch, and restart rediscovers these durable outdated rows.
+The tracker shares its existing sixteen-branch check budget and minute schedule; node and Herdr I/O remain outside Runtime.
+Retry reservation and spawn share an off-lock effects guard with the tracker, so cleanup cannot remove a retained branch while a retry starts; a busy retry returns an actionable retry-later answer and a busy tracker waits for its next check.
 `hide memory building <card> <branch> <path>` is answered on the same conditions as `placed`, for a branch of the repository other than the attempt's own, one the worktree catalog lists when it has read the repository's branches, and a path that exists in that branch's checkout when the catalog lists one; it ends the attempt `building`, with no pull request of its own.
 A `building` card is still given to agents and is drawn as a progress row with the agent of the worktree on that branch; the tracker follows that branch's own pull request, opened at any time since that work began on its own, so its merge makes the card `merged` with the path the agent named, and its closing makes the card `closed_unmerged`.
 `hide memory unbuilt <card> <reason>` is answered on the same conditions and ends the attempt `unbuilt` with its reason (at most 500 characters): the tab asks about it once, and the operator's keeping it writes `kept`, an ordinary card that neither the promotion nor its document disagreement asks about again until its text changes.
@@ -2208,6 +2214,23 @@ Two terminal facts stay core-routed on purpose: the PTY size, because which scre
 
 ### Agent labels in the core
 
+
+The current pane binding and conversation display record are separate (`labels/record.rs`).
+The links ledger stores bounded title, goal, summary, analyzed-turn hashes and PR sightings under its existing device/provider/native-ID key; its single writer, schema migration, deletion and retention remain the owners.
+`LedgerCall::Metadata` is a local, bounded query through the existing mailbox, with a one-second response deadline, performed only by the labels reader off the coordinator and Runtime lock.
+An already read owner reuses its in-memory metadata, and an unchanged display is not enqueued again.
+Legacy compatibility candidates are capped at 512 short records and twenty PRs per record, contain no paths or raw facts, and are imported only after an exact native owner match.
+A metadata write requires an indexed session so it cannot create an orphan outside existing retention.
+
+When Herdr reports no session reference, that same reader may ask `pane.process_info` for the exact pane, with a one-second deadline and the shared wire decoder.
+It accepts only the adapter's executable and explicit resume selector within 64 arguments and 8 KiB, refusing forks, conflicting candidates and unbounded input.
+The native owner proves the historical record, not the current process conversation; an argv-only locator remains unconfirmed and never feeds analysis, current turn facts or control.
+A hook reference takes priority immediately and advances the generation before reading; a successful current native read confirms that binding.
+The core carries the display connection state into shared rows, and UI controls continue to use the existing current-pane authority.
+Failures retain dimmed display history and retry on the existing worker at fifteen seconds, without another thread or retry queue.
+Unreadable and unknown-version labels files disable that instance's file writes while runtime observation continues, preserving their original bytes.
+
+
 What each Claude Code, Codex or OpenCode pane is doing (the session's goal, one line for its turn, and how the turn ended) is made by the core, not by a Herdr plugin and not through pane tokens (PRD labels-in-hided, overview-request-view D-08).
 The code is `herdr-core/src/labels/`.
 Each session-sync coordinator, one per Herdr server (this Mac's and each connected device's), owns a `LabelWorker` it feeds from the agent state it already follows; the core owns one `LabelAnalyzer` for all of them and one `LabelStore`.
@@ -2308,7 +2331,13 @@ Nothing runs under the runtime mutex: conversation reads run on the worker's rea
   At most 512 panes of a device and 64 devices are kept, the newest first, and a save that changes no mark writes nothing (a pane's state change or a new fact of the conversation alone does not rewrite the file).
   One mark this build cannot read is dropped alone with a `store.device_marks_dropped` diagnostic, and a cap that drops marks writes `store.device_marks_capped`.
   A core move drops the section (`node_migration/reown.rs`).
-  A restart resumes from it with no read and no request for an unchanged pane; a file that cannot be read starts empty and records a diagnostic, and nothing in it is shown until a reference proves it.
+  Native-proven display metadata waits for the shared links ledger in one pending value per device/provider/native session, at most 512 per label worker, independently of the source pane's lifetime or later conversation.
+  The existing reader commits one value at a time and acknowledges it only after the indexed-only ledger writer returns; a newer pending value survives an older acknowledgement, and unavailable or unindexed saves retry on the existing 15-second tick.
+  Each pane submits a candidate only when its observed display changes; an acknowledgement rechecks capacity without turning unchanged values from other panes of the same conversation into new writes.
+  The pending set contains only bounded display fields and identity, never a path or conversation facts; it is not another persistent store and adds no worker or timer.
+  A first save whose history read failed merges existing analysis and PR history before writing while preserving the current native title and manual-title clear.
+  Capacity and write failures reach the existing diagnostic log, and native reads retain priority over waiting writes.
+  Once imported, a restart resumes from it with no analysis request for an unchanged pane; a file that cannot be read starts empty and records a diagnostic, and nothing in it is shown until a reference proves it.
   The first run with no `labels.json` imports the retired plugin's `display-state.json` once, taking only entries it had proven an owner for.
 - **One generator per Herdr server.** A worker generates only while the node on the machine that runs its server holds that server's lock for it (`Call::LabelLock`, `hide_host::label_lock`): an exclusive `flock` on `<socket>.hide-label-generator.lock` beside Herdr's socket, which every daemon reaching that server shares whatever HOME it runs with, so cores on any machine that label one server meet at one file and the core keeps no lock file of its own.
   The node keys each lock by the socket as the core named it, and a node that dialed its core locks only its own Herdr server's file, the one it bridges.

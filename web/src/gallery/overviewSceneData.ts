@@ -328,6 +328,11 @@ export function overviewFocusWorld(now: number, content: string): OverviewWorld 
     extraProjects.push(workspace(id, { label: `실험 프로젝트 ${index + 1}${content === "long" ? " · Korean and English 프로젝트 이름 줄바꿈" : ""}`, checkouts: [one], agent_scope: scopeWith(rows.map((row) => card(row.pane_id, "working", [row.pane_id], [one.id], "0"))) }, REFERENCE_FOLDS));
   }
   world.rest.navigator!.workspaces!.push(...extraProjects);
+  if (content === "connection") for (const [index, row] of agents.entries()) {
+    row.identity_label += " · 긴 한국어와 English 저장 대화 제목";
+    row.record_connection = (["checking", "unconfirmed", "confirmed"] as const)[index % 3];
+    row.record_summary = "기록에 보관한 진행 요약 · saved conversation summary";
+  }
   if (content === "resting") for (const row of agents) Object.assign(row, { mark: "quiet", group: "seen", state: { ...get("h-r1").state } });
   if (content === "direct") world.rest.overview_graph!.direct_inputs = [
     { id: "fixture-direct-one", sender: { device_id: "local", pane_id: "h-a1c1", session: "fixture-h-a1c1" }, recipient: { device_id: "local", pane_id: "h-a1", session: "fixture-h-a1" }, at_unix_ms: now - MINUTE },

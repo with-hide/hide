@@ -3,10 +3,11 @@ import type { Subtree, SubtreeRow, SubtreeState } from "../close";
 import { useInterfaceTranslation } from "../i18n/client";
 import { statusText } from "../agentStatus";
 import type { MessageKey } from "../i18n/catalogs";
-import { markTone, markWords } from "../agentRow";
+import { markTone, markWords, recordWords } from "../agentRow";
 import { machineName } from "../screenMachine";
 import type { RowMark as RowMarkValue } from "../snapshot";
 import { useShellStore } from "../store";
+import { AgentRecordTitle } from "./agent-record-title";
 import { DeviceChip } from "./device-chip";
 import { StatusMark } from "./status-mark";
 import { Hint } from "./ui/tooltip";
@@ -78,7 +79,7 @@ function SubtreeItem({ row, targetDevice }: { row: SubtreeRow; targetDevice: str
   return (
     <li
       tabIndex={0}
-      aria-label={[agent.identity_label, device, statusText(t, agent.status_code)].filter(Boolean).join(", ")}
+      aria-label={[agent.identity_label, recordWords(t, agent), agent.record_summary, device, statusText(t, agent.status_code)].filter(Boolean).join(", ")}
       data-subtree-row={agent.pane_id}
       data-subtree-state={row.state}
       data-subtree-target={row.target ? "true" : undefined}
@@ -87,7 +88,7 @@ function SubtreeItem({ row, targetDevice }: { row: SubtreeRow; targetDevice: str
     >
       <RowMark mark={agent.mark} tone={markTone(agent)} status={quiet ? markWords(t, agent) : null} />
       <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-xs gap-y-xxs" aria-hidden="true">
-        <span className={`min-w-0 break-words ${row.target ? "font-medium text-foreground" : "text-foreground"}`}>{agent.identity_label}</span>
+        <AgentRecordTitle agent={agent} className={row.target ? "font-medium text-foreground" : "text-foreground"} />
         {quiet ? null : <span className="shrink-0 text-caption text-subtle-foreground" data-subtree-status="true">{statusText(t, agent.status_code)}</span>}
         {device ? <DeviceChip label={device} className="max-w-full" /> : null}
       </span>

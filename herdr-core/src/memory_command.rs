@@ -494,7 +494,14 @@ impl PreparedMemory {
                     "card": number,
                     "reason_chars": reason.chars().count(),
                 }));
-                self.report(&identity.id, MemoryChange::Other);
+                self.report(
+                    &identity.id,
+                    if outcome == "outdated" {
+                        MemoryChange::Promotion
+                    } else {
+                        MemoryChange::Other
+                    },
+                );
                 Ok(json!({"card": card_name(number), "outcome": outcome}))
             }
             MemoryCommand::Building {

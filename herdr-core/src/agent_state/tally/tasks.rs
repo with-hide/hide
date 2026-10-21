@@ -349,7 +349,7 @@ fn stage(rows: &[&Place<'_>]) -> Option<u8> {
             .flat_map(|r| &r.pull_requests)
             .collect::<Vec<_>>();
         for own in &summary.pulls {
-            if let Some(pull) = pulls.get(own.index) {
+            if let Some(pull) = pulls.get(own.index).filter(|pull| !pull.provisional) {
                 states.entry(pull.url.as_str()).or_insert(own.state);
             }
         }

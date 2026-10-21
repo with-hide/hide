@@ -246,7 +246,17 @@ export function branchChip(agent: Pick<AgentRow, "state">): string | null {
  * shows has to be here.
  */
 export function rowAccessibleName(t: TFunction<"translation">, agent: AgentRow, device: string | null): string {
-  return [agent.identity_label, device, branchChip(agent), agentProductName(agent.agent_kind), markWords(t, agent), hideAiWords(t, agent.hide_ai), agent.letters_waiting ? t("agents.letterWaiting") : null, rowSentence(t, agent)].filter(Boolean).join(", ");
+  return [agent.identity_label, recordWords(t,agent), agent.record_summary, device, branchChip(agent), agentProductName(agent.agent_kind), markWords(t, agent), hideAiWords(t, agent.hide_ai), agent.letters_waiting ? t("agents.letterWaiting") : null, rowSentence(t, agent)].filter(Boolean).join(", ");
+}
+
+export function recordPending(agent: Pick<AgentRow, "record_connection">): boolean {
+  return agent.record_connection === "checking" || agent.record_connection === "unconfirmed";
+}
+
+export function recordWords(t: TFunction<"translation">, agent: Pick<AgentRow, "record_connection">): string | null {
+  if (agent.record_connection === "checking") return t("agents.record.checking");
+  if (agent.record_connection === "unconfirmed") return t("agents.record.unconfirmed");
+  return null;
 }
 
 /**
