@@ -6,9 +6,9 @@
 // release's package.yml run asks for: every executable in the bundle (the
 // Electron helpers, the notification permission helper, the bundled CLIs and
 // Herdr) is signed with the Developer ID certificate under the hardened
-// runtime, Apple notarizes the app and its ticket is stapled, so a downloaded
-// copy opens like any other app; the dmg around it is signed, notarized and
-// stapled the same way (`notarizeDiskImage`). Herdr ships with only the linker's ad-hoc
+// runtime, Apple notarizes the app and its ticket is stapled (`notarizeApp`),
+// so a downloaded copy opens like any other app; the dmg around it is signed,
+// notarized and stapled the same way (`notarizeDiskImage`). Herdr ships with only the linker's ad-hoc
 // signature and notarization refuses an executable without a Developer ID one,
 // so hide's signature replaces it; Herdr's code is not changed.
 //
@@ -55,8 +55,8 @@ export function macosSigning(env) {
 }
 
 /**
- * The packager's `osxSign` and `osxNotarize` options for a Developer ID
- * package. `executables` names the programs shipped flat in
+ * The packager's `osxSign` options for a Developer ID package; the signed
+ * app is notarized afterwards by `notarizeApp`. `executables` names the programs shipped flat in
  * Contents/Resources, `entitlements` is the folder holding the two
  * entitlement files, and `helpers` maps each program placed beside the app's
  * executable in Contents/MacOS to the code-signing identifier it is signed
@@ -81,10 +81,67 @@ export function developerIdOptions(signing, executables, entitlements, helpers =
         return { entitlements: path.join(entitlements, "app.plist") };
       },
     },
-    // Submits the signed app with notarytool, waits for Apple's answer and
-    // staples the ticket; a rejection throws with Apple's log.
-    osxNotarize: signing.notary,
   };
+}
+
+/** Submits `file` with notarytool, waits for Apple's answer and throws unless Apple accepted it. */
+function submitForNotarization(file, signing, cwd) {
+  const { appleApiKey, appleApiKeyId, appleApiIssuer } = signing.notary;
+  // notarytool exits 0 for a rejected submission too; its status says which.
+  const submitted = JSON.parse(execFileSync("/usr/bin/xcrun", ["notarytool", "submit", file, "--key", appleApiKey, "--key-id", appleApiKeyId, "--issuer", appleApiIssuer, "--wait", "--timeout", "60m", "--output-format", "json"], { encoding: "utf8", cwd }));
+  if (submitted.status !== "Accepted") throw new Error(`Apple did not accept ${file} for notarization: ${submitted.status} (submission ${submitted.id}; read its log with notarytool log)`);
+}
+
+// stapler's exit codes when it cannot fetch a ticket Apple has issued: 65
+// while the ticket's record is not served yet, 68 when the connection to
+// Apple's ticket service fails. A GitHub macOS runner lost that connection on
+// two release builds in a row on 2026-10-21, each after Apple had accepted the
+// app. Any other code is a failure of the target itself.
+const TICKET_NOT_FETCHED = new Set([65, 68]);
+// The pause before each further try, in seconds: six tries over about five minutes.
+const STAPLE_RETRY_WAITS = [10, 20, 40, 80, 160];
+
+function runStapler(target) {
+  const result = spawnSync("/usr/bin/xcrun", ["stapler", "staple", target], { encoding: "utf8" });
+  process.stdout.write(`${result.stdout ?? ""}${result.stderr ?? ""}`);
+  return { status: result.status };
+}
+
+const pauseSeconds = (seconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, seconds * 1000);
+
+/**
+ * Staples the ticket Apple issued for `target`. Call it only after Apple
+ * accepted the submission: the ticket then exists, so stapler failing to
+ * fetch it is tried again after each of STAPLE_RETRY_WAITS, and the last
+ * failure throws. A test gives `run` (one stapler call) and `pause`.
+ */
+export function staple(target, { run = runStapler, pause = pauseSeconds } = {}) {
+  for (let tries = 1; ; tries += 1) {
+    const { status } = run(target);
+    if (status === 0) return;
+    if (!TICKET_NOT_FETCHED.has(status) || tries > STAPLE_RETRY_WAITS.length) {
+      throw new Error(`stapler could not staple ${target}: exit ${status} after ${tries} ${tries === 1 ? "try" : "tries"}`);
+    }
+    console.warn(`stapler could not fetch the ticket for ${target} (exit ${status}); trying again in ${STAPLE_RETRY_WAITS[tries - 1]} s`);
+    pause(STAPLE_RETRY_WAITS[tries - 1]);
+  }
+}
+
+/**
+ * Notarizes the signed `app` and staples its ticket, throwing on a rejection.
+ * notarytool takes an archive, so the app is zipped into a new folder under
+ * `scratch`, which is removed on every path.
+ */
+export function notarizeApp(app, signing, scratch) {
+  const folder = fs.mkdtempSync(path.join(scratch, "notarize-"));
+  try {
+    const archive = path.join(folder, `${path.basename(app, ".app")}.zip`);
+    execFileSync("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", app, archive]);
+    submitForNotarization(archive, signing, folder);
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
+  staple(app);
 }
 
 /**
@@ -95,11 +152,8 @@ export function developerIdOptions(signing, executables, entitlements, helpers =
  */
 export function notarizeDiskImage(dmg, signing, scratch) {
   execFileSync("/usr/bin/codesign", ["--force", "--sign", signing.identity, "--timestamp", dmg], { stdio: "inherit" });
-  const { appleApiKey, appleApiKeyId, appleApiIssuer } = signing.notary;
-  // notarytool exits 0 for a rejected submission too; its status says which.
-  const submitted = JSON.parse(execFileSync("/usr/bin/xcrun", ["notarytool", "submit", dmg, "--key", appleApiKey, "--key-id", appleApiKeyId, "--issuer", appleApiIssuer, "--wait", "--timeout", "60m", "--output-format", "json"], { encoding: "utf8", cwd: scratch }));
-  if (submitted.status !== "Accepted") throw new Error(`Apple did not accept ${dmg} for notarization: ${submitted.status} (submission ${submitted.id}; read its log with notarytool log)`);
-  execFileSync("/usr/bin/xcrun", ["stapler", "staple", dmg], { stdio: "inherit" });
+  submitForNotarization(dmg, signing, scratch);
+  staple(dmg);
   const assessment = spawnSync("/usr/sbin/spctl", ["--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=4", dmg], { encoding: "utf8" });
   const answer = `${assessment.stdout}${assessment.stderr}`.trim();
   if (assessment.status !== 0 || !answer.includes("source=Notarized Developer ID")) {

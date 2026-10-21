@@ -597,7 +597,7 @@ def code_sources():
     """Each Rust, web and desktop source's code with comment lines left out, by path, with its crate."""
     crate_of = {directory: crate["name"] for directory, crate in CRATES.items()}
     sources = {}
-    for folder in [*crate_of, "web/src", "web/e2e", "desktop/src", "desktop/e2e"]:
+    for folder in [*crate_of, "web/src", "web/e2e", "desktop/src", "desktop/e2e", "desktop/scripts"]:
         for source in (ROOT / folder).rglob("*"):
             if source.suffix not in (".rs", ".ts", ".tsx", ".mjs", ".js") or "node_modules" in source.parts:
                 continue
