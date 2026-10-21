@@ -258,6 +258,7 @@ Its four required string inputs are `public_sha` (a full lowercase commit SHA), 
 The optional boolean `live_agents` defaults to `true`; select `false` to defer signed-in provider calls when accounts are unavailable.
 The source must already be an ancestor of main; a branch, fork, PR run, incomplete run or different source is refused before building or using provider keys.
 The workflow revision is main's dispatch revision and may differ from the source revision it builds.
+`package.yml` and `agent-journey.yml` run their steps from that dispatch revision on the source's checkout, so the workflow refuses a source at which either file differs from main; choose a newer verified source instead.
 
 The workflow reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks.
 It runs the existing `agent-journey.yml` on the same source, with stand-ins on Linux and macOS, Windows form checks, and fake-model lanes on all three systems.
