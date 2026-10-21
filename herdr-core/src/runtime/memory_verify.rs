@@ -23,7 +23,7 @@ use hide_memory::{
 use serde_json::json;
 
 use super::memory::{digest, now_ms};
-use super::memory_analysis::{AnalysisFailure, FailureScope};
+use super::memory_analysis::{AnalysisFailure, FailureScope, count_input_failure};
 use super::memory_evidence::CheckoutFacts;
 use crate::node_access::{NodeLink, read_bytes};
 
@@ -31,8 +31,19 @@ use crate::node_access::{NodeLink, read_bytes};
 #[derive(Default)]
 pub(super) struct Checked {
     pub(super) changed: usize,
-    /// Calls the provider answered, usably or not.
+    /// Calls the provider answered usably: what recovers a Project from an
+    /// earlier provider failure.
     pub(super) answered: usize,
+    /// Calls answered with something unusable: spent, but no sign of health.
+    pub(super) unusable: usize,
+}
+
+/// What a check reports as it goes, for the card shown as being checked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CheckProgress {
+    Checking(u64),
+    Answered,
+    Unusable,
 }
 
 /// Completed reconciliation work survives every later stop in the same pass.
@@ -142,7 +153,7 @@ pub(super) fn reverify_pending(
     root: &str,
     cancel: &CancelToken,
     admit: Admit<'_>,
-    progress: &mut dyn FnMut(Option<u64>),
+    progress: &mut dyn FnMut(CheckProgress),
 ) -> Result<Checked, AnalysisFailure> {
     let local = |error: String| AnalysisFailure::Local(error);
     let mut checked = Checked::default();
@@ -156,7 +167,7 @@ pub(super) fn reverify_pending(
         }
         // The deferral comes first, so a held-back card keeps its day.
         admit(store)?;
-        progress(Some(card.number));
+        progress(CheckProgress::Checking(card.number));
         // A card from before evidence was kept has none; what its text names
         // is read now, so the check is not asked blind.
         let mut card = card;
@@ -199,13 +210,31 @@ pub(super) fn reverify_pending(
         let verdict = match verdict {
             Ok(verdict) => verdict,
             Err(error) if FailureScope::of(&error) == FailureScope::Input => {
-                checked.answered += 1;
+                checked.unusable += 1;
                 spend_unusable(store, &card.item_id, project_id, card.number)?;
-                progress(None);
+                progress(CheckProgress::Unusable);
                 continue;
             }
-            Err(error) => return Err(provider_failure(error)),
+            Err(error) => {
+                let subject = format!("verify:{}", card.item_id);
+                if count_input_failure(
+                    store,
+                    project_id,
+                    &subject,
+                    &card.revision.to_string(),
+                    &error,
+                )
+                .map_err(local)?
+                {
+                    spend_unusable(store, &card.item_id, project_id, card.number)?;
+                }
+                return Err(provider_failure(error));
+            }
         };
+        // An answer ends the run of requests the provider never answered.
+        store
+            .clear_input_failure(project_id, &format!("verify:{}", card.item_id))
+            .map_err(|error| local(error.to_string()))?;
         checked.answered += 1;
         // The day is spent by an answer, not by a call: a provider that
         // failed leaves the card due for the next pass.
@@ -213,7 +242,7 @@ pub(super) fn reverify_pending(
             .begin_verification(&card.item_id, now_ms())
             .map_err(|error| local(error.to_string()))?
         {
-            progress(None);
+            progress(CheckProgress::Answered);
             continue;
         }
         let applied = match &verdict {
@@ -272,7 +301,7 @@ pub(super) fn reverify_pending(
         if applied {
             checked.changed += 1;
         }
-        progress(None);
+        progress(CheckProgress::Answered);
         crate::diagnostic!(json!({
             "component": "memory",
             "kind": "verification.applied",
@@ -419,7 +448,7 @@ pub(super) fn check_before_suggestion(
     home: Option<&Path>,
     cancel: &CancelToken,
     admit: Admit<'_>,
-    progress: &mut dyn FnMut(Option<u64>),
+    progress: &mut dyn FnMut(CheckProgress),
 ) -> Result<Checked, AnalysisFailure> {
     let local = |error: String| AnalysisFailure::Local(error);
     let mut checked = Checked::default();
@@ -447,7 +476,7 @@ pub(super) fn check_before_suggestion(
         let answers = facts.facts(&detail.evidence);
         let words = query_words(&[&item.title, &item.body, &item.aliases.join(" ")]);
         admit(store)?;
-        progress(Some(item.number));
+        progress(CheckProgress::Checking(item.number));
         let request = promote_check_request(
             digest(&[
                 "memory-promote-check",
@@ -482,13 +511,31 @@ pub(super) fn check_before_suggestion(
         let verdict = match verdict {
             Ok(verdict) => verdict,
             Err(error) if FailureScope::of(&error) == FailureScope::Input => {
-                checked.answered += 1;
+                checked.unusable += 1;
                 spend_unusable(store, &item.id, project_id, item.number)?;
-                progress(None);
+                progress(CheckProgress::Unusable);
                 continue;
             }
-            Err(error) => return Err(provider_failure(error)),
+            Err(error) => {
+                let subject = format!("promote:{}", item.id);
+                if count_input_failure(
+                    store,
+                    project_id,
+                    &subject,
+                    &item.revision.to_string(),
+                    &error,
+                )
+                .map_err(local)?
+                {
+                    spend_unusable(store, &item.id, project_id, item.number)?;
+                }
+                return Err(provider_failure(error));
+            }
         };
+        // An answer ends the run of requests the provider never answered.
+        store
+            .clear_input_failure(project_id, &format!("promote:{}", item.id))
+            .map_err(|error| local(error.to_string()))?;
         checked.answered += 1;
         // The day's one answer about the card, so a card the check keeps
         // correcting costs one call a day (B10).
@@ -496,7 +543,7 @@ pub(super) fn check_before_suggestion(
             .begin_verification(&item.id, now_ms())
             .map_err(|error| local(error.to_string()))?
         {
-            progress(None);
+            progress(CheckProgress::Answered);
             continue;
         }
         match verdict {
@@ -553,7 +600,7 @@ pub(super) fn check_before_suggestion(
                 checked.changed += 1;
             }
         }
-        progress(None);
+        progress(CheckProgress::Answered);
         crate::diagnostic!(json!({
             "component": "memory",
             "kind": "promotion.checked",
@@ -675,33 +722,15 @@ pub(super) fn reconcile_corrections(
             let subject = format!("correction:{}", item.id);
             let verdict = match verdict {
                 Ok(verdict) => verdict,
-                // This card's unusable answer is counted against this
-                // revision and document version and stops nothing else; a
-                // provider or account failure stops the pass's provider work.
-                Err(AnalysisFailure::Provider(error))
-                    if FailureScope::of(&error) == FailureScope::Input =>
-                {
-                    result.checked.answered += 1;
-                    let attempts = store
-                        .record_input_failure(
-                            project,
-                            &subject,
-                            &format!("{revision}:{fingerprint}"),
-                            now_ms(),
-                        )
-                        .map_err(local)?;
-                    let set_aside = attempts >= hide_memory::INPUT_FAILURE_LIMIT;
-                    crate::diagnostic!(json!({
-                        "component": "memory",
-                        "kind": if set_aside { "correction.set_aside" } else { "correction.reconcile_failed" },
-                        "project_id": project,
-                        "card": number,
-                        "attempts": attempts,
-                        "error_class": error.class(),
-                    }));
-                    if set_aside {
-                        // Not asked about again until the card or its
-                        // document changes.
+                // Counted against this revision and document version; set
+                // aside, it is asked about again only when either changes.
+                // An unusable answer stops nothing else; any other failure
+                // stops the pass's provider work.
+                Err(AnalysisFailure::Provider(error)) => {
+                    let input = format!("{revision}:{fingerprint}");
+                    if count_input_failure(store, project, &subject, &input, &error)
+                        .map_err(AnalysisFailure::Local)?
+                    {
                         store
                             .record_correction_check(
                                 project,
@@ -712,6 +741,10 @@ pub(super) fn reconcile_corrections(
                             )
                             .map_err(local)?;
                     }
+                    if FailureScope::of(&error) != FailureScope::Input {
+                        return Err(AnalysisFailure::Provider(error));
+                    }
+                    result.checked.unusable += 1;
                     continue;
                 }
                 Err(error) => return Err(error),

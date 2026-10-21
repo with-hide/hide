@@ -24,8 +24,30 @@ CREATE TABLE memory_contexts(project_id TEXT NOT NULL REFERENCES projects(id) ON
 CREATE TABLE receipt_contexts(receipt_id TEXT PRIMARY KEY REFERENCES injection_receipts(id) ON DELETE CASCADE,generation INTEGER NOT NULL);
 CREATE TABLE analysis_schedule(id INTEGER PRIMARY KEY CHECK(id=1),turn INTEGER NOT NULL);
 INSERT INTO analysis_schedule VALUES(1,0);
-CREATE TABLE input_failures(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,subject TEXT NOT NULL,input TEXT NOT NULL,attempts INTEGER NOT NULL,failed_at_ms INTEGER NOT NULL,PRIMARY KEY(project_id,subject));
 ";
+
+/// Schema 18: what one input's failures have cost, by kind.
+pub(super) const FAILURE_TABLES: &str = "CREATE TABLE IF NOT EXISTS input_failures(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,subject TEXT NOT NULL,input TEXT NOT NULL,unusable INTEGER NOT NULL,unanswered INTEGER NOT NULL,failed_at_ms INTEGER NOT NULL,PRIMARY KEY(project_id,subject));";
+
+/// How one Memory call to the provider failed for one input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputFailure {
+    /// The provider answered, but not usably (wrong shape, refused input).
+    Unusable,
+    /// The provider took the request and gave no answer (a timeout, a lost
+    /// completion, an internal failure).
+    Unanswered,
+}
+
+impl InputFailure {
+    /// The failures in a row the same input gets before it is set aside.
+    pub fn limit(self) -> u32 {
+        match self {
+            Self::Unusable => crate::INPUT_FAILURE_LIMIT,
+            Self::Unanswered => crate::INPUT_UNANSWERED_LIMIT,
+        }
+    }
+}
 
 pub(super) fn install_projection_tracking(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(r#"CREATE TRIGGER memory_projection_memory_items_insert AFTER INSERT ON memory_items BEGIN UPDATE memory_projection_state SET generation=generation+1 WHERE id=1; END;
@@ -160,32 +182,60 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Counts one unusable answer to `input` of `subject` and answers how
-    /// many the same input has had; a changed input starts again at one.
-    /// The caller sets the input aside at [`crate::INPUT_FAILURE_LIMIT`].
+    /// Counts one failure of `kind` for `input` of `subject` and answers
+    /// how many of that kind the same input has had in a row: a changed
+    /// input, a success ([`Self::clear_input_failure`]) or a day without
+    /// failure starts again. `None` when the table is full: the failure is
+    /// not counted and the caller treats the input as not yet set aside.
     pub fn record_input_failure(
         &self,
         project: &str,
         subject: &str,
         input: &str,
+        kind: InputFailure,
         now: u64,
-    ) -> Result<u32, MemoryError> {
+    ) -> Result<Option<u32>, MemoryError> {
         self.require_writer()?;
-        let count: u64 =
-            self.connection
-                .query_row("SELECT COUNT(*) FROM input_failures", [], |row| row.get(0))?;
-        let exists: bool = self.connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM input_failures WHERE project_id=?1 AND subject=?2)",
-            params![project, subject],
-            |row| row.get(0),
+        // A row a day old says nothing about a failure in a row: its card
+        // was forgotten, its session settled or it was answered since.
+        self.connection.execute(
+            "DELETE FROM input_failures WHERE failed_at_ms<?1",
+            [now.saturating_sub(crate::INPUT_FAILURE_WINDOW_MS)],
         )?;
-        if count >= PENDING_LIMIT && !exists {
-            return Err(MemoryError::InvalidState("input_failure_capacity".into()));
+        let row: Option<(String, u32, u32)> = self
+            .connection
+            .query_row(
+                "SELECT input,unusable,unanswered FROM input_failures WHERE project_id=?1 AND subject=?2",
+                params![project, subject],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if row.is_none() {
+            let count: u64 =
+                self.connection
+                    .query_row("SELECT COUNT(*) FROM input_failures", [], |row| row.get(0))?;
+            if count >= PENDING_LIMIT {
+                return Ok(None);
+            }
         }
-        Ok(self.connection.query_row("INSERT INTO input_failures VALUES(?1,?2,?3,1,?4) ON CONFLICT(project_id,subject) DO UPDATE SET attempts=CASE WHEN input=excluded.input THEN attempts+1 ELSE 1 END,input=excluded.input,failed_at_ms=excluded.failed_at_ms RETURNING attempts", params![project,subject,input,now], |row| row.get(0))?)
+        let (mut unusable, mut unanswered) = row
+            .filter(|(kept, ..)| kept == input)
+            .map_or((0, 0), |(_, unusable, unanswered)| (unusable, unanswered));
+        let count = match kind {
+            InputFailure::Unusable => {
+                unusable += 1;
+                unusable
+            }
+            InputFailure::Unanswered => {
+                unanswered += 1;
+                unanswered
+            }
+        };
+        self.connection.execute("INSERT INTO input_failures VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(project_id,subject) DO UPDATE SET input=excluded.input,unusable=excluded.unusable,unanswered=excluded.unanswered,failed_at_ms=excluded.failed_at_ms", params![project,subject,input,unusable,unanswered,now])?;
+        Ok(Some(count))
     }
 
-    /// The subject's input was answered: its count is over.
+    /// The subject's input was answered, or set aside: its count is over.
     pub fn clear_input_failure(&self, project: &str, subject: &str) -> Result<(), MemoryError> {
         self.require_writer()?;
         self.connection.execute(

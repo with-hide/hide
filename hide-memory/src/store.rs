@@ -19,9 +19,9 @@ use crate::{
 
 pub(crate) mod hold;
 mod progress;
-pub use progress::CorrectionCheck;
+pub use progress::{CorrectionCheck, InputFailure};
 
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any
 /// agent the operator added under its fallback list (PRD settings-cleanup
 /// D-26), which now includes vendors other than the two it was limited to.
@@ -3552,6 +3552,7 @@ fn migrate(
             .execute_batch(SCHEMA)
             .and_then(|_| connection.execute_batch(hold::TABLES))
             .and_then(|_| connection.execute_batch(progress::TABLES))
+            .and_then(|_| connection.execute_batch(progress::FAILURE_TABLES))
             .and_then(|_| progress::install_projection_tracking(connection))
             .and_then(|_| enable_fts_secure_delete(connection))
             .and_then(|_| connection.pragma_update(None, "user_version", SCHEMA_VERSION))
@@ -3666,6 +3667,14 @@ COMMIT;"#,
         transaction.execute_batch("DELETE FROM session_cursors AS c WHERE operator_events BETWEEN 1 AND 2 AND NOT EXISTS(SELECT 1 FROM analysis_batches b WHERE b.project_id=c.project_id AND b.provider=c.provider AND b.session_id=c.session_id); PRAGMA user_version=17;")?;
         transaction.commit()?;
         version = 17;
+    }
+    if version == 17 {
+        // Adds one empty table, so no backup is kept.
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(progress::FAILURE_TABLES)?;
+        transaction.execute_batch("PRAGMA user_version=18;")?;
+        transaction.commit()?;
+        version = 18;
     }
     if version != SCHEMA_VERSION {
         return Err(MemoryError::WrongSchema {
@@ -6790,6 +6799,87 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
         assert_eq!(
             seen,
             ["old-a".into(), "old-b".into(), "old-c".into()].into()
+        );
+    }
+
+    #[test]
+    fn a_version_seventeen_store_gains_the_input_failure_count() {
+        // An earlier build of schema 17 had no `input_failures`.
+        let (temp, store, project) = store();
+        drop(store);
+        let path = temp.path().join("memory.sqlite3");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("DROP TABLE input_failures; PRAGMA user_version=17;")
+            .unwrap();
+        let store = MemoryStore::open(&path).unwrap();
+        let version: i64 = store
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(
+            store
+                .record_input_failure(&project, "s", "a", InputFailure::Unusable, 10)
+                .unwrap(),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn input_failures_count_in_a_row_per_kind_and_start_again_on_change_success_or_a_day() {
+        let (_temp, store, project) = store();
+        let record = |input: &str, kind, now| {
+            store
+                .record_input_failure(&project, "s", input, kind, now)
+                .unwrap()
+        };
+        assert_eq!(record("a", InputFailure::Unusable, 10), Some(1));
+        assert_eq!(record("a", InputFailure::Unanswered, 20), Some(1));
+        assert_eq!(record("a", InputFailure::Unusable, 30), Some(2));
+        assert_eq!(
+            record("b", InputFailure::Unusable, 40),
+            Some(1),
+            "a changed input"
+        );
+        store.clear_input_failure(&project, "s").unwrap();
+        assert_eq!(
+            record("b", InputFailure::Unusable, 50),
+            Some(1),
+            "after a success"
+        );
+        let later = 50 + crate::INPUT_FAILURE_WINDOW_MS + 1;
+        assert_eq!(
+            record("b", InputFailure::Unusable, later),
+            Some(1),
+            "a day apart"
+        );
+    }
+
+    #[test]
+    fn a_full_input_failure_table_counts_nothing_new_and_prunes_a_day_old_rows() {
+        let (_temp, store, project) = store();
+        store
+            .connection
+            .execute(
+                "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<19999) INSERT INTO input_failures SELECT ?1,'old'||i,'x',1,0,5 FROM n",
+                [&project],
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .record_input_failure(&project, "new", "x", InputFailure::Unusable, 10)
+                .unwrap(),
+            None,
+            "past the cap a failure is reported as uncounted, never an error"
+        );
+        let later = 5 + crate::INPUT_FAILURE_WINDOW_MS + 1;
+        assert_eq!(
+            store
+                .record_input_failure(&project, "new", "x", InputFailure::Unusable, later)
+                .unwrap(),
+            Some(1),
+            "rows a day old are pruned"
         );
     }
 

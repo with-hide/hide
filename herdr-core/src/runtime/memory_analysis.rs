@@ -21,7 +21,7 @@ use super::memory::{
     session_conversation, session_stat, trusted_memory_receipt,
 };
 use super::memory_evidence::{CheckoutFacts, check_evidence};
-use super::memory_verify::{check_before_suggestion, reverify_pending};
+use super::memory_verify::{CheckProgress, check_before_suggestion, reverify_pending};
 use super::*;
 use crate::labels::worker::{MemoryHandoff, MemorySession, SightedMemoryReceipt};
 use crate::model::MemoryAnalysisState;
@@ -145,6 +145,12 @@ enum PassReport {
         learned: usize,
         error: Option<AiError>,
     },
+    /// The Project's analysis in this pass ended on an unusable answer to
+    /// one input, counted against that input: no failure of the Project's,
+    /// and no sign that an earlier provider failure is over either.
+    Unusable {
+        project_id: String,
+    },
     /// Cards of the Project were checked against the repository and some
     /// changed state (`확인 중` came or went, a card was corrected or
     /// forgotten): the open screen reads them again, and nothing else moves.
@@ -252,6 +258,51 @@ impl FailureScope {
             _ => Self::Account,
         }
     }
+}
+
+/// Counts `error` against `input` of `subject` and answers whether the input
+/// is now set aside, with a diagnostic either way. An unusable answer and a
+/// request the provider took and never answered are each counted in a row;
+/// a refusal before any model work or an account pause is not the input's
+/// and counts nothing. A set-aside input's count ends with it.
+pub(super) fn count_input_failure(
+    store: &MemoryStore,
+    project_id: &str,
+    subject: &str,
+    input: &str,
+    error: &AiError,
+) -> Result<bool, String> {
+    use hide_memory::InputFailure;
+    let kind = match (FailureScope::of(error), error) {
+        (FailureScope::Input, _) => InputFailure::Unusable,
+        (_, AiError::Timeout | AiError::CompletionUnknown(_) | AiError::Internal(_)) => {
+            InputFailure::Unanswered
+        }
+        _ => return Ok(false),
+    };
+    let counted = store
+        .record_input_failure(project_id, subject, input, kind, now_ms())
+        .map_err(|error| error.to_string())?;
+    let set_aside = counted.is_some_and(|count| count >= kind.limit());
+    crate::diagnostic!(json!({
+        "component": "memory",
+        "kind": match counted {
+            None => "input.failures_full",
+            Some(_) if set_aside => "input.set_aside",
+            Some(_) => "input.failed",
+        },
+        "project_id": project_id,
+        "subject": subject,
+        "failures": counted,
+        "limit": kind.limit(),
+        "error_class": error.class(),
+    }));
+    if set_aside {
+        store
+            .clear_input_failure(project_id, subject)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(set_aside)
 }
 
 impl Runtime {
@@ -676,6 +727,7 @@ impl Runtime {
             PassReport::Analyzing { project_id }
             | PassReport::CheckState { project_id, .. }
             | PassReport::Analyzed { project_id, .. }
+            | PassReport::Unusable { project_id }
             | PassReport::Checked { project_id, .. } => project_id.clone(),
         };
         if let PassReport::Checked { answered, .. } = report {
@@ -736,6 +788,14 @@ impl Runtime {
                     .then(|| hide_memory::memory_call_reset_at(now));
             }
             PassReport::Checked { .. } => return false,
+            PassReport::Unusable { project_id } => {
+                let project = self.memory_work.projects.entry(project_id).or_default();
+                if project.analysis == MemoryAnalysisState::Analyzing {
+                    project.analysis = MemoryAnalysisState::Idle;
+                }
+                project.checking_card = None;
+                project.check_resume_at_unix_ms = None;
+            }
             PassReport::Analyzing { project_id } => {
                 let project = self.memory_work.projects.entry(project_id).or_default();
                 project.analysis = MemoryAnalysisState::Analyzing;
@@ -1161,6 +1221,7 @@ fn run_analysis_turn(
         &input.cancel,
         &mut admit,
     );
+    let mut unusable = false;
     let (learned, error, rotate) = match result {
         Ok(learned) => {
             outcome.read_succeeded(ANALYSIS_FAILED, &task.session);
@@ -1170,7 +1231,10 @@ fn run_analysis_turn(
         // Project failure; a provider failure backs the Project off and
         // yields the turn; an account pause keeps it. Unfinished work stays.
         Err(AnalysisFailure::Provider(error)) => match FailureScope::of(&error) {
-            FailureScope::Input => (0, None, true),
+            FailureScope::Input => {
+                unusable = true;
+                (0, None, true)
+            }
             FailureScope::Provider => (0, Some(error), true),
             FailureScope::Account => (0, Some(error), false),
         },
@@ -1190,7 +1254,11 @@ fn run_analysis_turn(
             (0, None, true)
         }
     };
-    if analyzing || error.is_some() {
+    if unusable {
+        report(PassReport::Unusable {
+            project_id: project_id.clone(),
+        });
+    } else if analyzing || error.is_some() {
         report(PassReport::Analyzed {
             project_id: project_id.clone(),
             learned,
@@ -1448,7 +1516,7 @@ fn maintain_cards(
     );
     tally.checked |= reconciled.checked.changed > 0;
     tally.answered |= reconciled.checked.answered > 0;
-    outcome.wants_usage |= reconciled.checked.answered > 0;
+    outcome.wants_usage |= reconciled.checked.answered + reconciled.checked.unusable > 0;
     match reconciled.stopped {
         None => {}
         Some(AnalysisFailure::Provider(error)) => {
@@ -1488,11 +1556,15 @@ fn maintain_cards(
         return;
     }
     outcome.wants_usage = true;
-    let mut progress = |card: Option<u64>| {
+    let mut progress = |step: CheckProgress| {
+        let card = match step {
+            CheckProgress::Checking(card) => Some(card),
+            CheckProgress::Answered | CheckProgress::Unusable => None,
+        };
         if card.is_none() {
             report(PassReport::Checked {
                 project_id: project_id.to_owned(),
-                answered: true,
+                answered: step == CheckProgress::Answered,
             });
         }
         report(PassReport::CheckState {
@@ -2019,30 +2091,17 @@ fn analyze_session(
                     .map_err(|error| local(error.to_string()))?;
                 written
             }
-            Err(AnalysisFailure::Provider(error))
-                if FailureScope::of(&error) == FailureScope::Input =>
-            {
+            Err(AnalysisFailure::Provider(error)) => {
                 let input = digest(&[&Value::Array(group.clone()).to_string()]);
-                let attempts = store
-                    .record_input_failure(project_id, &subject, &input, now_ms())
-                    .map_err(|error| local(error.to_string()))?;
-                let set_aside = attempts >= hide_memory::INPUT_FAILURE_LIMIT;
-                crate::diagnostic!(json!({
-                    "component": "memory",
-                    "kind": if set_aside { "analysis.group_set_aside" } else { "analysis.group_failed" },
-                    "project_id": project_id,
-                    "provider": provider,
-                    "session_id": session.id,
-                    "group": index,
-                    "attempts": attempts,
-                    "error_class": error.class(),
-                }));
-                if !set_aside {
+                if !count_input_failure(store, project_id, &subject, &input, &error)
+                    .map_err(local)?
+                {
                     return Err(AnalysisFailure::Provider(error));
                 }
-                // The same words were answered unusably every time: what
-                // they could teach is given up, and the rest of the session
-                // goes on. A rescan with other words asks again.
+                // The same words failed every time: what they could teach is
+                // given up and the rest of the session goes on. A rescan with
+                // other words asks again. A provider failure still stops the
+                // pass and backs the Project off.
                 completed = index + 1;
                 store
                     .save_analysis_progress(
@@ -2054,6 +2113,9 @@ fn analyze_session(
                         &left_out.keys().cloned().collect::<Vec<_>>(),
                     )
                     .map_err(|error| local(error.to_string()))?;
+                if FailureScope::of(&error) != FailureScope::Input {
+                    return Err(AnalysisFailure::Provider(error));
+                }
                 continue;
             }
             Err(failure) => return Err(failure),
@@ -3125,6 +3187,7 @@ mod tests {
                     PassReport::Analyzed { error: Some(_), .. } => "failed",
                     PassReport::Analyzed { learned: 1, .. } => "learned one",
                     PassReport::Analyzed { .. } => "analyzed",
+                    PassReport::Unusable { .. } => "unusable",
                 };
                 if reports.last() != Some(&result) {
                     reports.push(result);
@@ -4467,7 +4530,10 @@ mod tests {
             tally.error.is_none(),
             "one card's unusable answer backs off no Project"
         );
-        assert!(tally.answered && outcome.wants_usage);
+        assert!(
+            !tally.answered && outcome.wants_usage,
+            "an unusable answer spends a call but is no sign the provider recovered"
+        );
     }
 
     #[test]
@@ -4594,10 +4660,10 @@ mod tests {
         };
         for _ in 1..hide_memory::INPUT_FAILURE_LIMIT {
             let reports = fixture.pass(false, true);
-            assert_ne!(
+            assert_eq!(
                 reports.last(),
-                Some(&"failed"),
-                "an input's failure is no Project failure"
+                Some(&"unusable"),
+                "an input's failure is reported as its own, no Project failure"
             );
             assert!(cursor(&fixture).is_none(), "the group is asked again");
         }
@@ -4817,6 +4883,96 @@ mod tests {
         let guard = runtime.lock().unwrap();
         assert_eq!(guard.memory_work.projects[&fixture.project_id].failures, 1);
         assert!(guard.memory_work.projects[&fixture.project_id].retry_at_unix_ms > now_ms());
+    }
+
+    #[test]
+    fn a_correction_the_provider_never_answers_is_set_aside_after_five_tries() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        confirm_fixture_correction(&fixture, 1);
+        fixture.fail_with(Some(AiError::Timeout));
+        let calls = fixture.calls();
+        for attempt in 1..=hide_memory::INPUT_UNANSWERED_LIMIT as usize {
+            let (tally, _) = fixture.maintain(&mut 0);
+            assert_eq!(fixture.calls(), calls + attempt);
+            assert_eq!(
+                tally.error.as_ref().map(FailureScope::of),
+                Some(FailureScope::Provider),
+                "every timeout still backs the Project off"
+            );
+        }
+        fixture.maintain(&mut 0);
+        assert_eq!(
+            fixture.calls(),
+            calls + hide_memory::INPUT_UNANSWERED_LIMIT as usize,
+            "the input that always times out no longer holds its Project"
+        );
+    }
+
+    #[test]
+    fn an_answered_check_starts_the_count_of_unanswered_requests_again() {
+        let fixture = Fixture::new();
+        let due_again = |fixture: &Fixture| {
+            let mut store = fixture.store();
+            let card = store
+                .item_by_number(&fixture.project_id, 1)
+                .unwrap()
+                .unwrap();
+            assert!(store.mark_unverified(&card.id, card.revision).unwrap());
+            rusqlite::Connection::open(&fixture.database)
+                .unwrap()
+                .execute("UPDATE memory_items SET reverify_at_ms=NULL", [])
+                .unwrap();
+        };
+        let short = hide_memory::INPUT_UNANSWERED_LIMIT as usize - 1;
+        let time_out = |fixture: &Fixture| {
+            fixture.fail_with(Some(AiError::Timeout));
+            let before = fixture.calls();
+            for _ in 0..short {
+                fixture.maintain(&mut 0);
+            }
+            fixture.fail_with(None);
+            fixture.calls() - before
+        };
+        due_again(&fixture);
+        assert_eq!(time_out(&fixture), short);
+        fixture
+            .push(json!({"verdict":"valid","text":null,"title":null,"aliases":[],"document":null}));
+        fixture.maintain(&mut 0);
+        due_again(&fixture);
+        assert_eq!(
+            time_out(&fixture),
+            short,
+            "the answer between the runs reset the count, so the card is still asked"
+        );
+    }
+
+    #[test]
+    fn an_unusable_answer_neither_backs_off_nor_clears_an_earlier_provider_failure() {
+        let mut runtime = crate::runtime::tests::runtime();
+        let project_id = "project:unusable".to_owned();
+        runtime.apply_memory_report(PassReport::Analyzed {
+            project_id: project_id.clone(),
+            learned: 0,
+            error: Some(AiError::Timeout),
+        });
+        let failed = runtime.memory_work.projects[&project_id].clone();
+        assert_eq!(failed.failures, 1);
+        runtime.apply_memory_report(PassReport::Analyzing {
+            project_id: project_id.clone(),
+        });
+        runtime.apply_memory_report(PassReport::Unusable {
+            project_id: project_id.clone(),
+        });
+        runtime.apply_memory_report(PassReport::Checked {
+            project_id: project_id.clone(),
+            answered: false,
+        });
+        let after = &runtime.memory_work.projects[&project_id];
+        assert_eq!(after.analysis, MemoryAnalysisState::Idle);
+        assert_eq!(after.failures, failed.failures);
+        assert_eq!(after.retry_at_unix_ms, failed.retry_at_unix_ms);
     }
 
     #[test]

@@ -33,8 +33,8 @@ pub use store::hold::{
 pub use store::{
     AnalysisBatch, ApplyOptions, ApplySummary, Candidate, CandidateKind, CandidateOutcome,
     CandidateRelation, CardEvidence, ComparisonCard, Conversion, CorrectionCheck, CursorReader,
-    DeleteProjectOutcome, InjectedItem, Injection, InjectionKind, InjectionOutcome, MemoryDetail,
-    MemoryError, MemoryItem, MemoryLifecycle, MemorySource, MemoryStore, PendingCard,
+    DeleteProjectOutcome, InjectedItem, Injection, InjectionKind, InjectionOutcome, InputFailure,
+    MemoryDetail, MemoryError, MemoryItem, MemoryLifecycle, MemorySource, MemoryStore, PendingCard,
     PreviousRevision, ProjectMemoryState, Promotion, PromotionState, PromotionSuggestion,
     ReceiptRecord, RetrievalQuery, SessionCursorRecord, SessionSourceRecord, StoreMode,
     branch_name, card_name, parse_card_name, repository_path,
@@ -58,10 +58,17 @@ pub fn database_path(state_dir: &std::path::Path) -> std::path::PathBuf {
 }
 
 pub const ACTIVE_MEMORY_LIMIT: usize = 10_000;
-/// Unusable answers one unchanged input gets before it is set aside: a
-/// session group is passed over and a correction's document version is not
-/// asked about again, each with a diagnostic, until that input changes.
+/// Unusable answers in a row one unchanged input gets before it is set
+/// aside: a session group is passed over and a correction's document version
+/// is not asked about again, each with a diagnostic, until that input changes.
 pub const INPUT_FAILURE_LIMIT: u32 = 3;
+/// Requests in a row the provider took for one unchanged input and never
+/// answered before it is set aside the same way. Higher than
+/// [`INPUT_FAILURE_LIMIT`]: an outage fails innocent inputs too, and the
+/// provider's backoff, not this count, is what waits it out.
+pub const INPUT_UNANSWERED_LIMIT: u32 = 5;
+/// Failures further apart than this are not in a row.
+pub const INPUT_FAILURE_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 pub const MEMORY_BODY_LIMIT_CHARS: usize = 4_000;
 pub const ANALYSIS_INPUT_LIMIT_BYTES: usize = 64 * 1024;
 pub const HOOK_INPUT_LIMIT_BYTES: usize = 256 * 1024;
