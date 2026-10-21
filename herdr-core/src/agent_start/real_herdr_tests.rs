@@ -393,15 +393,19 @@ fn unix_agent(herdr: &PrivateHerdr) {
         .into_iter()
         .find(|path| Path::new(path).is_file())
         .unwrap();
-    if cfg!(target_os = "macos") {
+    let argv0 = if cfg!(target_os = "macos") {
         std::os::unix::fs::symlink(sleep, agent.join("claude")).unwrap();
+        "claude"
     } else {
         std::fs::copy(sleep, agent.join("claude")).unwrap();
-    }
+        // Linux keeps the copied filename as the process name; multicall
+        // utilities still need their original argv[0] to select sleep.
+        "sleep"
+    };
     let script = herdr.home.join("bin/claude");
     std::fs::write(
         &script,
-        "#!/bin/bash\nprintf '%s\\n' \"${PWD##*/} $*\" >> \"$HOME/claude-args\"\nexec -a claude \"$HOME/agent/claude\" 600\n",
+        format!("#!/bin/bash\nprintf '%s\\n' \"${{PWD##*/}} $*\" >> \"$HOME/claude-args\"\nexec -a {argv0} \"$HOME/agent/claude\" 600\n"),
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
