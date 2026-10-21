@@ -336,7 +336,8 @@ A test whose assertion requires a pipe to have no readers creates and closes tha
    `fs::copy` may make an APFS clone whose first execution stalls before `main`, but a byte copy still pays first-execution validation.
    This fixture calls `stand_ins::ready_with_args(&helper, &["node", "--version"])` before its unchanged five-second protocol deadline, using the same file-identity cache and owned 60-second setup guard as `ready`.
    Choose a known one-shot invocation: `hided --help` starts a daemon, whereas `hided node --version` exits without opening daemon state.
-   A copied system utility may be a multicall binary: the real-shell agent fixture keeps `sleep` as argv[0] on Linux, where the copied executable's name identifies the agent, and uses the agent argv[0] on macOS, where process identification needs it.
+   The Unix shell-start fixture (`herdr-core/src/agent_start/real_herdr_tests.rs`) builds its native agent with `cc` and starts that file without arguments before the launch deadline; with arguments it stays alive for Herdr's process detection.
+   Do not rename a system utility to stand in for an agent: a multicall utility can choose its implementation from the executable name and reject the agent's name.
 9. **Retries are a classification.**
    CI runs every Rust lane (Linux, macOS, Windows, the OS contract and nightly) with `scripts/verify-cargo.sh nextest --profile ci` (`retries = 1` in `.config/nextest.toml`), so a test that fails once and then passes is reported as flaky and recorded in an issue with an expiry; two failures fail the lane.
    The one test it does not retry is the nightly's signed-in agy turn, which spends a provider's daily requests ([A real agent on CI](#a-real-agent-on-ci)).
