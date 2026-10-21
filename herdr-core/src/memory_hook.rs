@@ -100,34 +100,18 @@ pub fn answer(scope: &Scope, ask: &Ask, deadline: Instant) -> HookContext {
         return without(HookOutcome::Deadline);
     }
     let prompt = hide_memory::hook::prompt_prefix(ask.prompt.as_deref().unwrap_or_default());
-    let ask_with = |prompt: &str| {
-        hide_memory::hook::context_for(
-            &scope.store,
-            &scope.project,
-            HookRequest {
-                runtime_id: &ask.runtime,
-                event: ask.event,
-                session_id: &ask.session,
-                prompt: Some(prompt),
-            },
-            move || Instant::now() >= deadline,
-        )
-    };
-    let own = ask_with(prompt);
-    // Native hooks provide text, not a continuation flag. A prompt that finds
-    // its own Memory has its own topic and keeps it; only a brief line (at
-    // most 80 characters) that finds nothing, such as "go on", is read as
-    // continuing the confirmed task and ranked with it. No language-specific
-    // words decide it.
-    let continues = own.outcome == HookOutcome::Empty
-        && !prompt.trim().is_empty()
-        && prompt.chars().count() <= 80;
-    match scope.task_context.as_deref().filter(|_| continues) {
-        Some(context) => ask_with(hide_memory::hook::prompt_prefix(&format!(
-            "{prompt}\n{context}"
-        ))),
-        None => own,
-    }
+    hide_memory::hook::context_for(
+        &scope.store,
+        &scope.project,
+        HookRequest {
+            runtime_id: &ask.runtime,
+            event: ask.event,
+            session_id: &ask.session,
+            prompt: Some(prompt),
+            task_context: scope.task_context.as_deref(),
+        },
+        move || Instant::now() >= deadline,
+    )
 }
 
 /// The Project that holds `checkout_path`, as the node that holds it reads
@@ -237,6 +221,22 @@ mod tests {
             "a short prompt that finds its own card spends nothing on the task's"
         );
         assert!(result.context.unwrap().contains("Granite slabs"));
+        hide_memory::MemoryStore::open(&scope.store)
+            .unwrap()
+            .record_receipt(
+                &scope.project.id,
+                "claude",
+                "short-own-topic",
+                "event:1",
+                "m2@1",
+                5,
+            )
+            .unwrap();
+        assert_eq!(
+            answer(&scope, &own_topic, Instant::now() + WITHIN).outcome,
+            HookOutcome::Empty,
+            "a prompt whose own card was already given gets nothing, never the task's"
+        );
 
         let result = answer(&scope, &ask, Instant::now() + WITHIN);
         assert_eq!(result.outcome, HookOutcome::Provided { count: 1 });

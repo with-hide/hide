@@ -100,7 +100,13 @@ pub struct HookRequest<'a> {
     pub event: HookEvent,
     pub session_id: &'a str,
     pub prompt: Option<&'a str>,
+    /// The confirmed task of the caller's checkout, which a brief prompt
+    /// with no Memory of its own, such as "go on", is ranked with.
+    pub task_context: Option<&'a str>,
 }
+
+/// The longest prompt read as continuing its task rather than naming one.
+pub const CONTINUATION_PROMPT_CHARS: usize = 80;
 
 /// The Memory context for one hook, with its receipt, or none.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -193,6 +199,25 @@ where
         }
         return base();
     };
+    // Native hooks give text, not a continuation flag: a prompt that matches
+    // any card, even one the session was already given, has its own topic.
+    // Only a brief one that matches none is ranked again, on the same open
+    // store, with its task. No language-specific words decide it.
+    let prompt = request.prompt.unwrap_or_default();
+    let continues = request.event == HookEvent::UserPromptSubmit
+        && injection.matched == 0
+        && !prompt.trim().is_empty()
+        && prompt.chars().count() <= CONTINUATION_PROMPT_CHARS;
+    if let Some(task) = request.task_context.filter(|_| continues) {
+        query.text = prompt_prefix(&format!("{prompt}\n{task}")).to_owned();
+        let Ok(continued) = store.retrieve_with_expiry(&query, expired.clone()) else {
+            if expired() {
+                return deadline();
+            }
+            return base();
+        };
+        injection = continued;
+    }
     let Ok(generation) =
         store.context_generation(&project.id, request.runtime_id, request.session_id)
     else {
@@ -375,6 +400,7 @@ mod tests {
             event,
             session_id: session,
             prompt,
+            task_context: None,
         }
     }
 
@@ -795,6 +821,7 @@ mod tests {
                 kind: InjectionKind::Index,
                 items: Vec::new(),
                 token_count: 0,
+                matched: 0,
             },
             None,
             0,

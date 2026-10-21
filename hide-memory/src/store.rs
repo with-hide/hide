@@ -594,6 +594,9 @@ pub struct Injection {
     pub kind: InjectionKind,
     pub items: Vec<InjectedItem>,
     pub token_count: usize,
+    /// Cards the query matched, counting those the session was already
+    /// given: zero says the text has no Memory of its own.
+    pub matched: usize,
 }
 
 /// A card's number as agents and the screen name it.
@@ -3133,11 +3136,13 @@ impl MemoryStore {
             kind: query.kind,
             items: Vec::new(),
             token_count: 0,
+            matched: 0,
         };
         let state = self.project_state(&query.project_id)?;
         if !state.enabled {
             return Ok(empty(InjectionOutcome::Disabled));
         }
+        let mut matched = 0;
         let selected = match query.kind {
             InjectionKind::Index => self.index(&query.project_id, query.maximum_items)?,
             InjectionKind::Bodies => {
@@ -3153,6 +3158,7 @@ impl MemoryStore {
                 if expired() {
                     return Ok(empty(InjectionOutcome::Deadline));
                 }
+                matched = candidates.len();
                 select_bodies(candidates, query)
             }
         };
@@ -3169,6 +3175,7 @@ impl MemoryStore {
             kind: query.kind,
             items: selected,
             token_count,
+            matched,
         })
     }
 
@@ -7799,6 +7806,7 @@ PRAGMA user_version=14;"#,
                         .to_owned(),
                 }],
                 token_count: 7,
+                matched: 0,
             }
             .context()
             .unwrap();
@@ -8156,6 +8164,7 @@ PRAGMA user_version=14;"#,
                 kind: InjectionKind::Index,
                 items: Vec::new(),
                 token_count: 0,
+                matched: 0,
             }
         );
     }

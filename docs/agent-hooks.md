@@ -147,7 +147,7 @@ Requests and responses are capped at 16 KiB and 64 KiB, and the existing bootstr
 The letter and Memory children run independently and in parallel under their existing caller deadlines and fail-open outcomes.
 The core takes the Project from the caller's attested checkout and already-prepared catalog facts, never from anything the hook sends.
 Only an explicit checkout purpose or branch description contributes at most 1024 bytes of prepared task context; absent facts fail open without discovery.
-Native hooks have no continuation flag, so a prompt ranks by its own text first; only a nonempty brief prompt of at most 80 characters that finds no Memory of its own is asked again with that context, so an unrelated short prompt that finds its own cards never spends the budget or its receipts on the task's.
+Native hooks have no continuation flag, so a prompt ranks by its own text first; only a nonempty brief prompt of at most 80 characters that matches no card at all is asked again with that context, on the same open store, so an unrelated short prompt that finds its own cards never spends the budget or its receipts on the task's, and one whose matches were all given earlier gets nothing rather than the task's cards.
 The combined ranking input is capped at 8 KiB on a UTF-8 boundary after composition.
 
 The lookup performs no provider or embedding call, transcript scan, child-process launch, or database write, and runs off the core's runtime lock.
