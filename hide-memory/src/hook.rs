@@ -19,23 +19,33 @@ pub const PROMPT_LIMIT_BYTES: usize = 8 * 1024;
 pub const RENDERED_TOKEN_LIMIT: usize = 1_200;
 
 pub fn estimated_tokens(text: &str) -> usize {
-    // Per character class, never per byte: ASCII runs about four characters
-    // a token (and never fewer tokens than words); a Hangul syllable, a Han
-    // or kana character, or any other non-ASCII character counts as one
-    // token, which is at or above what current tokenizers spend on Korean,
-    // Chinese and Japanese without charging their three UTF-8 bytes each.
-    let (ascii, other) = text.chars().fold((0, 0), |(ascii, other), ch| {
-        if ch.is_ascii() {
-            (ascii + 1, other)
+    // Per character class, never per byte, with a tenth on top so the
+    // estimate stays at or above what current tokenizers spend:
+    // - ASCII letters and spaces about four characters a token (never fewer
+    //   tokens than words);
+    // - ASCII digits and symbols, as in ids, hashes, paths and escapes, about
+    //   two characters a token;
+    // - a Hangul syllable, a Han or kana character, or any other character
+    //   of the Basic Multilingual Plane, one token;
+    // - a character beyond it (an emoji, a rare Han), two tokens.
+    let (mut prose, mut symbols, mut wide) = (0, 0, 0);
+    for ch in text.chars() {
+        if ch.is_ascii_alphabetic() || ch.is_ascii_whitespace() {
+            prose += 1;
+        } else if ch.is_ascii() {
+            symbols += 1;
+        } else if u32::from(ch) > 0xFFFF {
+            wide += 2;
         } else {
-            (ascii, other + 1)
+            wide += 1;
         }
-    });
-    let ascii_words = text
-        .split(|ch: char| !ch.is_ascii() || ch.is_ascii_whitespace())
+    }
+    let words = text
+        .split(|ch: char| !ch.is_ascii_alphabetic())
         .filter(|word| !word.is_empty())
         .count();
-    ascii_words.max(usize::div_ceil(ascii, 4)) + other
+    let tokens = words.max(usize::div_ceil(prose, 4)) + usize::div_ceil(symbols, 2) + wide;
+    tokens + tokens.div_ceil(10)
 }
 
 /// `prompt`'s first [`PROMPT_LIMIT_BYTES`] bytes at most, cut on a character
@@ -423,6 +433,30 @@ mod tests {
     }
 
     #[test]
+    fn ids_paths_escapes_and_emoji_are_not_counted_as_prose() {
+        // Lower bounds a BPE tokenizer meets or exceeds: a hex digest
+        // splits into pieces of about two or three characters, an emoji is
+        // at least two tokens, an escape is at least two.
+        let digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+        assert!(estimated_tokens(digest) >= digest.len() / 3);
+        let emoji = "🚀✅".repeat(50);
+        assert!(estimated_tokens(&emoji) >= 2 * 50 + 50);
+        let escaped = "&lt;hide-memory&gt; &amp; ".repeat(20);
+        assert!(estimated_tokens(&escaped) >= escaped.len() / 3);
+        let card = format!(
+            "{} 경로는 `hide-memory/src/store/progress.rs:182`, 커밋 {digest} 🚀",
+            "입력 실패는 하루 안에서만 연속으로 센다.".repeat(10)
+        );
+        let lower = card.chars().filter(|ch| !ch.is_ascii()).count()
+            + card
+                .chars()
+                .filter(|ch| ch.is_ascii() && !ch.is_ascii_alphabetic() && *ch != ' ')
+                .count()
+                / 3;
+        assert!(estimated_tokens(&card) >= lower);
+    }
+
+    #[test]
     fn a_prompt_sharing_no_word_or_alias_gets_no_memory() {
         // B12
         let temp = tempfile::tempdir().unwrap();
@@ -702,8 +736,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let cards = (0..22)
             .map(|index| Candidate {
-                title: format!("{index} {}", "<durable&hooks>".repeat(25)),
-                ..rule(&format!("durable hooks {}", "<&>".repeat(180)), 0.9)
+                // Escapes cost about a token per two symbols, so an
+                // escape-heavy card is sized to fit the budget alone.
+                title: format!("{index} {}", "<durable&hooks>".repeat(8)),
+                ..rule(&format!("durable hooks {}", "<&>".repeat(60)), 0.9)
             })
             .collect::<Vec<_>>();
         let (path, project) = enabled_store(temp.path(), &temp.path().join("project"), &cards);

@@ -158,7 +158,7 @@ SessionStart has the same Memory read budget, a separate two-second Workspace CL
 The core sets a one-second Memory answer deadline: owner-scope reply waiting uses the remaining expiry and remote admission, write and answer share an absolute deadline.
 Retrieval expires at the earlier of that invocation expiry and its own 100 ms allowance.
 The escaped index or body envelope, including receipts, shares a 1200 estimated rendered-token cap; this is not a provider billing count.
-The local estimator reserves one token per four ASCII bytes and byte-fallback space for non-ASCII text, so unspaced Korean, Chinese and Japanese text is not discounted as English words.
+The local estimator counts ASCII letters and spaces at one token per four characters (never fewer than one per word), ASCII digits and symbols at one per two, so ids, paths and escapes are not counted as prose, each other character of the Basic Multilingual Plane at one, and a character past it, such as an emoji, at two, then adds a tenth as margin; unspaced Korean, Chinese and Japanese text is not discounted as English words.
 
 Receipts suppress only a current revision delivered in the same Project/runtime/session/context generation.
 The existing background receipt reader advances context generation from Claude Code's native `SessionStart:clear` and `SessionStart:compact` hook attachments, Codex's native top-level `compacted` records, and Pi/omp native compaction records.
