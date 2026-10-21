@@ -344,17 +344,8 @@ pub fn replace_file(from: &Path, to: &Path) -> io::Result<FileId> {
 /// takes the same route). A Windows folder this account may add no entry to
 /// cannot be flushed by it and is `PermissionDenied`, never a quiet `Ok`.
 pub fn sync_dir(dir: &impl Handle) -> io::Result<()> {
-    // TEMPORARY #1515: how long each folder flush takes.
-    let began = std::time::Instant::now();
-    let done = sys::sync_dir(dir);
-    if let Ok(mut flushes) = FLUSH_TIMES.lock() {
-        flushes.push(began.elapsed().as_millis() as u64);
-    }
-    done
+    sys::sync_dir(dir)
 }
-
-/// TEMPORARY #1515: each folder flush's milliseconds since the last take.
-pub static FLUSH_TIMES: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
 
 fn sync_path_parent(folder: &Path) {
     if let Ok(folder) = fs::File::open(folder) {

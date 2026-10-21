@@ -1182,13 +1182,17 @@ mod sys {
     }
 
     /// Whether `folder` is flushed to keep `entry`, the chain's next folder
-    /// in it: only when this account made `entry` (it owns it), since one the
-    /// system made, such as `Users` in a drive's root, is not left unwritten
-    /// by anything this account did, and a drive root's flush writes out all
-    /// the drive holds unwritten, seconds after an install; and only when
-    /// the account may flush `folder` ([`may_flush`]).
+    /// in it: only when `entry`'s owner is this account (its user, or the
+    /// owner its token gives what it makes), since a folder another owner
+    /// holds, such as the system's `Users` in a drive's root, cannot be one
+    /// this account or an earlier run made, and a drive root's flush writes
+    /// out all the drive holds unwritten, seconds after an install; and only
+    /// when the account may flush `folder` ([`may_flush`]). An owner that
+    /// cannot be read is flushed for, as every entry was before (operator
+    /// decision on #1515: the safe side when the fact is missing).
     pub(super) fn flushes_entry(folder: &fs::File, entry: &fs::File) -> io::Result<bool> {
-        Ok(handle_owned_by_current_user(entry)? && may_flush(folder)?)
+        let made_here = handle_owned_by_current_user(entry).unwrap_or(true);
+        Ok(made_here && may_flush(folder)?)
     }
 
     /// Whether this account owns the open folder or may add a file or a

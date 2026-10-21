@@ -691,7 +691,6 @@ fn owner_loop(
     ready: Sender<Result<(), String>>,
     notify: broadcast::Sender<()>,
 ) {
-    let owner_began = std::time::Instant::now(); // TEMPORARY #1515
     // The core's own node answers for the home the core reads and writes
     // for: the configured one, else the process's, as the core decides.
     let home = options
@@ -761,9 +760,6 @@ fn owner_loop(
             }
         }
     });
-    herdr_core::diagnostic!(
-        serde_json::json!({"component":"hided","kind":"owner.before_create","ms":owner_began.elapsed().as_millis() as u64})
-    ); // TEMPORARY #1515
     let Some(core) = Core::create_with_product_analytics(
         options,
         std::sync::Arc::new(own_node),

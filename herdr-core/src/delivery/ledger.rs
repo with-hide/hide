@@ -731,22 +731,7 @@ pub fn recover(path: &Path) -> Result<Ledger, SaveError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err(refused()),
     }
-    // TEMPORARY #1515: time the parts of recovery.
-    let mut __at = std::time::Instant::now();
-    let __t = |at: &mut std::time::Instant, part: &str| {
-        let flushes = std::mem::take(
-            &mut *hide_platform::fs::atomic::FLUSH_TIMES
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()),
-        );
-        crate::diagnostic!(
-            serde_json::json!({"component":"core","kind":"recover.part","part":part,"ms":at.elapsed().as_millis() as u64,"flushes":flushes})
-        );
-        *at = std::time::Instant::now();
-    };
-    __t(&mut __at, "checks");
     let ledger = load(path).map_err(SaveError::Validation)?;
-    __t(&mut __at, "load");
     let mut ancestor = parent;
     let mut missing = Vec::new();
     loop {
@@ -762,23 +747,18 @@ pub fn recover(path: &Path) -> Result<Ledger, SaveError> {
             Err(_) => return Err(refused()),
         }
     }
-    __t(&mut __at, "ancestors");
     let anchor = hide_platform::fs::private::establish_dir_durability(ancestor)
         .map_err(SaveError::Bootstrap)?;
-    __t(&mut __at, "establish");
     let mut canonical_parent = anchor.clone();
     for part in missing.into_iter().rev() {
         canonical_parent.push(part);
     }
     hide_platform::fs::private::create_dir_all_durable(&canonical_parent, &anchor)
         .map_err(SaveError::Bootstrap)?;
-    __t(&mut __at, "create_dirs");
     if !hide_platform::fs::private::is_private(&canonical_parent).map_err(|_| refused())? {
         return Err(refused());
     }
-    __t(&mut __at, "is_private");
     save(path, &ledger)?;
-    __t(&mut __at, "save");
     Ok(ledger)
 }
 

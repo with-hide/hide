@@ -126,12 +126,12 @@ try {
   await until("the Herdr server answering", () => {
     try { return JSON.parse(output(herdr, ["status", "server", "--json"], isolated)).running === true; } catch { return false; }
   });
+  const connectBegan = Date.now();
   const connected = JSON.parse(output(path.join(runtime, "hide.exe"), ["connect"], { ...isolated, HERDR_BIN_PATH: herdr }));
+  const connectMs = Date.now() - connectBegan;
   check("the daemon starts from the copy", () => {
     if (connected.ok !== true) throw new Error(JSON.stringify(connected));
-    // TEMPORARY #1515: the parts of core creation.
-    console.log(`core parts (ms): ${daemonRecords(isolated.HIDE_STATE_DIR).filter((record) => record.kind === "recover.part").map((record) => `${record.part} ${record.ms} [${record.flushes.join(" ")}]`).join(", ")}`);
-    return `daemon ${connected.pid}, Herdr server ${herdrPid}; start steps: ${startSteps(isolated.HIDE_STATE_DIR)}`;
+    return `daemon ${connected.pid}, Herdr server ${herdrPid}; connect ${connectMs} ms; start steps: ${startSteps(isolated.HIDE_STATE_DIR)}`;
   });
 
   check("installing again keeps the Herdr server and the daemon running", () => {

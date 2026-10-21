@@ -137,9 +137,9 @@ fn an_ancestor_is_passed_over_only_when_the_account_neither_owns_nor_may_add_to_
 /// and only when the account made that folder: one the system made, as
 /// `Users` in a drive's root, is not flushed for, since a drive root's flush
 /// writes out all the drive holds unwritten. The account owns `closed` but
-/// may not flush it, and the folder the chain goes through in it is the
-/// system's, so the chain stands; the account's own folder there would make
-/// the refused flush the answer, as the test above shows.
+/// may not flush it: with the system's folder next on the chain, the chain
+/// stands; with the account's own folder there, the refused flush is the
+/// answer.
 #[cfg(windows)]
 #[test]
 fn an_ancestor_is_flushed_only_to_keep_a_folder_the_account_made() {
@@ -164,6 +164,18 @@ fn an_ancestor_is_flushed_only_to_keep_a_folder_the_account_made() {
         identity::file_id(&canonical).unwrap(),
         identity::file_id(&anchor).unwrap()
     );
+
+    // The same folder made the account's own: `closed` is flushed for it,
+    // and the account may not flush `closed`.
+    let user = std::env::var("USERNAME").unwrap();
+    icacls(&system, &["/setowner", &user]);
+    assert!(private::owned_by_current_user(&system).unwrap());
+    let closed = fs::canonicalize(&closed).unwrap();
+    assert!(matches!(
+        private::establish_dir_durability(&anchor),
+        Err(private::DirectoryDurabilityError::Uncertain { path, source, .. })
+            if path == closed && source.kind() == ErrorKind::PermissionDenied
+    ));
     assert!(names(&anchor).is_empty());
 }
 
