@@ -134,7 +134,18 @@ fn names_local_path(url: &str) -> bool {
 /// One path's fact; the first path of a repository also reads its config
 /// once, for its branch notes and its remotes.
 fn read(native: &Path, facts: &mut PathFacts, bytes: &mut usize) -> PathFact {
-    let repository = hide_project::git::discover(native).map(|repository| {
+    // One walk up to `.git` answers both the Project and the repository. A
+    // path whose Project cannot be read, or not carried (the wire spells
+    // paths in UTF-8), is answered without one; the other paths still are.
+    let (project, repository) = match hide_project::facts_and_repository(native) {
+        Ok((project, repository)) => (wire_project(native, project), repository),
+        Err(hide_project::ResolveError::MissingPath(_)) => (None, None),
+        Err(error) => {
+            project_unread(native, &error.to_string());
+            (None, None)
+        }
+    };
+    let repository = repository.map(|repository| {
         let main_root = comparison(&repository.main_root());
         if !facts.repositories.contains_key(&main_root) {
             let (notes, remote_urls) = match repository.config() {
@@ -161,9 +172,34 @@ fn read(native: &Path, facts: &mut PathFacts, bytes: &mut usize) -> PathFact {
     PathFact {
         comparison: comparison(native),
         exists: native.exists(),
-        project: hide_project::facts(native).ok(),
+        project,
         repository,
     }
+}
+
+fn wire_project(
+    native: &Path,
+    project: hide_project::ProjectFacts,
+) -> Option<hide_project::ProjectFacts> {
+    if project.root.to_str().is_some() && project.checkout_root.to_str().is_some() {
+        return Some(project);
+    }
+    project_unread(native, "project_path_not_utf8");
+    None
+}
+
+/// One record on the node's error stream for a path asked about whose
+/// Project could not be answered.
+fn project_unread(native: &Path, reason: &str) {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "component": "catalog",
+            "kind": "path_facts.project_unread",
+            "path": path::to_wire_lossy(native),
+            "reason": reason,
+        })
+    );
 }
 
 /// `path` with its links resolved as far as it exists: the whole path when
@@ -284,6 +320,59 @@ mod tests {
                 "{url}: a server in a form not read here is left to gh"
             );
         }
+    }
+
+    #[test]
+    fn a_path_whose_project_cannot_be_read_is_answered_beside_the_others() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = identity::canonical(temp.path()).unwrap();
+        let broken = root.join("broken");
+        std::fs::create_dir(&broken).unwrap();
+        std::fs::write(broken.join(".git"), "gitdir: nowhere-at-all\n").unwrap();
+        let plain = root.join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        let broken = path::to_wire_lossy(&broken);
+        let plain_wire = path::to_wire_lossy(&plain);
+
+        let facts = path_facts(&[broken.clone(), plain_wire.clone()]).unwrap();
+
+        let fact = &facts.paths[&broken];
+        assert!(fact.exists);
+        assert!(fact.project.is_none() && fact.repository.is_none());
+        let project = facts.paths[&plain_wire]
+            .project
+            .as_ref()
+            .expect("the other path keeps its Project");
+        assert_eq!(project.kind, hide_project::ProjectKind::Folder);
+        assert_eq!(project.root, hide_project::facts(&plain).unwrap().root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_project_the_wire_cannot_spell_is_left_out_and_the_answer_still_serializes() {
+        use std::os::unix::ffi::OsStrExt;
+        let unspellable = PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/\xff-project"));
+        let project = hide_project::ProjectFacts {
+            root: unspellable.clone(),
+            checkout_root: unspellable,
+            kind: hide_project::ProjectKind::Folder,
+            branch: None,
+            linked_worktree: false,
+        };
+        assert!(serde_json::to_string(&project).is_err());
+        let kept = wire_project(Path::new("/tmp/asked"), project);
+        assert!(kept.is_none());
+        let mut facts = PathFacts::default();
+        facts.paths.insert(
+            "/tmp/asked".into(),
+            PathFact {
+                comparison: "/tmp/asked".into(),
+                exists: true,
+                project: kept,
+                repository: None,
+            },
+        );
+        assert!(serde_json::to_string(&facts).is_ok());
     }
 
     #[test]

@@ -94,6 +94,14 @@ pub struct ProjectFacts {
 }
 
 pub fn facts(path: &Path) -> Result<ProjectFacts, ResolveError> {
+    facts_and_repository(path).map(|(facts, _)| facts)
+}
+
+/// [`facts`] with the repository it was read from, so a caller that also
+/// needs the repository's own files walks the folders up to `.git` once.
+pub fn facts_and_repository(
+    path: &Path,
+) -> Result<(ProjectFacts, Option<git::Repository>), ResolveError> {
     if !path.exists() {
         return Err(ResolveError::MissingPath(path.to_path_buf()));
     }
@@ -103,13 +111,14 @@ pub fn facts(path: &Path) -> Result<ProjectFacts, ResolveError> {
     })?;
     if let Some(repository) = git::discover_checked(&canonical)? {
         let root = repository.main_root();
-        return Ok(ProjectFacts {
+        let facts = ProjectFacts {
             linked_worktree: root != repository.root,
             branch: repository.branch(),
-            checkout_root: repository.root,
+            checkout_root: repository.root.clone(),
             root,
             kind: ProjectKind::Git,
-        });
+        };
+        return Ok((facts, Some(repository)));
     }
     let folder = if canonical.is_dir() {
         canonical
@@ -119,13 +128,16 @@ pub fn facts(path: &Path) -> Result<ProjectFacts, ResolveError> {
             .map(Path::to_path_buf)
             .ok_or_else(|| ResolveError::MissingPath(path.to_path_buf()))?
     };
-    Ok(ProjectFacts {
-        root: folder.clone(),
-        checkout_root: folder,
-        kind: ProjectKind::Folder,
-        branch: None,
-        linked_worktree: false,
-    })
+    Ok((
+        ProjectFacts {
+            root: folder.clone(),
+            checkout_root: folder,
+            kind: ProjectKind::Folder,
+            branch: None,
+            linked_worktree: false,
+        },
+        None,
+    ))
 }
 
 /// The durable id of the project at `root` on `device_id`: the same root on
