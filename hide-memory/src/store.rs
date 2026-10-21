@@ -202,6 +202,9 @@ pub struct ApplySummary {
     /// Cards forgotten to make room for this batch's new cards, by number:
     /// the least recently used that no person confirmed.
     pub evicted: Vec<u64>,
+    /// The oldest such cards removed for good past
+    /// [`crate::EVICTED_CARD_LIMIT`].
+    pub evictions_purged: usize,
     /// New cards left out because their session reached its limit (D-02).
     pub session_limited: usize,
     pub duplicate_batch: bool,
@@ -1643,7 +1646,13 @@ impl MemoryStore {
         candidates: &[Candidate],
         options: &ApplyOptions,
     ) -> Result<ApplySummary, MemoryError> {
-        self.apply_candidates_limited(batch, candidates, options, ACTIVE_MEMORY_LIMIT)
+        self.apply_candidates_limited(
+            batch,
+            candidates,
+            options,
+            ACTIVE_MEMORY_LIMIT,
+            crate::EVICTED_CARD_LIMIT,
+        )
     }
 
     #[cfg(test)]
@@ -1653,7 +1662,24 @@ impl MemoryStore {
         candidates: &[Candidate],
         item_limit: usize,
     ) -> Result<ApplySummary, MemoryError> {
-        self.apply_candidates_limited(batch, candidates, &ApplyOptions::default(), item_limit)
+        self.apply_candidates_with_limits(batch, candidates, item_limit, crate::EVICTED_CARD_LIMIT)
+    }
+
+    #[cfg(test)]
+    fn apply_candidates_with_limits(
+        &mut self,
+        batch: &AnalysisBatch,
+        candidates: &[Candidate],
+        item_limit: usize,
+        evicted_limit: usize,
+    ) -> Result<ApplySummary, MemoryError> {
+        self.apply_candidates_limited(
+            batch,
+            candidates,
+            &ApplyOptions::default(),
+            item_limit,
+            evicted_limit,
+        )
     }
 
     fn apply_candidates_limited(
@@ -1662,6 +1688,7 @@ impl MemoryStore {
         candidates: &[Candidate],
         options: &ApplyOptions,
         item_limit: usize,
+        evicted_limit: usize,
     ) -> Result<ApplySummary, MemoryError> {
         self.require_writer()?;
         let transaction = self.connection.transaction()?;
@@ -1757,6 +1784,8 @@ impl MemoryStore {
                         )?;
                         summary.evicted.push(number);
                         live_count -= 1;
+                        summary.evictions_purged +=
+                            purge_evicted(&transaction, &batch.project_id, evicted_limit)?;
                     }
                     let item_id =
                         stable_id("memory", &[&batch.id, &index.to_string(), &redacted.text]);
@@ -5111,6 +5140,21 @@ fn evictable(
     Ok(rows.into_iter().find(|(id, _)| !named.contains(id)))
 }
 
+/// Removes the oldest cards forgotten to make room past `limit`, with their
+/// revisions, sources and evidence, so a full Project stays bounded; the
+/// newest stay for Undo. Answers how many went.
+fn purge_evicted(
+    connection: &Connection,
+    project_id: &str,
+    limit: usize,
+) -> Result<usize, MemoryError> {
+    Ok(connection.execute(
+        "DELETE FROM memory_items WHERE id IN (SELECT i.id FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
+         WHERE i.project_id=?1 AND i.lifecycle='tombstoned' AND r.batch_id LIKE 'evict:%' ORDER BY r.created_at_ms DESC,i.number DESC LIMIT -1 OFFSET ?2)",
+        params![project_id, limit as u64],
+    )?)
+}
+
 fn count_live(connection: &Connection, project_id: &str) -> Result<usize, MemoryError> {
     Ok(connection.query_row(
         "SELECT COUNT(*) FROM memory_items WHERE project_id=?1 AND lifecycle!='tombstoned'",
@@ -6381,6 +6425,53 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
         assert_eq!(version, SCHEMA_VERSION);
         store.mark_evictions_seen(&project, 5).unwrap();
         assert_eq!(store.project_state(&project).unwrap().evicted_count, 0);
+    }
+
+    #[test]
+    fn a_full_project_keeps_only_its_newest_cleared_cards() {
+        let (_temp, mut store, project) = store();
+        store
+            .apply_candidates(
+                &batch(&project, "b0", "b0"),
+                &[candidate("Card zero", CandidateRelation::New)],
+            )
+            .unwrap();
+        let mut purged = 0;
+        for index in 1..=4 {
+            let name = format!("Card {index}");
+            purged += store
+                .apply_candidates_with_limits(
+                    &batch(&project, &name, &name),
+                    &[candidate(&name, CandidateRelation::New)],
+                    1,
+                    2,
+                )
+                .unwrap()
+                .evictions_purged;
+        }
+        assert_eq!(purged, 2);
+        let kept: Vec<u64> = store
+            .connection
+            .prepare("SELECT number FROM memory_items ORDER BY number")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            kept,
+            [3, 4, 5],
+            "the two newest cleared cards and the live one"
+        );
+        assert!(
+            store.undo_card(&project, 1).unwrap().is_none(),
+            "a removed card has nothing to undo"
+        );
+        assert!(store.connection.query_row(
+            "SELECT NOT EXISTS(SELECT 1 FROM memory_revisions r LEFT JOIN memory_items i ON i.id=r.item_id WHERE i.id IS NULL)",
+            [],
+            |row| row.get::<_, bool>(0),
+        ).unwrap(), "its revisions go with it");
     }
 
     #[test]

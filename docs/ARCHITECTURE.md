@@ -335,7 +335,8 @@ The card forgotten is the least recently used: never given or read first, oldest
 An undo never takes the Project past its limit: bringing a forgotten card back while it is full is refused (`MemoryError::Full`, `memory_full` for `hide memory undo`), and the operator forgets another card first.
 The Memory tab counts the cards forgotten this way since it last said so: drawing its line sends `memory_evictions_seen` with the newest one's time, which the core writes to the Project's `evictions_seen_at_ms` (store schema 19) off the lock, and the tab keeps its line until it closes.
 A confirmed correction, a card with a promotion, and a card the same batch writes or names are never forgotten; with none left to forget the new card is refused, merges and corrections in the batch still commit, and the Memory tab says the Memory is full.
-Each forgotten card is a `card.evicted` diagnostic with its batch.
+A Project keeps its newest 1,000 cards forgotten this way (`EVICTED_CARD_LIMIT`) for Undo; an older one is removed for good in the same transaction, with its revisions, sources and evidence, so a full Project stays bounded.
+Each forgotten card is a `card.evicted` diagnostic with its batch, and the batch's `analysis.session_cards` line counts those removed (`evictions_purged`).
 The prompt hook and the commands read only whether a Project's Memory is on (`MemoryStore::project_enabled`), never these counts, which only the Memory tab's read computes.
 Every write reports to the core, which reads the opened Project's Memory again; a forget names its card on the Memory tab with its Undo.
 A card write checks the Project's switch inside its own transaction, so a card analyzed or added while the operator turned Memory off is never written after the switch.

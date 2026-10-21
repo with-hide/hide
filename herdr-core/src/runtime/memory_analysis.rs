@@ -2557,7 +2557,7 @@ pub(crate) fn write_cards(
         })?;
     crate::diagnostic!(
         json!({"component":"memory", "kind":"analysis.session_cards", "project_id":source.project_id, "session_id":source.session_id, "batch_id":batch_id,
-        "created":summary.created, "superseded":summary.superseded, "capacity_rejections":summary.capacity_rejections, "evicted":summary.evicted.len(), "duplicates_in_docs":duplicates, "extraction_input_chars":request.input.chars().count(), "document_input_chars":document_input })
+        "created":summary.created, "superseded":summary.superseded, "capacity_rejections":summary.capacity_rejections, "evicted":summary.evicted.len(), "evictions_purged":summary.evictions_purged, "duplicates_in_docs":duplicates, "extraction_input_chars":request.input.chars().count(), "document_input_chars":document_input })
     );
     for number in &summary.evicted {
         crate::diagnostic!(
