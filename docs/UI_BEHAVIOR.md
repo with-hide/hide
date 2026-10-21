@@ -513,7 +513,7 @@ The pointer on the chip or the keyboard's focus on it opens the checklist below 
 Leaving the chip and the list, or blurring the chip, closes it; a press on the chip or Show task list (⇧⌘U, Alt+Shift+U on Windows and Linux, remappable) pins the focused pane's list, and a second press, the chord again or Esc closes it; Esc on a pinned list stops there, so an agent CLI in the focused terminal is not interrupted, and opening the list never takes the keyboard from the terminal (`web/src/PaneTaskChip.tsx`).
 The chip, the list and the record follow the ledger in the same snapshot burst, and a chip whose count did not change is not redrawn.
 A plain shell keeps its terminal mark.
-On an agent pane whose session Hide knows, the status mark, the logo and the title are one button: under the pointer they light together with the hint `세션 기록 보기`, and a press shows that session's record in the lane's 보기 slot ([The 보기 slot](#the-보기-slot)), opening the lane when it is closed or put away, while the keyboard and the input cursor stay in the pane's terminal (PRD overview-device-tasks B22, sidebar-task-lens B15); the Overview's `lane에서 보기` lands the same way.
+On an agent pane whose session Hide knows, the status mark, the logo and the title are one button: under the pointer or focus they light together and open the turn card, headed by the title, the product and the state words, in place of a hint (PRD pane-last-request D-12), and a press shows that session's record in the lane's 보기 slot ([The 보기 slot](#the-보기-slot)), opening the lane when it is closed or put away, while the keyboard and the input cursor stay in the pane's terminal (PRD overview-device-tasks B22, sidebar-task-lens B15); the Overview's `lane에서 보기` lands the same way.
 A press while the lane already draws that record turns the lane back to its tool, and the fork mark and the PR mark keep their own presses outside the button (B23).
 Whether the lane draws that record is read from the slot's front item and the lane's tool, both of which the core keeps.
 A plain shell, and an agent pane whose session is not known yet, keeps the plain head with nothing to press; the head becomes the button in place once the session is known, on a device's pane as on this Mac's (B24).
@@ -538,8 +538,15 @@ No other hold of a letter reaches the screen, and nothing changes on the sender'
 The tree popover's `Overview에서 일감 보기` opens the Overview on the agent's device with the card of the task it belongs to selected and the agent's own record in the panel (PRD overview-device-tasks B59); a resting or cleanup card's fold opens with it, so the selected card is drawn.
 The zoom control names the panes it hides and unzooms the tab; the input pane keeps its accent perimeter and header tint.
 
-The second row over the terminal shows one operator request or the current pane agent's own live working progress, with a child-tree button at its left when direct children are known.
-It is absent when there is no request, valid progress or child button; a pane whose terminal is not live has no ask or progress on it, because its body says why.
+The second row over the terminal shows the pane's turn, `요청 <request> → <answer>`, with a child-tree button at its left when direct children are known (PRD pane-last-request).
+The request is the operator's last one, the label's one-line summary of it, read against the conversation (`제안대로 진행 + 애매한 상태 더 점검` for `ㅇㅇ 그렇게 해 … 점검들 좀 해줘`), in quiet text after a quiet `요청`; until the label has summarized it, with summaries off, after a failed judgment or for a turn before the summary existed, it is the request's own first line, and a request of images alone reads `이미지 N`.
+A letter another agent sent after it does not replace it; a delegated child with no operator request shows its sender's last request the same way.
+The answer is the operator's ask, the agent's own Working progress (`작업 중` without a sentence), or, for a finished turn the operator has not looked at, `끝남` and its result sentence; once the operator has looked the row goes.
+The request shows only with an answer: a pane that waits, rests or finished and was read has no row (only the children button when it has live children).
+When the request and the answer do not fit one line the answer moves to a second row under the request, each cut only when it overflows its own row, and the two return to one line when the pane widens; the children button stays at the first row's left, the request is never folded into an icon, and both rows overlay the terminal without changing its grid.
+The request is a button the keyboard reaches: the pointer or focus on it opens the turn card under it, a press pins the card and a second press or Esc closes it, and Esc on a card neither pinned nor focused stays the terminal's.
+The card shows the request's summary and its own first two lines, who sent a later request, the answer's verb and words, the agent's last reply in three lines, up to two earlier turns with how each ended, and `기록 열기`, which shows the session record in the lane; a part with nothing to say is not drawn (`web/src/PaneTurnCard.tsx`).
+The second row is absent when there is no turn to show and no child button; a pane whose terminal is not live has no ask, request or progress on it, because its body says why.
 The core publishes the ask (`herdr-core/src/agent_state/header.rs`, `Header.band`): the pane's own Approval, Answer or Blocked first, the lead raised descendant next, then the pane's own Stopped.
 A pull request's verb (Fix, Review, Merge) is the header PR mark's colour and a finished turn is the status mark's dot to read, so neither draws a row; the PR mark carries no review word either.
 An ask stays until it is answered: once the operator has had the pane focused it dims to `--opacity-read-status`, as its row's request line does, and a question the operator read but did not answer keeps its row (`Band.read`).
@@ -548,7 +555,7 @@ A raised descendant's ask starts with its verb, then the originating agent's nam
 The hover gives the originating agent's product, path, checkout and wait when known; a draft still names its originating child while Open goes to the parent holding the input draft.
 Open goes to the raised descendant, or for a draft to the parent whose input holds it, and is disabled with the connection reason beside it while that pane's device is not connected.
 An ask is quiet text on the secondary fill with a warning rail; the request text gets three shares of the flexible space, and the asking agent and an unreceived-letter explanation get one each, so they do not consume the whole reason at narrow widths or enlarged text.
-Without an ask, the row shows the current pane agent's own nonblank progress only while its state is live Working; finished, idle and disconnected states cannot retain that sentence.
+Without an ask, the row shows the current pane agent's own nonblank progress only while its state is live Working, and a finished turn's result sentence only until the operator looks; idle and disconnected states cannot retain either sentence.
 The label worker retires the previous turn's sentence as soon as it proves a new human turn, even when the agent stays Working, before the new turn's analysis arrives.
 The row does not substitute a child's line or the pane title for missing progress.
 The children button stays at the row's left whenever the pane has live direct children, with an ask or progress on the row or neither: a tree icon, the actual number and a chevron open the existing tree popover ([status-model.md](status-model.md#the-descendant-mark-and-the-tree-popover)).
@@ -557,7 +564,7 @@ Its tooltip and accessible name spell out the live direct child total and every 
 The button opens with the raised branches expanded whenever its core raised count is positive; `외 N건` remains only when the children button is unavailable.
 If the parent or a known descendant's device is not connected, the button keeps the last topology total and the reason in its tooltip and accessible name; the connection reason is also visible beside any progress until the connection returns.
 With no live children there is no children button, and no empty separator.
-Working keeps a thin blue line along the top and adds its own progress row only when the core has a valid sentence; CI wait, waiting and idle have neither.
+Working keeps a thin blue line along the top and adds its row when the core has a valid sentence or a request to show; CI wait, waiting and idle have neither.
 The row and the blue line overlay the terminal and change neither its viewport nor its PTY grid.
 Pending and failed moves appear at the initiating popover, ancestor step or Open with the existing retry rules, plus the Agent-area notice when the source pane is no longer visible or the move started from a child's name.
 
