@@ -39,7 +39,7 @@ export type PhoneAgent = {
   holds_notification: boolean;
 };
 
-export type GroupId = "needs_you" | "done" | "working" | "seen";
+export type GroupId = "needs_you" | "done" | "revisit" | "working" | "seen";
 
 /** A conversation intent has no pane address, lineage or filesystem path. */
 export type PhoneSleepingSession = {
@@ -179,6 +179,7 @@ export function noticeText(t: TFunction<"translation">, notice: Notice): string 
 export const GROUP_TITLE: Record<GroupId, MessageKey> = {
   needs_you: "mobile.group.needs_you",
   done: "mobile.group.done",
+  revisit: "mobile.group.revisit",
   working: "mobile.group.working",
   seen: "mobile.group.seen",
 };

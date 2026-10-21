@@ -11,8 +11,8 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Where a task stands, in the order the 태스크 list draws it (B4, B9):
-/// Needs You, 막힘, 일하는 중 (working, then waiting), 끝남, then the folded
-/// 쉬는 중 and 정리할 것.
+/// Needs You, 막힘, 일하는 중 (working, then waiting), 끝남, 다시 볼 것 (PRD
+/// revisit-group D-01), then the folded 쉬는 중 and 정리할 것.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskState {
@@ -21,6 +21,8 @@ pub enum TaskState {
     Working,
     Waiting,
     Done,
+    /// A read, unanswered ask, or a quiet task the operator starred.
+    Revisit,
     /// Nothing to do and nothing to clean, a resolved task included:
     /// folded under `쉬는 중 N`.
     Resting,
@@ -227,6 +229,16 @@ impl<'a> Forest<'a> {
                     .state
                     .request_since
                     .cmp(&self.places[b.root.as_str()].agent.state.request_since),
+                // Longest waiting first (PRD revisit-group D-06).
+                TaskState::Revisit => {
+                    let since = |card: &Card| {
+                        self.places[card.root.as_str()]
+                            .agent
+                            .revisit
+                            .map(|revisit| revisit.since_unix_ms)
+                    };
+                    since(a).cmp(&since(b))
+                }
                 _ => b.recency.cmp(&a.recency),
             })
         });
@@ -385,9 +397,14 @@ fn state(root: &Place<'_>, stage: Option<u8>, rows: &[&Place<'_>]) -> TaskState 
         if agent.activity == "working" {
             return TaskState::Working;
         }
-        if agent.wait.is_some() {
-            return TaskState::Waiting;
-        }
+    }
+    // The current state wins over the mark (D-04); a ★ wins over waiting,
+    // rest and an automatic resolution, an operator's 해결 having taken it.
+    if agent.revisit.is_some() {
+        return TaskState::Revisit;
+    }
+    if agent.resolved.is_none() && agent.wait.is_some() {
+        return TaskState::Waiting;
     }
     let leftover = rows
         .iter()

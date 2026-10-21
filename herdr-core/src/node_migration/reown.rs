@@ -1426,6 +1426,7 @@ mod tests {
                 "request_verbs": keyed("pane", json!({"verb": "review"})),
                 "pane_terminal_sizes": keyed("pane", json!([80, 24])),
                 "resolved_sessions": keyed("pane", json!({"at_unix_ms": 1})),
+                "revisit_sessions": keyed("pane", json!({"starred_at_unix_ms": 1, "session": "s"})),
                 "session_resolution_inputs": keyed("pane", json!(1)),
                 "agent_sleep": {
                     "stamps": keyed("pane", json!({})),

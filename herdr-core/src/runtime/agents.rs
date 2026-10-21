@@ -2500,9 +2500,13 @@ impl Runtime {
                     let result = persistence::save(&path, &state, &sizes);
                     let changed = {
                         let mut guard = runtime.lock().unwrap_or_else(|e| e.into_inner());
-                        let resolving = state.resolved_sessions.iter().any(|(pane, record)| {
+                        let resolution = state.resolved_sessions.iter().any(|(pane, record)| {
                             guard.pending_session_resolutions.get(pane) == Some(record)
                         });
+                        let resolving = resolution
+                            || guard.pending_revisit.iter().any(|(pane, pending)| {
+                                state.revisit_sessions.get(pane) == pending.as_ref()
+                            });
                         let resolved_changed =
                             guard.acknowledge_session_save(&state, result.is_ok());
                         let archive_changed =
@@ -2520,7 +2524,11 @@ impl Runtime {
                                 );
                             } else if resolving && !dormant_changed {
                                 guard.push_diagnostic(
-                                    "session.resolve.save_failed",
+                                    if resolution {
+                                        "session.resolve.save_failed"
+                                    } else {
+                                        "revisit.save_failed"
+                                    },
                                     message.clone(),
                                 );
                             } else if archive_changed {

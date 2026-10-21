@@ -315,6 +315,9 @@ impl Runtime {
             project_label,
             members,
             reason: None,
+            starred_at_unix_ms: self
+                .revisit_mark(pane_id)
+                .and_then(|mark| mark.starred_at_unix_ms),
             deleting: false,
         };
         self.snapshot
@@ -934,6 +937,7 @@ impl Runtime {
         let mut changed = false;
         let live = self.archive_live();
         let task = self.snapshot.task_operation.clone();
+        let mut restarred: Vec<(String, u64)> = Vec::new();
         let ids = self
             .snapshot
             .ui_state
@@ -968,6 +972,11 @@ impl Runtime {
                     member.resume = Resume::Done {
                         pane_id: pane.clone(),
                     };
+                    if member.parent.is_none()
+                        && let Some(at) = record.starred_at_unix_ms
+                    {
+                        restarred.push((pane.clone(), at));
+                    }
                     record.revision += 1;
                     changed = true;
                     continue;
@@ -1054,6 +1063,22 @@ impl Runtime {
                     }))
             });
         changed |= before != self.snapshot.ui_state.session_archive.records.len();
+        // A resumed root wears its ★ again, on the conversation it resumed.
+        for (pane, at) in restarred {
+            let session = self
+                .archive_rows()
+                .find(|row| row.pane_id == pane)
+                .and_then(|row| row.lineage_session.clone());
+            self.snapshot.ui_state.revisit_sessions.insert(
+                pane,
+                crate::agent_state::sessions::RevisitMark {
+                    starred_at_unix_ms: Some(at),
+                    dismissed_ask_since: None,
+                    session,
+                },
+            );
+            changed = true;
+        }
         if changed {
             self.persist_ui_state();
         }

@@ -674,6 +674,7 @@ mod tests {
             state: Default::default(),
             resolved: None,
             resolved_recent: false,
+            revisit: None,
             escalation: None,
             letters_waiting: None,
             raised: Vec::new(),

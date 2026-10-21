@@ -1392,6 +1392,12 @@ impl Runtime {
         state
             .resolved_sessions
             .extend(self.pending_session_resolutions.clone());
+        for (pane, pending) in &self.pending_revisit {
+            match pending {
+                Some(mark) => state.revisit_sessions.insert(pane.clone(), mark.clone()),
+                None => state.revisit_sessions.remove(pane),
+            };
+        }
         if let Some(store) = self.workspace_views.as_ref() {
             (state.right_panel_visible, state.right_panel_section) = store.saved_panel;
         }

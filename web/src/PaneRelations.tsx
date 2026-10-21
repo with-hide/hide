@@ -117,6 +117,7 @@ type PaneMenuId =
   | `open:${string}`
   | "sleep_agent"
   | "archive_session"
+  | "revisit"
   | "fork_agent"
   | "fork_agent_side"
   | "copy_name"
@@ -140,7 +141,10 @@ type PaneMenuId =
  * each opened only by choosing it, its name and Herdr id to copy, and closing it. Opening
  * the menu moves no focus and marks nothing read.
  */
-export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffer = { kind: "hidden" }): MenuEntry<PaneMenuId>[] {
+/** 다시 볼 것 on a root agent's pane (PRD revisit-group D-08, B10): `star` offers the ★, `done` offers 다 봤음. */
+export type RevisitOffer = "hidden" | "star" | "done";
+
+export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden"): MenuEntry<PaneMenuId>[] {
   const relationLabel = { parent: "panes.relation.parent", sibling: "panes.relation.sibling" } as const;
   const items: MenuEntry<PaneMenuId>[] = relationEntries(pane).map((entry) => ({
     id: `open:${entry.paneId}` as const,
@@ -162,6 +166,9 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
   // root agent's pane, disabled with why on a child, an unknown conversation
   // or a disconnected device; a shell, a Factory worker and Hide AI get none.
   const archiveEntry: MenuEntry<PaneMenuId> | null = archive.kind === "offered" ? { id: "archive_session", icon: "archive", label: translate("archive.menu.archive"), unavailable: archive.unavailable } : null;
+  const revisitEntry: MenuEntry<PaneMenuId> | null = revisit === "hidden" ? null
+    : { id: "revisit", icon: revisit === "done" ? "unstar" : "star", label: translate(revisit === "done" ? "taskLens.menu.revisitDone" : "taskLens.menu.revisit"), unavailable: null };
+  if (revisitEntry && pane.sleep_action) agentActions.push(revisitEntry);
   if (archiveEntry && pane.sleep_action) agentActions.push(archiveEntry);
   // Fork agent and Fork agent to the side (PRD fork-operator-root B2, B3, D-03):
   // offered on an agent pane the core can fork, and both drawn disabled with the
@@ -174,6 +181,7 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
       { id: "fork_agent_side", group: "fork", menuLabel: translate("menus.forkSide"), icon: "split_right", label: translate("panes.menu.forkSide"), unavailable },
     );
   }
+  if (revisitEntry && !pane.sleep_action) agentActions.push(revisitEntry);
   if (archiveEntry && !pane.sleep_action) agentActions.push(archiveEntry);
   if (agentActions.length > 0) items.push(...agentActions.map((item, index) => (index === 0 ? { ...item, separated: items.length > 0 } : item)));
   items.push({ id: "copy_name", group: "copy", menuLabel: translate("menus.terminalName"), icon: "copy", label: translate("panes.menu.copyName"), unavailable: null, separated: items.length > 0 });
@@ -200,7 +208,7 @@ export type TerminalMenuContext = {
  * A right-click in the terminal: its link first, editing the text, then the tab's
  * layout around this pane, then everything the header menu offers.
  */
-export function terminalMenuItems(pane: PaneRow, title: string, context: TerminalMenuContext, archive: ArchiveOffer = { kind: "hidden" }): MenuEntry<PaneMenuId>[] {
+export function terminalMenuItems(pane: PaneRow, title: string, context: TerminalMenuContext, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden"): MenuEntry<PaneMenuId>[] {
   const { chords } = context;
   const items: MenuEntry<PaneMenuId>[] = [];
   const { target, found } = context.link ?? {};
@@ -235,7 +243,7 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
     },
   );
   if (editingStart > 0) items[editingStart] = { ...items[editingStart]!, separated: true };
-  const paneItems = paneMenuItems(pane, title, archive).map((item, index) => (index === 0 ? { ...item, separated: true } : item));
+  const paneItems = paneMenuItems(pane, title, archive, revisit).map((item, index) => (index === 0 ? { ...item, separated: true } : item));
   return [...items, ...paneItems];
 }
 
@@ -274,6 +282,8 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
         return actions.sleepAgent(pane.id);
       case "archive_session":
         return actions.archiveSession(pane.id);
+      case "revisit":
+        return revisit === "done" ? actions.finishRevisit(pane.id) : actions.starSession(pane.id);
       case "fork_agent":
         return actions.forkPane(pane.id, "tab");
       case "fork_agent_side":
@@ -303,7 +313,8 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
   // menu is open (the session's label arrives after its first turn), and the
   // menu says what the header says now.
   const archive = useArchiveOffer(pane.id, open !== null);
-  const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive) : paneMenuItems(pane, title, archive);
+  const revisit = useRevisitOffer(pane.id, open !== null);
+  const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive, revisit) : paneMenuItems(pane, title, archive, revisit);
   if (move?.mutationBlocked(pane.id)) {
     for (const item of items) if (["close_pane", "split_right", "split_down", "toggle_zoom", "sleep_agent", "archive_session", "fork_agent", "fork_agent_side"].includes(item.id)) item.unavailable = t("menus.paneMove.busy");
   }
@@ -337,6 +348,16 @@ function useArchiveOffer(paneId: string, open: boolean): ArchiveOffer {
   if (offer === "hidden") return { kind: "hidden" };
   const reason = offer.slice("offered:".length);
   return { kind: "offered", unavailable: reason || null };
+}
+
+/** 다시 볼 것 for this pane's agent: only a root the operator owns, read only while its menu is open. */
+function useRevisitOffer(paneId: string, open: boolean): RevisitOffer {
+  return useShellStore((s) => {
+    if (!open) return "hidden";
+    const agent = agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(paneId);
+    if (!agent || agent.hide_ai || agent.delegated || agent.lineage_parent_pane_id) return "hidden";
+    return agent.revisit ? "done" : "star";
+  });
 }
 
 export function useRelationProgress(sourcePaneId: string, targetPaneId: string | null) {

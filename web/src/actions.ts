@@ -1854,6 +1854,16 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "resolve_session", payload: { pane_id: paneId } });
     },
 
+    /** ★ a task so it waits in 다시 볼 것 while quiet (PRD revisit-group D-03). */
+    starSession(paneId: string) {
+      dispatch({ schema_version: 2, kind: "revisit_star", payload: { pane_id: paneId } });
+    },
+
+    /** 다 봤음: the ★ goes and the read ask standing now is put away (D-05). */
+    finishRevisit(paneId: string) {
+      dispatch({ schema_version: 2, kind: "revisit_done", payload: { pane_id: paneId } });
+    },
+
     /**
      * An agent chosen in a list that shows only what the operator has to do
      * (the sidebar, Sessions, a digit): a row its home owns opens the home,

@@ -95,6 +95,8 @@ export type AgentRow = {
   resolved?: { at_unix_ms: number; source: "operator" | "automatic" } | null;
   /** Resolved within the last 24 hours, so Sessions still lists it. */
   resolved_recent?: boolean;
+  /** The operator's ★ or a read, unanswered ask, and since when it waits (PRD revisit-group). */
+  revisit?: { starred: boolean; read_ask: boolean; since_unix_ms: number } | null;
   escalation?: { cause: "parent_blocked" | "draft" | "bell_exhausted" | "undelivered" | "child_blocked" | "observer_unconfirmed"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
   /** How many letters wait on this pane for a possible draft, once it has rested; absent while none waits (docs/delivery.md). */
   letters_waiting?: number;
@@ -1966,6 +1968,8 @@ export type ArchivedSession = {
   listed: boolean;
   archived_at_unix_ms: number;
   reason: string | null;
+  /** The root carries the operator's ★ (PRD revisit-group B15). */
+  starred?: boolean;
   /** The root first. */
   members: ArchivedMember[];
 };

@@ -99,7 +99,7 @@ export type CloseSubtree = {
 };
 
 /** Where a task stands, in the order its project's section draws it (`TaskState`, B7). */
-export type TaskState = "needs_you" | "blocked" | "working" | "waiting" | "done" | "resting" | "cleanup";
+export type TaskState = "needs_you" | "blocked" | "working" | "waiting" | "done" | "revisit" | "resting" | "cleanup";
 
 /** One task: a lineage root and every descendant on any device (`tasks::Card`, B8-B10). */
 export type TaskCardScope = {

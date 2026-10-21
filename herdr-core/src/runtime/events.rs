@@ -1497,6 +1497,8 @@ pub(super) enum Event {
     PaneInputSubmitted(PaneTargetPayload),
     PaneInputSent(PaneTargetPayload),
     ResolveSession(PaneTargetPayload),
+    RevisitStar(PaneTargetPayload),
+    RevisitDone(PaneTargetPayload),
     DeliverLettersNow(PaneTargetPayload),
     PaneVisit(PaneTargetPayload),
     AgentWake(AgentWakePayload),
@@ -1756,6 +1758,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "pane_input_submitted" => decode!(PaneTargetPayload, PaneInputSubmitted),
         "pane_input_sent" => decode!(PaneTargetPayload, PaneInputSent),
         "resolve_session" => decode!(PaneTargetPayload, ResolveSession),
+        "revisit_star" => decode!(PaneTargetPayload, RevisitStar),
+        "revisit_done" => decode!(PaneTargetPayload, RevisitDone),
         "deliver_letters_now" => decode!(PaneTargetPayload, DeliverLettersNow),
         "pane_visit" => decode!(PaneTargetPayload, PaneVisit),
         "agent_wake" => decode!(AgentWakePayload, AgentWake),
@@ -2099,6 +2103,8 @@ impl Runtime {
                 &payload.pane_id,
                 crate::agent_state::sessions::ResolveSource::Operator,
             ),
+            Event::RevisitStar(payload) => self.star_session(&payload.pane_id),
+            Event::RevisitDone(payload) => self.finish_revisit(&payload.pane_id),
             Event::PaneInputSent(payload) => {
                 self.note_delivery_key(&payload.pane_id, "phone");
                 false
@@ -4196,6 +4202,7 @@ impl Runtime {
                         .and_then(RightPanelSection::parse)
                         .unwrap_or(current.right_panel_section),
                     resolved_sessions: current.resolved_sessions,
+                    revisit_sessions: current.revisit_sessions,
                     session_resolution_inputs: current.session_resolution_inputs,
                     session_collapsed_checkout_ids: current.session_collapsed_checkout_ids,
                     session_open_folds: current.session_open_folds,

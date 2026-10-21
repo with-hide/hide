@@ -20,7 +20,7 @@
   "kit_component_id": ["cli", "claude_code_hook", "codex_hook", "coordination_retirement"],
   "kit_component_state": ["installed", "outdated", "not_installed", "removed", "failed", "absent", "off"],
   "kit_feature": ["skill", "guidance", "letters", "bell", "memory", "spawn_guard", "herdr_integration", "sleep", "fork", "start", "titles"],
-  "task_state": ["needs_you", "blocked", "working", "waiting", "done", "resting", "cleanup"],
+  "task_state": ["needs_you", "blocked", "working", "waiting", "done", "revisit", "resting", "cleanup"],
   "backlog_phase": ["waiting", "creating", "created", "failed"],
   "backlog_failure": ["not_installed", "not_logged_in", "no_github_remote", "network_or_rate_limit", "queue_full", "unconfirmed", "repository_changed", "unavailable", "refused"],
   "link_file_state": ["present", "missing", "unknown"],

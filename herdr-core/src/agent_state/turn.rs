@@ -903,7 +903,8 @@ pub mod push {
                 "needs_you" => Self::NeedsYou,
                 "done" => Self::Done,
                 "working" => Self::Working,
-                "seen" => Self::Seen,
+                // 다시 볼 것 is read: it clears a phone notice as 확인함 does.
+                "seen" | "revisit" => Self::Seen,
                 _ => Self::Other,
             }
         }

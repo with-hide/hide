@@ -4,7 +4,7 @@ import {
   FileTextIcon, FolderOpenIcon, GitForkIcon, HashIcon, MaximizeIcon,
   MinimizeIcon, MoonIcon, NetworkIcon, PanelBottomIcon, PanelLeftIcon,
   PanelRightIcon, PanelTopIcon, PencilIcon, PinIcon, PlayIcon, PlusIcon,
-  RefreshCwIcon, SearchIcon, SquareDashedIcon, SquareTerminalIcon, Trash2Icon,
+  RefreshCwIcon, SearchIcon, SquareDashedIcon, SquareTerminalIcon, StarIcon, StarOffIcon, Trash2Icon,
   XIcon,
 } from "lucide-react";
 
@@ -16,7 +16,7 @@ export const menuSymbols = {
   id: HashIcon, zoom: MaximizeIcon, unzoom: MinimizeIcon, sleep: MoonIcon, relations: NetworkIcon,
   split_down: PanelBottomIcon, split_left: PanelLeftIcon, split_right: PanelRightIcon, split_up: PanelTopIcon,
   rename: PencilIcon, pin: PinIcon, resume: PlayIcon, add: PlusIcon, refresh: RefreshCwIcon,
-  find: SearchIcon, select: SquareDashedIcon, terminal: SquareTerminalIcon, delete: Trash2Icon, close: XIcon,
+  find: SearchIcon, select: SquareDashedIcon, star: StarIcon, unstar: StarOffIcon, terminal: SquareTerminalIcon, delete: Trash2Icon, close: XIcon,
 } as const;
 
 export type MenuSymbol = keyof typeof menuSymbols;
