@@ -147,6 +147,8 @@ export type ExplorerClipboard = {
   isDirectory: boolean;
   root: string;
   device: string;
+  /** Copy also wrote the absolute path to the system clipboard for a terminal. */
+  terminalCopy?: boolean;
 };
 
 /** A failure the page itself found - a paste across checkouts, a drop past a cap or one hided refused - drawn in the Explorer's failure line under `path`, a folder. The core's own failures arrive in `explorer_operation`. */

@@ -79,6 +79,17 @@ async function render(rest: SnapshotRest, agents: AgentRow[], focused: string | 
 const heads = (container: HTMLElement) => [...container.querySelectorAll("[data-task-group-head]")].map((head) => head.textContent);
 const rows = (container: HTMLElement) => [...container.querySelectorAll("[data-task-row]")].map((element) => element.getAttribute("data-task-row"));
 
+it.each(["status", "project"] as const)("in %s orders resting tasks by their displayed request age, with unknown times last", async (view) => {
+  const agents = [row("old", { last_prompt_at_unix_ms: 100, changed_at_unix_ms: 900 }), row("unknown", { last_prompt_at_unix_ms: null }), row("recent", { last_prompt_at_unix_ms: 300, changed_at_unix_ms: 1 }), row("middle", { last_prompt_at_unix_ms: 200 })];
+  const cards = agents.map((agent) => card(agent.pane_id, "resting", "hide-main"));
+  const { container } = await render(snapshot(agents, cards, view), agents);
+  await act(async () => container.querySelector<HTMLButtonElement>("[data-task-fold] > button")!.click());
+  expect(rows(container)).toEqual(["recent", "middle", "old", "unknown"]);
+  const refreshed = agents.map((agent) => ({ ...agent, changed_at_unix_ms: agent.pane_id === "old" ? 10_000 : 1 }));
+  await act(async () => useShellStore.setState({ agents: refreshed, rest: snapshot(refreshed, cards, view) }));
+  expect(rows(container)).toEqual(["recent", "middle", "old", "unknown"]);
+});
+
 it("groups the device's tasks as 내 차례 (a block included), 읽을 것, 일하는 중 and 대기, drops empty groups, names each row's project, and folds the resting and cleanup ones (B4, B5, B9; status-marks B32)", async () => {
   const agents = [
     row("ask", { status_code: "question", state: undefined as never }, { group: "needs_you" }),

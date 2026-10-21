@@ -802,6 +802,33 @@ test("section headers stay at the top of the scrolled list, and a row the keyboa
     const row = (await first.boundingBox())!;
     const stuck = (await recent.boundingBox())!;
     expect(row.y).toBeGreaterThanOrEqual(stuck.y + stuck.height - 0.5);
+
+    // Keep the cached paint marker stale while a real core focus change arrives.
+    // The first agent fits in the viewport but is covered by the header.
+    const target = recent.locator("xpath=..").locator("[data-agent-open]").first();
+    await target.evaluate((element) => {
+      const list = element.closest<HTMLElement>("[data-project-list]")!;
+      list.scrollTop += element.getBoundingClientRect().top - list.getBoundingClientRect().top - 4;
+      const headers = [...list.querySelectorAll<HTMLElement>("[data-section-sticky]")];
+      const stale = () => { for (const header of headers) if (header.dataset.stuck !== "false") header.dataset.stuck = "false"; };
+      stale();
+      const observer = new MutationObserver(stale);
+      for (const header of headers) observer.observe(header, { attributes: true, attributeFilter: ["data-stuck"] });
+      // Fixture ends with this page; keep other animation frames and core deltas live.
+      window.addEventListener("pagehide", () => observer.disconnect(), { once: true });
+    });
+    await expect(recent).toHaveAttribute("data-stuck", "false");
+    await expect(target).not.toHaveAttribute("aria-current", "true");
+    const covered = (await target.boundingBox())!;
+    const covering = (await recent.boundingBox())!;
+    const viewport = (await list.boundingBox())!;
+    expect(covered.y).toBeGreaterThanOrEqual(viewport.y);
+    expect(covered.y).toBeLessThan(covering.y + covering.height);
+    expect(covered.y + covered.height).toBeLessThanOrEqual(viewport.y + viewport.height);
+    await target.dispatchEvent("click");
+    await expect(target).toHaveAttribute("aria-current", "true");
+    expect((await target.boundingBox())!.y).toBeGreaterThanOrEqual((await recent.boundingBox())!.y + (await recent.boundingBox())!.height - 0.5);
+    await expect(recent).toHaveAttribute("data-stuck", "false");
   } finally {
     await daemon?.stop();
     await herdr.stop();

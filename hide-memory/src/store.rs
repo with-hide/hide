@@ -2230,6 +2230,19 @@ impl MemoryStore {
             .collect()
     }
 
+    /// Whether an outdated sibling still protects this shared attempt branch.
+    pub fn branch_has_outdated_promotion(
+        &self,
+        project_id: &str,
+        branch: &str,
+    ) -> Result<bool, MemoryError> {
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM card_promotions p JOIN memory_items i ON i.id=p.item_id WHERE i.project_id=?1 AND p.branch=?2 AND p.state='outdated')",
+            params![project_id, branch],
+            |row| row.get(0),
+        )?)
+    }
+
     /// The promotions still waiting on an agent or a pull request, in every
     /// Project on `device`, with the Project's root.
     pub fn open_promotions(
@@ -2263,20 +2276,21 @@ impl MemoryStore {
         Ok(open)
     }
 
-    /// The branches whose pull request ended, merged or closed, in every
+    /// The branches whose pull request ended or whose attempt is outdated, in every
     /// Project on `device`, once each with the Project, its root and the
     /// coordination ids of the agents that attempted it. A batch's cards
     /// share one branch, and a card's row keeps its last attempt, so this is
     /// what an upgrade or a restart finds to retire.
+    /// The final flag requires preserving every commit when any card is outdated.
     #[allow(clippy::type_complexity)]
-    pub fn settled_branches(
+    pub fn retirement_branches(
         &self,
         device: &str,
-    ) -> Result<Vec<(String, String, String, Vec<String>)>, MemoryError> {
+    ) -> Result<Vec<(String, String, String, Vec<String>, bool)>, MemoryError> {
         let mut statement = self.connection.prepare(
-            "SELECT pr.id,pr.root,p.branch,p.agent_id FROM card_promotions p \
+            "SELECT pr.id,pr.root,p.branch,p.agent_id,p.state='outdated' FROM card_promotions p \
              JOIN memory_items i ON i.id=p.item_id JOIN projects pr ON pr.id=i.project_id \
-             WHERE pr.device_id=?1 AND p.state IN ('merged','closed_unmerged') \
+             WHERE pr.device_id=?1 AND p.state IN ('merged','closed_unmerged','outdated') \
              AND p.branch IS NOT NULL ORDER BY pr.id,p.branch,p.agent_id",
         )?;
         let rows = statement
@@ -2286,20 +2300,28 @@ impl MemoryStore {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
+                    row.get::<_, bool>(4)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut branches: Vec<(String, String, String, Vec<String>)> = Vec::new();
-        for (project, root, branch, agent) in rows {
+        let mut branches: Vec<(String, String, String, Vec<String>, bool)> = Vec::new();
+        for (project, root, branch, agent, empty_only) in rows {
             match branches.last_mut() {
                 Some(last) if last.0 == project && last.2 == branch => {
+                    last.4 |= empty_only;
                     if let Some(agent) = agent
                         && !last.3.contains(&agent)
                     {
                         last.3.push(agent);
                     }
                 }
-                _ => branches.push((project, root, branch, agent.into_iter().collect())),
+                _ => branches.push((
+                    project,
+                    root,
+                    branch,
+                    agent.into_iter().collect(),
+                    empty_only,
+                )),
             }
         }
         Ok(branches)
@@ -7275,7 +7297,7 @@ PRAGMA user_version=14;"#,
     /// B19: every branch whose pull request ended is found once, whatever
     /// the card's current revision, and an attempt still open or failed is not.
     #[test]
-    fn settled_branches_lists_each_ended_branch_once() {
+    fn retirement_branches_lists_each_ended_branch_once() {
         let (temp, mut store, project) = store();
         for (index, text) in ["Run the linter first", "Name the tests by result"]
             .into_iter()
@@ -7309,12 +7331,13 @@ PRAGMA user_version=14;"#,
             .set_promotion(&project, 1, &row(PromotionState::Merged, Some("b-1")))
             .unwrap();
         assert_eq!(
-            store.settled_branches("local").unwrap(),
+            store.retirement_branches("local").unwrap(),
             [(
                 project.clone(),
                 temp.path().to_string_lossy().into_owned(),
                 "b-1".to_owned(),
-                vec!["agent-7".to_owned()]
+                vec!["agent-7".to_owned()],
+                false
             )]
         );
         // A batch's cards share one branch; an open or failed attempt, or one
@@ -7326,13 +7349,13 @@ PRAGMA user_version=14;"#,
                 &row(PromotionState::ClosedUnmerged, Some("b-1")),
             )
             .unwrap();
-        assert_eq!(store.settled_branches("local").unwrap().len(), 1);
+        assert_eq!(store.retirement_branches("local").unwrap().len(), 1);
         for state in [PromotionState::PrOpen, PromotionState::Failed] {
             store
                 .set_promotion(&project, 2, &row(state, Some("b-2")))
                 .unwrap();
             assert_eq!(
-                store.settled_branches("local").unwrap().len(),
+                store.retirement_branches("local").unwrap().len(),
                 1,
                 "{state:?}"
             );
@@ -7340,8 +7363,45 @@ PRAGMA user_version=14;"#,
         store
             .set_promotion(&project, 2, &row(PromotionState::Merged, None))
             .unwrap();
-        assert_eq!(store.settled_branches("local").unwrap().len(), 1);
-        assert_eq!(store.settled_branches("elsewhere").unwrap(), []);
+        assert_eq!(store.retirement_branches("local").unwrap().len(), 1);
+        assert_eq!(store.retirement_branches("elsewhere").unwrap(), []);
+        store
+            .set_promotion(&project, 2, &row(PromotionState::Outdated, Some("b-1")))
+            .unwrap();
+        let branches = store.retirement_branches("local").unwrap();
+        assert_eq!(
+            branches.len(),
+            1,
+            "one branch shared by an outdated and merged card"
+        );
+        assert!(
+            branches[0].4,
+            "the outdated card protects the branch's commits"
+        );
+        assert!(
+            store
+                .branch_has_outdated_promotion(&project, "b-1")
+                .unwrap()
+        );
+        assert!(!store.branch_has_outdated_promotion("other", "b-1").unwrap());
+        store
+            .set_promotion(&project, 2, &row(PromotionState::Merged, Some("b-1")))
+            .unwrap();
+        assert!(
+            !store
+                .branch_has_outdated_promotion(&project, "b-1")
+                .unwrap()
+        );
+        store
+            .set_promotion(&project, 2, &row(PromotionState::Outdated, Some("b-1")))
+            .unwrap();
+        drop(store);
+        let store = MemoryStore::open_read_only(&temp.path().join("memory.sqlite3")).unwrap();
+        assert_eq!(
+            store.retirement_branches("local").unwrap(),
+            branches,
+            "restart finds unfinished cleanup"
+        );
     }
 
     #[test]

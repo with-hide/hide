@@ -14,7 +14,7 @@ import { toPage } from "../../desktop/src/main/wirePath";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot, showExplorer, showProjectRow, showTool } from "./wire";
-import { chord } from "./chords";
+import { chord, mod } from "./chords";
 import { dumpOnFailure } from "./failure-dump";
 import { onDisk, quietFor } from "./wait";
 
@@ -99,7 +99,11 @@ type Fixture = {
 };
 
 /** Starts the isolated stack and leaves the Explorer showing `src/main.ts`. */
-async function openCheckout(page: Page, beforeLoad?: (page: Page) => Promise<void>): Promise<Fixture> {
+async function openCheckout(
+  page: Page,
+  beforeLoad?: (page: Page) => Promise<void>,
+  extraFiles: Record<string, string> = {},
+): Promise<Fixture> {
   const herdr = await startHerdr();
   let daemon: Daemon | null = null;
   try {
@@ -107,6 +111,9 @@ async function openCheckout(page: Page, beforeLoad?: (page: Page) => Promise<voi
     fs.mkdirSync(path.join(repoDir, "src"), { recursive: true });
     fs.writeFileSync(path.join(repoDir, "src", "main.ts"), SOURCE);
     fs.writeFileSync(path.join(repoDir, "README.md"), "# repo\n");
+    for (const [name, contents] of Object.entries(extraFiles)) {
+      fs.writeFileSync(path.join(repoDir, name), contents);
+    }
     fs.writeFileSync(
       path.join(repoDir, "notes.md"),
       "# Title\n\n- one\n- two\n\n- [ ] open\n\nsee [text](https://example.com) now\n\n```rust\nfn main() {}\n```\n",
@@ -220,6 +227,40 @@ function close(fixture: Fixture): void {
 }
 
 test.describe.configure({ timeout: 90_000 });
+
+test("Explorer opens HTML as a browser page and keeps source editing explicit", async ({ page }) => {
+  const names = ["리포트 1.html", "report.HTM", "report.xhtml"];
+  const fixture = await openCheckout(page, undefined, Object.fromEntries(names.map((name) => [
+    name, '<!doctype html><meta charset="utf-8"><title>Report</title><h1>리포트</h1>',
+  ])));
+  const { repo, sent, lastSent } = fixture;
+  try {
+    const filesBefore = sent.get("file_open") ?? 0;
+    for (const [index, name] of names.entries()) {
+      const row = page.locator(`[data-explorer-row="${repo}/${name}"]`);
+      if (index === 0) await row.click();
+      else if (index === 1) await row.dblclick();
+      else {
+        await page.locator("[data-explorer-tree]").focus();
+        await page.locator('[data-explorer-tree]').press("ArrowDown");
+        // Move selection to the named file without opening it, then Enter.
+        await expect(page.locator('[data-explorer-tree] [aria-selected="true"]')).toHaveAttribute("data-explorer-row", `${repo}/${name}`);
+        await page.locator("[data-explorer-tree]").press("Enter");
+      }
+      await expect.poll(() => lastSent.get("browser_open")?.url).toBe(new URL(`file://${repo}/${name}`).href);
+      await expect(page.locator('[data-browser-display]').last()).toBeVisible();
+      expect(sent.get("file_open") ?? 0).toBe(filesBefore);
+    }
+    const html = page.locator(`[data-explorer-row="${repo}/${names[0]}"]`);
+    await html.click({ button: "right" });
+    await page.locator('[data-explorer-menu] [data-menu-item="open-source"]').click();
+    await expect(page.locator('[data-editor-codemirror] .cm-content')).toContainText("<h1>리포트</h1>");
+    expect(lastSent.get("file_open")).toMatchObject({ path: `${repo}/${names[0]}`, preview: false });
+    await screenshot(page, "explorer-html-source");
+  } finally {
+    close(fixture);
+  }
+});
 
 test("the Explorer lists a checkout, expands a folder and opens a preview tab", async ({ page }) => {
   const fixture = await openCheckout(page);
@@ -1263,6 +1304,77 @@ test("⌘P opens a file by name and ⌘K switches checkout", { tag: "@platform" 
     await projectRow.click();
     await expect(page.locator("[data-palette-input]")).toHaveCount(0);
     await expect.poll(() => sent.get("focus_checkout")).toBeGreaterThan(focusBefore);
+  } finally {
+    close(fixture);
+  }
+});
+
+test("Explorer files paste paths and images attach to the receiving terminal", { tag: "@platform" }, async ({ page }) => {
+  const fixture = await openCheckout(page);
+  const { herdr, sent } = fixture;
+  try {
+    const folder = path.join(herdr.root, "fixture");
+    const name = "한글 ' $HOME 파일.txt";
+    const file = path.join(folder, name);
+    fs.writeFileSync(file, "original file");
+    fs.writeFileSync(path.join(folder, "drag-image.png"), PNG);
+    const checkout = page.locator("[data-project]", { hasText: "fixture" }).locator("[data-checkout]").first();
+    await checkout.click();
+    await expect(checkout).toHaveAttribute("aria-current", "true");
+    await showExplorer(page);
+    const source = toPage(fs.realpathSync(file));
+    const image = toPage(fs.realpathSync(path.join(folder, "drag-image.png")));
+    await expect(page.locator(`[data-explorer-row="${source}"]`)).toBeVisible();
+    await expect(page.locator(`[data-explorer-row="${image}"]`)).toBeVisible();
+    const [target] = herdr.panes;
+    await expect(page.locator(`[data-pane-view="${target}"]`)).toBeVisible();
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
+    const [log] = herdr.inputLogs;
+    const read = () => fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "";
+    const before = read().length;
+    const dragToTerminal = (from: string) => page.evaluate(({ from, target }) => {
+      const row = document.querySelector(`[data-explorer-row="${from}"]`)!;
+      const pane = document.querySelector(`[data-pane-view="${target}"]`)!;
+      const data = new DataTransfer();
+      row.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: data }));
+      const over = new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: data });
+      pane.dispatchEvent(over);
+      if (!over.defaultPrevented) throw new Error("terminal refused the Explorer drag");
+      pane.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: data }));
+      row.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: data }));
+    }, { from, target });
+    await dragToTerminal(source);
+    await expect.poll(read).toContain(name.replace("$", "\\$"));
+    expect(read().slice(before)).not.toMatch(/[\r\n]/);
+    expect(sent.get("attachment_commit") ?? 0).toBe(0);
+    expect(fs.readFileSync(file, "utf8")).toBe("original file");
+    await dragToTerminal(image);
+    await expect.poll(read).toContain("drag-image.png");
+    await expect.poll(() => sent.get("attachment_commit")).toBe(1);
+    expect(sent.get("path_move") ?? 0).toBe(0);
+    await expect(page.locator(`[data-pane-view="${target}"]`)).toHaveAttribute("data-focused", "true");
+    await expect(page.locator("[data-pane-attachment-refusal]")).toHaveCount(0);
+    expect(fs.readFileSync(path.join(folder, "drag-image.png"))).toEqual(PNG);
+    // Right-click Copy writes a public path; terminal Paste preserves file intent.
+    await page.locator(`[data-explorer-row="${source}"]`).click({ button: "right" });
+    await page.locator('[data-explorer-menu] [data-menu-item="copy"]').click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(source);
+    // Terminal Paste is ⌘V on macOS, Ctrl+Shift+V on Windows and Linux
+    // (UI_BEHAVIOR.md, Keyboard): Ctrl+V remains input to the program there.
+    await page.locator(`[data-pane-view="${target}"] .xterm-helper-textarea`).focus();
+    await page.keyboard.press(mod("KeyV"));
+    await expect.poll(() => read().split(name.replace("$", "\\$")).length - 1).toBe(2);
+    // Keyboard Copy followed by native Paste uses the same image attachment route.
+    await page.locator("[data-explorer-tree]").focus();
+    // Selection starts empty; the image sorts before the Korean text file.
+    await page.keyboard.press("ArrowDown");
+    await expect(page.locator(`[data-explorer-row="${image}"]`)).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("ControlOrMeta+c");
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(image);
+    await page.locator(`[data-pane-view="${target}"] .xterm-helper-textarea`).focus();
+    await page.keyboard.press(mod("KeyV"));
+    await expect.poll(() => read().split("drag-image.png").length - 1).toBe(2);
+    await screenshot(page, "explorer-terminal-drop");
   } finally {
     close(fixture);
   }

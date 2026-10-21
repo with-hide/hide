@@ -459,7 +459,6 @@ pub fn allowed(arguments: &[&str]) -> bool {
         || is_conditional_read(arguments)
         || is_pull_digest_read(arguments)
         || is_checks_verdict_read(arguments)
-        || is_checks_summary_read(arguments)
         || matches!(
             arguments,
             ["pr", "list", "--state", "open", "--limit", PULL_REQUEST_LIMIT, "--json", OPEN_CHECK_FIELDS]
@@ -516,7 +515,8 @@ pub fn allowed(arguments: &[&str]) -> bool {
                 || arguments[3].starts_with("query=query HideIssueDependencies {")
                 || is_issue_attempt_query(arguments[3])
                 || is_pr_facts_query(arguments[3])
-                || is_pr_card_query(arguments[3])))
+                || is_pr_card_query(arguments[3])
+                || is_checkout_checks_query(arguments[3])))
 }
 
 /// A conditional read prints the response headers and no body: only the
@@ -605,49 +605,46 @@ pub fn checks_verdict_arguments(
 /// with many jobs is not cut at GitHub's default thirty.
 pub const CHECK_RUNS_TAIL: &str = "check-runs?per_page=100";
 
-/// A bounded exact-SHA detail: never infer success from a truncated list.
-/// URLs are GitHub's returned values, not routes synthesized by the client.
-pub fn checks_summary_arguments(
-    repository: &str,
-    commit: &str,
-    list: ChecksList,
-) -> Option<Vec<String>> {
-    let mut arguments = checks_verdict_arguments(repository, commit, list)?;
-    arguments[2] = match list {
-        ChecksList::CheckRuns => format!(
-            "{{state:(({CHECK_RUNS_VERDICT_JQ}) as $state | if $state == \"failed\" then $state elif .total_count > (.check_runs|length) then \"unknown\" else $state end),url:([.check_runs[]|.details_url // .html_url|select(type==\"string\" and length>0)][0] // null)}}"
-        ),
-        ChecksList::Status => format!(
-            "{{state:({COMMIT_STATUS_VERDICT_JQ}),url:([.statuses[]|.target_url|select(type==\"string\" and length>0)][0] // null)}}"
-        ),
-    };
-    Some(arguments)
+/// A fixed read of the header's exact commit identities, never an arbitrary query.
+pub fn checkout_checks_query(repository: &str, commits: &[String]) -> Option<String> {
+    if !is_repository(repository)
+        || commits.is_empty()
+        || commits.len() > crate::worktrees::CHECKOUT_COMMIT_LIMIT
+        || commits.iter().any(|sha| !is_commit(sha))
+        || commits
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != commits.len()
+    {
+        return None;
+    }
+    let (owner, name) = repository.split_once('/')?;
+    let objects = commits.iter().enumerate().map(|(index, sha)| format!(
+        "c{index}: object(oid:\"{sha}\") {{ ... on Commit {{ oid url statusCheckRollup {{ state }} }} }}"
+    )).collect::<Vec<_>>().join(" ");
+    Some(format!(
+        "query=query HideCheckoutChecks {{ repository(owner:\"{owner}\",name:\"{name}\") {{ {objects} }} }}"
+    ))
 }
 
-fn is_checks_summary_read(arguments: &[&str]) -> bool {
-    let ["api", "--jq", _, endpoint] = arguments else {
-        return false;
-    };
-    let Some((repository, rest)) = endpoint
-        .strip_prefix("repos/")
-        .and_then(|path| path.split_once("/commits/"))
+fn is_checkout_checks_query(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("query=query HideCheckoutChecks { repository(owner:\"")
     else {
         return false;
     };
-    let Some((commit, tail)) = rest.split_once('/') else {
+    let Some((owner, rest)) = rest.split_once("\",name:\"") else {
         return false;
     };
-    let list = match tail {
-        CHECK_RUNS_TAIL => ChecksList::CheckRuns,
-        "status" => ChecksList::Status,
-        _ => return false,
+    let Some((name, rest)) = rest.split_once('"') else {
+        return false;
     };
-    checks_summary_arguments(repository, commit, list).is_some_and(|expected| {
-        expected
-            .iter()
-            .map(String::as_str)
-            .eq(arguments.iter().copied())
-    })
+    let commits: Vec<String> = rest
+        .split("object(oid:\"")
+        .skip(1)
+        .filter_map(|part| part.split_once('"').map(|(sha, _)| sha.to_owned()))
+        .collect();
+    checkout_checks_query(&format!("{owner}/{name}"), &commits).is_some_and(|query| query == value)
 }
 
 fn is_checks_verdict_read(arguments: &[&str]) -> bool {
@@ -815,21 +812,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn header_checks_allow_only_fixed_exact_sha_reads_with_real_detail_fields() {
-        for list in [ChecksList::CheckRuns, ChecksList::Status] {
-            let args = checks_summary_arguments("example/fixture", &"a".repeat(40), list).unwrap();
-            assert!(allowed(
-                &args.iter().map(String::as_str).collect::<Vec<_>>()
-            ));
-            let mut changed = args.clone();
-            changed[2] = ".body".into();
-            assert!(!allowed(
-                &changed.iter().map(String::as_str).collect::<Vec<_>>()
-            ));
-        }
-        assert!(
-            checks_summary_arguments("example/fixture", "main", ChecksList::CheckRuns).is_none()
-        );
+    fn header_checks_allow_only_five_fixed_exact_sha_reads() {
+        let commits: Vec<_> = (0..5).map(|i| format!("{i:040x}")).collect();
+        let query = checkout_checks_query("example/fixture", &commits).unwrap();
+        assert!(allowed(&["api", "graphql", "-f", &query]));
+        assert!(!allowed(&[
+            "api",
+            "graphql",
+            "-f",
+            &query.replace("oid url", "oid body url")
+        ]));
+        assert!(checkout_checks_query("example/fixture", &[]).is_none());
+        assert!(checkout_checks_query("example/fixture", &vec!["a".repeat(40); 6]).is_none());
+        assert!(checkout_checks_query("example/fixture", &["main".into()]).is_none());
+        assert!(checkout_checks_query("example/fixture", &vec!["a".repeat(40); 2]).is_none());
+        assert!(checkout_checks_query("../fixture", &commits).is_none());
     }
 
     /// Detail paging may vary only its repository, issue and bounded cursor;

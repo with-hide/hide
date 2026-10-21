@@ -66,6 +66,7 @@ import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
 import { useUiStore } from "./ui";
 import { useOverviewCount } from "./Overview";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
+import { observeStuckHeaders } from "./sidebarSticky";
 import { SidebarLensSwitch, TaskLens } from "./TaskLens";
 
 function herdrRowLabel(state: string | null, t: TFunction<"translation">): string | null {
@@ -627,29 +628,7 @@ function useStuckHeaders(list: { current: HTMLUListElement | null }, loaded: boo
   useEffect(() => {
     const element = list.current;
     if (!element) return undefined;
-    const mark = () => {
-      const top = element.getBoundingClientRect().top;
-      for (const header of element.querySelectorAll<HTMLElement>("[data-section-sticky]")) {
-        const section = header.parentElement!.getBoundingClientRect();
-        header.dataset.stuck = String(section.top < top - 0.5 && section.bottom > top);
-      }
-    };
-    const sizes = new ResizeObserver(mark);
-    const watch = () => {
-      sizes.disconnect();
-      sizes.observe(element);
-      for (const child of element.children) sizes.observe(child);
-      mark();
-    };
-    watch();
-    const rows = new MutationObserver(watch);
-    rows.observe(element, { childList: true });
-    element.addEventListener("scroll", mark, { passive: true });
-    return () => {
-      element.removeEventListener("scroll", mark);
-      rows.disconnect();
-      sizes.disconnect();
-    };
+    return observeStuckHeaders(element);
   }, [list, loaded]);
 }
 
