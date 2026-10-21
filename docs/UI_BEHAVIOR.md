@@ -834,7 +834,13 @@ An empty Project says no cards yet and when sessions are analyzed.
 
 ## Terminal image attachment boundary
 
-Web owner: `web/src/attachments.ts`, `web/src/PaneView.tsx`. Core owner: `herdr-core/src/runtime/attachments.rs`; device staging `hide-node/src/ssh/attachments.rs`.
+Web owner: `web/src/attachments.ts`, `web/src/PaneView.tsx`, `web/src/explorerDrag.ts`, `web/src/terminals.ts`. Core owner: `herdr-core/src/runtime/attachments.rs`; device staging `hide-node/src/ssh/attachments.rs`.
+
+Dragging an Explorer file onto a terminal focuses that pane and inserts the original absolute path as quoted text, without submitting it.
+Image files instead read through the checkout's existing bounded file-bytes stream and enter the same binary attachment flow as an external image drop, retaining their original format and filename.
+One Explorer image read is admitted at a time, capped at 20 MiB, and a reconnection during that read discards the result.
+Folders and files from another device show the forbidden drop cursor and insert nothing; moving files inside Explorer keeps its existing behavior.
+Image acceptance and display remain the receiving program's responsibility, as for other terminal attachments.
 
 Dropping local file URLs into a visible terminal focuses that receiving pane and starts one attachment intent through the existing ordered writer.
 Paste captures PNG or TIFF clipboard images at the same ingress; ordinary text and keys keep their existing terminal behavior.
@@ -1319,7 +1325,11 @@ A clipboard that refuses the write goes to the diagnostic log, and nothing else 
 Collapse All changes only the tree's expansion, which the next press on a folder restores.
 
 Cut, Copy, Paste and Duplicate work on one item, the selected row or the row the menu opened on.
-Cut and Copy (⌘X and ⌘C, Ctrl+X and Ctrl+C on Windows and Linux) put the item in the Explorer's own clipboard, which holds one item and names the checkout and device it came from; they never touch the system clipboard, so a text field's paste is unchanged.
+Cut and Copy (⌘X and ⌘C, Ctrl+X and Ctrl+C on Windows and Linux) put the item in the Explorer's own clipboard, which holds one item and names the checkout and device it came from.
+Copy of a file also writes its absolute path to the system clipboard, so another text field or app can paste that path.
+Pasting it into a terminal in this window inserts a quoted path, or uses binary attachment ingress for an image, just as dragging that file does.
+That file treatment applies only while the system text still matches this window's copied file; ordinary copied text and the explicit Copy Path and Copy Relative Path commands retain plain-text paste.
+Cut and folder Copy remain internal file operations, and a terminal paste never moves or duplicates the original file.
 A cut item is drawn faded until it is pasted.
 Paste (⌘V, Ctrl+V) puts the item in the selected folder, in the folder of the selected file, or at the root when nothing is selected; the menu's Paste on a folder row pastes into that folder, on a file row into its folder.
 The folder a paste lands in opens, and the new item is selected.

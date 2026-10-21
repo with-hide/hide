@@ -23,7 +23,10 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, type IDisposable, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { submitFiles } from "./attachments";
+import { submitExplorerImage, submitFiles } from "./attachments";
+import { copiedExplorerFile, isImageDrag, terminalPathText, type ExplorerDrag } from "./explorerDrag";
+import { useUiStore } from "./ui";
+import { localDeviceId } from "./snapshot";
 import { keySystem } from "./host";
 import { terminalKey } from "./keys";
 import { noteWriteComplete, probeEnabled } from "./probe";
@@ -590,6 +593,32 @@ export function pasteText(paneId: string, text: string) {
   instances.get(paneId)?.term.paste(text);
 }
 
+/** Explorer Copy retains file identity only while the system text still matches. */
+export function pasteExplorerCopy(paneId: string, text: string): boolean {
+  const held = useUiStore.getState().explorerClipboard;
+  const item = copiedExplorerFile(held, text);
+  if (!item) {
+    if (held?.terminalCopy) useUiStore.getState().setExplorerClipboard({ ...held, terminalCopy: false });
+    return false;
+  }
+  pasteExplorerFile(paneId, item);
+  return true;
+}
+
+/** Drag and Copy share one path/image decision and the existing terminal ingress. */
+export function pasteExplorerFile(paneId: string, item: ExplorerDrag): void {
+  const state = useShellStore.getState();
+  if (item.device !== (remoteTargetOfPane(state.rest, paneId) ?? localDeviceId(state.rest))) {
+    state.setAttachmentRefusal({ pane_id: paneId, reason: "source_device" });
+    return;
+  }
+  if (isImageDrag(item)) void submitExplorerImage(paneId, item, bracketedPaste(paneId));
+  else {
+    try { pasteText(paneId, terminalPathText(item.path)); }
+    catch { state.setAttachmentRefusal({ pane_id: paneId, reason: "invalid_request_id" }); }
+  }
+}
+
 /**
  * Puts the pane's selection on the clipboard, for the menu's Copy and the
  * copy chord alike; a refused write is a diagnostic and the answer is false,
@@ -628,7 +657,7 @@ export async function pasteClipboard(paneId: string, where: string): Promise<voi
       return void submitFiles(paneId, [new File([image], `clipboard.${type.slice("image/".length)}`, { type })], true, bracketedPaste(paneId));
     }
     const text = await navigator.clipboard.readText();
-    if (text) pasteText(paneId, text);
+    if (text && !pasteExplorerCopy(paneId, text)) pasteText(paneId, text);
   } catch {
     noteDiagnostic(`${where} paste: clipboard read refused`);
   }

@@ -3,7 +3,7 @@ import { ChevronRightIcon, ChevronsDownUpIcon, FilePlusIcon, FolderPlusIcon, Loa
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { isHtmlFile } from "./browserViews";
-import { holdShellDrag } from "./shellDrag";
+import { beginExplorerDrag, explorerDrag } from "./explorerDrag";
 import { EntryPointMenu } from "./components/entry-menu";
 import { FileMark } from "./components/file-mark";
 import { Badge } from "./components/ui/badge";
@@ -384,6 +384,8 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
 
   const copyPathOf = (path: string, relative: boolean) => {
     if (!rootPath) return;
+    const held = useUiStore.getState().explorerClipboard;
+    if (held?.terminalCopy) setClipboard({ ...held, terminalCopy: false });
     actions.copyText(relative ? relativeTo(path, rootPath) : path, relative ? "relative path" : "path");
     setMenu(null);
   };
@@ -395,7 +397,9 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
     setMenu(null);
     if (!row || !rootPath) return;
     setNotice(null);
-    setClipboard({ mode, path: row.path, isDirectory: row.isDirectory, root: rootPath, device });
+    const terminalCopy = mode === "copy" && !row.isDirectory;
+    setClipboard({ mode, path: row.path, isDirectory: row.isDirectory, root: rootPath, device, terminalCopy });
+    if (terminalCopy) actions.copyText(row.path, "Explorer file");
   };
 
   const pasteInto = (folder: string) => {
@@ -485,7 +489,10 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
     event.preventDefault();
     const row = rowForPath(rows, selection);
     if (mode === "paste") pasteInto(pasteTarget(row, rootPath));
-    else takeItem(row, mode);
+    else {
+      takeItem(row, mode);
+      if (mode === "copy" && row && !row.isDirectory) event.clipboardData.setData("text/plain", row.path);
+    }
   };
 
   // Files dragged in from the file manager land in the folder under the
@@ -493,14 +500,14 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
   // tree is `moveEntry`'s and never reaches these.
   const osDrag = (folder: string | null) => ({
     onDragOver: (event: React.DragEvent<HTMLElement>) => {
-      if (dragPath.current || !carriesOsFiles(event.dataTransfer)) return;
+      if (explorerDrag.current || !carriesOsFiles(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = folder === null ? "none" : "copy";
       setOsTarget(folder);
     },
     onDrop: (event: React.DragEvent<HTMLElement>) => {
-      if (dragPath.current || !carriesOsFiles(event.dataTransfer)) return;
+      if (explorerDrag.current || !carriesOsFiles(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
       setOsTarget(null);
@@ -744,7 +751,7 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
                   cut={clipboard?.mode === "cut" && clipboard.root === rootPath && clipboard.path === row.path}
                   osOver={osTarget === row.path}
                   osDrag={osDrag(row.isDirectory ? row.path : null)}
-                  onDragStart={(source) => beginDrag(row.path, source)}
+                  onDragStart={(source) => beginExplorerDrag({ path: row.path, directory: row.isDirectory, device, root: rootPath! }, source)}
                   onDrop={(from) => {
                     if (from && from !== row.path && !row.path.startsWith(`${from}/`)) actions.moveEntry(from, row.path);
                   }}
@@ -798,29 +805,6 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
         </p>
       ) : null}
     </div>
-  );
-}
-
-/** The one path a drag is carrying; a ref because a drag never re-renders. */
-const dragPath = { current: null as string | null };
-
-/**
- * Starts carrying `path` from its row. The drag marks the root while it runs,
- * so a page it crosses gives way to its still and never takes the drop. The
- * mark and the carried path go at the drag's end, heard on the row itself: a
- * row the list drew away mid-drag still gets its `dragend`, which never
- * reaches the window or React.
- */
-function beginDrag(path: string, source: HTMLElement): void {
-  dragPath.current = path;
-  const release = holdShellDrag("file");
-  source.addEventListener(
-    "dragend",
-    () => {
-      dragPath.current = null;
-      release();
-    },
-    { once: true },
   );
 }
 
@@ -1026,12 +1010,12 @@ function ExplorerRowView({
       onContextMenu={onContextMenu}
       onDragStart={(event) => {
         event.stopPropagation();
-        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.effectAllowed = "copyMove";
         event.dataTransfer.setData("text/plain", row.path);
         onDragStart(event.currentTarget);
       }}
       onDragOver={(event) => {
-        if (!dragPath.current) {
+        if (!explorerDrag.current) {
           osDrag.onDragOver(event);
           return;
         }
@@ -1042,14 +1026,14 @@ function ExplorerRowView({
       }}
       onDragLeave={() => setOver(false)}
       onDrop={(event) => {
-        if (!dragPath.current && carriesOsFiles(event.dataTransfer)) {
+        if (!explorerDrag.current && carriesOsFiles(event.dataTransfer)) {
           osDrag.onDrop(event);
           return;
         }
         event.preventDefault();
         setOver(false);
-        const from = dragPath.current ?? event.dataTransfer.getData("text/plain");
-        dragPath.current = null;
+        const from = explorerDrag.current?.path ?? event.dataTransfer.getData("text/plain");
+        explorerDrag.current = null;
         onDrop(from || null);
       }}
       onDragEnd={() => setOver(false)}

@@ -6,6 +6,8 @@
 
 import type { TFunction } from "i18next";
 import { dropRefusalText } from "./explorerDropText";
+import type { ExplorerDrag } from "./explorerDrag";
+import { requestFileBytesWithTotal } from "./fileBytes";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
@@ -93,6 +95,8 @@ export function refusalText(reason: string, t: TFunction<"translation">): string
       return t("panes.attachment.forwardFailed");
     case "no_pane":
       return t("panes.attachment.noPane");
+    case "source_device":
+      return t("panes.attachment.sourceDevice");
     default:
       return t("panes.attachment.refused");
   }
@@ -192,6 +196,36 @@ export async function submitFiles(paneId: string, files: File[], clipboard: bool
     return;
   }
   submitAttachments(paneId, await readInputs(selected), clipboard, bracketedPaste);
+}
+
+/** One bounded Explorer image read at a time, before the existing staging cap. */
+let readingExplorerImage = false;
+
+export async function submitExplorerImage(paneId: string, item: ExplorerDrag, bracketedPaste: boolean): Promise<void> {
+  const state = useShellStore.getState();
+  if (readingExplorerImage) {
+    state.setAttachmentRefusal({ pane_id: paneId, reason: "staging_full" });
+    return;
+  }
+  readingExplorerImage = true;
+  const generation = state.viewGeneration;
+  try {
+    const file = await requestFileBytesWithTotal(item.path, { length: MAX_FILE_BYTES + 1 }, { device: item.device, root: item.root });
+    if (file.total > MAX_FILE_BYTES) {
+      state.setAttachmentRefusal({ pane_id: paneId, reason: "too_large" });
+      return;
+    }
+    if (useShellStore.getState().viewGeneration !== generation) {
+      state.setAttachmentRefusal({ pane_id: paneId, reason: "no_pane" });
+      return;
+    }
+    if (file.bytes.byteLength !== file.total) throw new Error("incomplete_read");
+    submitAttachments(paneId, [{ name: safeName(item.path.slice(item.path.lastIndexOf("/") + 1)), bytes: file.bytes }], false, bracketedPaste);
+  } catch {
+    state.setAttachmentRefusal({ pane_id: paneId, reason: "stage_failed" });
+  } finally {
+    readingExplorerImage = false;
+  }
 }
 
 /** The caps a batch of files fails, read from their sizes alone. */

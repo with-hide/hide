@@ -10,9 +10,11 @@ import {
   refusalText,
   safeName,
   submitAttachments,
+  submitExplorerImage,
   type AttachmentInput,
 } from "./attachments";
 import { useShellStore } from "./store";
+import { configureFileBytes, receiveBytes } from "./fileBytes";
 
 function capture() {
   const events: { kind: string; payload: Record<string, unknown> }[] = [];
@@ -28,6 +30,15 @@ function decodeFrame(bytes: Uint8Array): { header: Record<string, unknown>; body
   const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, false);
   const header = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + length)));
   return { header, body: bytes.subarray(4 + length) };
+}
+
+function answerRead(request: Record<string, unknown>, total: number, body = new Uint8Array([9])): void {
+  const header = new TextEncoder().encode(JSON.stringify({ type: "file_bytes", request_id: request.request_id, path: request.path, offset: 0, total, eof: true }));
+  const frame = new Uint8Array(4 + header.length + body.length);
+  new DataView(frame.buffer).setUint32(0, header.length, false);
+  frame.set(header, 4);
+  frame.set(body, 4 + header.length);
+  receiveBytes(frame.buffer);
 }
 
 let en: TFunction<"translation">;
@@ -67,6 +78,46 @@ describe("attachment upload", () => {
     const stage = events[0]!.payload.request_id as string;
     expect(stage).toBe(events[1]!.payload.request_id);
     expect(events[0]!.payload).toMatchObject({ clipboard: true });
+  });
+
+  it("reads Explorer images from their owning checkout within the attachment byte cap", async () => {
+    const { events, binaries } = capture();
+    const reads: Record<string, unknown>[] = [];
+    configureFileBytes((event) => { reads.push(event.payload); });
+    const item = { path: "/project/shot.png", directory: false, device: "device-1", root: "/project" };
+    const accepted = submitExplorerImage("pane-1", item, true);
+    expect(reads[0]).toMatchObject({ path: item.path, device_id: "device-1", root: "/project", length: 20 * 1024 * 1024 + 1 });
+    answerRead(reads[0]!, 1);
+    await accepted;
+    expect(events[0]?.payload).toMatchObject({ name: "shot.png", clipboard: false });
+    expect(events[1]?.payload).toMatchObject({ pane_id: "pane-1", bracketed_paste: true });
+    expect(decodeFrame(binaries[0]!).body).toEqual(new Uint8Array([9]));
+    const count = events.length;
+    const oversized = submitExplorerImage("pane-1", item, false);
+    answerRead(reads[1]!, 20 * 1024 * 1024 + 1);
+    await oversized;
+    expect(events).toHaveLength(count);
+    expect(useShellStore.getState().attachmentRefusal?.reason).toBe("too_large");
+  });
+
+  it("refuses concurrent Explorer reads and discards an image when the connection generation changes", async () => {
+    const { events } = capture();
+    const reads: Record<string, unknown>[] = [];
+    configureFileBytes((event) => { reads.push(event.payload); });
+    const item = { path: "/project/shot.png", directory: false, device: "device-1", root: "/project" };
+    const pending = submitExplorerImage("pane-1", item, false);
+    await submitExplorerImage("pane-2", item, false);
+    expect(reads).toHaveLength(1);
+    expect(useShellStore.getState().attachmentRefusal).toEqual({ pane_id: "pane-2", reason: "staging_full" });
+    useShellStore.setState({ viewGeneration: useShellStore.getState().viewGeneration + 1 });
+    answerRead(reads[0]!, 1);
+    await pending;
+    expect(events).toHaveLength(0);
+    expect(useShellStore.getState().attachmentRefusal).toEqual({ pane_id: "pane-1", reason: "no_pane" });
+    const retry = submitExplorerImage("pane-1", item, false);
+    answerRead(reads[1]!, 1);
+    await retry;
+    expect(events.at(-1)?.kind).toBe("attachment_commit");
   });
 
   it("refuses a batch past the daemon's caps before uploading it", () => {
