@@ -130,7 +130,7 @@ pub(crate) fn confirm_fork_started(
         );
     }
 }
-const PANE_BUSY: &str = "agent_pane_busy";
+pub(crate) const PANE_BUSY: &str = "agent_pane_busy";
 const NAME_TAKEN: &str = "agent_name_taken";
 const AGENT_NOT_FOUND: &str = "agent_not_found";
 /// The fewest bytes of an unfinished line a supported system's terminal
@@ -415,6 +415,7 @@ fn start_within(
         },
     };
     let mut settled = false;
+    let mut busy = 0_u32;
     loop {
         shell.wait(started, deadline)?;
         check().map_err(StartError::NotStarted)?;
@@ -425,12 +426,32 @@ fn start_within(
             params.clone(),
             answer_timeout,
         ) {
-            // A prompt hook can take the terminal between the read and the
-            // start. Herdr refused before typing anything, so the same start
-            // is sent again once the shell holds the terminal, inside the
-            // same deadline.
-            Err(ApiError::Remote { code, .. })
-                if code == PANE_BUSY && Instant::now() < deadline => {}
+            // Herdr refused before typing anything: something besides the
+            // shell runs in the pane. A prompt hook can take the terminal
+            // between the read and the start, and on Windows Herdr refuses a
+            // shell with any child process while `pane.process_info` names
+            // the shell alone unless the child is an agent, so the read above
+            // cannot see this state end. Herdr's next answer is the only
+            // reading of it: the same start is asked again one poll later,
+            // inside the same deadline, never at once (Windows CI,
+            // 2026-10-22: 5,613 refusals in 30 s held the spawn lock and
+            // slowed every other Herdr call).
+            Err(ApiError::Remote { code, message }) if code == PANE_BUSY => {
+                busy += 1;
+                let now = Instant::now();
+                if now >= deadline {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "agent_start",
+                        "kind": "pane_busy.timeout",
+                        "request": correlation_id,
+                        "pane_id": pane_id,
+                        "refusals": busy,
+                        "waited_ms": started.elapsed().as_millis() as u64,
+                    }));
+                    return Err(StartError::Herdr(ApiError::Remote { code, message }));
+                }
+                thread::sleep(POLL_INTERVAL.min(deadline - now));
+            }
             // Herdr has not yet forgotten the agent this start replaces. It
             // refused before typing anything, so the same start is sent again
             // until it has, inside the name wait.
@@ -966,6 +987,39 @@ mod tests {
                 "pane.process_info",
                 "agent.start"
             ]
+        );
+    }
+
+    /// On Windows Herdr refuses a shell with any child process, while
+    /// `pane.process_info` names the shell alone unless that child is an
+    /// agent: the read keeps saying ready and only Herdr's answer can change.
+    /// The start asks once a poll until its deadline, then gives Herdr's
+    /// refusal, and never asks in a burst.
+    #[test]
+    fn a_pane_herdr_keeps_refusing_as_busy_is_asked_once_a_poll_until_the_deadline() {
+        let herdr =
+            FakeHerdr::start_with_errors("agent-start-busy-held", |method, _| match method {
+                "pane.process_info" => Ok(process_info(SHELL, &[SHELL])),
+                "agent.start" => Err((
+                    PANE_BUSY.into(),
+                    "agent target pane w1:p1 is not an available shell".into(),
+                )),
+                other => panic!("unexpected {other}"),
+            });
+        let wait = Duration::from_millis(600);
+        let Err(StartError::Herdr(ApiError::Remote { code, .. })) = start(&herdr, wait) else {
+            panic!("a pane Herdr never frees is not a start");
+        };
+        assert_eq!(code, PANE_BUSY);
+        let asked = herdr
+            .methods()
+            .iter()
+            .filter(|method| *method == "agent.start")
+            .count();
+        let polls = (wait.as_millis() / POLL_INTERVAL.as_millis()) as usize;
+        assert!(
+            (2..=polls + 1).contains(&asked),
+            "agent.start asked {asked} times"
         );
     }
 
