@@ -1956,6 +1956,7 @@ impl Runtime {
         // so the remote server's own focus is the read signal.
         let mut read_changed = false;
         if let Ok(session) = fetched.as_mut() {
+            self.overlay_remote_pane_moves(target_id, session);
             // A node that dials this core sleeps as the core's own machine
             // does (PRD core-host-node-remote-core B13).
             self.stamp_node_agent_sleep(target_id, &mut session.agents);
@@ -2465,6 +2466,9 @@ impl Runtime {
         // Sleeping agents Herdr no longer lists are drawn from their records
         // before anything below reads the agents (PRD agent-sleep B10).
         let mut fetched = fetched;
+        if let Ok(payload) = fetched.as_mut() {
+            self.overlay_pane_moves(payload);
+        }
         let mut inline_paths = None;
         if let Ok(payload) = fetched.as_mut() {
             self.label_overlay.apply(payload);

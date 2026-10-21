@@ -514,6 +514,17 @@ impl Runtime {
             );
             return true;
         }
+        if let AgentLayoutAction::Move { tab_id, .. } | AgentLayoutAction::Split { tab_id, .. } =
+            &payload.action
+            && self.pane_move_holds_tab(tab_id)
+        {
+            self.set_error(
+                "pane.move_pending",
+                "Check the pending pane move before rearranging this tab",
+                false,
+            );
+            return true;
+        }
         let request = match &payload.action {
             AgentLayoutAction::Split { request_id, .. } => Some(format!("agent:{request_id}")),
             _ => None,

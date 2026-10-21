@@ -429,3 +429,15 @@ pub(crate) use subscription::{
     fetch_workspace_active_tab, log_sync_failure, stop_subscription,
 };
 use sync_reads::{SyncRead, SyncReadAnswer, SyncReader};
+
+/// A worker's authoritative read uses the same device projection as the replica.
+pub(crate) fn project_remote_read(
+    value: Value,
+    device: &str,
+) -> Result<(SessionSnapshotPayload, RemoteSessionSnapshot), SessionFetchError> {
+    let state = wire::snapshot_response(value)?;
+    let payload = state.project();
+    let (remote, _) =
+        replica::SessionReplica::project_remote_state(&state, device, payload.clone())?;
+    Ok((payload, remote))
+}

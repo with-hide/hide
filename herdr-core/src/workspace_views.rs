@@ -21,8 +21,7 @@
 //! version or one whose migration fails, is moved aside, never overwritten,
 //! and the defaults load.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -184,6 +183,8 @@ pub struct WorkspaceView {
     pub agent_layout: crate::agent_layout::Layout,
     /// Named collections are additive: the original tree remains ungrouped.
     pub agent_groups: crate::agent_groups::Groups,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(crate) pane_moves: std::collections::BTreeMap<String, crate::runtime::pane_move::Intent>,
     pub(crate) agent_starts:
         std::collections::BTreeMap<String, crate::runtime::group_starts::StartIntent>,
     /// The operator's comments on this checkout's Views (PRD
@@ -225,6 +226,8 @@ struct StoredLane {
     #[serde(default)]
     agent_starts: std::collections::BTreeMap<String, crate::runtime::group_starts::StartIntent>,
     #[serde(default)]
+    pane_moves: std::collections::BTreeMap<String, crate::runtime::pane_move::Intent>,
+    #[serde(default)]
     feedback: crate::view_feedback::Feedback,
 }
 
@@ -248,6 +251,7 @@ impl StoredLane {
             agent_layout: self.agent_layout,
             agent_groups: self.agent_groups,
             agent_starts: self.agent_starts,
+            pane_moves: self.pane_moves,
             feedback: self.feedback,
         }
     }
@@ -322,6 +326,7 @@ impl StoredColumns {
             agent_layout: self.agent_layout,
             agent_groups: Default::default(),
             agent_starts: Default::default(),
+            pane_moves: Default::default(),
             feedback: Default::default(),
         }
     }
@@ -390,6 +395,7 @@ impl WorkspaceView {
             agent_layout: crate::agent_layout::Layout::default(),
             agent_groups: Default::default(),
             agent_starts: Default::default(),
+            pane_moves: Default::default(),
             feedback: Default::default(),
         }
     }
@@ -739,21 +745,13 @@ pub fn save(path: &Path, views: &WorkspaceViews) -> Result<(), String> {
     };
     let bytes = serde_json::to_vec_pretty(&stored)
         .map_err(|_| "Workspace view state could not be encoded".to_owned())?;
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(".next");
-    let temporary = path.with_file_name(name);
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&temporary)
-        .map_err(|_| "Workspace view state temporary file could not be opened".to_owned())?;
-    output
-        .write_all(&bytes)
-        .and_then(|_| output.sync_all())
-        .map_err(|_| "Workspace view state temporary file could not be written".to_owned())?;
-    fs::rename(&temporary, path)
-        .map_err(|_| "Workspace view state file could not be replaced".to_owned())
+    hide_platform::fs::atomic::write_file_durable(
+        path,
+        &bytes,
+        hide_platform::fs::atomic::DurableAccess::Private,
+    )
+    .map(|_| ())
+    .map_err(|error| format!("Workspace view state could not be saved durably: {error}"))
 }
 
 #[cfg(test)]

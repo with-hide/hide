@@ -1851,7 +1851,10 @@ impl Runtime {
         let mut requests = Vec::new();
         let mut settled = Vec::new();
         for agent in &self.snapshot.navigator.agents {
-            if !agent.delegated || crate::agent_hooks::is_remote_pane(&agent.pane_id) {
+            if !agent.delegated
+                || crate::agent_hooks::is_remote_pane(&agent.pane_id)
+                || self.manually_placed_pane(&agent.pane_id)
+            {
                 continue;
             }
             let Some(parent_pane_id) = agent.lineage_parent_pane_id.as_deref() else {
