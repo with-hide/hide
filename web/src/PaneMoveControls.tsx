@@ -71,7 +71,7 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
   const connection = useShellStore(s => s.connection);
   const operations = useShellStore(s => s.rest?.status?.async_operations);
   const trackedOperation = operations?.find(op => op.kind === "pane.move" && op.id === request?.request_id);
-  const unresolvedOperation = operations?.find(op => op.kind === "pane.move" && op.phase !== "completed" && op.phase !== "failed" && checkout.tabs.some(tab => op.scope_id === tab.id || op.related_scope_ids?.includes(tab.id)));
+  const unresolvedOperation = operations?.find(op => op.kind === "pane.move" && op.phase !== "completed" && op.phase !== "failed" && checkout.tabs.some(tab => tab.id !== null && (op.scope_id === tab.id || op.related_scope_ids?.includes(tab.id))));
   // Published reservations survive a scope change or renderer reconnect.
   const operation = !request || trackedOperation?.phase === "completed" || trackedOperation?.phase === "failed" && unresolvedOperation?.phase === "unknown" ? unresolvedOperation : trackedOperation;
   const held = request !== null && (!trackedOperation || (trackedOperation.phase !== "completed" && trackedOperation.phase !== "failed"));
