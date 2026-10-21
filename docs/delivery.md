@@ -684,13 +684,15 @@ A spawn by a pane that conducts an open mission is that mission's worker:
 
 - Before `hide mission start` it is refused `mission_not_started`.
 - A worker aimed at a machine other than the one the mission's project is on is refused `mission_machine_refused`.
+- With worker candidates in Settings › Conductor, a worker that is none of them is refused `mission_candidate_refused`: its agent, its model where a candidate fixes one or the CLI's default where it names none, and its effort where a candidate fixes one must match; an automatic effort is the Conductor's.
 - The ledger counts the mission's live workers when it reserves the spawn, under the same lock, and refuses one past the mission's cap `mission_cap_reached` with the cap; the Conductor is not counted.
-  A reserved spawn that has no child ten minutes later stopped partway and is no longer counted, so a retry under a new intent can start.
+  A reserved spawn that has made no step for ten minutes and has no child stopped partway and is no longer counted, so a retry under a new intent can start; asked again later under its own intent, it takes a place under the cap again or is refused `mission_cap_reached`, so it never runs one worker past the cap.
 - While the record cannot be read nothing counts the workers, and the guide tells the Conductor that answers `mission_unavailable` to start none and tell the operator.
 
 Pull request changes wake the Conductor: when a node's pull request gets a new head commit, a review asking for changes, or is merged, the core records a wake on the mission and `hide:conductor` sends the Conductor one request naming the change and `hide mission show`.
 A wake stays in the record until its letter is in the Conductor's inbox: a failed send, a restart and a mission whose Conductor is gone keep it, and the next GitHub read or `hide mission take` sends it.
-Its intent is `mission:<id>:<node>:<number>:<event>:<head>:<n>`, where `n` counts the mission's wakes, so a wake sent again after a restart is the same letter while the same change asked for twice is two; a cancelled mission wakes no one, and such a change on a mission closed as `done` reopens it.
+Its intent is `mission:<id>:<node>:<number>:<event>:<head>:<n>:<conductor>`, where `n` counts the mission's wakes and `conductor` is the Conductor's registration (its pane when it has none), so a wake sent again after a restart is the same letter, the same change asked for twice is two, and a Conductor that took the mission over gets its own; a cancelled mission wakes no one, and such a change on a mission closed as `done` reopens it.
+A `merge_wait` mission closes as `done` on the GitHub read that finds every pull request of its stack merged, whether or not its Conductor is there.
 A mission keeps at most 32 unsent wakes, dropping the oldest as `mission.wake_dropped`; one thread sends them, at most 256 at once, so the lock never waits on a delivery.
 A change that would make the saved record larger than a start reads back is refused `mission_full`, as a full book is.
 Deleting a Conductor's session from the archive deletes its missions with it.

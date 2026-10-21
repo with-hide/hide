@@ -396,6 +396,21 @@ pub struct Candidate {
     pub purpose: String,
 }
 
+impl Candidate {
+    /// Whether a worker started as `kind` with `launch` is this candidate
+    /// (D-34): the same agent, its model where the candidate fixes one or
+    /// the CLI's default where it names none, and its effort only where the
+    /// candidate fixes one; an automatic effort is the Conductor's choice.
+    pub(crate) fn admits(&self, kind: &str, launch: &hide_agent_adapter::LaunchChoice) -> bool {
+        hide_agent_adapter::canonical_kind(&self.agent) == hide_agent_adapter::canonical_kind(kind)
+            && self.model == launch.model
+            && self
+                .effort
+                .as_ref()
+                .is_none_or(|effort| launch.effort.as_ref() == Some(effort))
+    }
+}
+
 impl ConductorSettings {
     /// Checks a value before it is kept: a cap in range, known agents, and
     /// each model and effort one the agent takes.
@@ -1093,6 +1108,9 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_text_invalid" | "mission_plan_invalid" => {
             "Check the command's text and JSON and retry"
+        }
+        "mission_candidate_refused" => {
+            "Start the worker as one of the operator's candidates: run hide mission settings for the agents, models and efforts it allows"
         }
         "mission_cap_reached" => {
             "Wait for a worker to finish (end its registration with hide agent end <id>) and retry; a start that failed stops counting after 10 minutes"

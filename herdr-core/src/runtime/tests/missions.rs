@@ -169,7 +169,7 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
     // A pane that conducts nothing spawns as it always did.
     assert!(
         runtime
-            .mission_spawn_admission(&conductor, None)
+            .mission_spawn_admission(&conductor, None, "codex", &Default::default())
             .unwrap()
             .is_none()
     );
@@ -193,7 +193,7 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
         "a worker runs only on the machine the project is on (D-41)"
     );
     let admission = runtime
-        .mission_spawn_admission(&conductor, None)
+        .mission_spawn_admission(&conductor, None, "codex", &Default::default())
         .unwrap()
         .expect("a running mission's spawn is one of its workers");
     assert_eq!(
@@ -211,7 +211,7 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
     .unwrap();
     assert!(
         runtime
-            .mission_spawn_admission(&conductor, None)
+            .mission_spawn_admission(&conductor, None, "codex", &Default::default())
             .unwrap()
             .is_none()
     );
@@ -426,7 +426,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     );
     assert_eq!(
         runtime.note_mission_pulls(node, &pushed),
-        vec!["mission:mission-1:fix:7:new_head:b2:1"]
+        vec!["mission:mission-1:fix:7:new_head:b2:1:sender"]
     );
     assert!(runtime.note_mission_pulls(node, &pushed).is_empty());
 
@@ -441,7 +441,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     );
     assert_eq!(
         runtime.note_mission_pulls(node, &reviewed),
-        vec!["mission:mission-1:fix:7:changes_requested:b2:2"]
+        vec!["mission:mission-1:fix:7:changes_requested:b2:2:sender"]
     );
 
     // A merge of a done mission's pull request reopens it with the wake.
@@ -460,7 +460,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     let merged = github(vec![pull(7, "b2", PullRequestBadge::Merged, None)], false);
     assert_eq!(
         runtime.note_mission_pulls(node, &merged),
-        vec!["mission:mission-1:fix:7:merged:-:3"]
+        vec!["mission:mission-1:fix:7:merged:-:3:sender"]
     );
     assert_eq!(
         runtime.missions.book.get("mission-1").unwrap().status,
@@ -532,6 +532,20 @@ fn a_missions_wake_waits_in_the_record_until_its_letter_is_delivered() {
 
     runtime.mission_wakes_sent(&[("mission-1".to_owned(), 1)]);
     assert_eq!(waiting(&runtime), [2]);
+
+    // A Conductor that takes the mission over is the recipient its wakes
+    // name, so none is taken for a letter its predecessor was sent.
+    runtime.delivery_observations.remove("sender");
+    command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "take", "mission": "mission-1"}),
+    )
+    .unwrap();
+    runtime.note_mission_pulls(node, &open);
+    let after = runtime.note_mission_pulls(node, &asked);
+    assert_eq!(after.len(), 1);
+    assert!(after[0].ends_with(":recipient"), "{after:?}");
 }
 
 #[test]
@@ -693,4 +707,202 @@ fn a_mission_book_that_cannot_be_read_is_never_written_over() {
         drop(guard.missions.store.take());
     }
     assert_eq!(std::fs::read(&path).unwrap(), b"not a mission book");
+}
+
+/// A device's catalog never answers an empty model list as if it read one:
+/// each agent that takes a model says its models are read on the core's
+/// machine only, and an unknown or disconnected machine is refused
+/// (PRD software-factory-conductor B10).
+#[test]
+fn a_devices_catalog_says_why_it_has_no_models_rather_than_listing_none() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let node = crate::node::TEST_NODE;
+    assert_eq!(
+        runtime.agent_catalog(node, Some("mini")).unwrap_err(),
+        "machine_unknown"
+    );
+    let remote = |state: &str| crate::model::RemoteStatusSnapshot {
+        target_id: "mini".into(),
+        state: state.into(),
+        message: None,
+        herdr_version: None,
+        session: None,
+        files: crate::model::RemoteFileListSnapshot::idle(),
+        catalog: Default::default(),
+        unreachable_since_unix_ms: None,
+    };
+    runtime.snapshot.status.remote.push(remote("disconnected"));
+    assert_eq!(
+        runtime.agent_catalog(node, Some("mini")).unwrap_err(),
+        "machine_unavailable"
+    );
+    runtime.snapshot.status.remote[0] = remote("connected");
+    let catalog = runtime.agent_catalog(node, Some("mini")).unwrap();
+    assert_eq!(catalog["machine"], "mini");
+    let items = catalog["items"].as_array().unwrap();
+    assert!(!items.is_empty());
+    for item in items {
+        if item["takes_model"] == true {
+            assert!(item["models"].is_null(), "{item}");
+            assert_eq!(
+                item["models_unavailable_reason"], "models_read_on_this_machine_only",
+                "{item}"
+            );
+        }
+    }
+    assert!(items.iter().any(|item| item["takes_model"] == true));
+}
+
+/// A mission left waiting on the operator's merges closes itself once its
+/// whole stack is merged, with no Conductor there (B41); a stack still part
+/// open keeps it waiting.
+#[test]
+fn a_merge_wait_mission_closes_when_its_whole_stack_is_merged() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Stack"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "api", "title": "API", "kind": "change", "delivery": "pr"},
+            {"key": "screen", "title": "Screen", "kind": "change", "delivery": "pr", "depends_on": ["api"]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    for (node, pr) in [("api", 7), ("screen", 8)] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": node, "patch": {"pr": pr, "status": "done"}}),
+        )
+        .unwrap();
+    }
+    let node = crate::node::TEST_NODE;
+    let open = |badge_api, badge_screen| {
+        github(
+            vec![
+                pull(7, "a1", badge_api, None),
+                pull(8, "b1", badge_screen, None),
+            ],
+            false,
+        )
+    };
+    runtime.note_mission_pulls(node, &open(PullRequestBadge::Open, PullRequestBadge::Open));
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    // The Conductor is gone.
+    runtime.delivery_observations.remove("sender");
+    let status = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().status;
+
+    runtime.note_mission_pulls(
+        node,
+        &open(PullRequestBadge::Merged, PullRequestBadge::Open),
+    );
+    assert_eq!(status(&runtime), MissionStatus::MergeWait);
+    runtime.note_mission_pulls(
+        node,
+        &open(PullRequestBadge::Merged, PullRequestBadge::Merged),
+    );
+    assert_eq!(status(&runtime), MissionStatus::Done);
+    assert!(
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .closed_at_unix_ms
+            .is_some()
+    );
+}
+
+/// With worker candidates set, a Conductor's worker outside them is refused
+/// by name (B8, D-34): another agent, another model than the one a candidate
+/// fixes or a model where it keeps the CLI's default, another effort than a
+/// fixed one. An automatic effort is the Conductor's to choose.
+#[test]
+fn a_conductors_worker_outside_the_candidates_is_refused() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let launch = |model: Option<&str>, effort: Option<&str>| hide_agent_adapter::LaunchChoice {
+        model: model.map(str::to_owned),
+        effort: effort.map(str::to_owned),
+    };
+    let admit = |runtime: &Runtime, kind: &str, choice: hide_agent_adapter::LaunchChoice| {
+        runtime
+            .mission_spawn_admission(&conductor, None, kind, &choice)
+            .map(|admission| admission.is_some())
+    };
+    // No candidates: any agent the machine has.
+    assert_eq!(admit(&runtime, "codex", launch(None, None)), Ok(true));
+
+    runtime.snapshot.ui_state.conductor_settings.candidates = vec![
+        crate::missions::Candidate {
+            agent: "claude".into(),
+            model: None,
+            effort: None,
+            purpose: "changes".into(),
+        },
+        crate::missions::Candidate {
+            agent: "codex".into(),
+            model: Some("gpt-x".into()),
+            effort: Some("high".into()),
+            purpose: "review".into(),
+        },
+    ];
+    let refused = Err("mission_candidate_refused".to_owned());
+    assert_eq!(admit(&runtime, "claude", launch(None, None)), Ok(true));
+    assert_eq!(
+        admit(&runtime, "claude", launch(None, Some("max"))),
+        Ok(true),
+        "an automatic effort is free"
+    );
+    assert_eq!(
+        admit(&runtime, "claude", launch(Some("other"), None)),
+        refused
+    );
+    assert_eq!(
+        admit(&runtime, "codex", launch(Some("gpt-x"), Some("high"))),
+        Ok(true)
+    );
+    assert_eq!(
+        admit(&runtime, "codex", launch(Some("gpt-x"), None)),
+        refused
+    );
+    assert_eq!(
+        admit(&runtime, "codex", launch(None, Some("high"))),
+        refused
+    );
+    assert_eq!(admit(&runtime, "opencode", launch(None, None)), refused);
+    // The spawn command itself is refused, before the ledger reserves it.
+    runtime
+        .snapshot
+        .ui_state
+        .conductor_settings
+        .candidates
+        .truncate(1);
+    assert_eq!(
+        prepare_spawn(&mut runtime, &conductor, None).unwrap_err(),
+        "mission_candidate_refused"
+    );
 }

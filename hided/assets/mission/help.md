@@ -32,6 +32,7 @@ Running a command again changes nothing more, so after a timeout read `hide miss
 
 - Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope and the worker candidates.
 - Run `hide agent catalog` for the agents installed here, their models, their efforts and their weekly usage.
+  A model list Hide could not read comes with `models_unavailable_reason` instead of models (a device's models are read on the core's machine only); start such an agent with the CLI's default or a model the operator named.
 - Run `gh auth status` and note the account; the plan names it (`GitHub: <account> (gh)`), and approving the plan approves that account.
   Check the account can do what the scope needs: push and open pull requests for `pr`, and merge as well for `merge`; `gh api repos/<owner>/<repo> --jq .permissions` answers it (`push` for `pr`, `push` and `maintain` or `admin`, or a merge the branch rules allow, for `merge`).
   If `gh` is not signed in or lacks a permission, ask the operator now and do no GitHub work.
@@ -75,6 +76,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   A candidate with a fixed effort keeps it; with none, choose the effort per node and mark it `effort_auto`.
   Send no effort to an agent that takes none (`hide agent catalog` lists `efforts`).
   If no candidate can run, say so in the plan.
+  Hide refuses a worker that is none of the candidates (`mission_candidate_refused`): another agent, a model other than the one a candidate fixes (or any model where it keeps the CLI's default), or an effort other than a fixed one.
 - Declare the `issues` and `paths` a node touches: the plan's answer lists `overlaps`, the other missions of this project on the same issue or files.
 - Show the plan in the conversation: the nodes and their kinds, dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, the cap, the scope (up to ready pull requests, or through the merge), the GitHub account, and any overlap.
   The operator's changes in conversation change this mission only; the settings stay as they are.
@@ -137,7 +139,7 @@ When every node reached the scope, report in conversation and close: `hide missi
 - What the operator has to do.
 - For each node, the evidence it is done (CI, review, check output, screenshot).
 
-A `pr`-scope mission that leaves a stack waiting for the operator's merge closes `--as merge_wait` after the report and stays open quietly; when the operator merges the lower pull request, move the one above, check it, and close `--as done` when the stack is merged.
+A `pr`-scope mission that leaves a stack waiting for the operator's merge closes `--as merge_wait` after the report and stays open quietly; when the operator merges the lower pull request, move the one above and check it; once every pull request of the stack is merged Hide closes the mission as done itself, with or without you there.
 A further instruction to a done mission, or a change to one of its pull requests, opens it again (`hide mission reopen`).
 
 ## 8. Taking over

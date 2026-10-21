@@ -146,16 +146,37 @@ pub(crate) struct MissionRuntime {
     rewake: bool,
 }
 
-/// The letter intent of one recorded wake: the same wake re-sent after a
-/// restart is the same letter (engineering #11), and two wakes are two.
-fn wake_intent(mission: &str, wake: &PendingWake) -> String {
+/// Every pull request the mission's live nodes made is merged, as GitHub
+/// last answered; a mission with none has no stack to wait on.
+fn stack_merged(mission: &Mission) -> bool {
+    let mut pulls = mission
+        .nodes
+        .iter()
+        .filter(|node| node.status != NodeStatus::Dropped && node.pr.is_some())
+        .peekable();
+    pulls.peek().is_some()
+        && pulls.all(|node| node.pr_seen.as_ref().is_some_and(|seen| seen.merged))
+}
+
+/// The letter intent of one recorded wake to the mission's Conductor now:
+/// the same wake re-sent after a restart is the same letter (engineering
+/// #11), two wakes are two, and a Conductor that took the mission over gets
+/// its own letter rather than the one its predecessor was sent, since one
+/// intent reaches one recipient.
+fn wake_intent(mission: &Mission, wake: &PendingWake) -> String {
+    let conductor = &mission.conductor;
     format!(
-        "mission:{mission}:{}:{}:{}:{}:{}",
+        "mission:{}:{}:{}:{}:{}:{}:{}",
+        mission.id,
         wake.node,
         wake.pr,
         wake.event.as_str(),
         wake.head.as_deref().unwrap_or("-"),
-        wake.seq
+        wake.seq,
+        conductor
+            .agent_id
+            .as_deref()
+            .unwrap_or(&conductor.actor.pane_id)
     )
 }
 
@@ -676,14 +697,17 @@ impl Runtime {
             .is_some_and(|observation| observation.actor.same_identity(actor))
     }
 
-    /// The admission of a spawn `actor` asks for (B4, B11, B12): none when
-    /// it conducts no open mission, a refusal while its plan is not approved
-    /// or when the worker would run on another machine than the project's,
+    /// The admission of a spawn `actor` asks for (B4, B8, B11, B12): none
+    /// when it conducts no open mission, a refusal while its plan is not
+    /// approved, when the worker would run on another machine than the
+    /// project's, or when it is none of the operator's worker candidates,
     /// and otherwise the mission whose cap the ledger checks.
     pub(crate) fn mission_spawn_admission(
         &self,
         actor: &Actor,
         machine: Option<&str>,
+        kind: &str,
+        launch: &hide_agent_adapter::LaunchChoice,
     ) -> Result<Option<MissionAdmission>, String> {
         let Some(mission) = self.missions.book.conducted_open(actor) else {
             return Ok(None);
@@ -694,6 +718,14 @@ impl Runtime {
         let worker_machine = machine.unwrap_or(actor.device_id.as_str());
         if worker_machine != mission.device_id {
             return Err("mission_machine_refused".into());
+        }
+        let candidates = &self.snapshot.ui_state.conductor_settings.candidates;
+        if !candidates.is_empty()
+            && !candidates
+                .iter()
+                .any(|candidate| candidate.admits(kind, launch))
+        {
+            return Err("mission_candidate_refused".into());
         }
         Ok(Some(MissionAdmission {
             mission: mission.id.clone(),
@@ -826,6 +858,19 @@ impl Runtime {
             for (node_index, seen) in seen_updates {
                 mission.nodes[node_index].pr_seen = Some(seen);
             }
+            // A mission waiting on the operator's merges is done once every
+            // pull request of its stack is merged, whether or not a Conductor
+            // is there to say so (B41).
+            if mission.status == MissionStatus::MergeWait && stack_merged(mission) {
+                mission.status = MissionStatus::Done;
+                mission.closed_at_unix_ms = Some(now);
+                mission.updated_at_unix_ms = now;
+                mission.decision = None;
+                mission.delay = None;
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.closed_by_merge", "mission": mission.id,
+                }));
+            }
             if events.is_empty() {
                 continue;
             }
@@ -841,7 +886,7 @@ impl Runtime {
                     event,
                     head,
                 };
-                recorded.push(wake_intent(&mission.id, &wake));
+                recorded.push(wake_intent(mission, &wake));
                 mission.wakes.push(wake);
             }
             if mission.wakes.len() > PENDING_WAKE_LIMIT {
@@ -885,7 +930,7 @@ impl Runtime {
                 continue;
             };
             for wake in &mission.wakes {
-                let intent = wake_intent(&mission.id, wake);
+                let intent = wake_intent(mission, wake);
                 if tried.contains(&intent) {
                     continue;
                 }

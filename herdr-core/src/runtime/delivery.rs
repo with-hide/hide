@@ -964,11 +964,15 @@ impl Runtime {
         if let Command::Agents {
             command:
                 crate::coordination::Command::Spawn {
-                    machine, mission, ..
+                    machine,
+                    mission,
+                    kind,
+                    launch,
+                    ..
                 },
         } = &mut command
         {
-            *mission = self.mission_spawn_admission(&actor, machine.as_deref())?;
+            *mission = self.mission_spawn_admission(&actor, machine.as_deref(), kind, launch)?;
         }
         // Only the pane's own session proves its composer was submitted, so a
         // stray `hide inbox --hook` from a tool in the pane clears no draft.

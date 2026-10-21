@@ -877,6 +877,21 @@ pub(crate) fn apply(
             if task.as_ref().is_some_and(|task| task.kind.home().is_none()) {
                 return Err("task_kind_unknown".into());
             }
+            // A mission's start asked again after it stopped holding its place
+            // takes one again under the cap, or waits, so a start that comes
+            // back late never runs one worker past it (engineering #15).
+            if let Some(admission) = mission
+                && let Some(record) = ledger
+                    .spawns
+                    .iter()
+                    .find(|record| &record.parent == parent && &record.intent == intent)
+                && record.child.is_none()
+                && !record.completed
+                && now.saturating_sub(record.reserved_at_unix_ms) >= MISSION_RESERVATION_HOLD_MS
+                && mission_workers(ledger, &admission.mission, now) >= usize::from(admission.cap)
+            {
+                return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
+            }
             if let Some(record) = ledger
                 .spawns
                 .iter_mut()
@@ -903,6 +918,9 @@ pub(crate) fn apply(
                 }
                 if record.task.is_none() {
                     record.task.clone_from(task);
+                }
+                if record.mission.is_some() && record.child.is_none() && !record.completed {
+                    record.reserved_at_unix_ms = now;
                 }
                 return Ok(json!(record));
             }
@@ -1003,6 +1021,8 @@ pub(crate) fn apply(
                 }
                 record.seed_tab = Some(seed.clone());
             }
+            // A step forward keeps a mission's start holding its place.
+            record.reserved_at_unix_ms = now;
             if path.is_some() {
                 record.path = path.clone()
             };
@@ -1983,6 +2003,16 @@ mod tests {
         assert_eq!(mission_workers(&ledger, "mission-1", later - 1), 1);
         assert_eq!(mission_workers(&ledger, "mission-1", later), 0);
         apply(&mut ledger, &caller, &worker("mission-1:c"), later).unwrap();
+        // The start that stopped holding its place comes back while `c` holds
+        // the one place: it waits rather than run a second worker, and takes
+        // the place again once `c` is gone.
+        assert_eq!(
+            split_refusal(&apply(&mut ledger, &caller, &worker("mission-1:b"), later).unwrap_err()),
+            ("mission_cap_reached", Some("1"))
+        );
+        let gone = later + MISSION_RESERVATION_HOLD_MS;
+        apply(&mut ledger, &caller, &worker("mission-1:b"), gone).unwrap();
+        assert_eq!(mission_workers(&ledger, "mission-1", gone), 1);
     }
     #[test]
     fn a_parent_intent_has_one_durable_child_and_other_parents_have_their_own() {
