@@ -178,7 +178,8 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     .sort((a, b) => a.id.localeCompare(b.id));
   // Centers share the 400-node budget with their representatives. Counts/list stay uncapped.
   const pinned = new Set(options.pinned ?? []);
-  const priority = [...all].sort((a, b) => Number(b.agents.some((row) => pinned.has(row.id))) - Number(a.agents.some((row) => pinned.has(row.id))) || a.id.localeCompare(b.id));
+  const admissionPriority = new Map(all.map((group) => [group.id, Number(group.agents.some((row) => row.id === options.selected)) * 4 + Number(group.agents.some((row) => pinned.has(row.id))) * 2 + Number(group.expanded)]));
+  const priority = [...all].sort((a, b) => admissionPriority.get(b.id)! - admissionPriority.get(a.id)! || a.id.localeCompare(b.id));
   // Admit complete center + access-slot pairs first. A greedy expanded project
   // must not consume the one position another summarized project needs.
   const groups: GraphProject[] = [];

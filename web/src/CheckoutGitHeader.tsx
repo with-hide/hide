@@ -1,4 +1,5 @@
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CircleHelpIcon, CircleMinusIcon, ClockIcon, FileDiffIcon, GitCommitHorizontalIcon, GitCompareArrowsIcon, LoaderCircleIcon, TriangleAlertIcon, XIcon } from "lucide-react";
+import { useRef } from "react";
 import type { Actions } from "./actions";
 import { useElapsed, useRemaining } from "./components/elapsed";
 import { Button } from "./components/ui/button";
@@ -12,7 +13,8 @@ const iconClass = "size-(--size-icon-sm)";
 
 /** Small details reuse the shell's layer and focus-return contract. */
 function Detail({ label, mark, children, className = "", ...attributes }: { label: string; mark: React.ReactNode; children: React.ReactNode; className?: string } & React.HTMLAttributes<HTMLButtonElement>) {
-  return <Popover><Hint label={label}><PopoverTrigger asChild><Button variant="ghost" size="sm" className={`h-(--size-control-sm) min-w-0 gap-xs px-xs text-caption font-normal ${className}`} aria-label={label} {...attributes}>{mark}</Button></PopoverTrigger></Hint><PopoverContent side="bottom" align="end" aria-label={label} className="flex flex-col gap-xs break-words text-caption">{children}</PopoverContent></Popover>;
+  const content = useRef<HTMLDivElement>(null);
+  return <Popover><Hint label={label}><PopoverTrigger asChild><Button variant="ghost" size="sm" className={`h-(--size-control-sm) min-w-0 gap-xs px-xs text-caption font-normal ${className}`} aria-label={label} {...attributes}>{mark}</Button></PopoverTrigger></Hint><PopoverContent ref={content} tabIndex={-1} onOpenAutoFocus={(event) => { event.preventDefault(); content.current?.focus({ preventScroll: true }); }} side="bottom" align="end" aria-label={label} className="flex flex-col gap-xs break-words text-caption">{children}</PopoverContent></Popover>;
 }
 
 /** A missing/failed read is never the clean state; old counts are labelled stale. */

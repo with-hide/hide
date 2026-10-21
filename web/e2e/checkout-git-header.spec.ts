@@ -25,6 +25,8 @@ test("checkout header reads working files with Changes closed, current-SHA statu
     await page.locator("[data-checkout-commit]").click();
     const history = page.locator("[data-commit-history]");
     await expect(history).toBeVisible();
+    await expect(page.locator('[data-slot="popover-content"]')).toBeFocused();
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
     await expect(history.locator("[data-commit-history-item]")).toHaveCount(5);
     const failedRow = history.locator(`[data-commit-history-item="${fixture.sha}"]`);
     await expect(failedRow.locator('[data-commit-ci="failed"]')).toBeVisible();
@@ -36,6 +38,9 @@ test("checkout header reads working files with Changes closed, current-SHA statu
     });
     expect(placement.ciTop).toBeGreaterThanOrEqual(placement.titleBottom);
     expect(placement.ciLeft).toBeGreaterThanOrEqual(placement.timeRight);
+    await page.keyboard.press("Tab");
+    await expect(failedRow.locator('[data-commit-ci="failed"]')).toBeFocused();
+    await expect(page.getByRole("tooltip")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.locator('aside[data-lane="changes"]')).toHaveCount(0);
     fs.writeFileSync(path.join(fixture.root, "tracked.txt"), "edited\n");

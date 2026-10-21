@@ -193,6 +193,21 @@ describe("current sessions in the Overview graph", () => {
     expect(after.agents).toHaveLength(401);
   });
 
+  it("retains a selected project when expanding the last admitted collapsed heading at the cap", () => {
+    const projects = Array.from({ length: 401 }, (_, index) => project(`p${String(index).padStart(3, "0")}`, [agent(`a${index}`)]));
+    const collapsed = overviewGraphModel(projects, undefined, new Set(), null);
+    const target = collapsed.projects.at(-1)!;
+    const selected = target.agents[0]!.id;
+    const expanded = overviewGraphModel(projects, undefined, new Set([target.id]), null);
+    expect(expanded.projects.some((group) => group.id === target.id)).toBe(true);
+    expect(expanded.visible.map((row) => row.id)).toContain(selected);
+    const opened = overviewGraphModel(projects, undefined, new Set([target.id]), null, { focus: "all", includeResting: false, selected });
+    expect(opened.projects.some((group) => group.id === target.id)).toBe(true);
+    expect(opened.visible.map((row) => row.id)).toContain(selected);
+    expect(opened.projects.length + opened.visible.length).toBeLessThanOrEqual(400);
+    expect(opened.agents).toHaveLength(401);
+  });
+
   it("opens the chosen project, then the recent checkout, without using device display labels as identity", () => {
     const a = project("one", [agent("a")]);
     const b = project("two", [agent("b")]);

@@ -21,7 +21,9 @@ At the right, the current HEAD's subject and relative age open a compact history
 Each compact item has its subject on the first line and short SHA and relative time on the second, with the exact local time available on the timestamp.
 Its associated CI result sits at the right of that second line; commits with no CI omit the result.
 The adjacent CI mark describes only that exact SHA, using GitHub's aggregate statusCheckRollup even on main without a PR, and distinguishes passing, pending, failed, none, unknown, unavailable and stale.
-Its trigger opens the same history below itself; each CI result names its read time in its hint and opens only the provider-returned URL validated against that repository and exact commit in the existing Browser View.
+Its trigger opens the same history below itself, with initial focus on the content so no CI hint covers the first item; Tab reaches the CI links and their read-time hints.
+Each CI result opens only the provider-returned URL validated against that repository and exact commit in the existing Browser View.
+An outside click closes the history and keeps the clicked destination's focus; Escape closes it and returns focus to its trigger.
 CI describes committed changes only, and a provider error or unknown aggregate never becomes success.
 Changing device, checkout, connection or HEAD fences old results; the front checkout's file status refreshes independently of the Changes lane and stale data is labelled.
 On narrow widths the relative age disappears before the subject, then the subject contracts to the commit icon, preserving the path, count and trailing tools; details remain keyboard reachable and Escape returns to their triggers.
@@ -921,6 +923,7 @@ One-project scope retains its center and offers All projects to return.
 A collapsed project hides every agent, including the current or previously selected one, retaining only its heading and counts; Collapse all applies this to every project and frames the remaining headings.
 An explicit project expansion or collapse centers that project; background status updates never move the camera.
 An oversized expanded project retains stable-ID representatives and an access slot within the shared 400-node budget.
+Admission prioritizes the selected project, the current project's protected position and expanded projects before collapsed headings, so expanding a heading at the limit retains it.
 Each admitted expanded project reserves an access position for a hidden selected member, and selecting a session whose project is outside that budget opens its project scope with that session selected.
 In an expanded project, the current member has its own protected position, so choosing another member cannot displace it at the graph limit.
 Up to twelve sessions share the first ring; agent circles and labels stay below the project heading, including for one session.
