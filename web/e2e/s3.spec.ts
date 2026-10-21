@@ -107,6 +107,9 @@ async function openCheckout(page: Page, beforeLoad?: (page: Page) => Promise<voi
     fs.mkdirSync(path.join(repoDir, "src"), { recursive: true });
     fs.writeFileSync(path.join(repoDir, "src", "main.ts"), SOURCE);
     fs.writeFileSync(path.join(repoDir, "README.md"), "# repo\n");
+    for (const name of ["리포트 1.html", "report.HTM", "report.xhtml"]) {
+      fs.writeFileSync(path.join(repoDir, name), '<!doctype html><meta charset="utf-8"><title>Report</title><h1>리포트</h1>');
+    }
     fs.writeFileSync(
       path.join(repoDir, "notes.md"),
       "# Title\n\n- one\n- two\n\n- [ ] open\n\nsee [text](https://example.com) now\n\n```rust\nfn main() {}\n```\n",
@@ -220,6 +223,38 @@ function close(fixture: Fixture): void {
 }
 
 test.describe.configure({ timeout: 90_000 });
+
+test("Explorer opens HTML as a browser page and keeps source editing explicit", async ({ page }) => {
+  const fixture = await openCheckout(page);
+  const { repo, sent, lastSent } = fixture;
+  try {
+    const filesBefore = sent.get("file_open") ?? 0;
+    const names = ["리포트 1.html", "report.HTM", "report.xhtml"];
+    for (const [index, name] of names.entries()) {
+      const row = page.locator(`[data-explorer-row="${repo}/${name}"]`);
+      if (index === 0) await row.click();
+      else if (index === 1) await row.dblclick();
+      else {
+        await page.locator("[data-explorer-tree]").focus();
+        await page.locator('[data-explorer-tree]').press("ArrowDown");
+        // Move selection to the named file without opening it, then Enter.
+        await expect(page.locator('[data-explorer-tree] [aria-selected="true"]')).toHaveAttribute("data-explorer-row", `${repo}/${name}`);
+        await page.locator("[data-explorer-tree]").press("Enter");
+      }
+      await expect.poll(() => lastSent.get("browser_open")?.url).toBe(new URL(`file://${repo}/${name}`).href);
+      await expect(page.locator('[data-browser-display]').last()).toBeVisible();
+      expect(sent.get("file_open") ?? 0).toBe(filesBefore);
+    }
+    const html = page.locator(`[data-explorer-row="${repo}/${names[0]}"]`);
+    await html.click({ button: "right" });
+    await page.locator('[data-explorer-menu] [data-menu-item="open-source"]').click();
+    await expect(page.locator('[data-editor-codemirror] .cm-content')).toContainText("<h1>리포트</h1>");
+    expect(lastSent.get("file_open")).toMatchObject({ path: `${repo}/${names[0]}`, preview: false });
+    await screenshot(page, "explorer-html-source");
+  } finally {
+    close(fixture);
+  }
+});
 
 test("the Explorer lists a checkout, expands a folder and opens a preview tab", async ({ page }) => {
   const fixture = await openCheckout(page);

@@ -435,7 +435,7 @@ The new-tab page offers no tools or panes; ⌘P remains the file palette everywh
 
 A web page is a view like a file: it opens in the active area, has a tab, splits, moves, and closes like one, and comes back after a restart at the address it last showed.
 A page with an address carries a globe mark and the page's title, else its host, else a local file's name; its tooltip and accessible name carry `Page`, the title, and the full address.
-It opens from `hide browser open` in a connected Herdr pane or a shell inside a registered checkout, from Open in Browser on an HTML file in the Explorer's menu (listed after Open to the side), from a page that opens a tab (beside that page, which stays in view: in the area next to it, else in a new area to its right), and from the address field.
+It opens from `hide browser open` in a connected Herdr pane or a shell inside a registered checkout, from clicking or pressing Enter on an HTML file in the Explorer or its Open in Browser menu item, from a page that opens a tab (beside that page, which stays in view: in the area next to it, else in a new area to its right), and from the address field.
 A sign-in popup a page opens is a small window of its own above hide, so the sign-in can report back to the page and close; ⌘W closes it.
 A link that would open another app (Slack, Zoom) asks first with the app's name, and opens in that app only on Open.
 On a connected SSH device, the native page uses that device's localhost or consented checkout resources; a route failure appears in the page's existing failure state.
@@ -1299,7 +1299,10 @@ Under the light theme a mark the theme draws differently on a light background t
 The same marks stand beside a file in ⌘P, on a View tab and on a History row.
 A changed file's name takes its status mark's color; a folder's name stays plain and its dot carries the state.
 
-The tree's context menu on a file row is Open to the side (and Open in Browser for an HTML file), a separator, the reveal, a separator, Cut, Copy, Paste (only while the clipboard holds an item) and Duplicate, a separator, Copy Path and Copy Relative Path, a separator, Rename, a separator, Move to Trash.
+Clicking, double-clicking or pressing Enter on an HTML file (`.html`, `.htm` or `.xhtml`, case-insensitive) opens it directly in a Browser View through the same device-scoped file boundary as Open in Browser.
+Other file kinds keep their editor preview and pin behavior.
+The tree's context menu on a file row is Open to the side (and Open in Browser, then Open source for an HTML file), a separator, the reveal, a separator, Cut, Copy, Paste (only while the clipboard holds an item) and Duplicate, a separator, Copy Path and Copy Relative Path, a separator, Rename, a separator, Move to Trash.
+Open source opens HTML as an ordinary editor tab, and Open to the side keeps its editor behavior.
 A folder row has New File and New Folder in place of the opens.
 Each item shows the chord that does the same, as the operator has it bound, at its end.
 The item set the menu offers is a presentation decision a test can check directly (`explorerMenuItems` in `web/src/explorer.ts`), not something the platform decides implicitly.
@@ -1403,7 +1406,7 @@ Switching Workspaces replaces the decoration root, and no per-row, hover, select
 
 Core owner: `herdr-core/src/runtime/editor.rs` (`place_editor_tab`, `promote_editor_tab`), `EditorTabSnapshot.preview`. The web Workspace's one-preview-per-View-area model is the same idea applied per area; see [Web Workspace](#web-workspace).
 
-A single click on an Explorer file or a History row opens it in the checkout's one preview tab (VS Code's model): the strip draws the title in italic, and the next single click replaces the tab in the same slot instead of adding one.
+A single click on an Explorer file other than HTML, or a History row, opens it in the checkout's one preview tab (VS Code's model): the strip draws the title in italic, and the next single click replaces the tab in the same slot instead of adding one.
 The core owns the preview flag and decides replacement and promotion; the shell only says what the click meant.
 Promotion happens in the same slot, on four triggers: a double-click on the Explorer row, a double-click on the tab title, the first edit, and Keep Open; a drag to a new slot promotes as well.
 A dirty tab is never replaced: the core promotes it where it sits and opens the new preview beside it.
