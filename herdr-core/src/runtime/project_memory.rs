@@ -1719,6 +1719,7 @@ DROP TRIGGER memory_projection_memory_fts_content_delete;
 DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals;
 DROP TABLE correction_checks; DROP TABLE memory_contexts; DROP TABLE receipt_contexts;
 DROP TABLE memory_projection_state; DROP TABLE analysis_schedule; DROP TABLE input_failures;
+ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; ALTER TABLE projects DROP COLUMN answered_at_ms;
 PRAGMA user_version=16;",
                 )
                 .unwrap();

@@ -26,8 +26,8 @@ CREATE TABLE analysis_schedule(id INTEGER PRIMARY KEY CHECK(id=1),turn INTEGER N
 INSERT INTO analysis_schedule VALUES(1,0);
 ";
 
-/// Schema 18: what one input's failures have cost, by kind.
-pub(super) const FAILURE_TABLES: &str = "CREATE TABLE IF NOT EXISTS input_failures(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,subject TEXT NOT NULL,input TEXT NOT NULL,unusable INTEGER NOT NULL,unanswered INTEGER NOT NULL,failed_at_ms INTEGER NOT NULL,PRIMARY KEY(project_id,subject));";
+/// Schema 20: what one input's failures have cost, by kind.
+pub(super) const FAILURE_TABLES: &str = "CREATE TABLE input_failures(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,subject TEXT NOT NULL,input TEXT NOT NULL,unusable INTEGER NOT NULL,unanswered INTEGER NOT NULL,failed_at_ms INTEGER NOT NULL,PRIMARY KEY(project_id,subject));";
 
 /// How one Memory call to the provider failed for one input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

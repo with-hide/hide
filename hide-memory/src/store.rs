@@ -21,7 +21,7 @@ pub(crate) mod hold;
 mod progress;
 pub use progress::{CorrectionCheck, InputFailure};
 
-const SCHEMA_VERSION: i64 = 19;
+const SCHEMA_VERSION: i64 = 20;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any
 /// agent the operator added under its fallback list (PRD settings-cleanup
 /// D-26), which now includes vendors other than the two it was limited to.
@@ -3801,47 +3801,24 @@ COMMIT;"#,
         hold::migrate_version_fifteen(connection)?;
         version = 16;
     }
+    // Versions 17 to 19 were written only by unreleased builds, each with
+    // another shape, so this one step from 16 makes the final shape and a
+    // store at any of them is refused below.
     if version == 16 {
         back_up(connection, path, version)?;
         let transaction = connection.unchecked_transaction()?;
         transaction.execute_batch(progress::TABLES)?;
         progress::install_projection_tracking(&transaction)?;
+        transaction.execute_batch(progress::FAILURE_TABLES)?;
+        transaction.execute_batch(
+            "ALTER TABLE projects ADD COLUMN evictions_seen_at_ms INTEGER; ALTER TABLE projects ADD COLUMN answered_at_ms INTEGER;",
+        )?;
         // Only recover the old minimum-event skip: sessions with human
         // evidence whose cursor advanced without a single analysis batch.
         // Unrelated completed history and receipt cursors remain untouched.
-        transaction.execute_batch("DELETE FROM session_cursors AS c WHERE operator_events BETWEEN 1 AND 2 AND NOT EXISTS(SELECT 1 FROM analysis_batches b WHERE b.project_id=c.project_id AND b.provider=c.provider AND b.session_id=c.session_id); PRAGMA user_version=17;")?;
+        transaction.execute_batch("DELETE FROM session_cursors AS c WHERE operator_events BETWEEN 1 AND 2 AND NOT EXISTS(SELECT 1 FROM analysis_batches b WHERE b.project_id=c.project_id AND b.provider=c.provider AND b.session_id=c.session_id); PRAGMA user_version=20;")?;
         transaction.commit()?;
-        version = 17;
-    }
-    if version == 17 {
-        // An earlier build of 17 made the table with another shape; its
-        // counts are disposable, so it is made again empty and no backup is
-        // kept.
-        let transaction = connection.unchecked_transaction()?;
-        transaction.execute_batch("DROP TABLE IF EXISTS input_failures;")?;
-        transaction.execute_batch(progress::FAILURE_TABLES)?;
-        transaction.execute_batch("PRAGMA user_version=18;")?;
-        transaction.commit()?;
-        version = 18;
-    }
-    if version == 18 {
-        // Adds two empty columns, so no backup is kept.
-        let transaction = connection.unchecked_transaction()?;
-        for column in ["evictions_seen_at_ms", "answered_at_ms"] {
-            let present: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('projects') WHERE name=?1)",
-                [column],
-                |row| row.get(0),
-            )?;
-            if !present {
-                transaction.execute_batch(&format!(
-                    "ALTER TABLE projects ADD COLUMN {column} INTEGER;"
-                ))?;
-            }
-        }
-        transaction.execute_batch("PRAGMA user_version=19;")?;
-        transaction.commit()?;
-        version = 19;
+        version = SCHEMA_VERSION;
     }
     if version != SCHEMA_VERSION {
         return Err(MemoryError::WrongSchema {
@@ -6399,45 +6376,66 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
     }
 
     #[test]
-    fn a_version_seventeen_store_with_the_earlier_failure_table_counts_again() {
-        // The first build of schema 17 made `input_failures` with one count.
+    fn a_version_sixteen_store_gains_failure_counts_and_eviction_marks_in_one_step() {
         let (temp, store, project) = store();
         drop(store);
         let path = temp.path().join("memory.sqlite3");
-        Connection::open(&path)
+        let connection = Connection::open(&path).unwrap();
+        let triggers: Vec<String> = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'memory_projection_%'")
             .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        for trigger in triggers {
+            connection
+                .execute_batch(&format!("DROP TRIGGER {trigger};"))
+                .unwrap();
+        }
+        connection
             .execute_batch(
-                "DROP TABLE input_failures; CREATE TABLE input_failures(project_id TEXT NOT NULL,subject TEXT NOT NULL,input TEXT NOT NULL,attempts INTEGER NOT NULL,failed_at_ms INTEGER NOT NULL,PRIMARY KEY(project_id,subject)); PRAGMA user_version=17;",
+                "DROP TABLE input_failures; DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals; DROP TABLE memory_projection_state; DROP TABLE correction_checks; DROP TABLE memory_contexts; DROP TABLE receipt_contexts; DROP TABLE analysis_schedule; ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; ALTER TABLE projects DROP COLUMN answered_at_ms; PRAGMA user_version=16;",
             )
             .unwrap();
-        let store = MemoryStore::open(&path).unwrap();
-        assert_eq!(
-            store
-                .record_input_failure(&project, "s", "a", InputFailure::Unusable, 10)
-                .unwrap(),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn a_version_eighteen_store_gains_the_cleared_cards_marker() {
-        let (temp, store, project) = store();
-        drop(store);
-        let path = temp.path().join("memory.sqlite3");
-        Connection::open(&path)
-            .unwrap()
-            .execute_batch(
-                "ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; PRAGMA user_version=18;",
-            )
-            .unwrap();
+        drop(connection);
         let store = MemoryStore::open(&path).unwrap();
         let version: i64 = store
             .connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(
+            store
+                .record_input_failure(&project, "s", "a", InputFailure::Unanswered, 10)
+                .unwrap(),
+            Some(1)
+        );
+        store.input_answered(&project, "other", 20).unwrap();
         store.mark_evictions_seen(&project, 5).unwrap();
         assert_eq!(store.project_state(&project).unwrap().evicted_count, 0);
+    }
+
+    #[test]
+    fn a_store_an_earlier_build_of_this_schema_opened_is_refused() {
+        // Schemas 17 to 19 were only ever written by unreleased builds, each
+        // with another shape: such a store is refused, not misread.
+        for earlier in 17..=19 {
+            let (temp, store, _project) = store();
+            drop(store);
+            let path = temp.path().join("memory.sqlite3");
+            Connection::open(&path)
+                .unwrap()
+                .pragma_update(None, "user_version", earlier)
+                .unwrap();
+            assert!(
+                matches!(
+                    MemoryStore::open(&path),
+                    Err(MemoryError::WrongSchema { found, expected: SCHEMA_VERSION }) if found == earlier
+                ),
+                "schema {earlier}"
+            );
+        }
     }
 
     #[test]
@@ -7404,30 +7402,6 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
         assert_eq!(
             seen,
             ["old-a".into(), "old-b".into(), "old-c".into()].into()
-        );
-    }
-
-    #[test]
-    fn a_version_seventeen_store_gains_the_input_failure_count() {
-        // An earlier build of schema 17 had no `input_failures`.
-        let (temp, store, project) = store();
-        drop(store);
-        let path = temp.path().join("memory.sqlite3");
-        Connection::open(&path)
-            .unwrap()
-            .execute_batch("DROP TABLE input_failures; PRAGMA user_version=17;")
-            .unwrap();
-        let store = MemoryStore::open(&path).unwrap();
-        let version: i64 = store
-            .connection
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
-        assert_eq!(
-            store
-                .record_input_failure(&project, "s", "a", InputFailure::Unusable, 10)
-                .unwrap(),
-            Some(1)
         );
     }
 
@@ -10101,7 +10075,7 @@ PRAGMA user_version=14;"#,
         connection.execute_batch(SCHEMA).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE card_comparisons; DROP TABLE promotion_batches; ALTER TABLE memory_revisions DROP COLUMN docs_compared; ALTER TABLE card_promotions DROP COLUMN repository; ALTER TABLE card_promotions DROP COLUMN failure; ALTER TABLE analysis_calls DROP COLUMN checks; PRAGMA user_version=9;",
+                "DROP TABLE card_comparisons; DROP TABLE promotion_batches; ALTER TABLE memory_revisions DROP COLUMN docs_compared; ALTER TABLE card_promotions DROP COLUMN repository; ALTER TABLE card_promotions DROP COLUMN failure; ALTER TABLE analysis_calls DROP COLUMN checks; ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; ALTER TABLE projects DROP COLUMN answered_at_ms; PRAGMA user_version=9;",
             )
             .unwrap();
         let scratch = tempfile::tempdir().unwrap();
