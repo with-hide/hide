@@ -1,5 +1,6 @@
 // Pane-header move B1-B10/B18/B21: production UI and real isolated PTYs.
 import { expect, test } from "@playwright/test";
+import fs from "node:fs";
 import { beginDrag, expectDirection, paneFacts, paneView, processFacts, selectMarker, startMove, tabTitle } from "./pane-move-fixture";
 import { sessionOf } from "./herdr-fixture";
 import { screenshot } from "./wire";
@@ -87,6 +88,8 @@ test("a cross-workspace tab drop keeps the terminal and xterm under the new publ
     expect(processFacts(flow.herdr, after.pane_id)).toEqual(process);
     await expect(paneView(page, after.pane_id)).toHaveAttribute("data-transport", "controlling");
     expect(await textarea!.evaluate((node, id) => node === document.querySelector(`[data-pane-view="${id}"] .xterm-helper-textarea`), after.pane_id)).toBe(true);
+    await paneView(page, after.pane_id).locator(".xterm-helper-textarea").focus(); await page.keyboard.type("AFTER_MOVE");
+    await expect.poll(() => fs.readFileSync(flow.herdr.inputLogs[0], "utf8")).toContain("AFTER_MOVE");
     await screenshot(page, "pane-move-cross-workspace");
   } finally { flow.stop(); }
 });
