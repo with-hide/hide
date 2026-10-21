@@ -14,7 +14,7 @@
 # opens a `nightly-failure` issue, which a failed push run does not.
 #
 # A pull request whose last green run still stands reruns `policy` and any
-# changed registered unit tests: what it adds to main changed since that run
+# changed registered desktop unit tests: what it adds to main changed since that run
 # only in these paths, and main changed none of the paths it changes that a
 # lane reads. The plan job finds that run and the plan record each pull request run keeps as
 # the `ci-plan` artifact, which is why it reads actions; a lookup, fetch or

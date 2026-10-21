@@ -46,24 +46,31 @@ def needs_for(result, **override):
 class Selection(unittest.TestCase):
     def test_unit_test_changes_keep_existing_systems_without_application_suites(self):
         for status in ("A", "M", "D"):
-            for path in ("web/src/new.test.ts", "web/src/components/new.test.tsx",
-                         "desktop/src/main/new.test.ts", "web/e2e/platform-program.unit.ts",
+            for path in ("desktop/src/main/new.test.ts", "desktop/src/main/updater.test.ts",
                          "desktop/e2e/fixture-cleanup.unit.ts"):
                 with self.subTest(status=status, path=path):
                     result = plan(path, status=status)
-                    expected = ["policy", "checks"]
-                    if not path.startswith("web/src/"):
-                        expected.append("windows-check")
-                    self.assertEqual(result["lanes"], expected)
+                    self.assertEqual(result["lanes"], ["policy", "checks", "windows-check"])
                     self.assertEqual(result["rust_packages"], [])
                     self.assertFalse(ci.reads_no_lane(status, path, CRATES, ROOT))
+
+    def test_web_unit_tests_keep_their_rust_and_css_build_readers(self):
+        # sidebar.rs scans all web/src TS, including comments in test files;
+        # Tailwind's web-root scan also reads source and e2e unit tests.
+        for path in ("web/src/new.test.ts", "web/src/components/new.test.tsx"):
+            with self.subTest(path=path):
+                result = plan(path)
+                self.assertEqual(set(result["lanes"]), {"policy", "rust", "checks", "web-e2e", "desktop-e2e"})
+                self.assertEqual(result["rust_packages"], ["herdr-core"])
+        self.assertEqual(set(plan("web/e2e/platform-program.unit.ts")["lanes"]),
+                         {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"})
 
     def test_unit_tests_do_not_remove_a_products_lanes_or_a_conservative_fallback(self):
         for product in ("web/src/terminals.ts", "desktop/src/main/index.ts", "desktop/src/main/updater.ts", "hide-platform/src/lib.rs",
                         "Cargo.lock", "scripts/ci-plan.py", "unclaimed/config.json"):
             with self.subTest(product=product):
                 expected = set(plan(product)["lanes"]) | {"checks"}
-                self.assertEqual(set(plan("web/src/new.test.ts", product)["lanes"]), expected)
+                self.assertEqual(set(plan("desktop/src/main/new.test.ts", product)["lanes"]), expected | {"windows-check"})
         self.assertIn("package", plan("desktop/src/main/updater.ts")["lanes"])
         self.assertEqual(plan("web/src/new.test.ts", status="R100")["lanes"], FULL)
         for path in ("desktop/src/main/new.test.tsx", "web/e2e/new.unit.ts", "desktop/e2e/new.unit.ts"):
@@ -451,11 +458,11 @@ class NamedPaths(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), {"policy", "checks", "desktop-e2e", "windows-desktop", "windows-check"})
 
-    def test_the_narrow_unit_paths_are_exactly_the_registered_vitest_tests(self):
+    def test_the_narrow_unit_paths_are_exactly_the_registered_desktop_vitest_tests(self):
         # Independent authority: Vitest's actual include lists, not the selector.
         # A new test convention must be registered before its app lanes can go.
         registered = set()
-        for folder, config in (("web", "vite.config.ts"), ("desktop", "vitest.config.ts")):
+        for folder, config in (("desktop", "vitest.config.ts"),):
             text = (ROOT / folder / config).read_text()
             patterns = json.loads(re.search(r"include: (\[[^\]]+\])", text).group(1))
             for pattern in patterns:
@@ -466,14 +473,11 @@ class NamedPaths(unittest.TestCase):
                     registered.update(path.relative_to(ROOT).as_posix() for path in (ROOT / folder).glob(glob))
         sources = code_sources()
         selected = {path for path in sources if any(fnmatchcase(path, glob) for glob in ci.UNIT_TEST_PATHS)}
-        self.assertGreater(len(registered), 100)
+        self.assertTrue(registered)
         self.assertEqual(selected, registered)
         for path in registered:
             with self.subTest(path=path):
-                expected = {"policy", "checks"}
-                if not path.startswith("web/src/"):
-                    expected.add("windows-check")
-                self.assertEqual(self.lanes(path), expected)
+                self.assertEqual(self.lanes(path), {"policy", "checks", "windows-check"})
         # Both retained jobs run both Vitest suites; a configured matrix alone
         # would not establish that these tests are executed on Windows.
         for lane in ("checks", "windows-check"):
@@ -866,9 +870,8 @@ class ReuseGreenRun(unittest.TestCase):
         self.assertRuns(self.pr.plan(lambda: self.green), "main changed web/src/x.ts")
 
     def test_only_registered_unit_checks_rerun_after_a_green_app_run(self):
-        for path, lanes in (("web/src/x.test.ts", ["policy", "checks"]),
-                            ("desktop/src/main/x.test.ts", ["policy", "checks", "windows-check"]),
-                            ("web/e2e/platform-program.unit.ts", ["policy", "checks", "windows-check"])):
+        for path, lanes in (("desktop/src/main/x.test.ts", ["policy", "checks", "windows-check"]),
+                            ("desktop/e2e/windows-processes.unit.ts", ["policy", "checks", "windows-check"])):
             with self.subTest(path=path):
                 self.pr.git("checkout", "-q", "topic")
                 self.pr.git("reset", "--hard", self.green["head"])
@@ -884,20 +887,20 @@ class ReuseGreenRun(unittest.TestCase):
                 self.assertIn("desktop-e2e", self.pr.plan(None)["lanes"])
 
     def test_modified_and_deleted_unit_tests_are_rechecked_against_the_original_green_anchor(self):
-        self.green["head"] = self.pr.commit("topic", "unit fixture", {"web/src/x.test.ts": "first\n"})
-        self.pr.commit("topic", "unit assertion", {"web/src/x.test.ts": "second\n"})
+        self.green["head"] = self.pr.commit("topic", "unit fixture", {"desktop/src/main/x.test.ts": "first\n"})
+        self.pr.commit("topic", "unit assertion", {"desktop/src/main/x.test.ts": "second\n"})
         self.pr.check_out_merge()
         first = self.pr.plan(lambda: self.green)
-        self.assertEqual(first["lanes"], ["policy", "checks"])
+        self.assertEqual(first["lanes"], ["policy", "checks", "windows-check"])
         # This partial green must not claim that its app lanes checked a new
         # head: later runs still compare with the original app-tested commits.
         anchor = ci.plan_record(first, 7, 202)["verified"]
         self.pr.git("checkout", "-q", "topic")
-        self.pr.git("rm", "web/src/x.test.ts")
+        self.pr.git("rm", "desktop/src/main/x.test.ts")
         self.pr.git("commit", "-qm", "delete unit test")
         self.pr.check_out_merge()
         deleted = self.pr.plan(lambda: anchor)
-        self.assertEqual(deleted["lanes"], ["policy", "checks"])
+        self.assertEqual(deleted["lanes"], ["policy", "checks", "windows-check"])
         self.assertEqual(deleted["verified"], self.green)
         self.pr.commit("topic", "product change", {"web/src/x.ts": "changed again\n"})
         self.pr.check_out_merge()
@@ -906,12 +909,13 @@ class ReuseGreenRun(unittest.TestCase):
     def test_unit_edits_do_not_reuse_app_checks_when_main_changed_shared_product_code(self):
         self.pr.commit("main", "main moves", {"web/src/x.ts": LINES.replace("line 19\n", "line nineteen\n")})
         self.pr.merge_main_into_topic()
-        self.pr.commit("topic", "unit assertion", {"web/src/x.test.ts": "test\n"})
+        self.pr.commit("topic", "unit assertion", {"desktop/src/main/x.test.ts": "test\n"})
         self.pr.check_out_merge()
         self.assertRuns(self.pr.plan(lambda: self.green), "main changed web/src/x.ts")
 
     def test_an_unregistered_test_or_shared_test_configuration_does_not_reuse_app_checks(self):
-        for path in ("web/e2e/new.unit.ts", "web/vite.config.ts", "desktop/src/main/new.test.tsx"):
+        for path in ("web/src/x.test.ts", "web/e2e/platform-program.unit.ts", "web/e2e/new.unit.ts",
+                     "web/vite.config.ts", "desktop/src/main/new.test.tsx"):
             with self.subTest(path=path):
                 self.pr.git("checkout", "-q", "topic")
                 self.pr.git("reset", "--hard", self.green["head"])

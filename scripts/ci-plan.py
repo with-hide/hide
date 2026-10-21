@@ -13,9 +13,9 @@ what only macOS proves (`os-contract-macos`, `desktop-e2e`, and `package`'s
 packaged app); the rest of the macOS checks are jobs of `nightly.yml`.
 
 A pull request whose last green run still stands plans `policy` alone, or
-also the unit checks when only registered unit tests changed: what
+also the unit checks when only registered desktop unit tests changed: what
 it adds to main differs from what that run checked only in policy paths or
-registered unit tests, and main has changed none of the paths it adds that a lane
+registered desktop unit tests, and main has changed none of the paths it adds that a lane
 reads. Each pull request run keeps a plan record for the next one to read; a
 missing run or record, or a lookup, fetch or comparison that fails, leaves
 the plan as it is.
@@ -137,7 +137,7 @@ READERS = (
     ("CLAUDE.md", {"rust"}, {"herdr-core"}),
     # herdr-core's structure tests scan the shell (runtime/tests.rs, sidebar.rs)
     # and the daemon (runtime/tests/snapshot_delta.rs).
-    ("web/src/", {"rust"}, {"herdr-core"}),  # shell_sources excludes .test. files.
+    ("web/src/", {"rust"}, {"herdr-core"}),
     ("hided/src/", {"rust"}, {"herdr-core"}),
     # web/e2e/s2, s3 and s7 import the wire path conversion.
     ("desktop/src/main/wirePath.ts", {"checks", "web-e2e", "windows-e2e"}, set()),
@@ -173,8 +173,7 @@ READERS = (
 def reader_entries(name):
     """The READERS entries that read the changed path `name`."""
     return [entry for entry in READERS
-            if (name == entry[0] or (entry[0].endswith("/") and name.startswith(entry[0])))
-            and not (entry[0] == "web/src/" and ".test." in PurePosixPath(name).name)]
+            if name == entry[0] or (entry[0].endswith("/") and name.startswith(entry[0]))]
 
 
 # The paths that change what goes into a package: the package scripts and
@@ -237,15 +236,13 @@ POLICY_ONLY = (
 # check`, so neither is web-only or desktop-only.
 WEB_E2E_LANES = {"checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"}
 DESKTOP_E2E_LANES = {"checks", "desktop-e2e", "windows-desktop", "windows-check"}
-# Vitest's registered tests, not application inputs: Linux `checks` runs all
-# of them. Desktop and e2e-directory tests already plan `windows-check`; keep
-# that coverage, whose fixture/process tests exercise a different system.
-# Web source unit tests keep their existing PR coverage (Linux); the full
-# main/nightly plan runs them on Windows too. An unregistered .unit or .test convention
-# keeps its folder's existing plan; this is not a blanket test-file rule.
+# Desktop Vitest inputs, outside the app's explicit esbuild entry graphs:
+# `checks` and `windows-check` run them. Web tests are deliberately absent:
+# sidebar.rs scans every web/src TypeScript file, and Tailwind's web-root
+# scanner reads web tests as CSS inputs. Their existing app lanes must stay.
+# An unregistered convention keeps its folder's existing plan.
 UNIT_TEST_PATHS = (
-    "web/src/*.test.ts", "web/src/*.test.tsx", "desktop/src/*.test.ts",
-    "web/e2e/windows-sockets.unit.ts", "web/e2e/platform-program.unit.ts",
+    "desktop/src/*.test.ts",
     "desktop/e2e/fixture-cleanup.unit.ts", "desktop/e2e/windows-processes.unit.ts",
 )
 
@@ -402,10 +399,7 @@ def classify(path, status, crates, root):
         # design-contract.yml checks the library; no pr.yml lane reads it.
         return set(), f"design library: {path}", set()
     if is_unit_test(path.as_posix()):
-        lanes = {"checks"}
-        if not path.as_posix().startswith("web/src/"):
-            lanes.add("windows-check")
-        return lanes, f"registered unit test: {path}", set()
+        return {"checks", "windows-check"}, f"registered desktop unit test: {path}", set()
     crate = crates.get(parts[0])
     if crate is not None:
         packages = reverse_closure(crates, crate["name"])
@@ -489,7 +483,7 @@ def select(entries, crates, root=ROOT, full_reason=None):
         if not name or path.is_absolute() or ".." in path.parts:
             raise ValueError(f"invalid changed path: {name!r}")
         # A broad package input (updater*) can name its unit test too, but a
-        # registered unit test is not built into the package.
+        # registered desktop unit test is not built into the package.
         if not is_unit_test(name) and any(fnmatchcase(name, pattern) for pattern in PACKAGE_PATHS):
             reasons["package"].append(f"package input: {name}")
         lanes, reason, reached = classify(path, status, crates, root)
@@ -630,7 +624,7 @@ def still_stands(verified, base, head, entries, crates, root=ROOT):
     """Why the run stands and the unit-test delta to recheck, or NotReused.
 
     It stands when the pull request adds to main what that run's head added,
-    but for policy paths and registered unit tests, and main has changed none of the
+    but for policy paths and registered desktop unit tests, and main has changed none of the
     paths the pull request changes that a lane reads since that run's main.
     """
     run, old_base, old_head = verified["run"], verified["base"], verified["head"]
@@ -652,7 +646,7 @@ def still_stands(verified, base, head, entries, crates, root=ROOT):
     if overlap:
         raise NotReused(f"since run {run} main changed {listing(overlap)}, which the pull request changes too")
     why = (f"run {run} checked head {old_head[:9]} on main {old_base[:9]}; since then the pull request changed only "
-           "policy paths or registered unit tests, and main none of the paths it changes that a lane reads")
+           "policy paths or registered desktop unit tests, and main none of the paths it changes that a lane reads")
     return why, delta
 
 
