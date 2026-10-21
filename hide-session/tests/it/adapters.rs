@@ -24,7 +24,7 @@ fn an_oversized_codex_compaction_keeps_its_reset_across_cursor_restarts() {
     let path = root.path().join("rollout.jsonl");
     let prefix = "{\"type\":\"session_meta\",\"payload\":{}}\n";
     let record = serde_json::json!({"type":"compacted", "timestamp":"2026-10-21T01:00:00Z", "payload":{
-        "replacement_history":[{"role":"user","content":"PRIVATE_PAYLOAD".repeat(100_000)}],
+        "replacement_history":[{"role":"user","content":"PRIVATE_PAYLOAD".repeat(100_000),"timestamp":"PRIVATE_PAYLOAD".repeat(100_000)}],
         "retained_context":null
     }});
     std::fs::write(&path, format!("{prefix}{record}\n")).unwrap();

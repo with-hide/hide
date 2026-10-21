@@ -876,7 +876,9 @@ impl LargeRecord {
                         token.value.push(byte as char);
                     }
                 } else if token.value.len() < 64
-                    && (token.key || matches!(token.field.as_str(), "type" | "name" | "timestamp"))
+                    && (token.key
+                        || matches!(token.field.as_str(), "type" | "name")
+                        || (token.scope == Scope::Root && token.field == "timestamp"))
                 {
                     token.value.push(byte as char);
                 }
