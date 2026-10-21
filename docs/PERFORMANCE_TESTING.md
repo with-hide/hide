@@ -474,6 +474,11 @@ Record uptime, the restart time, and both sample windows in the run directory, a
 - Keep the keyboard path to the byte bridge: a key goes from the web socket to the router to the pane's writer and never takes `Mutex<Runtime>` (PRD core-host-node-terminal B5).
   The node adds the operator-submit check per key (`hide-node/src/terminal/input.rs`, `submits`, PRD overview-request-view D-19): a chunk over 64 bytes is skipped and a shorter one is scanned in place.
   The core hears a key only as an input fact: the first key after a quiet second, an Enter and a key that moves the keyboard at once, and the keys between folded into one report a second later; a report is one push onto the report channel, and the core takes waiting reports into the runtime in one batch and publishes once.
+- Terminal selection tracking (`web/src/terminals.ts`) retains one original range, its selected rows and Copy text per pane while the highlight is clipped, bounded by the grid at selection time.
+  A wheel still coalesces into one scroll dispatch per animation frame; tracking adds no core notification, timer or input queue.
+  Only a pending scroll installs a write callback: it reads the selected rows first, and searches the current screen only after those rows change.
+  A settled clipped selection retains its original ends without adding work to ordinary output; clearing, replacing, resizing or parking the selection releases its tracking state.
+  `web/e2e/terminal-selection-scroll.spec.ts` owns the partial-edge return and original Copy text regression alongside the existing continuous-scroll and offscreen-copy journey.
 - Keep async operation records bounded by active intent and conflict scope; a tab's geometry operations wait in its line, one with Herdr and at most `GEOMETRY_QUEUE_LIMIT` behind it.
   A close or topology mutation uses an absolute five-second stage deadline; expiry becomes a caller-visible unknown result and never schedules a destructive resend.
   Status checks are read-only and are started only for an ambiguous close or an explicit status action, so unknown activity does not become a polling loop.

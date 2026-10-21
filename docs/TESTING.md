@@ -102,9 +102,6 @@ When the behavior depends on the order of two events, the test fixes that order;
 ## Writing a fixture
 
 - Set every fixture's `HOME` and Hide state folder to private paths before starting a candidate.
-- The Unix real-shell agent fixture records its launch arguments, then waits in one process for at most 600 seconds.
-  macOS uses a `sleep` symlink with the agent name in `argv[0]`; Linux uses a copied Bash with the agent filename and its `read -r -t 600` builtin, because this scenario sends no input after launch.
-  Do not rename a multicall system utility for the Linux stand-in: its dispatcher can reject the agent filename even when `argv[0]` names the utility.
 - A restart fixture that requires completed native labels waits for the matching session, goal and end in the private `labels.json` before stopping the daemon; a rendered label alone does not prove its asynchronous save completed, and Windows fixture shutdown is forced.
 - The same boundary applies to Workspace views: `web/e2e/right-lane.spec.ts` waits for the expected tool, pin and active document in the private `workspace-views.json` before each restart, then checks the restored screen.
   A rendered pin or selected document alone does not prove the save has landed; a missing save fails the persistence wait rather than racing the forced shutdown.
@@ -339,6 +336,8 @@ A test whose assertion requires a pipe to have no readers creates and closes tha
    `fs::copy` may make an APFS clone whose first execution stalls before `main`, but a byte copy still pays first-execution validation.
    This fixture calls `stand_ins::ready_with_args(&helper, &["node", "--version"])` before its unchanged five-second protocol deadline, using the same file-identity cache and owned 60-second setup guard as `ready`.
    Choose a known one-shot invocation: `hided --help` starts a daemon, whereas `hided node --version` exits without opening daemon state.
+   The Unix shell-start fixture (`herdr-core/src/agent_start/real_herdr_tests.rs`) builds its native agent with `cc` and starts that file without arguments before the launch deadline; with arguments it stays alive for Herdr's process detection.
+   Do not rename a system utility to stand in for an agent: a multicall utility can choose its implementation from the executable name and reject the agent's name.
 9. **Retries are a classification.**
    CI runs every Rust lane (Linux, macOS, Windows, the OS contract and nightly) with `scripts/verify-cargo.sh nextest --profile ci` (`retries = 1` in `.config/nextest.toml`), so a test that fails once and then passes is reported as flaky and recorded in an issue with an expiry; two failures fail the lane.
    The one test it does not retry is the nightly's signed-in agy turn, which spends a provider's daily requests ([A real agent on CI](#a-real-agent-on-ci)).
