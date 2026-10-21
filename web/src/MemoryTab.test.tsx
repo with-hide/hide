@@ -405,6 +405,16 @@ describe("the Memory tab", () => {
     expect(sent("memory_evictions_seen")).toHaveLength(2);
   });
 
+  it("keeps no cleared-cards line for a mark the core never counted", async () => {
+    await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 50 }));
+    expect(sent("memory_evictions_seen")).toHaveLength(1);
+    // The Memory fills before the core counts the mark, so the line gives way while two are still uncounted.
+    await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 50, capacity_reached: true }));
+    // The count reaches none another way: nothing says the core took the mark.
+    await render(memory({ evicted_cards: 0, evicted_through_unix_ms: null }));
+    expect(container.querySelector("[data-memory-evicted]")).toBeNull();
+  });
+
   it("says once how many older cards made room, and says full only when nothing can", async () => {
     await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 50 }));
     expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("2 older cards were cleared to make room for new ones.");

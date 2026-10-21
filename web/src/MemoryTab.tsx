@@ -104,11 +104,12 @@ function useEvictedCards(project: ProjectMemory, actions: Actions): { count: num
       if (actions.memoryEvictionsSeen(id, through)) pending.current = { id, through, count: project.evicted_cards };
       return;
     }
-    // The core counts none now: it took the mark this tab sent.
-    if (pending.current?.id === id) {
-      setSaid({ id, count: pending.current.count });
-      pending.current = null;
-    }
+    if (pending.current?.id !== id) return;
+    // The core counts none now: it took the mark this tab sent. A line gone
+    // while cards are still counted (the Memory filled, or was turned off)
+    // says nothing of the mark, so it is sent again when the line returns.
+    if (project.evicted_cards === 0) setSaid({ id, count: pending.current.count });
+    pending.current = null;
   }, [actions, id, shown, visible, through, project.evicted_cards]);
   const count = shown ? project.evicted_cards : said?.id === id ? said.count : 0;
   return { count, lineRef };
