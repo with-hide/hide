@@ -202,11 +202,10 @@ impl ConversationCursor {
     pub fn restore(checkpoint: ConversationCheckpoint) -> Self {
         let mut cursor = SessionCursor::restore(checkpoint.cursor);
         let (discarded_bytes, classifier) = match checkpoint.classifier {
-            // A scan an older build checkpointed kept no native ids, or none of
-            // what the wake reader needs, so it cannot say which call the record
-            // answered or whether it held a device's words. Reread that record
+            // Older scans lack native ids, wake metadata or context boundaries.
+            // They cannot certify the discarded record. Reread that record
             // from its start rather than refuse it on every later read.
-            Some(scan) if !scan.native_ids || !scan.wake_aware => {
+            Some(scan) if !scan.native_ids || !scan.wake_aware || !scan.context_aware => {
                 cursor.offset = cursor.offset.saturating_sub(checkpoint.discarded_bytes);
                 (0, None)
             }
@@ -364,6 +363,7 @@ impl ConversationCursor {
                         native_ids: true,
                         grok: (agent == Agent::Grok).then(Default::default),
                         wake_aware: true,
+                        context_aware: true,
                         ..LargeRecord::default()
                     };
                     scan.feed(&pending);
@@ -398,6 +398,11 @@ impl ConversationCursor {
                     }
                 } else {
                     let wake = LargeRecord::wake_mark(scan.as_deref(), agent);
+                    if let Some(event) = scan.as_deref().and_then(|scan| scan.context_reset(agent))
+                    {
+                        parsed.events.push(event);
+                        parsed.event_offsets.push(line_start);
+                    }
                     let (reason, turn) =
                         scan.map_or_else(LargeRecord::unreadable, |scan| (*scan).discard(agent));
                     parsed.skipped(reason);
@@ -641,6 +646,11 @@ struct LargeRecord {
     token: Option<JsonString>,
     root_kind: String,
     payload_kind: String,
+    /// Native reset metadata only; replacement context bodies are discarded.
+    #[serde(default)]
+    context_aware: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timestamp: Option<String>,
     content_array: bool,
     conversation: bool,
     invalid: bool,
@@ -819,6 +829,8 @@ impl LargeRecord {
                                 _ => self.payload_mode = Some(token.value),
                             },
                         }
+                    } else if token.scope == Scope::Root && token.field == "timestamp" {
+                        self.timestamp = Some(token.value);
                     } else if token.field == "type" {
                         match token.scope {
                             Scope::Root => self.root_kind = token.value,
@@ -864,7 +876,7 @@ impl LargeRecord {
                         token.value.push(byte as char);
                     }
                 } else if token.value.len() < 64
-                    && (token.key || matches!(token.field.as_str(), "type" | "name"))
+                    && (token.key || matches!(token.field.as_str(), "type" | "name" | "timestamp"))
                 {
                     token.value.push(byte as char);
                 }
@@ -954,6 +966,19 @@ impl LargeRecord {
                 _ => (),
             }
         }
+    }
+
+    /// A native replacement boundary, without any replacement-context body.
+    fn context_reset(&self, agent: Agent) -> Option<crate::ConversationEvent> {
+        if agent != Agent::Codex || self.root_kind != "compacted" || !self.certified() {
+            return None;
+        }
+        let at =
+            crate::timestamp_ms(Some(&serde_json::Value::String(self.timestamp.clone()?))).ok()?;
+        Some(
+            crate::ConversationEvent::new("system", crate::EventKind::Injected, at, "")
+                .with_context_reset(true),
+        )
     }
 
     /// Whether the scan certifies the record's structure.

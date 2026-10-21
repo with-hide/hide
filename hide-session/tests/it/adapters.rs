@@ -19,6 +19,43 @@ use hide_session::turns::{Waiting, WakeLoss};
 use hide_session::{Agent, PrSighting};
 
 #[test]
+fn an_oversized_codex_compaction_keeps_its_reset_across_cursor_restarts() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("rollout.jsonl");
+    let prefix = "{\"type\":\"session_meta\",\"payload\":{}}\n";
+    let record = serde_json::json!({"type":"compacted", "timestamp":"2026-10-21T01:00:00Z", "payload":{
+        "replacement_history":[{"role":"user","content":"PRIVATE_PAYLOAD".repeat(100_000)}],
+        "retained_context":null
+    }});
+    std::fs::write(&path, format!("{prefix}{record}\n")).unwrap();
+    let mut cursor = hide_session::ConversationCursor::new();
+    let mut events = Vec::new();
+    let mut offsets = Vec::new();
+    let mut polls = 0;
+    loop {
+        let read = cursor.read(Agent::Codex, &path).unwrap();
+        events.extend(read.events);
+        offsets.extend(read.event_offsets);
+        polls += 1;
+        let checkpoint = cursor.checkpoint();
+        let more = cursor.has_more();
+        let serialized = serde_json::to_string(&checkpoint).unwrap();
+        assert!(!serialized.contains("PRIVATE_PAYLOAD"));
+        cursor =
+            hide_session::ConversationCursor::restore(serde_json::from_str(&serialized).unwrap());
+        if !more {
+            break;
+        }
+    }
+    assert!(polls > 1);
+    assert_eq!(offsets, vec![prefix.len() as u64]);
+    assert_eq!(events.len(), 1);
+    assert!(events[0].context_reset && events[0].text.is_empty());
+    assert_eq!(events[0].at_unix_ms, 1792544400000);
+    assert!(cursor.read(Agent::Codex, &path).unwrap().events.is_empty());
+}
+
+#[test]
 fn context_resets_require_native_metadata_and_keep_their_record_offsets() {
     let at = "2026-10-21T01:00:00Z";
     let rows = [

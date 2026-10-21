@@ -782,7 +782,8 @@ The disclosure says cards stay in Hide's Memory, and the delete confirmation rem
 An unavailable link or Memory reader uses the existing unreadable state; its reason is recorded in the diagnostic log.
 `처리할 것` appears, and the tab's name carries a dot, while the Project has a suggestion, an unresolved document comparison, a failed placement or a decision nothing builds yet.
 Each compact row has a one-line title and one-line reason, truncating long text; `Compare` reads and opens the document excerpt and original operator words with their dates only when requested.
-A newer operator decision offers `Fix the doc` and `Card is wrong`; unknown or equal dates first offer `Card is right` and `Doc is right`, and cannot be selected until answered.
+A confirmed enduring operator correction offers `Fix the doc` and `Card is wrong`; unresolved authority first offers `Card is right` and `Doc is right`, and cannot be selected until answered.
+Dates remain provenance and never decide authority.
 Choosing the document marks the card Outdated; choosing the card turns the row into a document correction proposal.
 Eligible rows have checkboxes; selecting one to five shows `N selected · up to 5 per PR`, `Clear` and `Open one PR`, and at five the other checkboxes are disabled.
 The row's single-card action uses the same batch path.
