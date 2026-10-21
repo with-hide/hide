@@ -367,3 +367,142 @@ fn pane_notices_keep_idle_and_ci_wait_quiet_and_distinguish_failed_exits() {
         );
     }
 }
+
+/// A stopped root that asked a question the operator has read.
+fn with_read_question() -> Runtime {
+    let mut runtime = with_session();
+    let row = &mut runtime.snapshot.navigator.agents[0];
+    row.demand = "question".into();
+    row.unread = false;
+    row.completed = false;
+    row.changed_at_unix_ms = Some(5);
+    runtime.sync_session_state();
+    runtime
+}
+
+#[test]
+fn a_read_question_waits_in_revisit_until_done_puts_it_away() {
+    // PRD revisit-group B2, B11, B16.
+    let mut runtime = with_read_question();
+    let _dirs = hold_dirs(&mut runtime);
+    let row = &runtime.snapshot.navigator.agents[0];
+    assert_eq!(row.group, "seen");
+    let revisit = row.revisit.expect("a read question waits in 다시 볼 것");
+    assert!(revisit.read_ask && !revisit.starred);
+    assert!(runtime.finish_revisit("session"));
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    let saved = persistence::load(&runtime.state_path).0;
+    assert_eq!(
+        saved.revisit_sessions["session"].dismissed_ask_since,
+        Some(5)
+    );
+    assert!(
+        !runtime.finish_revisit("session"),
+        "a second 다 봤음 changes nothing"
+    );
+    // The next ask stands again.
+    runtime.snapshot.navigator.agents[0].changed_at_unix_ms = Some(9);
+    runtime.sync_session_state();
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_some());
+}
+
+#[test]
+fn a_star_holds_a_quiet_task_survives_restart_and_done_takes_it() {
+    // B6, B11, B12, B16.
+    let mut runtime = with_session();
+    let _dirs = hold_dirs(&mut runtime);
+    runtime.snapshot.navigator.agents[0].unread = false;
+    runtime.sync_session_state();
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    assert!(runtime.star_session("session"));
+    let revisit = runtime.snapshot.navigator.agents[0].revisit.unwrap();
+    assert!(revisit.starred && !revisit.read_ask);
+    let at = runtime.snapshot.ui_state.revisit_sessions["session"].starred_at_unix_ms;
+    assert!(
+        !runtime.star_session("session"),
+        "a second ★ changes nothing"
+    );
+    assert_eq!(
+        persistence::load(&runtime.state_path).0.revisit_sessions["session"].starred_at_unix_ms,
+        at
+    );
+    assert!(runtime.finish_revisit("session"));
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    assert!(
+        persistence::load(&runtime.state_path)
+            .0
+            .revisit_sessions
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_read_block_and_an_unread_question_never_wait_in_revisit() {
+    // B3, B4: the current state wins.
+    let mut runtime = with_read_question();
+    runtime.snapshot.navigator.agents[0].unread = true;
+    runtime.sync_session_state();
+    assert_eq!(runtime.snapshot.navigator.agents[0].group, "needs_you");
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    let row = &mut runtime.snapshot.navigator.agents[0];
+    row.demand = "error".into();
+    row.unread = false;
+    runtime.sync_session_state();
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+}
+
+#[test]
+fn resolving_puts_the_star_away_and_a_failed_save_keeps_the_row_as_it_was() {
+    // B17, B23.
+    let mut runtime = with_session();
+    let _dirs = hold_dirs(&mut runtime);
+    runtime.snapshot.navigator.agents[0].unread = false;
+    assert!(runtime.star_session("session"));
+    assert!(runtime.resolve_session("session", ResolveSource::Operator));
+    assert!(runtime.snapshot.ui_state.revisit_sessions.is_empty());
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+
+    let mut runtime = with_session();
+    let occupied = runtime.state_path.with_file_name("occupied");
+    std::fs::write(&occupied, b"not a directory").unwrap();
+    runtime.state_path = occupied.join("state.json");
+    runtime.star_session("session");
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    assert!(runtime.pending_revisit.is_empty());
+    assert_eq!(
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|e| e.kind.as_str()),
+        Some("revisit.save_failed")
+    );
+}
+
+#[test]
+fn a_new_conversation_in_the_pane_drops_its_mark() {
+    // D-11: a mark belongs to the session it was written for.
+    let mut runtime = with_session();
+    let _dirs = hold_dirs(&mut runtime);
+    runtime.snapshot.navigator.agents[0].unread = false;
+    assert!(runtime.star_session("session"));
+    runtime.snapshot.navigator.agents[0].lineage_session = Some("another".into());
+    runtime.sync_session_state();
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+    assert!(runtime.snapshot.ui_state.revisit_sessions.is_empty());
+}
+
+#[test]
+fn the_phone_lists_a_read_question_in_revisit_between_unread_and_working() {
+    // B19.
+    let runtime = with_read_question();
+    let row = &runtime.snapshot.navigator.agents[0];
+    let phone =
+        crate::agent_state::phone::project(&json!({"navigator": {"agents": [row]}}), "local");
+    assert_eq!(phone.agents().next().unwrap().group, "revisit");
+    assert_eq!(
+        crate::agent_state::phone::GROUP_ORDER,
+        ["needs_you", "done", "revisit", "working", "seen"]
+    );
+}

@@ -1230,6 +1230,9 @@ pub struct SidebarAgentSnapshot {
     pub resolved: Option<crate::agent_state::sessions::Resolution>,
     /// Resolved within the last 24 hours, so Sessions still lists it under Resolved.
     pub resolved_recent: bool,
+    /// The operator's ★ or a read, unanswered ask (PRD revisit-group).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revisit: Option<crate::agent_state::sessions::Revisit>,
     pub escalation: Option<crate::agent_state::escalation::Escalation>,
     /// How many letters wait on this pane because a draft may stand in its
     /// composer, once it has rested long enough for the operator to be shown
@@ -3609,6 +3612,9 @@ impl DetailSlot {
 pub struct UiStateSnapshot {
     #[serde(default)]
     pub resolved_sessions: BTreeMap<String, crate::agent_state::sessions::Resolution>,
+    /// The operator's 다시 볼 것 marks, by root pane (PRD revisit-group D-11).
+    #[serde(default)]
+    pub revisit_sessions: BTreeMap<String, crate::agent_state::sessions::RevisitMark>,
     /// A new input starts work beyond any PR that had already settled.
     #[serde(default)]
     pub session_resolution_inputs: BTreeMap<String, u64>,
@@ -4531,6 +4537,7 @@ impl Default for UiStateSnapshot {
     fn default() -> Self {
         Self {
             resolved_sessions: BTreeMap::new(),
+            revisit_sessions: BTreeMap::new(),
             session_resolution_inputs: BTreeMap::new(),
             session_collapsed_checkout_ids: Vec::new(),
             session_open_folds: Vec::new(),
@@ -7498,6 +7505,7 @@ mod wire_enum_tests {
             OverviewTaskState::Working,
             OverviewTaskState::Waiting,
             OverviewTaskState::Done,
+            OverviewTaskState::Revisit,
             OverviewTaskState::Resting,
             OverviewTaskState::Cleanup,
         ];
@@ -7508,6 +7516,7 @@ mod wire_enum_tests {
                 | OverviewTaskState::Working
                 | OverviewTaskState::Waiting
                 | OverviewTaskState::Done
+                | OverviewTaskState::Revisit
                 | OverviewTaskState::Resting
                 | OverviewTaskState::Cleanup => {}
             }

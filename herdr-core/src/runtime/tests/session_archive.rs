@@ -708,3 +708,35 @@ fn a_resumed_childs_registration_is_released_when_its_new_pane_is_gone() {
             .contains_key("agent-2")
     );
 }
+
+#[test]
+fn an_archived_root_keeps_its_star_and_wears_it_again_once_resumed() {
+    // PRD revisit-group B15.
+    let mut runtime = archive_runtime(&[]);
+    send(
+        &mut runtime,
+        "revisit_star",
+        serde_json::json!({"pane_id": "w1:p1"}),
+    );
+    let at = runtime.snapshot.ui_state.revisit_sessions["w1:p1"].starred_at_unix_ms;
+    assert!(at.is_some());
+    archive(&mut runtime, "w1:p1", false);
+    leave(&mut runtime, &["w1:p1", "w1:p2", "w1:p4"]);
+    leave(&mut runtime, &["w1:p1"]);
+    leave(&mut runtime, &[]);
+    let (_, held) = record(&runtime).unwrap();
+    assert_eq!(held.starred_at_unix_ms, at);
+    assert!(runtime.snapshot.navigator.archived_sessions[0].starred);
+
+    let mut payload = tree_payload(&["w1:p1"], &[]);
+    payload.agents[0].agent_session = Some(crate::sidebar::SessionAgentSessionPayload {
+        kind: "id".into(),
+        value: session_of("w1:p1"),
+    });
+    runtime.ingest_session_with_catalog(Ok(payload), Some(tree_catalog()));
+    runtime.advance_session_archive();
+    assert_eq!(
+        runtime.snapshot.ui_state.revisit_sessions["w1:p1"].starred_at_unix_ms,
+        at
+    );
+}

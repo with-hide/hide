@@ -1166,6 +1166,8 @@ pub struct Runtime {
     state_path: PathBuf,
     pending_session_resolutions: BTreeMap<String, crate::agent_state::sessions::Resolution>,
     failed_session_resolutions: BTreeMap<String, crate::agent_state::sessions::Resolution>,
+    /// 다시 볼 것 changes waiting on their save; `None` removes the mark.
+    pending_revisit: BTreeMap<String, Option<crate::agent_state::sessions::RevisitMark>>,
     delivery_holds: BTreeMap<String, crate::delivery::doorbell::Hold>,
     /// The panes whose letters the operator is shown waiting on a possible
     /// draft, with how many (`doorbell::letters_waiting`).
@@ -2222,6 +2224,7 @@ impl Runtime {
             worker_context: None,
             pending_session_resolutions: BTreeMap::new(),
             failed_session_resolutions: BTreeMap::new(),
+            pending_revisit: BTreeMap::new(),
             delivery_holds: BTreeMap::new(),
             letters_waiting: BTreeMap::new(),
             session_window_deadline_unix_ms: 0,

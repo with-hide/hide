@@ -351,7 +351,7 @@ pub mod phone {
     pub use crate::agent_sleep::{DormantPhase, SleepId};
 
     /// The groups in the order the phone draws them.
-    pub const GROUP_ORDER: [&str; 4] = ["needs_you", "done", "working", "seen"];
+    pub const GROUP_ORDER: [&str; 5] = ["needs_you", "done", "revisit", "working", "seen"];
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
     pub struct Line {
@@ -691,7 +691,21 @@ pub mod phone {
                     .get(pane_id)
                     .cloned()
                     .unwrap_or_else(|| pane_id.to_owned()),
-                group: str_of(agent, "group").to_owned(),
+                // A quiet row the operator starred or read and left
+                // unanswered stands in 다시 볼 것 (PRD revisit-group D-10).
+                group: match str_of(agent, "group") {
+                    "seen" if agent.get("revisit").is_some_and(|value| !value.is_null()) => {
+                        "revisit".to_owned()
+                    }
+                    "working"
+                        if str_of(agent, "activity") != "working"
+                            && agent.pointer("/revisit/starred").and_then(Value::as_bool)
+                                == Some(true) =>
+                    {
+                        "revisit".to_owned()
+                    }
+                    group => group.to_owned(),
+                },
                 mark: str_of(agent, "mark").to_owned(),
                 wait: agent.get("wait").and_then(Value::as_str).map(str::to_owned),
                 descendants_working: agent

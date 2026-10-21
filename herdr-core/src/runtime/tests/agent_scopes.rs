@@ -161,6 +161,64 @@ fn a_task_is_its_root_and_every_descendant_with_their_projects_and_devices() {
 }
 
 #[test]
+fn revisit_tasks_stand_oldest_first_and_the_current_state_wins() {
+    // PRD revisit-group B6, B7, B13: a quiet ★ or read ask stands in
+    // 다시 볼 것, oldest first; a working ★ stays in 일하는 중.
+    use crate::agent_state::sessions::Revisit;
+    let mut runtime = runtime();
+    let mut base = rows().remove(1);
+    base.lineage_parent_pane_id = None;
+    let agent = |id: &str, group: &str, activity: &str, since: Option<u64>| {
+        let mut agent = base.clone();
+        agent.pane_id = id.into();
+        agent.group = group.into();
+        agent.demand = "none".into();
+        agent.activity = activity.into();
+        agent.revisit = since.map(|since_unix_ms| Revisit {
+            starred: true,
+            read_ask: false,
+            since_unix_ms,
+        });
+        agent
+    };
+    runtime.snapshot.navigator.agents = vec![
+        agent("newer", "seen", "stopped", Some(20)),
+        agent("older", "seen", "stopped", Some(10)),
+        agent("busy", "working", "working", Some(5)),
+        agent("plain", "seen", "stopped", None),
+    ];
+    let names = ["newer", "older", "busy", "plain"];
+    let checkouts: Vec<_> = names
+        .iter()
+        .map(|name| {
+            checkout(
+                "project",
+                name,
+                &format!("/{name}"),
+                Some(pane(name, &format!("/{name}"))),
+            )
+        })
+        .collect();
+    runtime.snapshot.navigator.workspaces =
+        vec![workspace("project", "Project", "/fixture", checkouts)];
+    assert!(runtime.refresh_agent_scopes());
+    let tasks = &runtime.snapshot.navigator.workspaces[0].agent_scope.tasks;
+    assert_eq!(
+        tasks
+            .cards
+            .iter()
+            .map(|c| (c.root.as_str(), c.state))
+            .collect::<Vec<_>>(),
+        [
+            ("busy", TaskState::Working),
+            ("older", TaskState::Revisit),
+            ("newer", TaskState::Revisit),
+            ("plain", TaskState::Resting),
+        ]
+    );
+}
+
+#[test]
 fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
     // B7, B9: Needs You, blocked, working, waiting, done, then resting and
     // the cleanup fold; the stage bar follows the task's PRs and worktrees.

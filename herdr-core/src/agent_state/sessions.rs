@@ -26,6 +26,68 @@ pub struct Resolution {
     pub activity: String,
 }
 
+/// How many tasks may carry the operator's ★ at once (PRD revisit-group D-15).
+pub const MAX_STARRED_SESSIONS: usize = 256;
+
+/// The operator's 다시 볼 것 decisions about one root session (PRD
+/// revisit-group D-03, D-05): the ★ and the read ask 다 봤음 put away. Bound
+/// to the session the pane hosted when it was written, like a resolution.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct RevisitMark {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starred_at_unix_ms: Option<u64>,
+    /// The `request_since` of the read ask 다 봤음 dismissed; a later ask
+    /// has another and stands again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dismissed_ask_since: Option<u64>,
+    pub session: Option<String>,
+}
+
+impl RevisitMark {
+    pub fn is_empty(&self) -> bool {
+        self.starred_at_unix_ms.is_none() && self.dismissed_ask_since.is_none()
+    }
+}
+
+/// What a row carries for 다시 볼 것 (PRD revisit-group D-02, D-03): the
+/// operator's ★, an ask the operator read and has not answered, and since
+/// when it waits, the older of the two.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct Revisit {
+    pub starred: bool,
+    pub read_ask: bool,
+    pub since_unix_ms: u64,
+}
+
+/// An ask the operator read and has not answered: a question or an approval
+/// that no longer holds the row in Needs You (a block holds it there, D-12),
+/// on a root that is not working, and not the one 다 봤음 put away.
+pub(crate) fn revisit_of(
+    agent: &SidebarAgentSnapshot,
+    mark: Option<&RevisitMark>,
+) -> Option<Revisit> {
+    let read_ask = agent.lineage_parent_pane_id.is_none()
+        && matches!(agent.demand.as_str(), "question" | "approval")
+        && !agent.blocked
+        && !agent.unread
+        && agent.activity != "working"
+        && agent.state.request_since.is_some()
+        && mark.and_then(|m| m.dismissed_ask_since) != agent.state.request_since;
+    let starred_at = mark.and_then(|m| m.starred_at_unix_ms);
+    let since = [
+        read_ask.then_some(agent.state.request_since).flatten(),
+        starred_at,
+    ]
+    .into_iter()
+    .flatten()
+    .min()?;
+    Some(Revisit {
+        starred: starred_at.is_some(),
+        read_ask,
+        since_unix_ms: since,
+    })
+}
+
 pub(crate) fn auto_resolvable(agent: &SidebarAgentSnapshot, input_after: Option<u64>) -> bool {
     if agent.activity != "stopped" || agent.blocked || agent.demand != "none" {
         return false;

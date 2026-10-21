@@ -211,6 +211,10 @@ pub struct ArchiveRecord {
     pub members: Vec<ArchivedMember>,
     #[serde(default)]
     pub reason: Option<String>,
+    /// The root's ★, kept while archived and given back on resume (PRD
+    /// revisit-group D-05, B15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starred_at_unix_ms: Option<u64>,
     /// A delete whose link-record lines are gone and whose removal waits
     /// for the writer's receipt; never written, so the save leaves it out.
     #[serde(skip)]
@@ -432,6 +436,8 @@ pub struct ArchivedSessionSnapshot {
     pub listed: bool,
     pub archived_at_unix_ms: u64,
     pub reason: Option<String>,
+    /// The root carries the operator's ★ (PRD revisit-group B15).
+    pub starred: bool,
     pub members: Vec<ArchivedMemberSnapshot>,
 }
 
@@ -486,6 +492,7 @@ impl ArchiveRecord {
             listed: self.root_archived() || self.phase == ArchivePhase::CloseUnknown,
             archived_at_unix_ms: self.archived_at_unix_ms,
             reason: self.reason.clone(),
+            starred: self.starred_at_unix_ms.is_some(),
             members: self
                 .members
                 .iter()
@@ -589,6 +596,7 @@ pub(crate) fn fixture_record(members: Vec<ArchivedMember>, at: u64) -> ArchiveRe
         project_label: "repo".into(),
         members,
         reason: None,
+        starred_at_unix_ms: None,
         deleting: false,
     }
 }
