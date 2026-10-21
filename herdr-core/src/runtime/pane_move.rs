@@ -88,6 +88,8 @@ pub(crate) struct Intent {
     message: Option<String>,
     #[serde(default)]
     target_terminal: Option<String>,
+    #[serde(default)]
+    new_tab_slot: bool,
     /// The last acknowledged public identity, never a replacement terminal.
     result_pane: Option<String>,
     result_tab: Option<String>,
@@ -99,6 +101,7 @@ pub(super) struct Operation {
     baseline: Option<SessionSnapshotPayload>,
     worker: bool,
     remote_baseline: Option<RemoteSessionSnapshot>,
+    publication_barrier: Option<std::time::Instant>,
 }
 pub(super) struct SaveWaiter {
     key: (String, String),
@@ -108,10 +111,54 @@ pub(super) struct SaveWaiter {
 }
 
 impl Runtime {
+    /// A bootstrap begun after a transaction's final read is authoritative
+    /// even if another client changed or closed the pane in the meantime.
+    pub(crate) fn release_pane_move_publication_barriers(
+        &mut self,
+        device: Option<&str>,
+        snapshot_started_at: std::time::Instant,
+    ) -> bool {
+        let device = device.unwrap_or(self.node.as_str());
+        let mut changed = false;
+        for op in self.pane_moves.values_mut().filter(|op| {
+            op.intent.request.workspace.device_id == device
+                && op
+                    .publication_barrier
+                    .is_some_and(|created| created <= snapshot_started_at)
+        }) {
+            changed = true;
+            op.publication_barrier = None;
+            op.baseline = None;
+            op.remote_baseline = None;
+        }
+        if changed {
+            self.sync_async_operations();
+        }
+        changed
+    }
+    pub(super) fn pending_pane_move_tabs(&self, key: &(String, String)) -> usize {
+        self.workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(&key.0, &key.1))
+            .map_or(0, |view| {
+                view.pane_moves
+                    .values()
+                    .filter(|intent| {
+                        intent.new_tab_slot
+                            && !matches!(intent.phase.as_str(), "completed" | "failed")
+                    })
+                    .count()
+            })
+    }
     pub(super) fn pane_move_holds_tab(&self, tab: &str) -> bool {
         self.pane_moves.values().any(|op| {
-            !matches!(op.intent.phase.as_str(), "failed" | "completed")
+            (!matches!(op.intent.phase.as_str(), "failed" | "completed")
+                || op.publication_barrier.is_some())
                 && (op.intent.request.source.tab_id == tab
+                    || op.intent.result_tab.as_ref().is_some_and(|id| {
+                        self.pane_move_public(&op.intent.request.workspace.device_id, "tab", id)
+                            == tab
+                    })
                     || op
                         .intent
                         .request
@@ -225,10 +272,7 @@ impl Runtime {
             return Err("This tab already has a pending change".into());
         }
         let checkout = self
-            .snapshot
-            .navigator
-            .workspaces
-            .iter()
+            .catalog_workspaces()
             .filter(|w| w.device_id == key.0)
             .flat_map(|w| &w.checkouts)
             .find(|c| c.path == key.1)
@@ -304,23 +348,35 @@ impl Runtime {
         {
             return Err("At most 64 Agent tabs can be arranged. Close a tab first.".into());
         }
-        Ok((
-            terminal,
-            self.pane_move_raw(
-                &key.0,
-                "workspace",
-                &self
-                    .snapshot
+        let native_workspace = if key.0 == self.node.as_str() {
+            self.snapshot
+                .pane_layouts
+                .iter()
+                .find(|layout| {
+                    layout.tab_id == request.source.tab_id
+                        && layout.pane_ids().contains(&request.source.pane_id.as_str())
+                })
+                .map(|layout| layout.workspace_id.as_str())
+        } else {
+            self.device_raw_sessions.get(&key.0).and_then(|session| {
+                session
                     .pane_layouts
                     .iter()
                     .find(|layout| {
                         layout.tab_id == request.source.tab_id
-                            && layout.pane_ids().contains(&request.source.pane_id.as_str())
+                            && layout
+                                .frames
+                                .iter()
+                                .any(|frame| frame.pane_id == request.source.pane_id)
                     })
-                    .ok_or("The source native layout is unavailable")?
-                    .workspace_id,
-            )?
-            .to_owned(),
+                    .map(|layout| layout.workspace_id.as_str())
+            })
+        }
+        .ok_or("The source native layout is unavailable")?;
+        Ok((
+            terminal,
+            self.pane_move_raw(&key.0, "workspace", native_workspace)?
+                .to_owned(),
             source.panes.len() == 1,
         ))
     }
@@ -390,6 +446,7 @@ impl Runtime {
                 started_at: unix_milliseconds(),
                 message: None,
                 target_terminal: None,
+                new_tab_slot: false,
                 result_pane: None,
                 result_tab: None,
             });
@@ -399,7 +456,10 @@ impl Runtime {
         if self
             .pane_moves
             .values()
-            .filter(|op| !matches!(op.intent.phase.as_str(), "failed" | "completed"))
+            .filter(|op| {
+                op.publication_barrier.is_some()
+                    || !matches!(op.intent.phase.as_str(), "failed" | "completed")
+            })
             .count()
             >= ACTIVE_LIMIT
         {
@@ -440,16 +500,15 @@ impl Runtime {
             return true;
         };
         let target_terminal = request.destination.target().and_then(|(_, id, _)| {
-            self.snapshot
-                .navigator
-                .workspaces
-                .iter()
+            self.catalog_workspaces()
+                .filter(|workspace| workspace.device_id == key.0)
                 .flat_map(|w| &w.checkouts)
                 .flat_map(|c| &c.tabs)
                 .flat_map(|t| &t.panes)
                 .find(|p| p.id == id)
                 .and_then(|p| p.terminal_id.clone())
         });
+        let new_tab_slot = matches!(request.destination, Destination::NewTab { .. });
         let intent = Intent {
             request,
             terminal_id,
@@ -458,6 +517,7 @@ impl Runtime {
             started_at: unix_milliseconds(),
             message: None,
             target_terminal: None,
+            new_tab_slot,
             result_pane: None,
             result_tab: None,
         };
@@ -495,6 +555,7 @@ impl Runtime {
             started_at: unix_milliseconds(),
             message: Some(message),
             target_terminal: None,
+            new_tab_slot: false,
             result_pane: None,
             result_tab: None,
         });
@@ -519,7 +580,8 @@ impl Runtime {
                 .insert(request.request_id.clone(), intent.clone());
         }
         self.pane_moves.retain(|_, op| {
-            !matches!(op.intent.phase.as_str(), "failed" | "completed")
+            op.publication_barrier.is_some()
+                || !matches!(op.intent.phase.as_str(), "failed" | "completed")
                 || op.intent.started_at.saturating_add(60_000) > unix_milliseconds()
         });
         let remote_baseline = self
@@ -530,7 +592,10 @@ impl Runtime {
             let oldest = self
                 .pane_moves
                 .iter()
-                .filter(|(_, op)| matches!(op.intent.phase.as_str(), "failed" | "completed"))
+                .filter(|(_, op)| {
+                    op.publication_barrier.is_none()
+                        && matches!(op.intent.phase.as_str(), "failed" | "completed")
+                })
                 .min_by_key(|(_, op)| op.intent.started_at)
                 .map(|(id, _)| id.clone());
             if let Some(id) = oldest {
@@ -547,6 +612,7 @@ impl Runtime {
                 baseline: None,
                 remote_baseline,
                 worker,
+                publication_barrier: None,
             },
         );
         self.sync_async_operations();
@@ -588,7 +654,7 @@ impl Runtime {
             || self
                 .pane_moves
                 .get(&check.request_id)
-                .is_some_and(|op| op.worker)
+                .is_some_and(|op| op.worker || op.publication_barrier.is_some())
         {
             return false;
         }
@@ -599,11 +665,12 @@ impl Runtime {
                 baseline: None,
                 remote_baseline: None,
                 worker: false,
+                publication_barrier: None,
             });
         if self
             .pane_moves
             .values()
-            .filter(|operation| operation.worker)
+            .filter(|operation| operation.worker || operation.publication_barrier.is_some())
             .count()
             >= ACTIVE_LIMIT
         {
@@ -633,6 +700,7 @@ impl Runtime {
                 baseline: None,
                 remote_baseline: None,
                 worker: true,
+                publication_barrier: None,
             },
         );
         if let Err(error) = thread::Builder::new()
@@ -659,20 +727,43 @@ impl Runtime {
             .values()
             .filter(|intent| {
                 !matches!(intent.phase.as_str(), "completed")
+                    || self
+                        .pane_moves
+                        .get(&intent.request.request_id)
+                        .is_some_and(|op| op.publication_barrier.is_some())
                     || intent.started_at.saturating_add(60_000) > unix_milliseconds()
             })
             .map(|intent| crate::model::AsyncOperationSnapshot {
-                related_scope_ids: intent
-                    .request
-                    .destination
-                    .target()
-                    .map(|(id, _, _)| vec![intent.request.source.tab_id.clone(), id.into()])
-                    .unwrap_or_else(|| vec![intent.request.source.tab_id.clone()]),
+                related_scope_ids: {
+                    let mut tabs = intent
+                        .request
+                        .destination
+                        .target()
+                        .map(|(id, _, _)| vec![intent.request.source.tab_id.clone(), id.into()])
+                        .unwrap_or_else(|| vec![intent.request.source.tab_id.clone()]);
+                    if let Some(result) = &intent.result_tab {
+                        let public = self.pane_move_public(
+                            &intent.request.workspace.device_id,
+                            "tab",
+                            result,
+                        );
+                        if !tabs.contains(&public) {
+                            tabs.push(public);
+                        }
+                    }
+                    tabs
+                },
                 id: intent.request.request_id.clone(),
                 kind: "pane.move".into(),
                 target_id: intent.request.source.pane_id.clone(),
                 scope_id: intent.request.source.tab_id.clone(),
-                phase: if self.pane_moves.contains_key(&intent.request.request_id) {
+                phase: if self
+                    .pane_moves
+                    .get(&intent.request.request_id)
+                    .is_some_and(|op| op.publication_barrier.is_some())
+                {
+                    "awaiting_topology".into()
+                } else if self.pane_moves.contains_key(&intent.request.request_id) {
                     intent.phase.clone()
                 } else if matches!(
                     intent.phase.as_str(),
@@ -686,7 +777,11 @@ impl Runtime {
                 started_at_unix_ms: intent.started_at,
                 deadline_at_unix_ms: None,
                 message: intent.message.clone(),
-                retryable: intent.phase == "failed",
+                retryable: intent.phase == "failed"
+                    && !self
+                        .pane_moves
+                        .get(&intent.request.request_id)
+                        .is_some_and(|op| op.publication_barrier.is_some()),
             })
             .collect()
     }
@@ -769,8 +864,58 @@ impl Runtime {
     }
     /// Preserve the affected native tabs while a live transaction uses a
     /// temporary tab. Unrelated tabs and agent activity keep publishing.
+    pub(super) fn overlay_pane_move_catalog(&self, catalog: &mut session_sync::PrecomputedCatalog) {
+        for op in self.pane_moves.values().filter(|op| {
+            (op.worker || op.publication_barrier.is_some())
+                && op.baseline.is_some()
+                && op.intent.request.workspace.device_id == self.node.as_str()
+        }) {
+            let affected = |tab: &str| {
+                tab == op.intent.request.source.tab_id
+                    || op
+                        .intent
+                        .request
+                        .destination
+                        .target()
+                        .is_some_and(|(id, _, _)| id == tab)
+                    || (op.publication_barrier.is_some()
+                        && op.intent.result_tab.as_deref() == Some(tab))
+            };
+            for checkout in catalog
+                .workspaces
+                .iter_mut()
+                .flat_map(|workspace| &mut workspace.checkouts)
+            {
+                if checkout.path != op.intent.request.workspace.checkout_path {
+                    continue;
+                }
+                checkout.tabs.retain(|tab| {
+                    !tab.id.as_deref().is_some_and(affected)
+                        && !tab
+                            .panes
+                            .iter()
+                            .any(|pane| pane.terminal_id.as_deref() == Some(&op.intent.terminal_id))
+                });
+                checkout.tabs.extend(
+                    self.snapshot
+                        .navigator
+                        .workspaces
+                        .iter()
+                        .flat_map(|workspace| &workspace.checkouts)
+                        .filter(|original| original.path == checkout.path)
+                        .flat_map(|original| &original.tabs)
+                        .filter(|tab| tab.id.as_deref().is_some_and(affected))
+                        .cloned(),
+                );
+            }
+        }
+    }
     pub(super) fn overlay_pane_moves(&self, payload: &mut SessionSnapshotPayload) {
-        for op in self.pane_moves.values().filter(|op| op.worker) {
+        for op in self
+            .pane_moves
+            .values()
+            .filter(|op| op.worker || op.publication_barrier.is_some())
+        {
             let Some(baseline) = &op.baseline else {
                 continue;
             };
@@ -784,7 +929,12 @@ impl Runtime {
                 .destination
                 .target()
                 .map(|(tab, _, _)| tab);
-            let affected = |tab: &str| tab == source || target == Some(tab);
+            let affected = |tab: &str| {
+                tab == source
+                    || target == Some(tab)
+                    || (op.publication_barrier.is_some()
+                        && op.intent.result_tab.as_deref() == Some(tab))
+            };
             let moved = payload
                 .panes
                 .iter()
@@ -891,11 +1041,10 @@ impl Runtime {
         device: &str,
         payload: &mut RemoteSessionSnapshot,
     ) {
-        for op in self
-            .pane_moves
-            .values()
-            .filter(|op| op.worker && op.intent.request.workspace.device_id == device)
-        {
+        for op in self.pane_moves.values().filter(|op| {
+            (op.worker || op.publication_barrier.is_some())
+                && op.intent.request.workspace.device_id == device
+        }) {
             let Some(baseline) = &op.remote_baseline else {
                 continue;
             };
@@ -906,7 +1055,16 @@ impl Runtime {
                 .destination
                 .target()
                 .map(|(tab, _, _)| tab);
-            let affected = |id: &str| id == source || target == Some(id);
+            let result = op
+                .intent
+                .result_tab
+                .as_ref()
+                .map(|id| self.pane_move_public(device, "tab", id));
+            let affected = |id: &str| {
+                id == source
+                    || target == Some(id)
+                    || (op.publication_barrier.is_some() && result.as_deref() == Some(id))
+            };
             let mut temporary = HashSet::new();
             for tab in payload
                 .workspaces
@@ -1004,10 +1162,7 @@ impl Runtime {
     }
     pub(super) fn manually_placed_pane(&self, pane_id: &str) -> bool {
         let terminal = self
-            .snapshot
-            .navigator
-            .workspaces
-            .iter()
+            .catalog_workspaces()
             .flat_map(|w| &w.checkouts)
             .flat_map(|c| &c.tabs)
             .flat_map(|tab| &tab.panes)
@@ -1292,6 +1447,8 @@ fn run(
         }
         match final_payload {
             Ok((payload, remote)) => {
+                let publication =
+                    (executed || check_only).then(|| (payload.clone(), remote.clone()));
                 let found = locate(&payload, &intent.terminal_id)
                     .map(|(pane, tab, _)| (pane.to_owned(), tab.to_owned()));
                 let local = intent.request.workspace.device_id == guard.node.as_str();
@@ -1329,6 +1486,28 @@ fn run(
                             });
                         guard.finish_pane_move(id, if gone{"failed"}else{"unknown"}, Some(if gone{"The original terminal is no longer live; no replacement was started".into()}else{message}), None)
                     }
+                }
+                if let Some((payload, remote)) = publication {
+                    if let Some(op) = guard.pane_moves.get_mut(id) {
+                        op.baseline = Some(payload);
+                        op.remote_baseline = Some(remote);
+                        op.publication_barrier = Some(std::time::Instant::now());
+                    }
+                    let refresh_started = if local {
+                        if let Some(waker) = &guard.republish_waker {
+                            waker.refresh_topology()
+                        } else {
+                            false
+                        }
+                    } else {
+                        guard.refresh_remote_topology(&intent.request.workspace.device_id)
+                    };
+                    if !refresh_started && let Some(op) = guard.pane_moves.get_mut(id) {
+                        op.publication_barrier = None;
+                        op.baseline = None;
+                        op.remote_baseline = None;
+                    }
+                    guard.sync_async_operations();
                 }
             }
             Err(error) => guard.finish_pane_move(
@@ -1537,6 +1716,7 @@ mod tests {
             started_at: 1,
             message: None,
             target_terminal: Some("term-target".into()),
+            new_tab_slot: false,
             result_pane: None,
             result_tab: None,
         }
@@ -1586,6 +1766,220 @@ mod tests {
         let after = payload(rect(40, 0, 40, 24), rect(0, 0, 40, 24));
         assert!(same_placement(&before, &before, &intent(Edge::Up, "w1:t1")));
         assert!(!same_placement(&before, &after, &intent(Edge::Up, "w1:t1")));
+    }
+
+    #[test]
+    fn pending_new_tab_move_reserves_the_shared_last_agent_slot_until_settled() {
+        let mut runtime = crate::runtime::tests::pane_move::arranged();
+        let ids = (1..=63)
+            .map(|number| format!("w-order:t{number}"))
+            .collect::<Vec<_>>();
+        let refs = ids.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut before = crate::runtime::tests::pane_move::topology(&refs);
+        let sibling: crate::sidebar::SessionPanePayload = serde_json::from_value(json!({
+            "pane_id":"w-order:extra", "terminal_id":"extra", "cwd":"/fixture/pane-move"
+        }))
+        .unwrap();
+        before.panes.push(sibling);
+        let extra = before.layouts[0].panes[0].clone();
+        before.layouts[0]
+            .panes
+            .push(crate::sidebar::SessionLayoutPanePayload {
+                pane_id: "w-order:extra".into(),
+                ..extra
+            });
+        runtime.ingest_session(Ok(before));
+        let key = (
+            crate::node::TEST_NODE.to_owned(),
+            "/fixture/pane-move".to_owned(),
+        );
+        let area = runtime
+            .workspace_views
+            .as_ref()
+            .unwrap()
+            .views
+            .get(&key.0, &key.1)
+            .unwrap()
+            .agent_layout
+            .tree
+            .area_of("w-order:t1")
+            .unwrap()
+            .id
+            .clone();
+        let mut first = intent(Edge::Right, "w1:t1");
+        first.request.workspace.checkout_path = key.1.clone();
+        first.request.source = Source {
+            pane_id: "w-order:t2:p".into(),
+            tab_id: "w-order:t2".into(),
+            area_id: area.clone(),
+        };
+        first.request.destination = Destination::NewTab {
+            area_id: area.clone(),
+        };
+        first.new_tab_slot = true;
+        first.terminal_id = "terminal:w-order:t2:p".into();
+        runtime.record_pane_move(first.clone());
+        assert_eq!(runtime.pending_agent_admissions(&key), 1);
+        assert!(!runtime.admit_agent_tab_for_workspace(&key));
+        let mut second = first.request.clone();
+        second.request_id = "second".into();
+        second.source.pane_id = "w-order:t1:p".into();
+        second.source.tab_id = "w-order:t1".into();
+        assert!(
+            runtime
+                .validate_pane_move(&second)
+                .unwrap_err()
+                .contains("64 Agent tabs")
+        );
+        runtime.finish_pane_move(&first.request.request_id, "unknown", None, None);
+        assert_eq!(runtime.pending_agent_admissions(&key), 1);
+        runtime.finish_pane_move(&first.request.request_id, "failed", None, None);
+        assert_eq!(runtime.pending_agent_admissions(&key), 0);
+        assert!(runtime.admit_agent_tab_for_workspace(&key));
+    }
+
+    #[test]
+    fn final_publication_barrier_preserves_named_group_area_and_accepts_a_later_close() {
+        let mut runtime = crate::runtime::tests::pane_move::arranged();
+        let key = (
+            crate::node::TEST_NODE.to_owned(),
+            "/fixture/pane-move".to_owned(),
+        );
+        let mut before = crate::runtime::tests::pane_move::topology(&["w-order:t1", "w-order:t2"]);
+        let mut remaining = before.panes[0].clone();
+        remaining.pane_id = "w-order:remaining".into();
+        remaining.terminal_id = Some("remaining-terminal".into());
+        before.panes.push(remaining.clone());
+        let mut sibling = before.layouts[0].panes[0].clone();
+        sibling.pane_id = remaining.pane_id.clone();
+        before.layouts[0].panes.push(sibling);
+        runtime.ingest_session(Ok(before.clone()));
+        let stale_catalog = session_sync::PrecomputedCatalog::here(
+            runtime.snapshot.ui_state.workspace_registrations.clone(),
+            &before,
+            &runtime.worktree_catalog(),
+        );
+        let (group, area) = {
+            let view = runtime
+                .workspace_views
+                .as_mut()
+                .unwrap()
+                .views
+                .entry(&key.0, &key.1);
+            let group = view.create_agent_group("Review").unwrap();
+            view.move_agent_to_group("w-order:t1", Some(&group), 1)
+                .unwrap();
+            view.move_agent_to_group("w-order:t2", Some(&group), 2)
+                .unwrap();
+            let area = view
+                .group_layout_mut(Some(&group))
+                .unwrap()
+                .tree
+                .split("w-order:t2", "a1", Edge::Right, 3)
+                .unwrap();
+            (group, area)
+        };
+        let mut final_payload =
+            crate::runtime::tests::pane_move::topology(&["w-order:t1", "w-order:t2", "w-order:t3"]);
+        final_payload.panes[0] = remaining;
+        final_payload.layouts[0].panes[0].pane_id = "w-order:remaining".into();
+        final_payload.layouts[0].focused_pane_id = "w-order:remaining".into();
+        final_payload.panes[2].pane_id = "w-order:t1:p".into();
+        final_payload.panes[2].terminal_id = Some("terminal:w-order:t1:p".into());
+        final_payload.layouts[2].panes[0].pane_id = "w-order:t1:p".into();
+        final_payload.layouts[2].focused_pane_id = "w-order:t1:p".into();
+        let mut closed = final_payload.clone();
+        closed.tabs.retain(|tab| tab.tab_id != "w-order:t3");
+        closed
+            .layouts
+            .retain(|layout| layout.tab_id != "w-order:t3");
+        closed.panes.retain(|pane| pane.pane_id != "w-order:t1:p");
+        let mut moved = intent(Edge::Right, "w1:t1");
+        moved.request.workspace.checkout_path = key.1.clone();
+        moved.request.group_id = Some(group.clone());
+        moved.request.source = Source {
+            pane_id: "w-order:t1:p".into(),
+            tab_id: "w-order:t1".into(),
+            area_id: "a1".into(),
+        };
+        moved.request.destination = Destination::NewTab {
+            area_id: area.clone(),
+        };
+        moved.terminal_id = "terminal:w-order:t1:p".into();
+        runtime.record_pane_move(moved.clone());
+        runtime
+            .pane_moves
+            .get_mut(&moved.request.request_id)
+            .unwrap()
+            .worker = false;
+        runtime.ingest_session(Ok(final_payload.clone()));
+        runtime.finish_pane_move(
+            &moved.request.request_id,
+            "completed",
+            None,
+            Some(("w-order:t1:p".into(), "w-order:t3".into())),
+        );
+        let created = std::time::Instant::now();
+        let op = runtime
+            .pane_moves
+            .get_mut(&moved.request.request_id)
+            .unwrap();
+        op.baseline = Some(final_payload);
+        op.publication_barrier = Some(created);
+        runtime.ingest_session_with_catalog(Ok(before.clone()), Some(stale_catalog));
+        let view = runtime
+            .workspace_views
+            .as_ref()
+            .unwrap()
+            .views
+            .get(&key.0, &key.1)
+            .unwrap();
+        assert_eq!(
+            view.agent_tab_group("w-order:t3"),
+            Some(Some(group.as_str()))
+        );
+        assert_eq!(
+            view.group_layout(Some(&group))
+                .unwrap()
+                .tree
+                .area_of("w-order:t3")
+                .unwrap()
+                .id,
+            area
+        );
+        assert!(runtime.pane_move_holds_tab("w-order:t3"));
+        let locations = runtime
+            .catalog_workspaces()
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .filter(|tab| {
+                tab.panes
+                    .iter()
+                    .any(|pane| pane.terminal_id.as_deref() == Some(&moved.terminal_id))
+            })
+            .filter_map(|tab| tab.id.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(locations, ["w-order:t3"]);
+        runtime.release_pane_move_publication_barriers(None, created - Duration::from_millis(1));
+        assert!(
+            runtime.pane_moves[&moved.request.request_id]
+                .publication_barrier
+                .is_some()
+        );
+        runtime.release_pane_move_publication_barriers(None, std::time::Instant::now());
+        runtime.ingest_session(Ok(closed));
+        assert!(!runtime.pane_move_holds_tab("w-order:t3"));
+        assert!(
+            runtime
+                .workspace_views
+                .as_ref()
+                .unwrap()
+                .views
+                .get(&key.0, &key.1)
+                .unwrap()
+                .agent_tab_group("w-order:t3")
+                .is_none()
+        );
     }
 
     #[test]

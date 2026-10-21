@@ -130,10 +130,7 @@ impl Runtime {
             return;
         };
         let panes = self
-            .snapshot
-            .navigator
-            .workspaces
-            .iter()
+            .catalog_workspaces()
             .filter(|workspace| &workspace.device_id == device)
             .flat_map(|workspace| &workspace.checkouts)
             .filter(|checkout| checkout.path == request.workspace.checkout_path)

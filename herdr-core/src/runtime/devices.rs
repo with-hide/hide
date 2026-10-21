@@ -84,6 +84,17 @@ pub(super) struct RemoteDeviceConnection {
 }
 
 impl Runtime {
+    pub(super) fn refresh_remote_topology(&self, device: &str) -> bool {
+        if let Some(sync) = self
+            .remote_connections
+            .get(device)
+            .and_then(|connection| connection.sync.as_ref())
+        {
+            sync.republish_waker().refresh_topology()
+        } else {
+            false
+        }
+    }
     /// Makes a registered device the one in front: its checkouts, panes and
     /// files are what the shell shows next.
     pub(super) fn bring_device_forward(&mut self, device_id: String) {

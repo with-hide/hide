@@ -217,7 +217,7 @@ fn run_coordinator(
                     subscription: next_subscription,
                     snapshot_at,
                 }) => {
-                    if !begin_read_connection(&context) {
+                    if !begin_read_connection(&context, snapshot_started_at) {
                         stop_subscription(&mut subscription);
                         return;
                     }
@@ -600,6 +600,14 @@ fn run_coordinator(
             next_operation_tick,
         );
         match receiver.recv_timeout(timeout) {
+            Ok(CoordinatorMessage::RefreshTopology) => {
+                // Discard the old stream generation. The next bootstrap is a
+                // read only; it can safely supersede a move's final drawing
+                // even when another client has since moved or closed it.
+                stop_subscription(&mut subscription);
+                reconnect_at = Instant::now();
+                defer_background_reads = true;
+            }
             Ok(CoordinatorMessage::Stop) => {
                 stop_subscription(&mut subscription);
                 return;
@@ -1835,7 +1843,7 @@ fn observe_labels(worker: &mut LabelWorker, replica: &SessionReplica) {
 /// Starts the read axis's view of this connection before its first
 /// projection: the server reached may be the one lost or a restored one, and
 /// only the panes' marks tell (`agent_state::ReadConnection`).
-fn begin_read_connection(context: &SessionSyncContext) -> bool {
+fn begin_read_connection(context: &SessionSyncContext, snapshot_started_at: Instant) -> bool {
     let Some(runtime) = context.runtime.upgrade() else {
         return false;
     };
@@ -1843,6 +1851,12 @@ fn begin_read_connection(context: &SessionSyncContext) -> bool {
         return false;
     };
     guard.begin_read_connection(context.read_target());
+    let changed =
+        guard.release_pane_move_publication_barriers(context.read_target(), snapshot_started_at);
+    drop(guard);
+    if changed {
+        context.notifier.notify();
+    }
     true
 }
 

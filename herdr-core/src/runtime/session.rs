@@ -2466,8 +2466,12 @@ impl Runtime {
         // Sleeping agents Herdr no longer lists are drawn from their records
         // before anything below reads the agents (PRD agent-sleep B10).
         let mut fetched = fetched;
+        let mut precomputed = precomputed;
         if let Ok(payload) = fetched.as_mut() {
             self.overlay_pane_moves(payload);
+            if let Some(catalog) = precomputed.as_mut() {
+                self.overlay_pane_move_catalog(catalog);
+            }
         }
         let mut inline_paths = None;
         if let Ok(payload) = fetched.as_mut() {
