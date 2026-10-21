@@ -18,8 +18,7 @@ import type { DispatchFn } from "./ws";
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 // Layout failure is a supported surface with the same session preview actions.
 vi.mock("./overviewGraphLayout", () => ({
-  useOverviewGraphLayout: () => ({ key: "fixture", phase: "failed", placement: null }),
-  useGraphReducedMotion: () => true,
+  useOverviewGraphLayout: () => ({ phase: "failed", size: null, points: new Map(), map: null, reset: () => {} }),
   useGraphTheme: () => "light",
 }));
 const savedShell = useShellStore.getState();
@@ -100,4 +99,87 @@ it.each([
       : { kind: "remote_control", payload: { target_id: "mini", action: "focus_pane", pane_id: pane } });
     expect(Boolean((events[0]!.payload as { focus_device?: boolean }).focus_device)).toBe(front !== device);
   } finally { await act(async () => root.unmount()); }
+});
+
+// PRD overview-main-map B11-B16: the side column lists projects with their
+// states and what waits on the operator; a chosen session shows its team and
+// its counterparts by count only; hiding a project ends a selection inside it.
+it("lists projects, hides one, and shows a chosen session's team and counterparts without message text", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const checkout = (workspace: string): Checkout => ({ id: `${workspace}-main`, workspace_id: workspace, label: "main", path: `/fixture/${workspace}`, branch: "feat/map", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() });
+  const root = legacyAgentRow({ id: "r", pane_id: "r", identity_label: "배포 확인", agent_kind: "claude", session_id: "native-r", group: "needs_you", demand: "question", mark: "turn" });
+  root.state.ask = { verb: "answer", what: "배포 범위를 확인해 주세요", more: 0 };
+  const child = legacyAgentRow({ id: "c", pane_id: "c", identity_label: "검증 자식", agent_kind: "codex", session_id: "native-c", group: "working", activity: "working", delegated: true, lineage_parent_pane_id: "r" });
+  const other = legacyAgentRow({ id: "o", pane_id: "o", identity_label: "다른 일", agent_kind: "claude", session_id: "native-o", group: "working", activity: "working" });
+  const board = (id: string, label: string, agents: typeof root[]): BoardProject => {
+    const row = checkout(id);
+    return { agents, device: null, workspace: { id, label, device_id: "local", path: `/fixture/${id}`, registered: true, temporary: false, pinned: false, checkouts: [row], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: agents.map((agent) => ({ pane_id: agent.pane_id, project_id: id, checkout_id: row.id })) } } };
+  };
+  const projects = [board("alpha", "알파", [root, child]), board("beta", "베타", [other])];
+  const party = (pane: string) => ({ device_id: "local", pane_id: pane, session: `digest-${pane}` });
+  const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local" }, status: {}, overview_graph: {
+    available: true, limit: 2000, retained_count: 2, truncated: false, retention_ms: 86400000,
+    letters: [{ id: "l1", sender: party("r"), recipient: party("o"), kind: "request", at_unix_ms: 10 }, { id: "l2", sender: party("o"), recipient: party("r"), kind: "report", at_unix_ms: 20 }, { id: "l3", sender: party("o"), recipient: party("r"), kind: "progress", at_unix_ms: 30 }],
+    direct_inputs: [{ id: "d1", sender: party("c"), recipient: party("r"), at_unix_ms: 40 }],
+    sessions: ["r", "c", "o"].map((pane) => ({ device_id: "local", pane_id: pane, session_digest: `digest-${pane}`, launch_model: null })),
+  } } as unknown as SnapshotRest;
+  useShellStore.setState({ rest, agents: [root, child, other], focusedPaneId: null, connection: "live", linkSummaries: null });
+  useUiStore.getState().setOverview({ projectId: null, panel: null });
+  useUiStore.setState({ overviewOpen: false, opening: null, screen: { kind: "main", deviceId: "local" } });
+  const events: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { events.push(event); return true; });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const reactRoot = createRoot(container);
+  const button = (name: string, within: ParentNode = container) => [...within.querySelectorAll<HTMLButtonElement>("button")].find((one) => one.textContent?.trim() === name || one.getAttribute("aria-label") === name);
+  try {
+    await act(async () => reactRoot.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));
+    const column = () => container.querySelector("[data-graph-projects]")!;
+    // B11: each project with its session count and nonzero states.
+    const alpha = column().querySelector('[data-graph-project-row="alpha"]')!;
+    expect(alpha.textContent).toContain("알파");
+    expect(alpha.querySelector('[data-state="turn"]')?.textContent).toContain("1");
+    expect(alpha.querySelector('[data-state="going"]')?.textContent).toContain("1");
+    expect(alpha.querySelector(".og-count")?.textContent).toBe("2");
+    expect(column().querySelector('[data-graph-project-row="beta"] [data-state="turn"]')).toBeNull();
+    // B12: the root whose turn it is, its question, and a way to answer in its pane.
+    const ask = column().querySelector('[data-graph-ask="r"]')!;
+    expect(ask.textContent).toContain("배포 범위를 확인해 주세요");
+    await act(async () => button("Go answer", ask)!.click());
+    expect(events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "r" } });
+    // B15/B16: choosing the root shows its team and counterparts as counts.
+    await act(async () => ask.querySelector<HTMLButtonElement>(".og-ask-who")!.click());
+    const preview = () => container.querySelector("[data-graph-preview]");
+    expect(preview()?.textContent).toContain("Asks you");
+    expect(preview()?.textContent).toContain("feat/map");
+    const team = preview()!.querySelector(".og-team-list")!;
+    expect(team.textContent).toContain("검증 자식");
+    const talks = [...preview()!.querySelectorAll(".og-talks > div")].map((row) => row.textContent);
+    expect(talks).toEqual(expect.arrayContaining([expect.stringContaining("Sent 1 · Received 2"), expect.stringContaining("Received 1")]));
+    expect(preview()!.textContent).not.toContain("request");
+    // A team row chooses that descendant.
+    await act(async () => team.querySelector<HTMLButtonElement>("button")!.click());
+    expect(preview()?.querySelector(".og-details-head")?.textContent).toContain("검증 자식");
+    // Escape closes the panel first (the shell's keyboard pops the top layer); the session stays highlighted.
+    await act(async () => useUiStore.getState().escapeLayers.at(-1)!());
+    expect(preview()).toBeNull();
+    const listed = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("[data-graph-session-list] > button")].find((row) => row.textContent?.includes(name))!;
+    expect(listed("검증 자식").getAttribute("aria-pressed")).toBe("true");
+    // B25: a project folds into one circle from its row, and unfolds from the same place.
+    await act(async () => button("Fold 알파 into one circle")!.click());
+    await act(async () => button("Unfold 알파, 2 sessions")!.click());
+    expect(button("Fold 알파 into one circle")).toBeDefined();
+    // B14: hiding the highlighted session's project clears it; the row stays, dimmed, with its counts.
+    await act(async () => button("Hide 알파 on the map")!.click());
+    expect(listed("검증 자식").getAttribute("aria-pressed")).toBe("false");
+    const hidden = column().querySelector('[data-graph-project-row="alpha"]')!;
+    expect(hidden.getAttribute("data-hidden")).toBe("true");
+    expect(hidden.querySelector('[data-state="turn"]')?.textContent).toContain("1");
+    // D-21/B27: a hidden project's question still waits for the operator, marked hidden.
+    expect(column().querySelector('[data-graph-ask="r"] .og-hidden-mark')?.textContent).toBe("Hidden on the map");
+    expect(button("Fold 알파 into one circle")!.disabled).toBe(true);
+    await act(async () => button("Show 알파 on the map again")!.click());
+    expect(column().querySelector('[data-graph-project-row="alpha"]')?.getAttribute("data-hidden")).toBe("false");
+  } finally { await act(async () => reactRoot.unmount()); }
 });

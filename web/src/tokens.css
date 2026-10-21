@@ -335,17 +335,17 @@
   --size-overview-graph-compact-group-width: 168px;
   --size-overview-graph-compact-group-height: 96px;
   --size-overview-graph-root-width: 140px;
-  --size-overview-graph-root-height: 144px;
+  --size-overview-graph-root-height: 112px;
   --size-overview-graph-child-width: 120px;
-  --size-overview-graph-child-height: 132px;
+  --size-overview-graph-child-height: 72px;
   --size-overview-graph-group-width: 200px;
   --size-overview-graph-group-height: 96px;
   --size-overview-graph-header: 96px;
   --size-overview-graph-padding: 12px;
   --size-overview-graph-gap: 12px;
   --size-overview-graph-project-gap: 40px;
-  --size-overview-graph-root-orb: 36px;
-  --size-overview-graph-child-orb: 28px;
+  --size-overview-graph-root-orb: 44px;
+  --size-overview-graph-child-orb: 12px;
   --size-checkout-header-commit-min: 540px;
   --size-checkout-header-time-min: 800px;
 }

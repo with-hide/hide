@@ -940,58 +940,68 @@ The Overview reads the same tasks for the Projects tab's `지금` counts and the
 
 ### Work
 
-Web owners are `web/src/overviewGraphModel.ts`, `web/src/OverviewGraph.tsx`, `web/src/overviewGraphNodes.tsx` and `web/src/dependencyLayout.ts`.
-Work offers graph and list views over real live agents, grouped by project and explicit parentage, with local group folds.
+Web owners are `web/src/overviewGraphModel.ts`, `web/src/overviewMapLayout.ts` (the force map and its drags), `web/src/overviewGraphLayout.ts`, `web/src/overviewGraphLines.ts` (which lines are drawn, the team outline, a project's accent and glow), `web/src/OverviewGraph.tsx` (folding and what each folded session is drawn as) and `web/src/overviewGraphNodes.tsx` (PRD overview-main-map).
+Work offers graph and list views over real live agents, grouped by project and explicit parentage.
 Both views share All, My turn, Working and Unread results, with counts from canonical marks: `turn`, `going|waiting` and `done|unread`.
 Include sleeping starts off and excludes only `asleep`; idle sessions marked `quiet`, Seen demands and sleeping raised asks still marked `turn`, and `unknown`, remain available.
 The list orders My turn, Working, Unread results, unknown, idle and sleeping, retaining fifty-row pagination.
-An excluded ancestor stays dim as relationship context without increasing match counts.
-Only branches whose every descendant sleeps offer a reversible subtree fold; a descendant becoming idle or active releases that fold.
-Projects without matches move into a disclosure naming sleeping-only, no-session and filtered reasons, with a route to show each project and its sleeping sessions.
-Projects form a radial map: a small top-centered heading shows the actual project name, matching-session count and state totals, with radial sessions below it and no central card or large enclosing box.
-One-project scope retains its center and offers All projects to return.
-A collapsed project hides every agent, including the current or previously selected one, retaining only its heading and counts; Collapse all applies this to every project and frames the remaining headings.
-An explicit project expansion or collapse centers that project; background status updates never move the camera.
-An oversized expanded project retains stable-ID representatives and an access slot within the shared 400-node budget.
-Admission prioritizes the last explicitly toggled or selected project, then the selected session and current project's protected positions and expanded projects before collapsed headings, so expanding a heading at the limit retains it.
-Each admitted expanded project reserves an access position for a hidden selected member, and selecting a session whose project is outside that budget opens its project scope with that session selected.
-In an expanded project, the current member has its own protected position, so choosing another member cannot displace it at the graph limit.
-Up to twelve sessions share the first ring; agent circles and labels stay below the project heading, including for one session.
-Representative nodes retain task titles and state, with provider and proved launch model in accessible names and details.
-Project search compares real names and counts and moves the camera to that center; the paged session list searches every matching session, including those outside the graph budget.
-Selecting a session from the uncapped list expands its project; in an oversized expanded project the hidden selection uses its reserved position without moving other representatives.
+A filter dims the sessions it does not match instead of removing them, so a filter never moves a circle; an excluded ancestor of a present session stays as dimmed context, and dimmed sessions never increase match counts.
+A filter with no match shows Show all sessions, distinct from no current sessions and layout failure.
+A team folds into its root, and a project folds into one circle (PRD overview-main-map D-19).
+A team whose every descendant sleeps opens folded; one the operator folded or unfolded keeps that choice while the view is mounted.
+
+The graph is a force map centred on the operator, the way Obsidian's graph view is drawn (PRD overview-main-map D-01, D-20): a `나` circle is fixed at the centre, and every session without a lineage parent (a root) is held loosely toward it by a faint line.
+Each project gathers around its own place on an ellipse around the operator, so a project's sessions settle as one cluster apart from the others.
+A delegated session is a small dot in its state colour, tied short to its parent by a faint line, and a grandchild sits outside its parent the same way (D-02).
+Behind each project's cluster is a soft glow in the project's accent colour, and its name sits in bold, larger than a session's title, in that colour above the cluster; there is no band or box (D-17).
+The accent is one of sky, violet, lime and amber, chosen by a stable hash of the project's id.
+Pointing at a project's name or its row in the side column, focusing either from the keyboard, or choosing one of its sessions so its details open, makes that project's glow and name clearly stronger, and they return when the pointer leaves or the choice closes; the current pane's highlight at entry lights nothing, and reduced motion changes them without a transition (B21).
+Placement is computed in the web shell and settles before the first paint, so nothing wobbles on open; every start position comes from the session's id, so the same sessions open in the same shape (D-13).
+Status, labels, letters, filters, selection, hiding and folding never enter the layout key.
+When a session appears, every placed session holds still while only the new one finds a place beside its parent or in its project; a session that leaves takes only itself away.
+Admission keeps the map within the 400-node budget (below); a map the layout cannot place fails into the existing Retry and session list.
+A root's circle shows its title and its sidebar second line (what it is doing, what it asks, what it waits for); a descendant shows only its title, plus what it asks in amber while it is the operator's turn.
+Provider, proved launch model, state words and judged tasks are not drawn under circles; the accessible name still reads title, state, provider and proved launch model.
+The ring colour and shape of each circle encode its mark (working, waiting, my turn, unread result, quiet), with the StatusMark beside it and a dashed outline on the current pane's session.
+
+Lines carry no words.
+Parent-to-child lines are always drawn faint; choosing a session brightens its team's lines and draws one dashed outline around the team's circles and words, which goes away when the choice is cleared (D-03).
+Letters and Herdr direct input between the same two sessions are one line with direction arrows: solid when any letter exists, short dots when only direct input does.
+A pair in different teams is always drawn; a pair inside one team is drawn only while that team is chosen.
+Every drawn root is joined to `나` by a faint line; a root whose mark is `turn` draws an amber arrow to `나` instead, and a descendant's ask reaches the operator through its root, which the core marks as the operator's turn.
+A folded team that holds the operator's turn draws the amber ring on its root and the amber arrow to `나`; a folded project keeps its colour border and wears the turn's `!` badge at the top of its circle, with the same amber arrow (B26).
+A reply wait is not drawn as a line, because the core does not name its recipient.
+An unresolved endpoint is never joined by a similar name or pane number; only independently proven device, pane and native-session endpoints join current rows, and missing results, stale sessions and unproven recipients create no line.
+Direct input never creates inbox items, watches, lineage, read marks, letter notifications or phone pushes, and the bounded 30-day observation metadata carries no command or prompt content.
+Letters and direct inputs share one newest-2,000-record graph budget; no letter subject or body reaches the graph or its panel.
+
+With nothing chosen, the side column lists each project with a search box, its session count, its nonzero My turn, In progress and Unread counts in their colours, a Fold toggle and a Hide toggle.
+Choosing a project's name moves the camera to that project's sessions; a project outside the graph budget opens its project scope instead.
+Hide removes that project's sessions, name, glow, outlines and lines from the map without moving any other circle; its row stays, dimmed, keeps its counts, and offers Show again, which returns the sessions to the same places.
+Hiding lasts while the view is mounted, survives the graph/list switch and scope changes, and never affects the list view or the filter counts.
+Hiding the project of the selected or highlighted session clears that selection.
+Below the project list, Waiting on you lists each root whose turn it is, drawn on the map or not, with its project, title and question, and Go answer focuses the asking pane: the root when it asks, else its first asking descendant.
+A root in a hidden project stays in the list with a `그래프에서 숨김` mark, because hiding a project from the map does not make its question wait less (D-21).
+Folding a team leaves its root circle with a chip that counts its descendants and shows their My turn, Working and Unread marks; choosing the chip unfolds it, and the descendants come back to their places (B24).
+Folding a project, from the faint fold button beside its name in the map (clear while the name is pointed at) or from its row's Fold, turns its cluster into one circle in the project's place, filled faintly and bordered in the project's colour, keeping the project's glow and its emphasis, with its name at the expanded name's size and colour, its session count and nonzero counts; a line between that project and another ends on the circle, and choosing the circle unfolds the cluster to its old shape; both places share one fold state, and the button never starts a project drag (B25).
+Fold all folds every project into its circle and leaves each team's own fold as it was; Unfold all opens every project and every team; both sit in the toolbar of the graph view (B26).
+Choosing a session by click, Enter or Space replaces the column with its panel: title, state, project and branch, provider and proved launch model, what it does now, what it asks the operator when it asks, its team (every descendant with its state; choosing one selects it), its counterparts with sent and received counts only, and `세션 열기 · 기록 보기`.
+Below the Overview breakpoint the panel overlays the graph; Escape closes the panel first, and changing filter or scope clears a selection that no longer matches.
+Hover and keyboard focus outline the pointed session and its counterparts and never open details.
+
+Project names share the 400-node budget with sessions; admission prioritises the selected session's project and the protected current session, and the remaining room is shared in identity order.
+An oversized project retains stable-ID representatives and a reserved access slot, where a chosen hidden member appears without moving another member; the paged list searches every matching session, and selecting one outside the graph budget opens its project scope with that session selected.
+One-project scope offers All projects to return.
 When the confirmed focused device, pane and native session have a graph proof at entry, that exact session is highlighted without opening details; pane reuse cannot inherit the initial selection.
-The first camera shows the current project's whole ordinary cluster at a readable zoom; a cluster too large for that zoom centers the exact current member instead, and it never automatically fits the entire map.
+The first camera, and Fit graph, put the operator at the centre of the view at the zoom that shows the whole map; when that zoom is too small to read, the first camera instead centres the current session (or the operator) at a readable zoom.
 Fit graph, Current pane and Reset layout remain explicit keyboard-accessible controls.
-Dragging a session's provider circle moves only that session, without opening details; clicking the same circle opens details, and the text below it remains a selection target without becoming a drag handle.
-A project's handle moves its entire relative-positioned group, including summarized members when expanded later.
-Offsets live only in this mounted view, edges follow the moved endpoints, and Reset layout clears offsets and restores the initial camera without dispatching pane moves.
-A filtered-empty view offers Show all sessions, distinct from no current sessions and layout failure.
-Each agent shows its canonical task identity, agent, state and actual current progress; a model is shown only when the current launch proves it.
-Edges distinguish delegation from retained deliveries, whose graph metadata is direction, kind, time and count; no letter subject or body reaches this projection.
-An unresolved endpoint is never joined by a similar name or pane number.
-Herdr direct input has its own visibility switch, short dotted directional line, input count and latest submission time, separate from long-dashed letters and solid delegation.
-When the same endpoints have both letters and direct input, each uses a separate curved lane with its own visible label and keyboard target, without moving the sessions.
-Its details label the relationship `Herdr direct input` and explain that observed submission proves neither a model read nor a completed answer.
-Only independently proven device, pane and native-session endpoints join current rows; missing results, stale sessions and unproven recipients create no confirmed edge.
-Direct input never creates inbox items, watches, lineage, read marks, letter notifications or phone pushes.
-The bounded 30-day observation metadata carries no command or prompt content; its appearance or visibility changes no graph coordinates, poller or subscription.
-Letters and direct inputs share one newest-2,000-record graph budget.
-Group folds aggregate the facts of their members and never invent progress or an inferred relationship.
-The list is paged at fifty rows and stays usable when graph layout fails; the graph offers Retry beside that failure.
-The existing circular provider logos, StatusMark, root and child sizes, rings, identity and progress stay intact.
-Initial zoom is readable without fitting every project; pan, zoom and explicit Fit graph expose the rest.
-Hover and keyboard focus emphasize relationships and never open details.
-Click, Enter or Space selects one session and opens its details beside the graph, using the existing overlay panel below the Overview breakpoint.
-Escape closes details first; changing filter or scope clears a selection that no longer matches.
-Delegation has a solid parent-to-child arrow, letters have long dashes, and direct input has short dots; all retain arrow clearance and a contrasting underlay.
-All three kinds have separate curved lanes and real count labels, including aggregated project endpoints.
-Their labels share one endpoint-safe anchor with stable kind lanes, so clearing task text cannot place two counts on top of each other.
-Selecting a session or relationship strengthens related paths and dims the others; labels are keyboard targets that open the corresponding safe metadata.
-Selection and Replay flow trigger one finite token-timed flow animation; the motion switch and reduced motion disable it, and no decorative animation runs at idle.
-Mail visibility, hover, focus and selection do not enter the layout key or change node coordinates.
-Graph filters, selection, pan, zoom and folding stay local to the mounted view; filters survive graph/list and scope changes while Work remains mounted.
-Reduced motion removes decorative movement, and closing the view ends its layout work and listeners.
+Two things drag, neither opening details (D-18).
+A project's name, or its folded circle, moves every session of the project and nothing else, and the project stays where it is put.
+A session's circle follows the hand and its team is pulled along by the physics; on release it stays where it was put and the rest settles around it.
+With reduced motion, nothing is pulled while a circle is held, and the map settles at once on release.
+Clicking a circle opens details, and the text below it remains a selection target without becoming a drag handle; outlines, glows and lines follow the moved circles.
+Moves live only in this mounted view, and Reset layout places the map again from the start and restores the initial camera without dispatching pane moves.
+Graph filters, hiding, selection, pan, zoom, moves and folding stay local to the mounted view; filters and hiding survive graph/list and scope changes while Work remains mounted, and closing the view stops the map's physics and ends its listeners.
 
 ### A record beside the tabs
 

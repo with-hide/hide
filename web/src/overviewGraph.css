@@ -1,133 +1,171 @@
 .overview-graph { position: relative; min-width: 0; color: var(--foreground); }
 .og-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-md); padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-lg); }
 .og-toolbar h2 { margin: 0 0 var(--spacing-sm); font-size: var(--text-headline); font-weight: 600; }
-.og-toolbar-actions, .og-toolbar-actions > div { display: flex; align-items: center; gap: var(--spacing-xs); }
+.og-toolbar-actions, .og-toolbar-actions > div { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xs); }
 .og-toolbar-actions > div { padding: var(--spacing-xxs); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); }
-.og-state-counts, .og-state-counts > span { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xs); }
-.og-state-counts { gap: var(--spacing-md); color: var(--muted-foreground); font-size: var(--text-caption); }
+.og-state-counts, .og-state-counts > span { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-xxs); }
+.og-state-counts { gap: var(--spacing-sm); color: var(--muted-foreground); font-size: var(--text-caption); }
 .og-state-counts b { font-weight: 500; font-variant-numeric: tabular-nums; }
-.og-legend { display: flex; flex-wrap: wrap; gap: var(--spacing-lg); border-block: var(--size-hairline) solid var(--border); padding: var(--spacing-sm) var(--spacing-lg); color: var(--muted-foreground); font-size: var(--text-caption); }
+.og-state-counts [data-state="turn"] { color: var(--warning); }
+.og-state-counts [data-state="going"] { color: var(--agent-working); }
+.og-state-counts [data-state="done"] { color: var(--success); }
 .og-notice { display: flex; align-items: center; flex-wrap: wrap; gap: var(--spacing-sm); padding: var(--spacing-sm) var(--spacing-lg); font-size: var(--text-body); color: var(--muted-foreground); }
-.og-stage { display: flex; position: relative; height: min(70vh, var(--size-overview-sheet-h)); min-height: var(--size-panel-min); overflow: hidden; }
+.og-stage { display: flex; position: relative; height: min(70vh, var(--size-overview-sheet-h)); min-height: var(--size-panel-min); overflow: hidden; border-top: var(--size-hairline) solid var(--border); }
+.og-canvas { flex: 1; min-width: 0; height: 100%; }
 .overview-graph .react-flow { background-image: radial-gradient(color-mix(in srgb, var(--border) 40%, transparent) var(--size-hairline), transparent var(--size-hairline)); background-size: var(--spacing-xl) var(--spacing-xl); }
 .overview-graph .react-flow__node { border: 0; background: transparent; border-radius: 0; font-family: inherit; color: inherit; }
 .overview-graph .react-flow__handle { opacity: 0; pointer-events: none; }
-.overview-graph .react-flow__edgelabel-renderer { z-index: 0; }
-/* The group footprint owns relative child positions; only its top heading is painted. */
-.og-project { position: relative; width: 100%; height: 100%; pointer-events: none; }
-.og-project-center { position: absolute; left: 50%; top: var(--size-overview-graph-padding); transform: translateX(-50%); width: calc(var(--size-overview-graph-group-width) * var(--interface-scale, 1)); padding: var(--spacing-xs); border: var(--size-hairline) solid transparent; border-radius: var(--radius-sm); background: var(--background); pointer-events: auto; }
-.og-project[data-expanded="false"] .og-project-center { width: calc(var(--size-overview-graph-compact-group-width) * var(--interface-scale, 1)); padding: var(--spacing-sm); }
-.og-project[data-expanded="false"] .og-project-heading strong { font-size: var(--text-body); }
-.og-project[data-expanded="false"] .og-state-counts { gap: var(--spacing-xs); font-size: var(--text-micro); }
-.og-project[data-current="true"] .og-project-center, .og-project[data-highlighted="true"] .og-project-center { border-color: var(--primary); box-shadow: 0 0 0 var(--spacing-xs) color-mix(in srgb, var(--primary) 12%, transparent); }
-.og-project-heading { display: flex; width: 100%; align-items: center; gap: var(--spacing-xs); padding: var(--spacing-xs); padding-right: var(--spacing-lg); text-align: left; background: transparent; border: 0; color: var(--foreground); cursor: pointer; }
-.og-project-heading > svg { width: var(--size-icon-sm); height: var(--size-icon-sm); flex-shrink: 0; color: var(--primary); }
-.og-project-heading strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-width: 0; flex: 1; overflow-wrap: anywhere; font-size: var(--text-body); font-weight: 500; }
-.og-count { flex-shrink: 0; font-size: var(--text-caption); color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-.og-project-summary { padding-inline: var(--spacing-xs); }
-.og-project-summary .og-state-counts { gap: var(--spacing-sm); font-size: var(--text-micro); }
-.og-drag-handle { display: flex; position: absolute; right: 0; top: 0; padding: var(--spacing-xxs); border: 0; border-radius: var(--radius-sm); background: var(--card); color: var(--muted-foreground); cursor: grab; pointer-events: auto; }
-.og-drag-handle:active { cursor: grabbing; }
-.og-drag-handle svg { width: var(--size-icon-sm); height: var(--size-icon-sm); }
-.og-drag-handle:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
+.og-filters, .og-filters > div, .og-filters label { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-sm); }
+.og-filters { padding: var(--spacing-sm) var(--spacing-lg); gap: var(--spacing-lg); font-size: var(--text-caption); }
+.og-filters button span { font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+.og-filters button[data-focus="turn"] span { color: var(--warning); }
+.og-filters input { accent-color: var(--primary); }
+
+/* The operator at the center of the map. */
+.og-operator { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; border: var(--size-hairline) solid var(--foreground); border-radius: 50%; background: var(--secondary); color: var(--foreground); font-size: var(--text-body); font-weight: 600; }
+
+/* A project is a soft light of its color behind its sessions, with its name above them as the
+   project's drag handle. Nothing but the name takes the pointer, so the canvas pans everywhere else. */
+.og-project { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; gap: var(--spacing-xxs); font-size: var(--text-headline); font-weight: 700; line-height: 1.2; opacity: 0.8; transition: opacity calc(var(--graph-motion-ms) * 1ms) ease-out, text-shadow calc(var(--graph-motion-ms) * 1ms) ease-out; }
+/* The name clips for its ellipsis, so it keeps room inside for its glow's blur. */
+.og-project-name { min-width: 0; overflow: hidden; padding: var(--spacing-md); margin: calc(var(--spacing-md) * -1); text-overflow: ellipsis; white-space: nowrap; cursor: grab; }
+.og-project[data-current="true"] { opacity: 1; }
+/* Pointed at, or holding the chosen session, the project's name and glow stand out (PRD D-17, B21). */
+.og-project[data-emphasized="true"] { opacity: 1; text-shadow: 0 0 var(--spacing-md) color-mix(in srgb, var(--og-accent) 70%, transparent); }
+/* The in-map fold button is quiet until the name is pointed at (PRD D-19, B25). */
+.og-project-fold { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 1.2em; height: 1.2em; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--og-accent); opacity: var(--opacity-dimmed); cursor: pointer; }
+.og-project-fold svg { width: 85%; height: 85%; }
+.og-project:hover .og-project-fold, .og-project-fold:focus-visible { opacity: 1; }
+.og-project-fold:hover { background: var(--accent); }
+.og-project-fold:focus-visible { outline: var(--size-hairline) solid var(--ring); }
+.og-project-drag:active, .og-cluster-drag:active { cursor: grabbing; }
+.og-glow { display: block; overflow: visible; }
+/* A project's accent, from a stable hash of its id (PRD D-17). */
+[data-accent="sky"] { --og-accent: var(--accent-choice-sky); }
+[data-accent="violet"] { --og-accent: var(--accent-choice-violet); }
+[data-accent="lime"] { --og-accent: var(--accent-choice-lime); }
+[data-accent="amber"] { --og-accent: var(--accent-choice-amber); }
+.og-project, .og-cluster strong { color: var(--og-accent); }
+.og-glow-core, .og-glow-edge { stop-color: var(--og-accent); }
+.og-glow-edge { stop-opacity: 0; }
+.og-glow-core { stop-opacity: 0.1; transition: stop-opacity calc(var(--graph-motion-ms) * 1ms) ease-out; }
+:root.light .og-glow-core { stop-opacity: 0.14; }
+.og-glow[data-emphasized="true"] .og-glow-core { stop-opacity: 0.26; }
+:root.light .og-glow[data-emphasized="true"] .og-glow-core { stop-opacity: 0.34; }
+.og-cluster[data-emphasized="true"] .og-cluster-orb { box-shadow: 0 0 var(--spacing-md) color-mix(in srgb, var(--og-accent) 60%, transparent); }
+.og-cluster[data-emphasized="true"] strong { text-shadow: 0 0 var(--spacing-md) color-mix(in srgb, var(--og-accent) 70%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  .og-glow-core, .og-project { transition: none; }
+}
+/* A folded project is one circle with its name and counts; choosing the circle unfolds it. */
+.og-cluster { display: flex; width: 100%; height: 100%; flex-direction: column; align-items: center; gap: var(--spacing-xxs); text-align: center; }
+.og-cluster-orb { position: relative; display: flex; flex-shrink: 0; align-items: center; justify-content: center; border: var(--graph-edge-flow-width) solid var(--og-accent); border-radius: 50%; background: color-mix(in srgb, var(--og-accent) 22%, var(--background)); color: var(--foreground); font-size: var(--text-title); font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; }
+/* The operator's turn inside a folded project is a badge at the circle's top, larger than a session's. */
+.og-cluster-orb .og-orb-state { top: 0; bottom: auto; right: 0; transform: scale(1.4); transform-origin: top right; }
+.og-cluster-orb:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
+.og-cluster strong { max-width: 100%; overflow: hidden; padding-inline: var(--spacing-xxs); border-radius: var(--radius-sm); background: var(--background); font-size: var(--text-headline); font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.og-cluster .og-state-counts { justify-content: center; background: var(--background); border-radius: var(--radius-sm); padding-inline: var(--spacing-xxs); }
+
+/* The chosen team's dashed outline goes round its root and every delegated descendant. */
+.og-team { display: block; overflow: visible; }
+.og-team path { fill: color-mix(in srgb, var(--foreground) 3%, transparent); stroke: var(--muted-foreground); stroke-width: var(--graph-edge-width); stroke-dasharray: var(--spacing-xxs) var(--spacing-xs); }
+
 .og-session { position: relative; --og-orb-size: var(--size-overview-graph-child-orb); width: 100%; height: 100%; }
 .og-session[data-root="true"] { --og-orb-size: var(--size-overview-graph-root-orb); }
-.overview-graph .og-session .react-flow__handle-left { left: calc(50% - var(--og-orb-size) / 2 - var(--spacing-xs)); top: calc(var(--og-orb-size) / 2); }
-.overview-graph .og-session .react-flow__handle-right { right: calc(50% - var(--og-orb-size) / 2 - var(--spacing-xs)); top: calc(var(--og-orb-size) / 2); }
+.overview-graph .og-session .react-flow__handle { left: 50%; top: calc(var(--og-orb-size) / 2); }
 .og-session-target { display: flex; width: 100%; height: 100%; flex-direction: column; align-items: center; gap: var(--spacing-xxs); padding: 0 var(--spacing-xs); background: transparent; color: var(--foreground); border: 0; border-radius: var(--radius-sm); text-align: center; cursor: pointer; pointer-events: auto; }
 .og-session-target > * { flex-shrink: 0; }
 .og-session-target:hover .og-orb, .og-session[data-selected="true"] .og-orb { background: var(--accent); }
-.og-project-heading:focus-visible, .og-session-target:focus-visible, .og-letter-label:focus-visible, .og-list > button:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
-.og-orb { display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; width: var(--og-orb-size); height: var(--og-orb-size); margin-bottom: var(--spacing-xs); border: var(--size-hairline) solid var(--border); border-radius: 50%; background: var(--secondary); }
-.og-session[data-root="true"] .og-orb { border-color: var(--primary); box-shadow: 0 0 0 var(--spacing-xs) color-mix(in srgb, var(--primary) 12%, transparent); margin-bottom: var(--spacing-sm); }
-.og-orb .og-provider { width: 65%; height: 65%; }
+.og-session-target:focus-visible, .og-list > button:focus-visible, .og-project-list button:focus-visible, .og-ask-who:focus-visible, .og-team-list button:focus-visible { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
+/* The orb's ring says the state: working, my turn, a result to read, quiet. */
+.og-orb { display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; width: var(--og-orb-size); height: var(--og-orb-size); margin-bottom: var(--spacing-xxs); border: var(--graph-edge-flow-width) solid var(--border); border-radius: 50%; background: var(--secondary); }
+.og-orb .og-provider { width: 60%; height: 60%; }
+.og-session[data-mark="going"] .og-orb, .og-session[data-mark="waiting"] .og-orb { border-color: var(--agent-working); }
+.og-session[data-mark="waiting"] .og-orb { border-style: dashed; }
+.og-session[data-mark="turn"] .og-orb, .og-session[data-folded-turn="true"] .og-orb { border-color: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--warning); }
+.og-session[data-mark="done"] .og-orb { border-color: var(--success); }
+.og-session[data-mark="unread"] .og-orb { border-color: var(--foreground); }
 .og-session-drag { cursor: grab; }
 .og-session-drag:active { cursor: grabbing; }
 .og-orb-state { position: absolute; right: calc(-1 * var(--spacing-xxs)); bottom: 0; display: flex; border-radius: 50%; background: var(--card); padding: var(--size-hairline); }
-.og-session-title { max-width: 100%; font-size: var(--text-caption); font-weight: 500; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+/* Lines pass behind a circle's words: the title and line sit on the canvas colour. */
+.og-session-title, .og-session-line { max-width: 100%; padding-inline: var(--spacing-xxs); border-radius: var(--radius-sm); background: var(--background); }
+.og-session-title { font-size: var(--text-caption); font-weight: 500; line-height: 1.4; }
+.og-session-title [data-agent-title] { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; text-align: center; }
 .og-session[data-root="true"] .og-session-title { font-size: var(--text-body); font-weight: 600; }
-.og-session[data-compact="true"] { --og-orb-size: var(--size-overview-graph-compact-orb); }
-.og-session[data-compact="true"] .og-session-title { font-size: var(--text-caption); font-weight: 500; }
-.og-session[data-compact="true"] .og-model { display: none; }
-.og-session[data-compact="true"] .og-orb { margin-bottom: var(--spacing-xxs); }
-.og-model { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-micro); line-height: 1.3; color: var(--muted-foreground); }
-.og-session-status, .og-progress { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-micro); line-height: 1.3; color: var(--muted-foreground); }
-.og-progress { color: var(--primary); font-variant-numeric: tabular-nums; }
-.og-session[data-state="delegating"] .og-orb { border-style: dashed; }
-.og-session[data-state="turn"] .og-orb { border-color: var(--warning); }
-.overview-graph .og-lineage .react-flow__edge-path { stroke: color-mix(in srgb, var(--primary) 45%, var(--border)); stroke-width: var(--graph-edge-width); }
-.overview-graph .og-communication .react-flow__edge-path { stroke: var(--agent-working); stroke-width: var(--graph-edge-width); stroke-dasharray: var(--graph-flow-dash) var(--graph-flow-gap); opacity: 1; }
-.overview-graph .og-communication.selected .react-flow__edge-path, .overview-graph .og-communication:hover .react-flow__edge-path { opacity: 1; stroke-width: var(--graph-edge-flow-width); }
-.og-letter-label { position: absolute; pointer-events: all; padding: var(--spacing-xxs) var(--spacing-sm); border: var(--size-hairline) solid color-mix(in srgb, var(--agent-working) 30%, var(--border)); border-radius: var(--radius-lg); background: var(--card); color: var(--agent-working); font-size: var(--text-micro); line-height: 1.3; white-space: nowrap; cursor: pointer; font-variant-numeric: tabular-nums; }
-.og-letter-label[aria-pressed="true"] { border-color: var(--agent-working); background: var(--secondary); }
-.og-letter-label[data-kind="lineage"], .og-letter-label[data-kind="herdr_direct"] { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 30%, var(--border)); }
+.og-session-line { justify-content: center; font-size: var(--text-caption); line-height: 1.4; color: var(--subtle-foreground); }
+.og-session-line.og-asking { color: var(--warning); }
+.og-session[data-context="true"] .og-session-target, .og-session[data-muted="true"] .og-session-target { opacity: var(--opacity-dimmed); }
+.og-session[data-highlighted="true"] .og-orb { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
+.og-session[data-current="true"] .og-orb { outline: var(--size-hairline) dashed var(--primary); outline-offset: var(--spacing-xs); }
+/* A delegated session is a small dot filled with its state's color. */
+.og-dot { display: block; flex-shrink: 0; width: var(--og-orb-size); height: var(--og-orb-size); margin-bottom: var(--spacing-xxs); border-radius: 50%; background: var(--muted-foreground); }
+.og-session[data-mark="going"] .og-dot, .og-session[data-mark="waiting"] .og-dot { background: var(--agent-working); }
+.og-session[data-mark="turn"] .og-dot { background: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--background), 0 0 0 calc(var(--size-hairline) * 3) var(--warning); }
+.og-session[data-mark="done"] .og-dot { background: var(--success); }
+.og-session[data-mark="unread"] .og-dot { background: var(--foreground); }
+.og-session[data-mark="quiet"] .og-dot, .og-session[data-mark="asleep"] .og-dot { opacity: var(--opacity-dimmed); }
+.og-session-target:hover .og-dot, .og-session[data-selected="true"] .og-dot { outline: var(--size-hairline) solid var(--foreground); outline-offset: var(--size-hairline); }
+.og-session[data-highlighted="true"] .og-dot { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
+.og-session[data-current="true"] .og-dot { outline: var(--size-hairline) dashed var(--primary); outline-offset: var(--spacing-xs); }
+/* A team root carries its fold: the descendant count, and when folded the states folded away. */
+.og-team-chip { position: absolute; top: 0; left: calc(50% + var(--og-orb-size) / 2 + var(--spacing-xxs)); display: inline-flex; align-items: center; gap: var(--spacing-xxs); padding: 0 var(--spacing-xs); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-lg); background: var(--card); color: var(--muted-foreground); font-size: var(--text-micro); font-variant-numeric: tabular-nums; cursor: pointer; pointer-events: auto; }
+.og-team-chip[data-folded="true"] { color: var(--foreground); }
+.og-team-chip[data-folded="true"][data-turn="true"] { border-color: var(--warning); }
+.og-team-chip:focus-visible { outline: var(--size-hairline) solid var(--ring); }
+.og-team-states { display: inline-flex; align-items: center; gap: var(--size-hairline); }
+
+/* Lines carry no words: each root faintly to the operator, delegation faint and bright for the chosen
+   team, letters solid, Herdr input dotted, my turn in amber. */
+.og-edge-underlay { stroke: var(--background); stroke-width: calc(var(--graph-edge-flow-width) + var(--spacing-xs)); pointer-events: none; }
+.overview-graph .og-mine .react-flow__edge-path { stroke: var(--border); stroke-width: var(--graph-edge-width); }
+.overview-graph .og-lineage .react-flow__edge-path { stroke: color-mix(in srgb, var(--muted-foreground) 50%, transparent); stroke-width: var(--graph-edge-width); }
+.overview-graph .og-lineage.og-emphasized .react-flow__edge-path { stroke: var(--muted-foreground); }
+.overview-graph .og-communication .react-flow__edge-path { stroke: var(--subtle-foreground); stroke-width: var(--graph-edge-width); }
+.overview-graph .og-direct-input .react-flow__edge-path { stroke-dasharray: var(--size-hairline) var(--spacing-xs); stroke-linecap: round; }
+.overview-graph .og-turn .react-flow__edge-path { stroke: var(--warning); stroke-width: var(--graph-edge-flow-width); }
+.overview-graph .og-emphasized .react-flow__edge-path { stroke-width: var(--graph-edge-flow-width); }
+.overview-graph .og-muted { opacity: var(--opacity-dimmed); }
+
 .og-zoom { position: absolute; right: var(--spacing-lg); bottom: var(--spacing-xl); z-index: 5; display: flex; padding: var(--spacing-xs); background: var(--card); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); }
 .overview-graph .react-flow__attribution { background: var(--background); color: var(--muted-foreground); font-size: var(--text-micro); }
 .og-list { height: 100%; overflow-y: auto; padding: var(--spacing-sm) var(--spacing-lg); }
 .og-list > button { display: flex; align-items: center; gap: var(--spacing-sm); width: 100%; padding: var(--spacing-md) var(--spacing-sm); border: 0; border-bottom: var(--size-hairline) solid var(--border); background: transparent; text-align: left; font-size: var(--text-body); color: var(--muted-foreground); cursor: pointer; }
-.og-list > button:hover { background: var(--accent); }
+.og-list > button:hover, .og-list > button[aria-pressed="true"] { background: var(--accent); }
 .og-list-name { min-width: 0; flex: 1; }
 .og-list-name strong, .og-list-name small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .og-list-name strong { font-size: var(--text-body); font-weight: 500; color: var(--foreground); }
 .og-list-name small { font-size: var(--text-caption); }
 .og-pagination { display: flex; justify-content: center; align-items: center; gap: var(--spacing-sm); padding-block: var(--spacing-sm); font-size: var(--text-caption); color: var(--muted-foreground); }
-.og-details { z-index: 6; flex-shrink: 0; width: min(var(--size-lane-min), 100%); height: 100%; overflow-y: auto; border: var(--size-hairline) solid var(--border); border-radius: var(--radius-md); background: var(--popover); color: var(--popover-foreground); padding: var(--spacing-lg); font-size: var(--text-body); }
+.og-empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-md); padding: var(--spacing-lg); color: var(--muted-foreground); font-size: var(--text-body); }
+
+/* The side column: projects and what waits on the operator, or the chosen session. */
+.og-navigator, .og-details { flex: 0 0 var(--size-lane-min); max-width: 35%; height: 100%; overflow-y: auto; padding: var(--spacing-md); border-left: var(--size-hairline) solid var(--border); background: var(--background); font-size: var(--text-body); }
+.og-project-list { margin-top: var(--spacing-sm); }
+.og-project-list > div { display: flex; align-items: center; gap: var(--spacing-xs); border-bottom: var(--size-hairline) solid var(--border); }
+.og-project-list > div[data-hidden="true"] > button:first-child { opacity: var(--opacity-dimmed); }
+.og-project-list > div > button:first-child { display: flex; flex: 1; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: var(--spacing-xs) var(--spacing-sm); border: 0; padding: var(--spacing-sm); background: transparent; color: var(--foreground); text-align: left; cursor: pointer; }
+.og-project-list > div > button:first-child:disabled { cursor: default; }
+.og-project-list strong { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; font-size: var(--text-body); font-weight: 500; }
+.og-count { flex-shrink: 0; margin-left: auto; font-size: var(--text-caption); color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.og-navigator h3, .og-details h3 { display: flex; gap: var(--spacing-xs); margin: var(--spacing-lg) 0 var(--spacing-xs); color: var(--muted-foreground); font-size: var(--text-caption); font-weight: 500; }
+.og-waiting h3 span { color: var(--warning); font-variant-numeric: tabular-nums; }
+.og-ask { display: flex; flex-direction: column; align-items: start; gap: var(--spacing-xs); margin-bottom: var(--spacing-sm); padding: var(--spacing-sm) var(--spacing-md); border: var(--size-hairline) solid color-mix(in srgb, var(--warning) 40%, var(--border)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--warning) calc(var(--opacity-subtle-fill) * 100%), transparent); }
+.og-ask p { margin: 0; overflow-wrap: anywhere; }
+.og-ask small { color: var(--warning); font-size: var(--text-caption); }
+.og-ask-who { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--spacing-xs); border: 0; padding: 0; background: transparent; color: var(--warning); font-size: var(--text-caption); text-align: left; cursor: pointer; }
+.og-ask-who > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.og-ask-who small { flex-shrink: 0; color: var(--muted-foreground); }
 .og-details-head { display: flex; align-items: start; justify-content: space-between; gap: var(--spacing-sm); }
-.og-details-head strong { min-width: 0; overflow-wrap: anywhere; font-size: var(--text-subhead); font-weight: 600; }
+.og-details-head strong { display: flex; min-width: 0; align-items: center; gap: var(--spacing-xs); overflow-wrap: anywhere; font-size: var(--text-subhead); font-weight: 600; }
 .og-detail-status { display: flex; align-items: center; gap: var(--spacing-xs); padding-block: var(--spacing-sm); color: var(--muted-foreground); }
-.og-work { margin-bottom: var(--spacing-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
 .og-context { margin-block: var(--spacing-xs); color: var(--muted-foreground); font-size: var(--text-caption); overflow-wrap: anywhere; }
-.og-children { margin-top: var(--spacing-md); padding-top: var(--spacing-md); border-top: var(--size-hairline) solid var(--border); }
-.og-children strong { font-weight: 500; }
-.og-children p { margin-top: var(--spacing-xs); color: var(--muted-foreground); }
-.og-details-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-sm); margin-top: var(--spacing-lg); }
-.og-direction { display: flex; justify-content: space-between; gap: var(--spacing-md); margin-block: var(--spacing-sm); }
-.og-direction span { min-width: 0; overflow-wrap: anywhere; }
-.og-direction b { flex-shrink: 0; color: var(--agent-working); font-size: var(--text-caption); font-weight: 500; }
-.og-details dl { margin-top: var(--spacing-md); }
-.og-details dl > div { display: flex; justify-content: space-between; gap: var(--spacing-md); margin-block: var(--spacing-xs); }
-.og-details dt { color: var(--muted-foreground); }
-.og-details dd { text-align: right; font-variant-numeric: tabular-nums; }
-.og-empty { display: flex; align-items: center; gap: var(--spacing-md); padding: var(--spacing-lg); color: var(--muted-foreground); font-size: var(--text-body); }
-
-.og-canvas { flex: 1; min-width: 0; height: 100%; }
-.og-filters, .og-filters > div, .og-filters label { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-sm); }
-.og-filters { padding: var(--spacing-sm) var(--spacing-lg); gap: var(--spacing-lg); font-size: var(--text-caption); }
-.og-filters button span { font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
-.og-filters input { accent-color: var(--primary); }
-.og-omitted { padding: var(--spacing-sm) var(--spacing-lg); color: var(--muted-foreground); font-size: var(--text-caption); }
-.og-omitted summary { cursor: pointer; }
-.og-omitted li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-sm); }
-.og-omitted li > span { min-width: 0; overflow-wrap: anywhere; }
-.og-session[data-context="true"] .og-session-target { opacity: var(--opacity-dimmed); }
-.og-session[data-highlighted="true"] .og-orb { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
-.overview-graph .og-emphasized .react-flow__edge-path { opacity: 1; stroke-width: var(--graph-edge-flow-width); }
-.og-fold { position: absolute; top: 100%; left: 0; width: 100%; background: var(--background); color: var(--muted-foreground); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); font-size: var(--text-micro); cursor: pointer; pointer-events: auto; }
-.og-fold:focus-visible, .og-omitted summary:focus-visible { outline: var(--size-hairline) solid var(--ring); }
-.og-list > button[aria-pressed="true"] { background: var(--accent); }
-.og-toolbar-actions { flex-wrap: wrap; }
-.og-empty { flex-wrap: wrap; }
-
-
-.overview-graph .og-direct-input .react-flow__edge-path { stroke: var(--primary); stroke-dasharray: var(--size-hairline) var(--spacing-xs); stroke-linecap: round; }
-.og-letter-label[data-kind="herdr_direct"] { color: var(--primary); border-color: var(--primary); }
-
-.og-navigator { flex: 0 0 var(--size-lane-min); max-width: 35%; padding: var(--spacing-md); border-left: var(--size-hairline) solid var(--border); overflow: auto; background: var(--background); }
-.og-project-list > div { padding-block: var(--spacing-sm); border-bottom: var(--size-hairline) solid var(--border); }
-.og-project-list > div > button:first-child { display: flex; align-items: start; justify-content: space-between; gap: var(--spacing-sm); width: 100%; border: 0; padding: var(--spacing-sm); background: transparent; color: var(--foreground); text-align: left; cursor: pointer; }
-.og-project-list strong { min-width: 0; overflow-wrap: anywhere; font-size: var(--text-body); font-weight: 500; }
-.og-project-list span { color: var(--muted-foreground); font-size: var(--text-caption); }
-.og-project-list button:focus-visible { outline: var(--size-hairline) solid var(--ring); }
-.og-details { position: absolute; right: 0; top: 0; }
-.og-session[data-current="true"] .og-orb { outline: var(--spacing-xxs) solid var(--primary); outline-offset: var(--spacing-xs); }
-.og-edge-underlay { stroke: var(--background); stroke-width: calc(var(--graph-edge-flow-width) + var(--spacing-xs)); pointer-events: none; }
-.overview-graph .og-muted { opacity: var(--opacity-dimmed); }
-.og-flow-tracer { display: none; pointer-events: none; stroke: var(--foreground); stroke-width: var(--graph-edge-flow-width); stroke-dasharray: var(--graph-flow-dash) var(--graph-flow-gap); }
-.overview-graph .og-playing .og-flow-tracer { display: block; animation: og-flow calc(var(--graph-flow-step-ms) * var(--graph-flow-steps) * 1ms) linear 1; }
-@keyframes og-flow { to { stroke-dashoffset: calc(-1 * (var(--graph-flow-dash) + var(--graph-flow-gap)) * var(--graph-flow-steps)); } }
-@media (prefers-reduced-motion: reduce) { .overview-graph .og-playing .og-flow-tracer { display: none; animation: none; } .overview-graph * { scroll-behavior: auto; } }
-
-.overview-graph .react-flow__node-project { pointer-events: none; }
-
-.overview-graph .og-lineage.og-emphasized .react-flow__edge-path { stroke: var(--primary); }
-.og-letter-label[data-kind="lineage"] { border-color: transparent; color: var(--muted-foreground); }
+.og-now { display: flex; min-width: 0; align-items: baseline; gap: var(--spacing-sm); margin-block: var(--spacing-sm); }
+.og-now b { flex-shrink: 0; color: var(--muted-foreground); font-size: var(--text-caption); font-weight: 500; }
+.og-details-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-sm); margin-top: var(--spacing-md); }
+.og-team-list > button, .og-talks > div { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--spacing-sm); padding-block: var(--spacing-xs); border: 0; border-bottom: var(--size-hairline) solid var(--border); background: transparent; color: var(--foreground); font-size: var(--text-caption); text-align: left; }
+.og-team-list > button { cursor: pointer; }
+.og-team-list > button:hover { background: var(--accent); }
+.og-team-list > button > span:not([data-mark]), .og-talks > div > span:not([data-mark]) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.og-team-list > button > small, .og-talks > div > small { flex-shrink: 0; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.og-hidden-mark { flex-shrink: 0; color: var(--muted-foreground); }

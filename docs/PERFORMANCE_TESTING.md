@@ -925,19 +925,22 @@ Issue comments use the existing detail worker, fifty per requested page and two 
 
 Work derives its graph from canonical agent, lineage, verified launch and bounded delivery facts, never from terminal output or letter bodies.
 The graph delivery projection keeps at most 2,000 metadata edges, independently of the existing 5,000-item delivery ledger, and publishes only changed facts.
-Overview radial placement packs bounded project footprints in the existing cancellable worker; it replaces the tree placement only for Work and keeps the shared 400-node/three-second boundary.
-Each admitted project reserves an access position before larger expansions spend the remaining budget, so a hidden member can be selected without another layout request.
+Work places its operator-centred force map synchronously on the main thread in `overviewMapLayout.ts` (d3-force), over at most four hundred nodes, only when the structure key changes: a fixed 120 ticks of Barnes-Hut charge, collision and ties, so the cost is O(ticks × n log n) and never loops.
+Measured on an Apple Silicon Mac in the unit-test runtime, 75 nodes took about 15 ms, 225 about 67 ms and 399 about 140 ms; placing one new session beside 398 held ones took about 130 ms, because held sessions still take part in each tick.
+A drag runs the same simulation on d3's animation timer only while a circle is held or settling, about two seconds after release, and the view stops it when it unmounts or replaces the map.
+On a 2026 MacBook in vitest, the slowest shape measured was one root with 398 children at about 43 ms, a 255-session binary team about 5 ms, and 399 roots or 200 one-session projects under 2 ms.
+Each admitted project reserves an access position before the remaining room is shared in identity order, so a hidden member can be selected without another layout request.
 Protected current members reserve additional positions before admission, independently of the one selected-member position.
-Radial clearance checks label rectangles within each ring on the capped worker input, while edge labels check only their two endpoint rectangles during redraw, reserving the three kind-label lanes together before placing each count.
+Lines carry no labels; each is a straight segment between two orb centres computed during redraw, and team outlines are convex hulls of at most one team's orbs.
 Drag updates one local offset map and redraws the bounded nodes and edges; endpoint lookup uses a node-ID index rather than scanning the node array for each edge.
 Selection may reproject the existing bounded relationship metadata but starts no daemon request, provider read, inference, polling clock or pending-layout queue.
-The layout key contains representative identity, proven root sizing, expansion and interface scale, excluding labels, marks, hover, selection and relationship visibility.
-Replay owns one token-timed timeout, cleared on another play, motion change or unmount; idle has neither a decorative loop nor a new clock.
+The layout key contains representative identity, drawn parents, access slots and interface scale, excluding labels, marks, filters, hiding, hover, selection and correspondence.
+The map has no replay or decorative animation, so idle has neither a loop nor a clock.
 
 `overviewGraphModel.ts` creates a stable structure key so status, model and elapsed-text updates do not schedule another layout.
-`dependencyLayout.ts` owns at most one layout Worker and AbortController with a deadline, terminates them on success, failure, cancellation and unmount, and refuses more than four hundred layout nodes.
-A failed layout leaves the fifty-row list usable with Retry; hover, zoom, folding and selection add no core event or reader.
-Reduced-motion changes and unmount release animation and media-query listeners rather than leaving background work running.
+`overviewMapLayout.ts` refuses more than four hundred layout nodes and starts no worker.
+A failed layout leaves the fifty-row list usable with Retry; hover, zoom, folding, hiding and selection add no core event or reader.
+Unmount releases the theme and interface-scale observers rather than leaving background work running.
 
 History queries the retained request ledger through the existing session-work worker and its sixteen-RPC admission and 512-command queue, without a new resident worker, native session scan or polling interval.
 One cancellable 180 ms debounce belongs to the mounted view; a newer query replaces its demand and request-id and connection-generation checks reject stale answers.
