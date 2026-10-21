@@ -186,6 +186,7 @@ pub(super) fn record(
         project,
         actor: actor_for(agent, host.machine, host.on_node)?,
         ended: false,
+        terminal_id: Some(agent.terminal_id.clone()),
         forked: false,
     })
 }
@@ -364,6 +365,7 @@ pub(crate) fn register_code_owned(
         project: None,
         actor: actor.clone(),
         ended: false,
+        terminal_id: None,
         forked: false,
     };
     let registered = mutate(
@@ -1513,6 +1515,7 @@ mod tests {
                         origin: None,
                         project: None,
                         ended: false,
+                        terminal_id: None,
                         forked: false,
                         actor: actor.clone(),
                     },
@@ -1742,6 +1745,7 @@ mod tests {
                 origin: None,
                 project: None,
                 ended: false,
+                terminal_id: None,
                 forked: false,
                 actor: Actor {
                     pane_id: "sender".into(),
@@ -1843,6 +1847,7 @@ mod tests {
                 project: Some("/fixture/topic".into()),
                 actor: child_actor.clone(),
                 ended: false,
+                terminal_id: None,
                 forked: false,
             };
             let child_id = super::super::apply(

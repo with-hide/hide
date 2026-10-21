@@ -15,6 +15,10 @@ A pane hint cannot replace that binding: a pane-bound caller whose hint names an
 Each queued command revalidates the caller's pane against the prepared Workspace and checkout context before applying or saving; a moved checkout returns `caller_context_changed`.
 Mailbox callers and new recipients require a positive native-session binding; a missing binding returns `native_identity_required`.
 Two missing native references in the same pane never authorize retained mail.
+A live pane move may change Herdr's public pane address while keeping the same native terminal and session.
+The registration stores the terminal identity separately from its address; a unique fresh observation on the same device and Herdr scope with the same native session and agent kind continues that registration, letters, watches and spawn receipt in one ledger transaction.
+A missing identity, another session, a reused address or an ambiguous terminal never proves continuity.
+An inherited Workspace capability follows Herdr's caller alias only after the terminal identity and shell process birth still match, and its registered checkout context must remain the same.
 Target names and pane IDs resolve against the daemon's current observations.
 Herdr numbers panes per machine, and an agent learns the numbers from its own machine's Herdr, so a bare pane ID (`w1:p2`) names the pane on the caller's own machine: a device agent's `w1:p2` is that device's pane, and the core's own agent's `w1:p2` is the core's.
 A bare pane ID never reaches a pane on another machine, even when only that machine has the number: the command is refused `target_unavailable`.

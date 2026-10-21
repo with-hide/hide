@@ -373,6 +373,7 @@ fn spawned_record(
             session: crate::wire::session_digest(session),
         },
         ended: false,
+        terminal_id: None,
         forked: false,
     }
 }

@@ -82,6 +82,7 @@ impl Runtime {
         host_scope: Option<&str>,
         labels: Option<&LabelOverlay>,
     ) {
+        self.continue_moved_registrations(device, payload, host_scope);
         let now = unix_milliseconds();
         let terminals: std::collections::HashMap<_, _> = payload
             .panes
@@ -251,6 +252,141 @@ impl Runtime {
         self.settle_dormant_registrations();
     }
 
+    /// Continue a registration only when this host still reports its terminal
+    /// incarnation and native session. Public pane ids may change when Herdr
+    /// moves a pane between its workspaces. The saved terminal also lets the
+    /// first read after a daemon restart establish that continuity.
+    fn continue_moved_registrations(
+        &mut self,
+        device: &str,
+        payload: &SessionSnapshotPayload,
+        host_scope: Option<&str>,
+    ) {
+        let Some(scope) = host_scope else { return };
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return;
+        };
+        let present: HashSet<_> = payload
+            .panes
+            .iter()
+            .map(|pane| pane.pane_id.as_str())
+            .chain(
+                payload
+                    .agents
+                    .iter()
+                    .filter_map(|agent| agent.pane_id.as_deref()),
+            )
+            .collect();
+        let agents: std::collections::HashMap<_, _> = payload
+            .agents
+            .iter()
+            .filter_map(|agent| agent.pane_id.as_deref().map(|pane| (pane, agent)))
+            .collect();
+        // A duplicated terminal in a malformed/transitional read proves no move.
+        let mut terminals = std::collections::HashMap::new();
+        for pane in &payload.panes {
+            if let Some(terminal) = pane.terminal_id.as_deref().filter(|id| !id.is_empty()) {
+                terminals
+                    .entry(terminal)
+                    .and_modify(|pane: &mut Option<&str>| *pane = None)
+                    .or_insert(Some(pane.pane_id.as_str()));
+            }
+        }
+        let mut continuations = Vec::new();
+        for record in &ledger.agents {
+            if record.ended
+                || record.actor.code_owned()
+                || record.actor.device_id != device
+                || record.host_scope != scope
+            {
+                continue;
+            }
+            let pending = self.registration_rebinds.get(&record.id);
+            let previous_pane = pending.map_or(record.actor.pane_id.as_str(), |pending| {
+                pending.to.pane_id.as_str()
+            });
+            let previous = self
+                .delivery_observations
+                .get(previous_pane)
+                .filter(|old| old.host_scope.as_deref() == Some(scope));
+            let Some(terminal) = record
+                .terminal_id
+                .as_deref()
+                .or_else(|| pending.and_then(|pending| pending.terminal_id.as_deref()))
+                .or_else(|| previous.and_then(|old| old.terminal_id.as_deref()))
+            else {
+                continue;
+            };
+            let Some(Some(pane)) = terminals.get(terminal) else {
+                continue;
+            };
+            if *pane != record.pane && present.contains(record.pane.as_str()) {
+                continue;
+            }
+            let Some(agent) = agents.get(pane) else {
+                continue;
+            };
+            let (Some(name), Some(kind), Some(session)) = (
+                agent.id.as_deref(),
+                agent.agent.as_deref(),
+                agent.lineage_session.as_deref(),
+            ) else {
+                continue;
+            };
+            if record.actor.session.as_deref() != Some(session)
+                || hide_agent_adapter::canonical_kind(&record.actor.kind)
+                    != hide_agent_adapter::canonical_kind(kind)
+            {
+                continue;
+            }
+            let pane_id = if self.node == device {
+                (*pane).to_owned()
+            } else {
+                format!("remote:{device}:pane:{pane}")
+            };
+            let actor = Actor {
+                pane_id,
+                name: name.to_owned(),
+                kind: kind.to_owned(),
+                device_id: device.to_owned(),
+                session: Some(session.to_owned()),
+            };
+            if record.actor.same_identity(&actor) && record.terminal_id.as_deref() == Some(terminal)
+            {
+                continue;
+            }
+            if !actor.valid()
+                || ledger.agents.iter().any(|other| {
+                    other.id != record.id && !other.ended && other.actor.same_identity(&actor)
+                })
+            {
+                continue;
+            }
+            continuations.push((
+                record.id.clone(),
+                previous_pane.to_owned(),
+                crate::coordination::Rebind {
+                    from: record.actor.clone(),
+                    to: actor,
+                    pane: (*pane).to_owned(),
+                    terminal_id: Some(terminal.to_owned()),
+                },
+            ));
+        }
+        for (id, previous_pane, rebind) in continuations {
+            if previous_pane != rebind.to.pane_id
+                && let Some(mut observation) = self.delivery_observations.remove(&previous_pane)
+            {
+                observation.actor = rebind.to.clone();
+                observation.raw_pane_id.clone_from(&rebind.pane);
+                self.delivery_observations
+                    .insert(rebind.to.pane_id.clone(), observation);
+            }
+            self.registrations_gone.remove(&id);
+            self.registration_rebinds.insert(id, rebind);
+        }
+    }
+
     /// A host's session sync is about to ask Herdr for a fresh snapshot.
     /// Until that snapshot publishes, the host's panes are unknown and no
     /// registration on it is ended.
@@ -324,6 +460,7 @@ impl Runtime {
             .filter_map(|record| record.registration.as_ref())
             .chain(self.snapshot.ui_state.session_archive.held_registrations())
             .map(|registration| registration.id.as_str())
+            .chain(self.registration_rebinds.keys().map(String::as_str))
             .collect();
         let read =
             self.delivery_panes
@@ -894,7 +1031,11 @@ impl Runtime {
         }
         self.registration_rebinds.retain(|id, rebind| {
             ledger.agents.iter().any(|record| {
-                &record.id == id && !record.ended && record.actor.same_identity(&rebind.from)
+                &record.id == id
+                    && !record.ended
+                    && record.actor.same_identity(&rebind.from)
+                    && (!record.actor.same_identity(&rebind.to)
+                        || record.terminal_id != rebind.terminal_id)
             })
         });
         // Only a change in who waits for a reply, from whom, and whether that
@@ -2271,6 +2412,7 @@ pub(crate) mod tests {
                 project: None,
                 actor,
                 ended: false,
+                terminal_id: None,
                 forked: false,
             });
             guard.delivery_ledger = Ok(Arc::new(ledger));
@@ -3021,6 +3163,7 @@ pub(crate) mod tests {
                 project: None,
                 actor: runtime.delivery_observations[pane].actor.clone(),
                 ended: false,
+                terminal_id: None,
                 forked: false,
             });
         }
@@ -3031,6 +3174,100 @@ pub(crate) mod tests {
         ledger.validate().unwrap();
         runtime.delivery_ledger = Ok(Arc::new(ledger.clone()));
         ledger
+    }
+
+    /// Cross-workspace moves change the public address, while the native
+    /// terminal, conversation, registration and responsibility remain live.
+    #[test]
+    fn moved_terminal_keeps_registration_letters_and_watch_after_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, _, path) = fixture(root.path());
+        let (worker, client) = Worker::spawn(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        let old_child;
+        {
+            let mut guard = runtime.lock().unwrap();
+            let mut ledger = registered_pair(&mut guard);
+            ledger.agents[1].terminal_id = Some("terminal-child".into());
+            old_child = ledger.agents[1].actor.clone();
+            let lead = ledger.agents[0].actor.clone();
+            crate::delivery::mailbox::send(
+                &mut ledger,
+                &lead,
+                &old_child,
+                "keep-request",
+                "continue",
+                "request",
+                None,
+                1,
+            )
+            .unwrap();
+            crate::delivery::ledger::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+            // A restarted core has no old in-memory observation to guess from.
+            guard.delivery_observations.clear();
+            let payload = serde_json::from_value(json!({
+            "panes":[{"pane_id":"moved-child","terminal_id":"terminal-child"}],
+            "agents":[
+                {"id":"lead","pane_id":"lead","agent":"claude","agent_status":"idle",
+                    "lineage_session":crate::wire::session_digest("lead-native")},
+                {"id":"child","pane_id":"moved-child","agent":"codex","agent_status":"working",
+                    "lineage_session":crate::wire::session_digest("child-native")}
+            ]}))
+            .unwrap();
+            guard.observe_delivery(crate::node::TEST_NODE, &payload, Some("scope"), None);
+            assert!(!guard.delivery_registrations_gone().contains_key("agent-2"));
+        }
+        client
+            .submit(
+                crate::delivery::worker::Effect::HumanClaim,
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        let persisted = crate::delivery::ledger::load(&path).unwrap();
+        let child = &persisted.agents[1];
+        assert_eq!(child.id, "agent-2");
+        assert_eq!(child.pane, "moved-child");
+        assert_eq!(child.parent.as_deref(), Some("agent-1"));
+        assert_eq!(child.terminal_id.as_deref(), Some("terminal-child"));
+        assert!(!child.ended);
+        assert_eq!(persisted.watches.len(), 1);
+        assert!(persisted.watches[0].target.same_identity(&child.actor));
+        assert!(persisted.letters[0].recipient.same_identity(&child.actor));
+        assert!(!child.actor.same_identity(&old_child));
+        persisted.validate().unwrap();
+        drop(worker);
+    }
+
+    #[test]
+    fn a_reused_address_or_terminal_does_not_continue_another_session() {
+        for (terminal, session, scope) in [
+            ("replacement", "child-native", "scope"),
+            ("terminal-child", "another-session", "scope"),
+            ("terminal-child", "child-native", "another-herdr"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let (runtime, _, _, _) = fixture(root.path());
+            let mut guard = runtime.lock().unwrap();
+            let mut ledger = registered_pair(&mut guard);
+            ledger.agents[1].terminal_id = Some("terminal-child".into());
+            guard.delivery_ledger = Ok(Arc::new(ledger));
+            let payload = serde_json::from_value(json!({
+                "panes":[{"pane_id":"moved-child","terminal_id":terminal}],
+                "agents":[{"id":"child","pane_id":"moved-child","agent":"codex",
+                    "agent_status":"working","lineage_session":crate::wire::session_digest(session)}]
+            })).unwrap();
+            guard.observe_delivery(crate::node::TEST_NODE, &payload, Some(scope), None);
+            assert!(
+                !guard
+                    .delivery_registration_rebinds()
+                    .contains_key("agent-2")
+            );
+        }
     }
 
     fn only_lead() -> SessionSnapshotPayload {

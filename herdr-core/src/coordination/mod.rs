@@ -189,6 +189,8 @@ pub struct AgentRecord {
     pub native_machine: String,
     pub session: String,
     pub instance: String,
+    /// Herdr's terminal incarnation, retained when a move changes the public pane id.
+    pub terminal_id: Option<String>,
     pub pane: String,
     pub parent: Option<String>,
     /// Provenance only for handoffs and forks; delegated provenance is the
@@ -217,6 +219,8 @@ struct AgentRecordOnDisk {
     native_machine: String,
     session: String,
     instance: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_id: Option<String>,
     pane: String,
     parent: Option<String>,
     #[serde(default)]
@@ -238,6 +242,7 @@ impl From<AgentRecord> for AgentRecordOnDisk {
             native_machine: record.native_machine,
             session: record.session,
             instance: record.instance,
+            terminal_id: record.terminal_id,
             pane: record.pane,
             parent: record.parent,
             origin: record.origin,
@@ -262,6 +267,7 @@ impl From<AgentRecordOnDisk> for AgentRecord {
             native_machine: disk.native_machine,
             session: disk.session,
             instance: disk.instance,
+            terminal_id: disk.terminal_id,
             pane: disk.pane,
             parent: disk.parent,
             origin: disk.origin,
@@ -597,6 +603,10 @@ pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
             || !key(&record.id)
             || !record.id.starts_with("agent-")
             || record.name.as_deref().is_some_and(|name| !key(name))
+            || record
+                .terminal_id
+                .as_deref()
+                .is_some_and(|terminal| !key(terminal))
             || ![
                 &record.machine,
                 &record.host_scope,
@@ -1282,6 +1292,7 @@ pub(crate) struct Rebind {
     pub(crate) to: Actor,
     /// Herdr's own id of the woken pane, which a local actor spells the same.
     pub(crate) pane: String,
+    pub(crate) terminal_id: Option<String>,
 }
 
 /// Points each registration at the pane that woke it, with the letters,
@@ -1312,6 +1323,7 @@ pub(crate) fn rebind(
             record.instance = rebind.pane.clone();
         }
         let old_pane = std::mem::replace(&mut record.pane, rebind.pane.clone());
+        record.terminal_id.clone_from(&rebind.terminal_id);
         record.actor = rebind.to.clone();
         for letter in &mut ledger.letters {
             for party in [&mut letter.sender, &mut letter.recipient] {
@@ -1378,6 +1390,7 @@ mod tests {
                 session: crate::wire::session_digest(session),
             },
             ended: false,
+            terminal_id: None,
             forked: false,
         }
     }
@@ -2736,6 +2749,7 @@ mod tests {
                 ..from.clone()
             },
             pane: pane.into(),
+            terminal_id: None,
         }
     }
 

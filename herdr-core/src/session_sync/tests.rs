@@ -3060,6 +3060,7 @@ fn registrations_end_only_on_a_fresh_snapshot_never_during_the_resync() {
                 session: crate::wire::session_digest(&format!("{id}-native")),
             },
             ended: false,
+            terminal_id: None,
             forked: false,
         };
         let ledger = crate::delivery::ledger::Ledger {
