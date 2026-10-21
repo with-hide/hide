@@ -1745,7 +1745,7 @@ fn parse_claude_line(item: &Value, reply: &dyn Fn() -> CommandReply) -> LineResu
 fn claude_hook_context(item: &Value) -> LineResult {
     let content = match claude_attachment::Attachment::of(item) {
         Some(claude_attachment::Attachment::HookSuccess {
-            hook_name: Some("SessionStart:resume" | "SessionStart:clear" | "SessionStart:compact"),
+            hook_name: Some("SessionStart:clear" | "SessionStart:compact"),
         }) => {
             return match timestamp_ms(item.get("timestamp")) {
                 Ok(at) => LineResult::Event(

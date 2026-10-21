@@ -99,11 +99,17 @@ pub fn answer(scope: &Scope, ask: &Ask, deadline: Instant) -> HookContext {
     if Instant::now() >= deadline {
         return without(HookOutcome::Deadline);
     }
-    let prompt = ask.prompt.as_deref().unwrap_or_default();
-    let ranked_prompt = scope
-        .task_context
-        .as_deref()
-        .map(|context| format!("{}\n{}", prompt, context));
+    let prompt = hide_memory::hook::prompt_prefix(ask.prompt.as_deref().unwrap_or_default());
+    // Native hooks provide text, not a continuation flag. A brief line (at
+    // most 80 characters) may use the confirmed task as ranking context.
+    // Longer requests carry their own task; no language-specific words decide it.
+    let ranked_prompt = if !prompt.trim().is_empty() && prompt.chars().count() <= 80 {
+        scope.task_context.as_deref().map(|context| {
+            hide_memory::hook::prompt_prefix(&format!("{prompt}\n{context}")).to_owned()
+        })
+    } else {
+        None
+    };
     hide_memory::hook::context_for(
         &scope.store,
         &scope.project,
@@ -111,7 +117,7 @@ pub fn answer(scope: &Scope, ask: &Ask, deadline: Instant) -> HookContext {
             runtime_id: &ask.runtime,
             event: ask.event,
             session_id: &ask.session,
-            prompt: ranked_prompt.as_deref().or(ask.prompt.as_deref()),
+            prompt: Some(ranked_prompt.as_deref().unwrap_or(prompt)),
         },
         move || Instant::now() >= deadline,
     )
@@ -195,6 +201,12 @@ mod tests {
             HookOutcome::Empty
         );
         scope.task_context = Some("테스트 실행기 점검".into());
+        let unrelated = Ask::from_wire(&json!({"event":"UserPromptSubmit","runtime":"claude","session":"other-task","prompt":"Investigate the basalt specimen archive and document the geological history of the volcanic rocks collected last year."})).unwrap();
+        assert_eq!(
+            answer(&scope, &unrelated, Instant::now() + WITHIN).outcome,
+            HookOutcome::Empty
+        );
+
         let result = answer(&scope, &ask, Instant::now() + WITHIN);
         assert_eq!(result.outcome, HookOutcome::Provided { count: 1 });
         assert!(
@@ -202,6 +214,15 @@ mod tests {
                 .context
                 .unwrap()
                 .contains("Use nextest for test execution")
+        );
+        scope.task_context = Some(format!(
+            "{}테스트 실행기",
+            "basalt ".repeat(hide_memory::hook::PROMPT_LIMIT_BYTES / 7 + 1)
+        ));
+        assert_eq!(
+            answer(&scope, &ask, Instant::now() + WITHIN).outcome,
+            HookOutcome::Empty,
+            "ranking context beyond the combined 8 KiB limit is never searched"
         );
     }
 

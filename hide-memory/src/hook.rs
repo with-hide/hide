@@ -19,9 +19,12 @@ pub const PROMPT_LIMIT_BYTES: usize = 8 * 1024;
 pub const RENDERED_TOKEN_LIMIT: usize = 1_200;
 
 pub fn estimated_tokens(text: &str) -> usize {
+    // Keep the English estimate, but reserve byte-fallback space for
+    // non-ASCII scripts instead of treating four CJK characters as one token.
+    let ascii = text.bytes().filter(u8::is_ascii).count();
     text.split_whitespace()
         .count()
-        .max(text.chars().count().div_ceil(4))
+        .max(ascii.div_ceil(4) + text.len() - ascii)
 }
 
 /// `prompt`'s first [`PROMPT_LIMIT_BYTES`] bytes at most, cut on a character
@@ -355,6 +358,13 @@ mod tests {
     }
 
     #[test]
+    fn multilingual_render_estimates_do_not_discount_unspaced_cjk_text() {
+        for text in ["한글".repeat(700), "漢字".repeat(700), "かな".repeat(700)] {
+            assert!(estimated_tokens(&text) >= text.chars().count());
+        }
+    }
+
+    #[test]
     fn a_prompt_sharing_no_word_or_alias_gets_no_memory() {
         // B12
         let temp = tempfile::tempdir().unwrap();
@@ -653,6 +663,31 @@ mod tests {
                 estimated_tokens(&text)
             );
             assert!(matches!(answer.outcome,HookOutcome::Provided{count} if count>0));
+        }
+    }
+
+    #[test]
+    fn unspaced_korean_and_cjk_bodies_share_the_exact_rendered_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let cards = (0..12)
+            .map(|index| {
+                rule(
+                    &format!("durable hooks {index} {}", "한글漢字かな".repeat(25)),
+                    0.9,
+                )
+            })
+            .collect::<Vec<_>>();
+        let (path, project) = enabled_store(temp.path(), &temp.path().join("project"), &cards);
+        for event in [HookEvent::SessionStart, HookEvent::UserPromptSubmit] {
+            let answer = context_for(
+                &path,
+                &project,
+                ask(event, "s", Some("durable hooks")),
+                frozen(),
+            );
+            let text = answer.context.expect("a bounded multilingual capsule");
+            assert!(estimated_tokens(&text) <= RENDERED_TOKEN_LIMIT);
+            assert!(text.chars().filter(|ch| !ch.is_ascii()).count() <= RENDERED_TOKEN_LIMIT);
         }
     }
 

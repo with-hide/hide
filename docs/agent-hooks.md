@@ -146,7 +146,10 @@ Each step that can fail answers its own reason, which the hook records under a c
 Requests and responses are capped at 16 KiB and 64 KiB, and the existing bootstrap and node proof worker caps still apply.
 The letter and Memory children run independently and in parallel under their existing caller deadlines and fail-open outcomes.
 The core takes the Project from the caller's attested checkout and already-prepared catalog facts, never from anything the hook sends.
-Only an explicit checkout purpose or branch description contributes bounded task context; absent facts fail open without discovery.
+Only an explicit checkout purpose or branch description contributes at most 1024 bytes of prepared task context; absent facts fail open without discovery.
+Native hooks have no continuation flag, so the core uses that context only for a nonempty brief prompt of at most 80 characters; a longer request ranks by its own text.
+The combined ranking input is capped at 8 KiB on a UTF-8 boundary after composition.
+
 The lookup performs no provider or embedding call, transcript scan, child-process launch, or database write, and runs off the core's runtime lock.
 Missing, locked, corrupt, stale, over-limit, unresolved-Project, and over-deadline stores return no Memory context, and the hook still exits zero.
 Memory waits for its answer until 1,250 ms after the inner hook starts; the 1,650 ms intake budget reserves its last 400 ms for letter confirmation after a successful stdout flush.
@@ -155,9 +158,12 @@ SessionStart has the same Memory read budget, a separate two-second Workspace CL
 The core sets a one-second Memory answer deadline: owner-scope reply waiting uses the remaining expiry and remote admission, write and answer share an absolute deadline.
 Retrieval expires at the earlier of that invocation expiry and its own 100 ms allowance.
 The escaped index or body envelope, including receipts, shares a 1200 estimated rendered-token cap; this is not a provider billing count.
+The local estimator reserves one token per four ASCII bytes and byte-fallback space for non-ASCII text, so unspaced Korean, Chinese and Japanese text is not discounted as English words.
+
 Receipts suppress only a current revision delivered in the same Project/runtime/session/context generation.
-The existing background receipt reader advances context generation from Claude Code's native `SessionStart:resume`, `SessionStart:clear` and `SessionStart:compact` hook attachments, Codex's native top-level `compacted` records, and Pi/omp native compaction records.
+The existing background receipt reader advances context generation from Claude Code's native `SessionStart:clear` and `SessionStart:compact` hook attachments, Codex's native top-level `compacted` records, and Pi/omp native compaction records.
 A Codex replacement context can retain some content, but its metadata does not certify which delivered Memory bodies survived, so the boundary permits bounded revision-aware recall again without reading the retained payload.
+A normal Claude Code resume preserves delivery history because it restores the conversation rather than proving context loss.
 Other runtimes retain revision-aware delivery but have no proven context-reset signal here; prompt text never implies compaction, and delivery history does not prove present model context.
 Generation-bound tags preserve old generation-zero receipt authentication and never assign old deliveries to a new context.
 Native evidence becomes usable after the existing reader observes it; the submitting prompt does not scan a transcript.

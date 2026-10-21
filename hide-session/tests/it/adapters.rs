@@ -62,6 +62,7 @@ fn context_resets_require_native_metadata_and_keep_their_record_offsets() {
         serde_json::json!({"type":"user","timestamp":at,"origin":{"kind":"human"},"message":{"content":"SessionStart:compact - please compact this context"}}),
         serde_json::json!({"type":"attachment","timestamp":at,"attachment":{"type":"hook_success","hookName":"SessionStart:compact"}}),
         serde_json::json!({"type":"attachment","timestamp":at,"attachment":{"type":"hook_success","hookName":"SessionStart:resume"}}),
+        serde_json::json!({"type":"attachment","timestamp":at,"attachment":{"type":"hook_success","hookName":"SessionStart:clear"}}),
     ];
     let rows = rows.map(|mut row| {
         row["sessionId"] = serde_json::json!("a1b2c3d4-0000-4000-8000-000000000001");
