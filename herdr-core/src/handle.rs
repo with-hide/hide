@@ -231,15 +231,23 @@ impl Core {
         reports: crate::terminal_reports::TerminalReports,
         analytics: Option<Arc<dyn crate::product_analytics::Sink>>,
     ) -> Option<Box<Self>> {
+        // TEMPORARY #1515: time each part of core creation.
+        let mut __at = std::time::Instant::now();
+        let __t = |at: &mut std::time::Instant, part: &str| {
+            crate::diagnostic!(serde_json::json!({"component":"core","kind":"create.part","part":part,"ms":at.elapsed().as_millis() as u64}));
+            *at = std::time::Instant::now();
+        };
         if validate_options(&options).is_err()
             || options.herdr_socket_path.is_some() != own_herdr.is_some()
         {
             return None;
         }
+        __t(&mut __at, "validate"); // TEMPORARY #1515
         let environment = match options.home.as_deref() {
             Some(home) => environment::read_and_validate().with_home(home.into()),
             None => environment::read_and_validate(),
         };
+        __t(&mut __at, "environment"); // TEMPORARY #1515
         let environment_home = environment.home_path.clone();
         let usage_paths = crate::usage::UsagePaths {
             home: environment.home_path.clone(),
@@ -258,14 +266,17 @@ impl Core {
                 serde_json::json!({"kind": "diagnostics.open_failed", "message": error.to_string()})
             );
         }
+        __t(&mut __at, "diagnostics"); // TEMPORARY #1515
         // Before the runtime exists, so the read is never made under its lock.
         let system_language = crate::runtime::output_language::read_system_language();
+        __t(&mut __at, "system_language"); // TEMPORARY #1515
         let runtime = Arc::new(Mutex::new(Runtime::new(
             options.clone(),
             environment,
             Arc::clone(&own_node),
             devices,
         )));
+        __t(&mut __at, "runtime_new"); // TEMPORARY #1515
         if let Some(sink) = analytics {
             lock_recover(&runtime).install_product_analytics(sink);
         }
@@ -275,6 +286,7 @@ impl Core {
         lock_recover(&runtime).set_guardrails_own_file(options.account_state_folder);
         lock_recover(&runtime).publish_own_guardrail_policy();
         lock_recover(&runtime).set_terminals(terminals);
+        __t(&mut __at, "runtime_setup"); // TEMPORARY #1515
         // Started before anything can attach, so no report waits on it.
         let terminal_reports = match crate::terminal_reports::ReportPump::spawn(
             reports,
@@ -291,6 +303,7 @@ impl Core {
                 None
             }
         };
+        __t(&mut __at, "report_pump"); // TEMPORARY #1515
         let delivery_path = hide_kit::layout::delivery_ledger(
             std::path::Path::new(&options.app_state_path)
                 .parent()
@@ -312,6 +325,7 @@ impl Core {
                 None
             }
         };
+        __t(&mut __at, "delivery"); // TEMPORARY #1515
         // Before any coordinator starts, so the sidebar draws the last run's
         // pull request state from its first frame instead of after a `gh` pass.
         if let Some(directory) = std::path::Path::new(&options.app_state_path)
@@ -335,6 +349,7 @@ impl Core {
             let restored = checks.restore();
             lock_recover(&runtime).install_composer_checks(checks, restored);
         }
+        __t(&mut __at, "stores"); // TEMPORARY #1515
         // Before any coordinator starts, because each builds its label worker
         // on these, and before the kit runs, because the plugin state the
         // store imports once is what the kit's retirement deletes.
@@ -367,6 +382,7 @@ impl Core {
                 None
             }
         };
+        __t(&mut __at, "labels"); // TEMPORARY #1515
         // Before any coordinator, so the first catalog and GitHub answers
         // reach it.
         let links = match crate::runtime::links::spawn_worker(&runtime, notifier.clone()) {
@@ -385,6 +401,7 @@ impl Core {
                 None
             }
         };
+        __t(&mut __at, "links"); // TEMPORARY #1515
         let session_sync = if let (Some(socket_path), Some(own_herdr)) =
             (options.herdr_socket_path.as_deref(), own_herdr)
         {
@@ -399,9 +416,11 @@ impl Core {
         } else {
             None
         };
+        __t(&mut __at, "session_sync"); // TEMPORARY #1515
         if lock_recover(&runtime).connect_registered_devices() {
             notifier.notify();
         }
+        __t(&mut __at, "devices"); // TEMPORARY #1515
         // History reads through each checkout's own host, so it runs whether
         // or not this machine has a Herdr session.
         let changes =
@@ -416,6 +435,7 @@ impl Core {
                     None
                 }
             };
+        __t(&mut __at, "changes"); // TEMPORARY #1515
         // This machine's install kit runs on its own node whether or not
         // Herdr answers; only retiring the old labels plugin needs it (PRD
         // labels-in-hided D-12). Without a socket from the embedder the node
@@ -436,6 +456,7 @@ impl Core {
                 None
             }
         };
+        __t(&mut __at, "kit"); // TEMPORARY #1515
         let usage_ledger =
             match crate::runtime::usage_ledger::spawn_worker(&runtime, notifier.clone()) {
                 Ok(worker) => Some(worker),
@@ -456,6 +477,7 @@ impl Core {
                     None
                 }
             };
+        __t(&mut __at, "usage_ledger"); // TEMPORARY #1515
         Some(Box::new(Core {
             _delivery: delivery,
             _terminal_reports: terminal_reports,
