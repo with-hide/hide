@@ -97,6 +97,15 @@ describe("pane move gesture", () => {
     await act(async () => check.click());
     expect(events.filter(event => event.kind === "pane_move_check")).toEqual([{ schema_version: 2, kind: "pane_move_check", payload: { request_id: request.request_id } }]);
   });
+  it("restores a published unknown reservation and check action after mounting without local request state", async () => {
+    const unknown: AsyncOperation = { id: "retained-move", kind: "pane.move", target_id: "p1", scope_id: "t1", related_scope_ids: ["t1", "t2"], phase: "unknown", stage: "move", message: null, retryable: false };
+    await act(async () => useShellStore.setState({ rest: { status: { async_operations: [unknown] } } }));
+    expect(element('[data-busy]').textContent).toBe("true:false");
+    const check = [...container.querySelectorAll("button")].find(button => button.textContent === "Check status")!;
+    await act(async () => check.click());
+    expect(events.filter(event => event.kind === "pane_move_check")).toEqual([{ schema_version: 2, kind: "pane_move_check", payload: { request_id: unknown.id } }]);
+    expect(moves()).toHaveLength(0);
+  });
   it("cancels on connection loss and suppresses a later release click", async () => {
     hit = element('[data-pane-view="p2"]'); await start(); await pointer("pointermove", 390, 100);
     await act(async () => useShellStore.setState({ connection: "connecting" }));
