@@ -68,9 +68,18 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     }
     await setFixtureLifecycle(herdr, child, "working");
     await expect(pane.locator('[data-pane-header-band="raised"]')).toHaveCount(0);
-    continueFixtureTranscript(herdr, parentSession, { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중" });
+    // The ask leads with the request's own first line until the label has summarized it (PRD pane-last-request B3).
+    await expect(pane.locator(`[data-pane-turn-request="${parent}"]`)).toContainText("한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목 진행해줘");
+    continueFixtureTranscript(herdr, parentSession, { task: "한국어 입력과 세션 복귀 경계를 검토하는 긴 작업 제목", progress: "자식 검토 결과를 기다리는 중", request: "자식 검토 결과 정리와 세션 복귀 확인" });
     await setFixtureLifecycle(herdr, parent, "working");
     await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveText("자식 검토 결과를 기다리는 중", { timeout: 25_000 });
+    // The working turn leads with the label's summary of the new request, and its card opens under it (B1, B2, B6).
+    const request = pane.locator(`[data-pane-turn-request="${parent}"]`);
+    await expect(request).toContainText("자식 검토 결과 정리와 세션 복귀 확인");
+    await request.hover();
+    await expect(page.locator(`[data-pane-turn-card="${parent}"] [data-turn-card-original]`)).toContainText("이어서 진행해줘");
+    await captureNativeWindow(app, "session-turn-card", { ...facts, terminal });
+    await page.mouse.move(0, 0);
     expect(await host.boundingBox()).toEqual(terminal);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${child}"]`)).toHaveCount(0);
     await captureNativeWindow(app, "session-working-restored", { ...facts, terminal });

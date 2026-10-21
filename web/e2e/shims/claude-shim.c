@@ -91,6 +91,16 @@ static int fit_schema(char *label, int argc, char **argv) {
     memmove(legacy + new_length, legacy + old_length, strlen(legacy + old_length) + 1);
     memcpy(legacy, replacement, new_length);
   }
+  /* Recorded markers from before context_label.v19 carry no request summary:
+     they answer none, which the product reads as the request's own words. */
+  if (strstr(schema, "\"request\"") && !strstr(label, "\"request\":")) {
+    const char *field = "\"request\":\"\",";
+    size_t length = strlen(label);
+    size_t capacity = sizeof prompt - (size_t)(label - prompt);
+    if (label[0] != '{' || length + strlen(field) >= capacity) return 0;
+    memmove(label + 1 + strlen(field), label + 1, length);
+    memcpy(label + 1, field, strlen(field));
+  }
   if (strstr(schema, "\"end\"")) {
     /* Recorded native-format fixtures retain their old label marker. This
        controlled provider gives that unrelated reader journey no work judgment
