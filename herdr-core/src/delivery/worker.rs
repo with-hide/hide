@@ -1180,6 +1180,7 @@ mod tests {
             last_submit_at_unix_ms: 0,
             entered_working_at_unix_ms: 0,
             released_input_at_unix_ms: 0,
+            hook_submit_at_unix_ms: 0,
             session: Some(hide_session::session_activity::SessionActivityRequest {
                 agent: hide_session::Agent::Codex,
                 reference_kind: "id".into(),

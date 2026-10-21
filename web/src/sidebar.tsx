@@ -147,6 +147,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
           <SidebarHeader
             compact={(preview ?? storedWidth ?? tokenPx("--size-sidebar-ideal")) < tokenPx("--size-sidebar-ideal")}
             overview={{ selected: overviewSelected, count: overviewCount, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
+            addProject={hostBridge() ? { chord: commandLabel("new_workspace") || null, onOpen: () => actions.openAddProject() } : undefined}
             searchChord={commandLabel("search") || null}
             onSearch={() => actions.openSearch()}
           />
@@ -501,9 +502,9 @@ function ProjectList({ actions }: { actions: Actions }) {
       <ul ref={list} className="min-h-0 flex-1 overflow-auto px-sm" data-project-list="true">
         {/* Each section is its own box, so its header sticks to the list's top only while its rows pass under it, and the next section's header pushes it away (D-05). */}
         {sections.map((section, index) => (
-          <li key={`section:${section.header.section}`} data-project-section={section.header.section}>
+          <li key={`section:${section.header.section}`} data-project-section={section.header.section} className={index > 0 || raised.length > 0 ? "mt-sm border-t border-border" : undefined}>
             <ul>
-              <SectionHeader row={section.header} actions={actions} />
+              <SectionHeader row={section.header} />
               {section.rows.map((row, index) => (
                 <ProjectRowView key={rowKey(row)} row={row} first={index === 0} context={context} />
               ))}
@@ -585,20 +586,20 @@ function projectSections(rows: ProjectRow[]): { header: SectionRow; rows: Projec
   return sections;
 }
 
+/** What sets an open project block (its checkouts drawn under its name) off from the row above; a folded project is one line and takes only a small gap. */
+const BLOCK_GAP = "mt-sm border-t border-border pt-xs";
+
 /**
  * A section's header, stuck to the top of the list while its rows scroll
  * under it, with a hairline under it only while it is stuck (D-05). The
- * Pinned header carries the pin, which no pinned row repeats; the Projects
- * title carries the sidebar's one Add project, shown with or without
- * projects, where the host can pick a folder (PRD first-run-onboarding B51);
- * with none it is the bare word, over the empty list's line.
+ * Pinned header carries the pin, which no pinned row repeats; with no project
+ * the Projects title is the bare word, over the empty list's line.
  */
-function SectionHeader({ row, actions }: { row: SectionRow; actions: Actions }) {
+function SectionHeader({ row }: { row: SectionRow }) {
   const { t } = useInterfaceTranslation();
-  const add = row.section === "recent" && hostBridge();
   return (
     <li
-      className="sticky top-0 z-10 flex h-(--size-sidebar-section-header) items-end gap-xs bg-sidebar pr-xs pb-xs pl-sm text-micro font-medium text-muted-foreground data-[stuck=true]:border-b data-[stuck=true]:border-border"
+      className="sticky top-0 z-10 flex h-(--size-sidebar-section-header) items-end gap-xs bg-sidebar pr-sm pb-xs pl-sm text-micro font-medium text-muted-foreground data-[stuck=true]:border-b data-[stuck=true]:border-border"
       data-section={row.section}
       data-section-sticky="true"
     >
@@ -606,13 +607,6 @@ function SectionHeader({ row, actions }: { row: SectionRow; actions: Actions }) 
       <span className="min-w-0 flex-1 truncate">
         {row.section === "recent" && row.count === 0 ? t("sidebar.projects") : `${t(PROJECT_SECTION_TITLE[row.section])} · ${row.count}`}
       </span>
-      {add ? (
-        <Hint label={t("commands.new_workspace")} shortcut={commandLabel("new_workspace") || null}>
-          <Button variant="ghost" size="icon-sm" className="size-(--size-sidebar-line)" data-sidebar-new-workspace="true" onClick={() => actions.openAddProject()}>
-            <PlusIcon />
-          </Button>
-        </Hint>
-      ) : null}
     </li>
   );
 }
@@ -968,7 +962,7 @@ function WorkspaceRows({ workspace, level, first = false, context }: { workspace
     />
   );
   return (
-    <li data-project={workspace.id} className={cn(inset, !first && "mt-md border-t border-border pt-xs")}>
+    <li data-project={workspace.id} className={cn(inset, !first && (expanded ? BLOCK_GAP : "mt-xs"))}>
       <EntryContextMenu
         label={t("common.entryActions", { name: workspace.label })}
         items={() => projectMenu(workspace, menuHost(), t, issueSource)}
@@ -1248,7 +1242,7 @@ const FolderRowView = memo(function FolderRowView({
   const secondLine = asleep ? !open && checkoutHasSecondLine(view, purpose, raisedFrom) : disclosure.secondLine;
   const visibleRows = open ? agentRows : agentRows.filter((row) => row.depth === 0 && row.agent.state.needs_you);
   return (
-    <li data-project={workspace.id} data-checkout-open={open ? "true" : undefined} className={cn(inset, !first && "mt-md border-t border-border pt-xs")}>
+    <li data-project={workspace.id} data-checkout-open={open ? "true" : undefined} className={cn(inset, !first && (open ? BLOCK_GAP : "mt-xs"))}>
       <EntryContextMenu
         label={t("common.entryActions", { name: workspace.label })}
         items={() => folderMenu(workspace, checkout, menuHost(), t, purposeProblem, issueSource)}

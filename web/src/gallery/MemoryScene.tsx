@@ -10,7 +10,7 @@ import { useShellStore } from "../store";
 import { Lane } from "../Tools";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 
-export const MEMORY_SCENE_STATES = ["workspace", "off", "ai_not_ready", "analyzing", "empty", "unreadable", "promote", "writing", "writing_batch", "failed", "start_failed", "not_processed", "building", "unbuilt", "forgotten", "verifying", "reconsent", "checking", "check_budget_exhausted"] as const;
+export const MEMORY_SCENE_STATES = ["workspace", "correction", "off", "ai_not_ready", "analyzing", "empty", "unreadable", "promote", "writing", "writing_batch", "failed", "start_failed", "not_processed", "building", "unbuilt", "forgotten", "verifying", "reconsent", "checking", "check_budget_exhausted", "evicted", "full"] as const;
 export type MemorySceneState = (typeof MEMORY_SCENE_STATES)[number];
 export type MemorySceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type MemorySceneParams = { theme: "light" | "dark"; state: MemorySceneState; width: number; language: MemorySceneLanguage };
@@ -55,7 +55,7 @@ const EXPANDED: ProjectMemory["expanded"] = {
 
 export function memorySceneProject(state: MemorySceneState): ProjectMemory {
   const base: ProjectMemory = {
-    workspace_id: "herdr-ide", unavailable: null, loading: false, enabled: true, capacity_reached: false,
+    workspace_id: "herdr-ide", unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0, evicted_through_unix_ms: null,
     rows: ROWS, questions: [], analysis: "idle", consent_required: false, usable_cards: 2, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null, expanded: null, search: null,
   };
   switch (state) {
@@ -64,6 +64,7 @@ export function memorySceneProject(state: MemorySceneState): ProjectMemory {
         { kind: "promote", number: 3, title: ROWS[5]!.title, human_session_count: 3, pulled_session_count: 9 },
         { kind: "promote", number: 5, title: ROWS[6]!.title, human_session_count: 2, pulled_session_count: 6 },
       ] };
+    case "correction": return { ...base, rows: [{ ...ROWS[6]!, title: "Use the repository verification script", body_preview: "Use the verification script so local checks and CI use the same toolchain." }], questions: [{ kind: "docs_disagree", number: ROWS[6]!.number, title: "Use the repository verification script", document: { authority: "card_newer", document: "docs/TESTING.md", document_at_unix_ms: Date.now(), operator_at_unix_ms: Date.now() - 1440 * MINUTE } }] };
     case "off": return { ...base, enabled: false, usable_cards: 0 };
     case "ai_not_ready": return { ...base, analysis: "ai_not_ready" };
     case "analyzing": return { ...base, analysis: "analyzing" };
@@ -90,6 +91,8 @@ export function memorySceneProject(state: MemorySceneState): ProjectMemory {
     case "check_budget_exhausted": return { ...base, usable_cards: 0, analysis: "check_budget_exhausted", check_resume_at_unix_ms: (Math.floor(Date.now() / 86_400_000) + 1) * 86_400_000, rows: [{ ...ROWS[0]!, verifying: true }, { ...ROWS[5]!, verifying: true }] };
     case "verifying": return { ...base, rows: [{ ...ROWS[0]!, verifying: true }, ROWS[5]!, { ...ROWS[6]!, verifying: true }] };
     case "forgotten": return { ...base, rows: ROWS.filter((card) => card.number !== 9), forgotten: 9 };
+    case "evicted": return { ...base, evicted_cards: 3, evicted_through_unix_ms: Date.now() - 5 * MINUTE };
+    case "full": return { ...base, capacity_reached: true, evicted_cards: 3, evicted_through_unix_ms: Date.now() - 5 * MINUTE };
   }
 }
 

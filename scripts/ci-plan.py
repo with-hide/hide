@@ -242,7 +242,7 @@ DESKTOP_E2E_LANES = {"checks", "desktop-e2e", "windows-desktop", "windows-check"
 # scanner reads web tests as CSS inputs. Their existing app lanes must stay.
 # An unregistered convention keeps its folder's existing plan.
 UNIT_TEST_PATHS = (
-    "desktop/src/*.test.ts",
+    "desktop/src/*.test.ts", "desktop/scripts/*.test.mjs",
     "desktop/e2e/fixture-cleanup.unit.ts", "desktop/e2e/windows-processes.unit.ts",
 )
 
@@ -258,8 +258,10 @@ JOURNEY_LANES = {"agent-journey"}
 # that installs it on every system (contracts/README.md, Agent CLI pins).
 AGENT_CLI_LANES = {"agent-clis"}
 # Files inside a crate the journey runs as its own tools: Hide's conversation
-# reader, its Project Memory card writer and Codex's app-server stand-in.
+# reader, its Project Memory card writer, the composer judge and Codex's
+# app-server stand-in.
 JOURNEY_CRATE_FILES = ("hide-session/examples/journey_conversation.rs", "hide-memory/examples/journey_memory.rs",
+                       "hide-agent-adapter/examples/journey_composer.rs",
                        "hide-agent-hooks/tests/fixtures/fake-codex.py")
 # The live check's code, which the journey runs and `agent-live-check.spec.ts`
 # drives in the web e2e; its unit tests are `policy`'s.

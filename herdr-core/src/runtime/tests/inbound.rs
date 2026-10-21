@@ -506,9 +506,18 @@ fn memory_is_answered_for_this_machine_and_a_linked_node_only() {
                 checkout_id: "checkout".to_owned(),
                 checkout_path: "/work/project".to_owned(),
             })
-            .map(|scope| (scope.node.as_str().to_owned(), scope.checkout_path))
+            .map(|scope| {
+                (
+                    scope.project.device_id,
+                    scope.project.checkout_root.to_string_lossy().into_owned(),
+                )
+            })
     };
-    assert_eq!(scope(&own), Ok((own.clone(), "/work/project".to_owned())));
+    assert_eq!(
+        scope(&own),
+        Err("project_unresolved"),
+        "an attested pane without prepared facts does no discovery"
+    );
     assert_eq!(scope(NODE), Err("unregistered"));
 
     let event = serde_json::json!({
@@ -527,6 +536,24 @@ fn memory_is_answered_for_this_machine_and_a_linked_node_only() {
         "studio",
         Arc::new(hide_node::Local::new(Some(home.path().to_owned()))),
     );
+    assert_eq!(scope("studio"), Err("project_unresolved"));
+    let prepare = |device: &str| {
+        let mut runtime = shared.lock().unwrap();
+        let facts = runtime.device_facts.entry(device.into()).or_default();
+        facts.reread = false;
+        facts.unavailable = None;
+        facts.facts.insert(
+            "/work/project".into(),
+            crate::device_catalog::Fact::Known(hide_project::ProjectFacts {
+                root: "/work/project".into(),
+                checkout_root: "/work/project".into(),
+                kind: hide_project::ProjectKind::Folder,
+                branch: None,
+                linked_worktree: false,
+            }),
+        );
+    };
+    prepare("studio");
     assert_eq!(
         scope("studio"),
         Ok(("studio".to_owned(), "/work/project".to_owned()))
@@ -543,10 +570,21 @@ fn memory_is_answered_for_this_machine_and_a_linked_node_only() {
     wait(&shared, "the link ready", |runtime| {
         runtime.host_snapshot(NODE).state == "ready"
     });
+    prepare(NODE);
+    assert_eq!(scope(NODE), Ok((NODE.to_owned(), "/work/project".into())));
+    shared
+        .lock()
+        .unwrap()
+        .device_facts
+        .get_mut(NODE)
+        .unwrap()
+        .reread = true;
     assert_eq!(
         scope(NODE),
-        Ok((NODE.to_owned(), "/work/project".to_owned()))
+        Err("project_unresolved"),
+        "a reconnected node must refresh its prepared identity"
     );
+    prepare(NODE);
     // The background pass walks both connection directions through their nodes.
     let pass_nodes = || {
         let (nodes, unreached) = shared.lock().unwrap().memory_nodes();
@@ -572,6 +610,7 @@ fn memory_is_answered_for_this_machine_and_a_linked_node_only() {
     // this machine's and the linked node's, each read through its own link;
     // both connection directions reach the same core store.
     let receipt = |session: &str| crate::labels::worker::SightedMemoryReceipt {
+        context_reset: false,
         provider: "opencode",
         session_id: session.to_owned(),
         cwd: "/work/project".to_owned(),
@@ -1204,4 +1243,40 @@ fn a_moved_core_reads_its_own_kit_and_its_node_s_and_each_read_ends() {
     drop(runtime);
     drop(pump);
     drop(release);
+}
+
+#[test]
+fn prepared_memory_identity_matches_the_analysis_owner_for_native_paths() {
+    let mut runtime = runtime();
+    let temp = tempfile::tempdir().unwrap();
+    let folder = temp.path().join("folder");
+    std::fs::create_dir(&folder).unwrap();
+    let file = folder.join("notes.md");
+    std::fs::write(&file, "fixture").unwrap();
+    let own = runtime.node.as_str().to_owned();
+    for path in [&folder, &file] {
+        // On Windows these name the same native path with backslashes and
+        // wire slashes; both must retain the owner's canonical Project ID.
+        for spelling in [
+            path.to_string_lossy().into_owned(),
+            hide_platform::path::to_wire_lossy(path),
+        ] {
+            runtime.catalog_paths = crate::workspace::PathIndex::ask(
+                runtime.own_node().as_ref(),
+                [spelling.clone()].into(),
+            )
+            .unwrap()
+            .into();
+            let scope = runtime
+                .memory_scope(&crate::workspace_control::Context {
+                    device_id: own.clone(),
+                    workspace_id: "w".into(),
+                    checkout_id: "c".into(),
+                    checkout_path: spelling,
+                })
+                .unwrap();
+            let expected = hide_project::resolve(path, &own).unwrap();
+            assert_eq!(scope.project, expected);
+        }
+    }
 }

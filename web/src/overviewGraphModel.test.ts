@@ -1,8 +1,10 @@
-// Overview redesign B3-B8: session identity, verified lineage and bounded rendering.
+// Overview redesign B3-B8 and PRD overview-main-map B4, B10, B13, B16-B18:
+// session identity, verified lineage and teams, pairs of correspondence and
+// bounded rendering.
 import { describe, expect, it } from "vitest";
 import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
-import { graphProjectId, initialGraphExpansion, overviewGraphFamily, overviewGraphModel, overviewProjectGraphCounts } from "./overviewGraphModel";
+import { graphProjectId, overviewGraphModel, overviewGraphTeam, overviewProjectGraphCounts } from "./overviewGraphModel";
 import type { BoardProject } from "./projectBoard";
 import type { AgentRow, Checkout, OverviewGraphMetadata, OverviewGraphParty, Workspace } from "./snapshot";
 
@@ -19,9 +21,14 @@ const letter = (id: string, sender: OverviewGraphParty, recipient: OverviewGraph
 function metadata(parties: OverviewGraphParty[], letters: OverviewGraphMetadata["letters"] = []): OverviewGraphMetadata {
   return { available: true, limit: 2000, retained_count: letters.length, truncated: false, retention_ms: 86400000, letters, sessions: parties.map((row) => ({ device_id: row.device_id, pane_id: row.pane_id, session_digest: row.session, launch_model: null })) };
 }
+type Model = ReturnType<typeof overviewGraphModel>;
+const pane = (model: Model, id: string) => model.allAgents.find((row) => row.id === id)!.agent.pane_id;
+const idOf = (model: Model, paneId: string) => model.allAgents.find((row) => row.agent.pane_id === paneId)!.id;
+const lineage = (model: Model) => [...model.parents].map(([child, parent]) => [pane(model, parent), pane(model, child)]).sort();
+const team = (model: Model, paneId: string) => overviewGraphTeam(model.allAgents.find((row) => row.agent.pane_id === paneId)!, model).map(({ row, depth }) => [row.agent.pane_id, depth]);
 
 describe("current sessions in the Overview graph", () => {
-  it("keeps Herdr input count and direction separate from letters and delegation", () => {
+  it("joins letters and Herdr input between the same two sessions into one pair with directions", () => {
     const p = project("one", [agent("a"), agent("b")]);
     const facts = metadata([party("a"), party("b")], [letter("mail", party("a"), party("b"))]);
     facts.direct_inputs = [
@@ -31,293 +38,248 @@ describe("current sessions in the Overview graph", () => {
       { id: "old-session", sender: party("a", "previous-digest"), recipient: party("b"), at_unix_ms: 50 },
       { id: "other-server-device", sender: party("a", "digest-a", "other-server-device"), recipient: party("b"), at_unix_ms: 60 },
     ];
-    const graph = overviewGraphModel([p], facts, new Set([graphProjectId(p)]), null);
-    const direct = graph.communication.find((row) => row.kind === "herdr_direct")!;
-    expect(direct.count).toBe(3);
-    expect(direct.latest).toBe(40);
-    expect(direct.directions.map((row) => row.count).sort()).toEqual([1, 2]);
-    expect(direct.kinds).toEqual({ herdr_direct: 3 });
-    expect(graph.communication.find((row) => row.kind === "letters")?.count).toBe(1);
-    expect(graph.lineage).toEqual([]);
-    expect(overviewGraphModel([p], { ...facts, direct_inputs: [] }, new Set([graphProjectId(p)]), null).structure).toBe(graph.structure);
-    expect(overviewGraphModel([p], { ...facts, sessions: [] }, new Set([graphProjectId(p)]), null).communication).toEqual([]);
-    const withoutLetters = overviewGraphModel([p], { ...facts, available: false }, new Set([graphProjectId(p)]), null);
-    expect(withoutLetters.communication.map((row) => row.kind)).toEqual(["herdr_direct"]);
+    const graph = overviewGraphModel([p], facts, null);
+    expect(graph.communication).toHaveLength(1);
+    const [pair] = graph.communication;
+    expect(pair).toMatchObject({ letters: 1, direct: 3 });
+    const a = idOf(graph, "a");
+    const b = idOf(graph, "b");
+    expect(pair!.directions.find((row) => row.from === a)).toEqual({ from: a, to: b, letters: 1, direct: 2 });
+    expect(pair!.directions.find((row) => row.from === b)).toEqual({ from: b, to: a, letters: 0, direct: 1 });
+    expect(graph.parents.size).toBe(0);
+    expect(overviewGraphModel([p], { ...facts, direct_inputs: [] }, null).structure).toBe(graph.structure);
+    expect(overviewGraphModel([p], { ...facts, sessions: [] }, null).communication).toEqual([]);
+    expect(overviewGraphModel([p], { ...facts, available: false }, null).communication).toMatchObject([{ letters: 0, direct: 3 }]);
+    // One direction only: the pair points from its sender.
+    const one = overviewGraphModel([p], metadata([party("a"), party("b")], [letter("x", party("b"), party("a"))]), null).communication[0]!;
+    expect([one.source, one.target]).toEqual([b, a]);
   });
 
   it("shares one newest-record cap across letters and direct inputs", () => {
     const p = project("one", [agent("a"), agent("b")]);
     const facts = metadata([party("a"), party("b")], Array.from({ length: 2000 }, (_, index) => letter(`letter-${index}`, party("a"), party("b"), "request", index)));
     facts.direct_inputs = [{ id: "direct", sender: party("a"), recipient: party("b"), at_unix_ms: 2000 }];
-    const graph = overviewGraphModel([p], facts, new Set([graphProjectId(p)]), null);
-    expect(graph.communication.reduce((count, row) => count + row.count, 0)).toBe(2000);
-    expect(graph.communication.find((row) => row.kind === "herdr_direct")?.count).toBe(1);
-    expect(graph.communication.find((row) => row.kind === "letters")?.count).toBe(1999);
+    expect(overviewGraphModel([p], facts, null).communication).toMatchObject([{ letters: 1999, direct: 1 }]);
   });
 
-  it("keeps core-verified lineage in both cross-device directions and counts descendants by current session", () => {
+  it("keeps a pair whose session is outside the drawn budget, for the chosen session's counterparts", () => {
+    const big = project("big", Array.from({ length: 400 }, (_, i) => agent(`p${String(i).padStart(3, "0")}`)));
+    const other = project("other", [agent("o")]);
+    const facts = metadata([...big.agents.map((row) => party(row.pane_id)), party("o")], [letter("far", party("p399"), party("o"))]);
+    const graph = overviewGraphModel([big, other], facts, null);
+    expect(graph.visible.some((row) => row.agent.pane_id === "p399")).toBe(false);
+    expect(graph.communication).toMatchObject([{ letters: 1, source: idOf(graph, "p399"), target: idOf(graph, "o") }]);
+  });
+
+  it("keeps core-verified lineage in both cross-device directions and lists each team in tree order", () => {
     const local = project("local", [agent("local-parent"), agent("local-child", { lineage_parent_pane_id: "remote:mini:pane:parent" }), agent("local-grandchild", { lineage_parent_pane_id: "remote:mini:pane:child" })]);
     const remote = project("remote", [agent("remote:mini:pane:parent", { device_id: "mini" }), agent("remote:mini:pane:child", { device_id: "mini", lineage_parent_pane_id: "local-parent" }), agent("remote:mini:pane:fork", { device_id: "mini", forked_from: { pane_id: "local-parent", label: "source" } })], "mini");
-    const graph = overviewGraphModel([local, remote], undefined, new Set([graphProjectId(local), graphProjectId(remote)]), null);
-    const edges = graph.lineage.map((edge) => [graph.agents.find((row) => row.id === edge.from)!.agent.pane_id, graph.agents.find((row) => row.id === edge.to)!.agent.pane_id]);
-    expect(edges).toEqual(expect.arrayContaining([["local-parent", "remote:mini:pane:child"], ["remote:mini:pane:parent", "local-child"], ["remote:mini:pane:child", "local-grandchild"]]));
-    expect(edges).toHaveLength(3);
-    const family = (pane: string) => overviewGraphFamily(graph.agents.find((row) => row.agent.pane_id === pane)!, graph.agents);
-    expect(family("local-parent")).toEqual({ direct: 1, descendants: 2 });
-    expect(family("remote:mini:pane:parent")).toEqual({ direct: 1, descendants: 1 });
-    expect(family("remote:mini:pane:child")).toEqual({ direct: 1, descendants: 1 });
+    const graph = overviewGraphModel([local, remote], undefined, null);
+    expect(lineage(graph)).toEqual([["local-parent", "remote:mini:pane:child"], ["remote:mini:pane:child", "local-grandchild"], ["remote:mini:pane:parent", "local-child"]]);
+    expect(team(graph, "local-parent")).toEqual([["remote:mini:pane:child", 1], ["local-grandchild", 2]]);
+    expect(team(graph, "remote:mini:pane:parent")).toEqual([["local-child", 1]]);
+    expect(graph.teams.get(idOf(graph, "local-grandchild"))).toBe(idOf(graph, "local-parent"));
+    expect(graph.teams.get(idOf(graph, "remote:mini:pane:fork"))).toBe(idOf(graph, "remote:mini:pane:fork"));
   });
 
   it.each(["another-device", "duplicate-native-sessions"])("rejects ambiguous plain parents: %s", (ambiguity) => {
     const first = project("first", [agent("parent")]);
     const second = project("second", [agent("parent", { device_id: ambiguity === "another-device" ? "mini" : "local", session_id: "other-native-session" })], ambiguity === "another-device" ? "mini" : "local");
     const child = project("child", [agent("child", { device_id: ambiguity === "another-device" ? "third" : "local", lineage_parent_pane_id: "parent" })], ambiguity === "another-device" ? "third" : "local");
-    const graph = overviewGraphModel([first, second, child], undefined, new Set([first, second, child].map(graphProjectId)), null);
-    expect(graph.lineage).toEqual([]);
-    for (const row of graph.agents) expect(overviewGraphFamily(row, graph.agents)).toEqual({ direct: 0, descendants: 0 });
+    const graph = overviewGraphModel([first, second, child], undefined, null);
+    expect(graph.parents.size).toBe(0);
+    for (const row of graph.agents) expect(overviewGraphTeam(row, graph)).toEqual([]);
+    expect(graph.roots.size).toBe(3);
   });
 
-  it("summarizes direct children and all current descendants without forks or another device's reused pane", () => {
+  it("lists direct children and all current descendants without forks or another device's reused pane", () => {
     const p = project("family", [agent("parent"), ...["a", "b", "c", "d"].map((pane) => agent(pane, { lineage_parent_pane_id: "parent" })), agent("grandchild", { lineage_parent_pane_id: "a" }), agent("fork", { forked_from: { pane_id: "parent", label: "source" } })]);
     const other = project("remote", [agent("parent", { device_id: "remote" }), agent("remote-child", { device_id: "remote", lineage_parent_pane_id: "parent" })], "remote");
-    const graph = overviewGraphModel([p, other], undefined, new Set([graphProjectId(p), graphProjectId(other)]), null);
+    const graph = overviewGraphModel([p, other], undefined, null);
     const parent = graph.agents.find((row) => row.agent.pane_id === "parent" && row.deviceId === "local")!;
-    expect(overviewGraphFamily(parent, graph.agents)).toEqual({ direct: 4, descendants: 5 });
-    expect(overviewGraphFamily(graph.agents.find((row) => row.agent.pane_id === "a")!, graph.agents)).toEqual({ direct: 1, descendants: 1 });
-    expect(graph.lineage.filter((edge) => edge.from === parent.id)).toHaveLength(4);
+    expect(overviewGraphTeam(parent, graph).map(({ row, depth }) => [row.agent.pane_id, depth])).toEqual([["a", 1], ["grandchild", 2], ["b", 1], ["c", 1], ["d", 1]]);
+    // The drawn tree follows the same parents: a grandchild sits outside its own parent.
+    expect(graph.layoutParents.get(idOf(graph, "grandchild"))).toBe(idOf(graph, "a"));
+    expect(graph.layoutParents.get(parent.id)).toBeNull();
   });
 
   it("keeps multiple roots and uses only proven parents, never a fork origin or registration outside the core scope", () => {
     const p = project("one", [agent("a"), agent("b", { lineage_parent_pane_id: "a" }), agent("fork", { forked_from: { pane_id: "a", label: "source" } })]);
     p.agents.push(agent("historical"));
-    const graph = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null);
+    const graph = overviewGraphModel([p], undefined, null);
     expect(graph.agents.map((row) => row.agent.pane_id).sort()).toEqual(["a", "b", "fork"]);
     expect(graph.projects[0]?.roots).toBe(2);
     expect(overviewProjectGraphCounts([p], undefined).get(graphProjectId(p))).toEqual({ total: 3, roots: 2, children: 1 });
-    expect(graph.lineage.map((edge) => [graph.agents.find((row) => row.id === edge.from)?.agent.pane_id, graph.agents.find((row) => row.id === edge.to)?.agent.pane_id])).toEqual([["a", "b"]]);
+    expect(lineage(graph)).toEqual([["a", "b"]]);
   });
 
   it("does not attach past correspondence to a reused pane, a different device or an unproven native session", () => {
     const a = project("one", [agent("same")]);
     const b = project("two", [agent("other")]);
     const facts = metadata([party("same", "new"), party("other")], [letter("old", party("same", "old"), party("other")), letter("wrong-device", party("same", "new", "remote"), party("other")), letter("current", party("same", "new"), party("other"))]);
-    const graph = overviewGraphModel([a, b], facts, new Set(), null);
-    expect(graph.communication.map((row) => row.count)).toEqual([1]);
-    expect(overviewGraphModel([a, b], { ...facts, sessions: [] }, new Set(), null).communication).toEqual([]);
+    expect(overviewGraphModel([a, b], facts, null).communication.map((row) => row.letters)).toEqual([1]);
+    expect(overviewGraphModel([a, b], { ...facts, sessions: [] }, null).communication).toEqual([]);
+    expect(graphProjectId(project("one", [], "remote-1"))).not.toBe(graphProjectId(project("one", [], "remote-2")));
   });
 
-  it("keeps folded endpoint kinds and directions while hiding every session until expansion", () => {
-    const a = project("one", Array.from({ length: 10 }, (_, i) => agent(`a${i}`)));
-    const b = project("two", [agent("b")]);
-    const facts = metadata([...a.agents.map((row) => party(row.pane_id)), party("b")], [letter("1", party("a8"), party("b")), letter("2", party("a9"), party("b"), "progress", 20), letter("3", party("b"), party("a8"), "report", 30)]);
-    const folded = overviewGraphModel([a, b], facts, new Set(), null);
-    expect(folded.communication).toHaveLength(1);
-    expect(folded.communication[0]).toMatchObject({ count: 3, latest: 30, kinds: { request: 1, progress: 1, report: 1 } });
-    expect(folded.communication[0]?.directions.map((row) => row.count).sort()).toEqual([1, 2]);
-    const selected = folded.agents.find((row) => row.agent.pane_id === "a8")!.id;
-    const revealed = overviewGraphModel([a, b], facts, new Set(), null, { focus: "all", includeResting: false, selected });
-    expect(revealed.visible).toHaveLength(0);
-    expect(revealed.projects[0]?.shown.map((row) => row.id)).toEqual(folded.projects[0]?.shown.map((row) => row.id));
-    expect(revealed.structure).toBe(folded.structure);
-    expect(revealed.communication).toHaveLength(1);
-    const opened = overviewGraphModel([a, b], facts, new Set([graphProjectId(a)]), null);
-    expect(opened.visible).toHaveLength(10);
-  });
-
-  it("keeps topology stable when status, labels, correspondence or activity order refresh", () => {
+  it("keeps topology stable when status, labels, correspondence, filters or activity order refresh", () => {
     const first = project("one", [agent("b"), agent("a")]);
-    const second = project("two", [agent("c")]);
-    const expanded = new Set([graphProjectId(first)]);
-    const before = overviewGraphModel([first, second], metadata([party("a"), party("b"), party("c")]), expanded, null, { focus: "all", includeResting: true });
-    const changed = project("one", [agent("a", { identity_label: "새 상태", group: "needs_you", demand: "question" }), agent("b", { group: "seen" })]);
-    const after = overviewGraphModel([second, changed], metadata([party("a"), party("b"), party("c")], [letter("new", party("a"), party("c"))]), expanded, null, { focus: "all", includeResting: true });
+    const second = project("two", [agent("c", { mark: "turn" })]);
+    const before = overviewGraphModel([first, second], metadata([party("a"), party("b"), party("c")]), null, { focus: "all", includeResting: true });
+    const changed = project("one", [agent("a", { identity_label: "새 상태", group: "needs_you", demand: "question", mark: "turn" }), agent("b", { group: "seen", mark: "quiet" })]);
+    const after = overviewGraphModel([second, changed], metadata([party("a"), party("b"), party("c")], [letter("new", party("a"), party("c"))]), null, { focus: "all", includeResting: true });
     expect(after.structure).toBe(before.structure);
-    expect(after.visible.find((row) => row.agent.pane_id === "a")?.bucket).toBe("turn");
+    expect(after.visible.find((row) => row.agent.pane_id === "a")?.agent.mark).toBe("turn");
+    // B10: a filter dims sessions; it never removes them from the map.
+    const filtered = overviewGraphModel([first, second], metadata([party("a"), party("b"), party("c")]), null, { focus: "turn", includeResting: true });
+    expect(filtered.structure).toBe(before.structure);
+    expect(filtered.agents.map((row) => row.agent.pane_id)).toEqual(["c"]);
+    expect([...filtered.context].map((id) => pane(filtered, id)).sort()).toEqual(["a", "b"]);
   });
 
-  it("counts project groups against the cap and retains every session in the fallback list", () => {
+  it("summarizes each project's graph sessions by state, including sessions the budget does not draw", () => {
+    const p = project("mixed", [agent("ask", { mark: "turn" }), agent("work", { mark: "going" }), agent("wait", { mark: "waiting" }), agent("read", { mark: "unread" }), agent("done", { mark: "done" }), agent("idle", { mark: "quiet" }), agent("sleep", { mark: "asleep" })]);
+    const graph = overviewGraphModel([p], undefined, null);
+    expect(graph.summaries).toMatchObject([{ id: graphProjectId(p), sessions: 6, turn: 1, working: 2, results: 2, admitted: true }]);
+    expect(overviewGraphModel([p], undefined, null, { focus: "all", includeResting: true }).summaries[0]?.sessions).toBe(7);
+  });
+
+  it("counts project names against the cap and retains every session in the fallback list", () => {
     const p = project("large", Array.from({ length: 400 }, (_, i) => agent(`p${i}`)));
-    const graph = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null);
+    const graph = overviewGraphModel([p], undefined, null);
     expect(graph.limited).toBe(true);
-    // B8 retains representative sessions when an oversized expansion is refused.
+    // B18 retains representative sessions and an access slot when a project is too large.
     expect(graph.visible).toHaveLength(6);
-    expect(graph.projects[0]?.expanded).toBe(true);
+    expect(graph.projects[0]?.revealSlot).not.toBeNull();
     expect(graph.agents).toHaveLength(400);
-    const many = Array.from({ length: 401 }, (_, i) => project(`project${i}`, [agent(`pane${i}`)]));
-    const bounded = overviewGraphModel(many, undefined, new Set(), null);
-    // Every admitted center retains one member/access position within 400 nodes.
-    expect(bounded.projects).toHaveLength(400);
+    const many = Array.from({ length: 401 }, (_, i) => project(`project${String(i).padStart(3, "0")}`, [agent(`pane${i}`)]));
+    const bounded = overviewGraphModel(many, undefined, null);
+    // Every admitted name retains one member position within 400 nodes.
+    expect(bounded.projects).toHaveLength(200);
+    expect(bounded.projects.length + bounded.visible.length).toBe(400);
     expect(bounded.agents).toHaveLength(401);
     expect(bounded.limited).toBe(true);
+    expect(bounded.summaries.filter((row) => !row.admitted)).toHaveLength(201);
     const counts = overviewProjectGraphCounts(many, undefined);
     expect(counts.size).toBe(401);
     expect(counts.get(graphProjectId(many[400]!))).toEqual({ total: 1, roots: 1, children: 0 });
   });
 
-  it("does not let one open project consume another summary's selection position", () => {
+  it("reveals a chosen session in its project's reserved slot without moving another project's members", () => {
     const a = project("a", Array.from({ length: 390 }, (_, i) => agent(`a${i}`)));
     const b = project("b", Array.from({ length: 40 }, (_, i) => agent(`b${i}`)));
-    const all = overviewGraphModel([a, b], undefined, new Set([graphProjectId(a)]), null);
-    const selected = all.agents.find((row) => row.agent.pane_id === "b39")!.id;
-    const chosen = overviewGraphModel([a, b], undefined, new Set([graphProjectId(a)]), null, { focus: "all", includeResting: false, selected });
-    expect(chosen.visible.some((row) => row.id === selected)).toBe(false);
-    expect(chosen.agents.some((row) => row.id === selected)).toBe(true);
+    const all = overviewGraphModel([a, b], undefined, null);
+    const selected = idOf(all, "b39");
+    const chosen = overviewGraphModel([a, b], undefined, null, { focus: "all", includeResting: false, selected });
+    expect(all.visible.some((row) => row.id === selected)).toBe(false);
+    expect(chosen.visible.some((row) => row.id === selected)).toBe(true);
+    expect(chosen.projects.find((group) => group.project.workspace.id === "b")?.revealed?.id).toBe(selected);
     expect(chosen.structure).toBe(all.structure);
     expect(chosen.projects.length + chosen.visible.length).toBeLessThanOrEqual(400);
   });
 
   it("protects the entry session before applying the 400-node graph budget", () => {
-    const projects = Array.from({ length: 401 }, (_, i) => project(`project${i}`, [agent(`pane${i}`)]));
-    const all = overviewGraphModel(projects, undefined, new Set(), null);
-    const current = all.allAgents.find((row) => row.agent.pane_id === "pane400")!;
-    const protectedGraph = overviewGraphModel(projects, undefined, new Set(), null, { focus: "all", includeResting: false, pinned: [current.id] });
-    expect(protectedGraph.projects.map((row) => row.id)).toContain(current.projectId);
-    expect(protectedGraph.visible).toHaveLength(0);
+    const projects = Array.from({ length: 401 }, (_, i) => project(`project${String(i).padStart(3, "0")}`, [agent(`pane${i}`)]));
+    const all = overviewGraphModel(projects, undefined, null);
+    const current = idOf(all, "pane400");
+    expect(all.projects.some((group) => group.id === all.allAgents.find((row) => row.id === current)!.projectId)).toBe(false);
+    const protectedGraph = overviewGraphModel(projects, undefined, null, { focus: "all", includeResting: false, pinned: [current] });
+    expect(protectedGraph.visible.map((row) => row.id)).toContain(current);
     expect(protectedGraph.visible.length + protectedGraph.projects.length).toBeLessThanOrEqual(400);
     expect(protectedGraph.agents).toHaveLength(401);
+    // The selected session's project is admitted the same way.
+    const opened = overviewGraphModel(projects, undefined, null, { focus: "all", includeResting: false, selected: current });
+    expect(opened.visible.map((row) => row.id)).toContain(current);
   });
 
   it("retains current and a different selected member simultaneously at the admission boundary", () => {
-    const projects = Array.from({ length: 200 }, (_, i) => project(`project${i}`, [agent(`current${i}`), agent(`other${i}`)]));
-    projects[0] = project("project0", [agent("current0"), agent("other0"), agent("selected0")]);
-    const all = overviewGraphModel(projects, undefined, new Set(), null);
-    const current = all.allAgents.find((row) => row.agent.pane_id === "current0")!.id;
-    const selected = all.allAgents.find((row) => row.agent.pane_id === "selected0")!.id;
+    const projects = Array.from({ length: 200 }, (_, i) => project(`project${String(i).padStart(3, "0")}`, [agent(`current${i}`), agent(`other${i}`)]));
+    projects[0] = project("project000", [agent("current0"), agent("other0"), agent("selected0")]);
+    const all = overviewGraphModel(projects, undefined, null);
+    const current = idOf(all, "current0");
+    const selected = idOf(all, "selected0");
     const options = { focus: "all" as const, includeResting: false, pinned: [current] };
-    const open = new Set([graphProjectId(projects[0]!)]);
-    const before = overviewGraphModel(projects, undefined, open, null, options);
-    const after = overviewGraphModel(projects, undefined, open, null, { ...options, selected });
+    const before = overviewGraphModel(projects, undefined, null, options);
+    const after = overviewGraphModel(projects, undefined, null, { ...options, selected });
     expect(after.visible.map((row) => row.id)).toEqual(expect.arrayContaining([current, selected]));
     expect(after.structure).toBe(before.structure);
     expect(after.projects.length + after.visible.length).toBeLessThanOrEqual(400);
     expect(after.agents).toHaveLength(401);
   });
-
-  it("retains a selected project when expanding the last admitted collapsed heading at the cap", () => {
-    const projects = Array.from({ length: 401 }, (_, index) => project(`p${String(index).padStart(3, "0")}`, [agent(`a${index}`)]));
-    const collapsed = overviewGraphModel(projects, undefined, new Set(), null);
-    const target = collapsed.projects.at(-1)!;
-    const selected = target.agents[0]!.id;
-    const expanded = overviewGraphModel(projects, undefined, new Set([target.id]), null);
-    expect(expanded.projects.some((group) => group.id === target.id)).toBe(true);
-    expect(expanded.visible.map((row) => row.id)).toContain(selected);
-    const opened = overviewGraphModel(projects, undefined, new Set([target.id]), null, { focus: "all", includeResting: false, selected });
-    expect(opened.projects.some((group) => group.id === target.id)).toBe(true);
-    expect(opened.visible.map((row) => row.id)).toContain(selected);
-    expect(opened.projects.length + opened.visible.length).toBeLessThanOrEqual(400);
-    expect(opened.agents).toHaveLength(401);
-  });
-
-  it("protects the latest heading expansion beside other expanded projects at the cap", () => {
-    const current = project("p000", [agent("current"), agent("child")]);
-    const others = Array.from({ length: 199 }, (_, index) => project(`p${String(index + 1).padStart(3, "0")}`, [agent(`a${index}`)]));
-    const projects = [current, ...others];
-    const target = graphProjectId(others.at(-1)!);
-    const all = overviewGraphModel(projects, undefined, new Set(), null);
-    const pinned = [all.agents.find((row) => row.agent.pane_id === "current")!.id];
-    const expanded = new Set(projects.slice(0, -1).map(graphProjectId));
-    const before = overviewGraphModel(projects, undefined, expanded, null, { focus: "all", includeResting: false, pinned });
-    expect(before.projects.length + before.visible.length).toBe(400);
-    expanded.add(target);
-    const after = overviewGraphModel(projects, undefined, expanded, null, { focus: "all", includeResting: false, pinned, preferredProject: target });
-    expect(after.projects.some((group) => group.id === target && group.expanded)).toBe(true);
-    expect(after.visible.some((row) => row.projectId === target)).toBe(true);
-    expect(after.visible.some((row) => row.id === pinned[0])).toBe(true);
-    expect(after.projects.length + after.visible.length).toBeLessThanOrEqual(400);
-    expect(after.agents).toHaveLength(201);
-  });
-
-  it("opens the chosen project, then the recent checkout, without using device display labels as identity", () => {
-    const a = project("one", [agent("a")]);
-    const b = project("two", [agent("b")]);
-    expect([...initialGraphExpansion([a, b], "one", ["two-main"])]).toEqual([graphProjectId(a)]);
-    expect([...initialGraphExpansion([a, b], null, ["two-main"])]).toEqual([graphProjectId(b)]);
-    expect(graphProjectId(project("one", [], "remote-1"))).not.toBe(graphProjectId(project("one", [], "remote-2")));
-  });
 });
 
 // Overview focus B2-B8, B17-B18: projection uses authoritative marks, not bucket.
 describe("Overview focus", () => {
-  const panes = (model: ReturnType<typeof overviewGraphModel>) => model.agents.map((row) => row.agent.pane_id);
+  const panes = (model: Model) => model.agents.map((row) => row.agent.pane_id);
   it("keeps idle sessions, Seen demands, sleeping asks and unknown, with operator-first list order", () => {
     const p = project("focus", [agent("rest", { mark: "quiet" }), agent("sleep", { mark: "asleep" }), agent("unknown", { mark: "unknown" }), agent("result", { mark: "unread" }), agent("worker", { mark: "waiting" }), agent("seen-ask", { mark: "turn", group: "seen" }), agent("sleep-ask", { mark: "turn" })]);
-    const all = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null);
+    const all = overviewGraphModel([p], undefined, null);
     expect(panes(all)).toEqual(["seen-ask", "sleep-ask", "worker", "result", "unknown", "rest"]);
     expect(all.counts).toEqual({ all: 6, turn: 2, working: 1, results: 1 });
     for (const [focus, expected] of [["turn", ["seen-ask", "sleep-ask"]], ["working", ["worker"]], ["results", ["result"]]] as const) {
-      expect(panes(overviewGraphModel([p], undefined, new Set(), null, { focus, includeResting: false }))).toEqual(expected);
+      expect(panes(overviewGraphModel([p], undefined, null, { focus, includeResting: false }))).toEqual(expected);
     }
-    expect(panes(overviewGraphModel([p], undefined, new Set(), null, { focus: "all", includeResting: true })).slice(-2)).toEqual(["rest", "sleep"]);
+    expect(panes(overviewGraphModel([p], undefined, null, { focus: "all", includeResting: true })).slice(-2)).toEqual(["rest", "sleep"]);
   });
   it("retains resting ancestors as context without increasing matching counts", () => {
     const p = project("family", [agent("root", { mark: "asleep" }), agent("middle", { mark: "quiet", lineage_parent_pane_id: "root" }), agent("child", { mark: "going", lineage_parent_pane_id: "middle" })]);
-    const graph = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null, { focus: "working", includeResting: false });
+    const graph = overviewGraphModel([p], undefined, null, { focus: "working", includeResting: false });
     expect(panes(graph)).toEqual(["child"]);
     expect(graph.visible.map((row) => row.agent.pane_id).sort()).toEqual(["child", "middle", "root"]);
-    expect(graph.context.size).toBe(2);
-    expect(graph.projects[0]?.matches).toBe(1);
-    expect(graph.lineage).toHaveLength(2);
+    expect([...graph.context].map((id) => pane(graph, id)).sort()).toEqual(["middle", "root"]);
+    expect(graph.counts.working).toBe(1);
+    expect(graph.layoutParents.get(idOf(graph, "child"))).toBe(idOf(graph, "middle"));
+    expect(graph.layoutParents.get(idOf(graph, "middle"))).toBe(idOf(graph, "root"));
     expect(graph.quietBranches.size).toBe(0);
-  });
-  it("counts collapsed families from the filtered projection without changing Projects totals", () => {
-    const p = project("several", [agent("first"), agent("ask", { mark: "turn" }), agent("rest", { mark: "quiet" })]);
-    const graph = overviewGraphModel([p], undefined, new Set(), null, { focus: "turn", includeResting: false });
-    expect(graph.projects[0]).toMatchObject({ roots: 1, matches: 1, expanded: false });
-    expect(graph.projects[0]?.agents).toHaveLength(1);
-    expect(overviewProjectGraphCounts([p], undefined).get(graphProjectId(p))).toEqual({ total: 3, roots: 3, children: 0 });
   });
   it("does not spend graph capacity on empty or sleeping-only projects", () => {
     const projects = Array.from({ length: 450 }, (_, i) => project(`empty${i}`, []));
     projects.push(project("rest", [agent("rest", { mark: "asleep" })]));
     const active = project("active", [agent("active")]);
     projects.push(active);
-    const graph = overviewGraphModel(projects, undefined, new Set([graphProjectId(active)]), null);
-    expect(graph.projects).toHaveLength(1);
+    const graph = overviewGraphModel(projects, undefined, null);
+    expect(graph.projects.map((group) => group.id)).toEqual([graphProjectId(active)]);
     expect(graph.visible).toHaveLength(1);
-    expect(graph.omitted).toHaveLength(451);
+    expect(graph.summaries.map((row) => row.id)).toEqual([graphProjectId(active)]);
     expect(graph.limited).toBe(false);
   });
-  it("offers folds only for completely sleeping descendant branches, and releases a fold when a child becomes idle", () => {
+  it("names a team whose every descendant sleeps, and stops naming it when one wakes", () => {
     const rows = [agent("root"), agent("quiet", { mark: "asleep", lineage_parent_pane_id: "root" }), agent("leaf", { mark: "asleep", lineage_parent_pane_id: "quiet" })];
-    const p = project("family", rows);
     const options = { focus: "all" as const, includeResting: true };
-    const before = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null, options);
-    const root = before.agents.find((row) => row.agent.pane_id === "root")!.id;
+    const before = overviewGraphModel([project("family", rows)], undefined, null, options);
+    const root = idOf(before, "root");
     expect(before.quietBranches.get(root)).toBe(2);
-    const folded = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null, { ...options, folded: new Set([root]) });
-    expect(folded.visible.map((row) => row.agent.pane_id)).toEqual(["root"]);
-    expect(folded.agents).toHaveLength(3);
-    const changed = project("family", rows.map((row) => row.pane_id === "leaf" ? { ...row, mark: "quiet" } : row));
-    const active = overviewGraphModel([changed], undefined, new Set([graphProjectId(changed)]), null, { ...options, folded: new Set([root]) });
-    expect(active.folded.size).toBe(0);
-    expect(active.visible).toHaveLength(3);
+    // Folding is drawn by the map; the model keeps every session in place.
+    expect(before.visible).toHaveLength(3);
+    const changed = overviewGraphModel([project("family", rows.map((row) => row.pane_id === "leaf" ? { ...row, mark: "quiet" } : row))], undefined, null, options);
+    expect(changed.quietBranches.has(root)).toBe(false);
   });
   it("shows idle-only projects by default and restores sleeping sessions on request", () => {
     const idle = project("idle", [agent("idle", { mark: "quiet" })]);
     const sleeping = project("sleeping", [agent("sleeping", { mark: "asleep" })]);
     const projects = [sleeping, idle];
-    const expanded = new Set(projects.map(graphProjectId));
-    const graph = overviewGraphModel(projects, undefined, expanded, null);
+    const graph = overviewGraphModel(projects, undefined, null);
     expect(graph.projects.map((group) => group.project.workspace.id)).toEqual(["idle"]);
     expect(panes(graph)).toEqual(["idle"]);
     expect(graph.visible.map((row) => row.agent.pane_id)).toEqual(["idle"]);
-    expect(graph.omitted.map((group) => group.project.workspace.id)).toEqual(["sleeping"]);
-    expect([...initialGraphExpansion(projects, null)]).toEqual([graphProjectId(idle)]);
-    expect(panes(overviewGraphModel(projects, undefined, expanded, null, { focus: "all", includeResting: true }))).toEqual(["idle", "sleeping"]);
+    const restored = overviewGraphModel(projects, undefined, null, { focus: "all", includeResting: true });
+    expect(panes(restored)).toEqual(["idle", "sleeping"]);
+    expect(restored.projects.map((group) => group.project.workspace.id).sort()).toEqual(["idle", "sleeping"]);
   });
-  it("distinguishes empty, resting-only and filtered projects and recovers without mutating input", () => {
+  it("keeps the map when no session matches the filter, without mutating input", () => {
     const projects = [project("empty", []), project("rest", [agent("sleep", { mark: "asleep" })]), project("busy", [agent("busy")])];
     const before = JSON.stringify(projects);
-    const graph = overviewGraphModel(projects, undefined, new Set(), null, { focus: "turn", includeResting: false });
-    expect(graph.omitted.map((group) => [group.project.workspace.id, group.reason])).toEqual([["empty", "empty"], ["rest", "resting"], ["busy", "filtered"]]);
-    expect(graph.projects).toEqual([]);
-    expect(overviewGraphModel(projects, undefined, new Set(), null, { focus: "all", includeResting: true }).projects).toHaveLength(2);
+    const graph = overviewGraphModel(projects, undefined, null, { focus: "turn", includeResting: false });
+    expect(graph.agents).toEqual([]);
+    expect(graph.projects.map((group) => group.project.workspace.id)).toEqual(["busy"]);
+    expect(overviewGraphModel(projects, undefined, null, { focus: "all", includeResting: true }).projects).toHaveLength(2);
     expect(JSON.stringify(projects)).toBe(before);
   });
-  it("terminates cyclic lineage and never offers an unsafe cyclic fold", () => {
+  it("terminates cyclic lineage, never offers an unsafe cyclic fold, and gives the cycle one team", () => {
     const p = project("cycle", [agent("a", { mark: "quiet", lineage_parent_pane_id: "b" }), agent("b", { mark: "quiet", lineage_parent_pane_id: "a" })]);
-    const graph = overviewGraphModel([p], undefined, new Set([graphProjectId(p)]), null, { focus: "all", includeResting: true });
+    const graph = overviewGraphModel([p], undefined, null, { focus: "all", includeResting: true });
     expect(graph.visible).toHaveLength(2);
     expect(graph.quietBranches.size).toBe(0);
+    expect(new Set(graph.allAgents.map((row) => graph.teams.get(row.id))).size).toBe(1);
   });
 });

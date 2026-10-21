@@ -665,7 +665,7 @@ Web owners: `web/src/PaneView.tsx`, `web/src/PaneHeaderBand.tsx`, `web/src/PaneR
 ### Work Hide AI does for a home
 
 Hide AI starts agents for the operator by itself (today a Memory card's `올리기`), and the work belongs to a screen, its home, not to the operator's agent lists (PRD hide-ai-work-home).
-The Memory tab's To ask row is the home of a promotion: it shows the progress, the pull request, the failure and the agent link, and it is where the work is read and acted on.
+The Memory tab's To resolve row is the home of a promotion: it shows the progress, the pull request, the failure and the agent link, and it is where the work is read and acted on.
 The fact that Hide AI started an agent comes only from the coordination record of the spawn (`docs/delivery.md`), never from a branch or worktree name: a checkout the operator made by hand on a branch called `hide-memory-m9` is an ordinary checkout.
 The work is named in words, `Memory 올리기 · m72`, and never by an icon of its own, because Hide AI will start other work, each kind with its own home.
 `docs/status-model.md`, Work Hide AI does for a home, owns the ownership value, the group rule and the turn table; this section owns what the screen draws.
@@ -683,7 +683,7 @@ A row has one line, and its second line is the agent's ask or its block's cause,
 The row's accessible name carries `Hide AI`, the task and the turn (`Hide AI · Memory 올리기 · m72 · PR #924 리뷰`).
 An attempt with no live agent (a failure with no pull request, an open pull request after the operator closed the pane) never has a row; the Memory tab alone shows it, as it did.
 
-Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the Tools lane on the Memory tab of the row's Project with that attempt's To ask row open, and the `Agent ↗` link there opens the pane.
+Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the Tools lane on the Memory tab of the row's Project with that attempt's To resolve row open, and the `Agent ↗` link there opens the pane.
 A row whose Project the core has not yet named opens the pane as any row does.
 The phone's Needs You row opens the agent's detail.
 The digits that number agent rows follow the drawn order, so a Hide AI row is numbered with the Needs You rows above the tree and no checkout of its own takes a digit.
@@ -806,42 +806,53 @@ While a pass analyzes the Project, a small `분석 중` chip sits beside the swi
 A Project on any linked device shows the same Memory controls and cards as this machine's Projects, read from the core's store with the device's own Project identity.
 The disclosure says cards stay in Hide's Memory, and the delete confirmation removes them from this Project's Memory; neither claims the screen's device owns the store.
 An unavailable link or Memory reader uses the existing unreadable state; its reason is recorded in the diagnostic log.
-`물어볼 것` appears, and the tab's name carries a dot, while the Project has a suggestion, an unresolved document comparison, a failed placement or a decision nothing builds yet.
+`처리할 것` appears, and the tab's name carries a dot, while the Project has a suggestion, an unresolved document comparison, a failed placement or a decision nothing builds yet.
 Each compact row has a one-line title and one-line reason, truncating long text; `Compare` reads and opens the document excerpt and original operator words with their dates only when requested.
-A newer operator decision offers `Fix the doc` and `Card is wrong`; unknown or equal dates first offer `Card is right` and `Doc is right`, and cannot be selected until answered.
+A confirmed enduring operator correction offers `Fix the doc` and `Card is wrong`; unresolved authority first offers `Card is right` and `Doc is right`, and cannot be selected until answered.
+Dates remain provenance and never decide authority.
 Choosing the document marks the card Outdated; choosing the card turns the row into a document correction proposal.
 Eligible rows have checkboxes; selecting one to five shows `N selected · up to 5 per PR`, `Clear` and `Open one PR`, and at five the other checkboxes are disabled.
 The row's single-card action uses the same batch path.
 While any row is selected, per-row promotion and dismissal buttons are hidden; unknown-authority answer buttons remain so those comparisons can be settled before selection.
 Promotion reasons omit zero counts and use short source-session counts.
-Started single or batch promotions remain in To ask, in the same two-line format as the questions: a PR mark in the checkbox slot, the first title and `+N` for additional cards with the disclosure indicator, then the status, elapsed time where measured, subdued card numbers and links.
+Started single or batch promotions remain in To resolve, in the same two-line format as the questions: a PR mark in the checkbox slot, the first title and `+N` for additional cards with the disclosure indicator, then the status, elapsed time where measured, subdued card numbers and links.
 Before a PR exists the row says Writing PR with the durable attempt's elapsed time; cards bound to the same running agent and attempt share a row.
 After confirmation, cards with the same PR number share a row, and `PR <number>` opens the existing PR panel.
 The catalog's failed checks use destructive text, requested changes and an agent asking the operator use warning text, and writing or awaiting review is neutral.
 `Agent ↗` appears only while writing or needing attention and only when a real pane is known; a quiet review row keeps only its disclosure indicator.
 After PR creation the agent link requires a Hide AI promotion origin and that agent's live PR association with the catalog's full repository-qualified URL, rather than a name or branch guess.
 This applies equally to promotions already open before upgrade; PR numbers remain plain identifier digits in all four languages.
-Every To ask row expands from its title, reason or empty space, or its single disclosure button with Enter or Space; the chevron only indicates expansion.
+Every To resolve row expands from its title, reason or empty space, or its single disclosure button with Enter or Space; the chevron only indicates expansion.
 Checkboxes, links and action buttons perform only their own actions.
 An ordinary question opens its current body, cited files and sources below its action buttons, while a document disagreement opens Compare content.
 A progress row opens a two-line body preview aligned with its title and status; a single card does not repeat its title, while a batch labels each preview with its card number and title.
 The progress row keeps medium inset spacing around its header and preview, with a small gap above the expanded body, so its content stays clear of the hover surface and bottom rule.
 PR and agent actions appear once, in the status line, and an expanded row also exposes its known agent there when the collapsed status does not need that link.
-Merged promotions leave To ask and become document pointers; closed-unmerged promotions leave To ask as ordinary cards and are not suggested again at that revision.
+Merged promotions leave To resolve and become document pointers; closed-unmerged promotions leave To resolve as ordinary cards and are not suggested again at that revision.
 A promotion row whose agent is alive is also in Needs You while the operator has something to do (`PR #n 리뷰` or `CI 실패`), and choosing that row opens this tab with it open (Work Hide AI does for a home); the row here still shows the progress, the pull request and the agent link whether or not it is in Needs You.
 When the pull request merges or closes, its agent ends and its worktree goes with the branch kept, so a closed attempt's `Agent ↗` link leaves with the pane.
 A card that was not processed returns with `Card was not processed · Ended without a PR` in warning text and the agent's reason behind the row; every failed row offers Retry, continuing the shared branch and PR, and `Don't promote`, which leaves an ordinary card.
 When a promotion reports a card outdated, its empty, clean worktree is released after its agent has left; committed or uncommitted work stays and a later promotion continues on that same branch and PR.
+An accepted outdated report returns the card to verification with its original sources intact.
 An outdated card sharing a batch waits while any sibling still runs, has an open PR or follows a building branch.
-A card whose decision the code does not have yet, which another branch builds, stays in To ask as a progress row, `Goes in with the PR that builds it`, with `Agent ↗` to that branch's agent and `PR <number>` once its pull request is open; it asks nothing, puts no dot on the tab and is still given to agents, and that pull request's merge makes it a document pointer like any merged promotion.
+A card whose decision the code does not have yet, which another branch builds, stays in To resolve as a progress row, `Goes in with the PR that builds it`, with `Agent ↗` to that branch's agent and `PR <number>` once its pull request is open; it asks nothing, puts no dot on the tab and is still given to agents, and that pull request's merge makes it a document pointer like any merged promotion.
 When nothing builds it, one row says `Not built yet · nothing builds it` with a clock mark in the checkbox slot and the agent's reason behind the row, and offers only `Keep as is`, which leaves an ordinary card that is not asked about again, its document disagreement included, until its text changes.
-A new rule or lesson suggestion keeps its source-session counts and dismissal until its revision changes; at most three new suggestions are open.
+A new rule, lesson or decision suggestion keeps its source-session counts and dismissal until its revision changes; at most three new suggestions are open.
 `카드 N` lists the other cards, two lines each: the number and title, then the kind, how many sessions it was given to, how many times it was pulled, how many of its sources are the operator's words, and when it changed.
 The first five show, the rest fold under `그 외 N`, and a card shown in full is never folded; the search above them shows every match, best first, and is the Project's, so every window shows the same query and only the one typed into sends it.
 A searched promotion card also shows its running status and the name that opens its pane, with no name before the session appears; expanding a progress row does not duplicate it in Cards.
 Once merged, its ordinary card dims and shows the file it went into, or the merged pull request's mark when no file was named, with `파일로 올라감 · 주입 안 함`.
 A personal preference carries `Personal`, remains available to agents and never appears as a document suggestion.
-Fact disagreements remain withheld and readable in ordinary card detail, with no unsupported document correction action; rule, lesson and decision disagreements are eligible for correction.
+Unresolved fact disagreements remain withheld and readable in ordinary card detail, with no unsupported document correction action; rule, lesson and decision disagreements are eligible for correction.
+A confirmed enduring correction says `Correction confirmed · document update pending` in the existing comparison row and remains available to agents as untrusted reference data.
+It retains the original human source and document quote; unrelated document commits do not ask the same authority question again.
+When the owning document incorporates it, background reconciliation turns the card into the existing document pointer without another promotion.
+Turning Memory off retains cards and analysis progress; its setting explains that enabling it again catches up on unprocessed conversations, including conversations from the disabled period.
+A Project at its 10,000-card limit makes room for a new card by forgetting its least recently used one, and the tab says so in one quiet line under the head, `N older cards were cleared to make room for new ones.` (`새 카드를 남기려고 오래된 카드 N개를 지웠습니다.`), counting the cards forgotten that way since the tab last said so.
+The line is said once: it counts as seen once it is in view on a visible page, stays while the tab is open, and the next time the tab opens it is gone until another card is cleared, when it counts only the new ones.
+`hide memory undo mN` brings one of the newest 1,000 cleared cards back, and so does `되돌리기` on a card just forgotten, but not while the Project is at its limit: the undo is refused with `mN cannot come back while this Project's Memory is full; forget another card first`.
+A card added by hand is never cleared this way.
+Only when every card is one a person made or settled (added by hand, a confirmed correction, or a card whose promotion is under way, waiting on the operator, merged or kept) does the line become the warning `This Project's Memory is full, so new cards are not kept.`, from the same check that refuses a new card; merges and corrections of existing cards still land.
 An Outdated comparison dims its card and names the document and its date, asks nothing and is excluded from injection.
 Document references in card metadata and Compare headers show a single-line filename, truncated when needed, with the full path on hover and the date alongside.
 An unverified card waiting to be checked against the repository again is dimmed; only the card the worker is checking shows `확인 중` in its existing status line, and a promotion keeps priority there.
@@ -853,7 +864,7 @@ With Memory off, stored cards are retained but the list and its empty slot stay 
 An older consent shows a short re-consent explanation under the existing off disclosure and points to the switch above; it never enables or injects on its own.
 The core supplies the usable count, current card and reasons, and the shell only draws them; no banner, alert, toast or panel is added.
 The checking mark is one line in the lane at its 360px minimum in all four languages, and the card is still listed and opens in full; an unverified card is not given to agents until the check ends (PRD memory-card-quality D-13, B6, B19).
-When the agent is gone and GitHub cannot say whether its pull request came (gh missing or logged out, or GitHub not answering), the line reads `PR 확인 못 함 · <reason>` with no spinner and nothing to press, since restoring GitHub settles it; it is not asked about in `물어볼 것`.
+When the agent is gone and GitHub cannot say whether its pull request came (gh missing or logged out, or GitHub not answering), the line reads `PR 확인 못 함 · <reason>` with no spinner and nothing to press, since restoring GitHub settles it; it is not asked about in `처리할 것`.
 A card on its way into the repository is never folded under `그 외 N`, and a card opened from a conversation clears a search that leaves it out.
 A card opens in place: `N분 전에 바뀜 · 이전 내용` when a text replaced another (the earlier text with `되돌리기`), its body, its cited files, its sources with their runtime, time and whether they are the operator's words, and `지우기`.
 A forgotten card leaves `mN 지움 · 되돌리기` at the bottom of the tab until it is undone or another card is forgotten.
@@ -940,58 +951,68 @@ The Overview reads the same tasks for the Projects tab's `지금` counts and the
 
 ### Work
 
-Web owners are `web/src/overviewGraphModel.ts`, `web/src/OverviewGraph.tsx`, `web/src/overviewGraphNodes.tsx` and `web/src/dependencyLayout.ts`.
-Work offers graph and list views over real live agents, grouped by project and explicit parentage, with local group folds.
+Web owners are `web/src/overviewGraphModel.ts`, `web/src/overviewMapLayout.ts` (the force map and its drags), `web/src/overviewGraphLayout.ts`, `web/src/overviewGraphLines.ts` (which lines are drawn, the team outline, a project's accent and glow), `web/src/OverviewGraph.tsx` (folding and what each folded session is drawn as) and `web/src/overviewGraphNodes.tsx` (PRD overview-main-map).
+Work offers graph and list views over real live agents, grouped by project and explicit parentage.
 Both views share All, My turn, Working and Unread results, with counts from canonical marks: `turn`, `going|waiting` and `done|unread`.
 Include sleeping starts off and excludes only `asleep`; idle sessions marked `quiet`, Seen demands and sleeping raised asks still marked `turn`, and `unknown`, remain available.
 The list orders My turn, Working, Unread results, unknown, idle and sleeping, retaining fifty-row pagination.
-An excluded ancestor stays dim as relationship context without increasing match counts.
-Only branches whose every descendant sleeps offer a reversible subtree fold; a descendant becoming idle or active releases that fold.
-Projects without matches move into a disclosure naming sleeping-only, no-session and filtered reasons, with a route to show each project and its sleeping sessions.
-Projects form a radial map: a small top-centered heading shows the actual project name, matching-session count and state totals, with radial sessions below it and no central card or large enclosing box.
-One-project scope retains its center and offers All projects to return.
-A collapsed project hides every agent, including the current or previously selected one, retaining only its heading and counts; Collapse all applies this to every project and frames the remaining headings.
-An explicit project expansion or collapse centers that project; background status updates never move the camera.
-An oversized expanded project retains stable-ID representatives and an access slot within the shared 400-node budget.
-Admission prioritizes the last explicitly toggled or selected project, then the selected session and current project's protected positions and expanded projects before collapsed headings, so expanding a heading at the limit retains it.
-Each admitted expanded project reserves an access position for a hidden selected member, and selecting a session whose project is outside that budget opens its project scope with that session selected.
-In an expanded project, the current member has its own protected position, so choosing another member cannot displace it at the graph limit.
-Up to twelve sessions share the first ring; agent circles and labels stay below the project heading, including for one session.
-Representative nodes retain task titles and state, with provider and proved launch model in accessible names and details.
-Project search compares real names and counts and moves the camera to that center; the paged session list searches every matching session, including those outside the graph budget.
-Selecting a session from the uncapped list expands its project; in an oversized expanded project the hidden selection uses its reserved position without moving other representatives.
+A filter dims the sessions it does not match instead of removing them, so a filter never moves a circle; an excluded ancestor of a present session stays as dimmed context, and dimmed sessions never increase match counts.
+A filter with no match shows Show all sessions, distinct from no current sessions and layout failure.
+A team folds into its root, and a project folds into one circle (PRD overview-main-map D-19).
+A team whose every descendant sleeps opens folded; one the operator folded or unfolded keeps that choice while the view is mounted.
+
+The graph is a force map centred on the operator, the way Obsidian's graph view is drawn (PRD overview-main-map D-01, D-20): a `나` circle is fixed at the centre, and every session without a lineage parent (a root) is held loosely toward it by a faint line.
+Each project gathers around its own place on an ellipse around the operator, so a project's sessions settle as one cluster apart from the others.
+A delegated session is a small dot in its state colour, tied short to its parent by a faint line, and a grandchild sits outside its parent the same way (D-02).
+Behind each project's cluster is a soft glow in the project's accent colour, and its name sits in bold, larger than a session's title, in that colour above the cluster; there is no band or box (D-17).
+The accent is one of sky, violet, lime and amber, chosen by a stable hash of the project's id.
+Pointing at a project's name or its row in the side column, focusing either from the keyboard, or choosing one of its sessions so its details open, makes that project's glow and name clearly stronger, and they return when the pointer leaves or the choice closes; the current pane's highlight at entry lights nothing, and reduced motion changes them without a transition (B21).
+Placement is computed in the web shell and settles before the first paint, so nothing wobbles on open; every start position comes from the session's id, so the same sessions open in the same shape (D-13).
+Status, labels, letters, filters, selection, hiding and folding never enter the layout key.
+When a session appears, every placed session holds still while only the new one finds a place beside its parent or in its project; a session that leaves takes only itself away.
+Admission keeps the map within the 400-node budget (below); a map the layout cannot place fails into the existing Retry and session list.
+A root's circle shows its title and its sidebar second line (what it is doing, what it asks, what it waits for); a descendant shows only its title, plus what it asks in amber while it is the operator's turn.
+Provider, proved launch model, state words and judged tasks are not drawn under circles; the accessible name still reads title, state, provider and proved launch model.
+The ring colour and shape of each circle encode its mark (working, waiting, my turn, unread result, quiet), with the StatusMark beside it and a dashed outline on the current pane's session.
+
+Lines carry no words.
+Parent-to-child lines are always drawn faint; choosing a session brightens its team's lines and draws one dashed outline around the team's circles and words, which goes away when the choice is cleared (D-03).
+Letters and Herdr direct input between the same two sessions are one line with direction arrows: solid when any letter exists, short dots when only direct input does.
+A pair in different teams is always drawn; a pair inside one team is drawn only while that team is chosen.
+Every drawn root is joined to `나` by a faint line; a root whose mark is `turn` draws an amber arrow to `나` instead, and a descendant's ask reaches the operator through its root, which the core marks as the operator's turn.
+A folded team that holds the operator's turn draws the amber ring on its root and the amber arrow to `나`; a folded project keeps its colour border and wears the turn's `!` badge at the top of its circle, with the same amber arrow (B26).
+A reply wait is not drawn as a line, because the core does not name its recipient.
+An unresolved endpoint is never joined by a similar name or pane number; only independently proven device, pane and native-session endpoints join current rows, and missing results, stale sessions and unproven recipients create no line.
+Direct input never creates inbox items, watches, lineage, read marks, letter notifications or phone pushes, and the bounded 30-day observation metadata carries no command or prompt content.
+Letters and direct inputs share one newest-2,000-record graph budget; no letter subject or body reaches the graph or its panel.
+
+With nothing chosen, the side column lists each project with a search box, its session count, its nonzero My turn, In progress and Unread counts in their colours, a Fold toggle and a Hide toggle.
+Choosing a project's name moves the camera to that project's sessions; a project outside the graph budget opens its project scope instead.
+Hide removes that project's sessions, name, glow, outlines and lines from the map without moving any other circle; its row stays, dimmed, keeps its counts, and offers Show again, which returns the sessions to the same places.
+Hiding lasts while the view is mounted, survives the graph/list switch and scope changes, and never affects the list view or the filter counts.
+Hiding the project of the selected or highlighted session clears that selection.
+Below the project list, Waiting on you lists each root whose turn it is, drawn on the map or not, with its project, title and question, and Go answer focuses the asking pane: the root when it asks, else its first asking descendant.
+A root in a hidden project stays in the list with a `그래프에서 숨김` mark, because hiding a project from the map does not make its question wait less (D-21).
+Folding a team leaves its root circle with a chip that counts its descendants and shows their My turn, Working and Unread marks; choosing the chip unfolds it, and the descendants come back to their places (B24).
+Folding a project, from the faint fold button beside its name in the map (clear while the name is pointed at) or from its row's Fold, turns its cluster into one circle in the project's place, filled faintly and bordered in the project's colour, keeping the project's glow and its emphasis, with its name at the expanded name's size and colour, its session count and nonzero counts; a line between that project and another ends on the circle, and choosing the circle unfolds the cluster to its old shape; both places share one fold state, and the button never starts a project drag (B25).
+Fold all folds every project into its circle and leaves each team's own fold as it was; Unfold all opens every project and every team; both sit in the toolbar of the graph view (B26).
+Choosing a session by click, Enter or Space replaces the column with its panel: title, state, project and branch, provider and proved launch model, what it does now, what it asks the operator when it asks, its team (every descendant with its state; choosing one selects it), its counterparts with sent and received counts only, and `세션 열기 · 기록 보기`.
+Below the Overview breakpoint the panel overlays the graph; Escape closes the panel first, and changing filter or scope clears a selection that no longer matches.
+Hover and keyboard focus outline the pointed session and its counterparts and never open details.
+
+Project names share the 400-node budget with sessions; admission prioritises the selected session's project and the protected current session, and the remaining room is shared in identity order.
+An oversized project retains stable-ID representatives and a reserved access slot, where a chosen hidden member appears without moving another member; the paged list searches every matching session, and selecting one outside the graph budget opens its project scope with that session selected.
+One-project scope offers All projects to return.
 When the confirmed focused device, pane and native session have a graph proof at entry, that exact session is highlighted without opening details; pane reuse cannot inherit the initial selection.
-The first camera shows the current project's whole ordinary cluster at a readable zoom; a cluster too large for that zoom centers the exact current member instead, and it never automatically fits the entire map.
+The first camera, and Fit graph, put the operator at the centre of the view at the zoom that shows the whole map; when that zoom is too small to read, the first camera instead centres the current session (or the operator) at a readable zoom.
 Fit graph, Current pane and Reset layout remain explicit keyboard-accessible controls.
-Dragging a session's provider circle moves only that session, without opening details; clicking the same circle opens details, and the text below it remains a selection target without becoming a drag handle.
-A project's handle moves its entire relative-positioned group, including summarized members when expanded later.
-Offsets live only in this mounted view, edges follow the moved endpoints, and Reset layout clears offsets and restores the initial camera without dispatching pane moves.
-A filtered-empty view offers Show all sessions, distinct from no current sessions and layout failure.
-Each agent shows its canonical task identity, agent, state and actual current progress; a model is shown only when the current launch proves it.
-Edges distinguish delegation from retained deliveries, whose graph metadata is direction, kind, time and count; no letter subject or body reaches this projection.
-An unresolved endpoint is never joined by a similar name or pane number.
-Herdr direct input has its own visibility switch, short dotted directional line, input count and latest submission time, separate from long-dashed letters and solid delegation.
-When the same endpoints have both letters and direct input, each uses a separate curved lane with its own visible label and keyboard target, without moving the sessions.
-Its details label the relationship `Herdr direct input` and explain that observed submission proves neither a model read nor a completed answer.
-Only independently proven device, pane and native-session endpoints join current rows; missing results, stale sessions and unproven recipients create no confirmed edge.
-Direct input never creates inbox items, watches, lineage, read marks, letter notifications or phone pushes.
-The bounded 30-day observation metadata carries no command or prompt content; its appearance or visibility changes no graph coordinates, poller or subscription.
-Letters and direct inputs share one newest-2,000-record graph budget.
-Group folds aggregate the facts of their members and never invent progress or an inferred relationship.
-The list is paged at fifty rows and stays usable when graph layout fails; the graph offers Retry beside that failure.
-The existing circular provider logos, StatusMark, root and child sizes, rings, identity and progress stay intact.
-Initial zoom is readable without fitting every project; pan, zoom and explicit Fit graph expose the rest.
-Hover and keyboard focus emphasize relationships and never open details.
-Click, Enter or Space selects one session and opens its details beside the graph, using the existing overlay panel below the Overview breakpoint.
-Escape closes details first; changing filter or scope clears a selection that no longer matches.
-Delegation has a solid parent-to-child arrow, letters have long dashes, and direct input has short dots; all retain arrow clearance and a contrasting underlay.
-All three kinds have separate curved lanes and real count labels, including aggregated project endpoints.
-Their labels share one endpoint-safe anchor with stable kind lanes, so clearing task text cannot place two counts on top of each other.
-Selecting a session or relationship strengthens related paths and dims the others; labels are keyboard targets that open the corresponding safe metadata.
-Selection and Replay flow trigger one finite token-timed flow animation; the motion switch and reduced motion disable it, and no decorative animation runs at idle.
-Mail visibility, hover, focus and selection do not enter the layout key or change node coordinates.
-Graph filters, selection, pan, zoom and folding stay local to the mounted view; filters survive graph/list and scope changes while Work remains mounted.
-Reduced motion removes decorative movement, and closing the view ends its layout work and listeners.
+Two things drag, neither opening details (D-18).
+A project's name, or its folded circle, moves every session of the project and nothing else, and the project stays where it is put.
+A session's circle follows the hand and its team is pulled along by the physics; on release it stays where it was put and the rest settles around it.
+With reduced motion, nothing is pulled while a circle is held, and the map settles at once on release.
+Clicking a circle opens details, and the text below it remains a selection target without becoming a drag handle; outlines, glows and lines follow the moved circles.
+Moves live only in this mounted view, and Reset layout places the map again from the start and restores the initial camera without dispatching pane moves.
+Graph filters, hiding, selection, pan, zoom, moves and folding stay local to the mounted view; filters and hiding survive graph/list and scope changes while Work remains mounted, and closing the view stops the map's physics and ends its listeners.
 
 ### A record beside the tabs
 
@@ -1165,7 +1186,7 @@ A press or Enter goes to the task's Workspace, tab and pane; the arrows, Home an
 The row of the pane with the keyboard, or its nearest drawn ancestor while folded away, carries the sidebar's selected fill and `aria-current`; the list scrolls only as far as brings a newly selected row into view, and never while the operator's scroll position holds the selected row unchanged (B13).
 While ⌥ is held (Alt on Windows and Linux) each task row carries its number at its top right, as the 프로젝트 tree's roots and the Agent tabs do (PRD electron-digit-shortcuts-hints): the rows are counted top to bottom as the list draws them, a group's rows then the rows of a fold the operator opened, a task's children never, nine at most, and ⌥1 to ⌥9 open that row's task the way a press does.
 The `프로젝트 | 태스크` switch decides which list ⌥n counts, so on 태스크 the numbers are this list's and on 프로젝트 the tree's, whether or not the sidebar is shown.
-Under the pointer or focus the time's slot holds a ☆/★ button, the record button and `⋯`, which offers `기록 보기` (Space), `터미널로 이동` (↩), on a task `다시 볼 것으로 표시` or, on one in 다시 볼 것 or starred, `다 봤음`, then Resolve (not while the agent works or waits, or an approval prompt holds it) and, on a task, `세션 보관`, offered and disabled as the pane menu's Archive session is; a right-click on the row opens the same menu (B15, B18; PRD session-archive B1, D-27; PRD revisit-group B8, B9).
+Under the pointer or focus the small ★ after the title is not drawn and the time's slot holds a ☆/★ button, the record button and `⋯`, which offers `기록 보기` (Space), `터미널로 이동` (↩), on a task `다시 볼 것으로 표시` or, on one in 다시 볼 것 or starred, `다 봤음`, then Resolve (not while the agent works or waits, or an approval prompt holds it) and, on a task, `세션 보관`, offered and disabled as the pane menu's Archive session is; a right-click on the row opens the same menu (B15, B18; PRD session-archive B1, D-27; PRD revisit-group B8, B9).
 ☆ stars the task and ★ is `다 봤음`, which takes the ★ and puts the read ask away so the task rests until something new; a root agent's pane menu offers the same item before Archive session, the 프로젝트 tree, Overview's list and its detail head draw a starred task's small ★, an archived row keeps its ★, the phone lists the same group between 읽을 것 and 작업 중, and a ★ or 다 봤음 that could not be saved, or a ★ past 256, leaves the row as it was and says so once (PRD revisit-group B10, B11, B15, B19, B20, B22, B23).
 `세션 보관` closes the task's root and every descendant pane with it and keeps their conversations: a session that is not working, or only waits on the operator, goes at once, and one with work running first asks `작업을 멈추고 보관할까요?`, listing the agents working now, with `작업 멈추고 보관` and `취소`, neither holding the keyboard (B5-B7).
 The row leaves the open groups for 보관됨 once every pane closed; a save that fails closes nothing, and a close some agents refuse keeps the session as it was, with one notice, the members that did close listed in its record, and `세션 보관` again finishing the same archive; the notice says whether a close was refused, timed out or lost its device, and once that root closes some other way its archived members stand in 보관됨 as their own row (B8-B12, B24).
@@ -1533,7 +1554,7 @@ Project rows now open checkouts; shared Overview owns the only Overview selectio
 The sidebar sets its words on three sizes: a checkout name, an agent title and a count 12/400, and a second line, a project name, a tab or group name and a time 11; a section header is 10/500 in sentence case (`Projects · Recent activity · 5`), 26 high with its words on the baseline.
 A project's own name is its block's label, 11/600, muted while its agents only rest or sleep or it has none and in the ordinary text color while one of its awake agents draws a mark (the turn, the ring or a dot to read); the core decides which (`agent_presence.working`) and the next snapshot moves it.
 A project's block is set off from the one above it by a hairline at its top and a 12px gap, so the last checkouts of one project never read as the next project's rows.
-A project row and a one-line plain folder are 36 high, a checkout row 32 or 48 with its second line, an agent row 28 or 44.
+A project row and a one-line plain folder are 32 high, a checkout row 32 or 48 with its second line, an agent row 28 or 44.
 A checkout name mutes its prefix up to and including the first slash (`prd/`), so the part that tells checkouts apart reads first; a name with no slash, or one that starts or ends with it, has no prefix.
 The checkout whose Workspace is in front turns its name 500 and nothing else about the row.
 The sidebar keeps these sizes at every Appearance font size, because its rows are scanned, not read; the font size scales the rest of the interface.
@@ -1550,7 +1571,7 @@ This is the 프로젝트 list; the `프로젝트 | 태스크` switch above it, �
 The sidebar hierarchy is Project > Workspace > Group > Tab > Agents; a Workspace corresponds to one checkout path, including a plain folder.
 Two checkouts of one repository share a project cycle.
 Each checkout row shows a kind glyph: home for the stored primary checkout, otherwise the pull-request lifecycle icon when current GitHub data has a pull request, then branch, commit for detached HEAD, or folder for a plain folder.
-A project row with checkouts draws no glyph of its own: its name starts on the row's inset and its checkouts' kind glyphs stand on that same column under it, one step shallower than a project glyph would put them (PRD sidebar-quiet-mark-indent D-06); its type is the block's label and the hairline above the block is what tells one project from the next; a plain folder's row keeps its folder glyph, which says its checkout's kind (D-07).
+A project row with checkouts draws no glyph of its own: its name starts on the row's inset and its checkouts' kind glyphs stand on that same column under it, one step shallower than a project glyph would put them (PRD sidebar-quiet-mark-indent D-06); its type is the block's label and the hairline above an open block is what tells it from the project above, while a folded project is one line set off by a small gap and no hairline; a plain folder's row keeps its folder glyph, which says its checkout's kind (D-07).
 The primary choice belongs to the registered project and survives restart; a registration without a choice defaults to its root checkout.
 Changing it moves the home glyph and first position together without moving focus; a vanished choice stays stored and is marked again when that checkout returns.
 A checkout row's `Set as default checkout` sets it; the item is disabled with its reason on the checkout that already is the default, a plain folder, a checkout whose folder is missing, a project without a registration (pin it first), and a device's checkout, which is read-only for this action.
@@ -1641,7 +1662,7 @@ The same root-only sidebar and 태스크 list rules apply while an SSH device is
 A checkout whose root came from another checkout prefixes its purpose line with the Return glyph and the parent checkout's branch, adding `+N` when more than one external root raised it.
 Folding a project by its row or chevron, or using a checkout chevron changes the list only: the center, the focused pane and tab, read state, groups and running processes stay as they were.
 Before the first snapshot arrives the Agents and Projects lists say they are connecting rather than drawing an empty list, and a local Projects list with no registered project says so in a line with no button of its own.
-In the desktop app the Projects section title (`Projects · Recent activity · N`) ends in a + that opens Add a project, drawn whether or not a project is registered, with the hint `Add project ⇧⌘N` (`Alt+Shift+N` off macOS) on pointer or keyboard focus; it is the sidebar's one Add project (PRD first-run-onboarding D-27, B51, B52).
+In the desktop app an `Add project` row sits directly under the Overview row, drawn whether or not a project is registered, with the current chord (`⇧⌘N`, `Alt+Shift+N` off macOS) on its right and no + on the section titles; it is the sidebar's one Add project (PRD first-run-onboarding B51, B52).
 The sidebar has no Home row (PRD sidebar-titlebar-refresh D-06, D-07): a Home agent is found and opened from Needs You and Done, the 태스크 list and ⌘K, the ⌘N start panel can target the Home, and ⌥n numbers the visible rows without it.
 Every device's sidebar starts with the Search row and the shared Overview row, under the device title in the window's top row, followed by one project/checkout/root list with no mode strip.
 Overview shows its glyph, label, Needs You count and current shortcut; zero, an absent snapshot or a disconnected device hides the count.
@@ -1658,7 +1679,7 @@ The list shows the device's Needs You and Done and projects with their operator-
 Needs You and Done stand still above the projects: the project list scrolls under them and never carries them off, and past half the sidebar's height they scroll on their own.
 Opening a raised row that leaves its section, a Done row once read, moves the next row up into its place, so the operator opens one after another from the same spot while the project list brings each one's tree row into view below (`web/e2e/projects-sidebar.spec.ts`).
 Choosing a tile keeps each device's list apart, and ⌥n numbers its visible root rows in physical order.
-The Search row at the sidebar's top, a field-shaped button reading `Search` with the current ⌘K chord (a rebound chord shows as bound), opens the ⌘K palette by a click or Enter on this machine or a selected SSH device alike; Add project sits on the Projects title instead (see Adding a project), and there is no bottom new-workspace button.
+The Search row at the sidebar's top, a field-shaped button reading `Search` with the current ⌘K chord (a rebound chord shows as bound), opens the ⌘K palette by a click or Enter on this machine or a selected SSH device alike; Add project is its own row under Overview (see Adding a project), and there is no bottom new-workspace button.
 The Herdr status line sits under the top and above the list, and is not shown while a device is in front.
 The web Projects list is the scope picker, starting at its first project.
 The shared Overview row carries the selected fill and current-location marker while its modal or page is shown; project headings do not, and a project heading is filled only while a Workspace is in front and its fold hides the focused checkout (below).
@@ -1687,7 +1708,7 @@ No agents folds worktrees with no unresolved agent, excluding primary, front, di
 ### Purpose, pinning, and PR chrome
 
 A checkout's one-line purpose is set from the checkout row's or Overview header's `Set purpose…` context item, with a character count and a warning near the limit; saving an empty purpose clears it, and display falls back through branch description, representative agent title, and pull-request title in that order.
-Any project row can be pinned from its right-click menu: a row Herdr shows without a registration is registered with its device and root by the same Pin, so pinning never needs a separate add; pinned projects are drawn once under a `Pinned · N` section, its header led by a pin glyph and its rows carrying none, between the raised groups and the activity-ordered project list, in the tree's own order (device first, then latest activity), and only while at least one project is pinned.
+Any project row can be pinned from its right-click menu: a row Herdr shows without a registration is registered with its device and root by the same Pin, so pinning never needs a separate add; pinned projects are drawn once under a `Pinned · N` section, its header led by a pin glyph and its rows carrying none, between the raised groups and the activity-ordered project list, one hairline setting each section off from the one above, the first from the raised groups when there are any, in the tree's own order (device first, then latest activity), and only while at least one project is pinned.
 The pin lives on the project's registration and survives a relaunch; removing the registration takes the pin with it.
 A pinned project is exempt from its device's inactive fold whatever its activity; its own stale worktrees still fold behind their own `Inactive N` row.
 PR state colour is a semantic-colour exception to otherwise neutral chrome, one colour per state on every surface, including during hover and selection (docs/status-model.md, Pull request visual states; operator approval, 2026-10-10): failed red, pending amber, mergeable green, draft grey, merged purple with the merge icon, and closed dim.
@@ -1771,8 +1792,8 @@ Hover, filter and checkbox changes are local: they dispatch no core event and st
 ### Adding a project
 
 Web owner: `web/src/AddProjectDialog.tsx`, `web/src/addProject.ts`; desktop owner: the `hide:pick-folder` channel in `desktop/src/main/host.ts`.
-Add project opens one centered `Add a project` dialog from each of its entry points: the + on the sidebar's Projects title, the empty Home's center button (B27), ⌘⇧N and the File menu; Escape and × close it.
-With projects registered the Projects title's + is the only one on screen; with none it and the empty Home's button are the two (PRD first-run-onboarding B51, B52).
+Add project opens one centered `Add a project` dialog from each of its entry points: the Add project row under Overview, the empty Home's center button (B27), ⌘⇧N and the File menu; Escape and × close it.
+With projects registered the Add project row under Overview is the only one on screen; with none it and the empty Home's button are the two (PRD first-run-onboarding B51, B52).
 Only the desktop app offers it, because the native folder picker is how a local project is added: a plain browser tab draws none of those entry points and has no chord for it.
 The Host selector lists this Mac and every registered device, and starts on the focused device.
 This Mac here is the machine the window runs on, which on a window of a machine whose core runs elsewhere is not the core's (`hostWays` in `web/src/addProject.ts`).
@@ -1781,7 +1802,7 @@ The chosen folder is registered with one `create_workspace`; the dialog closes w
 A refusal stays inside the dialog as an alert naming the folder, and the dialog stays open for another pick: `already_registered` from the shell's own registrations, before anything is sent, and `outside_home`, `home_root`, `not_found`, `not_a_directory` or `invalid_path` from hided's `$HOME` line, or the core's own error.
 Another machine's folders are not this window's to browse, so on a device, the core's machine seen from a node's window included, the dialog shows a `~/` path field instead, sent to that machine's node through the same event, with its refusal shown the same way.
 On the core's machine, the one a new project can be made on, an `Other ways to add` group sits under Browse folder or the path field, one row per way, each opening its own view of the same dialog with a `Back` that returns to the first view and puts the keyboard on the row it came from; on a node's window it sits under the core's machine and its views offer no folder picker, since the picker would show this machine's folders.
-`Clone from URL` (web owner: `web/src/CloneFromUrl.tsx`) shows a `Git URL` field that holds the keyboard, and a `Parent folder` field with a button that opens the same native folder picker; the parent starts beside the most recently added local project, else at home (`~`).
+`Clone from URL` (web owner: `web/src/CloneFromUrl.tsx`) shows a `Git URL` field that holds the keyboard, and a `Parent folder` field with a button that opens the same native folder picker; the parent starts in the folder most local projects live in (the latest added wins a tie), else at home (`~`); Create new project starts there too.
 The folder the URL names is shown as `Clones into a new folder <name>`, and hided is asked whether it is free under that parent, so `Clone` is enabled only for an https, ssh (`git@host:path`, `ssh://`) or `file://` URL, a parent inside home, and a name nothing holds there yet (`already_exists` covers even an empty folder, since a clone never writes into a folder it did not make); each refusal is shown inline under its field.
 While the clone runs the dialog shows Git's stage and percent with a progress bar and a `Cancel` button, and the fields and `Back` wait; closing the dialog leaves the clone running, and opening it again shows it.
 A finished clone is registered like a picked folder and the dialog closes when the project appears, or says it could not be added and that the repository is on disk for Browse folder; a failure (authentication, a stalled transfer, a missing repository) stays inline in plain words with `Clone` enabled again, and a cancel says nothing was kept.

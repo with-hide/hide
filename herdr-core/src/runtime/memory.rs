@@ -870,6 +870,7 @@ fn load_opencode_detail(
 
 pub(super) struct MemoryReceipt {
     event: String,
+    pub(super) generation: u64,
     item_key: String,
     items: Vec<(String, u64)>,
     auth: String,
@@ -913,7 +914,7 @@ pub(super) fn trusted_memory_receipt(
             project_id,
             provider,
             session_id,
-            &receipt.event,
+            &MemoryStore::context_receipt_event(&receipt.event, receipt.generation),
             &receipt.item_key,
             &receipt.auth,
         )
@@ -949,8 +950,18 @@ fn memory_receipt(text: &str) -> Option<MemoryReceipt> {
     let event = marker[event_start..].split_once('"')?.0.to_owned();
     let auth_start = marker.find("auth=\"")? + "auth=\"".len();
     let auth = marker[auth_start..].split_once('"')?.0.to_owned();
+    let generation = if let Some(start) = marker.find(" generation=\"") {
+        marker[start + " generation=\"".len()..]
+            .split_once('"')?
+            .0
+            .parse::<u64>()
+            .ok()?
+    } else {
+        0
+    };
     (items.len() == count).then_some(MemoryReceipt {
         event,
+        generation,
         item_key: raw_items.to_owned(),
         items,
         auth,

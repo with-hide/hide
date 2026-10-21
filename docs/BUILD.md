@@ -246,6 +246,7 @@ pnpm --dir desktop package
 
 `desktop/scripts/macos-signing.mjs` refuses before the build when a value is missing or malformed, the identity is in no keychain on the search list, or `notarytool` is not installed.
 Apple usually answers within minutes; the run leaves no archive unless Apple accepts the app and Gatekeeper accepts the app expanded from the archive as notarized.
+Once Apple accepts the app or the dmg, its ticket exists, so a stapler that cannot fetch it (exit 65 or 68, as when a GitHub macOS runner loses the connection to Apple's ticket service) tries again, six times over about five minutes, and the run fails after the last try; any other stapler failure fails at once.
 `xcrun notarytool history` lists past submissions and `xcrun notarytool log <submission id>` says why one was refused, each with `--key`, `--key-id` and `--issuer` given the same three values.
 The command installs nothing; [The Installed App Is The Operator's](../AGENTS.md#the-installed-app-is-the-operators) governs replacing `/Applications/hide.app` with what it built.
 

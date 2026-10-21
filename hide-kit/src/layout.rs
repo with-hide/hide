@@ -155,6 +155,13 @@ pub fn composer_marks(state_dir: &Path) -> PathBuf {
     state_dir.join("composer-marks.json")
 }
 
+/// Each agent version whose composer Hide has checked against its
+/// declaration, so a version whose screen did not read empty when it was
+/// known to be is never read again; its owner is the core's composer checks.
+pub fn composer_checks(state_dir: &Path) -> PathBuf {
+    state_dir.join("composer-checks.json")
+}
+
 /// The last GitHub answer per project, restored when the daemon starts; its
 /// owner is the core's GitHub store.
 pub fn github_snapshot(state_dir: &Path) -> PathBuf {

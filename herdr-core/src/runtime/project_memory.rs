@@ -461,6 +461,54 @@ impl Runtime {
         true
     }
 
+    /// The Memory tab said how many older cards were cleared to make room,
+    /// the newest at `through_unix_ms`: they are seen, so the tab opened
+    /// again says nothing until another is cleared. Written off the lock.
+    pub(super) fn memory_evictions_seen(
+        &mut self,
+        workspace_id: &str,
+        through_unix_ms: u64,
+    ) -> bool {
+        if !self.memory_opened(workspace_id) {
+            return false;
+        }
+        let (Some(project_id), Some(context)) = (
+            self.project_memory.project_id.clone(),
+            self.worker_context.clone(),
+        ) else {
+            return false;
+        };
+        let database = self.memory_database_path();
+        let spawn = thread::Builder::new()
+            .name("hide-project-memory-seen".to_owned())
+            .spawn(move || {
+                let marked = super::memory::open_memory_store(&database)
+                    .and_then(|store| store.mark_evictions_seen(&project_id, through_unix_ms));
+                if let Err(error) = marked {
+                    crate::diagnostic!(json!({
+                        "component": "memory",
+                        "kind": "memory.evictions_seen_failed",
+                        "project_id": project_id,
+                        "message": error.to_string(),
+                    }));
+                    return;
+                }
+                let Some(runtime) = context.runtime.upgrade() else {
+                    return;
+                };
+                if let Ok(mut guard) = runtime.lock() {
+                    guard.refresh_project_memory();
+                };
+            });
+        if let Err(error) = spawn {
+            self.push_diagnostic(
+                "memory.evictions_seen_not_started",
+                format!("Project Memory could not record the cleared cards as seen: {error}"),
+            );
+        }
+        false
+    }
+
     fn memory_opened(&self, workspace_id: &str) -> bool {
         self.snapshot
             .memory
@@ -574,6 +622,11 @@ impl Runtime {
             .state
             .as_ref()
             .is_some_and(|state| state.capacity_reached);
+        project.evicted_cards = load.state.as_ref().map_or(0, |state| state.evicted_count);
+        project.evicted_through_unix_ms = load
+            .state
+            .as_ref()
+            .and_then(|state| state.evicted_through_unix_ms);
         let project_id = self.project_memory.project_id.clone().unwrap_or_default();
         let mut rows = load.rows;
         let mut questions = Vec::new();
@@ -682,7 +735,9 @@ impl Runtime {
             rows.iter()
                 .filter(|row| {
                     !row.verifying
-                        && row.document_comparison.is_none()
+                        && row.document_comparison.as_ref().is_none_or(|comparison| {
+                            comparison.authority == hide_memory::DocumentAuthority::CardNewer
+                        })
                         && !row.promotion.as_ref().is_some_and(|promotion| {
                             promotion.state == crate::model::MemoryPromotionState::Merged
                         })
@@ -1173,7 +1228,12 @@ fn mutate_memory(
             let number = named()?;
             store
                 .undo_card(&identity.id, number)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| match error {
+                    hide_memory::MemoryError::Full => format!(
+                        "m{number} cannot come back while this Project's Memory is full; forget another card first"
+                    ),
+                    error => error.to_string(),
+                })?
                 .ok_or_else(|| format!("m{number} has no change to undo"))?;
             Ok(outcome())
         }
@@ -1641,24 +1701,131 @@ mod tests {
             .items;
         let before_suggestions = store.promotion_suggestions(&identity.id, 1000, 3).unwrap();
         drop(store);
-        // Reproduce the historical v11 shape before the first docs check.
-        let connection = rusqlite::Connection::open(&database).unwrap();
-        connection.execute_batch("DROP TRIGGER card_holds_follow_card; DROP TABLE card_holds; DROP TABLE stale_reports; DROP TABLE card_comparisons; DROP TABLE promotion_batches; ALTER TABLE memory_revisions DROP COLUMN docs_compared; ALTER TABLE card_promotions DROP COLUMN repository; PRAGMA user_version=11;").unwrap();
-        drop(connection);
-        let store = super::memory::open_memory_store(&database).unwrap();
-        assert_eq!(
-            store
-                .retrieve(&hide_memory::RetrievalQuery::session_start(&identity.id))
-                .unwrap()
-                .items,
-            before_index
-        );
-        assert_eq!(
-            store.promotion_suggestions(&identity.id, 1000, 3).unwrap(),
-            before_suggestions
-        );
-        assert_eq!(store.pending_cards(&identity.id, 1000, 4).unwrap().len(), 4);
-        drop(store);
+        // Reproduce each historical schema, including removal of every v17
+        // addition. A version number alone is not a migration fixture.
+        for version in [16, 11] {
+            let connection = rusqlite::Connection::open(&database).unwrap();
+            connection
+                .execute_batch(
+                    "DROP TRIGGER memory_projection_memory_items_insert;
+DROP TRIGGER memory_projection_memory_items_update;
+DROP TRIGGER memory_projection_memory_items_delete;
+DROP TRIGGER memory_projection_memory_revisions_insert;
+DROP TRIGGER memory_projection_memory_revisions_update;
+DROP TRIGGER memory_projection_memory_revisions_delete;
+DROP TRIGGER memory_projection_memory_fts_content_insert;
+DROP TRIGGER memory_projection_memory_fts_content_update;
+DROP TRIGGER memory_projection_memory_fts_content_delete;
+DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals;
+DROP TABLE correction_checks; DROP TABLE memory_contexts; DROP TABLE receipt_contexts;
+DROP TABLE memory_projection_state; DROP TABLE analysis_schedule; DROP TABLE input_failures;
+ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; ALTER TABLE projects DROP COLUMN answered_at_ms;
+PRAGMA user_version=16;",
+                )
+                .unwrap();
+            if version == 16 {
+                // Recover only skipped short analysis, preserving completed
+                // analysis and the independent receipt reader's cursor.
+                for (session, humans) in [("short", 2), ("s-1", 2), ("empty", 0), ("long", 3)] {
+                    connection.execute(
+                        "INSERT INTO session_cursors(project_id,provider,session_id,byte_offset,pending_bytes,last_content_hash,updated_at_ms,operator_events) VALUES(?1,'codex',?2,64,x'','source-hash',1,?3)",
+                        rusqlite::params![identity.id, session, humans],
+                    ).unwrap();
+                }
+                connection.execute(
+                    "INSERT INTO receipt_cursors(project_id,provider,session_id,byte_offset,pending_bytes,last_content_hash,updated_at_ms,operator_events) VALUES(?1,'codex','short',64,x'','receipt-hash',1,2)",
+                    [&identity.id],
+                ).unwrap();
+            }
+            if version == 11 {
+                connection.execute_batch("DROP TRIGGER card_holds_follow_card; DROP TABLE card_holds; DROP TABLE stale_reports; DROP TABLE card_comparisons; DROP TABLE promotion_batches; ALTER TABLE memory_revisions DROP COLUMN docs_compared; ALTER TABLE card_promotions DROP COLUMN repository; PRAGMA user_version=11;").unwrap();
+            }
+            drop(connection);
+            let store = super::memory::open_memory_store(&database).unwrap();
+            assert_eq!(
+                store
+                    .retrieve(&hide_memory::RetrievalQuery::session_start(&identity.id))
+                    .unwrap()
+                    .items,
+                before_index
+            );
+            assert_eq!(
+                store.promotion_suggestions(&identity.id, 1000, 3).unwrap(),
+                before_suggestions
+            );
+            assert_eq!(
+                store.pending_cards(&identity.id, 1000, 4).unwrap().len(),
+                if version == 11 { 4 } else { 0 }
+            );
+            assert!(
+                store
+                    .load_cursor(
+                        hide_memory::CursorReader::Analysis,
+                        &identity.id,
+                        "codex",
+                        "short"
+                    )
+                    .unwrap()
+                    .is_none()
+            );
+            for session in ["s-1", "empty", "long"] {
+                assert_eq!(
+                    store
+                        .load_cursor(
+                            hide_memory::CursorReader::Analysis,
+                            &identity.id,
+                            "codex",
+                            session
+                        )
+                        .unwrap()
+                        .unwrap()
+                        .byte_offset,
+                    64
+                );
+            }
+            assert_eq!(
+                store
+                    .load_cursor(
+                        hide_memory::CursorReader::Receipts,
+                        &identity.id,
+                        "codex",
+                        "short"
+                    )
+                    .unwrap()
+                    .unwrap()
+                    .byte_offset,
+                64
+            );
+            drop(store);
+            let backup = rusqlite::Connection::open_with_flags(
+                database.with_file_name("memory.sqlite3.v16-backup"),
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            assert_eq!(
+                backup
+                    .pragma_query_value(None, "user_version", |row| row.get::<_, u64>(0))
+                    .unwrap(),
+                16
+            );
+            assert_eq!(
+                backup
+                    .query_row("SELECT COUNT(*) FROM memory_items", [], |row| row
+                        .get::<_, u64>(0))
+                    .unwrap(),
+                4
+            );
+            assert_eq!(
+                backup
+                    .query_row(
+                        "SELECT byte_offset FROM session_cursors WHERE session_id='short'",
+                        [],
+                        |row| row.get::<_, u64>(0)
+                    )
+                    .unwrap(),
+                64
+            );
+        }
         let load = load_opened_memory(
             &crate::node::test_node(),
             node.as_ref(),
@@ -1758,7 +1925,8 @@ mod tests {
         assert_eq!(project.usable_cards, 4);
         let mut store = MemoryStore::open(&database).unwrap();
         // D08 permits rule/lesson/decision corrections, never an unsupported
-        // Fact action. Its comparison remains readable and withheld (D04).
+        // Fact action. Confirmed corrections remain usable while unresolved
+        // comparisons are withheld, including a fact without a promotion action.
         for number in [2, 3] {
             store
                 .set_promotion(
@@ -1826,18 +1994,23 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(numbers.len(), 3);
             assert!(numbers.iter().all(|number| [1, 2, 3].contains(number)));
-            assert_eq!(project.usable_cards, 0);
-            assert!(
-                store
-                    .retrieve(&hide_memory::RetrievalQuery::prompt(
-                        &identity.id,
-                        "service port",
-                        vec![]
-                    ))
-                    .unwrap()
-                    .items
-                    .is_empty()
-            );
+            let confirmed = authority == hide_memory::DocumentAuthority::CardNewer;
+            assert_eq!(project.usable_cards, if confirmed { 4 } else { 0 });
+            let injected = store
+                .retrieve(&hide_memory::RetrievalQuery::prompt(
+                    &identity.id,
+                    "service port",
+                    vec![],
+                ))
+                .unwrap();
+            assert_eq!(injected.items.len(), usize::from(confirmed));
+            if confirmed {
+                assert!(
+                    injected.items[0]
+                        .text
+                        .contains("Pending document update: AGENTS.md")
+                );
+            }
         }
         store
             .set_promotion(

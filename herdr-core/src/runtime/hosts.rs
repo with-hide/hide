@@ -1096,12 +1096,64 @@ impl Runtime {
         &self,
         context: &crate::workspace_control::Context,
     ) -> Result<crate::memory_hook::Scope, &'static str> {
-        let (node, link) = self.memory_node(&context.device_id)?;
+        let (node, _) = self.memory_node(&context.device_id)?;
+        // These facts already belong to the catalog's background owner. A
+        // disconnected or unconfirmed catalog never triggers hook discovery.
+        let project = if node == self.node {
+            let paths = &self.catalog_paths;
+            if !paths.knows(&context.checkout_path) || !paths.exists(&context.checkout_path) {
+                return Err("project_unresolved");
+            }
+            let facts = paths
+                .project(&context.checkout_path)
+                .ok_or("project_unresolved")?;
+            hide_project::ProjectIdentity {
+                id: hide_project::project_id(node.as_str(), &facts.root),
+                root: facts.root.clone(),
+                checkout_root: facts.checkout_root.clone(),
+                device_id: node.as_str().into(),
+                kind: facts.kind,
+            }
+        } else {
+            let facts = self
+                .device_facts
+                .get(&context.device_id)
+                .filter(|facts| !facts.reread && facts.unavailable.is_none())
+                .ok_or("project_unresolved")?;
+            let Some(crate::device_catalog::Fact::Known(facts)) =
+                facts.facts.get(&context.checkout_path)
+            else {
+                return Err("project_unresolved");
+            };
+            hide_project::ProjectIdentity {
+                id: hide_project::project_id(node.as_str(), &facts.root),
+                root: facts.root.clone(),
+                checkout_root: facts.checkout_root.clone(),
+                device_id: node.as_str().into(),
+                kind: facts.kind,
+            }
+        };
+        let task_context = self
+            .snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.device_id == context.device_id)
+            .flat_map(|workspace| &workspace.checkouts)
+            .find(|checkout| checkout.path == context.checkout_path)
+            .and_then(|checkout| checkout.purpose.as_ref())
+            .filter(|purpose| {
+                matches!(
+                    purpose.origin,
+                    crate::model::CheckoutPurposeOrigin::Token
+                        | crate::model::CheckoutPurposeOrigin::BranchDescription
+                )
+            })
+            .map(|purpose| hide_memory::hook::prefix(&purpose.text, 1024).to_owned());
         Ok(crate::memory_hook::Scope {
             store: self.memory_database_path(),
-            node,
-            checkout_path: context.checkout_path.clone(),
-            link,
+            project,
+            task_context,
         })
     }
 

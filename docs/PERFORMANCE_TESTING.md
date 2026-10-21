@@ -852,6 +852,14 @@ That query can scan more existing rows than the matches it returns; its cost dep
 Checking start, completion and an actionable deferral publish only a changed core state; each of the existing four re-verifications and three promotion checks per Project can request one coalesced open-Memory refresh as its answer lands.
 Cancellation and worker completion clear the active card, while budget holds clear when work resumes or no check is due, and provider holds also clear when settings change.
 The daily cap counts a call when it is admitted, so a failing provider spends it too; that is the runaway bound, and the provider's backoff keeps failures to a few dozen a day.
+An intent-local session failure keeps its unfinished cursor but rotates its durable queue turn; the existing Project failure record and backoff throttle retry without keeping other Projects behind that session.
+Account/provider readiness, usage and resource-cap pauses preserve the durable next position; intent-local failures yield to peers.
+Hide AI off still permits receipt and evidence reads, but creates no analysis queue entry and requests no usage refresh for analysis.
+A reader-rejected native record is diagnosed and skipped while valid later records and the source checkpoint continue.
+Normalized event text is capped at 256 KiB before chunk allocation; an event past it records its Project/session/offset, measured bytes and limit without content, and is skipped rather than retried forever.
+Accepted events preserve their complete text through 36 KiB groups and the four-group session quantum.
+At the active-card cap, only new growth is rejected: accepted merges and corrections commit with the batch, its cursor advances, and `analysis.session_cards` reports the rejection count.
+
 With no window attached, the usage reader runs on its own 5-minute schedule for 30 minutes after a pass last had a session due, so the usage limit has a figure headless (the usage reader also runs headless while Hide AI is paused by the limit or an agent worked in the last 30 minutes, at the same one read per provider every 5 minutes); that is at most one usage read per provider every 5 minutes, and none while no session is due.
 Session file discovery, incremental reads, SQLite work, redaction, provider requests, hook-config writes, and JSON serialization stay outside `Mutex<Runtime>`.
 One incremental transcript read takes at most 1 MiB, one retained JSONL line is capped at 256 KiB, and catalog or archive detail parsing rejects a complete session above 64 MiB.
@@ -879,12 +887,14 @@ Overview History searches retained canonical requests on demand through the exis
 The old `session-search.sqlite3` is opened read-only only to read each project's retention choice, and a missing file or table costs nothing beyond that open.
 
 `UserPromptSubmit` is a separate high-frequency boundary.
-The hook accepts at most 256 KiB of input and asks the core with one `hide workspace memory` beside its letter pull, carrying the prompt's first 8 KiB; the core asks the checkout's node for its Project, opens its store read-only, checks schema and active-projection integrity, requests at most sixty local FTS candidates within the store's 100 ms retrieval deadline, and returns at most three whole items and 600 estimated tokens, off the runtime lock.
-The core sets a one-second Memory answer deadline, but `CoreHandle::memory_scope` waits for its owner reply without a receive timeout, and a remote node call applies its timeout separately to admission, write and answer.
-Those boundaries do not enforce a one-second end-to-end execution cutoff for the daemon job; the CLI/hook can stop waiting while admitted work remains.
+The hook accepts at most 256 KiB of input and asks the core with one `hide workspace memory` beside its letter pull, carrying the prompt's first 8 KiB; the core uses the attested checkout's prepared Project and at most 1024 bytes of confirmed task context, opens its store read-only, checks schema and the writer's indexed projection certificate, and requests at most sixty local FTS candidates within the earlier of the caller expiry and the 100 ms retrieval deadline.
+The body selector keeps at most three whole items and 600 estimated body tokens; the final escaped envelope, including wrappers and receipts, is trimmed to a shared 1200 estimated rendered-token limit, off the runtime lock.
+These are local estimates, not provider billing tokens.
+The core sets a one-second Memory answer deadline; `CoreHandle::memory_scope` bounds its owner reply with the remaining expiry, and remote admission, write and answer share one absolute deadline.
+SQLite's progress handler observes the invocation expiry, and retrieval also enforces its local 100 ms allowance.
 Memory and letter reads run beside each other: Memory waits until 1,250 ms after the inner hook starts, and the 1,650 ms intake budget reserves its last 400 ms for confirmation after a successful stdout flush.
 The prompt supervisor bounds the inner helper at 1,850 ms from the outer helper's start; 1,250 ms is a Memory read budget, not the whole hook duration.
-The core's lookup starts no model, embedding, transcript scan, child process, network request beyond the node call, or database write.
+The core's lookup starts no model, embedding, transcript scan, child process, network request, repository discovery, full-store scan, or database write.
 Missing, locked, corrupt, stale, unresolved, unreachable or over-deadline inputs exit successfully with empty context so prompt submission continues.
 `SessionStart` reads the Project's index under the same read-only and fail-open ownership and the same Memory read budget: at most 20 one-line rule, decision, lesson and preference cards and no body.
 Its separate Workspace probe has a two-second CLI timeout and runs beside Memory when its thread starts; later count-report calls also have their own two-second timeouts.
@@ -925,19 +935,22 @@ Issue comments use the existing detail worker, fifty per requested page and two 
 
 Work derives its graph from canonical agent, lineage, verified launch and bounded delivery facts, never from terminal output or letter bodies.
 The graph delivery projection keeps at most 2,000 metadata edges, independently of the existing 5,000-item delivery ledger, and publishes only changed facts.
-Overview radial placement packs bounded project footprints in the existing cancellable worker; it replaces the tree placement only for Work and keeps the shared 400-node/three-second boundary.
-Each admitted project reserves an access position before larger expansions spend the remaining budget, so a hidden member can be selected without another layout request.
+Work places its operator-centred force map synchronously on the main thread in `overviewMapLayout.ts` (d3-force), over at most four hundred nodes, only when the structure key changes: a fixed 120 ticks of Barnes-Hut charge, collision and ties, so the cost is O(ticks × n log n) and never loops.
+Measured on an Apple Silicon Mac in the unit-test runtime, 75 nodes took about 15 ms, 225 about 67 ms and 399 about 140 ms; placing one new session beside 398 held ones took about 130 ms, because held sessions still take part in each tick.
+A drag runs the same simulation on d3's animation timer only while a circle is held or settling, about two seconds after release, and the view stops it when it unmounts or replaces the map.
+On a 2026 MacBook in vitest, the slowest shape measured was one root with 398 children at about 43 ms, a 255-session binary team about 5 ms, and 399 roots or 200 one-session projects under 2 ms.
+Each admitted project reserves an access position before the remaining room is shared in identity order, so a hidden member can be selected without another layout request.
 Protected current members reserve additional positions before admission, independently of the one selected-member position.
-Radial clearance checks label rectangles within each ring on the capped worker input, while edge labels check only their two endpoint rectangles during redraw, reserving the three kind-label lanes together before placing each count.
+Lines carry no labels; each is a straight segment between two orb centres computed during redraw, and team outlines are convex hulls of at most one team's orbs.
 Drag updates one local offset map and redraws the bounded nodes and edges; endpoint lookup uses a node-ID index rather than scanning the node array for each edge.
 Selection may reproject the existing bounded relationship metadata but starts no daemon request, provider read, inference, polling clock or pending-layout queue.
-The layout key contains representative identity, proven root sizing, expansion and interface scale, excluding labels, marks, hover, selection and relationship visibility.
-Replay owns one token-timed timeout, cleared on another play, motion change or unmount; idle has neither a decorative loop nor a new clock.
+The layout key contains representative identity, drawn parents, access slots and interface scale, excluding labels, marks, filters, hiding, hover, selection and correspondence.
+The map has no replay or decorative animation, so idle has neither a loop nor a clock.
 
 `overviewGraphModel.ts` creates a stable structure key so status, model and elapsed-text updates do not schedule another layout.
-`dependencyLayout.ts` owns at most one layout Worker and AbortController with a deadline, terminates them on success, failure, cancellation and unmount, and refuses more than four hundred layout nodes.
-A failed layout leaves the fifty-row list usable with Retry; hover, zoom, folding and selection add no core event or reader.
-Reduced-motion changes and unmount release animation and media-query listeners rather than leaving background work running.
+`overviewMapLayout.ts` refuses more than four hundred layout nodes and starts no worker.
+A failed layout leaves the fifty-row list usable with Retry; hover, zoom, folding, hiding and selection add no core event or reader.
+Unmount releases the theme and interface-scale observers rather than leaving background work running.
 
 History queries the retained request ledger through the existing session-work worker and its sixteen-RPC admission and 512-command queue, without a new resident worker, native session scan or polling interval.
 One cancellable 180 ms debounce belongs to the mounted view; a newer query replaces its demand and request-id and connection-generation checks reject stale answers.

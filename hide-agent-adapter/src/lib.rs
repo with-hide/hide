@@ -4,6 +4,7 @@
 //! I/O, starts no work and stores no runtime state. Lookup borrows the input
 //! and static rows: no allocation, lock, normalization buffer or cache.
 
+pub mod composer;
 mod declarations;
 mod journey;
 pub mod usage;
@@ -570,6 +571,11 @@ pub struct AgentAdapter {
     pub resume: Option<LaunchDialect>,
     pub conversation: Option<SessionFormat>,
     pub titles: Capability<SessionFormat>,
+    /// Where the agent draws its composer and what an empty one shows, so
+    /// a letter held on a possible draft can be released when the screen
+    /// says the composer holds nothing (`docs/delivery.md`, Reading the
+    /// composer).
+    pub composer: Capability<composer::Composer>,
     pub start: Option<LaunchDialect>,
     /// Safety declaration for keyless journeys only; never changes a real login HOME.
     pub fake_home: journey::FakeHome,

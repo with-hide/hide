@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import { packager } from "@electron/packager";
 import { applyFuses, assertFuses } from "./fuses.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
-import { assertNotarized, developerIdOptions, macosSigning } from "./macos-signing.mjs";
+import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repo = path.resolve(root, "..");
@@ -298,13 +298,15 @@ for (const companion of herdr.companions) {
 if (platform === "darwin") {
   const helper = path.join(bundle, "Contents", "MacOS", path.basename(notificationHelper));
   if (!fs.statSync(helper, { throwIfNoEntry: false })?.isFile()) throw new Error(`the notification permission helper did not land at ${helper}`);
-  // A Developer ID bundle was signed and notarized inside the packager.
+  // A Developer ID bundle was signed inside the packager and is notarized below.
   if (signing.mode === "adhoc") run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", bundle], { stdio: "inherit" });
   run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", bundle], { stdio: "inherit" });
   // Signing the bundle again must not have given the helper another identity.
   const signed = spawnSync("/usr/bin/codesign", ["-dv", helper], { encoding: "utf8" }).stderr;
   if (!signed.includes(`Identifier=${APP_BUNDLE_ID}\n`)) throw new Error(`the notification permission helper is not signed as ${APP_BUNDLE_ID}: ${signed.trim()}`);
   if (signing.mode === "developer-id" && !/flags=0x[0-9a-f]+\([^)]*runtime/.test(signed)) throw new Error(`the notification permission helper is not signed under the hardened runtime: ${signed.trim()}`);
+  // Apple notarizes the checked bundle before any installer wraps it.
+  if (signing.mode === "developer-id") notarizeApp(bundle, signing, out);
 }
 
 // The installers wrap the app as it stands; a Developer ID build's dmg is

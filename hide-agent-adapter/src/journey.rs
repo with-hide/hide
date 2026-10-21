@@ -143,6 +143,9 @@ pub struct JourneyCells {
     pub guidance_memory: bool,
     /// A letter reaches the agent and its reply.
     pub letter: bool,
+    /// Typed, erased, pasted and cleared text reads as the composer's own
+    /// verdict on its screen. It starts no model turn.
+    pub composer: bool,
     pub sleep_wake: bool,
     /// Wake keeps the native session.
     pub resume: bool,
@@ -176,6 +179,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             integration: start,
             guidance_memory: context_cell(row),
             letter: start && (row.bell || row.tool_letters.is_some()),
+            composer: start && row.composer.is_some(),
             sleep_wake: start && row.sleep.is_some(),
             resume: start && row.sleep.is_some() && row.resume.is_some(),
             fork: start && row.fork.is_some(),
@@ -188,7 +192,8 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
         // tells its session only at its first turn, as Codex does, is
         // registered as a fork only then, and the operator types into a fork
         // to use it) and the prompt typed after Wake. The other cells judge
-        // what Hide shows of those turns and start none.
+        // what Hide shows of those turns and start none; the composer cell
+        // types text it never submits.
         let turns = [
             start,
             cells.start_untrusted,

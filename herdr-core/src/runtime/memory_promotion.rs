@@ -1970,8 +1970,7 @@ pub(super) fn start_promotion(
         if matches!(
             item.kind,
             hide_memory::CandidateKind::Fact | hide_memory::CandidateKind::Preference
-        ) || (item.kind == hide_memory::CandidateKind::Decision && comparison.is_none())
-        {
+        ) {
             return Err(format!(
                 "m{number} is not eligible for repository documents"
             ));
@@ -2868,7 +2867,7 @@ mod tests {
                 },
                 &[
                     card("Run lint before tests", CandidateKind::Rule),
-                    card("Bound worker queues", CandidateKind::Rule),
+                    card("Bound worker queues", CandidateKind::Decision),
                     card("The service listens on port 8080", CandidateKind::Fact),
                 ],
             )

@@ -329,6 +329,11 @@ impl Core {
             );
             let marks = composers.restore(crate::links::now_ms());
             lock_recover(&runtime).install_composer_store(composers, marks);
+            let checks = crate::composer_checks::ComposerChecks::new(
+                hide_kit::layout::composer_checks(directory),
+            );
+            let restored = checks.restore();
+            lock_recover(&runtime).install_composer_checks(checks, restored);
         }
         // Before any coordinator starts, because each builds its label worker
         // on these, and before the kit runs, because the plugin state the

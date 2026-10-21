@@ -32,9 +32,9 @@ pub use store::hold::{
 };
 pub use store::{
     AnalysisBatch, ApplyOptions, ApplySummary, Candidate, CandidateKind, CandidateOutcome,
-    CandidateRelation, CardEvidence, ComparisonCard, Conversion, CursorReader,
-    DeleteProjectOutcome, InjectedItem, Injection, InjectionKind, InjectionOutcome, MemoryDetail,
-    MemoryError, MemoryItem, MemoryLifecycle, MemorySource, MemoryStore, PendingCard,
+    CandidateRelation, CardEvidence, ComparisonCard, Conversion, CorrectionCheck, CursorReader,
+    DeleteProjectOutcome, InjectedItem, Injection, InjectionKind, InjectionOutcome, InputFailure,
+    MemoryDetail, MemoryError, MemoryItem, MemoryLifecycle, MemorySource, MemoryStore, PendingCard,
     PreviousRevision, ProjectMemoryState, Promotion, PromotionState, PromotionSuggestion,
     ReceiptRecord, RetrievalQuery, SessionCursorRecord, SessionSourceRecord, StoreMode,
     branch_name, card_name, parse_card_name, repository_path,
@@ -58,6 +58,23 @@ pub fn database_path(state_dir: &std::path::Path) -> std::path::PathBuf {
 }
 
 pub const ACTIVE_MEMORY_LIMIT: usize = 10_000;
+/// The most cards a full Project keeps forgotten for new ones, for Undo;
+/// the oldest past it are removed for good.
+pub const EVICTED_CARD_LIMIT: usize = 1_000;
+/// The source provider of a card the operator added by hand
+/// (`hide memory add`), which a full Project never forgets for a new one.
+pub const HAND_ADDED_PROVIDER: &str = "hide";
+/// Unusable answers in a row one unchanged input gets before it is set
+/// aside: a session group is passed over and a correction's document version
+/// is not asked about again, each with a diagnostic, until that input changes.
+pub const INPUT_FAILURE_LIMIT: u32 = 3;
+/// Requests in a row the provider took for one unchanged input and never
+/// answered before it is set aside the same way. One counts only when the
+/// provider answered the Project since the last, so an outage, which the
+/// provider's backoff waits out, sets nothing aside.
+pub const INPUT_UNANSWERED_LIMIT: u32 = 5;
+/// Failures further apart than this are not in a row.
+pub const INPUT_FAILURE_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 pub const MEMORY_BODY_LIMIT_CHARS: usize = 4_000;
 pub const ANALYSIS_INPUT_LIMIT_BYTES: usize = 64 * 1024;
 pub const HOOK_INPUT_LIMIT_BYTES: usize = 256 * 1024;
@@ -95,12 +112,11 @@ pub const PROMOTION_PULLED_SESSIONS: u64 = 3;
 pub const PROMOTION_WINDOW_MS: u64 = 14 * 86_400_000;
 /// The most suggestions open at once (B29).
 pub const PROMOTION_OPEN_LIMIT: usize = 3;
-/// New cards one analyzed session may make (PRD memory-card-quality D-02);
-/// a card that is the same, a correction or a conflict does not count.
-pub const NEW_CARDS_PER_SESSION: usize = 2;
-/// A session with fewer of the operator's own events than this makes no new
-/// card (D-03).
-pub const OPERATOR_EVENTS_MINIMUM: u64 = 3;
+/// Significant new cards one extraction group may admit. Later groups have
+/// their own opportunity; corrections do not consume this allowance.
+pub const NEW_CARDS_PER_GROUP: usize = 8;
+/// Extraction groups one session may process in a background pass.
+pub const ANALYSIS_GROUP_QUANTUM: usize = 4;
 /// The most characters of the reason an agent gives when it calls a card
 /// outdated.
 pub const OUTDATED_REASON_LIMIT_CHARS: usize = 500;

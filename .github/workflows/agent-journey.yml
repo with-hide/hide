@@ -144,12 +144,13 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 5
         run: sudo apt-get install -y --no-install-recommends zsh
-      - name: Build hided, hide, the hooks and Hide's conversation reader
+      - name: Build hided, hide, the hooks, Hide's conversation reader and the composer judge
         timeout-minutes: 25
         run: |
           bash scripts/verify-cargo.sh cli
           bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation
           bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
+          bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer
       - name: Fetch the pinned Herdr runtime
         id: herdr
         timeout-minutes: 5
@@ -268,12 +269,13 @@ jobs:
       - name: Install the pinned agent CLIs
         timeout-minutes: 10
         run: '"$PYTHON" scripts/install-agent-clis.py --all'
-      - name: Build hided, hide, the hooks and Hide's conversation reader
+      - name: Build hided, hide, the hooks, Hide's conversation reader and the composer judge
         timeout-minutes: 25
         run: |
           bash scripts/verify-cargo.sh cli
           bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation
           bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
+          bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer
       - name: Fetch the pinned Herdr runtime
         id: herdr
         timeout-minutes: 5
@@ -430,13 +432,14 @@ jobs:
         if: ${{ steps.agents.outputs.kinds != '' }}
         timeout-minutes: 10
         run: '"$PYTHON" scripts/install-agent-clis.py ${{ steps.agents.outputs.kinds }}'
-      - name: Build hided, hide, the hooks and Hide's conversation reader
+      - name: Build hided, hide, the hooks, Hide's conversation reader and the composer judge
         if: ${{ steps.agents.outputs.kinds != '' }}
         timeout-minutes: 25
         run: |
           bash scripts/verify-cargo.sh cli
           bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation
           bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
+          bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer
       - name: Fetch the pinned Herdr runtime
         if: ${{ steps.agents.outputs.kinds != '' }}
         id: herdr

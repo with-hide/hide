@@ -36,12 +36,14 @@ const row = (number: number, overrides: Partial<MemoryRow> = {}): MemoryRow => (
   pull_count: 3, updated_at_unix_ms: Date.now(), verifying: false, promotion: null, ...overrides,
 });
 const memory = (overrides: Partial<ProjectMemory> = {}): ProjectMemory => ({
-  workspace_id: "p", unavailable: null, loading: false, enabled: true, capacity_reached: false,
+  workspace_id: "p", unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0, evicted_through_unix_ms: null,
   rows: [row(3), row(7)], questions: [], analysis: "idle", consent_required: false, usable_cards: 2, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null,
   expanded: null, search: null, ...overrides,
 });
 
 describe("the Memory tab", () => {
+  /** Whether the socket takes what the tab sends. */
+  let accepted = true;
   let container: HTMLDivElement;
   let root: Root;
   let saved: ReturnType<typeof useShellStore.getState>;
@@ -66,13 +68,14 @@ describe("the Memory tab", () => {
     useShellStore.setState(saved, true);
     await clientI18n.changeLanguage(savedLanguage);
     useUiStore.setState(savedUi, true);
+    accepted = true;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
   /** The rail, which opens the front checkout's Project and wears Memory's dot, and the Memory tool, or the rail alone. */
   async function render(project: ProjectMemory | null, tool: "memory" | "files" = "memory") {
-    const actions = createActions((event) => { events.push(event); return true; });
+    const actions = createActions((event) => { events.push(event); return accepted; });
     await act(async () => {
       useShellStore.setState({ connection: "live", rest, memory: { project } });
       root.render(<TooltipProvider><ToolRail actions={actions} />{tool === "memory" ? <MemoryTab actions={actions} /> : null}</TooltipProvider>);
@@ -381,6 +384,60 @@ describe("the Memory tab", () => {
     expect(document.body.textContent).toContain("Delete herdr-ide's Memory data?");
     await click("[data-memory-delete='confirm']");
     expect(sent("memory_action")).toEqual([{ workspace_id: "p", action: "delete", number: null }]);
+  });
+
+  it("marks cleared cards seen only while their line is on a visible page, and keeps a mark that was not sent", async () => {
+    const page = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 50 }));
+    expect(container.querySelector("[data-memory-evicted]")).not.toBeNull();
+    expect(sent("memory_evictions_seen")).toEqual([]);
+
+    accepted = false;
+    page.mockReturnValue("visible");
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(sent("memory_evictions_seen")).toHaveLength(1);
+    // The core never took it, so the line is not held once it counts none.
+    await render(memory({ evicted_cards: 0, evicted_through_unix_ms: null }));
+    expect(container.querySelector("[data-memory-evicted]")).toBeNull();
+
+    accepted = true;
+    await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 50 }));
+    expect(sent("memory_evictions_seen")).toHaveLength(2);
+  });
+
+  it("keeps no cleared-cards line for a mark the core never counted", async () => {
+    await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 50 }));
+    expect(sent("memory_evictions_seen")).toHaveLength(1);
+    // The Memory fills before the core counts the mark, so the line gives way while two are still uncounted.
+    await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 50, capacity_reached: true }));
+    // The count reaches none another way: nothing says the core took the mark.
+    await render(memory({ evicted_cards: 0, evicted_through_unix_ms: null }));
+    expect(container.querySelector("[data-memory-evicted]")).toBeNull();
+  });
+
+  it("says once how many older cards made room, and says full only when nothing can", async () => {
+    await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 50 }));
+    expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("2 older cards were cleared to make room for new ones.");
+    expect(container.textContent).not.toContain("Memory is full");
+    expect(sent("memory_evictions_seen")).toEqual([{ workspace_id: "p", through_unix_ms: 50 }]);
+
+    // The core counts them seen; the open tab keeps its line and says nothing again.
+    await render(memory({ evicted_cards: 0, evicted_through_unix_ms: null }));
+    expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("2 older cards were cleared to make room for new ones.");
+    expect(sent("memory_evictions_seen")).toHaveLength(1);
+
+    // Opened again, the tab has nothing to say until another card is cleared.
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await render(memory({ evicted_cards: 0, evicted_through_unix_ms: null }));
+    expect(container.querySelector("[data-memory-evicted]")).toBeNull();
+    await render(memory({ evicted_cards: 1, evicted_through_unix_ms: 80 }));
+    expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("1 older card was cleared to make room for new ones.");
+    expect(sent("memory_evictions_seen")).toEqual([{ workspace_id: "p", through_unix_ms: 50 }, { workspace_id: "p", through_unix_ms: 80 }]);
+
+    await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 90, capacity_reached: true }));
+    expect(container.querySelector("[data-memory-evicted]")).toBeNull();
+    expect(container.textContent).toContain("This Project's Memory is full, so new cards are not kept.");
   });
 
   it("offers a forgotten card back and a replaced text's undo by card number", async () => {

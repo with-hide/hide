@@ -234,6 +234,7 @@ pub(crate) fn note_receipts(
             continue;
         }
         receipts.push(MemoryReceiptPart {
+            context_reset: false,
             offset,
             text: line.to_owned(),
         });
@@ -244,6 +245,9 @@ pub(crate) fn note_receipts(
 /// One receipt line and the message it was stored in.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryReceiptPart {
+    /// Explicit native context boundary, carried by the same bounded reader.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub context_reset: bool,
     /// The message's index in the session, as [`LabelEvent::offset`].
     pub offset: u64,
     /// The `<hide-memory-receipt …/>` line, and nothing else of the part.
@@ -420,6 +424,17 @@ pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTransc
     let mut memory_receipts = Vec::new();
     let mut skipped_receipts = 0;
     for (event, offset) in parsed.events.iter().zip(&parsed.event_offsets) {
+        if event.context_reset {
+            if memory_receipts.len() < RECEIPTS_PER_READ {
+                memory_receipts.push(MemoryReceiptPart {
+                    context_reset: true,
+                    offset: *offset,
+                    text: String::new(),
+                });
+            } else {
+                skipped_receipts += 1;
+            }
+        }
         let kind = match event.kind {
             EventKind::Human => LabelEventKind::Human,
             EventKind::Assistant => LabelEventKind::Assistant,

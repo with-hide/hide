@@ -126,7 +126,7 @@ class FinishedAgent(unittest.TestCase):
                                   owner=SimpleNamespace(cancelled=threading.Event()))
         record = {}
         journey = Journey(runtime, None, None, {}, {"id": "codex", "herdr_kind": "codex", "model_flag": []},
-                          Path("/repo"), record, None, branch="b", created=[], sessions=Path("/h"), route={})
+                          Path("/repo"), record, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None)
         journey.opened += ["w4:p2", "w4:p3", "w4:p2", None, "w5:p1"]
         journey.close()
         self.assertEqual(calls, [["pane", "close", pane] for pane in ("w4:p2", "w4:p3", "w5:p1")])
@@ -141,7 +141,7 @@ class FinishedAgent(unittest.TestCase):
         runtime = SimpleNamespace(run=Path("/run"), command=command,
                                   owner=SimpleNamespace(cancelled=threading.Event()))
         journey = Journey(runtime, None, None, {}, {"id": "omp", "herdr_kind": "omp", "model_flag": []},
-                          Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={})
+                          Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None)
         # The agent's pane, then its fork's: the fork's ends with the fork cell.
         journey.pane = "w4:p2"
         journey.opened += ["w4:p2", "w4:p3"]
@@ -169,7 +169,7 @@ class FailedCellScreen(unittest.TestCase):
                                       owner=SimpleNamespace(cancelled=threading.Event()))
             table = {"opencode": {name: {"status": "pending"} for name in ("fork", "resume")}}
             journey = Journey(runtime, None, None, table, {"id": "opencode", "herdr_kind": "opencode", "model_flag": []},
-                              Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={})
+                              Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None)
             journey.pane = "w3:p1"
             # A fork is measured in its own pane while the journey's stays the source's.
             journey.settle("fork", ("fail", "no answer"), pane="w3:p7")
