@@ -1904,6 +1904,7 @@ mod tests {
         "editor_text_scale",
         "agent_sleep_after_hours",
         "issue_settings",
+        "conductor_settings",
         "agent_start",
     ];
 

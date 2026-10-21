@@ -197,6 +197,10 @@ struct StoredUiState {
     project_issue_sources: BTreeMap<String, String>,
     #[serde(default)]
     issue_settings: StoredIssueSettings,
+    /// Absent in a store written before Settings › Conductor, which loads
+    /// the defaults; a value this build refuses loads them too.
+    #[serde(default)]
+    conductor_settings: crate::missions::ConductorSettings,
     /// The agent kind and per-kind model last started with. Absent in a
     /// store written before it existed, which seeds it once from the removed
     /// `issue_settings.default_agent` (PRD home-device-rail D-18).
@@ -520,6 +524,9 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 )
             }),
             issue_settings: stored.issue_settings.settings,
+            conductor_settings: Some(stored.conductor_settings)
+                .filter(|settings| settings.validate().is_ok())
+                .unwrap_or_default(),
             agent_sleep: {
                 let mut store = stored.agent_sleep;
                 store.after_load();
@@ -680,6 +687,7 @@ pub fn save(
             settings: state.issue_settings.clone(),
             default_agent: None,
         },
+        conductor_settings: state.conductor_settings.clone(),
         agent_start: Some(state.agent_start.clone()),
         agent_sleep: state.agent_sleep.clone(),
         session_archive: state.session_archive.clone(),

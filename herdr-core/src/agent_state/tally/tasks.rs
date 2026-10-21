@@ -375,7 +375,7 @@ fn stage(rows: &[&Place<'_>]) -> Option<u8> {
         .then_some(1)
 }
 
-fn stage_of(state: PrState) -> u8 {
+pub(crate) fn stage_of(state: PrState) -> u8 {
     match state {
         PrState::Mergeable => 3,
         PrState::Merged => 4,

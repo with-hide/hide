@@ -392,6 +392,7 @@ impl Spawner {
             authority(&self.actor),
             self.actor.clone(),
             Command::Spawn {
+                mission: None,
                 parent: parent.map(str::to_owned),
                 machine: machine.map(str::to_owned),
                 name: "worker".into(),
@@ -966,6 +967,7 @@ fn a_spawn_by_a_device_caller_is_refused_before_anything_is_made() {
             authority(&actor),
             actor.clone(),
             Command::Spawn {
+                mission: None,
                 parent: Some("here".into()),
                 machine: Some(machine.into()),
                 name: "worker".into(),

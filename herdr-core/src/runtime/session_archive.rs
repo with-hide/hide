@@ -423,6 +423,14 @@ impl Runtime {
                 if ok {
                     let removed = self.snapshot.ui_state.session_archive.records.remove(id);
                     self.release_archive_holds(removed.iter().flat_map(|record| &record.members));
+                    // A Conductor's mission goes with its session (PRD
+                    // software-factory-conductor D-22, B47).
+                    let sessions: Vec<(String, String)> = removed
+                        .iter()
+                        .flat_map(|record| &record.members)
+                        .map(|member| (member.machine.clone(), member.native_session_id.clone()))
+                        .collect();
+                    self.drop_missions_of(&sessions);
                     crate::diagnostic!(serde_json::json!({
                         "component": "session_archive", "kind": "session_archive.deleted",
                         "archive_id": id.as_str(),
@@ -915,6 +923,27 @@ impl Runtime {
                         .is_some_and(|registration| !kept.contains(&registration.id))
                 }),
         );
+        // A Conductor whose archived session retention removed takes its
+        // mission with it, as a delete from the archive does (B47).
+        let remaining: HashSet<(&str, &str)> = self
+            .snapshot
+            .ui_state
+            .session_archive
+            .records
+            .values()
+            .flat_map(|record| &record.members)
+            .map(|member| (member.machine.as_str(), member.native_session_id.as_str()))
+            .collect();
+        let gone: Vec<(String, String)> = before
+            .records
+            .values()
+            .flat_map(|record| &record.members)
+            .filter(|member| {
+                !remaining.contains(&(member.machine.as_str(), member.native_session_id.as_str()))
+            })
+            .map(|member| (member.machine.clone(), member.native_session_id.clone()))
+            .collect();
+        self.drop_missions_of(&gone);
         crate::diagnostic!(serde_json::json!({
             "component": "session_archive", "kind": "session_archive.pruned",
             "sessions": keys.len(),

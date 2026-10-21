@@ -25,6 +25,7 @@ pub mod file_url;
 pub mod herdr_handoff;
 pub mod index;
 pub mod login_item;
+pub mod mission_cli;
 pub mod mobile;
 pub mod node_browser;
 pub mod node_cli;

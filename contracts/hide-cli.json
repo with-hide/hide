@@ -237,6 +237,25 @@
             "title": "AgentView",
             "type": "object"
         },
+        "agent_catalog": {
+            "properties": {
+                "installed_known": {
+                    "type": "object"
+                },
+                "items": {
+                    "type": "object"
+                },
+                "machine": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "machine",
+                "installed_known",
+                "items"
+            ],
+            "type": "object"
+        },
         "agent_list": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -1116,6 +1135,69 @@
             "title": "Letter",
             "type": "object"
         },
+        "mission": {
+            "properties": {
+                "mission": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "mission"
+            ],
+            "type": "object"
+        },
+        "mission_created": {
+            "properties": {
+                "mission": {
+                    "type": "object"
+                },
+                "settings": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "mission",
+                "settings"
+            ],
+            "type": "object"
+        },
+        "mission_list": {
+            "properties": {
+                "items": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "items"
+            ],
+            "type": "object"
+        },
+        "mission_planned": {
+            "properties": {
+                "mission": {
+                    "type": "object"
+                },
+                "overlaps": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "mission",
+                "overlaps"
+            ],
+            "type": "object"
+        },
+        "mission_settings": {
+            "properties": {
+                "settings": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "settings"
+            ],
+            "type": "object"
+        },
         "stopped": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "description": "`hide watch stop`.",
@@ -1983,9 +2065,566 @@
             "options": [],
             "repeats_at_most": null,
             "rest": null
+        },
+        {
+            "answers": [
+                "agent_catalog"
+            ],
+            "arguments": [],
+            "command": "agent catalog",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission_created"
+            ],
+            "arguments": [],
+            "command": "mission create",
+            "options": [
+                {
+                    "name": "--title",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--scope",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "pr",
+                            "merge"
+                        ]
+                    }
+                },
+                {
+                    "name": "--cap",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                },
+                {
+                    "name": "--github",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "mission_already_conducting",
+                "mission_full",
+                "mission_project_unknown",
+                "mission_cap_out_of_range"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission_planned"
+            ],
+            "arguments": [],
+            "command": "mission plan",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--json"
+                    ],
+                    "name": "--file",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "json"
+                    }
+                }
+            ],
+            "refusals": [
+                "mission_plan_invalid",
+                "mission_not_conductor",
+                "mission_closed",
+                "mission_cancelled",
+                "mission_too_many_nodes",
+                "mission_node_in_progress",
+                "mission_dependency_unknown",
+                "mission_dependency_cycle"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [
+                {
+                    "name": "node",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "mission node",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--status",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "planned",
+                            "working",
+                            "waiting",
+                            "review",
+                            "held",
+                            "done",
+                            "failed",
+                            "dropped"
+                        ]
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-agent-id"
+                    ],
+                    "name": "--agent-id",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-pr"
+                    ],
+                    "name": "--pr",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-base-pr"
+                    ],
+                    "name": "--base-pr",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-branch"
+                    ],
+                    "name": "--branch",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--attempts",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-line"
+                    ],
+                    "name": "--line",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-change"
+                    ],
+                    "name": "--change",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-review"
+                    ],
+                    "name": "--review",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--agent-id"
+                    ],
+                    "name": "--no-agent-id",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--pr"
+                    ],
+                    "name": "--no-pr",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--base-pr"
+                    ],
+                    "name": "--no-base-pr",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--branch"
+                    ],
+                    "name": "--no-branch",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--line"
+                    ],
+                    "name": "--no-line",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--change"
+                    ],
+                    "name": "--no-change",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--review"
+                    ],
+                    "name": "--no-review",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "mission_node_unknown",
+                "mission_not_conductor",
+                "mission_closed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [],
+            "command": "mission start",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [],
+            "command": "mission decide",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--clear"
+                    ],
+                    "name": "--line",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--line"
+                    ],
+                    "name": "--clear",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [],
+            "command": "mission delay",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--clear"
+                    ],
+                    "name": "--line",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--line"
+                    ],
+                    "name": "--clear",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [],
+            "command": "mission close",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--as",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "done",
+                            "merge_wait",
+                            "cancelled"
+                        ]
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--report-file"
+                    ],
+                    "name": "--report",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--report"
+                    ],
+                    "name": "--report-file",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [],
+            "command": "mission reopen",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "mission take",
+            "options": [],
+            "refusals": [
+                "mission_conducted",
+                "mission_cancelled",
+                "mission_other_project"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [],
+            "command": "mission show",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission_list"
+            ],
+            "arguments": [],
+            "command": "mission list",
+            "options": [],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission_settings"
+            ],
+            "arguments": [],
+            "command": "mission settings",
+            "options": [],
+            "repeats_at_most": null,
+            "rest": null
         }
     ],
-    "digest": "sha256:664d21d95baf7f8c6b93da7fa21cd5811f4cc7a5f89b0934fc5e240fdf8a13a4",
+    "digest": "sha256:14446af538972747d968003b1721c03c39ff8d69ee386974c86f2a9731cbfaa4",
     "envelopes": {
         "agent": {
             "answer": "value",
@@ -1993,6 +2632,11 @@
             "ok": "ok"
         },
         "inbox": {
+            "answer": "result",
+            "code": "reason",
+            "ok": "ok"
+        },
+        "mission": {
             "answer": "result",
             "code": "reason",
             "ok": "ok"
@@ -2012,6 +2656,7 @@
     "value_types": {
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",
+        "json": "a JSON document of the shape hide mission help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
         "one_of": "one of the listed values",
         "session": "non-empty, at most 4096 bytes, no control characters, does not start with -",

@@ -31,7 +31,11 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
     // that happens to hold the separator is never read as a next action.
     match refusal.split_once(DETAIL) {
         Some((
-            code @ ("machine_unknown" | crate::agent_start::SHELL_STARTING | "card_not_processed"),
+            code @ ("machine_unknown"
+            | crate::agent_start::SHELL_STARTING
+            | "card_not_processed"
+            | "mission_cap_reached"
+            | "mission_conducted"),
             detail,
         )) => (code, Some(detail)),
         _ => (refusal, None),
@@ -89,7 +93,29 @@ pub enum Command {
         /// Hide's own identity may give one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task: Option<SpawnTask>,
+        /// The mission this spawn starts a worker of, and its cap (PRD
+        /// software-factory-conductor D-45). Only the core sets it, from the
+        /// caller's mission; no command names it.
+        #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+        mission: Option<crate::runtime::missions::MissionAdmission>,
     },
+}
+
+/// The workers a mission has now (D-29): spawns made for it whose child has
+/// not ended, and those still being made, which will be one.
+pub(crate) fn mission_workers(ledger: &Ledger, mission: &str) -> usize {
+    ledger
+        .spawns
+        .iter()
+        .filter(|spawn| spawn.mission.as_deref() == Some(mission))
+        .filter(|spawn| match &spawn.child {
+            None => !spawn.completed,
+            Some(child) => ledger
+                .agents
+                .iter()
+                .any(|agent| &agent.id == child && !agent.ended),
+        })
+        .count()
 }
 
 /// The serialized value of a Memory card's promotion into the repository.
@@ -355,6 +381,9 @@ pub struct SpawnRecord {
     /// What Hide started the child for; absent for every other spawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<SpawnTask>,
+    /// The mission the child is a worker of, counted against its cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission: Option<String>,
 }
 
 pub(crate) enum Mutation {
@@ -790,6 +819,7 @@ pub(crate) fn apply(
                 args,
                 launch,
                 task,
+                mission,
                 ..
             } = command
             else {
@@ -852,6 +882,13 @@ pub(crate) fn apply(
                 }
                 return Ok(json!(record));
             }
+            // A new worker past its mission's cap waits for one to end; the
+            // same intent asked again above still answers the spawn it made.
+            if let Some(admission) = mission
+                && mission_workers(ledger, &admission.mission) >= usize::from(admission.cap)
+            {
+                return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
+            }
             if ledger.spawns.len() >= SPAWN_LIMIT {
                 return Err("capacity".into());
             }
@@ -879,6 +916,7 @@ pub(crate) fn apply(
                 completed: false,
                 auto_watch_id: None,
                 task: task.clone(),
+                mission: mission.as_ref().map(|admission| admission.mission.clone()),
             };
             ledger.spawns.push(record.clone());
             Ok(json!(record))
@@ -1500,6 +1538,7 @@ mod tests {
 
     fn command(intent: &str) -> Command {
         Command::Spawn {
+            mission: None,
             parent: Some("here".into()),
             machine: None,
             name: "worker".into(),
@@ -1771,6 +1810,73 @@ mod tests {
                 .parent,
             Some(id)
         );
+    }
+    /// A mission's workers past its cap are refused with the cap named,
+    /// while asking again for a worker it already has still answers it, and
+    /// an ended worker frees its place (PRD software-factory-conductor B12).
+    #[test]
+    fn a_mission_spawn_past_its_cap_is_refused_and_an_ended_worker_frees_a_place() {
+        let mut ledger = Ledger::default();
+        let conductor = record("conductor", "native-conductor", None);
+        let caller = conductor.actor.clone();
+        let id = register(&mut ledger, conductor, &caller);
+        let worker = |intent: &str| {
+            let mut spawn = command(intent);
+            if let Command::Spawn { mission: slot, .. } = &mut spawn {
+                *slot = Some(crate::runtime::missions::MissionAdmission {
+                    mission: "mission-1".into(),
+                    cap: 1,
+                });
+            }
+            Mutation::Reserve {
+                parent: id.clone(),
+                command: spawn,
+            }
+        };
+        let first = apply(&mut ledger, &caller, &worker("mission-1:a"), 2).unwrap();
+        assert_eq!(first["mission"], "mission-1");
+        assert_eq!(mission_workers(&ledger, "mission-1"), 1);
+        let refused = apply(&mut ledger, &caller, &worker("mission-1:b"), 3).unwrap_err();
+        assert_eq!(split_refusal(&refused), ("mission_cap_reached", Some("1")));
+        assert_eq!(
+            apply(&mut ledger, &caller, &worker("mission-1:a"), 4).unwrap()["id"],
+            first["id"]
+        );
+        // Another mission and an ordinary spawn are not counted here.
+        assert_eq!(mission_workers(&ledger, "mission-2"), 0);
+        apply(
+            &mut ledger,
+            &caller,
+            &Mutation::Reserve {
+                parent: id.clone(),
+                command: command("plain"),
+            },
+            5,
+        )
+        .unwrap();
+        assert_eq!(mission_workers(&ledger, "mission-1"), 1);
+        // The worker came up and then ended: its place is free again.
+        let child = register(
+            &mut ledger,
+            record("child", "native-child", Some(id.clone())),
+            &caller,
+        );
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "mission-1:a")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.completed = true;
+        assert_eq!(mission_workers(&ledger, "mission-1"), 1);
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == child)
+            .unwrap()
+            .ended = true;
+        assert_eq!(mission_workers(&ledger, "mission-1"), 0);
+        apply(&mut ledger, &caller, &worker("mission-1:b"), 6).unwrap();
     }
     #[test]
     fn a_parent_intent_has_one_durable_child_and_other_parents_have_their_own() {

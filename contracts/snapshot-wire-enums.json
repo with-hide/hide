@@ -1,4 +1,10 @@
 {
+  "mission_status": ["planning", "running", "merge_wait", "done", "cancelled"],
+  "mission_scope": ["pr", "merge"],
+  "mission_node_kind": ["change", "research", "verify"],
+  "mission_delivery": ["pr", "direct"],
+  "mission_node_status": ["planned", "working", "waiting", "review", "held", "done", "failed", "dropped"],
+  "mission_blocked": ["upstream_failed", "upstream_dropped"],
   "agent_onboarding": ["pending", "done"],
   "agent_wait": ["children", "background", "reply", "checks"],
   "row_mark": ["turn", "going", "waiting", "done", "unread", "quiet", "unknown", "asleep"],

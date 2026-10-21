@@ -78,6 +78,9 @@ pub struct Snapshot {
     pub schema_version: u32,
     pub delivery_watches: Vec<crate::delivery::watch::View>,
     pub overview_graph: OverviewGraphSnapshot,
+    /// Each Conductor's mission as its map draws it (PRD
+    /// software-factory-conductor D-14).
+    pub missions: crate::runtime::missions::MissionsSnapshot,
     pub navigator: NavigatorSnapshot,
     pub overlay: OverlaySnapshot,
     pub tab: TabSnapshot,
@@ -3572,6 +3575,8 @@ pub enum DetailItem {
     Record {
         session: crate::links::ledger::SessionIdentity,
     },
+    /// A Conductor's mission map (PRD software-factory-conductor D-14).
+    Mission { mission: String },
 }
 
 /// The lane's 보기 slot (PRD sidebar-task-lens D-50): what it opened, oldest
@@ -3870,6 +3875,10 @@ pub struct UiStateSnapshot {
     /// How starting work from an issue behaves (Settings › Issues).
     #[serde(default)]
     pub issue_settings: IssueSettingsSnapshot,
+    /// Settings › Conductor: the values a new mission's plan starts from
+    /// (PRD software-factory-conductor D-31).
+    #[serde(default)]
+    pub conductor_settings: crate::missions::ConductorSettings,
     /// The agent kind and each kind's model the operator last started with,
     /// from any start surface (PRD home-device-rail D-18, D-20): the next
     /// start anywhere preselects them.
@@ -4610,6 +4619,7 @@ impl Default for UiStateSnapshot {
             agent_sleep_after_hours: None,
             project_issue_sources: BTreeMap::new(),
             issue_settings: IssueSettingsSnapshot::default(),
+            conductor_settings: crate::missions::ConductorSettings::default(),
             agent_start: AgentStartChoice::default(),
             agent_sleep: crate::agent_sleep::AgentSleepStore::default(),
             session_archive: crate::session_archive::SessionArchive::default(),
@@ -6224,6 +6234,7 @@ impl Snapshot {
             usage: crate::usage::model::UsageSnapshot::initial(options.node_id.as_str()),
             delivery_watches: Vec::new(),
             overview_graph: OverviewGraphSnapshot::default(),
+            missions: Default::default(),
             navigator: NavigatorSnapshot {
                 agent_scope: Default::default(),
                 root_path: None,
@@ -7601,6 +7612,86 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "color_theme", &color_themes);
         checked.insert("color_theme");
+
+        {
+            use crate::missions::{
+                Blocked, Delivery, MissionScope, MissionStatus, NodeKind, NodeStatus,
+            };
+            let statuses = [
+                MissionStatus::Planning,
+                MissionStatus::Running,
+                MissionStatus::MergeWait,
+                MissionStatus::Done,
+                MissionStatus::Cancelled,
+            ];
+            for variant in statuses {
+                match variant {
+                    MissionStatus::Planning
+                    | MissionStatus::Running
+                    | MissionStatus::MergeWait
+                    | MissionStatus::Done
+                    | MissionStatus::Cancelled => {}
+                }
+            }
+            assert_wire(&contract, "mission_status", &statuses);
+            checked.insert("mission_status");
+            let scopes = [MissionScope::Pr, MissionScope::Merge];
+            for variant in scopes {
+                match variant {
+                    MissionScope::Pr | MissionScope::Merge => {}
+                }
+            }
+            assert_wire(&contract, "mission_scope", &scopes);
+            checked.insert("mission_scope");
+            let kinds = [NodeKind::Change, NodeKind::Research, NodeKind::Verify];
+            for variant in kinds {
+                match variant {
+                    NodeKind::Change | NodeKind::Research | NodeKind::Verify => {}
+                }
+            }
+            assert_wire(&contract, "mission_node_kind", &kinds);
+            checked.insert("mission_node_kind");
+            let deliveries = [Delivery::Pr, Delivery::Direct];
+            for variant in deliveries {
+                match variant {
+                    Delivery::Pr | Delivery::Direct => {}
+                }
+            }
+            assert_wire(&contract, "mission_delivery", &deliveries);
+            checked.insert("mission_delivery");
+            let node_statuses = [
+                NodeStatus::Planned,
+                NodeStatus::Working,
+                NodeStatus::Waiting,
+                NodeStatus::Review,
+                NodeStatus::Held,
+                NodeStatus::Done,
+                NodeStatus::Failed,
+                NodeStatus::Dropped,
+            ];
+            for variant in node_statuses {
+                match variant {
+                    NodeStatus::Planned
+                    | NodeStatus::Working
+                    | NodeStatus::Waiting
+                    | NodeStatus::Review
+                    | NodeStatus::Held
+                    | NodeStatus::Done
+                    | NodeStatus::Failed
+                    | NodeStatus::Dropped => {}
+                }
+            }
+            assert_wire(&contract, "mission_node_status", &node_statuses);
+            checked.insert("mission_node_status");
+            let blocked = [Blocked::UpstreamFailed, Blocked::UpstreamDropped];
+            for variant in blocked {
+                match variant {
+                    Blocked::UpstreamFailed | Blocked::UpstreamDropped => {}
+                }
+            }
+            assert_wire(&contract, "mission_blocked", &blocked);
+            checked.insert("mission_blocked");
+        }
 
         let unchecked = contract
             .keys()

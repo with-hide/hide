@@ -6,6 +6,9 @@ use super::answer::{Confirmed, InboxEntry};
 use super::ledger::{Ledger, Letter, State};
 use super::{Actor, BODY_LIMIT, HOOK_LETTERS, HOOK_LIMIT, LETTER_LIMIT, OPEN_LIMIT};
 
+// One per request, made and consumed by its caller and never kept in bulk,
+// so the size of the agent commands is not worth a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {

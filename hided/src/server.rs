@@ -1290,6 +1290,15 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "target_unavailable" => {
             "No agent answers to that; a bare pane ID names a pane on your own machine. Find the recipient in hide agent list and send to its name or registration ID"
         }
+        "mission_cap_reached" => {
+            "The mission's workers are at its cap; wait for one to finish and end it with hide agent end <id>, then run the same command again with the same intent"
+        }
+        "mission_not_started" => {
+            "The operator has not approved the mission's plan; show it to them and run hide mission start once they approve"
+        }
+        "mission_machine_refused" => {
+            "A mission's workers run on the machine its project is on; leave out --machine or name that machine"
+        }
         "codex_capability_unknown" => {
             "Hide has not read whether that machine's Codex runs a shared server; ask the operator to press Check again in Settings > Agents for that machine, then run the same command again with the same intent"
         }
@@ -1326,6 +1335,14 @@ fn refusal_answer(reason: String, next_action: &'static str) -> (String, String)
             format!("{next_action}. Its screen ends with: {screen}"),
         ),
         (code @ "shell_starting", _) => (code.to_owned(), next_action.to_owned()),
+        (code @ "mission_cap_reached", Some(cap)) => (
+            code.to_owned(),
+            format!("{next_action}; the mission runs at most {cap} workers at once"),
+        ),
+        (code @ "mission_conducted", Some(name)) => (
+            code.to_owned(),
+            format!("{next_action}; {name} conducts it now"),
+        ),
         (code, Some("")) => (
             code.to_owned(),
             "No other device is connected; connect one in Settings > Devices, then retry"
@@ -1363,6 +1380,11 @@ enum ScopedRequest {
     /// `hide workspace memory`: a hook's Project Memory, which needs no
     /// shell.
     MemoryHook(herdr_core::memory_hook::Ask),
+    /// `hide mission`: a Conductor's mission record, the core's own.
+    Mission(herdr_core::missions::MissionCommand),
+    /// `hide agent catalog`: what a machine's agents take, read from the
+    /// core's own reports.
+    AgentCatalog(Option<String>),
 }
 
 impl ScopedRequest {
@@ -1371,7 +1393,12 @@ impl ScopedRequest {
     fn needs_renderer(&self) -> bool {
         !matches!(
             self,
-            Self::Delivery(..) | Self::Links(..) | Self::Memory(..) | Self::MemoryHook(..)
+            Self::Delivery(..)
+                | Self::Links(..)
+                | Self::Memory(..)
+                | Self::MemoryHook(..)
+                | Self::Mission(..)
+                | Self::AgentCatalog(..)
         )
     }
 }
@@ -1465,10 +1492,27 @@ async fn scoped_client_loop(
                         .map(ScopedRequest::Memory),
                         Some("memory_hook") => herdr_core::memory_hook::Ask::from_wire(&value)
                             .map(ScopedRequest::MemoryHook),
+                        Some("mission") => serde_json::from_value::<
+                            herdr_core::missions::MissionCommand,
+                        >(value["command"].clone())
+                        .ok()
+                        .filter(herdr_core::missions::MissionCommand::valid)
+                        .map(ScopedRequest::Mission),
+                        Some("agent_catalog") => match value.get("machine") {
+                            None | Some(Value::Null) => Some(ScopedRequest::AgentCatalog(None)),
+                            Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => {
+                                Some(ScopedRequest::AgentCatalog(Some(id.clone())))
+                            }
+                            _ => None,
+                        },
                         _ => None,
                     };
+                    // A plan carries its whole node list, so a mission
+                    // command may use the frame's full size like a letter.
                     if command.is_none()
-                        || (value["type"] != "delivery" && text.len() > 16 * 1024)
+                        || (value["type"] != "delivery"
+                            && value["type"] != "mission"
+                            && text.len() > 16 * 1024)
                         || request_id.is_empty()
                         || request_id.len() > 64
                         || !request_id
@@ -1566,6 +1610,22 @@ async fn scoped_client_loop(
                                         .and_then(herdr_core::memory_command::PreparedMemory::run)
                                         .map_err(|code| {
                                             let next = herdr_core::memory_command::next_action(&code);
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::Mission(command) => {
+                                    core.mission(&cap.context.device_id, &cap.pane_id, &cap.context, command)
+                                        .map_err(|code| {
+                                            let next = herdr_core::missions::next_action(
+                                                herdr_core::coordination::split_refusal(&code).0,
+                                            );
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::AgentCatalog(machine) => {
+                                    core.agent_catalog(&cap.context.device_id, machine)
+                                        .map_err(|code| {
+                                            let next = crate::server::delivery_next_action(&code);
                                             (code, next)
                                         })?
                                 }

@@ -71,6 +71,8 @@ mod lineage;
 mod links;
 #[path = "tests/memory.rs"]
 mod memory;
+#[path = "tests/missions.rs"]
+mod missions;
 #[path = "tests/named_tab.rs"]
 mod named_tab;
 #[path = "tests/node_agent_areas.rs"]
