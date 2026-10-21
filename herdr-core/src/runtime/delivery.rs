@@ -262,7 +262,13 @@ impl Runtime {
         payload: &SessionSnapshotPayload,
         host_scope: Option<&str>,
     ) {
-        let Some(scope) = host_scope else { return };
+        // A local observation must identify its socket incarnation. Remote
+        // sync is already scoped by the authenticated node, and deliberately
+        // carries no local socket path into this core.
+        let Some(scope) = host_scope.or_else(|| (device != self.node.as_str()).then_some(device))
+        else {
+            return;
+        };
         let Ok(ledger) = self.delivery_ledger.as_ref() else {
             return;
         };
@@ -308,7 +314,7 @@ impl Runtime {
             let previous = self
                 .delivery_observations
                 .get(previous_pane)
-                .filter(|old| old.host_scope.as_deref() == Some(scope));
+                .filter(|old| old.host_scope.as_deref() == host_scope);
             let Some(terminal) = record
                 .terminal_id
                 .as_deref()
@@ -3268,6 +3274,55 @@ pub(crate) mod tests {
                     .contains_key("agent-2")
             );
         }
+    }
+
+    #[test]
+    fn remote_observation_without_a_local_socket_keeps_the_registered_session() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, _, path) = fixture(root.path());
+        let (worker, client) = Worker::spawn(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        {
+            let mut guard = runtime.lock().unwrap();
+            let mut ledger = registered_pair(&mut guard);
+            let child = &mut ledger.agents[1];
+            child.actor.device_id = "device".into();
+            child.machine = "device".into();
+            child.actor.pane_id = "remote:device:pane:child".into();
+            child.host_scope = "device".into();
+            child.terminal_id = Some("terminal-child".into());
+            let actor = child.actor.clone();
+            ledger.watches[0].target = actor;
+            crate::delivery::ledger::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+            guard.delivery_observations.clear();
+            let payload = serde_json::from_value(json!({
+                "panes":[{"pane_id":"moved-child","terminal_id":"terminal-child"}],
+                "agents":[{"id":"child","pane_id":"moved-child","agent":"codex","agent_status":"working",
+                    "lineage_session":crate::wire::session_digest("child-native")}]
+            })).unwrap();
+            // This is the Remote coordinator's actual calling convention.
+            guard.observe_delivery("device", &payload, None, None);
+            assert!(!guard.delivery_registrations_gone().contains_key("agent-2"));
+        }
+        client
+            .submit(
+                crate::delivery::worker::Effect::HumanClaim,
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        let persisted = crate::delivery::ledger::load(&path).unwrap();
+        let child = &persisted.agents[1];
+        assert_eq!(child.actor.pane_id, "remote:device:pane:moved-child");
+        assert_eq!(child.parent.as_deref(), Some("agent-1"));
+        assert!(!child.ended);
+        assert!(persisted.watches[0].target.same_identity(&child.actor));
+        persisted.validate().unwrap();
+        drop(worker);
     }
 
     fn only_lead() -> SessionSnapshotPayload {
