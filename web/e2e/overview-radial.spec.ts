@@ -37,6 +37,15 @@ test("@platform Overview restores its exact current session and keeps map moveme
     if (!canvas || !orb || !title) throw new Error("current identity has no canvas geometry");
     expect(orb.y).toBeGreaterThanOrEqual(canvas.y);
     expect(title.y + title.height).toBeLessThanOrEqual(canvas.y + canvas.height);
+    const heading = await graph.locator(".og-project-center").first().boundingBox();
+    if (!heading) throw new Error("project heading has no geometry");
+    expect(heading.y + heading.height).toBeLessThanOrEqual(orb.y);
+    await graph.getByRole("button", { name: "Collapse all", exact: true }).click();
+    await expect(graph.locator("[data-graph-session]")).toHaveCount(0);
+    await expect(graph.locator("[data-graph-project]")).toHaveCount(1);
+    await graph.locator(".og-project-heading").click();
+    await expect(current).toHaveCount(1);
+    await expect(graph).toHaveAttribute("data-graph-phase", "ready");
     const positions = () => graph.locator(".react-flow__node").evaluateAll(nodes => nodes.map(node => [node.getAttribute("data-id"), (node as HTMLElement).style.transform]));
     const before = await positions();
     const session = current.locator("xpath=..");

@@ -17,10 +17,12 @@ After the path, a Git checkout shows a small neutral FileDiff and the whole chec
 Clicking the count opens Changes idempotently and leaves terminal keyboard ownership in place; its tooltip explains the count, while a conflict, loading, unavailable or stale read has a distinct small mark and never claims a clean tree.
 Upstream differences use ↑/↓ counts against the tracking branch, with zero hidden and no-upstream/gone distinct; the small detail names the tracking ref and the last FETCH_HEAD time, which is the last local remote observation, not a live remote comparison.
 Only the ↑ arrow uses the existing success green and only the ↓ arrow uses warning orange; both counts and the file count remain neutral, including when the branch is ahead and behind at once.
-At the right, the current HEAD's subject and relative age open a compact detail with the full subject, short SHA and explicit local time; no commit is invented for an unborn branch.
-The adjacent CI mark describes only that exact SHA, combining its GitHub check-runs and commit statuses even on main without a PR, and distinguishes passing, pending, failed, none, unknown, unavailable and stale.
-Its detail names the target SHA and read time, excludes uncommitted edits explicitly, and opens only a URL actually returned by the provider in the existing Browser View.
-An incomplete check-run list beyond the bounded read is unknown, never a partial success.
+At the right, the current HEAD's subject and relative age open a compact history popover directly below that trigger, with up to five newest commits from the captured HEAD; no commit is invented for an unborn branch.
+Each compact item has its subject on the first line and short SHA and relative time on the second, with the exact local time available on the timestamp.
+Its associated CI result sits at the right of that second line; commits with no CI omit the result.
+The adjacent CI mark describes only that exact SHA, using GitHub's aggregate statusCheckRollup even on main without a PR, and distinguishes passing, pending, failed, none, unknown, unavailable and stale.
+Its trigger opens the same history below itself; each CI result names its read time in its hint and opens only the provider-returned URL validated against that repository and exact commit in the existing Browser View.
+CI describes committed changes only, and a provider error or unknown aggregate never becomes success.
 Changing device, checkout, connection or HEAD fences old results; the front checkout's file status refreshes independently of the Changes lane and stale data is labelled.
 On narrow widths the relative age disappears before the subject, then the subject contracts to the commit icon, preserving the path, count and trailing tools; details remain keyboard reachable and Escape returns to their triggers.
 Compact commit and CI buttons keep their own icon and text footprint even when the open sidebar leaves less space than the window width; they never overflow into Overview or Open server.
@@ -914,14 +916,17 @@ The list orders My turn, Working, Unread results, unknown, idle and sleeping, re
 An excluded ancestor stays dim as relationship context without increasing match counts.
 Only branches whose every descendant sleeps offer a reversible subtree fold; a descendant becoming idle or active releases that fold.
 Projects without matches move into a disclosure naming sleeping-only, no-session and filtered reasons, with a route to show each project and its sleeping sessions.
-Projects form a radial map: each center shows the actual project name, matching-session count and state totals, with sessions around it rather than inside a large enclosing box.
+Projects form a radial map: a small top-centered heading shows the actual project name, matching-session count and state totals, with radial sessions below it and no central card or large enclosing box.
 One-project scope retains its center and offers All projects to return.
-A collapsed project keeps up to six stable-ID representatives and a remaining-session count; an oversized expansion stays summarized within the shared 400-node budget.
-Each admitted center reserves an access position for a hidden selected member, and selecting a session whose project is outside that budget opens its project scope with that session selected.
-The current member has its own protected position, so choosing another member cannot displace it at the graph limit.
-Up to twelve sessions share the first ring; summarized projects use smaller centers and representative nodes showing task titles and state, with provider and proved launch model retained in their accessible names and details.
+A collapsed project hides every agent, including the current or previously selected one, retaining only its heading and counts; Collapse all applies this to every project and frames the remaining headings.
+An explicit project expansion or collapse centers that project; background status updates never move the camera.
+An oversized expanded project retains stable-ID representatives and an access slot within the shared 400-node budget.
+Each admitted expanded project reserves an access position for a hidden selected member, and selecting a session whose project is outside that budget opens its project scope with that session selected.
+In an expanded project, the current member has its own protected position, so choosing another member cannot displace it at the graph limit.
+Up to twelve sessions share the first ring; agent circles and labels stay below the project heading, including for one session.
+Representative nodes retain task titles and state, with provider and proved launch model in accessible names and details.
 Project search compares real names and counts and moves the camera to that center; the paged session list searches every matching session, including those outside the graph budget.
-A hidden selected session uses a reserved radial position without moving other nodes.
+Selecting a session from the uncapped list expands its project; in an oversized expanded project the hidden selection uses its reserved position without moving other representatives.
 When the confirmed focused device, pane and native session have a graph proof at entry, that exact session is highlighted without opening details; pane reuse cannot inherit the initial selection.
 The first camera shows the current project's whole ordinary cluster at a readable zoom; a cluster too large for that zoom centers the exact current member instead, and it never automatically fits the entire map.
 Fit graph, Current pane and Reset layout remain explicit keyboard-accessible controls.

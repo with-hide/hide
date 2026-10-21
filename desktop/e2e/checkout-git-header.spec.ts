@@ -14,7 +14,7 @@ test("checkout Git header fits the isolated native candidate at 720 by 480", asy
   let app: ElectronApplication | undefined;
   const errors: unknown[] = [];
   try {
-    const fixture = checkoutGitFixture(herdr, { divergedUpstream: true });
+    const fixture = checkoutGitFixture(herdr, { divergedUpstream: true, historyCount: 6 });
     git(fixture.root, ["branch", "-m", "feature/매우-긴-한글과-English-checkout-name"]);
     run = isolate(herdr, "checkout-header");
     const opened = await launchShell(run.env);
@@ -55,7 +55,7 @@ test("checkout Git header fits the isolated native candidate at 720 by 480", asy
         children: [...node.children].map(child => ({ tag: child.tagName, text: child.textContent, color: getComputedStyle(child).color })),
       }));
       console.log(`${theme} upstream: ${JSON.stringify(upstream)}`);
-      await captureNativeWindow(app, `checkout-header-native-720-${theme}`, { geometry, upstream, sha: fixture.sha, provider: "private synthetic check-runs and commit statuses; actual local Git diverged from origin/main", home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR });
+      await captureNativeWindow(app, `checkout-header-native-720-${theme}`, { geometry, upstream, sha: fixture.sha, provider: "private synthetic exact-SHA GraphQL rollups; actual local Git diverged from origin/main", home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR });
       for (const [index, control] of geometry.controls.entries()) {
         expect(control.hit, `${control.attribute} center reaches its own button`).toBe(true);
         expect(control.contentRight, `${control.attribute} contents fit its button`).toBeLessThanOrEqual(control.right + 1);
@@ -63,7 +63,9 @@ test("checkout Git header fits the isolated native candidate at 720 by 480", asy
         if (next) expect(next.left - control.right, `${control.attribute} is separate from ${next.attribute}`).toBeGreaterThanOrEqual(2);
       }
       await page.locator('[data-checkout-ci]').click();
-      await expect(page.locator('[data-ci-sha]')).toHaveText(fixture.sha);
+      await expect(page.locator('[data-commit-history-item]')).toHaveCount(5);
+      await expect(page.locator('[data-commit-history-item]').first()).toHaveAttribute("data-commit-history-item", fixture.sha);
+      await captureNativeWindow(app, `checkout-history-native-720-${theme}`, { sha: fixture.sha, commits: 5, provider: "private synthetic exact-SHA GraphQL rollups", home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR });
       await page.keyboard.press("Escape");
       await page.locator('[data-open-overview]').click();
       await expect(page.locator('[data-overview-page]')).toBeVisible();

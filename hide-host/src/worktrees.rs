@@ -56,20 +56,43 @@ pub fn checkout_git(path: &Path) -> HostResult<hide_node_link::worktrees::Checko
     if let Some(head) = facts.head_sha.as_deref() {
         let log = git_within_limit(
             path,
-            &["log", "-1", "--format=%ct%x00%s", head, "--"],
+            &["log", "-z", "-5", "--format=%H%x00%ct%x00%s", head, "--"],
             until.saturating_duration_since(Instant::now()),
             Some(64 * 1024),
         )
         .map_err(fail)?;
-        let (time, subject) = log
-            .trim_end()
-            .split_once('\0')
-            .ok_or_else(|| fail("Git returned no commit time or subject".to_owned()))?;
-        facts.commit_unix_seconds = Some(
-            time.parse()
-                .map_err(|_| fail("Git returned an invalid commit time".to_owned()))?,
-        );
-        facts.subject = Some(subject.to_owned());
+        let fields: Vec<_> = log.split_terminator('\0').collect();
+        let (records, remainder) = fields.as_chunks::<3>();
+        if records.is_empty()
+            || !remainder.is_empty()
+            || records.len() > hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT
+        {
+            return Err(fail("Git returned an invalid commit history".to_owned()));
+        }
+        for record in records {
+            if !matches!(record[0].len(), 40 | 64)
+                || !record[0].bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(fail("Git returned an invalid commit SHA".to_owned()));
+            }
+            facts
+                .recent_commits
+                .push(hide_node_link::worktrees::CheckoutCommit {
+                    sha: record[0].to_owned(),
+                    subject: record[2].to_owned(),
+                    commit_unix_seconds: record[1]
+                        .parse()
+                        .map_err(|_| fail("Git returned an invalid commit time".to_owned()))?,
+                });
+        }
+        let latest = &facts.recent_commits[0];
+        if latest.sha != head {
+            return Err(fail(
+                "Git history did not start at the requested HEAD".to_owned(),
+            ));
+        }
+        facts.commit_unix_seconds = Some(latest.commit_unix_seconds);
+        facts.subject = Some(latest.subject.clone());
     }
     let repository = hide_project::git::discover(path)
         .ok_or_else(|| fail("The checkout's Git directory is unavailable".to_owned()))?;

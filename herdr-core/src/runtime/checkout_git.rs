@@ -56,6 +56,7 @@ impl Runtime {
                 facts: None,
                 reason: None,
                 ci: None,
+                recent_ci: Vec::new(),
             });
             self.checkout_header.last_git = None;
             self.checkout_header.last_ci = None;
@@ -76,6 +77,15 @@ impl Runtime {
             git: git.clone(),
             repository,
             sha: facts.head_sha.clone()?,
+            commits: if facts.recent_commits.is_empty() {
+                vec![facts.head_sha.clone()?]
+            } else {
+                facts
+                    .recent_commits
+                    .iter()
+                    .map(|commit| commit.sha.clone())
+                    .collect()
+            },
             channel: ChannelRef(self.own_node.clone()),
         })
     }
@@ -88,6 +98,26 @@ impl Runtime {
         if self.checkout_header.target.as_ref() != Some(&request) {
             return false;
         }
+        let answer = answer.and_then(|facts| {
+            let commits = &facts.recent_commits;
+            if commits.len() > hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT
+                || (!commits.is_empty()
+                    && commits.first().map(|commit| &commit.sha) != facts.head_sha.as_ref())
+                || commits
+                    .iter()
+                    .any(|commit| !hide_node_link::gh::is_commit(&commit.sha))
+                || commits
+                    .iter()
+                    .map(|commit| &commit.sha)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    != commits.len()
+            {
+                Err("The checkout returned invalid commit history".into())
+            } else {
+                Ok(facts)
+            }
+        });
         let before = self.checkout_header.header.clone();
         let header = self
             .checkout_header
@@ -105,21 +135,34 @@ impl Runtime {
                     .and_then(hide_node_link::gh::repository_of_remote)
                     .filter(|repository| hide_node_link::gh::is_repository(repository));
                 if self.checkout_header.repository != repository
-                    || header
-                        .facts
-                        .as_ref()
-                        .is_none_or(|previous| previous.head_sha != facts.head_sha)
+                    || header.facts.as_ref().is_none_or(|previous| {
+                        previous.head_sha != facts.head_sha
+                            || previous.recent_commits != facts.recent_commits
+                    })
                 {
-                    header.ci = facts.head_sha.as_ref().map(|sha| Ci {
-                        sha: sha.clone(),
-                        state: if repository.is_some() {
-                            CiState::Loading
-                        } else {
-                            CiState::Unavailable
-                        },
-                        checked_at_unix_ms: None,
-                        url: None,
-                    });
+                    let commits: Vec<_> = if facts.recent_commits.is_empty() {
+                        facts.head_sha.iter().cloned().collect()
+                    } else {
+                        facts
+                            .recent_commits
+                            .iter()
+                            .map(|commit| commit.sha.clone())
+                            .collect()
+                    };
+                    header.recent_ci = commits
+                        .into_iter()
+                        .map(|sha| Ci {
+                            sha,
+                            state: if repository.is_some() {
+                                CiState::Loading
+                            } else {
+                                CiState::Unavailable
+                            },
+                            checked_at_unix_ms: None,
+                            url: None,
+                        })
+                        .collect();
+                    header.ci = header.recent_ci.first().cloned();
                     self.checkout_header.last_ci = None;
                 }
                 self.checkout_header.repository = repository;
@@ -135,7 +178,7 @@ impl Runtime {
                     GitState::Unavailable
                 };
                 header.reason = Some(reason);
-                if let Some(ci) = header.ci.as_mut() {
+                for ci in header.ci.iter_mut().chain(header.recent_ci.iter_mut()) {
                     ci.state = CiState::Stale;
                     ci.url = None;
                 }
@@ -153,8 +196,12 @@ impl Runtime {
             .header
             .as_mut()
             .expect("the CI request has a header");
-        let changed = header.ci.as_ref() != Some(&answer);
-        header.ci = Some(answer);
+        if answer.iter().map(|ci| &ci.sha).ne(request.commits.iter()) {
+            return false;
+        }
+        let changed = header.recent_ci != answer;
+        header.ci = answer.first().cloned();
+        header.recent_ci = answer;
         self.checkout_header.last_ci = Some(now);
         changed
     }
@@ -165,7 +212,18 @@ impl Runtime {
         let Some(header) = self.checkout_header.header.as_mut() else {
             return false;
         };
-        let before = (header.state, header.ci.as_ref().map(|ci| ci.state));
+        let states = |header: &Header| {
+            (
+                header.state,
+                header.ci.as_ref().map(|ci| ci.state),
+                header
+                    .recent_ci
+                    .iter()
+                    .map(|ci| ci.state)
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let before = states(header);
         if self
             .checkout_header
             .last_git
@@ -173,17 +231,18 @@ impl Runtime {
         {
             header.state = GitState::Stale;
         }
-        if (header.state != GitState::Fresh
+        if header.state != GitState::Fresh
             || self
                 .checkout_header
                 .last_ci
-                .is_some_and(|read| now.saturating_duration_since(read) > Duration::from_secs(90)))
-            && let Some(ci) = header.ci.as_mut()
+                .is_some_and(|read| now.saturating_duration_since(read) > Duration::from_secs(90))
         {
-            ci.state = CiState::Stale;
-            ci.url = None;
+            for ci in header.ci.iter_mut().chain(header.recent_ci.iter_mut()) {
+                ci.state = CiState::Stale;
+                ci.url = None;
+            }
         }
-        (header.state, header.ci.as_ref().map(|ci| ci.state)) != before
+        states(header) != before
     }
 
     pub(super) fn checkout_header_snapshot(&self, key: &(String, String)) -> Option<Header> {

@@ -1,4 +1,4 @@
-import { BaseEdge, EdgeLabelRenderer, Handle, Position, getBezierPath, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, Handle, Position, getBezierPath, getStraightPath, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
 import { ChevronDownIcon, ChevronRightIcon, FolderIcon, GripIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 import { AgentMark } from "./AgentMark";
@@ -47,16 +47,15 @@ export function ProjectGraphNode({ id, data }: NodeProps<ProjectNode>) {
   const { t } = useInterfaceTranslation();
   const { group, toggle, highlight } = data;
   const reveal = useRevealNode(id);
-  const hidden = group.agents.length - group.shown.length;
   return <div className="og-project" data-graph-project={group.project.workspace.id} data-expanded={group.expanded} data-current={data.current} data-highlighted={data.highlighted}>
     <div className="og-project-center">
       <Ports />
       <button type="button" className="og-drag-handle og-project-drag nopan" aria-label={t("overviewGraph.dragProject", { project: group.project.workspace.label })}><GripIcon /></button>
       <button type="button" className="og-project-heading nodrag nopan" title={group.project.workspace.label} aria-expanded={group.expanded} aria-label={t(group.expanded ? "overviewGraph.collapse" : "overviewGraph.expand", { project: group.project.workspace.label })} onPointerEnter={() => highlight(id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(id, true); }} onBlur={() => highlight(null, true)} onClick={() => toggle(group.id)}>
-        <FolderIcon /><strong>{group.project.workspace.label}</strong><span className="og-count">{group.matches}</span>
+        {group.expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}<FolderIcon /><strong>{group.project.workspace.label}</strong><span className="og-count">{group.matches}</span>
       </button>
       <div className="og-project-summary"><GraphStateCounts agents={group.agents} /></div>
-      <button type="button" className="og-project-more nodrag nopan" aria-expanded={group.expanded} onClick={() => toggle(group.id)}>{group.expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}{hidden > 0 ? t("overviewGraph.moreSessions", { count: hidden }) : t(group.expanded ? "overviewGraph.collapseAll" : "overviewGraph.expandShort")}</button>
+
     </div>
   </div>;
 }
@@ -82,7 +81,7 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
 export function CommunicationGraphEdge(props: EdgeProps<LetterEdge>) {
   const { t } = useInterfaceTranslation();
   const flow = useReactFlow();
-  let [path] = getBezierPath(props);
+  let [path] = props.data?.lineage ? getStraightPath(props) : getBezierPath(props);
   let x = (props.sourceX + props.targetX) / 2;
   let y = (props.sourceY + props.targetY) / 2;
   const bundle = props.data?.bundle;

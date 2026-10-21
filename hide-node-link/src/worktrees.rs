@@ -5,8 +5,20 @@ use serde::{Deserialize, Serialize};
 
 /// The front checkout's small, whole-repository header read. Unlike the
 /// catalog this includes ordinary file edits even while Changes is closed.
+/// The header reads only the five newest ancestors of its exact HEAD.
+pub const CHECKOUT_COMMIT_LIMIT: usize = 5;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CheckoutCommit {
+    pub sha: String,
+    pub subject: String,
+    pub commit_unix_seconds: u64,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CheckoutGit {
+    #[serde(default)]
+    pub recent_commits: Vec<CheckoutCommit>,
     pub head_sha: Option<String>,
     pub subject: Option<String>,
     pub commit_unix_seconds: Option<u64>,
