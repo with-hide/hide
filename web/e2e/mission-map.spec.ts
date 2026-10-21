@@ -54,7 +54,8 @@ test("the Conductor's commands draw the mission map once, the map follows the re
     }
     const created = herdr.run(["workspace", "create", "--cwd", repo, "--label", "missions-repo", "--env", `PATH=${herdr.fixturePath}`, "--focus"]) as { result: { root_pane: { pane_id: string } } };
     daemon = await startHided(herdr, "mission-map");
-    const conductor = await agentPane(herdr, daemon.stateDir, created.result.root_pane.pane_id);
+    const pane = created.result.root_pane.pane_id;
+    const conductor = await agentPane(herdr, daemon.stateDir, pane);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "missions-repo");
     const map = page.locator('aside[data-detail="mission"]');
@@ -76,7 +77,11 @@ test("the Conductor's commands draw the mission map once, the map follows the re
     expect(screen.y).toBeGreaterThan(api.y + api.height);
 
     await mission(conductor, ["mission", "start"]);
-    await mission(conductor, ["mission", "node", "api", "--status", "working", "--line", "엔드포인트 작성 중"]);
+    // The node's worker is a live agent row (here the Conductor's own registration), as a spawned worker's is.
+    const listed = (herdr.run(["api", "snapshot"]) as { result: { snapshot: { agents: { pane_id: string; terminal_id: string; agent_session?: { value: string } }[] } } }).result.snapshot.agents.find((agent) => agent.pane_id === pane)!;
+    const self = JSON.parse((await conductor(["agent", "register", "--host-scope", herdr.socket, "--session", listed.agent_session!.value, "--instance", listed.terminal_id, "--name", "conductor", "--pane", pane])).out.trim().split("\n").at(-1)!) as { ok: boolean; value: { id: string } };
+    expect(self.ok, JSON.stringify(self)).toBe(true);
+    await mission(conductor, ["mission", "node", "api", "--status", "working", "--agent-id", self.value.id, "--line", "엔드포인트 작성 중"]);
     await expect(map.locator("[data-mission-status]")).toHaveAttribute("data-mission-status", "running");
     const node = map.locator('[data-mission-node="api"]');
     await expect(node).toHaveAttribute("data-node-status", "working");
@@ -86,6 +91,11 @@ test("the Conductor's commands draw the mission map once, the map follows the re
     await expect(node.locator("[data-mission-duration]")).toBeVisible();
     await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
     await expect(map.locator('[data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
+    // A card opens its detail beside it in the app too, where the terminal keeps the keyboard.
+    await node.click();
+    await expect(page.locator('[data-mission-detail="api"]')).toBeVisible();
+    await node.click();
+    await expect(page.locator('[data-mission-detail="api"]')).toHaveCount(0);
     await screenshot(page, "mission-map-running");
 
     // Closed by the operator, a later plan does not open it again.

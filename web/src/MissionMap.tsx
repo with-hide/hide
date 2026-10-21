@@ -1,5 +1,5 @@
 import { GitBranchIcon, HistoryIcon, XIcon } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { DependencyGraphView, type EdgeLook } from "./DependencyGraph";
@@ -208,6 +208,7 @@ function useWorkerRow(node: MissionNode) {
 function NodeCard({ mission, node, open, onOpen, actions }: { mission: Mission; node: MissionNode; open: boolean; onOpen: (open: boolean) => void; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const row = useWorkerRow(node);
+  const card = useRef<HTMLButtonElement>(null);
   const mark = nodeMark(node, row?.mark ?? null);
   const worker = workerWords(node, t("mission.auto"));
   const lineText = nodeLine(mission, node, t);
@@ -218,6 +219,7 @@ function NodeCard({ mission, node, open, onOpen, actions }: { mission: Mission; 
     <Popover open={open} onOpenChange={onOpen}>
       <PopoverAnchor asChild>
         <button
+          ref={card}
           type="button"
           onClick={() => onOpen(!open)}
           aria-expanded={open}
@@ -260,7 +262,20 @@ function NodeCard({ mission, node, open, onOpen, actions }: { mission: Mission; 
           {(node.pr_state || node.branch) && node.line ? <span className={cn("min-w-0 truncate text-caption", attention ? "text-destructive" : "text-muted-foreground")} title={node.line}>{node.line}</span> : null}
         </button>
       </PopoverAnchor>
-      <PopoverContent align="start" side="bottom" className="w-(--size-mission-popover)" data-mission-detail={node.key}>
+      <PopoverContent
+        align="start"
+        side="bottom"
+        className="w-(--size-mission-popover)"
+        data-mission-detail={node.key}
+        // The keyboard stays where it was, as everything the 보기 slot opens leaves it.
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        // Focus going back to the terminal is not a dismissal, and the card's own press toggles it.
+        onFocusOutside={(event) => event.preventDefault()}
+        onInteractOutside={(event) => {
+          if (event.target instanceof Node && card.current?.contains(event.target)) event.preventDefault();
+        }}
+      >
         <NodeDetail mission={mission} node={node} onClose={() => onOpen(false)} actions={actions} />
       </PopoverContent>
     </Popover>
@@ -328,7 +343,9 @@ function ReportCard({ mission }: { mission: Mission }) {
 function NodeDetail({ mission, node, onClose, actions }: { mission: Mission; node: MissionNode; onClose: () => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const row = useWorkerRow(node);
-  const session = useShellStore((s) => (row ? sessionOfAgent(row, s.rest) : null));
+  // Derived outside the selector: it builds a new session each call, which a selector must not return.
+  const rest = useShellStore((s) => s.rest);
+  const session = useMemo(() => (row ? sessionOfAgent(row, rest) : null), [row, rest]);
   const depends = node.depends_on.map((key) => mission.nodes.find((other) => other.key === key)?.title ?? key);
   const worker = node.worker;
   const rows: [string, ReactNode][] = [
