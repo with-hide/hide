@@ -269,6 +269,8 @@ class Journey:
         if spawned[0] != cells.PASS:
             self.pane = self.pane or self.pane_of(answer)
             self.record["spawn"]["herdr"] = self.herdr_view(worktree)
+            if self.pane:
+                self.record["spawn"]["shell_children"] = self.shell_children(self.pane)
             evidence = self.evidence("spawn", self.record["spawn"])
             self.settle("start", spawned, evidence)
             return
@@ -676,6 +678,39 @@ class Journey:
             view[name] = out[:20000] if not code else {"exit": code, "stderr": err[:500], "stdout": out[:2000]}
         view["worktree_exists"] = worktree.exists()
         return view
+
+    def shell_children(self, pane):
+        """The processes under a refused spawn's pane shell, by pid, parent
+        and name only: Herdr refuses `agent.start` on Windows while the shell
+        has any child, and its `pane.process_info` names none that is not an
+        agent, so this is the one record of what held the pane."""
+        try:
+            info = self.runtime.json(["pane", "process-info", pane])["process_info"]
+            shell = int(info["shell_pid"])
+        except (ProcessError, KeyError, TypeError, ValueError) as error:
+            return {"error": str(error)[:200]}
+        if os.name == "nt":
+            argv = ["powershell.exe", "-NoProfile", "-Command",
+                    "Get-CimInstance Win32_Process | ForEach-Object { '{0} {1} {2}' -f "
+                    "$_.ProcessId, $_.ParentProcessId, $_.Name }"]
+        else:
+            argv = ["ps", "-A", "-o", "pid=,ppid=,comm="]
+        code, out, err = self.runtime.owner.run(argv, env={**self.runtime.env}, check=False, seconds=15)
+        if code:
+            return {"shell_pid": shell, "error": (err.strip() or f"exit {code}")[:200]}
+        parents = {}
+        for line in out.splitlines():
+            fields = line.split(None, 2)
+            if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
+                parents[int(fields[0])] = (int(fields[1]), os.path.basename(fields[2].strip()))
+        below, queue = [], [shell]
+        while queue and len(below) < 64:
+            parent = queue.pop(0)
+            for pid, (ppid, name) in sorted(parents.items()):
+                if ppid == parent and pid != shell and all(pid != seen["pid"] for seen in below):
+                    below.append({"pid": pid, "parent": ppid, "name": name})
+                    queue.append(pid)
+        return {"shell_pid": shell, "children": below}
 
     def pane_of(self, answer):
         """A refused spawn may still have opened its pane: the newest pane that

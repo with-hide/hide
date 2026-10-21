@@ -46,7 +46,8 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
             .is_none_or(|token| token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()))
         && match &request.command {
             HookCommand::WorkspaceInfo {} => true,
-            HookCommand::Observation { observation } => {
+            HookCommand::Observation { observation }
+            | HookCommand::StartObservation { observation } => {
                 herdr_core::direct_observation::valid(observation)
             }
             HookCommand::Memory {
@@ -79,7 +80,12 @@ pub(crate) fn answer(
 ) -> Value {
     let result = match &request.command {
         HookCommand::WorkspaceInfo {} => workspace_info(core, cap, desktop),
-        HookCommand::Observation { observation } => observation_answer(core, cap, observation),
+        HookCommand::Observation { observation } => {
+            observation_answer(core, cap, observation, false)
+        }
+        HookCommand::StartObservation { observation } => {
+            observation_answer(core, cap, observation, true)
+        }
         HookCommand::LetterPull {
             prompt_digest,
             session,
@@ -126,6 +132,7 @@ fn observation_answer(
     core: &CoreHandle,
     cap: &Capability,
     observation: &hide_node_link::panes::DirectObservation,
+    start: bool,
 ) -> Result<Value, Failure> {
     let deadline = Instant::now() + hide_node_link::panes::OBSERVATION_SEND_BUDGET;
     let result = cap
@@ -138,6 +145,7 @@ fn observation_answer(
                 &cap.context,
                 terminal.to_owned(),
                 observation.clone(),
+                start,
                 deadline,
             )
         })

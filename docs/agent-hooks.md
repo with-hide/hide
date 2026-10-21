@@ -1006,26 +1006,38 @@ Which session a receipt is signed for and what the core answers are `hide-memory
 
 ## Passive direct prompt observations
 
-The Post adapter recognizes a bounded, single canonical `herdr agent prompt <target> <text>` call and reads its terminal provider result without rewriting the command or result.
+The Post adapter reads every `herdr agent prompt`, `herdr agent start` and `herdr pane run <agent>` in a shell call, wherever it sits in the line: after `;`, `&&` or a pipe, with `--wait`, `--until` or `--timeout`, under a loop, or inside a `$(...)` command substitution.
+It reads the call with the spawn guard's lexer and adds no string pattern of its own; it never rewrites the command or the result.
 The shared adapter's required observation declaration gates native and plugin dispatch; hook installation and provider payload parsing remain owned here.
 Claude Code and Grok register Post and failure events, Codex registers Post only, OpenCode 1 reads after results and terminal error parts, OpenCode 2 reads completed/error after events, and Pi/omp read tool results with the actual native session ID.
-Antigravity registers Post but its documented event has no stdout or result, so it retains a weak conversation-step correlation and an unavailable result.
+Antigravity registers Post but its documented event has no stdout or result, so it retains a weak conversation-step correlation and only the command's own target.
 Ordinary shell results are filtered locally before any observation transport starts; command-hook runtimes still pay the native Post helper startup.
 No observation adds a Pre request, persistent command spool, polling thread, or detached process.
 
-Only a complete pinned Herdr `agent_prompted` response from a no-wait canonical call supplies a server-reported target candidate.
-Grok's Bash result supplies raw UTF-8 bytes in `output`; the adapter requires their length to match `total_bytes` and honors the native truncation, timeout, signal and background flags.
-Its decorated `output_for_prompt` and output-file path are never used to recover a missing or incomplete result.
-omp's pinned [completed Bash implementation](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/coding-agent/src/tools/bash.ts) returns decorated text without a separate raw stdout field.
-For omp alone, the parser accepts one complete Herdr JSON response followed by the exact two-newline `Wall time: <seconds with two decimal places> seconds` notice emitted by its [native formatter](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/tui/src/tools/bash.ts).
-Other suffixes, competing text parts, clipping notices and truncated, failed, interrupted or asynchronous results remain uncertain; the parser never searches for a JSON substring inside arbitrary output.
+Recipients come from Herdr's answers first (PRD direct-prompt-observation-widen D-08).
+Every line of the provider's stdout, stderr, output or text content that parses whole as one Herdr answer carrying `"id":"cli:agent:prompt"` (or `cli:agent:start`) is read, so a loop's several answer lines name several recipients.
+The parser never searches for JSON inside a line: a prefixed, decorated or clipped line is not an answer, and a truncated result keeps only its whole lines.
+Grok's Bash result supplies raw UTF-8 bytes in `output`; the adapter requires their length to match `total_bytes` and never reads the decorated `output_for_prompt` or the output-file path.
+omp's [completed Bash result](https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/coding-agent/src/tools/bash.ts) appends a `Wall time:` notice line, which is simply not an answer line.
+An answer naming a pane (`agent_prompted`, or the `agent_info` a `--wait` returns) proposes that pane, its terminal and its native session.
+Only when the call's output carries no answer, and the shell ran to its end with its command text whole (not failed, interrupted, backgrounded or truncated), does the target the command wrote stand in: a pane id or a Herdr agent name, never a word holding a variable, substitution or glob.
+A command the line can skip writes no stand-in, because the shell's end does not show it ran: one after `&&` or `||` in its list, in an `if`, loop or `case` body, or in a function; a `$(...)` takes its command's state.
+A `--wait` that ended in `timeout` or `agent_prompt_stalled` after Herdr took the input also falls back to the written target.
+When Herdr's answer and the written target disagree, only the answer counts.
+The exact `agent_blocked` refusal is an observed rejection; any other refusal, such as `agent_not_found` or `agent_not_ready`, names no recipient.
+A call aimed at another Herdr server, session or machine (a global flag before the subcommand, or a `HERDR_SOCKET_PATH`/`HERDR_SESSION` assignment or export in the line, which every `$(...)` in that line takes too) names no recipient.
+Each distinct recipient becomes its own observation, up to 64 for one call; past that, the call keeps one observation without a recipient and the helper records the `capacity` diagnostic.
 Success means PTY submission was observed, never model intake, reply, work completion, a Hide letter receipt, lineage or a watch.
-Missing native references remain incomplete; wait snapshots, compounds, redirection, foreign routes, truncation, interruption and background results cannot create a confirmed recipient.
-Only the exact `agent_blocked` server refusal is classified as an observed rejection.
-The parser shares the spawn guard lexer and emits typed metadata containing runtime, native session, tool correlation, observation time, status, reason and any returned pane/terminal/native reference.
+A variable target whose output was discarded or transformed, such as `for p in w1:p2 w1:p3; do herdr agent prompt $p … >/dev/null; done` or `… | jq -r .result.type`, and a call inside `bash -c`, a script or an alias, still names no recipient (D-17).
+The parser emits typed metadata containing runtime, native session, tool correlation, observation time, status, reason and any recipient candidate; the `DirectObservation` shape is unchanged, and a written target travels in its `pane_id` with no terminal or native reference.
 Prompt bodies, commands and result bodies never cross the observation admission boundary.
-The existing owned helper transport sends at most 8 KiB within 1.2 seconds, with no original-operation retry.
-The daemon validates the current sender and independently checks recipient identity before a graph endpoint can be admitted; caller JSON and timestamps are claims, not proof.
+
+A started agent is observed the same way and sent on its own (`hide observation --hook --start`, `HookCommand::StartObservation`), never in the same request as prompts, so a daemon that does not know it refuses only the start.
+Herdr's `agent_started` answer names the started pane, terminal and session; without one, the pane `agent start --pane` or `pane run` wrote stands in, and is admitted only for an agent Hide had not yet seen in that pane when the hook reported the call, so a start whose answer was discarded is usually not recorded.
+The core records the started agent only as the operator's root whose origin is the starting agent, the shape a handoff's child has: no parent, no watch, no pane tokens (D-23, D-25).
+The spawn guard still refuses these launches in a registered checkout before they run, so only a launch the guard did not see is recorded.
+The existing owned helper transport sends the call's observations, each at most 8 KiB, as one array to one `hide` child, within 1.2 seconds and with no original-operation retry; the child asks the daemon once per observation.
+The daemon validates the current sender and independently checks recipient identity before a graph endpoint can be admitted; caller JSON and timestamps are claims, not proof ([ARCHITECTURE.md](ARCHITECTURE.md#passive-herdr-input-observations)).
 Plugin helper concurrency and shutdown reuse their existing eight-child cap, while command hooks use their existing input deadline and owned child cleanup.
 
 Provider fixtures prove payload parsing and original-result preservation, not that a native runtime loaded the candidate hook or emitted an event.

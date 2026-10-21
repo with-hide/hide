@@ -65,7 +65,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         titles: Support::Supported(SessionFormat::Claude),
         composer: Support::Supported(Composer {
             region: Region::BetweenRules,
-            marker: Some("❯"),
+            marker: &["❯"],
             trailer: 0,
             // A suggestion such as `Try "…"` or the next prompt it predicts,
             // which changes from screen to screen, always dim.
@@ -146,7 +146,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         titles: Support::Supported(SessionFormat::Codex),
         composer: Support::Supported(Composer {
             region: Region::ToBlank,
-            marker: Some("›"),
+            marker: &["›"],
             trailer: 0,
             empty: &[Placeholder {
                 text: "Ask Codex to do anything",
@@ -224,16 +224,25 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Grok),
         conversation: Some(SessionFormat::Grok),
         titles: Support::Supported(SessionFormat::Grok),
-        // A paste is a grey `[Pasted: …]` chip, so nothing faint reads empty.
         composer: Support::Supported(Composer {
             region: Region::Box {
                 open: '╭',
                 close: '╰',
                 side: '│',
             },
-            marker: Some("❯"),
+            // `> ` on a console Grok takes for Windows' legacy one, which a
+            // Herdr pane on Windows is (`glyphs::prompt_arrow`).
+            marker: &["❯", ">"],
             trailer: 0,
-            empty: &[],
+            // The next prompt Grok predicts after a turn, drawn as ghost text
+            // in an empty composer (`ghost_text_style`, always italic); its
+            // words change from screen to screen. Typed text and the grey
+            // `[Pasted: …]` chip are never italic, so nothing merely faint
+            // reads empty.
+            empty: &[Placeholder {
+                text: "",
+                style: Style::Italic,
+            }],
         }),
         start: Some(LaunchDialect::Grok),
         find: None,
@@ -321,7 +330,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 side: '┃',
                 close: '╹',
             },
-            marker: None,
+            marker: &[],
             trailer: 1,
             empty: &[Placeholder {
                 text: "Ask anything…",
@@ -416,7 +425,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         titles: Support::Supported(SessionFormat::Pi),
         composer: Support::Supported(Composer {
             region: Region::BetweenRules,
-            marker: None,
+            marker: &[],
             trailer: 0,
             empty: &[],
         }),
@@ -507,7 +516,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         titles: Support::Supported(SessionFormat::Omp),
         composer: Support::Supported(Composer {
             region: Region::Line,
-            marker: Some("╰─"),
+            marker: &["╰─"],
             trailer: 0,
             empty: &[Placeholder {
                 text: "⇧⇥ to change thinking effort",
@@ -605,7 +614,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         titles: Support::Supported(SessionFormat::Antigravity),
         composer: Support::Supported(Composer {
             region: Region::BetweenRules,
-            marker: Some(">"),
+            marker: &[">"],
             trailer: 0,
             empty: &[],
         }),

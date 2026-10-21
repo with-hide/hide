@@ -3,12 +3,16 @@ import type { AgentRow } from "../snapshot";
 import { recordPending, recordWords } from "../agentRow";
 import { cn } from "../lib/utils";
 
-/** The same short history provenance on every shared agent row. */
-export function AgentRecordTitle({ agent, className, stacked = false }: { agent: AgentRow; className?: string; stacked?: boolean }) {
+/**
+ * The same short history provenance on every shared agent row. A title whose
+ * connection is not confirmed is only dimmed, since every restored row checks
+ * at launch and the worker retries on its own; the hint and accessible names
+ * carry the connection words.
+ */
+export function AgentRecordTitle({ agent, className }: { agent: AgentRow; className?: string }) {
   const { t } = useInterfaceTranslation();
-  const words = recordWords(t, agent);
-  return <span className={cn("flex min-w-0 flex-1", stacked && words ? "flex-col items-start justify-center" : "items-center gap-xs")} title={[words, agent.record_summary].filter(Boolean).join("\n") || undefined}>
-    <span className={cn("min-w-0 truncate", stacked && words ? "w-full text-micro leading-(--text-micro)" : "flex-1", className, recordPending(agent) && "opacity-(--opacity-dimmed)")} data-agent-title="true">{agent.identity_label}</span>
-    {words ? <span className={cn("min-w-0 max-w-full shrink-0 truncate whitespace-nowrap text-micro font-normal text-muted-foreground", stacked && "w-full leading-(--text-micro)")} data-record-connection={agent.record_connection}>{words}</span> : null}
+  const pending = recordPending(agent);
+  return <span className="flex min-w-0 flex-1 items-center" title={[recordWords(t, agent), agent.record_summary].filter(Boolean).join("\n") || undefined}>
+    <span className={cn("min-w-0 flex-1 truncate", className, pending && "opacity-(--opacity-dimmed)")} data-agent-title="true" data-record-connection={pending ? agent.record_connection : undefined}>{agent.identity_label}</span>
   </span>;
 }

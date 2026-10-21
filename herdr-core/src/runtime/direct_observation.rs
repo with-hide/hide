@@ -4,9 +4,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use hide_agent_hooks::observation::{
-    DirectObservation, ObservationCorrelation, ObservationReason, ObservationStatus,
-};
+use hide_agent_hooks::observation::{DirectObservation, ObservationStatus, ServerReportedTarget};
 
 use super::Runtime;
 use crate::direct_observation::{ADMISSION_TTL_MS, Endpoint, PreparedObservation, hash};
@@ -14,6 +12,7 @@ use crate::links::observation::DirectFact;
 use crate::workspace_control::{Caller, Context};
 
 impl Runtime {
+    #[allow(clippy::too_many_arguments)] // identity facts and deadline cross the authenticated boundary intact
     pub(crate) fn prepare_direct_observation(
         &self,
         device: &str,
@@ -21,6 +20,7 @@ impl Runtime {
         expected: &Context,
         terminal: &str,
         observation: DirectObservation,
+        start: bool,
         deadline: Instant,
     ) -> Result<PreparedObservation, String> {
         if !crate::direct_observation::valid(&observation) || Instant::now() >= deadline {
@@ -53,31 +53,48 @@ impl Runtime {
         {
             return Err("observation_sender_changed".into());
         }
-        // Only the captured no-wait complete result can propose an endpoint.
-        // Names, current target resolution and later --wait snapshots cannot.
-        let recipient = observation
+        // Hash addresses before durable metadata leaves the proof boundary.
+        let scope = self
+            .delivery_observations
+            .get(pane)
+            .and_then(|value| value.host_scope.clone());
+        let at = observation.observed_at_unix_ms;
+        let target = observation
             .target
             .as_ref()
-            .filter(|_| {
-                observation.status == ObservationStatus::SubmittedObserved
-                    && observation.reason == ObservationReason::Complete
-                    && observation.correlation_kind == ObservationCorrelation::ToolCall
-            })
-            .and_then(|target| {
-                let scoped = if device == self.node.as_str() {
-                    target.pane_id.clone()
-                } else {
-                    super::operations::remote_pane_id(device, &target.pane_id)
-                };
-                let endpoint =
-                    self.direct_endpoint(device, &scoped, observation.observed_at_unix_ms)?;
-                let native = target.native_session.as_ref()?;
-                (target.terminal_id.as_deref() == Some(endpoint.terminal.as_str())
-                    && crate::wire::session_digest(&native.value) == endpoint.actor.session
-                    && hide_agent_adapter::canonical_kind(&native.agent)
-                        == hide_agent_adapter::canonical_kind(&endpoint.actor.kind))
-                .then_some(endpoint)
-            });
+            .filter(|_| observation.status != ObservationStatus::RejectedObserved);
+        let (recipient, seen_before) = match target {
+            // A start is proven against Herdr's own list after this lock: the
+            // agent it made may not be projected yet. A pane Hide already saw
+            // before the call names whatever ran there, not what it started.
+            Some(target) if start => (
+                None,
+                (target.terminal_id.is_none())
+                    .then(|| self.direct_target(device, scope.as_deref(), target, false))
+                    .flatten()
+                    .filter(|value| value.observed_since_unix_ms <= at)
+                    .and_then(|value| value.actor.session.clone()),
+            ),
+            Some(target) => (
+                self.direct_target(device, scope.as_deref(), target, true)
+                    .and_then(|value| self.direct_endpoint(device, &value.actor.pane_id, at))
+                    .filter(|endpoint| match &target.native_session {
+                        Some(native) => {
+                            target.terminal_id.as_deref() == Some(endpoint.terminal.as_str())
+                                && crate::wire::session_digest(&native.value)
+                                    == endpoint.actor.session
+                                && hide_agent_adapter::canonical_kind(&native.agent)
+                                    == hide_agent_adapter::canonical_kind(&endpoint.actor.kind)
+                        }
+                        None => target
+                            .terminal_id
+                            .as_deref()
+                            .is_none_or(|terminal| terminal == endpoint.terminal),
+                    }),
+                None,
+            ),
+            None => (None, None),
+        };
         let connector = self
             .delivery_connector(device)
             .ok_or("observation_server_unavailable")?;
@@ -86,16 +103,13 @@ impl Runtime {
             .map_err(|_| "observation_node_unavailable")?;
         // Device registrations already distinguish canonical server/session
         // routes. The local socket additionally distinguishes named servers.
-        // Hash addresses before durable metadata leaves the proof boundary.
-        let scope = self
-            .delivery_observations
-            .get(pane)
-            .and_then(|value| value.host_scope.as_deref());
-        let source_server = self.direct_server_key(device, scope);
+        let source_server = self.direct_server_key(device, scope.as_deref());
         Ok(PreparedObservation {
             observation,
             sender,
             recipient,
+            start,
+            seen_before,
             connector,
             node,
             source_server,
@@ -103,6 +117,30 @@ impl Runtime {
             deadline,
             context: expected.clone(),
         })
+    }
+
+    /// The one agent `target` names on the sender's own server (PRD
+    /// direct-prompt-observation-widen D-11, D-18): a pane Herdr reported, by
+    /// its exact pane id, or a target as a command wrote it, which Herdr
+    /// itself resolves as a pane id or an agent name. Two answers are none.
+    fn direct_target(
+        &self,
+        device: &str,
+        scope: Option<&str>,
+        target: &ServerReportedTarget,
+        by_name: bool,
+    ) -> Option<&super::delivery::Observation> {
+        let literal = by_name && target.native_session.is_none();
+        let mut found = self.delivery_observations.values().filter(|value| {
+            value.actor.device_id == device
+                && value.host_scope.as_deref() == scope
+                && (value.raw_pane_id == target.pane_id
+                    || (literal && value.actor.name == target.pane_id))
+        });
+        let first = found.next()?;
+        found
+            .all(|other| other.actor.pane_id == first.actor.pane_id)
+            .then_some(first)
     }
 
     fn direct_server_key(&self, device: &str, scope: Option<&str>) -> String {
@@ -199,7 +237,9 @@ mod tests {
     use crate::direct_observation::valid;
     use crate::links::observation::DirectOutcome;
     use crate::model::GraphParty;
-    use hide_agent_hooks::observation::{ObservationNativeSession, ServerReportedTarget};
+    use hide_agent_hooks::observation::{
+        ObservationCorrelation, ObservationNativeSession, ObservationReason,
+    };
     use serde_json::json;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -246,7 +286,7 @@ mod tests {
             {"id":"sender","pane_id":"sender","agent":kind,"agent_status":"working","state_change_seq":1,
              "lineage_session":crate::wire::session_digest("sender-native"),
              "agent_session":{"source":format!("herdr:{kind}"),"agent":kind,"kind":"id","value":"sender-native"}},
-            {"id":"recipient","pane_id":"recipient","agent":kind,"agent_status":"working","state_change_seq":1,
+            {"id":"recipient-name","pane_id":"recipient","agent":kind,"agent_status":"working","state_change_seq":1,
              "lineage_session":crate::wire::session_digest("recipient-native"),
              "agent_session":{"source":format!("herdr:{kind}"),"agent":kind,"kind":"id","value":"recipient-native"}}
         ],"panes":[{"pane_id":"sender","terminal_id":"terminal-sender"},
@@ -293,6 +333,7 @@ mod tests {
             &context,
             "terminal-sender",
             event,
+            false,
             Instant::now() + Duration::from_secs(1),
         )?;
         prepared.runtime = Arc::downgrade(runtime);
@@ -405,20 +446,75 @@ mod tests {
         );
     }
 
+    fn written(target: &str) -> DirectObservation {
+        let mut event = observation();
+        event.status = ObservationStatus::OutcomeUnknown;
+        event.reason = ObservationReason::ResultMissing;
+        event.target = Some(ServerReportedTarget {
+            pane_id: target.into(),
+            terminal_id: None,
+            native_session: None,
+        });
+        event
+    }
+
+    /// PRD direct-prompt-observation-widen B4, B12: a target the command
+    /// wrote, a pane id or Herdr's agent name, is the pane Hide projects
+    /// for it on the sender's server, proven by the server's fresh answer,
+    /// under either correlation.
     #[test]
-    fn missing_wait_and_conversation_step_results_never_gain_recipient_from_lookup() {
+    fn a_written_pane_or_name_resolves_to_the_projected_recipient() {
         let root = tempfile::tempdir().unwrap();
         let herdr = server("terminal-recipient");
         let runtime = setup(root.path(), &herdr);
+        let mut step = written("recipient-name");
+        step.runtime_id = "codex".into();
+        step.correlation_kind = ObservationCorrelation::ConversationStep;
+        for event in [written("recipient"), written("recipient-name"), step] {
+            let prepared = prepare(&runtime, event).unwrap();
+            let endpoint = prepared.recipient.as_ref().expect("recipient resolved");
+            assert_eq!(endpoint.actor.pane_id, "recipient");
+            prepared
+                .prove_recipient(endpoint, prepared.observation.target.as_ref().unwrap())
+                .unwrap();
+        }
+    }
+
+    /// B6, B7, B8: no recipient for a name nothing holds, a refused input,
+    /// or a pane whose session Hide first saw after the call.
+    #[test]
+    fn unknown_refused_and_later_sessions_gain_no_recipient() {
+        let root = tempfile::tempdir().unwrap();
+        let herdr = server("terminal-recipient");
+        let runtime = setup(root.path(), &herdr);
+        let mut refused = written("recipient");
+        refused.status = ObservationStatus::RejectedObserved;
         let mut missing = observation();
         missing.target = None;
-        let mut wait = observation();
-        wait.reason = ObservationReason::WaitSnapshot;
-        let mut step = observation();
-        step.correlation_kind = ObservationCorrelation::ConversationStep;
-        for event in [missing, wait, step] {
+        let mut changed = observation();
+        changed
+            .target
+            .as_mut()
+            .unwrap()
+            .native_session
+            .as_mut()
+            .unwrap()
+            .value = "replacement-native".into();
+        for event in [written("nobody"), refused, missing, changed] {
             assert!(prepare(&runtime, event).unwrap().recipient.is_none());
         }
+        let since =
+            runtime.lock().unwrap().delivery_observations["recipient"].observed_since_unix_ms;
+        runtime
+            .lock()
+            .unwrap()
+            .delivery_observations
+            .get_mut("recipient")
+            .unwrap()
+            .observed_since_unix_ms = since + 60_000;
+        let mut event = written("recipient");
+        event.observed_at_unix_ms = since;
+        assert!(prepare(&runtime, event).unwrap().recipient.is_none());
     }
 
     #[test]

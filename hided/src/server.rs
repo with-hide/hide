@@ -1275,6 +1275,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "shell_starting" => {
             "The new pane's shell had not finished starting; answer what its startup files ask in that pane, then spawn with a new intent"
         }
+        "pane_busy" => {
+            "The new pane's shell kept another program running for the start's 30 s wait, so nothing was typed; let that program finish or end it in that pane, then run the same command again with the same intent"
+        }
         "native_identity_unavailable" => {
             "The agent started and has not reported its session yet (Codex and OpenCode 2 report theirs at their first turn); Hide registers it with its parent and watch when it does, and the same command with the same intent then answers it"
         }
@@ -4439,6 +4442,7 @@ mod tests {
             "agent_not_started",
             "worktree_unconfirmed",
             "shell_starting",
+            "pane_busy",
             "native_identity_unavailable",
             "identity_waits_full",
             "session_too_long",

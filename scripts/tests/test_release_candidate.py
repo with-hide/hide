@@ -48,6 +48,35 @@ class ReleaseCandidate(unittest.TestCase):
                         self.assertEqual(result.returncode, 0, result.stderr)
                         self.assertEqual(output.read_text(), expected)
 
+    def test_candidate_refuses_a_source_whose_called_workflows_differ_from_main(self):
+        steps = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]["validate"]["steps"]
+        command = next(step["run"] for step in steps if step.get("name") == "Require the build steps the source was verified with")
+        runs = ROOT / "agents/runs/release-candidate-tests"
+        runs.mkdir(parents=True, exist_ok=True)
+        for changed, refused in [("README.md", False), (".github/workflows/agent-journey.yml", True),
+                                 (".github/workflows/package.yml", True)]:
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory(dir=runs) as temp:
+                repo = Path(temp)
+                git = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                                                   cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+                git("init", "-q")
+                for name in ("README.md", ".github/workflows/agent-journey.yml", ".github/workflows/package.yml"):
+                    (repo / name).parent.mkdir(parents=True, exist_ok=True)
+                    (repo / name).write_text("first\n")
+                git("add", "-A")
+                git("commit", "-q", "-m", "source")
+                source = git("rev-parse", "HEAD")
+                (repo / changed).write_text("second\n")
+                git("commit", "-q", "-am", "main")
+                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", command], cwd=repo,
+                                        env={**os.environ, "PUBLIC_SHA": source},
+                                        capture_output=True, text=True, timeout=10)
+                if refused:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("choose a newer public_sha", result.stdout)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_candidate_is_manual_read_only_and_has_no_signing_secrets(self):
         workflow = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())
         self.assertEqual(set(workflow[True]), {"workflow_dispatch"})

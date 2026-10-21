@@ -2681,9 +2681,19 @@ pub(crate) fn start_agent(
             crate::agent_start::SHELL_STARTING,
             screen.as_deref().unwrap_or_default(),
         ),
+        // Herdr refused the pane as busy until the start's deadline: nothing
+        // was typed, and the same intent asks again in the same pane.
+        crate::agent_start::StartError::Herdr(ApiError::Remote { code, .. })
+            if code == crate::agent_start::PANE_BUSY =>
+        {
+            PANE_BUSY_REFUSAL.to_owned()
+        }
         other => start_error_message(other),
     })
 }
+
+/// A spawn's start that Herdr refused as busy for its whole wait.
+pub(crate) const PANE_BUSY_REFUSAL: &str = "pane_busy";
 
 #[allow(clippy::too_many_arguments)] // the existing start identity plus its effect admission
 fn start_agent_checked(

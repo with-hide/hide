@@ -198,7 +198,7 @@ export const PaneView = memo(function PaneView({
   const recordAgent = agentsByPane(usePaneAgents()).get(paneId);
   const move = usePaneMove();
   const moving = move?.mutationBlocked(pane.id) ?? false;
-  const titleContent = <span data-pane-move-title="true" className="flex min-w-0 items-center">{recordAgent && recordAgent.identity_label === title ? <AgentRecordTitle agent={recordAgent} stacked /> : <span className="min-w-0 truncate">{title}</span>}</span>;
+  const titleContent = <span data-pane-move-title="true" className="flex min-w-0 items-center">{recordAgent && recordAgent.identity_label === title ? <AgentRecordTitle agent={recordAgent} /> : <span className="min-w-0 truncate">{title}</span>}</span>;
   const paneMenu = usePaneMenu(pane, title, actions);
 
   // A dropped file or a pasted image stages through hided and reaches the

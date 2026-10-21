@@ -64,6 +64,17 @@ jobs:
           node scripts/release-candidate.mjs "$RUNNER_TEMP/verification.json" > "$RUNNER_TEMP/candidate.json"
           git merge-base --is-ancestor "$PUBLIC_SHA" origin/main
           echo "receipt=$(cat "$RUNNER_TEMP/candidate.json")" >> "$GITHUB_OUTPUT"
+      - name: Require the build steps the source was verified with
+        env:
+          PUBLIC_SHA: ${{ inputs.public_sha }}
+        run: |
+          # The called workflows' steps come from this dispatch revision but
+          # run on public_sha's checkout, so a step added after public_sha
+          # would reach files the source does not have.
+          if ! git diff --quiet "$PUBLIC_SHA" HEAD -- .github/workflows/package.yml .github/workflows/agent-journey.yml; then
+            echo "::error::package.yml or agent-journey.yml changed on main after $PUBLIC_SHA; choose a newer public_sha whose verify push run passed"
+            exit 1
+          fi
 
   packages:
     needs: validate

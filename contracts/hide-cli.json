@@ -1728,6 +1728,7 @@
                 "intent_conflict",
                 "invalid_launch_choice",
                 "shell_starting",
+                "pane_busy",
                 "agent_not_started",
                 "worktree_unconfirmed",
                 "native_identity_unavailable",
@@ -2625,7 +2626,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:1206c71e8bf00650a2a42aff33d110e6c49375a3c3a00126a493056e0917fb60",
+    "digest": "sha256:e755510f37d047e62f151d6a60225804e586bac519d790a4f0f93f84452721c7",
     "envelopes": {
         "agent": {
             "answer": "value",
