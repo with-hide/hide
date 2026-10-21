@@ -3,5 +3,6 @@
 //! crate and all its dependencies again; docs/BUILD.md, "One integration
 //! test binary per crate", owns the rule.
 
+mod composer;
 mod contract;
 mod lookup_budget;

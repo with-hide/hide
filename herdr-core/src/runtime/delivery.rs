@@ -45,6 +45,11 @@ pub(crate) struct Observation {
     /// no draft the bell waits for, since the operator saw the composer above
     /// which the mark sits and chose to ring. Input after it is a draft again.
     pub released_input_at_unix_ms: u64,
+    /// The last prompt hook of the pane's own session that ran at rest; 0
+    /// until one runs. A turn it started that has ended with no key since
+    /// leaves the composer known empty, the moment an agent version's
+    /// composer declaration is checked (`composer_check_due`).
+    pub hook_submit_at_unix_ms: u64,
     pub session: Option<hide_session::session_activity::SessionActivityRequest>,
     pub host_scope: Option<String>,
     pub turn: Turn,
@@ -224,6 +229,7 @@ impl Runtime {
                     _ => now,
                 },
                 released_input_at_unix_ms: previous.map_or(0, |old| old.released_input_at_unix_ms),
+                hook_submit_at_unix_ms: previous.map_or(0, |old| old.hook_submit_at_unix_ms),
                 session,
                 host_scope: host_scope
                     .filter(|scope| scope.len() <= 4096)
@@ -635,15 +641,27 @@ impl Runtime {
     /// prompt being taken up, not the composer being sent: the operator's
     /// newer draft is still there, and the turn's own entry to `working`
     /// already covers whatever was typed before it.
+    ///
+    /// Herdr can report the turn `working` before the hook that started it
+    /// reaches the core. A hook within `HOOK_AFTER_WORK_MS` of that entry,
+    /// with no key since it, is that turn's own prompt, so it marks the
+    /// moment an agent version's composer is checked at (`composer_check_due`)
+    /// as a hook at rest does; a queued prompt was typed after the entry.
     fn note_prompt_submitted(&mut self, pane_id: &str) {
+        const HOOK_AFTER_WORK_MS: u64 = 10_000;
         self.reopen_resolved_session(pane_id);
-        if let Some(observation) = self
-            .delivery_observations
-            .get_mut(pane_id)
-            .filter(|observation| observation.status != "working")
+        let now = unix_milliseconds();
+        let Some(observation) = self.delivery_observations.get_mut(pane_id) else {
+            return;
+        };
+        if observation.status != "working" {
+            observation.last_submit_at_unix_ms = now;
+            observation.hook_submit_at_unix_ms = now;
+            self.sync_composer_mark(pane_id, now);
+        } else if observation.last_input_at_unix_ms <= observation.entered_working_at_unix_ms
+            && now.saturating_sub(observation.entered_working_at_unix_ms) <= HOOK_AFTER_WORK_MS
         {
-            observation.last_submit_at_unix_ms = unix_milliseconds();
-            self.sync_composer_mark(pane_id, unix_milliseconds());
+            observation.hook_submit_at_unix_ms = observation.entered_working_at_unix_ms;
         }
     }
 
@@ -693,6 +711,204 @@ impl Runtime {
         waiting.remove(pane_id);
         self.set_letters_waiting(waiting);
         self.sync_session_state() | self.refresh_agent_scopes()
+    }
+
+    /// The agent version Hide knows for `actor`, as the hook diagnosis read
+    /// it from the installed runtime's `--version` on this machine. A pane on
+    /// a connected device, or an agent with no hook runtime, has none known.
+    fn composer_version(&self, actor: &Actor) -> Option<String> {
+        use hide_agent_hooks::MemoryCompatibility;
+        if self.node != actor.device_id.as_str() {
+            return None;
+        }
+        let id = hide_agent_adapter::adapter(&actor.kind)?.id;
+        let row = self
+            .hook_diagnosis
+            .as_ref()?
+            .runtimes
+            .iter()
+            .find(|row| row.runtime.id() == id)?;
+        match &row.memory_compatibility {
+            MemoryCompatibility::Supported { version } => Some(version.clone()),
+            MemoryCompatibility::UpdateRequired {
+                installed_version, ..
+            } => installed_version.clone(),
+        }
+        .filter(|version| crate::composer_checks::valid_version(version))
+    }
+
+    /// What the doorbell needs to read `observation`'s composer: where to
+    /// reach it, the agent's declaration and the version Hide knows for it.
+    fn composer_read(
+        &self,
+        observation: &Observation,
+        input_at_unix_ms: u64,
+    ) -> Result<crate::delivery::composer::Read, &'static str> {
+        let row = hide_agent_adapter::adapter(&observation.actor.kind).ok_or("kind_undeclared")?;
+        let composer = row.composer.supported().ok_or("kind_undeclared")?;
+        let version = self
+            .composer_version(&observation.actor)
+            .ok_or("version_unknown")?;
+        Ok(crate::delivery::composer::Read {
+            actor: observation.actor.clone(),
+            raw_pane_id: observation.raw_pane_id.clone(),
+            agent: row.id,
+            composer,
+            version,
+            input_at_unix_ms,
+        })
+    }
+
+    /// Whether a pane at rest still shows the clocks a read was made for:
+    /// Herdr reports it `idle` or `done` and current, and neither a key nor
+    /// a change of status came in the quiet period.
+    fn composer_at_rest(observation: &Observation, now: u64) -> bool {
+        use crate::delivery::INPUT_QUIET_MS;
+        !observation.telemetry_stale
+            && matches!(observation.status.as_str(), "idle" | "done")
+            && observation.state_change_seq.is_some()
+            && now.saturating_sub(observation.last_input_at_unix_ms) >= INPUT_QUIET_MS
+            && now.saturating_sub(observation.status_changed_at_unix_ms) >= INPUT_QUIET_MS
+    }
+
+    /// The composer read that may release `recipient`'s letters held on a
+    /// possible draft (docs/delivery.md, Reading the composer). `None` while
+    /// the pane is not yet at rest on a draft; otherwise the draft episode,
+    /// the input time that made it, with the read or the reason there is
+    /// none: no declaration, a version Hide does not know, or one whose
+    /// check failed or has not run.
+    pub(crate) fn composer_release_due(
+        &self,
+        recipient: &Actor,
+        now: u64,
+    ) -> Option<(u64, Result<crate::delivery::composer::Read, &'static str>)> {
+        if self.effects_held() {
+            return None;
+        }
+        let observation = self
+            .delivery_observations
+            .get(&recipient.pane_id)
+            .filter(|observation| observation.actor.same_identity(recipient))?;
+        if !observation.unsent_draft() || !Self::composer_at_rest(observation, now) {
+            return None;
+        }
+        let episode = observation.last_input_at_unix_ms;
+        let read = self.composer_read(observation, episode).and_then(|read| {
+            match self.composer_check(read.agent, &read.version) {
+                Some(true) => Ok(read),
+                Some(false) => Err("version_failed"),
+                None => Err("version_unchecked"),
+            }
+        });
+        Some((episode, read))
+    }
+
+    /// The doorbell read `actor`'s composer for the draft that the input at
+    /// `input_at_unix_ms` made, and the screen showed it empty. Like Deliver
+    /// now, input up to it is no draft any more and the pane's composer
+    /// mark goes; the doorbell's next look rings with every guard it always
+    /// applies. A key or a change of status since the read keeps the hold.
+    pub(crate) fn release_empty_composer(
+        &mut self,
+        actor: &Actor,
+        input_at_unix_ms: u64,
+        now: u64,
+    ) -> bool {
+        let Some(observation) =
+            self.delivery_observations
+                .get_mut(&actor.pane_id)
+                .filter(|observation| {
+                    observation.actor.same_identity(actor)
+                        && observation.last_input_at_unix_ms == input_at_unix_ms
+                        && observation.unsent_draft()
+                        && Self::composer_at_rest(observation, now)
+                })
+        else {
+            crate::diagnostic!(serde_json::json!({"component":"delivery",
+                "kind":"composer.release_refused","pane_id":actor.pane_id,
+                "agent":actor.kind,"reason":"input_after_read"}));
+            return false;
+        };
+        observation.released_input_at_unix_ms = input_at_unix_ms;
+        crate::diagnostic!(serde_json::json!({"component":"delivery",
+            "kind":"composer.released","pane_id":actor.pane_id,"agent":actor.kind}));
+        self.sync_composer_mark(&actor.pane_id, now);
+        true
+    }
+
+    /// Whether `agent`'s `version` passed its composer check: `None` when it
+    /// has not been checked.
+    fn composer_check(&self, agent: &str, version: &str) -> Option<bool> {
+        self.composer_checks
+            .iter()
+            .find(|check| check.agent == agent && check.version == version)
+            .map(|check| check.passed)
+    }
+
+    /// A pane whose composer is known empty and whose agent version has not
+    /// been checked: the turn a prompt hook of its own session started has
+    /// ended, no key came since, and it has rested for the quiet period
+    /// (docs/delivery.md, Catching an agent's screen change). One at a time;
+    /// `attempted` holds the moments already tried, by pane and hook time,
+    /// so a failed read is not repeated for the same moment.
+    pub(crate) fn composer_check_due(
+        &self,
+        attempted: &std::collections::HashMap<String, u64>,
+        now: u64,
+    ) -> Option<crate::delivery::composer::Read> {
+        if self.effects_held() {
+            return None;
+        }
+        self.delivery_observations.values().find_map(|observation| {
+            let hook = observation.hook_submit_at_unix_ms;
+            let known_empty = hook > 0
+                && observation.last_input_at_unix_ms <= hook
+                && observation.entered_working_at_unix_ms >= hook
+                && observation.status_changed_at_unix_ms >= observation.entered_working_at_unix_ms
+                && !observation.unsent_draft()
+                && Self::composer_at_rest(observation, now);
+            if !known_empty || attempted.get(&observation.actor.pane_id) == Some(&hook) {
+                return None;
+            }
+            self.composer_read(observation, hook)
+                .ok()
+                .filter(|read| self.composer_check(read.agent, &read.version).is_none())
+        })
+    }
+
+    /// Forgets the check moments of panes that are no longer observed.
+    pub(crate) fn retain_composer_attempts(
+        &self,
+        attempted: &mut std::collections::HashMap<String, u64>,
+    ) {
+        attempted.retain(|pane, _| self.delivery_observations.contains_key(pane));
+    }
+
+    /// Remembers the outcome of a version's composer check and saves it.
+    pub(crate) fn record_composer_check(&mut self, agent: &str, version: &str, passed: bool) {
+        crate::composer_checks::record(
+            &mut self.composer_checks,
+            crate::composer_checks::Check {
+                agent: agent.to_owned(),
+                version: version.to_owned(),
+                passed,
+                checked_at_unix_ms: unix_milliseconds(),
+            },
+        );
+        if let Some(store) = &self.composer_checks_store {
+            store.save(self.composer_checks.clone());
+        }
+    }
+
+    /// Restores the agent versions earlier runs checked and keeps the store
+    /// to save every later check into.
+    pub(crate) fn install_composer_checks(
+        &mut self,
+        store: crate::composer_checks::ComposerChecks,
+        restored: Vec<crate::composer_checks::Check>,
+    ) {
+        self.composer_checks = restored;
+        self.composer_checks_store = Some(store);
     }
 
     pub(crate) fn prepare_delivery(
@@ -1771,6 +1987,30 @@ pub(crate) mod tests {
         observation.status_changed_at_unix_ms = since;
         observation.last_input_at_unix_ms = since - 1;
         observation.last_submit_at_unix_ms = since - 1;
+    }
+
+    /// The pane as the core observes it after a turn a prompt hook of its
+    /// own session started at `hook` has ended, with no key typed since:
+    /// its composer is known empty.
+    pub(crate) fn observe_turn_ended(runtime: &mut Runtime, pane: &str, hook: u64) {
+        let observation = runtime.delivery_observations.get_mut(pane).unwrap();
+        observation.last_input_at_unix_ms = hook - 1;
+        observation.last_submit_at_unix_ms = hook;
+        observation.hook_submit_at_unix_ms = hook;
+        observation.entered_working_at_unix_ms = hook + 1;
+        observation.status_changed_at_unix_ms = hook + 2;
+    }
+
+    /// The pane's turn ends at `at`: Herdr reports it idle from then on.
+    pub(crate) fn end_turn(runtime: &mut Runtime, pane: &str, at: u64) {
+        let observation = runtime.delivery_observations.get_mut(pane).unwrap();
+        observation.status = "idle".into();
+        observation.status_changed_at_unix_ms = at;
+    }
+
+    /// A prompt hook of the pane's own session reaching the core now.
+    pub(crate) fn submit_prompt(runtime: &mut Runtime, pane: &str) {
+        runtime.note_prompt_submitted(pane);
     }
 
     /// The core's Herdr link, as a device's connection makes and drops it.

@@ -88,7 +88,7 @@ A command whose standard output is closed by its reader (`hide agent list | head
 ## Safe intake and manual fallback
 
 A doorbell types one line that says what arrived ([The bell line](#the-bell-line)).
-It is typed when every one of these hide-owned facts holds, and the verdict reads no terminal screen, so a redrawn footer or a user's statusline cannot change it:
+It is typed when every one of these hide-owned facts holds, and the verdict reads no terminal screen, so a redrawn footer or a user's statusline cannot change it (the one screen read, of a composer held as a draft, happens before the verdict and can only release that draft, [Reading the composer](#reading-the-composer)):
 
 - Herdr reports the pane `idle` or `done`, and has for 30 seconds; or the adapter declares no tool-letter intake, Herdr reports it `working` and the letter's wait is over ([Letters while the agent works](#letters-while-the-agent-works)).
 - Hide has routed no key to the pane for 30 seconds.
@@ -96,7 +96,7 @@ It is typed when every one of these hide-owned facts holds, and the verdict read
   Typed keys, a pasted attachment, a phone key and the keys of an agent's own find box all count as input, and none of them, Enter included, counts as a submission.
   A submission is a prompt hook that ran with the pane's own native session id, which the hook passes to `hide inbox --hook --session`, or a phone reply.
   A pane that entered `working` was submitted to as well, which is how an answered menu or a custom slash command that starts a turn clears the hold.
-  A key after both is an unsent draft, an Esc-restored prompt or a recalled input; a pane held by one stays held until the next real prompt.
+  A key after both is an unsent draft, an Esc-restored prompt or a recalled input; a pane held by one stays held until the next real prompt, or until its composer is read empty ([Reading the composer](#reading-the-composer)).
 - The pane still hosts the native session the letter was written for, and the agent kind is one the bell targets.
 - For Claude Code, Codex and Grok, whose session readers report turns, a read made for Herdr's current state says no native question or plan approval waits for the operator (see [A menu Herdr reads as a stop](#a-menu-herdr-reads-as-a-stop)).
 - Herdr does not report the agent as starting or not ready.
@@ -185,7 +185,7 @@ If the pane or its device's link goes away after such a failure (`pane_unavailab
 A letter still held when its deadline passes is logged once as `doorbell.expired` with the reason it last waited for.
 After a hided restart, an app update or a device's return, a pane starts with a 30 second grace and no draft assumed, except one the last run held as a draft.
 The draft is on the screen and nowhere else, so the one fact that cannot be read back is written down: `composer-marks.json` in the state directory (`hide_kit::layout::composer_marks`, written by `composer_store.rs` on a thread of its own, never under the runtime lock) names each pane, by device, pane id and native session, whose composer held an unsent draft in a pane the doorbell rings.
-A mark is written when the draft begins and removed when it ends, a prompt hook of the pane's own session or the pane entering `working`, so the file moves once a prompt and not once a key.
+A mark is written when the draft begins and removed when it ends, a prompt hook of the pane's own session, the pane entering `working`, a composer read empty or Deliver now, so the file moves once a prompt and not once a key.
 A pane first seen again with its mark starts as a draft, input newer than its submit, and stays held by it until the same events end it; a pane that is `working` when it comes back drops the mark, since a turn started while the daemon was away took the draft.
 A mark of a pane that is not observed is kept for seven days, at most 256 marks are kept, and a missing, damaged or other-version file is ignored with a `composer_marks.discarded` diagnostic.
 A pane with no mark is not held beyond the grace, so a restart never silences an idle pane for good.
@@ -298,9 +298,52 @@ Once the line is saved, submitting it in that pane takes the letter whoever pres
 A second bell for the same letter saves its own line, so a hook of the first one that arrives after it is an ordinary prompt too.
 The ledger refuses a saved line longer than 512 bytes or holding a control character.
 
+### Reading the composer
+
+Hide routes every key to a pane but cannot see the composer, so any key not followed by a submission holds the bell as a draft.
+Counting keys cannot tell a draft from an erased one: Claude Code folds a paste into `[Pasted text #1 +11 lines]`, and one Backspace removes it whole.
+So the screen decides, and only when it says the composer is empty.
+
+When the doorbell's verdict for a pending letter is `draft` and the pane is at rest (Herdr reports it `idle` or `done` and current, with no key and no change of status for the 30-second quiet period), the doorbell asks Herdr once for the pane's visible screen with its styling (`pane.read` with source `visible`, format `ansi`, `wire::composer_screen_params`).
+The read runs on the doorbell's own thread, off `Mutex<Runtime>` and never on the session-sync thread, at most once per draft episode (the input time that made the draft, `delivery/composer.rs`), and counts against the doorbell's eight Herdr calls a pass; a cut screen is a failed read.
+The screen is judged by the agent's composer declaration (below).
+Only a positive `empty` releases the draft, as [Deliver now](#delivering-a-held-letter-now) does: the input up to the read is no draft (`released_input_at_unix_ms`), the composer mark goes, and the doorbell's next pass rings with every guard it always applies.
+A key or a change of status between the read and the release keeps the hold (`composer.release_refused`).
+`not_empty`, `not_found`, a failed or timed-out read, an agent with no declaration and a version not checked keep today's hold, with the waiting mark after two minutes.
+Each read is logged as `composer.read` with the pane, agent, version and verdict, and each draft not read as `composer.not_read` with its reason (`kind_undeclared`, `version_unknown`, `version_unchecked`, `version_failed`) once per draft; no record carries screen text.
+
+Each agent's adapter declares where its composer sits and what an empty one shows (`hide_agent_adapter::composer`, the `composer` field of each row in `declarations.rs`), and one parser judges every agent.
+Empty is a positive signature only: nothing at all, or the agent's known placeholder in its known style; never "anything faint", since Grok draws a paste in grey.
+A screen with no composer where the declaration puts it is `not_found`.
+
+| Agent | Composer | Empty |
+| --- | --- | --- |
+| Claude Code | the `❯` line and any lines under it, between the last two `─` rules | nothing, or only text in the dim attribute (SGR 2), since its suggestions such as `Try "…"` change |
+| Codex | the `›` line and its indented lines down to a blank line | only the dim `Ask Codex to do anything` |
+| Grok | the `❯` line inside the last `╭`/`╰` box, between its `│` borders | only spaces; a paste is a grey `[Pasted: …]` chip, which is content |
+| OpenCode | the lines inside the `┃` bar above its `╹` foot, less the agent and model line | only the (128,128,128) `Ask anything…` placeholder; typed text is (238,238,238) and a paste an orange chip |
+| Pi | the lines between the last two `─` rules | the rules adjacent |
+| omp | the `╰─` line | nothing, or the `⇧⇥ to change thinking effort` hint; a paste shows `📄 #1` |
+| Antigravity | the `>` line between the last two `─` rules | nothing after the marker |
+
+The declarations were measured on 2026-10-21 under Herdr 0.9.5 at 60 columns (Claude Code 2.1.306, Codex 0.163.0, Grok 1.0.62, OpenCode 2.0.29, Pi 1.0.4, omp 18.7.0, Antigravity 1.4.4): type `hello 안녕하세요`, Backspace it all, paste 12 lines, Backspace twice, clear; `hide-agent-adapter/tests/it/composer.rs` judges those captures.
+Only Claude Code and Codex are rung, so only their drafts are released today; the other declarations serve the agent journey's `composer` cell and a bell target added later.
+[INSTALL.md](INSTALL.md#what-each-system-supports) records what has not been measured (narrow panes, the light theme, Windows and Linux).
+
+#### Catching an agent's screen change
+
+An agent update can move or restyle its composer under the declaration, so a release is allowed only for an agent version whose declaration was seen to work.
+Hide knows a version from the hook diagnosis, which reads the installed runtime's `--version` on the core's machine (`hide_agent_hooks::runtime_compatibility`, refreshed with the kit); a pane on a connected device, or an agent with no hook runtime, has no version Hide knows, and its drafts hold as before (`version_unknown`).
+The first time Hide sees a version, at a moment the composer is known empty (a turn that a prompt hook of the pane's own session started has ended, and no key came since), the doorbell reads the screen once and judges it, at most one pane every five seconds.
+Herdr can report the turn `working` before its hook reaches the core; a hook within ten seconds of that, with no key since the turn began, still marks the turn, while a hook after a key typed during the work is a queued prompt and marks nothing, since the composer may hold a newer draft.
+`empty` passes the version; anything else fails it, and that version's drafts hold as before; a failed read decides nothing and waits for the next such moment.
+Each check is logged as `composer.version_checked` with the agent, version and verdict, and kept in `composer-checks.json` in the state directory (`hide_kit::layout::composer_checks`, written by `composer_checks.rs` on a thread of its own), at most 128 versions with the oldest dropped first; a missing, damaged or other-version file is ignored with a `composer_checks.discarded` diagnostic, and every version is checked again.
+The version is the installed program's, so a pane still running the program from before an update is judged by the newer version's check until it restarts.
+The agent journey's `composer` cell checks every declaration nightly on each system lane ([VERIFICATION.md](VERIFICATION.md#agent-journey)).
+
 ### Delivering a held letter now
 
-A draft is the one hold that does not end on its own: an idle pane whose composer may hold the operator's half-written prompt keeps its letters until its next real prompt, for up to the 60-minute deadline.
+A draft is the one hold that does not end on its own: an idle pane whose composer may hold the operator's half-written prompt keeps its letters until its next real prompt, for up to the 60-minute deadline, unless its composer is read empty first ([Reading the composer](#reading-the-composer)).
 So the core shows it, and nothing else about a hold reaches the screen.
 A pane's letters are shown waiting when the doorbell's last reason for a pending letter there is `draft`, the pane still holds that draft, and the pane has rested for two minutes: no input hide routed and no change of Herdr status since (`doorbell::letters_waiting`, `WAITING_MARK_REST_MS`).
 Every other hold (working, the quiet period, a launch, a menu) ends on its own and shows nothing.

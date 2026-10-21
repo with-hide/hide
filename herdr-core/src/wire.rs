@@ -2011,6 +2011,18 @@ pub(crate) fn pane_read_params(pane: &str, source: &str, lines: u32) -> Result<V
     })
 }
 
+/// The pane's visible screen with its styling kept, which an agent's
+/// composer declaration is judged against (`delivery/composer.rs`).
+pub(crate) fn composer_screen_params(pane: &str) -> Result<Value, String> {
+    params(req::PaneReadParams {
+        pane_id: pane.into(),
+        source: req::ReadSource::Visible,
+        lines: None,
+        format: req::ReadFormat::Ansi,
+        strip_ansi: false,
+    })
+}
+
 fn response(value: Value, missing: &str) -> Result<res::ResponseResult, String> {
     serde_json::from_value(value).map_err(|_| missing.to_owned())
 }

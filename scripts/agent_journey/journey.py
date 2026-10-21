@@ -3,7 +3,8 @@
 Each step asks the product to act the way an operator or a parent agent does
 (`hide agent spawn`, `hide request send`, the daemon's Sleep, Wake and terminal
 input) and judges only what Hide then reports. A step that cannot run settles
-its cell with the reason; nothing here types into a screen it read.
+its cell with the reason; nothing here types into a screen it read, but the
+composer cell, which reads the pane's screen only to judge it.
 """
 
 import base64
@@ -17,7 +18,7 @@ from agent_live_check.processes import ProcessError
 from agent_live_check.protection import write_private
 from agent_live_check.system import git, same_path
 
-from . import cells, fork, kit, memory, title, usage
+from . import cells, composer, fork, kit, memory, title, usage
 from .ci import redact
 from .quota import model_requests, refusal_records, spent_quota
 
@@ -44,11 +45,11 @@ TOOL_LETTER = ("this agent takes a letter only at a tool call its model makes wh
 LETTER_BODY = "Reply with exactly the token on the next line of this letter.\n"
 LETTER_PROMPT = "Reply with exactly the token on the second line of the letter attached to this prompt."
 # The cells each measured by a module of its own, judging what Hide shows.
-MEASURES = {module.CELL: module.measure for module in (kit, memory, fork, title, usage)}
+MEASURES = {module.CELL: module.measure for module in (kit, memory, composer, fork, title, usage)}
 # The steps of one agent's journey in order, each from the state the last
 # left: the cells that only read what Hide shows come where that state is,
 # the fork before Sleep so its source still runs the session it copies.
-STEPS = ("start", "integration", "guidance_memory", "letter", "fork", "sleep_wake", "resume", "title", "usage")
+STEPS = ("start", "integration", "guidance_memory", "letter", "composer", "fork", "sleep_wake", "resume", "title", "usage")
 
 
 def created_branch(runtime, repository, branch, worktree):
@@ -73,10 +74,12 @@ def prompt(value):
 
 class Journey:
     def __init__(self, runtime, daemon, controller, table, contract_row, repository, record, reader, *,
-                 branch, created, sessions, route, model=None, quota=None):
+                 branch, created, sessions, route, composer_judge, model=None, quota=None):
         self.runtime, self.daemon, self.controller = runtime, daemon, controller
         self.table, self.row, self.repository = table, contract_row, repository
         self.record, self.reader = record, reader
+        # `journey_composer`, which judges a screen by the adapter's composer declaration.
+        self.composer_judge = composer_judge
         # The HOME the agent writes its sessions under, which Hide's reader searches.
         self.sessions = sessions
         # The session files Hide's reader read, for the request count and,
@@ -540,12 +543,13 @@ class Journey:
         reply = cells.with_turn(cells.reply_verdict(read, self.session, value, events), turn)
         self.settle("resume", cells.resume_verdict(before, after, reply), self.evidence("resume", record))
 
-    def type_prompt(self, record, text):
-        """Types `text` and Return as the operator does: opening the agent puts
-        its tab on screen, which attaches its terminal; the screen gives the
-        terminal its grid once it exists and waits for a size, as the shell's
-        terminal view does, and they type once it takes this screen's keys.
-        Whether it did is left in `record`."""
+    def take_keys(self, record):
+        """Opens the agent as the operator does: opening it puts its tab on
+        screen, which attaches its terminal; the screen gives the terminal
+        its grid once it exists and waits for a size, as the shell's terminal
+        view does, and the keys go once it takes this screen's keys and
+        Herdr reads the agent ready. Whether it took them is left in
+        `record`."""
         self.daemon.dispatch("focus_pane", {"pane_id": self.pane, "origin": "operator", "focus_device": False})
         states = record["terminal"] = []
 
@@ -566,6 +570,13 @@ class Journey:
             record["attach_wait"] = str(error)
             return False
         self.wait_ready()
+        return True
+
+    def type_prompt(self, record, text):
+        """Types `text` and Return as the operator does, once the terminal
+        takes this screen's keys (`take_keys`)."""
+        if not self.take_keys(record):
+            return False
         self.daemon.dispatch("key", {"pane_id": self.pane, "bytes_base64": base64.b64encode(text.encode()).decode()})
         self.runtime.owner.cancelled.wait(1)
         self.daemon.dispatch("key", {"pane_id": self.pane, "bytes_base64": base64.b64encode(b"\r").decode()})

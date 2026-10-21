@@ -11,6 +11,7 @@ mod changes;
 mod checkout_git;
 mod checkout_owner;
 mod codex_launch;
+mod composer_checks;
 mod composer_store;
 pub mod coordination;
 pub mod delivery;

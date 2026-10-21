@@ -1,4 +1,5 @@
 use super::*;
+use composer::{Composer, Placeholder, Region, Style};
 const GROK_CONTEXT_ABSENCE: CapabilityAbsence = CapabilityAbsence {
     reason: "Grok discards SessionStart and UserPromptSubmit output; the installed path cannot inject guidance or Memory.",
     evidence: "docs/agent-hooks.md#which-agents-hide-supports",
@@ -62,6 +63,17 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Claude),
         conversation: Some(SessionFormat::Claude),
         titles: Support::Supported(SessionFormat::Claude),
+        composer: Support::Supported(Composer {
+            region: Region::BetweenRules,
+            marker: Some("❯"),
+            trailer: 0,
+            // A suggestion such as `Try "…"` or the next prompt it predicts,
+            // which changes from screen to screen, always dim.
+            empty: &[Placeholder {
+                text: "",
+                style: Style::Dim,
+            }],
+        }),
         start: Some(LaunchDialect::Claude),
         find: Some(FindDialect::ClaudeTranscript),
         usage: UsageDeclaration {
@@ -132,6 +144,15 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Codex),
         conversation: Some(SessionFormat::Codex),
         titles: Support::Supported(SessionFormat::Codex),
+        composer: Support::Supported(Composer {
+            region: Region::ToBlank,
+            marker: Some("›"),
+            trailer: 0,
+            empty: &[Placeholder {
+                text: "Ask Codex to do anything",
+                style: Style::Dim,
+            }],
+        }),
         start: Some(LaunchDialect::Codex),
         find: Some(FindDialect::CodexTranscript),
         usage: UsageDeclaration {
@@ -203,6 +224,17 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Grok),
         conversation: Some(SessionFormat::Grok),
         titles: Support::Supported(SessionFormat::Grok),
+        // A paste is a grey `[Pasted: …]` chip, so nothing faint reads empty.
+        composer: Support::Supported(Composer {
+            region: Region::Box {
+                open: '╭',
+                close: '╰',
+                side: '│',
+            },
+            marker: Some("❯"),
+            trailer: 0,
+            empty: &[],
+        }),
         start: Some(LaunchDialect::Grok),
         find: None,
         usage: UsageDeclaration {
@@ -283,6 +315,19 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::OpenCode),
         conversation: Some(SessionFormat::OpenCode),
         titles: Support::Supported(SessionFormat::OpenCode),
+        // The last line inside the bar is the agent and model, never input.
+        composer: Support::Supported(Composer {
+            region: Region::Bar {
+                side: '┃',
+                close: '╹',
+            },
+            marker: None,
+            trailer: 1,
+            empty: &[Placeholder {
+                text: "Ask anything…",
+                style: Style::Rgb(128, 128, 128),
+            }],
+        }),
         start: Some(LaunchDialect::OpenCode),
         find: None,
         usage: UsageDeclaration {
@@ -369,6 +414,12 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Pi),
         conversation: Some(SessionFormat::Pi),
         titles: Support::Supported(SessionFormat::Pi),
+        composer: Support::Supported(Composer {
+            region: Region::BetweenRules,
+            marker: None,
+            trailer: 0,
+            empty: &[],
+        }),
         start: Some(LaunchDialect::Pi),
         find: None,
         usage: UsageDeclaration {
@@ -454,6 +505,15 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Omp),
         conversation: Some(SessionFormat::Omp),
         titles: Support::Supported(SessionFormat::Omp),
+        composer: Support::Supported(Composer {
+            region: Region::Line,
+            marker: Some("╰─"),
+            trailer: 0,
+            empty: &[Placeholder {
+                text: "⇧⇥ to change thinking effort",
+                style: Style::Any,
+            }],
+        }),
         start: Some(LaunchDialect::Omp),
         find: None,
         usage: UsageDeclaration {
@@ -543,6 +603,12 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         resume: Some(LaunchDialect::Antigravity),
         conversation: Some(SessionFormat::Antigravity),
         titles: Support::Supported(SessionFormat::Antigravity),
+        composer: Support::Supported(Composer {
+            region: Region::BetweenRules,
+            marker: Some(">"),
+            trailer: 0,
+            empty: &[],
+        }),
         start: Some(LaunchDialect::Antigravity),
         find: None,
         usage: UsageDeclaration {
@@ -623,6 +689,7 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     resume: None,
     conversation: Some(SessionFormat::Cursor),
     titles: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
+    composer: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     start: None,
     find: None,
     usage: UsageDeclaration {
