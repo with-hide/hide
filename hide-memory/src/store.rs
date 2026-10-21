@@ -368,7 +368,36 @@ impl PromotionState {
             _ => Err(MemoryError::InvalidState(value.to_owned())),
         }
     }
+
+    /// Whether a person made or settled the card through this promotion,
+    /// so a full Project never forgets it for a new one. Matched without a
+    /// wildcard, so a new state is decided here before it compiles.
+    const fn settles_card(self) -> bool {
+        match self {
+            Self::Dismissed | Self::ClosedUnmerged | Self::Failed | Self::Outdated => false,
+            Self::Running
+            | Self::PrOpen
+            | Self::Merged
+            | Self::Building
+            | Self::Unbuilt
+            | Self::Kept => true,
+        }
+    }
 }
+
+/// Every promotion state, which a test holds to the ones the store accepts.
+const PROMOTION_STATES: [PromotionState; 10] = [
+    PromotionState::Dismissed,
+    PromotionState::Running,
+    PromotionState::PrOpen,
+    PromotionState::Merged,
+    PromotionState::ClosedUnmerged,
+    PromotionState::Failed,
+    PromotionState::Outdated,
+    PromotionState::Building,
+    PromotionState::Unbuilt,
+    PromotionState::Kept,
+];
 
 /// One card's promotion as the core last decided it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -5098,9 +5127,8 @@ fn count_state(
 /// written first), then the least recently used, then by number. A card a
 /// person made or settled is never chosen: one added by hand
 /// ([`crate::HAND_ADDED_PROVIDER`]), a confirmed correction (its current
-/// revision's comparison says the card is newer), or one whose promotion is
-/// under way, merged or kept; a dismissed, failed, closed or outdated
-/// promotion settles nothing. Neither is a card this batch wrote to or one
+/// revision's comparison says the card is newer), or one with a promotion
+/// that settles it ([`PromotionState::settles_card`]). Neither is a card this batch wrote to or one
 /// in `named`.
 fn evictable(
     connection: &Connection,
@@ -5108,14 +5136,20 @@ fn evictable(
     batch_id: &str,
     named: &HashSet<String>,
 ) -> Result<Option<(String, u64)>, MemoryError> {
-    let mut statement = connection.prepare(
+    let unsettled = PROMOTION_STATES
+        .iter()
+        .filter(|state| !state.settles_card())
+        .map(|state| format!("'{}'", state.as_str()))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut statement = connection.prepare(&format!(
         "SELECT i.id,i.number FROM memory_items i WHERE i.project_id=?1 AND i.lifecycle!='tombstoned' \
          AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer') \
-         AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.state IN('running','pr_open','merged','building','kept')) \
+         AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.state NOT IN({unsettled})) \
          AND NOT EXISTS(SELECT 1 FROM memory_sources s WHERE s.item_id=i.id AND s.provider=?4) \
          AND NOT EXISTS(SELECT 1 FROM memory_revisions r WHERE r.item_id=i.id AND r.batch_id=?2) \
          ORDER BY i.last_used_at_ms IS NOT NULL,i.last_used_at_ms,i.created_at_ms,i.number LIMIT ?3",
-    )?;
+    ))?;
     let rows = statement
         .query_map(
             params![
@@ -6536,6 +6570,69 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
         );
     }
 
+    #[test]
+    fn a_card_whose_promotion_waits_on_the_operator_is_never_cleared() {
+        let (_temp, mut store, project) = store();
+        for (name, text) in [("b1", "Card one"), ("b2", "Card two"), ("b3", "Card three")] {
+            store
+                .apply_candidates(
+                    &batch(&project, name, name),
+                    &[candidate(text, CandidateRelation::New)],
+                )
+                .unwrap();
+        }
+        store
+            .set_promotion(
+                &project,
+                1,
+                &Promotion {
+                    state: PromotionState::Unbuilt,
+                    ..running(1, "agent-7")
+                },
+            )
+            .unwrap();
+        let evicted = store
+            .apply_candidates_with_limit(
+                &batch(&project, "b4", "b4"),
+                &[candidate("Card four", CandidateRelation::New)],
+                3,
+            )
+            .unwrap()
+            .evicted;
+        assert_eq!(
+            evicted,
+            [2],
+            "the oldest card waits on the operator, so it stays"
+        );
+    }
+
+    #[test]
+    fn every_promotion_state_the_store_accepts_is_one_the_eviction_decides() {
+        let check = SCHEMA
+            .split("CREATE TABLE card_promotions(")
+            .nth(1)
+            .and_then(|table| table.split("CHECK(state IN(").nth(1))
+            .and_then(|states| states.split(')').next())
+            .unwrap();
+        let stored: Vec<_> = check
+            .split(',')
+            .map(|state| PromotionState::parse(state.trim_matches('\'')).unwrap())
+            .collect();
+        assert_eq!(stored, PROMOTION_STATES);
+        let unsettled: Vec<_> = PROMOTION_STATES
+            .into_iter()
+            .filter(|state| !state.settles_card())
+            .collect();
+        assert_eq!(
+            unsettled,
+            [
+                PromotionState::Dismissed,
+                PromotionState::ClosedUnmerged,
+                PromotionState::Failed,
+                PromotionState::Outdated
+            ]
+        );
+    }
     #[test]
     fn the_prompt_hook_reads_none_of_the_memory_tabs_counts() {
         // A full Project stays full, so the hook must not sort its cards or
