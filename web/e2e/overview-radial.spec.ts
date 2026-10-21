@@ -41,10 +41,16 @@ test("@platform Overview restores its exact current session and keeps map moveme
     const before = await positions();
     const session = current.locator("xpath=..");
     const originalSession = await session.getAttribute("style");
-    await drag(page, current.locator(".og-session-drag"), 48, 32);
+    // Operators grab the provider circle itself; no separate grip control.
+    await drag(page, current.locator(".og-orb"), 48, 32);
     await expect.poll(() => session.getAttribute("style")).not.toBe(originalSession);
     const afterSession = await positions();
     expect(afterSession.filter((row, i) => JSON.stringify(row) !== JSON.stringify(before[i]))).toHaveLength(1);
+    await expect(graph.locator("[data-graph-preview]")).toHaveCount(0);
+    await current.locator(".og-orb").click();
+    await expect(graph.locator("[data-graph-preview]")).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(graph.locator("[data-graph-preview]")).toHaveCount(0);
     await graph.getByRole("button", { name: "Reset layout", exact: true }).click();
     await expect.poll(positions).toEqual(before);
     // React Flow renders absolute transforms even though our node data is relative.

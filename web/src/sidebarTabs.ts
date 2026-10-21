@@ -43,7 +43,7 @@ export function sidebarNamedGroups(checkout: Checkout, segments: readonly Sideba
     const selected = group.tabs.flatMap((id) => {
       if (collections.drafts.includes(id)) return [];
       const existing = segments.find((segment) => segment.tab?.id === id);
-      if (existing) return [{ ...existing, glyph: true }];
+      if (existing) return [existing];
       const tab = checkout.tabs.find((tab) => tab.id === id && !tab.delegated);
       return tab ? [{ tab, rows: [], count: 0, glyph: true }] : [];
     });

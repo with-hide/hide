@@ -925,7 +925,8 @@ A hidden selected session uses a reserved radial position without moving other n
 When the confirmed focused device, pane and native session have a graph proof at entry, that exact session is highlighted without opening details; pane reuse cannot inherit the initial selection.
 The first camera shows the current project's whole ordinary cluster at a readable zoom; a cluster too large for that zoom centers the exact current member instead, and it never automatically fits the entire map.
 Fit graph, Current pane and Reset layout remain explicit keyboard-accessible controls.
-Session drag handles move only that session; a project's handle moves its entire relative-positioned group, including summarized members when expanded later.
+Dragging a session's provider circle moves only that session, without opening details; clicking the same circle opens details, and the text below it remains a selection target without becoming a drag handle.
+A project's handle moves its entire relative-positioned group, including summarized members when expanded later.
 Offsets live only in this mounted view, edges follow the moved endpoints, and Reset layout clears offsets and restores the initial camera without dispatching pane moves.
 A filtered-empty view offers Show all sessions, distinct from no current sessions and layout failure.
 Each agent shows its canonical task identity, agent, state and actual current progress; a model is shown only when the current launch proves it.
@@ -1110,12 +1111,13 @@ Archived sessions fold last, into `보관됨 N ›`: under 정리할 것 in each
 프로젝트별 draws one group per project, the projects with a 내 차례 first, its head the project's name with its counts by state in the same order and names (`내 차례 1 · 일하는 중 2`), the same order inside and its own folds, and no project name on the rows.
 Where a project's rows change state, a small grey label names the band (`내 차례` in the warning colour, `읽을 것`, `일하는 중`, `대기`); it is skipped by the arrow keys and hidden from assistive technology, and each band's list carries the state's name instead; 상태별 draws no band labels, since its heads already name the state.
 Inside a group 내 차례 stands longest-waiting first and the others stand most recent first (B9).
+Inside `쉬는 중`, both views order rows by their latest actual native prompt, newest first, so the order matches the age on each row; unknown prompt times stand last and equal times retain their existing order.
 
 A row is one task, its root agent; descendants are its children only, and a memory question, a pull request with no session, a delegated child are never rows of their own (B7).
 Its first line is the row's own status mark (the sidebar's, status-marks D-12), the title, while folded no count of its children but `! N` in the warning colour when a hidden descendant asks the operator (status-marks D-24, B35), the PR mark and the elapsed time (B8, B10).
 In both 프로젝트 and 태스크, a session's elapsed time measures its latest actual native prompt, including a real request letter from another agent, rather than its latest state change.
 State changes and a daemon restart preserve that reference; a new session never inherits it, and an unknown prompt time leaves the slot empty until the native read succeeds.
-The existing localized units and shared clock also apply to child rows; ordering, unread state, waiting and escalation still use their own existing state times.
+The existing localized units and shared clock also apply to child rows; open-task ordering, unread state, waiting and escalation still use their own existing state times.
 Its second line is the sidebar's line in its parts: on 내 차례 the verb and the question (`질문 · …`) or the block's cause (`막힘 · …`) in the warning colour, a waiting ring's `대기 · ` and its cause, a stop's word (`끝남 · `, `일 남음 · `) and the background tail, work in progress its sentence alone, a waking, failed or unknown row its state, a sleeping row none (status-marks B10, B27, B29, B31, B33); on 쉬는 중 only unfinished work has a line, and a read one draws the quiet ring; with nothing to say there is no second line, and no stage bar is drawn.
 An unknown row is dimmed with no mark (status-marks B16).
 A row with children opens them in place under its chevron, five per parent and the rest behind `N개 더`, indented to the third level; a child in another checkout carries a branch line, a child on another device a device chip, a finished child a quiet title, and pressing a child goes to its pane, bringing its device to the front (B10, B11).
@@ -1560,10 +1562,12 @@ A tab line selects its owning group, area and tab, while an agent row continues 
 The sidebar keeps a root and its complete lineage subtree together under the root's actual tab; children working in another tab do not inflate that tab's physical agent count.
 Tab names use the manual name or localized `Tab N` from the core's stable number, while a draft reads New tab; automatic tabbar task titles remain independent.
 The tab line's tooltip and accessible name give its name and recognized agent count, or its name alone when it holds no agent; shell panes never count as agents.
+An unnamed tab with exactly one recognized physical agent draws that agent's row alone, without a tab heading or guide, in both ungrouped and named collections.
+Manual-name and multi-agent tabs retain their heading and guide, and terminal-only tabs remain reachable through their tab line.
 Group, tab and agent controls are stops in Arrow Up/Down and Home/End traversal, and click, Enter and Space use the same navigation.
 Lineage children retain their `--size-lineage-indent` step and elbow rails, and each root's lineage disclosure stays in its trailing slot.
 A tab has no disclosure state of its own; a stored tab fold from an earlier version is ignored on load and dropped on the next write.
-For a catalog without named-group metadata the previous tab-segment presentation remains: manual-name or multi-agent tabs have a quiet line and guide, an unnamed single-agent tab is its row alone, and a named empty tab remains reachable.
+For a catalog without named-group metadata the same single-agent rule applies, and a named empty tab remains reachable.
 Focused sidebar agent and checkout rows use the neutral `--secondary` fill.
 Root shortcuts follow the physical grouping order and deduplicate raised occurrences, with no numbers for group lines, tab lines or children.
 A closed checkout draws its status badge and still shows questioning or blocked Needs You rows.

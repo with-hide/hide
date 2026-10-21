@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import type { BoardRow } from "./projectBoard";
 import type { Checkout, Tab } from "./snapshot";
-import { sidebarTabGroups } from "./sidebarTabs";
+import { sidebarNamedGroups, sidebarTabGroups } from "./sidebarTabs";
 
 const agent = (id: string, device_id = "local") => legacyAgentRow({ id, pane_id: id, device_id, identity_label: id, agent_kind: "codex", group: "working" });
 const tab = (id: string, panes: string[]): Tab => ({ id, label: "Automatic task label", sidebar: { manual_name: null, number: Number(id.slice(1)), named_by_operator: false }, panes: panes.map((id) => ({ id })) } as Tab);
@@ -10,6 +10,18 @@ const checkout = (tabs: Tab[]) => ({ id: "c", tabs } as Checkout);
 const row = (id: string, depth = 0): BoardRow => ({ agent: agent(id), depth });
 
 describe("Projects sidebar tab groups", () => {
+  it("keeps the single-agent rule inside both unnamed and named collections, while empty terminal tabs stay reachable", () => {
+    const tabs = [tab("t1", ["a"]), tab("t2", ["b", "child"]), tab("t3", ["shell"]), { ...tab("t4", ["c"]), sidebar: { number: 4, manual_name: "Review", named_by_operator: true } }];
+    const base = { ...checkout(tabs), agent_groups: { selected: null, drafts: [], groups: [{ id: null, name: null, tabs: ["t1", "t2"] }, { id: "review", name: "Review", tabs: ["t3", "t4"] }] } };
+    const agents = [agent("a"), agent("b"), agent("child"), agent("c")];
+    const groups = sidebarNamedGroups(base, sidebarTabGroups(base, "local", [row("a"), row("b"), row("child", 1), row("c")], agents));
+    expect(groups.flatMap((group) => group.segments.map((segment) => [segment.tab?.id, segment.count, segment.glyph]))).toEqual([["t1", 1, false], ["t2", 2, true], ["t3", 0, true], ["t4", 1, true]]);
+    const next = { ...base, tabs: tabs.map((tab) => tab.id === "t2" ? { ...tab, panes: tab.panes.slice(0, 1) } : tab) };
+    const remaining = agents.filter((row) => row.pane_id !== "child");
+    const updated = sidebarNamedGroups(next, sidebarTabGroups(next, "local", [row("a"), row("b"), row("c")], remaining));
+    expect(updated[0]!.segments.map((segment) => [segment.tab?.id, segment.glyph])).toEqual([["t1", false], ["t2", false]]);
+  });
+
   it("orders complete root subtrees by tabs and keeps cross-tab descendants under their root", () => {
     const tabs = [tab("t1", ["a", "b", "shell"]), tab("t2", ["child", "c"]), tab("t3", ["d", "other-child"])];
     const rows = [row("c"), row("a"), row("child", 1), row("b")];

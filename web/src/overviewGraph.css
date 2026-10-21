@@ -42,6 +42,8 @@
 .og-orb { display: flex; align-items: center; justify-content: center; position: relative; flex-shrink: 0; width: var(--og-orb-size); height: var(--og-orb-size); margin-bottom: var(--spacing-xs); border: var(--size-hairline) solid var(--border); border-radius: 50%; background: var(--secondary); }
 .og-session[data-root="true"] .og-orb { border-color: var(--primary); box-shadow: 0 0 0 var(--spacing-xs) color-mix(in srgb, var(--primary) 12%, transparent); margin-bottom: var(--spacing-sm); }
 .og-orb .og-provider { width: 65%; height: 65%; }
+.og-session-drag { cursor: grab; }
+.og-session-drag:active { cursor: grabbing; }
 .og-orb-state { position: absolute; right: calc(-1 * var(--spacing-xxs)); bottom: 0; display: flex; border-radius: 50%; background: var(--card); padding: var(--size-hairline); }
 .og-session-title { max-width: 100%; font-size: var(--text-caption); font-weight: 500; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .og-session[data-root="true"] .og-session-title { font-size: var(--text-body); font-weight: 600; }
