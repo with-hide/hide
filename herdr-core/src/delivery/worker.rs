@@ -991,7 +991,12 @@ fn run(
                 .as_ref()
                 .map_err(|error| error.code().to_owned())
                 .and(result);
-            let _ = request.reply.send(result);
+            // A posted effect has no one waiting, so its failure is logged.
+            if let Err(mpsc::SendError(Err(code))) = request.reply.send(result) {
+                crate::diagnostic!(json!({
+                    "component": "delivery", "kind": "effect.unanswered_failure", "code": code,
+                }));
+            }
         }
     }
     while let Ok(request) = requests.try_recv() {

@@ -902,6 +902,13 @@ pub(crate) fn apply(
             if task.as_ref().is_some_and(|task| task.kind.home().is_none()) {
                 return Err("task_kind_unknown".into());
             }
+            // The mission's Conductor now may have taken it over from the
+            // one that started its workers, as a session that registered
+            // only to start this: its workers become its own first, so this
+            // start finds the worker it already has (B43).
+            if let Some(admission) = mission {
+                adopt_mission_workers(ledger, &admission.mission, parent)?;
+            }
             // A mission's start asked again after it stopped holding its place
             // takes one again under the cap, or waits, so a start that comes
             // back late never runs one worker past it (engineering #15).
@@ -1226,68 +1233,86 @@ pub(crate) fn apply(
             if !caller.hide_owned() {
                 return Err("parent_authority_required".into());
             }
-            let heir = ledger
-                .agents
-                .iter()
-                .find(|record| &record.id == conductor && !record.ended)
-                .ok_or("agent_unavailable")?
-                .actor
-                .clone();
-            let mut moved = 0;
-            for index in 0..ledger.spawns.len() {
-                let spawn = &ledger.spawns[index];
-                if spawn.mission.as_deref() != Some(mission.as_str()) || &spawn.parent == conductor
-                {
-                    continue;
-                }
-                // A start the heir already asked under the same intent is
-                // its own; the two never become one record.
-                if ledger
-                    .spawns
-                    .iter()
-                    .any(|other| &other.parent == conductor && other.intent == spawn.intent)
-                {
-                    continue;
-                }
-                let former = spawn.parent.clone();
-                let former_actor = ledger
-                    .agents
-                    .iter()
-                    .find(|record| record.id == former)
-                    .map(|record| record.actor.clone());
-                let child = spawn.child.clone();
-                let auto_watch = spawn.auto_watch_id.clone();
-                ledger.spawns[index].parent = conductor.clone();
-                moved += 1;
-                let Some(child) = child else { continue };
-                let mut child_actor = None;
-                if let Some(record) = ledger.agents.iter_mut().find(|record| record.id == child) {
-                    if record.parent.as_ref() == Some(&former) {
-                        record.parent = Some(conductor.clone());
-                    }
-                    child_actor = Some(record.actor.clone());
-                }
-                for watch in &mut ledger.watches {
-                    let on_worker = auto_watch.as_ref() == Some(&watch.id)
-                        || (child_actor
-                            .as_ref()
-                            .is_some_and(|actor| actor.same_identity(&watch.target))
-                            && former_actor
-                                .as_ref()
-                                .is_some_and(|actor| actor.same_identity(&watch.parent)));
-                    if on_worker && !watch.parent.same_identity(&heir) {
-                        watch.generation = watch.generation.saturating_add(1);
-                        watch.parent = heir.clone();
-                    }
-                }
-            }
-            crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.workers_adopted",
-                "mission": mission, "conductor": conductor, "count": moved,
-            }));
+            let moved = adopt_mission_workers(ledger, mission, conductor)?;
             Ok(json!({"moved": moved}))
         }
     }
+}
+
+/// Makes the registration `conductor`, which conducts `mission` now, the
+/// parent of each of the mission's worker starts another registration made,
+/// with the worker's own record (its parent, or its origin when it was
+/// started without one) and the watches on it, so its retries, reports and
+/// warnings are the new Conductor's (PRD software-factory-conductor B43).
+/// A start it already asked under the same intent keeps its own record.
+fn adopt_mission_workers(
+    ledger: &mut Ledger,
+    mission: &str,
+    conductor: &str,
+) -> Result<usize, String> {
+    let heir = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == conductor && !record.ended)
+        .ok_or("agent_unavailable")?
+        .actor
+        .clone();
+    let heir = named(ledger, &heir);
+    let mut moved = 0;
+    for index in 0..ledger.spawns.len() {
+        let spawn = &ledger.spawns[index];
+        if spawn.mission.as_deref() != Some(mission) || spawn.parent == conductor {
+            continue;
+        }
+        if ledger
+            .spawns
+            .iter()
+            .any(|other| other.parent == conductor && other.intent == spawn.intent)
+        {
+            continue;
+        }
+        let former = spawn.parent.clone();
+        let former_actor = ledger
+            .agents
+            .iter()
+            .find(|record| record.id == former)
+            .map(|record| record.actor.clone());
+        let child = spawn.child.clone();
+        let auto_watch = spawn.auto_watch_id.clone();
+        ledger.spawns[index].parent = conductor.to_owned();
+        moved += 1;
+        let Some(child) = child else { continue };
+        let mut child_actor = None;
+        if let Some(record) = ledger.agents.iter_mut().find(|record| record.id == child) {
+            if record.parent.as_ref() == Some(&former) {
+                record.parent = Some(conductor.to_owned());
+            }
+            if record.origin.as_ref() == Some(&former) {
+                record.origin = Some(conductor.to_owned());
+            }
+            child_actor = Some(record.actor.clone());
+        }
+        for watch in &mut ledger.watches {
+            let on_worker = auto_watch.as_ref() == Some(&watch.id)
+                || (child_actor
+                    .as_ref()
+                    .is_some_and(|actor| actor.same_identity(&watch.target))
+                    && former_actor
+                        .as_ref()
+                        .is_some_and(|actor| actor.same_identity(&watch.parent)));
+            if on_worker && !watch.parent.same_identity(&heir) {
+                watch.generation = watch.generation.saturating_add(1);
+                watch.parent = heir.clone();
+            }
+        }
+    }
+    if moved > 0 {
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.workers_adopted",
+            "mission": mission, "conductor": conductor, "count": moved,
+        }));
+    }
+    Ok(moved)
 }
 
 /// The device a spawn's child lives on: the one the caller named, else the
@@ -2202,6 +2227,91 @@ mod tests {
         assert!(moved.generation > watch.generation);
         // Asked again, nothing moves twice.
         assert_eq!(apply(&mut ledger, &hide, &adopt, 6).unwrap()["moved"], 0);
+    }
+
+    /// The session that took a mission over may register only to start a
+    /// worker: that start hands it the workers first, one started without a
+    /// parent included, so a retry under the same intent is the worker it
+    /// already has and the ledger stays valid.
+    #[test]
+    fn a_new_conductors_first_start_takes_the_missions_workers() {
+        let mut ledger = Ledger::default();
+        let former = record("former", "native-former", None);
+        let former_actor = former.actor.clone();
+        let former_id = register(&mut ledger, former, &former_actor);
+        let handoff = |mission: &str| {
+            let mut spawn = command("mission-1:docs");
+            if let Command::Spawn {
+                mission: slot,
+                parent,
+                ..
+            } = &mut spawn
+            {
+                *parent = None;
+                *slot = Some(crate::runtime::missions::MissionAdmission {
+                    mission: mission.into(),
+                    cap: 2,
+                });
+            }
+            spawn
+        };
+        let first = apply(
+            &mut ledger,
+            &former_actor,
+            &Mutation::Reserve {
+                parent: former_id.clone(),
+                command: handoff("mission-1"),
+            },
+            2,
+        )
+        .unwrap();
+        let child_record = record("docs", "native-docs", None);
+        let child_actor = child_record.actor.clone();
+        let child = register(&mut ledger, child_record, &child_actor);
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == child)
+            .unwrap()
+            .origin = Some(former_id.clone());
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "mission-1:docs")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.pane = Some("docs".into());
+        spawn.path = Some("/fixture/docs".into());
+        spawn.completed = true;
+        validate_records(&ledger).unwrap();
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == former_id)
+            .unwrap()
+            .ended = true;
+        let heir = record("heir", "native-heir", None);
+        let heir_actor = heir.actor.clone();
+        let heir_id = register(&mut ledger, heir, &heir_actor);
+
+        let again = apply(
+            &mut ledger,
+            &heir_actor,
+            &Mutation::Reserve {
+                parent: heir_id.clone(),
+                command: handoff("mission-1"),
+            },
+            3,
+        )
+        .unwrap();
+        assert_eq!(again["id"], first["id"]);
+        let worker = ledger
+            .agents
+            .iter()
+            .find(|agent| agent.id == child)
+            .unwrap();
+        assert_eq!(worker.origin.as_deref(), Some(heir_id.as_str()));
+        validate_records(&ledger).unwrap();
     }
 
     #[test]

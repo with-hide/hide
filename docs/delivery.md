@@ -678,7 +678,9 @@ Only a pane-bound credential can ask, refused `agent_pane_required` otherwise, a
 A mission belongs to the repository Project of the checkout it was created in (`mission_project_unknown`); asked before the machine's projects are first read, it is refused `mission_projects_loading`, and a retry a few seconds later goes through.
 Every other pane is refused `mission_not_conductor`, and a closed or cancelled mission refuses changes (`mission_closed`, `mission_cancelled`).
 `hide mission take <id>` makes the caller the Conductor only once the previous one is gone; while it is there the answer is `mission_conducted` with its name.
-A take hands the mission's workers to the caller's registration before it answers: each worker's start, its child record and the watch on it become the new Conductor's, so the same intent asked again answers the worker it already has, and the worker's reports and warnings reach the new Conductor.
+A take hands the mission's workers to the caller's registration before it answers, and a take whose handover cannot be queued is refused with that reason and can be asked again: each worker's start, its child record (its parent, or its origin when it was started without one) and the watch on it become the new Conductor's, so the same intent asked again answers the worker it already has, and the worker's reports and warnings reach the new Conductor.
+A new Conductor with no registration at the take is handed them when it registers to start its first worker, in the same reserve.
+Letters already sent to the former Conductor stay in its inbox.
 `hide mission reopen` of a done mission while its Conductor conducts another open one is refused `mission_already_conducting`, so a command or a start that names no mission always means the one open mission.
 Each command answers one JSON line, and the same command again changes nothing more.
 

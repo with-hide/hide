@@ -275,19 +275,39 @@ impl Runtime {
         // Only a command that can change the record is measured, and only
         // it pays for the copy a refusal puts back.
         let before = command.mutates().then(|| self.missions.book.clone());
+        let taken = match &command {
+            MissionCommand::Take { mission } => Some(mission.clone()),
+            _ => None,
+        };
         let answer = self.apply_mission_command(device, caller, expected, command)?;
+        let Some(before) = before.filter(|_| answer.1) else {
+            return Ok(answer);
+        };
         // A change that would make the saved book larger than a start reads
         // back is refused whole, like a full book (engineering #15).
-        if let Some(before) = before
-            && answer.1
-            && !crate::missions::may_keep(&before, &self.missions.book)
-        {
+        if !crate::missions::may_keep(&before, &self.missions.book) {
             self.missions.book = before;
             self.save_missions();
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "missions.record_full",
             }));
             return Err("mission_full".into());
+        }
+        if let Some(id) = taken {
+            // A take whose workers cannot be handed over is not made, so
+            // asking it again tries again.
+            let conductor = self
+                .missions
+                .book
+                .get(&id)
+                .and_then(|mission| mission.conductor.agent_id.clone());
+            if let Err(code) = self.adopt_mission_workers(&id, conductor.as_deref()) {
+                self.missions.book = before;
+                self.save_missions();
+                return Err(code);
+            }
+            // What waited for a Conductor goes to the one that took it.
+            self.flush_mission_wakes();
         }
         Ok(answer)
     }
@@ -544,7 +564,6 @@ impl Runtime {
                     return Err("mission_already_conducting".into());
                 }
                 let conductor = self.conductor_of(device, &pane, actor);
-                self.adopt_mission_workers(&mission, conductor.agent_id.as_deref());
                 let target = self
                     .missions
                     .book
@@ -557,8 +576,6 @@ impl Runtime {
                     "mission": mission, "pane": pane,
                 }));
                 self.save_missions();
-                // What waited for a Conductor goes to the one that took it.
-                self.flush_mission_wakes();
                 Ok((json!({"mission": self.mission_view_of(&mission)}), true))
             }
             MissionCommand::Show { mission } => {
@@ -686,31 +703,32 @@ impl Runtime {
     /// so the heir's retry of a start finds the worker it made, and the
     /// workers' reports and watches reach the Conductor there now. It is
     /// queued before the takeover answers, so it lands before any command
-    /// the heir sends next.
-    fn adopt_mission_workers(&self, mission: &str, conductor: Option<&str>) {
+    /// the heir sends next. A heir with no registration yet is handed them
+    /// when it registers to start a worker (`coordination`, the reserve).
+    fn adopt_mission_workers(&self, mission: &str, conductor: Option<&str>) -> Result<(), String> {
         let Some(conductor) = conductor else {
-            // A session with no registration cannot have started a worker,
-            // and its starts are refused until it registers.
-            return;
+            return Ok(());
         };
-        let queued = self
-            .hide_delivery(CONDUCTOR_ROLE)
-            .and_then(|(client, authority, actor)| {
-                client.post(crate::delivery::worker::Effect::Agents {
-                    authority,
-                    actor,
-                    mutation: Box::new(crate::coordination::Mutation::AdoptMissionWorkers {
-                        mission: mission.to_owned(),
-                        conductor: conductor.to_owned(),
-                    }),
-                })
-            });
-        if let Err(code) = queued {
-            crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.adopt_failed",
-                "mission": mission, "code": code,
-            }));
+        if self.delivery_client.is_none() {
+            // A runtime without a store (a test) has no workers to hand.
+            return Ok(());
         }
+        let (client, authority, actor) = self.hide_delivery(CONDUCTOR_ROLE)?;
+        client
+            .post(crate::delivery::worker::Effect::Agents {
+                authority,
+                actor,
+                mutation: Box::new(crate::coordination::Mutation::AdoptMissionWorkers {
+                    mission: mission.to_owned(),
+                    conductor: conductor.to_owned(),
+                }),
+            })
+            .inspect_err(|code| {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.adopt_failed",
+                    "mission": mission, "code": code,
+                }));
+            })
     }
 
     /// Whether `device`'s project catalog is still being read: this machine's
@@ -1011,10 +1029,13 @@ impl Runtime {
             }
         }
         for id in reopened {
-            let _ = self.reopen_mission(&id, now);
-            crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.reopened_by_pull", "mission": id,
-            }));
+            // Two done missions of one Conductor changed in one read: the
+            // first opens and the second stays done.
+            if self.reopen_mission(&id, now) == Ok(true) {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.reopened_by_pull", "mission": id,
+                }));
+            }
         }
         if changed {
             self.save_missions();
@@ -1331,7 +1352,9 @@ impl Runtime {
     /// and two bits per mission, and makes views again only when one moved
     /// or a worker being made stops counting. A closed mission's view is
     /// made again only when the book, its pull requests or its device's
-    /// answer moved, since its Conductor and its cap no longer change it.
+    /// answer moved: its Conductor's presence and its workers' count no
+    /// longer show, and a worker pane that moves after the close is followed
+    /// on the next of those.
     pub(super) fn refresh_missions(&mut self) {
         let failed = self
             .missions

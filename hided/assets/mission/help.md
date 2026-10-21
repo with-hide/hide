@@ -147,5 +147,5 @@ You conduct one open mission at a time: while another is open, a done one stays 
 
 If a mission has no Conductor, the map offers 이어받기, which starts a new pane and asks it to take the mission.
 Run `hide mission take <id>`, then `hide mission show` and `hide inbox`, read each worker's state (`hide agent list`, its record), and go on from there.
-The take makes the mission's workers yours: asking a start again under its intent answers the worker it already has, and their reports and warnings come to you. A worker still addresses the Conductor it was started by, so send each live worker one letter saying you conduct the mission now.
+The take makes the mission's workers yours: asking a start again under its intent answers the worker it already has, and their reports and warnings come to you. A worker still addresses the Conductor it was started by, and letters already sent there stay in that inbox, so send each live worker one letter saying you conduct the mission now.
 Hide refuses a second session while the mission's Conductor is still present (`mission_conducted`).
