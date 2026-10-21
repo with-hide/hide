@@ -1534,7 +1534,7 @@ Project rows now open checkouts; shared Overview owns the only Overview selectio
 The sidebar sets its words on three sizes: a checkout name, an agent title and a count 12/400, and a second line, a project name, a tab or group name and a time 11; a section header is 10/500 in sentence case (`Projects · Recent activity · 5`), 26 high with its words on the baseline.
 A project's own name is its block's label, 11/600, muted while its agents only rest or sleep or it has none and in the ordinary text color while one of its awake agents draws a mark (the turn, the ring or a dot to read); the core decides which (`agent_presence.working`) and the next snapshot moves it.
 A project's block is set off from the one above it by a hairline at its top and a 12px gap, so the last checkouts of one project never read as the next project's rows.
-A project row and a one-line plain folder are 36 high, a checkout row 32 or 48 with its second line, an agent row 28 or 44.
+A project row and a one-line plain folder are 32 high, a checkout row 32 or 48 with its second line, an agent row 28 or 44.
 A checkout name mutes its prefix up to and including the first slash (`prd/`), so the part that tells checkouts apart reads first; a name with no slash, or one that starts or ends with it, has no prefix.
 The checkout whose Workspace is in front turns its name 500 and nothing else about the row.
 The sidebar keeps these sizes at every Appearance font size, because its rows are scanned, not read; the font size scales the rest of the interface.
@@ -1551,7 +1551,7 @@ This is the 프로젝트 list; the `프로젝트 | 태스크` switch above it, �
 The sidebar hierarchy is Project > Workspace > Group > Tab > Agents; a Workspace corresponds to one checkout path, including a plain folder.
 Two checkouts of one repository share a project cycle.
 Each checkout row shows a kind glyph: home for the stored primary checkout, otherwise the pull-request lifecycle icon when current GitHub data has a pull request, then branch, commit for detached HEAD, or folder for a plain folder.
-A project row with checkouts draws no glyph of its own: its name starts on the row's inset and its checkouts' kind glyphs stand on that same column under it, one step shallower than a project glyph would put them (PRD sidebar-quiet-mark-indent D-06); its type is the block's label and the hairline above the block is what tells one project from the next; a plain folder's row keeps its folder glyph, which says its checkout's kind (D-07).
+A project row with checkouts draws no glyph of its own: its name starts on the row's inset and its checkouts' kind glyphs stand on that same column under it, one step shallower than a project glyph would put them (PRD sidebar-quiet-mark-indent D-06); its type is the block's label and the hairline above an open block is what tells it from the project above, while a folded project is one line set off by a small gap and no hairline; a plain folder's row keeps its folder glyph, which says its checkout's kind (D-07).
 The primary choice belongs to the registered project and survives restart; a registration without a choice defaults to its root checkout.
 Changing it moves the home glyph and first position together without moving focus; a vanished choice stays stored and is marked again when that checkout returns.
 A checkout row's `Set as default checkout` sets it; the item is disabled with its reason on the checkout that already is the default, a plain folder, a checkout whose folder is missing, a project without a registration (pin it first), and a device's checkout, which is read-only for this action.
@@ -1642,7 +1642,7 @@ The same root-only sidebar and 태스크 list rules apply while an SSH device is
 A checkout whose root came from another checkout prefixes its purpose line with the Return glyph and the parent checkout's branch, adding `+N` when more than one external root raised it.
 Folding a project by its row or chevron, or using a checkout chevron changes the list only: the center, the focused pane and tab, read state, groups and running processes stay as they were.
 Before the first snapshot arrives the Agents and Projects lists say they are connecting rather than drawing an empty list, and a local Projects list with no registered project says so in a line with no button of its own.
-In the desktop app the Projects section title (`Projects · Recent activity · N`) ends in a + that opens Add a project, drawn whether or not a project is registered, with the hint `Add project ⇧⌘N` (`Alt+Shift+N` off macOS) on pointer or keyboard focus; it is the sidebar's one Add project (PRD first-run-onboarding D-27, B51, B52).
+In the desktop app an `Add project` row sits directly under the Overview row, drawn whether or not a project is registered, with the current chord (`⇧⌘N`, `Alt+Shift+N` off macOS) on its right and no + on the section titles; it is the sidebar's one Add project (PRD first-run-onboarding B51, B52).
 The sidebar has no Home row (PRD sidebar-titlebar-refresh D-06, D-07): a Home agent is found and opened from Needs You and Done, the 태스크 list and ⌘K, the ⌘N start panel can target the Home, and ⌥n numbers the visible rows without it.
 Every device's sidebar starts with the Search row and the shared Overview row, under the device title in the window's top row, followed by one project/checkout/root list with no mode strip.
 Overview shows its glyph, label, Needs You count and current shortcut; zero, an absent snapshot or a disconnected device hides the count.
@@ -1659,7 +1659,7 @@ The list shows the device's Needs You and Done and projects with their operator-
 Needs You and Done stand still above the projects: the project list scrolls under them and never carries them off, and past half the sidebar's height they scroll on their own.
 Opening a raised row that leaves its section, a Done row once read, moves the next row up into its place, so the operator opens one after another from the same spot while the project list brings each one's tree row into view below (`web/e2e/projects-sidebar.spec.ts`).
 Choosing a tile keeps each device's list apart, and ⌥n numbers its visible root rows in physical order.
-The Search row at the sidebar's top, a field-shaped button reading `Search` with the current ⌘K chord (a rebound chord shows as bound), opens the ⌘K palette by a click or Enter on this machine or a selected SSH device alike; Add project sits on the Projects title instead (see Adding a project), and there is no bottom new-workspace button.
+The Search row at the sidebar's top, a field-shaped button reading `Search` with the current ⌘K chord (a rebound chord shows as bound), opens the ⌘K palette by a click or Enter on this machine or a selected SSH device alike; Add project is its own row under Overview (see Adding a project), and there is no bottom new-workspace button.
 The Herdr status line sits under the top and above the list, and is not shown while a device is in front.
 The web Projects list is the scope picker, starting at its first project.
 The shared Overview row carries the selected fill and current-location marker while its modal or page is shown; project headings do not, and a project heading is filled only while a Workspace is in front and its fold hides the focused checkout (below).
@@ -1772,8 +1772,8 @@ Hover, filter and checkbox changes are local: they dispatch no core event and st
 ### Adding a project
 
 Web owner: `web/src/AddProjectDialog.tsx`, `web/src/addProject.ts`; desktop owner: the `hide:pick-folder` channel in `desktop/src/main/host.ts`.
-Add project opens one centered `Add a project` dialog from each of its entry points: the + on the sidebar's Projects title, the empty Home's center button (B27), ⌘⇧N and the File menu; Escape and × close it.
-With projects registered the Projects title's + is the only one on screen; with none it and the empty Home's button are the two (PRD first-run-onboarding B51, B52).
+Add project opens one centered `Add a project` dialog from each of its entry points: the Add project row under Overview, the empty Home's center button (B27), ⌘⇧N and the File menu; Escape and × close it.
+With projects registered the Add project row under Overview is the only one on screen; with none it and the empty Home's button are the two (PRD first-run-onboarding B51, B52).
 Only the desktop app offers it, because the native folder picker is how a local project is added: a plain browser tab draws none of those entry points and has no chord for it.
 The Host selector lists this Mac and every registered device, and starts on the focused device.
 This Mac here is the machine the window runs on, which on a window of a machine whose core runs elsewhere is not the core's (`hostWays` in `web/src/addProject.ts`).

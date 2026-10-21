@@ -53,10 +53,10 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     const browse = page.locator("[data-add-project-browse]");
     const alert = dialog.locator("[data-registration-reason]");
 
-    // The + on the sidebar's Projects title opens the dialog on this Mac, Browse folder holding the keyboard
+    // The Add project row under Overview opens the dialog on this Mac, Browse folder holding the keyboard
     // (PRD first-run-onboarding B51); it is the window's one Add project, none beside Search or on Home's title (B52).
-    const add = page.locator('[data-section="recent"] [data-sidebar-new-workspace]');
-    await expect(add).toHaveAccessibleName("Add project");
+    const add = page.locator("[data-sidebar-new-workspace]");
+    await expect(add).toHaveAccessibleName(/Add project/);
     await expect(page.locator("[data-sidebar-new-workspace]")).toHaveCount(1);
     await expect(page.locator("[data-sidebar-title] [data-sidebar-new-workspace], [data-main-add-project]")).toHaveCount(0);
     await add.hover();
@@ -243,7 +243,7 @@ test("Clone from URL clones a repository into a folder under home and adds it as
     await expect(page.locator("[data-main-screen], [data-workspace-screen]")).toBeVisible({ timeout: 30_000 });
     const dialog = page.locator("[data-add-project]");
     // With no project registered the Projects title keeps its + (B51).
-    await page.locator('[data-section="recent"] [data-sidebar-new-workspace]').click();
+    await page.locator("[data-sidebar-new-workspace]").click();
     await expect(dialog.locator("[data-add-project-other-ways]")).toContainText("Other ways to add");
     await dialog.locator('[data-add-project-way="clone"]').click();
 

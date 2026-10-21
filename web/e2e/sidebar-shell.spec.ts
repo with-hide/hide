@@ -92,7 +92,7 @@ test("the Search row and the Overview row under the device, with no Home row and
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
 
     // B5: a browser tab has no folder picker, so neither the sidebar nor the chord offers Add project
-    // (the desktop app draws it on the Projects header: desktop/e2e/add-project.spec.ts).
+    // (the desktop app draws it under Overview: desktop/e2e/add-project.spec.ts).
     await expect(page.locator("[data-sidebar-new-workspace], [data-main-add-project]")).toHaveCount(0);
     await page.keyboard.press(chord("new_workspace", "electron"));
     await expect(page.locator("[data-add-project]")).toHaveCount(0);
