@@ -24,6 +24,8 @@ export type TurnCardTrigger = {
   onBlur: () => void;
   /** Pins or unpins the card; absent on a trigger whose press does something else. */
   onToggle?: () => void;
+  /** Closes the card, for a trigger whose press opens something in its place. */
+  close: () => void;
 };
 
 /**
@@ -69,6 +71,7 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
     onFocus: () => setFocused(true),
     onBlur: () => setFocused(false),
     onToggle: pinnable ? () => (pinned ? close() : setPinned(true)) : undefined,
+    close,
   };
   const session = agent ? sessionOfAgentOn(agent, localId) : null;
   return (
@@ -113,7 +116,8 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
 
 /** A request's one line as the row and the card draw it: its words, else its image count. */
 export function requestWords(t: TFunction<"translation">, request: PaneTurnRequest | { text: string | null; images: number }): string {
-  return request.text ?? t("requests.images", { count: request.images });
+  const images = request.images > 0 ? t("requests.images", { count: request.images }) : null;
+  return request.text ? (images ? `${request.text} · ${images}` : request.text) : images ?? "";
 }
 
 /** Who sent a request, in the row's words. */
@@ -184,8 +188,8 @@ function TurnCard({ agent, header, head, onRecord }: { agent: AgentRow; header: 
           <section className="flex min-w-0 flex-col gap-xxs" data-turn-card-earlier={earlier.length}>
             <h3 className="text-micro font-medium text-muted-foreground">{t("paneTurn.earlier")}</h3>
             <ul className="flex flex-col gap-xxs">
-              {earlier.map((turn) => (
-                <li key={turn.at_unix_ms} className="min-w-0 truncate text-muted-foreground" data-turn-card-earlier-item="true">
+              {earlier.map((turn, index) => (
+                <li key={index} className="min-w-0 truncate text-muted-foreground" data-turn-card-earlier-item="true">
                   <span className="text-foreground">{turn.request ?? t("paneTurn.unsummarized")}</span>
                   {turn.end ? <span> · {t(`requests.end.${turn.end}`)}</span> : null}
                   {turn.line ? <span> · {turn.line}</span> : null}

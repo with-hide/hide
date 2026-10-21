@@ -102,9 +102,10 @@ pub struct RequestLineSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TurnSnapshot {
     pub request: Option<String>,
-    pub sender: Option<RequestSender>,
     /// How it ended; absent while it was judged only as running.
     pub end: Option<LabelEnd>,
+    /// The label's line about how it ended; absent with `end`, since a
+    /// running turn's line says what it was doing, not how it went.
     pub line: Option<String>,
     pub at_unix_ms: u64,
 }
@@ -281,19 +282,17 @@ pub(crate) fn apply<'a>(
             .iter()
             .rev()
             .filter(|turn| shown_offset.is_some_and(|shown| turn.offset < shown))
+            // A turn the label gave no summary has nothing to name it by.
+            .filter(|turn| !turn.request.trim().is_empty())
             .take(MAX_EARLIER_TURNS)
-            .map(|turn| TurnSnapshot {
-                request: display_text::one_line(&turn.request, MAX_LINE_CHARS),
-                // Which request was the session's first is not kept with an
-                // earlier turn, so a delegated child's unattributed one is
-                // its parent's.
-                sender: turn
-                    .requester
-                    .as_ref()
-                    .map(|requester| requester_sender_of(requester, row.delegated, parent)),
-                end: turn.end.filter(|end| *end != LabelEnd::Working),
-                line: display_text::one_line(&turn.line, MAX_LINE_CHARS),
-                at_unix_ms: turn.at_unix_ms,
+            .map(|turn| {
+                let end = turn.end.filter(|end| *end != LabelEnd::Working);
+                TurnSnapshot {
+                    request: display_text::one_line(&turn.request, MAX_LINE_CHARS),
+                    end,
+                    line: end.and_then(|_| display_text::one_line(&turn.line, MAX_LINE_CHARS)),
+                    at_unix_ms: turn.at_unix_ms,
+                }
             })
             .collect();
         row.request = Some(AgentRequestSnapshot {
@@ -378,15 +377,7 @@ fn request_summary(request: &Request, turns: &[RecentTurn]) -> Option<String> {
 
 fn sender(request: &Request, delegated: bool, parent: Option<&String>) -> RequestSender {
     let parents_first = request.first && delegated;
-    requester_sender_of(&request.requester, parents_first, parent)
-}
-
-fn requester_sender_of(
-    requester: &Requester,
-    parents_first: bool,
-    parent: Option<&String>,
-) -> RequestSender {
-    match requester {
+    match &request.requester {
         Requester::Operator => RequestSender::Operator,
         Requester::Unobserved if parents_first => {
             parent.map_or(RequestSender::Agent, |name| named(name))

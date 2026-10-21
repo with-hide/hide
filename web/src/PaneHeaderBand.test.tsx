@@ -102,7 +102,7 @@ it("puts the tree and direct-child number first while keeping state counts acces
     const trigger = row.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
     expect(trigger.getAttribute("aria-label")).toBe("Child agents 5 · Child requests: 1 · Working: 1 · Reported results: 1 · Unknown state: 1 · Resting: 1");
     expect(trigger.textContent).toBe("5");
-    expect(row.firstElementChild).toBe(trigger);
+    expect(row.firstElementChild?.firstElementChild).toBe(trigger);
     // An ordinary child's question is its parent's to answer: no raised count.
     expect(trigger.querySelector('[data-mark="turn"]')).toBeNull();
     expect(row.querySelectorAll("[data-pane-child-name]")).toHaveLength(0);
@@ -126,7 +126,7 @@ it("puts the pane's own approval after the tree and keeps raised counts in its n
   const { container, unmount } = await mount({ working: false, notice: null, band: { ...header.band!, kind: "approval", reason: "Run the verification command", raised: undefined, action: null, more: 1 } }, agents);
   try {
     const row = container.querySelector('[data-pane-header-band="approval"]')!;
-    expect(row.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
+    expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
     expect(row.querySelector("[data-verb]")?.getAttribute("data-verb")).toBe("approval");
     expect(row.querySelector("[data-pane-band-who]")).toBeNull();
     expect(row.querySelector("[data-pane-child-names]")).toBeNull();
@@ -143,7 +143,7 @@ it("shows only the core-owned progress when no request waits, with or without ch
   const withChildren = await mount({ working: true, notice: null, band: null, progress }, childrenFixture());
   try {
     const row = withChildren.container.querySelector('[data-pane-header-band="progress"]')!;
-    expect(row.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
+    expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
     expect(row.querySelector('[data-pane-own-progress]')?.textContent).toBe(progress);
     expect(row.textContent).not.toContain("Child question");
   } finally { await withChildren.unmount(); }
@@ -578,8 +578,8 @@ function turnAgent(): AgentRow {
       request: { text: "ok do that. it should stay unread i think?\nalso check for other unclear states\nand a third line", cut: false, images: 0, at_unix_ms: 1, sender: { kind: "operator" } },
       request_summary: "Proceed as proposed + check unclear states",
       recent_turns: [
-        { request: "Proposal for the white ring after finishing", sender: { kind: "operator" }, end: "done", line: "Two options drafted", at_unix_ms: 2 },
-        { request: "Why unread states stick", sender: { kind: "operator" }, end: null, line: null, at_unix_ms: 1 },
+        { request: "Proposal for the white ring after finishing", end: "done", line: "Two options drafted", at_unix_ms: 2 },
+        { request: "Why unread states stick", end: null, line: null, at_unix_ms: 1 },
       ],
       later_by: { kind: "named", name: "lead" },
       reply: { text: "Found three unclear states:\n1. finished but unread\n2. idle with letters\n3. stale ring\n4. more", cut: false, at_unix_ms: 3 },

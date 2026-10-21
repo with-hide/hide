@@ -38,7 +38,7 @@ use super::analysis::{
 };
 use super::analyzer::{AnalysisJob, AnalysisResult, LabelAnalyzer};
 use super::context_label;
-use super::facts::{InputView, LogTarget, PullRequestTimes, ReadFacts};
+use super::facts::{InputView, LogTarget, PullRequestTimes, ReadFacts, Requester};
 use super::generator::{GeneratorLock, LockPlace};
 use super::input::{OperatorInput, Submit};
 use super::overlay::LabelOverlay;
@@ -2299,17 +2299,27 @@ impl LabelWorker {
                 }
                 // The summary belongs to the message at its own offset, so a
                 // late answer about an older turn never covers a newer request
-                // (PRD pane-last-request B12); how the turn stood is kept only
-                // while it is still the current one.
+                // (PRD pane-last-request B12), and that older turn keeps how
+                // it ended; a turn the agent resumed since keeps no stale end.
+                // Another agent's letter is not kept beside an operator's
+                // request: the header shows the operator's (D-10), and a lead
+                // pane's letters would push its summary out of the ring.
+                let mut turns_changed = false;
                 if let Some(offset) = outcome.offset {
-                    let requester = record.facts.requester_at(offset).cloned();
-                    record.record_turn(
-                        offset,
-                        &analysis.request,
-                        requester,
-                        (!stale_display).then_some((analysis.end, analysis.line.as_str())),
-                        outcome.request_at_unix_ms,
-                    );
+                    let shown = record.facts.operator_request.is_none()
+                        || record
+                            .facts
+                            .requester_at(offset)
+                            .is_none_or(Requester::is_operator);
+                    if shown {
+                        let outcome_kept = !stale_display || stale_turn;
+                        turns_changed = record.record_turn(
+                            offset,
+                            &analysis.request,
+                            outcome_kept.then_some((analysis.end, analysis.line.as_str())),
+                            outcome.request_at_unix_ms,
+                        );
+                    }
                 }
                 if stale_display {
                     record.task_input_cursor =
@@ -2327,7 +2337,8 @@ impl LabelWorker {
                         "target": self.target, "pane_id": pane_id,
                         "turn": format!("{:016x}", outcome.turn),
                     }));
-                    return goal_changed;
+                    // A late summary still reaches the header it names.
+                    return goal_changed || turns_changed;
                 }
                 record.line = analysis.line.clone();
                 record.end = Some(analysis.end);

@@ -35,8 +35,8 @@ const TURN_VIEW = {
   request: { text: "ㅇㅇㅇㅇ 그렇게 해. 읽을 것으로 두긴 해야할 것 같긴 한데?\n그 외에 뭔가 상태 애매한 거 있는지 점검들 좀 해줘", cut: false, images: 0, at_unix_ms: Date.now() - 180_000, sender: { kind: "operator" as const } },
   request_summary: TURN_REQUEST.text,
   recent_turns: [
-    { request: "완료 후 흰 원 표시 방식 제안", sender: { kind: "operator" as const }, end: "done" as const, line: "두 가지 안을 정리함", at_unix_ms: Date.now() - 720_000 },
-    { request: "미확인 상태 원인 조사", sender: { kind: "operator" as const }, end: "done" as const, line: null, at_unix_ms: Date.now() - 1_860_000 },
+    { request: "완료 후 흰 원 표시 방식 제안", end: "done" as const, line: "두 가지 안을 정리함", at_unix_ms: Date.now() - 720_000 },
+    { request: "미확인 상태 원인 조사", end: "done" as const, line: null, at_unix_ms: Date.now() - 1_860_000 },
   ],
   reply: { text: "애매한 상태 3곳을 찾았어요:\n① 완료 후 미확인 원\n② 대기 중 편지가 있는 쉬는 pane\n③ 오래된 링", cut: false, at_unix_ms: Date.now() - 180_000 },
   later_by: null,

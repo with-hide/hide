@@ -2190,11 +2190,12 @@ fn a_new_turn_read_retires_an_old_done_result_that_arrived_first() {
 }
 
 /// D-09, B12: each turn keeps its request summary by its message's offset,
-/// with how it ended; a new request shows its own once its start is judged,
-/// and the turn before it stays for the turn card.
+/// with how it ended; the turn start's summary stays when its end is judged,
+/// a new request shows its own once its start is judged, and the turn before
+/// it stays for the turn card.
 #[test]
 fn each_turn_keeps_its_own_request_summary_and_how_it_ended() {
-    let mut harness = Harness::new();
+    let harness = Harness::new();
     let path = harness.session("a", "native-a", &[("user", "첫 요청")]);
     harness.backend.begin("첫 요청의 실제 작업");
     let (mut worker, woken, _source) = harness.worker(harness.store());
@@ -2240,7 +2241,7 @@ fn each_turn_keeps_its_own_request_summary_and_how_it_ended() {
         [
             (
                 false,
-                "첫 요청을 마침 요청",
+                "첫 요청의 실제 작업 요청",
                 Some(super::analysis::LabelEnd::Done)
             ),
             (
@@ -2250,6 +2251,60 @@ fn each_turn_keeps_its_own_request_summary_and_how_it_ended() {
             ),
         ]
     );
+}
+
+/// D-09, D-10: the header shows the operator's request, so turns other
+/// agents' letters start are not kept beside it, and a lead pane's reports
+/// cannot push the operator's summary out of the three it keeps.
+#[test]
+fn letter_turns_do_not_push_the_operators_request_summary_out() {
+    let harness = Harness::new();
+    let mut messages = vec![("user".to_owned(), "요청 보기 만들어줘".to_owned())];
+    let write = |harness: &Harness, messages: &[(String, String)]| {
+        let borrowed: Vec<_> = messages
+            .iter()
+            .map(|(role, text)| (role.as_str(), text.as_str()))
+            .collect();
+        harness.session("a", "native-a", &borrowed)
+    };
+    let path = write(&harness, &messages);
+    harness.input.record("w1:p1", turn_at(0) - 300, false);
+    harness.backend.begin("요청 보기 화면 작업");
+    let (mut worker, woken, _source) = harness.worker(harness.store());
+    observe(&mut worker, &agent(&path, "working", 5));
+    settle(&mut worker, &woken);
+    let mut sequence = 6;
+    for index in 0..4 {
+        messages.push(("assistant".to_owned(), format!("답 {index}")));
+        write(&harness, &messages);
+        harness
+            .backend
+            .answer(&format!("요청 보기 단계 {index}"), "done", "");
+        observe(&mut worker, &agent(&path, "idle", sequence));
+        settle(&mut worker, &woken);
+        if index == 3 {
+            break;
+        }
+        messages.push((
+            "user".to_owned(),
+            format!("Hide letter r{index} from child (agent-{index}) [report]\n결과 {index}"),
+        ));
+        write(&harness, &messages);
+        harness.backend.begin(&format!("자식 보고 확인 {index}"));
+        observe(&mut worker, &agent(&path, "working", sequence + 1));
+        settle(&mut worker, &woken);
+        sequence += 2;
+    }
+    let last = agent(&path, "idle", sequence);
+    let facts = shown_facts(&worker, &last).unwrap();
+    let operator = facts.operator_request.as_ref().unwrap();
+    assert_eq!(operator.text, "요청 보기 만들어줘");
+    let summaries: Vec<_> = facts
+        .recent_turns
+        .iter()
+        .map(|turn| (Some(turn.offset) == operator.offset, turn.request.as_str()))
+        .collect();
+    assert_eq!(summaries, [(true, "요청 보기 화면 작업 요청")]);
 }
 
 #[test]

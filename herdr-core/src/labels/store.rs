@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::analysis::LabelEnd;
-use super::facts::{Requester, SessionFacts};
+use super::facts::SessionFacts;
 
 pub(crate) const LABELS_FILE: &str = "labels.json";
 /// The turns a pane keeps a request summary for: the current one and the two
@@ -148,8 +148,6 @@ pub(crate) struct RecentTurn {
     /// The label's request summary; empty when it gave none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) request: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) requester: Option<Requester>,
     /// How the turn stood at its last judgment and its line; none once a
     /// judgment of it failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -247,17 +245,19 @@ impl PaneRecord {
     }
 
     /// Keeps a judgment of the turn begun at `offset`: its request summary,
-    /// unless the judgment gave none, and how it stood, when `outcome` says.
-    /// A turn older than every kept one, once the ring is full, is not
-    /// brought back.
+    /// unless the turn already has one, and how it stood, when `outcome`
+    /// says. The first summary stays because the turn start reads the
+    /// request whole, while the turn end may see only the agent's last words
+    /// of a long turn. A turn older than every kept one, once the ring is
+    /// full, is not brought back. Returns whether the ring changed.
     pub(crate) fn record_turn(
         &mut self,
         offset: u64,
         request: &str,
-        requester: Option<Requester>,
         outcome: Option<(LabelEnd, &str)>,
         at_unix_ms: u64,
-    ) {
+    ) -> bool {
+        let before = self.recent_turns.clone();
         let index = match self
             .recent_turns
             .binary_search_by_key(&offset, |turn| turn.offset)
@@ -269,7 +269,6 @@ impl PaneRecord {
                     RecentTurn {
                         offset,
                         request: String::new(),
-                        requester: None,
                         end: None,
                         line: String::new(),
                         at_unix_ms,
@@ -279,11 +278,8 @@ impl PaneRecord {
             }
         };
         let turn = &mut self.recent_turns[index];
-        if !request.trim().is_empty() {
+        if turn.request.is_empty() && !request.trim().is_empty() {
             request.clone_into(&mut turn.request);
-        }
-        if requester.is_some() {
-            turn.requester = requester;
         }
         if let Some((end, line)) = outcome {
             turn.end = Some(end);
@@ -291,6 +287,7 @@ impl PaneRecord {
         }
         let over = self.recent_turns.len().saturating_sub(RECENT_TURNS);
         self.recent_turns.drain(..over);
+        self.recent_turns != before
     }
 
     /// A judgment of the turn begun at `offset` failed: how it stood is
@@ -351,8 +348,8 @@ const DEVICE_MARK_DEVICES: usize = 64;
 /// What a device pane keeps on disk, and nothing else: which session it ran
 /// (a hash token), which turns were analyzed (hashes), how the last one ended
 /// and the label the model wrote (its goal, line and recent request
-/// summaries, capped). No request or
-/// reply of the conversation, no fact, no path. A restart restores these so a
+/// summaries, capped). No request or reply text of the conversation, no
+/// fact, no path; a request summary is the model's one line about it. A restart restores these so a
 /// turn that was already analyzed is not paid for again and its label is
 /// still there.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -932,7 +929,7 @@ mod tests {
 
     /// D-09: a pane keeps the current turn and the two before it, oldest
     /// dropped; a late answer about a turn already dropped does not come
-    /// back, and an answer with no summary keeps the one it had.
+    /// back, and a later answer keeps the summary the turn already had.
     #[test]
     fn recent_turns_keep_three_by_offset_and_a_late_older_one_stays_out() {
         let mut record = record("v1:owner");
@@ -940,7 +937,6 @@ mod tests {
             record.record_turn(
                 offset,
                 &format!("요청 {offset}"),
-                Some(Requester::Operator),
                 Some((LabelEnd::Done, "끝")),
                 offset,
             );
@@ -958,10 +954,12 @@ mod tests {
             (40, "요청 40".to_owned()),
         ];
         assert_eq!(kept(&record), three);
-        record.record_turn(10, "늦은 답", None, None, 10);
+        assert!(!record.record_turn(10, "늦은 답", None, 10));
         assert_eq!(kept(&record), three, "a dropped turn does not come back");
-        record.record_turn(40, " ", None, Some((LabelEnd::Question, "골라 주세요")), 40);
+        assert!(record.record_turn(40, " ", Some((LabelEnd::Question, "골라 주세요")), 40));
         assert_eq!(kept(&record), three, "an empty summary keeps the old one");
+        record.record_turn(40, "끝에서 다시 쓴 요약", None, 40);
+        assert_eq!(kept(&record), three, "the turn start's summary stays");
         assert_eq!(record.recent_turns[2].end, Some(LabelEnd::Question));
         assert!(record.forget_turn_outcome(40));
         assert_eq!(
@@ -983,7 +981,7 @@ mod tests {
         let store = LabelStore::open(Some(root.path()), None, LOCAL_TARGET);
         let mut device = record("remote-owner");
         device.analysis_turn_end = Some(7);
-        device.record_turn(7, "원격 요청 요약", Some(Requester::Operator), None, 1);
+        device.record_turn(7, "원격 요청 요약", None, 1);
         store.save_target(
             "device:mini",
             &BTreeMap::from([("w2:p1".to_owned(), device)]),

@@ -109,25 +109,22 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : request ? "request" : "children");
   const tone = band ? "border-l-2 border-warning text-foreground" : "text-muted-foreground";
   return <div className="absolute inset-x-0 top-0 z-10 bg-background">
-    {request ? (
-      // Each part is one flex item, so the answer wraps under the request as
-      // a whole when the turn does not fit, and each then fills its own row.
-      <div className={cn("flex min-w-0 flex-wrap items-center gap-x-xs bg-secondary px-sm text-caption", tone)} data-pane-header-band={kind} data-pane-turn={paneId}>
-        <div className="flex h-(--size-pane-header) min-w-0 max-w-full shrink items-center gap-xs" data-pane-turn-part="request">
+    {/* One row whether or not it leads with a request, so the tree's
+        popover stays open when the request comes or goes. Each part is one
+        flex item: with a request, the answer wraps under it as a whole when
+        the turn does not fit, and each then fills its own row. */}
+    <div className={cn("flex min-w-0 items-center gap-x-xs bg-secondary px-sm text-caption", request ? "flex-wrap" : "flex-nowrap", tone)} data-pane-header-band={kind} data-pane-turn={request ? paneId : undefined}>
+      {tree || request ? (
+        <div key="request" className="flex h-(--size-pane-header) min-w-0 max-w-full shrink items-center gap-xs" data-pane-turn-part="request">
           {tree}
-          <PaneTurnCard paneId={paneId} actions={actions} pinnable trigger={(state) => <TurnRequestButton paneId={paneId} request={request} state={state} />} />
+          {request ? <PaneTurnCard paneId={paneId} actions={actions} pinnable trigger={(state) => <TurnRequestButton paneId={paneId} request={request} state={state} />} /> : null}
         </div>
-        <div className="flex h-(--size-pane-header) min-w-0 max-w-full grow items-center gap-xs" data-pane-turn-part="answer">
-          <span aria-hidden="true" className="shrink-0 text-subtle-foreground">→</span>
-          {answer}
-        </div>
-      </div>
-    ) : (
-      <div className={cn("flex h-[var(--size-pane-header)] min-w-0 items-center gap-xs bg-secondary px-sm text-caption", tone)} data-pane-header-band={kind}>
-        {tree}
+      ) : null}
+      <div key="answer" className={cn("flex h-(--size-pane-header) min-w-0 max-w-full grow items-center gap-xs", !request && "basis-0")} data-pane-turn-part="answer">
+        {request ? <span aria-hidden="true" className="shrink-0 text-subtle-foreground">→</span> : null}
         {answer}
       </div>
-    )}
+    </div>
     {workingLine}
   </div>;
 }
@@ -268,7 +265,10 @@ export function PaneRecordButton({ paneId, title, product, actions, children, pl
         aria-label={[title, product, words, t("record.recordHint")].filter(Boolean).join(", ")}
         aria-expanded={state.open}
         onMouseDown={(event) => event.preventDefault()}
-        onClick={() => actions.togglePaneRecord(session)}
+        onClick={() => {
+          state.close();
+          actions.togglePaneRecord(session);
+        }}
         onPointerEnter={state.onPointerEnter}
         onPointerLeave={state.onPointerLeave}
         onFocus={state.onFocus}

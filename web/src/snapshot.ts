@@ -214,7 +214,6 @@ export type AgentRequest = {
 /** A turn before the shown request (`TurnSnapshot`): the label's summary of its request and how it ended. */
 export type AgentTurn = {
   request: string | null;
-  sender: RequestSender | null;
   end: LabelEnd | null;
   line: string | null;
   at_unix_ms: number;

@@ -860,7 +860,6 @@ fn turn(offset: u64, request: &str, end: Option<LabelEnd>) -> RecentTurn {
     RecentTurn {
         offset,
         request: request.to_owned(),
-        requester: Some(Requester::Operator),
         end,
         line: format!("{request} 결과"),
         at_unix_ms: offset,
