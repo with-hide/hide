@@ -6,7 +6,7 @@ import type { AgentRow, OverviewGraphMetadata, OverviewGraphParty } from "./snap
 export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null };
 export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; expanded: boolean; roots: number; matches: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null };
 export type GraphFocus = "all" | "turn" | "working" | "results";
-export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; folded?: ReadonlySet<string>; pinned?: readonly string[]; selected?: string | null };
+export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; folded?: ReadonlySet<string>; pinned?: readonly string[]; selected?: string | null; preferredProject?: string | null };
 export type GraphActivity = Exclude<GraphFocus, "all"> | "unknown" | "idle" | "resting";
 export const GRAPH_FOCUS_DEFAULTS: GraphFocusOptions = { focus: "all", includeResting: false };
 
@@ -178,7 +178,7 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     .sort((a, b) => a.id.localeCompare(b.id));
   // Centers share the 400-node budget with their representatives. Counts/list stay uncapped.
   const pinned = new Set(options.pinned ?? []);
-  const admissionPriority = new Map(all.map((group) => [group.id, Number(group.agents.some((row) => row.id === options.selected)) * 4 + Number(group.agents.some((row) => pinned.has(row.id))) * 2 + Number(group.expanded)]));
+  const admissionPriority = new Map(all.map((group) => [group.id, Number(group.id === options.preferredProject) * 8 + Number(group.agents.some((row) => row.id === options.selected)) * 4 + Number(group.agents.some((row) => pinned.has(row.id))) * 2 + Number(group.expanded)]));
   const priority = [...all].sort((a, b) => admissionPriority.get(b.id)! - admissionPriority.get(a.id)! || a.id.localeCompare(b.id));
   // Admit complete center + access-slot pairs first. A greedy expanded project
   // must not consume the one position another summarized project needs.

@@ -208,6 +208,25 @@ describe("current sessions in the Overview graph", () => {
     expect(opened.agents).toHaveLength(401);
   });
 
+  it("protects the latest heading expansion beside other expanded projects at the cap", () => {
+    const current = project("p000", [agent("current"), agent("child")]);
+    const others = Array.from({ length: 199 }, (_, index) => project(`p${String(index + 1).padStart(3, "0")}`, [agent(`a${index}`)]));
+    const projects = [current, ...others];
+    const target = graphProjectId(others.at(-1)!);
+    const all = overviewGraphModel(projects, undefined, new Set(), null);
+    const pinned = [all.agents.find((row) => row.agent.pane_id === "current")!.id];
+    const expanded = new Set(projects.slice(0, -1).map(graphProjectId));
+    const before = overviewGraphModel(projects, undefined, expanded, null, { focus: "all", includeResting: false, pinned });
+    expect(before.projects.length + before.visible.length).toBe(400);
+    expanded.add(target);
+    const after = overviewGraphModel(projects, undefined, expanded, null, { focus: "all", includeResting: false, pinned, preferredProject: target });
+    expect(after.projects.some((group) => group.id === target && group.expanded)).toBe(true);
+    expect(after.visible.some((row) => row.projectId === target)).toBe(true);
+    expect(after.visible.some((row) => row.id === pinned[0])).toBe(true);
+    expect(after.projects.length + after.visible.length).toBeLessThanOrEqual(400);
+    expect(after.agents).toHaveLength(201);
+  });
+
   it("opens the chosen project, then the recent checkout, without using device display labels as identity", () => {
     const a = project("one", [agent("a")]);
     const b = project("two", [agent("b")]);

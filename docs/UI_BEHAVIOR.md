@@ -923,7 +923,7 @@ One-project scope retains its center and offers All projects to return.
 A collapsed project hides every agent, including the current or previously selected one, retaining only its heading and counts; Collapse all applies this to every project and frames the remaining headings.
 An explicit project expansion or collapse centers that project; background status updates never move the camera.
 An oversized expanded project retains stable-ID representatives and an access slot within the shared 400-node budget.
-Admission prioritizes the selected project, the current project's protected position and expanded projects before collapsed headings, so expanding a heading at the limit retains it.
+Admission prioritizes the last explicitly toggled or selected project, then the selected session and current project's protected positions and expanded projects before collapsed headings, so expanding a heading at the limit retains it.
 Each admitted expanded project reserves an access position for a hidden selected member, and selecting a session whose project is outside that budget opens its project scope with that session selected.
 In an expanded project, the current member has its own protected position, so choosing another member cannot displace it at the graph limit.
 Up to twelve sessions share the first ring; agent circles and labels stay below the project heading, including for one session.

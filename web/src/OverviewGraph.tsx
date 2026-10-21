@@ -54,6 +54,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const rest = useShellStore((state) => state.rest);
   const summaries = useShellStore((state) => state.linkSummaries);
   const [expanded, setExpanded] = useState(() => initialGraphExpansion(projects, projectId, (rest?.ui_state?.recent_checkouts ?? []).filter((row) => row.device_id === deviceId).map((row) => row.checkout_id)));
+  const [preferredProject, setPreferredProject] = useState<string | null>(null);
   const initialized = useRef(projects.length > 0);
   useEffect(() => {
     if (initialized.current || projects.length === 0) return;
@@ -90,7 +91,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const opener = useRef<HTMLElement | null>(null);
   const reduced = useGraphReducedMotion();
   const theme = useGraphTheme();
-  const model = useMemo(() => overviewGraphModel(projects, rest?.overview_graph, expanded, projectId, { focus, includeResting, folded, pinned: entry ? [entry.id] : [], selected: highlightedSession }), [projects, rest?.overview_graph, expanded, projectId, focus, includeResting, folded, entry, highlightedSession]);
+  const model = useMemo(() => overviewGraphModel(projects, rest?.overview_graph, expanded, projectId, { focus, includeResting, folded, pinned: entry ? [entry.id] : [], selected: highlightedSession, preferredProject }), [projects, rest?.overview_graph, expanded, projectId, focus, includeResting, folded, entry, highlightedSession, preferredProject]);
   useEffect(() => { if ([...folded].some((id) => !model.folded.has(id))) setFolded(new Set(model.folded)); }, [folded, model.folded]);
   const layout = useOverviewGraphLayout(model, host, retry);
   const flow = useReactFlow();
@@ -150,7 +151,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     return () => clearTimeout(timer);
   }, [playback, motion, reduced]);
   const progress = useMemo(() => new Map((summariesEnabled(rest?.status?.background_ai) ? summaries?.progress ?? [] : []).map((row) => [workKey(row.session), row])), [summaries, rest?.status?.background_ai]);
-  const toggle = useCallback((id: string) => { requestedCamera.current = id; setExpanded((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }, []);
+  const toggle = useCallback((id: string) => { requestedCamera.current = id; setPreferredProject(id); setExpanded((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }, []);
   const rememberOpener = useCallback((target?: HTMLElement) => {
     const active = target ?? document.activeElement;
     if (active instanceof HTMLElement && active !== document.body && !active.closest(".og-details")) opener.current = active;
@@ -162,7 +163,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     // An omitted project's uncapped list row has a deterministic route back to a graph.
     // Scope navigation is explicit user selection and does not move the existing map.
     if (row && !model.projects.some((group) => group.id === row.projectId)) { revealProjectSession(row); return; }
-    if (row) setExpanded((previous) => new Set([...previous, row.projectId]));
+    if (row) { setPreferredProject(row.projectId); setExpanded((previous) => new Set([...previous, row.projectId])); }
     rememberOpener(target); setHighlightedSession(id); setSelection({ kind: "session", id }); setPlayback((value) => value + 1);
   }, [rememberOpener, model.agents, model.projects, revealProjectSession]);
   const highlightLetter = useCallback((id: string | null, keyboard: boolean) => { if (keyboard) setEdgeFocus(id); else setEdgeHover(id); }, []);
