@@ -298,6 +298,18 @@ impl PathIndex {
     };
 
     pub fn new(facts: PathFacts) -> Self {
+        for (path, reason) in facts
+            .paths
+            .iter()
+            .filter_map(|(path, fact)| Some((path, fact.project_unread.as_ref()?)))
+        {
+            crate::diagnostic!(serde_json::json!({
+                "component": "workspace_catalog",
+                "kind": "project_facts.read_failed",
+                "path": path,
+                "message": reason,
+            }));
+        }
         let mut paths = facts.paths;
         let aliases = paths
             .values()
@@ -320,6 +332,7 @@ impl PathIndex {
                         comparison: place.root.clone(),
                         exists: true,
                         project,
+                        project_unread: None,
                         repository: Some(place.clone()),
                     },
                 )

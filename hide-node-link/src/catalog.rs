@@ -47,6 +47,10 @@ pub struct PathFact {
     /// Comparison paths are for matching, never for durable Project IDs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<hide_project::ProjectFacts>,
+    /// Why `project` is absent for a path that exists, so the core's log,
+    /// not the node's stderr, which a device's link does not carry, says it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_unread: Option<String>,
     /// The repository the path is in, read from its `.git` files.
     pub repository: Option<RepositoryPlace>,
 }

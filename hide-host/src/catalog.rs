@@ -45,6 +45,7 @@ fn path_facts_within(paths: &[String], answer_limit: usize) -> HostResult<PathFa
                 comparison: asked.clone(),
                 exists: false,
                 project: None,
+                project_unread: None,
                 repository: None,
             }
         };
@@ -65,6 +66,7 @@ fn path_facts_within(paths: &[String], answer_limit: usize) -> HostResult<PathFa
 
 fn fact_bytes(fact: &PathFact) -> usize {
     fact.comparison.len()
+        + fact.project_unread.as_ref().map_or(0, String::len)
         + fact.project.as_ref().map_or(0, |project| {
             project.root.to_string_lossy().len()
                 + project.checkout_root.to_string_lossy().len()
@@ -137,13 +139,13 @@ fn read(native: &Path, facts: &mut PathFacts, bytes: &mut usize) -> PathFact {
     // One walk up to `.git` answers both the Project and the repository. A
     // path whose Project cannot be read, or not carried (the wire spells
     // paths in UTF-8), is answered without one; the other paths still are.
-    let (project, repository) = match hide_project::facts_and_repository(native) {
-        Ok((project, repository)) => (wire_project(native, project), repository),
-        Err(hide_project::ResolveError::MissingPath(_)) => (None, None),
-        Err(error) => {
-            project_unread(native, &error.to_string());
-            (None, None)
-        }
+    let (project, project_unread, repository) = match hide_project::facts_and_repository(native) {
+        Ok((project, repository)) => match wire_project(project) {
+            Ok(project) => (Some(project), None, repository),
+            Err(reason) => (None, Some(reason), repository),
+        },
+        Err(hide_project::ResolveError::MissingPath(_)) => (None, None, None),
+        Err(error) => (None, Some(error.to_string()), None),
     };
     let repository = repository.map(|repository| {
         let main_root = comparison(&repository.main_root());
@@ -173,33 +175,18 @@ fn read(native: &Path, facts: &mut PathFacts, bytes: &mut usize) -> PathFact {
         comparison: comparison(native),
         exists: native.exists(),
         project,
+        project_unread,
         repository,
     }
 }
 
-fn wire_project(
-    native: &Path,
-    project: hide_project::ProjectFacts,
-) -> Option<hide_project::ProjectFacts> {
+/// The facts as the wire can carry them: it spells paths in UTF-8.
+fn wire_project(project: hide_project::ProjectFacts) -> Result<hide_project::ProjectFacts, String> {
     if project.root.to_str().is_some() && project.checkout_root.to_str().is_some() {
-        return Some(project);
+        Ok(project)
+    } else {
+        Err("project_path_not_utf8".to_owned())
     }
-    project_unread(native, "project_path_not_utf8");
-    None
-}
-
-/// One record on the node's error stream for a path asked about whose
-/// Project could not be answered.
-fn project_unread(native: &Path, reason: &str) {
-    eprintln!(
-        "{}",
-        serde_json::json!({
-            "component": "catalog",
-            "kind": "path_facts.project_unread",
-            "path": path::to_wire_lossy(native),
-            "reason": reason,
-        })
-    );
 }
 
 /// `path` with its links resolved as far as it exists: the whole path when
@@ -339,6 +326,13 @@ mod tests {
         let fact = &facts.paths[&broken];
         assert!(fact.exists);
         assert!(fact.project.is_none() && fact.repository.is_none());
+        assert!(
+            fact.project_unread
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("project_git_link_invalid")),
+            "the reason travels to the core: {:?}",
+            fact.project_unread
+        );
         let project = facts.paths[&plain_wire]
             .project
             .as_ref()
@@ -360,15 +354,16 @@ mod tests {
             linked_worktree: false,
         };
         assert!(serde_json::to_string(&project).is_err());
-        let kept = wire_project(Path::new("/tmp/asked"), project);
-        assert!(kept.is_none());
+        let kept = wire_project(project);
+        assert_eq!(kept, Err("project_path_not_utf8".to_owned()));
         let mut facts = PathFacts::default();
         facts.paths.insert(
             "/tmp/asked".into(),
             PathFact {
                 comparison: "/tmp/asked".into(),
                 exists: true,
-                project: kept,
+                project: None,
+                project_unread: kept.err(),
                 repository: None,
             },
         );
