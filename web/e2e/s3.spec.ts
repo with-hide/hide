@@ -14,7 +14,7 @@ import { toPage } from "../../desktop/src/main/wirePath";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, enterWorkspace, screenshot, showExplorer, showProjectRow, showTool } from "./wire";
-import { chord } from "./chords";
+import { chord, mod } from "./chords";
 import { dumpOnFailure } from "./failure-dump";
 import { onDisk, quietFor } from "./wait";
 
@@ -1318,9 +1318,10 @@ test("Explorer files paste paths and images attach to the receiving terminal", {
     await page.locator(`[data-explorer-row="${source}"]`).click({ button: "right" });
     await page.locator('[data-explorer-menu] [data-menu-item="copy"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(source);
-    // A real clipboard chord reaches the terminal's native paste listener.
+    // Terminal Paste is ⌘V on macOS, Ctrl+Shift+V on Windows and Linux
+    // (UI_BEHAVIOR.md, Keyboard): Ctrl+V remains input to the program there.
     await page.locator(`[data-pane-view="${target}"] .xterm-helper-textarea`).focus();
-    await page.keyboard.press("ControlOrMeta+v");
+    await page.keyboard.press(mod("KeyV"));
     await expect.poll(() => read().split(name.replace("$", "\\$")).length - 1).toBe(2);
     // Keyboard Copy followed by native Paste uses the same image attachment route.
     await page.locator("[data-explorer-tree]").focus();
@@ -1330,7 +1331,7 @@ test("Explorer files paste paths and images attach to the receiving terminal", {
     await page.keyboard.press("ControlOrMeta+c");
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(image);
     await page.locator(`[data-pane-view="${target}"] .xterm-helper-textarea`).focus();
-    await page.keyboard.press("ControlOrMeta+v");
+    await page.keyboard.press(mod("KeyV"));
     await expect.poll(() => read().split("drag-image.png").length - 1).toBe(2);
     await screenshot(page, "explorer-terminal-drop");
   } finally {
