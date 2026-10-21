@@ -492,8 +492,12 @@ fn a_new_conversation_in_the_pane_drops_its_mark() {
     runtime.snapshot.navigator.agents[0].lineage_session = Some("first".into());
     runtime.sync_session_state();
     assert!(runtime.snapshot.navigator.agents[0].revisit.is_some());
-    assert!(runtime.finish_revisit("session"));
-    assert!(runtime.star_session("session"));
+    assert_eq!(
+        runtime.snapshot.ui_state.revisit_sessions["session"]
+            .session
+            .as_deref(),
+        Some("first")
+    );
     runtime.snapshot.navigator.agents[0].lineage_session = Some("another".into());
     runtime.sync_session_state();
     assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());

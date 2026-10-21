@@ -417,6 +417,7 @@ impl Runtime {
                 .and_then(|letter| crate::display_text::one_line(letter.body.lines().next()?, 80))
         });
         let mut stale_revisits = Vec::new();
+        let mut adopted_revisits = Vec::new();
         for row in &mut rows {
             // A raise brings a resolved root back, as a new letter would.
             if !row.raised.is_empty() && row.resolved.is_some() {
@@ -436,6 +437,10 @@ impl Runtime {
                     // one not yet reported, or reported late, keeps the ★.
                     let current = match (&mark.session, &row.lineage_session) {
                         (Some(marked), Some(now)) => marked == now,
+                        (None, Some(now)) => {
+                            adopted_revisits.push((row.pane_id.clone(), now.clone()));
+                            true
+                        }
                         _ => true,
                     };
                     if !current {
@@ -445,9 +450,16 @@ impl Runtime {
                 });
             row.revisit = sessions::revisit_of(row, mark);
         }
-        if !stale_revisits.is_empty() {
+        if !stale_revisits.is_empty() || !adopted_revisits.is_empty() {
             for pane in &stale_revisits {
                 self.snapshot.ui_state.revisit_sessions.remove(pane);
+            }
+            // The first conversation reported after the ★ becomes its own, so
+            // a later one replacing it drops the mark.
+            for (pane, session) in adopted_revisits {
+                if let Some(mark) = self.snapshot.ui_state.revisit_sessions.get_mut(&pane) {
+                    mark.session = Some(session);
+                }
             }
             self.persist_ui_state();
         }
