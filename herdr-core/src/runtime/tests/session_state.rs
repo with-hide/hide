@@ -482,10 +482,17 @@ fn resolving_puts_the_star_away_and_a_failed_save_keeps_the_row_as_it_was() {
 
 #[test]
 fn a_new_conversation_in_the_pane_drops_its_mark() {
-    // D-11: a mark belongs to the session it was written for.
+    // D-11: a mark belongs to the session it was written for, and a
+    // conversation reported only after the ★ keeps it.
     let mut runtime = with_session();
     let _dirs = hold_dirs(&mut runtime);
     runtime.snapshot.navigator.agents[0].unread = false;
+    runtime.snapshot.navigator.agents[0].lineage_session = None;
+    assert!(runtime.star_session("session"));
+    runtime.snapshot.navigator.agents[0].lineage_session = Some("first".into());
+    runtime.sync_session_state();
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_some());
+    assert!(runtime.finish_revisit("session"));
     assert!(runtime.star_session("session"));
     runtime.snapshot.navigator.agents[0].lineage_session = Some("another".into());
     runtime.sync_session_state();
@@ -505,4 +512,65 @@ fn the_phone_lists_a_read_question_in_revisit_between_unread_and_working() {
         crate::agent_state::phone::GROUP_ORDER,
         ["needs_you", "done", "revisit", "working", "seen"]
     );
+}
+
+#[test]
+fn a_read_approval_waits_like_a_question() {
+    // B5, D-13.
+    let mut runtime = with_read_question();
+    runtime.snapshot.navigator.agents[0].demand = "approval".into();
+    runtime.sync_session_state();
+    assert!(
+        runtime.snapshot.navigator.agents[0]
+            .revisit
+            .is_some_and(|r| r.read_ask)
+    );
+}
+
+#[test]
+fn a_closed_pane_takes_its_mark_and_a_star_past_the_cap_is_refused() {
+    // B16, B22.
+    let mut runtime = with_session();
+    let _dirs = hold_dirs(&mut runtime);
+    assert!(runtime.star_session("session"));
+    runtime.prune_resolved_sessions(|pane| pane == "session");
+    assert!(runtime.snapshot.ui_state.revisit_sessions.is_empty());
+    assert!(runtime.pending_revisit.is_empty());
+
+    for index in 0..crate::agent_state::sessions::MAX_STARRED_SESSIONS {
+        runtime.snapshot.ui_state.revisit_sessions.insert(
+            format!("other-{index}"),
+            crate::agent_state::sessions::RevisitMark {
+                starred_at_unix_ms: Some(1),
+                ..Default::default()
+            },
+        );
+    }
+    runtime.star_session("session");
+    assert!(
+        !runtime
+            .snapshot
+            .ui_state
+            .revisit_sessions
+            .contains_key("session")
+    );
+    assert_eq!(
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|e| e.kind.as_str()),
+        Some("revisit.capacity")
+    );
+}
+
+#[test]
+fn resolving_a_read_question_takes_it_out_of_revisit() {
+    // B17, D-14.
+    let mut runtime = with_read_question();
+    let _dirs = hold_dirs(&mut runtime);
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_some());
+    assert!(runtime.resolve_session("session", ResolveSource::Operator));
+    assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
 }

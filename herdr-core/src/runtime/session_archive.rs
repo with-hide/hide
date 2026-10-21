@@ -317,13 +317,7 @@ impl Runtime {
             reason: None,
             starred_at_unix_ms: self
                 .revisit_mark(pane_id)
-                .and_then(|mark| mark.starred_at_unix_ms)
-                .or_else(|| {
-                    let records = &self.snapshot.ui_state.session_archive.records;
-                    records
-                        .get(&id)
-                        .and_then(|earlier| earlier.starred_at_unix_ms)
-                }),
+                .and_then(|mark| mark.starred_at_unix_ms),
             deleting: false,
         };
         self.snapshot

@@ -658,7 +658,10 @@ pub mod phone {
     ) {
         let roots = roots(agents);
         for agent in agents {
-            if agent.get("resolved").is_some_and(|value| !value.is_null()) {
+            // A starred task still waits in 다시 볼 것 after it resolved itself.
+            if agent.get("resolved").is_some_and(|value| !value.is_null())
+                && agent.pointer("/revisit/starred").and_then(Value::as_bool) != Some(true)
+            {
                 continue;
             }
             let pane_id = str_of(agent, "pane_id");
@@ -699,8 +702,7 @@ pub mod phone {
                     }
                     "working"
                         if str_of(agent, "activity") != "working"
-                            && agent.pointer("/revisit/starred").and_then(Value::as_bool)
-                                == Some(true) =>
+                            && agent.get("revisit").is_some_and(|value| !value.is_null()) =>
                     {
                         "revisit".to_owned()
                     }

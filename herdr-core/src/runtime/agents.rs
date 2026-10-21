@@ -2499,7 +2499,9 @@ impl Runtime {
                         let mut guard = runtime.lock().unwrap_or_else(|e| e.into_inner());
                         let resolving = state.resolved_sessions.iter().any(|(pane, record)| {
                             guard.pending_session_resolutions.get(pane) == Some(record)
-                        });
+                        }) || guard.pending_revisit.iter().any(
+                            |(pane, pending)| state.revisit_sessions.get(pane) == pending.as_ref(),
+                        );
                         let resolved_changed =
                             guard.acknowledge_session_save(&state, result.is_ok());
                         let archive_changed =

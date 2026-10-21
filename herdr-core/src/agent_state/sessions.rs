@@ -36,8 +36,9 @@ pub const MAX_STARRED_SESSIONS: usize = 256;
 pub struct RevisitMark {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub starred_at_unix_ms: Option<u64>,
-    /// The `request_since` of the read ask 다 봤음 dismissed; a later ask
-    /// has another and stands again.
+    /// The state stamp (`changed_at_unix_ms`) of the read ask 다 봤음
+    /// dismissed: reading leaves it alone and a later ask has another, which
+    /// stands again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dismissed_ask_since: Option<u64>,
     pub session: Option<String>,
@@ -61,7 +62,9 @@ pub struct Revisit {
 
 /// An ask the operator read and has not answered: a question or an approval
 /// that no longer holds the row in Needs You (a block holds it there, D-12),
-/// on a root that is not working, and not the one 다 봤음 put away.
+/// on a root that is not working or resolved (해결 puts it away, D-14), and
+/// not the one 다 봤음 put away. The ask is known by the stamp of the state it
+/// stands in, which the operator reading it does not move.
 pub(crate) fn revisit_of(
     agent: &SidebarAgentSnapshot,
     mark: Option<&RevisitMark>,
@@ -71,11 +74,12 @@ pub(crate) fn revisit_of(
         && !agent.blocked
         && !agent.unread
         && agent.activity != "working"
-        && agent.state.request_since.is_some()
-        && mark.and_then(|m| m.dismissed_ask_since) != agent.state.request_since;
+        && agent.resolved.is_none()
+        && agent.changed_at_unix_ms.is_some()
+        && mark.and_then(|m| m.dismissed_ask_since) != agent.changed_at_unix_ms;
     let starred_at = mark.and_then(|m| m.starred_at_unix_ms);
     let since = [
-        read_ask.then_some(agent.state.request_since).flatten(),
+        read_ask.then_some(agent.changed_at_unix_ms).flatten(),
         starred_at,
     ]
     .into_iter()

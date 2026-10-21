@@ -195,7 +195,7 @@ impl Runtime {
         let ask = row
             .revisit
             .filter(|revisit| revisit.read_ask)
-            .and(row.state.request_since);
+            .and(row.changed_at_unix_ms);
         let next = sessions::RevisitMark {
             starred_at_unix_ms: None,
             dismissed_ask_since: ask.or(current.as_ref().and_then(|m| m.dismissed_ask_since)),
@@ -211,8 +211,10 @@ impl Runtime {
     /// The mark changes only once the save holds it (B23).
     fn save_revisit(&mut self, pane: &str, mark: Option<sessions::RevisitMark>) -> bool {
         self.pending_revisit.insert(pane.to_owned(), mark);
-        if let Err(message) = self.write_ui_state() {
-            self.pending_revisit.remove(pane);
+        // A synchronous save already settled and reported its failure.
+        if let Err(message) = self.write_ui_state()
+            && self.pending_revisit.remove(pane).is_some()
+        {
             self.report_revisit_save_failed(&message);
         }
         self.sync_session_state();
@@ -430,7 +432,12 @@ impl Runtime {
                 .revisit_sessions
                 .get(&row.pane_id)
                 .filter(|mark| {
-                    let current = mark.session == row.lineage_session;
+                    // Only a known conversation replacing another drops it:
+                    // one not yet reported, or reported late, keeps the ★.
+                    let current = match (&mark.session, &row.lineage_session) {
+                        (Some(marked), Some(now)) => marked == now,
+                        _ => true,
+                    };
                     if !current {
                         stale_revisits.push(row.pane_id.clone());
                     }

@@ -189,7 +189,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           ref={main}
           type="button"
           disabled={unreachable}
-          aria-label={[offline ? [agent.identity_label, remote?.label, agentProductName(agent.agent_kind), offline].filter(Boolean).join(", ") : rowAccessibleName(t, agent, device ?? remote?.label ?? null), forkLabel(t, agent), closing ? t("agents.closingName") : null, place].filter(Boolean).join(", ")}
+          aria-label={[offline ? [agent.identity_label, remote?.label, agentProductName(agent.agent_kind), offline].filter(Boolean).join(", ") : rowAccessibleName(t, agent, device ?? remote?.label ?? null), forkLabel(t, agent), starred(agent) ? t("taskLens.revisit.starred") : null, closing ? t("agents.closingName") : null, place].filter(Boolean).join(", ")}
           aria-current={selected ? "true" : undefined}
           aria-expanded={tree && tree.open !== null && !tree.popover ? tree.open : undefined}
           data-agent-open={agent.pane_id}
