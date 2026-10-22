@@ -5,12 +5,12 @@
 //! location, hook dialect and documentation. This module projects those
 //! declarations into kit pieces and owns their installation policy. The content an
 //! agent reads is the same for all of them and is read from the `hide` binary
-//! at run time (`hide browser help`), so a new agent needs a shared declaration
+//! at run time (`hide guide`), so a new agent needs a shared declaration
 //! and a fixture, never another copy of this content (engineering rule 2, 7).
 //!
 //! Three things a row can turn on for an agent the operator switched on:
 //!
-//! - Hide's skill stubs ([`SKILLS`]: `hide-browser`, `hide-conductor`), in
+//! - Hide's skill stub ([`SKILLS`]: `hide`; [`RETIRED_SKILLS`] are taken out), in
 //!   the folder the agent reads ([`SkillDir`]); the folder is shared by every
 //!   agent that reads it, so the stubs stay while any of them is on;
 //! - a hook: Claude Code and Codex keep their kit parts
@@ -206,24 +206,49 @@ pub struct Skill {
     pub version: u32,
 }
 
-pub const BROWSER_SKILL: Skill = Skill {
-    name: "hide-browser",
-    description: "Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.",
-    body: "Run `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.",
-    version: 1,
-};
-
-/// Turns the session it runs in into a mission's Conductor (PRD
-/// software-factory-conductor B1).
-pub const CONDUCTOR_SKILL: Skill = Skill {
-    name: "hide-conductor",
-    description: "Run a mission in Hide as its Conductor: plan the work with the operator, start the agents that do it, follow their pull requests, and report. Use when the operator gives you a goal to carry out with several agents, or asks you to take over a mission.",
-    body: "Run `hide mission help` and follow what it prints. It explains how to plan a mission with the operator, start and follow its workers, change the plan when told, merge, report, and take over a mission whose Conductor is gone.",
+/// The one stub: the guide to Hide, which `hide guide` prints and which
+/// routes browser and mission work to their own guides.
+pub const GUIDE_SKILL: Skill = Skill {
+    name: "hide",
+    description: "Only for a session in a pane Hide manages, never an ordinary terminal. Work inside Hide, the operator's workspace for coding agents: send and answer letters to other agents, start agents and follow them, run a mission of agents as its Conductor, read and drive a browser display, show the operator a file or a diff, and read or add Project Memory. Use when a task involves another agent, a mission, a page in Hide's browser, the operator's screen in Hide, or Project Memory, or when you need to know what Hide offers here.",
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff and how to use Project Memory, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.",
     version: 1,
 };
 
 /// Every stub Hide writes; each skill folder holds all of them.
-pub const SKILLS: [Skill; 2] = [BROWSER_SKILL, CONDUCTOR_SKILL];
+pub const SKILLS: [Skill; 1] = [GUIDE_SKILL];
+
+/// A stub an earlier build wrote and this one takes out, by its exact text:
+/// a file that differs in any byte was edited by the operator and stays.
+#[derive(Clone, Copy, Debug)]
+pub struct RetiredSkill {
+    pub name: &'static str,
+    /// The whole file as that build wrote it.
+    pub text: &'static str,
+}
+
+/// `hide-browser` and `hide-conductor` version 1, whose guides `hide guide`
+/// now routes to.
+pub const RETIRED_SKILLS: [RetiredSkill; 2] = [
+    RetiredSkill {
+        name: "hide-browser",
+        text: concat!(
+            "---\nname: hide-browser\n",
+            "description: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n",
+            "---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\n",
+            "Run `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n",
+        ),
+    },
+    RetiredSkill {
+        name: "hide-conductor",
+        text: concat!(
+            "---\nname: hide-conductor\n",
+            "description: Run a mission in Hide as its Conductor: plan the work with the operator, start the agents that do it, follow their pull requests, and report. Use when the operator gives you a goal to carry out with several agents, or asks you to take over a mission.\n",
+            "---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\n",
+            "Run `hide mission help` and follow what it prints. It explains how to plan a mission with the operator, start and follow its workers, change the plan when told, merge, report, and take over a mission whose Conductor is gone.\n",
+        ),
+    },
+];
 
 /// The marker line of a stub, which proves Hide wrote it and says which
 /// text it was. A file without it is the operator's and is never touched.
@@ -351,11 +376,15 @@ pub(crate) fn login_shell() -> Option<PathBuf> {
 // --- The skill stub ------------------------------------------------------------
 
 impl Skill {
-    /// The text of the stub.
+    /// The text of the stub. The description is a quoted YAML string: a
+    /// plain one ends at its first `: `, and a strict reader such as Pi's
+    /// then drops the whole skill (version 1's `hide-conductor`).
     pub(crate) fn text(self) -> String {
+        // A JSON string is a YAML double-quoted scalar.
+        let description = serde_json::Value::from(self.description).to_string();
         format!(
-            "---\nname: {}\ndescription: {}\n---\n\n<!-- {SKILL_MARKER_NAME}@{}: written by Hide; remove it from Settings, Agents -->\n\n{}\n",
-            self.name, self.description, self.version, self.body
+            "---\nname: {}\ndescription: {description}\n---\n\n<!-- {SKILL_MARKER_NAME}@{}: written by Hide; remove it from Settings, Agents -->\n\n{}\n",
+            self.name, self.version, self.body
         )
     }
 
@@ -373,7 +402,7 @@ impl Skill {
                 }
                 Some(version) if version < self.version => SkillObserved::Stale,
                 Some(_) => SkillObserved::Edited,
-                None => SkillObserved::Foreign,
+                None => SkillObserved::Foreign(vec![self.name]),
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => SkillObserved::Missing,
             Err(error) => {
@@ -413,8 +442,9 @@ pub(crate) enum SkillObserved {
     /// Reinstall puts Hide's text back.
     Edited,
     Missing,
-    /// A file there that Hide did not write; it is left as it is.
-    Foreign,
+    /// Files there that Hide did not write, by the stub names they hold;
+    /// they are left as they are.
+    Foreign(Vec<&'static str>),
     Unreadable(String),
 }
 
@@ -425,9 +455,74 @@ pub(crate) fn observe_skill(dir: SkillDir, home: &Path) -> SkillObserved {
 /// What the skills folder `root` holds of Hide's stubs, as one piece: a
 /// folder that lacks a stub another of Hide's is beside (one written before
 /// that stub existed) is stale, and one where the operator's file holds a
-/// stub's name is foreign once Hide's others are current.
+/// stub's name is foreign once Hide's others are current. A retired stub
+/// Hide wrote makes the folder stale too, so the next pass takes it out and,
+/// in a folder an earlier build filled with only those, writes the current
+/// stub, which an unrecorded absence alone would not.
 pub(crate) fn observe_skill_in(root: &Path) -> SkillObserved {
-    combine(SKILLS.map(|skill| skill.observe_in(root)))
+    let observed = combine(SKILLS.map(|skill| skill.observe_in(root)));
+    if matches!(observed, SkillObserved::Unreadable(_)) {
+        return observed;
+    }
+    let mut retired = Vec::new();
+    for skill in RETIRED_SKILLS {
+        match skill.observe_in(root) {
+            Ok(found) => retired.push(found),
+            Err(reason) => return SkillObserved::Unreadable(reason),
+        }
+    }
+    if retired.contains(&RetiredObserved::Unedited)
+        || (observed == SkillObserved::Missing && retired.contains(&RetiredObserved::Edited))
+    {
+        SkillObserved::Stale
+    } else {
+        observed
+    }
+}
+
+/// What a skills folder holds of one retired stub.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RetiredObserved {
+    /// Nothing there, or a file without Hide's marker: the operator's.
+    NotHides,
+    Unedited,
+    /// Hide's marker over other text: the operator's now, and it stays.
+    Edited,
+}
+
+impl RetiredSkill {
+    fn file_in(self, root: &Path) -> PathBuf {
+        root.join(self.name).join("SKILL.md")
+    }
+
+    fn observe_in(self, root: &Path) -> Result<RetiredObserved, String> {
+        let path = self.file_in(root);
+        match std::fs::read_to_string(&path) {
+            Ok(text) if text == self.text => Ok(RetiredObserved::Unedited),
+            Ok(text) if skill_marker_version(&text).is_some() => Ok(RetiredObserved::Edited),
+            Ok(_) => Ok(RetiredObserved::NotHides),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(RetiredObserved::NotHides)
+            }
+            Err(error) => Err(format!("{} could not be read: {error}", path.display())),
+        }
+    }
+}
+
+/// Takes out every retired stub in `root` that Hide wrote and nobody edited,
+/// and its folder when nothing else is in it.
+fn retire_in(root: &Path) -> Result<bool, String> {
+    let mut removed = false;
+    for skill in RETIRED_SKILLS {
+        if skill.observe_in(root)? == RetiredObserved::Unedited {
+            let path = skill.file_in(root);
+            std::fs::remove_file(&path)
+                .map_err(|error| format!("{} could not be removed: {error}", path.display()))?;
+            let _ = std::fs::remove_dir(root.join(skill.name));
+            removed = true;
+        }
+    }
+    Ok(removed)
 }
 
 fn combine(each: [SkillObserved; SKILLS.len()]) -> SkillObserved {
@@ -437,13 +532,20 @@ fn combine(each: [SkillObserved; SKILLS.len()]) -> SkillObserved {
     {
         return SkillObserved::Unreadable(reason.clone());
     }
+    let foreign: Vec<&'static str> = each
+        .iter()
+        .flat_map(|observed| match observed {
+            SkillObserved::Foreign(names) => names.clone(),
+            _ => Vec::new(),
+        })
+        .collect();
     let own: Vec<&SkillObserved> = each
         .iter()
-        .filter(|observed| **observed != SkillObserved::Foreign)
+        .filter(|observed| !matches!(observed, SkillObserved::Foreign(_)))
         .collect();
     let any = |wanted: &[SkillObserved]| own.iter().any(|observed| wanted.contains(observed));
     if own.is_empty() {
-        SkillObserved::Foreign
+        SkillObserved::Foreign(foreign)
     } else if own
         .iter()
         .all(|observed| **observed == SkillObserved::Missing)
@@ -456,21 +558,22 @@ fn combine(each: [SkillObserved; SKILLS.len()]) -> SkillObserved {
     } else if own.len() < each.len() {
         // Hide's other stubs are in place; the operator's file keeps the
         // name, which is what the report says.
-        SkillObserved::Foreign
+        SkillObserved::Foreign(foreign)
     } else {
         SkillObserved::Current
     }
 }
 
-/// Writes every stub that is missing or older; an edited one only when the
-/// operator asked for it again (`reinstall`), and an operator's file never.
+/// Writes every stub that is missing or older, and takes out the retired
+/// ones Hide wrote; an edited stub only when the operator asked for it again
+/// (`reinstall`), and an operator's file never.
 pub(crate) fn install_skill(dir: SkillDir, home: &Path, reinstall: bool) -> Result<(), String> {
     let root = dir.path(home);
     for skill in SKILLS {
         let write = match skill.observe_in(&root) {
             SkillObserved::Missing | SkillObserved::Stale => true,
             SkillObserved::Edited => reinstall,
-            SkillObserved::Current | SkillObserved::Foreign => false,
+            SkillObserved::Current | SkillObserved::Foreign(_) => false,
             SkillObserved::Unreadable(reason) => return Err(reason),
         };
         if write {
@@ -481,11 +584,12 @@ pub(crate) fn install_skill(dir: SkillDir, home: &Path, reinstall: bool) -> Resu
             )?;
         }
     }
+    retire_in(&root)?;
     Ok(())
 }
 
-/// Takes the stub out when it is Hide's, and the folder with it when nothing
-/// else is in it.
+/// Takes the stub, and any retired one, out when it is Hide's, and the folder
+/// with it when nothing else is in it.
 pub(crate) fn remove_skill(dir: SkillDir, home: &Path) -> Result<bool, String> {
     remove_skill_in(&dir.path(home))
 }
@@ -497,7 +601,7 @@ pub(crate) fn remove_skill_in(root: &Path) -> Result<bool, String> {
     for skill in SKILLS {
         match skill.observe_in(root) {
             // An edited stub carries the operator's changes, so it stays.
-            SkillObserved::Missing | SkillObserved::Foreign | SkillObserved::Edited => {}
+            SkillObserved::Missing | SkillObserved::Foreign(_) | SkillObserved::Edited => {}
             SkillObserved::Unreadable(reason) => return Err(reason),
             SkillObserved::Current | SkillObserved::Stale => {
                 let path = skill.file_in(root);
@@ -510,7 +614,7 @@ pub(crate) fn remove_skill_in(root: &Path) -> Result<bool, String> {
             }
         }
     }
-    Ok(removed)
+    Ok(retire_in(root)? || removed)
 }
 
 /// The skills folder the stubs are in.

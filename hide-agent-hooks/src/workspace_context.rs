@@ -149,16 +149,14 @@ fn format_context(program: &OsString, reference: &Path, answer: &Value) -> Optio
     if has("inbox") {
         letters.push_str(" A prompt that begins with 🦉 is Hide waking you for a letter: the letter comes with that prompt, and `inbox` shows it if it did not. Codex CLI on Windows may show the line without the owl.");
     }
+    let quoted = shell_quote(&program.to_string_lossy());
     let command_prefix = format!(
-        "HIDE_CAP_REF={} {}",
+        "HIDE_CAP_REF={} {quoted}",
         shell_quote(&reference.to_string_lossy()),
-        shell_quote(&program.to_string_lossy()),
     );
     Some(format!(
-        "Hide Workspace control is available for this session's checkout `{checkout_path}`. Workspace commands affect only that checkout; there is no Workspace override. Delivery commands use the current agent pane and native session, including on a connected device.{letters} Prefix each command with `{command_prefix}`. Available commands: {}. Run `{} workspace info` to refresh capabilities and `{} --help` for syntax. While the operator is looking at this checkout from another pane, an open or select joins its Files list behind what they see, so tell them what you opened. A failed command returns a reason and next action; recheck before retrying a timed-out action.",
+        "Hide Workspace control is available for this session's checkout `{checkout_path}`. Workspace commands affect only that checkout; there is no Workspace override. Delivery commands use the current agent pane and native session, including on a connected device.{letters} Prefix each command with `{command_prefix}`. Available commands: {}. Run `{command_prefix} workspace info` to refresh capabilities and `{quoted} --help` for syntax. While the operator is looking at this checkout from another pane, an open or select joins its Files list behind what they see, so tell them what you opened. A failed command returns a reason and next action; recheck before retrying a timed-out action. Run `{quoted} guide` for how to work in Hide: letters, starting agents, the operator's screen and Project Memory; `{quoted} browser help` covers a browser display and `{quoted} mission help` running a mission of agents as its Conductor.",
         commands.join(", "),
-        command_prefix,
-        shell_quote(&program.to_string_lossy()),
     ))
 }
 
@@ -200,7 +198,11 @@ mod tests {
         );
         assert!(context.contains("browser open <url-or-path> [--wait], browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ... (read and drive a browser display; `browser help` explains refs, checking with `--diff`, and failures), view close <view-id>"));
         assert!(!context.contains("file open"));
-        assert!(!context.contains("letter"));
+        // The letter guidance is for a pane that can send and receive them.
+        assert!(!context.contains("A letter's first line"));
+        assert!(!context.contains("🦉"));
+        assert!(context.contains("Run `'/opt/hide/hide' guide` for how to work in Hide"));
+        assert!(context.contains("`'/opt/hide/hide' mission help` running a mission of agents"));
     }
 
     #[test]

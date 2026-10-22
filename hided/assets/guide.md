@@ -74,5 +74,5 @@ hide memory search <words> | show <card> | add <text> | stale <card> <reason>
 
 ## Where to go next
 
-- A web page, a local app in a browser, or what a page shows: the `hide-browser` skill, or `hide browser help`.
-- A goal to carry out with several agents, or a mission to take over: the `hide-conductor` skill, or `hide mission help`.
+- A web page, a local app in a browser, or what a page shows: run `hide browser help` and follow it.
+- A goal to carry out with several agents, or a mission to start or take over as its Conductor: run `hide mission help` and follow it. This guide is the way in for a mission; there is no separate Conductor skill.

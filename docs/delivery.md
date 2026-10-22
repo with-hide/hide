@@ -674,7 +674,7 @@ A ledger with no wait writes no `identity_waits` field, and a build from before 
 
 ## Missions
 
-A Conductor's mission (PRD software-factory-conductor) is a record the core keeps in `~/.hide/state/missions.json` and changes only on `hide mission` commands from the Conductor's own pane; `hide mission help` is the Conductor's guide and the `hide-conductor` skill points at it ([agent-hooks.md](agent-hooks.md)).
+A Conductor's mission (PRD software-factory-conductor) is a record the core keeps in `~/.hide/state/missions.json` and changes only on `hide mission` commands from the Conductor's own pane; `hide mission help` is the Conductor's guide, and an agent reaches it through `hide guide`, which the `hide` skill and the session guidance point at; there is no separate Conductor skill ([agent-hooks.md](agent-hooks.md#what-the-kit-puts-down)).
 Only a pane-bound credential can ask, refused `agent_pane_required` otherwise, and a pane conducts at most one open mission (`mission_already_conducting`).
 A mission belongs to the repository Project of the checkout it was created in (`mission_project_unknown`); asked before the machine's projects are first read, it is refused `mission_projects_loading`, and a retry a few seconds later goes through.
 Every other pane is refused `mission_not_conductor`, and a closed or cancelled mission refuses changes (`mission_closed`, `mission_cancelled`).

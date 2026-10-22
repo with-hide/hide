@@ -31,7 +31,7 @@ type Stack = { herdr: HerdrFixture; daemon: Daemon; home: string };
 
 const hooksFile = (home: string) => path.join(home, ".gemini", "config", "hooks.json");
 const settingsFile = (home: string) => path.join(home, ".gemini", "antigravity-cli", "settings.json");
-const stubFile = (home: string) => path.join(home, ".gemini", "config", "skills", "hide-browser", "SKILL.md");
+const stubFile = (home: string) => path.join(home, ".gemini", "config", "skills", "hide", "SKILL.md");
 const operatorSkills = (home: string) => path.join(home, ".gemini", "antigravity-cli", "skills");
 const aiFolder = (home: string) => path.join(home, ".hide", "ai", "antigravity-read-only");
 

@@ -5,7 +5,7 @@
 //! changes nothing.
 
 use super::*;
-use crate::agents::BROWSER_SKILL;
+use crate::agents::GUIDE_SKILL;
 
 const HOOK_COMMAND: &str = "[ -x /kit/hide-agent-hooks ] && /kit/hide-agent-hooks hook --runtime qwen-code --event SessionStart --source hide-guidance@1 || true";
 
@@ -22,7 +22,7 @@ fn qwen_skill(fixture: &Fixture) -> PathBuf {
     fixture
         .home()
         .join(".qwen/skills")
-        .join(BROWSER_SKILL.name)
+        .join(GUIDE_SKILL.name)
         .join("SKILL.md")
 }
 
@@ -45,7 +45,7 @@ fn qwen_as_an_earlier_build_left_it(fixture: &Fixture) {
         })
         .to_string(),
     );
-    write(&qwen_skill(fixture), &BROWSER_SKILL.text());
+    write(&qwen_skill(fixture), &GUIDE_SKILL.text());
     write(
         &fixture.home().join(".hide/kit/installed.json"),
         r#"{"format":1,"installed":["hook:qwen-code","skill:qwen"],"agents":{"qwen-code":true}}"#,
@@ -63,8 +63,8 @@ fn cursor_as_an_earlier_build_left_it(fixture: &Fixture) {
         r#"{"version":1,"hooks":{"sessionStart":[{"command":"/opt/other/start.sh"},{"command":"/kit/hide-agent-hooks hook --runtime cursor --event SessionStart --source hide-guidance@7"}],"preToolUse":[{"command":"/kit/hide-agent-hooks hook --runtime cursor --event PreToolUse --source hide-guidance@7"}]}}"#,
     );
     write(
-        &fixture.home().join(".agents/skills/hide-browser/SKILL.md"),
-        &BROWSER_SKILL.text(),
+        &fixture.home().join(".agents/skills/hide/SKILL.md"),
+        &GUIDE_SKILL.text(),
     );
     write(
         &fixture.home().join(".hide/kit/installed.json"),
@@ -125,7 +125,7 @@ fn cursor_retirement_keeps_the_shared_skill_for_a_live_reader() {
     assert!(
         fixture
             .home()
-            .join(".agents/skills/hide-browser/SKILL.md")
+            .join(".agents/skills/hide/SKILL.md")
             .is_file()
     );
     assert!(record(&fixture).contains("skill:agents"));
@@ -214,16 +214,13 @@ fn an_agent_the_record_never_named_is_not_touched() {
 fn a_skill_the_operator_wrote_over_is_kept_even_when_the_record_names_it() {
     let fixture = Fixture::new();
     qwen_as_an_earlier_build_left_it(&fixture);
-    write(
-        &qwen_skill(&fixture),
-        "---\nname: hide-browser\n---\nmine\n",
-    );
+    write(&qwen_skill(&fixture), "---\nname: hide\n---\nmine\n");
 
     apply(&fixture.target, &Scope::automatic());
 
     assert_eq!(
         std::fs::read_to_string(qwen_skill(&fixture)).unwrap(),
-        "---\nname: hide-browser\n---\nmine\n"
+        "---\nname: hide\n---\nmine\n"
     );
     assert!(!record(&fixture).contains("qwen"));
 }
@@ -265,7 +262,7 @@ fn the_shared_stub_stays_while_a_supported_agent_still_reads_it() {
     let shared = fixture
         .home()
         .join(".agents/skills")
-        .join(BROWSER_SKILL.name)
+        .join(GUIDE_SKILL.name)
         .join("SKILL.md");
     assert!(shared.is_file());
     // An earlier build also had Amp on, which read the same folder.
@@ -288,9 +285,9 @@ fn the_shared_stub_goes_with_the_last_retired_agent_that_read_it() {
     let shared = fixture
         .home()
         .join(".agents/skills")
-        .join(BROWSER_SKILL.name)
+        .join(GUIDE_SKILL.name)
         .join("SKILL.md");
-    write(&shared, &BROWSER_SKILL.text());
+    write(&shared, &GUIDE_SKILL.text());
     write(
         &fixture.home().join(".hide/kit/installed.json"),
         r#"{"format":1,"installed":["skill:agents"],"agents":{"amp":true,"goose":true}}"#,
@@ -314,12 +311,9 @@ fn the_shared_stub_goes_with_the_last_retired_agent_that_read_it() {
 fn a_shared_stub_that_could_not_be_removed_is_removed_by_a_later_pass() {
     use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new();
-    let folder = fixture
-        .home()
-        .join(".agents/skills")
-        .join(BROWSER_SKILL.name);
+    let folder = fixture.home().join(".agents/skills").join(GUIDE_SKILL.name);
     let shared = folder.join("SKILL.md");
-    write(&shared, &BROWSER_SKILL.text());
+    write(&shared, &GUIDE_SKILL.text());
     write(
         &fixture.home().join(".hide/kit/installed.json"),
         r#"{"format":1,"installed":["skill:agents"],"agents":{"amp":true}}"#,
@@ -375,7 +369,7 @@ fn shared_skill(fixture: &Fixture) -> PathBuf {
     fixture
         .home()
         .join(".agents/skills")
-        .join(BROWSER_SKILL.name)
+        .join(GUIDE_SKILL.name)
         .join("SKILL.md")
 }
 
@@ -411,7 +405,7 @@ fn gemini_as_an_earlier_build_left_it(fixture: &Fixture) {
             .join(".gemini/tmp/project/chats/session-1.json"),
         "{\"messages\":[]}",
     );
-    write(&shared_skill(fixture), &BROWSER_SKILL.text());
+    write(&shared_skill(fixture), &GUIDE_SKILL.text());
     write(
         &fixture.home().join(".hide/kit/installed.json"),
         r#"{"format":1,"installed":["hook:gemini-cli","skill:agents"],"agents":{"gemini-cli":true}}"#,

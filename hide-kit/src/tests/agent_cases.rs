@@ -2,7 +2,7 @@
 //! the skill stub and the guidance hooks, against a private HOME.
 
 use super::*;
-use crate::agents::{ADAPTERS, BROWSER_SKILL, CONDUCTOR_SKILL, SKILLS};
+use crate::agents::{ADAPTERS, GUIDE_SKILL, RETIRED_SKILLS, SKILLS};
 
 fn agent<'a>(report: &'a KitReport, id: &str) -> &'a AgentReport {
     report
@@ -16,7 +16,7 @@ fn shared_skill(fixture: &Fixture) -> PathBuf {
     fixture
         .home()
         .join(".agents/skills")
-        .join(BROWSER_SKILL.name)
+        .join(GUIDE_SKILL.name)
         .join("SKILL.md")
 }
 
@@ -181,7 +181,9 @@ fn an_older_stub_is_replaced_without_the_operator_asking() {
     apply(&fixture.target, &Scope::agents(["grok"], []));
     let path = shared_skill(&fixture);
     let current = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, current.replace("hide-skill@1", "hide-skill@0")).unwrap();
+    let older = format!("hide-skill@{}", GUIDE_SKILL.version - 1);
+    let marker = format!("hide-skill@{}", GUIDE_SKILL.version);
+    std::fs::write(&path, current.replace(&marker, &older)).unwrap();
 
     let before = status(&fixture.target);
     assert_eq!(agent(&before, "grok").skill.state, ComponentState::Outdated);
@@ -192,6 +194,90 @@ fn an_older_stub_is_replaced_without_the_operator_asking() {
         ComponentState::Installed
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), current);
+}
+
+/// The skills folder an earlier build filled with `hide-browser` and
+/// `hide-conductor` version 1 alone, recorded as Hide's.
+fn earlier_build_folder(fixture: &Fixture) -> PathBuf {
+    install(fixture, "grok", ".grok");
+    apply(&fixture.target, &Scope::agents(["grok"], []));
+    let root = fixture.home().join(".agents/skills");
+    std::fs::remove_dir_all(root.join(GUIDE_SKILL.name)).unwrap();
+    // The files exactly as that build wrote them.
+    std::fs::create_dir_all(root.join("hide-browser")).unwrap();
+    std::fs::write(root.join("hide-browser/SKILL.md"), "---\nname: hide-browser\ndescription: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nRun `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n").unwrap();
+    std::fs::create_dir_all(root.join("hide-conductor")).unwrap();
+    std::fs::write(root.join("hide-conductor/SKILL.md"), "---\nname: hide-conductor\ndescription: Run a mission in Hide as its Conductor: plan the work with the operator, start the agents that do it, follow their pull requests, and report. Use when the operator gives you a goal to carry out with several agents, or asks you to take over a mission.\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nRun `hide mission help` and follow what it prints. It explains how to plan a mission with the operator, start and follow its workers, change the plan when told, merge, report, and take over a mission whose Conductor is gone.\n").unwrap();
+    root
+}
+
+#[test]
+fn an_earlier_builds_two_stubs_give_way_to_the_guide() {
+    let fixture = Fixture::new();
+    let root = earlier_build_folder(&fixture);
+    assert_eq!(
+        agent(&status(&fixture.target), "grok").skill.state,
+        ComponentState::Outdated
+    );
+
+    let report = apply(&fixture.target, &Scope::automatic());
+
+    assert_eq!(
+        agent(&report, "grok").skill.state,
+        ComponentState::Installed
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("hide/SKILL.md")).unwrap(),
+        GUIDE_SKILL.text()
+    );
+    assert!(!root.join("hide-browser").exists());
+    assert!(!root.join("hide-conductor").exists());
+    assert!(
+        GUIDE_SKILL
+            .text()
+            .contains("description: \"Only for a session in a pane Hide manages")
+    );
+}
+
+#[test]
+fn an_old_stub_the_operator_edited_stays_and_the_rest_go() {
+    let fixture = Fixture::new();
+    let root = earlier_build_folder(&fixture);
+    let conductor = root.join("hide-conductor/SKILL.md");
+    let edited = std::fs::read_to_string(&conductor).unwrap() + "Always ask me first.\n";
+    std::fs::write(&conductor, &edited).unwrap();
+
+    let report = apply(&fixture.target, &Scope::automatic());
+
+    assert_eq!(
+        agent(&report, "grok").skill.state,
+        ComponentState::Installed
+    );
+    assert!(!root.join("hide-browser").exists());
+    assert_eq!(std::fs::read_to_string(&conductor).unwrap(), edited);
+    assert!(root.join("hide/SKILL.md").is_file());
+    // The kept file settles the folder: a second pass finds it current.
+    assert_eq!(
+        agent(&status(&fixture.target), "grok").skill.state,
+        ComponentState::Installed
+    );
+
+    // Switching every reader off takes Hide's stub out and keeps the edit.
+    apply(&fixture.target, &Scope::agents([], ["grok", "codex"]));
+    assert!(!root.join("hide").exists());
+    assert_eq!(std::fs::read_to_string(&conductor).unwrap(), edited);
+}
+
+#[test]
+fn switching_every_reader_off_takes_an_old_stub_out_too() {
+    let fixture = Fixture::new();
+    let root = earlier_build_folder(&fixture);
+
+    apply(&fixture.target, &Scope::agents([], ["grok", "codex"]));
+
+    for name in RETIRED_SKILLS.map(|skill| skill.name) {
+        assert!(!root.join(name).exists(), "{name}");
+    }
 }
 
 #[test]
@@ -234,7 +320,7 @@ fn switching_an_agent_off_takes_only_hides_pieces_and_keeps_a_folder_another_age
 }
 
 #[test]
-fn every_skill_folder_gets_every_stub_and_a_folder_from_before_the_conductor_gets_it() {
+fn every_skill_folder_gets_the_stub() {
     let fixture = Fixture::new();
     install(&fixture, "claude", ".claude");
     install(&fixture, "grok", ".grok");
@@ -264,34 +350,7 @@ fn every_skill_folder_gets_every_stub_and_a_folder_from_before_the_conductor_get
             );
         }
     }
-    assert!(CONDUCTOR_SKILL.text().contains("hide mission help"));
-
-    // A folder an older Hide wrote holds the browser stub alone.
-    let conductor = fixture
-        .home()
-        .join(".agents/skills")
-        .join(CONDUCTOR_SKILL.name);
-    std::fs::remove_dir_all(&conductor).unwrap();
-    let report = status(&fixture.target);
-    assert_eq!(agent(&report, "grok").skill.state, ComponentState::Outdated);
-    let report = apply(&fixture.target, &Scope::automatic());
-    assert_eq!(
-        agent(&report, "grok").skill.state,
-        ComponentState::Installed
-    );
-    assert!(conductor.join("SKILL.md").is_file());
-
-    // Switching every reader off takes both stubs out.
-    apply(&fixture.target, &Scope::agents([], ["grok", "codex"]));
-    for skill in SKILLS {
-        assert!(
-            !fixture
-                .home()
-                .join(".agents/skills")
-                .join(skill.name)
-                .exists()
-        );
-    }
+    assert!(GUIDE_SKILL.text().contains("run `hide guide`"));
 }
 
 #[test]
@@ -300,7 +359,7 @@ fn a_skill_that_hide_did_not_write_is_left_alone_and_reported() {
     install(&fixture, "grok", ".grok");
     let own = shared_skill(&fixture);
     std::fs::create_dir_all(own.parent().unwrap()).unwrap();
-    std::fs::write(&own, "---\nname: hide-browser\n---\nmine\n").unwrap();
+    std::fs::write(&own, "---\nname: hide\n---\nmine\n").unwrap();
 
     let report = apply(&fixture.target, &Scope::agents(["grok"], []));
 
@@ -308,13 +367,41 @@ fn a_skill_that_hide_did_not_write_is_left_alone_and_reported() {
     assert!(!agent(&report, "grok").needs_attention());
     assert_eq!(
         std::fs::read_to_string(&own).unwrap(),
-        "---\nname: hide-browser\n---\nmine\n"
+        "---\nname: hide\n---\nmine\n"
     );
     apply(&fixture.target, &Scope::agents([], ["grok", "codex"]));
     assert_eq!(
         std::fs::read_to_string(&own).unwrap(),
-        "---\nname: hide-browser\n---\nmine\n"
+        "---\nname: hide\n---\nmine\n"
     );
+}
+
+#[test]
+fn an_operators_own_hide_skill_is_left_alone() {
+    let fixture = Fixture::new();
+    install(&fixture, "claude", ".claude");
+    let mine = "---\nname: hide\n---\nmy notes on hiding files\n";
+    let own = fixture
+        .home()
+        .join(".claude/skills")
+        .join(GUIDE_SKILL.name)
+        .join("SKILL.md");
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    std::fs::write(&own, mine).unwrap();
+
+    let report = apply(&fixture.target, &Scope::automatic());
+
+    let skill = &agent(&report, "claude-code").skill;
+    assert_eq!(skill.state, ComponentState::Absent);
+    assert_eq!(
+        skill.reason.as_deref(),
+        Some("a skill named hide that Hide did not write is already there; Hide left it alone")
+    );
+    assert_eq!(std::fs::read_to_string(&own).unwrap(), mine);
+
+    // Switching Claude Code off leaves the operator's file.
+    apply(&fixture.target, &Scope::agents([], ["claude-code"]));
+    assert_eq!(std::fs::read_to_string(&own).unwrap(), mine);
 }
 
 #[test]
@@ -345,7 +432,7 @@ fn claude_code_and_codex_are_on_without_a_choice_and_off_removes_the_hook_part()
         fixture
             .home()
             .join(".claude/skills")
-            .join(BROWSER_SKILL.name)
+            .join(GUIDE_SKILL.name)
             .join("SKILL.md")
             .is_file()
     );
@@ -365,7 +452,7 @@ fn claude_code_and_codex_are_on_without_a_choice_and_off_removes_the_hook_part()
         !fixture
             .home()
             .join(".claude/skills")
-            .join(BROWSER_SKILL.name)
+            .join(GUIDE_SKILL.name)
             .exists()
     );
 
@@ -459,7 +546,7 @@ fn a_file_that_only_mentions_the_marker_is_not_hides_stub() {
     let own = shared_skill(&fixture);
     std::fs::create_dir_all(own.parent().unwrap()).unwrap();
     // The marker's words sit in the body, not in the line Hide writes.
-    let mine = "---\nname: hide-browser\n---\nsee hide-skill@1 in the docs\n";
+    let mine = "---\nname: hide\n---\nsee hide-skill@1 in the docs\n";
     std::fs::write(&own, mine).unwrap();
 
     let report = apply(&fixture.target, &Scope::agents(["grok"], []));
@@ -679,7 +766,7 @@ fn a_machine_the_kit_has_never_touched_waits_for_the_first_choice_before_any_age
         !fixture
             .home()
             .join(".claude/skills")
-            .join(BROWSER_SKILL.name)
+            .join(GUIDE_SKILL.name)
             .exists()
     );
     assert!(!shared_skill(&fixture).exists());

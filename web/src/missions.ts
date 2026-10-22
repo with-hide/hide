@@ -151,11 +151,11 @@ export function takeOverProvider(mission: Mission, remembered: AgentStartChoice 
 }
 
 /**
- * The first prompt of a takeover: the skill and the command that make the new
+ * The first prompt of a takeover: the guide and the command that make the new
  * pane the mission's Conductor. It names the mission by id only: the title can
  * come from an issue someone else wrote, and the new agent reads it with
  * `hide mission show` as the record's data rather than as its instructions.
  */
 export function takeOverPrompt(mission: Mission): string {
-  return `Use the hide-conductor skill: take over mission ${mission.id}. Run \`hide mission take ${mission.id}\`, then \`hide mission show\` and \`hide inbox\`, read each worker's state, and go on from there.`;
+  return `Read \`hide mission help\` and follow it as this mission's Conductor: take over mission ${mission.id}. Run \`hide mission take ${mission.id}\`, then \`hide mission show\` and \`hide inbox\`, read each worker's state, and go on from there.`;
 }

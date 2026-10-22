@@ -134,7 +134,7 @@ const PLATFORM: Record<OnboardingSystem, string> = { mac: "darwin", windows: "wi
 /** The kit's agents in its order, each as KitAgentSnapshot reports it on a Mac whose kit has not run. */
 function kitAgents(state: OnboardingState, system: OnboardingSystem): KitAgent[] {
   const piece = (location: string | null, failed: string | null = null): KitPiece => ({ state: failed ? "failed" : "off", reason: failed, location });
-  const shared = `${HOME}/.agents/skills/hide-browser/SKILL.md`;
+  const shared = `${HOME}/.agents/skills/hide/SKILL.md`;
   const none = state === "agents-none";
   const row = (id: string, label: string, installed: boolean, pieces: { hook?: string; skill: string; herdr: string }, extra: Partial<KitAgent> = {}): KitAgent => ({
     id,
@@ -151,13 +151,13 @@ function kitAgents(state: OnboardingState, system: OnboardingSystem): KitAgent[]
   // Off macOS, OpenCode is installed but Hide cannot attach to it there yet (B49).
   const pc = system !== "mac";
   return [
-    row("claude-code", "Claude Code", true, { hook: `${HOME}/.claude/settings.json`, skill: `${HOME}/.claude/skills/hide-browser/SKILL.md`, herdr: `${HOME}/.claude` }),
+    row("claude-code", "Claude Code", true, { hook: `${HOME}/.claude/settings.json`, skill: `${HOME}/.claude/skills/hide/SKILL.md`, herdr: `${HOME}/.claude` }),
     row("codex", "Codex", true, { hook: `${HOME}/.codex/hooks.json`, skill: shared, herdr: `${HOME}/.codex` }, state === "agents-failed" ? { enabled: true, chosen: true, hook: piece(`${HOME}/.codex/hooks.json`, "~/.codex/hooks.json could not be written") } : {}),
     row("grok", "Grok", false, { hook: `${HOME}/.grok/hooks/hide.json`, skill: shared, herdr: `${HOME}/.grok` }),
     row("opencode", "OpenCode", true, { hook: `${HOME}/.config/opencode/plugins/hide.js`, skill: shared, herdr: `${HOME}/.config/opencode` }, pc ? { availability: "unsupported_system" } : {}),
     row("pi", "Pi", true, { hook: `${HOME}/.pi/agent/extensions/hide.ts`, skill: shared, herdr: `${HOME}/.pi/agent` }),
     row("omp", "omp", !pc, { hook: `${HOME}/.omp/agent/extensions/hide.ts`, skill: shared, herdr: `${HOME}/.omp/agent` }),
-    row("antigravity", "Antigravity", false, { hook: `${HOME}/.gemini/config/hooks.json`, skill: `${HOME}/.gemini/config/skills/hide-browser/SKILL.md`, herdr: `${HOME}/.gemini/config` }),
+    row("antigravity", "Antigravity", false, { hook: `${HOME}/.gemini/config/hooks.json`, skill: `${HOME}/.gemini/config/skills/hide/SKILL.md`, herdr: `${HOME}/.gemini/config` }),
   ];
 }
 
