@@ -226,6 +226,7 @@ enum WorkerResult {
 struct AnalysisMeta {
     ledger_session: Option<SessionIdentity>,
     work_author: bool,
+    asks_answered: bool,
     /// The ledger names the pane's parent, so its header shows its newest
     /// request, whoever sent it, rather than the operator's.
     delegated: bool,
@@ -2143,6 +2144,15 @@ impl LabelWorker {
             .iter()
             .rfind(|event| event.kind == LabelEventKind::Human)
             .is_some_and(|event| facts.feeds_work(event, ledger.parent_name.as_deref()));
+        // A delegated session asks its parent, whose letters answer it (B12).
+        let parent = ledger.parent_name.as_deref();
+        let asks_answered = turn_events.iter().any(|event| {
+            event.kind == LabelEventKind::Human
+                && (facts.feeds_work(event, parent)
+                    || parent.is_some_and(|parent| {
+                        matches!(facts.requester_at(event.offset), Some(super::facts::Requester::Named(name)) if name == parent)
+                    }))
+        });
         let turn_witness = events
             .iter()
             .rfind(|event| event.kind == LabelEventKind::Human)
@@ -2184,6 +2194,7 @@ impl LabelWorker {
         let meta = AnalysisMeta {
             ledger_session,
             work_author,
+            asks_answered,
             delegated: ledger.parent_name.is_some(),
             turn_witness,
             owed: owed
@@ -2406,6 +2417,7 @@ impl LabelWorker {
                             end: analysis.end,
                             line: analysis.line.clone(),
                             work_author: outcome.work_author,
+                            asks_answered: outcome.asks_answered,
                             turn_witness: outcome.turn_witness.clone(),
                             judgment,
                         })

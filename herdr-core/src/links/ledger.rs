@@ -547,6 +547,9 @@ pub enum LedgerUpdate {
         end: LabelEnd,
         line: String,
         work_author: bool,
+        /// Whoever the session's asks wait on spoke in this turn: the
+        /// operator, or for a delegated session its parent (B12).
+        asks_answered: bool,
         turn_witness: Option<String>,
         judgment: TurnJudgment,
     },

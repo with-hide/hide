@@ -1187,6 +1187,7 @@ pub(super) fn seed_missed_turn(
             at_unix_ms: now - 1_500,
             end: crate::labels::analysis::LabelEnd::Done,
             work_author: true,
+            asks_answered: true,
             line: String::new(),
             turn_witness: witness,
             judgment: TurnJudgment {

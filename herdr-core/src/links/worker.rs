@@ -1903,6 +1903,7 @@ mod tests {
                 at_unix_ms: CREATED + 1,
                 end: LabelEnd::Working,
                 work_author: true,
+                asks_answered: true,
                 line: String::new(),
                 turn_witness: None,
                 judgment: TurnJudgment::default(),

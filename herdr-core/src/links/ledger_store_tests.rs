@@ -955,6 +955,7 @@ fn end(store: &mut LinkStore, offset: u64, judgment: TurnJudgment) {
             at_unix_ms: offset * 1_000 + 500,
             end: LabelEnd::Done,
             work_author: true,
+            asks_answered: true,
             line: String::new(),
             turn_witness: None,
             judgment,
@@ -1592,6 +1593,7 @@ fn a_mixed_device_tree_groups_descendant_prs_under_the_direct_child() {
                 at_unix_ms: 1_400,
                 end: LabelEnd::Done,
                 work_author: true,
+                asks_answered: true,
                 line: String::new(),
                 turn_witness: None,
                 judgment: TurnJudgment {
@@ -1728,6 +1730,7 @@ fn late_parent_retracts_judgments_and_refuses_in_flight_operator_work() {
             at_unix_ms: 2500,
             end: LabelEnd::Blocked,
             work_author: true,
+            asks_answered: true,
             line: String::new(),
             turn_witness: None,
             judgment: TurnJudgment {
@@ -2260,6 +2263,7 @@ fn turn(store: &mut LinkStore, offset: u64, end: LabelEnd, line: &str, artifacts
             at_unix_ms: offset * 1_000 + 500,
             end,
             work_author: true,
+            asks_answered: true,
             line: line.into(),
             turn_witness: None,
             judgment: TurnJudgment {
@@ -2635,6 +2639,7 @@ fn the_operators_reply_closes_earlier_asks_and_a_repeated_ask_is_one_line() {
             at_unix_ms: 2_500,
             end: LabelEnd::Question,
             work_author: false,
+            asks_answered: false,
             line: String::new(),
             turn_witness: None,
             judgment: TurnJudgment {
@@ -2654,6 +2659,22 @@ fn the_operators_reply_closes_earlier_asks_and_a_repeated_ask_is_one_line() {
         },
     );
     assert_eq!(asks(&store), ["PRD로 넘어갈까요?"]);
+    // A delegated session's parent answers by letter: its turn closes them too.
+    store
+        .apply_ledger_update(&LedgerUpdate::TurnEnd {
+            session: session(),
+            offset: 4,
+            started_at_unix_ms: 4_000,
+            at_unix_ms: 4_500,
+            end: LabelEnd::Done,
+            work_author: false,
+            asks_answered: true,
+            line: String::new(),
+            turn_witness: None,
+            judgment: TurnJudgment::default(),
+        })
+        .unwrap();
+    assert!(asks(&store).is_empty());
 }
 
 /// B22: an END reads the session's recorded outputs, newest first, so the

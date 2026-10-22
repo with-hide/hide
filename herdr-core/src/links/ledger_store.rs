@@ -1096,6 +1096,7 @@ impl LinkStore {
                 end,
                 line,
                 work_author,
+                asks_answered,
                 turn_witness,
                 judgment,
             } => {
@@ -1163,9 +1164,9 @@ impl LinkStore {
                     ],
                 )
                 .map_err(failed)?;
-                // The operator's reply answers what was asked before it (B12):
-                // an ask the agent still waits on is listed again by this turn.
-                if *work_author {
+                // A reply answers what was asked before it (B12): an ask the
+                // agent still waits on is listed again by this turn.
+                if *asks_answered {
                     tx.execute(
                         "UPDATE ledger_missed SET status=?4,resolved_turn_offset=?5 \
                         WHERE device=?1 AND agent=?2 AND id=?3 AND kind=?6 AND status=?7 AND turn_offset<?5",
