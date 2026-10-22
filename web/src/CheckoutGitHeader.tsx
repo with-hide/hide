@@ -30,22 +30,50 @@ export function CheckoutFileCount({ header, actions }: { header: Header | null |
   return <Hint label={`${label} · ${t("checkoutGit.countMeaning")}`}><Button variant="ghost" size="sm" className="h-(--size-control-sm) gap-xs px-xs text-caption font-normal" aria-label={`${label} · ${t("checkoutGit.countMeaning")}`} data-checkout-files={state} data-keyboard-stays="true" onMouseDown={(event) => event.preventDefault()} onClick={() => actions.showTool("changes")}><Icon className={iconClass} />{facts ? <span className="tabular-nums">{facts.changed_files}</span> : <span>?</span>}</Button></Hint>;
 }
 
-export function CheckoutUpstream({ header }: { header: Header | null | undefined }) {
+/**
+ * When the remote was last seen and whether the background fetch is failing:
+ * Hide's own fetch when it fetches this repository, the operator's last
+ * `git fetch` when Project Settings turned that off (PRD git-freshness D-03).
+ */
+function useRemoteCheck(header: Header | null | undefined) {
   const { t, i18n } = useInterfaceTranslation();
+  const remote = header?.remote ?? null;
+  const auto = remote?.auto ?? false;
+  const checkedAt = auto ? remote?.checked_at_unix_ms ?? null : header?.facts?.last_fetch_unix_ms ?? null;
+  const elapsed = useElapsed(checkedAt);
+  const failing = Boolean(auto && remote?.failing);
+  const checked = auto ? (checkedAt != null && elapsed ? t("checkoutGit.checkedAgo", { time: elapsed }) : t("checkoutGit.notChecked")) : t("checkoutGit.fetched", { time: checkedAt != null ? new Date(checkedAt).toLocaleString(i18n.language) : t("checkoutGit.notKnown") });
+  const failure = failing ? (checkedAt != null && elapsed ? t("checkoutGit.fetchFailing", { time: elapsed }) : t("checkoutGit.fetchFailingNever")) : null;
+  return { checked, failure, failing };
+}
+
+export function CheckoutUpstream({ header }: { header: Header | null | undefined }) {
+  const { t } = useInterfaceTranslation();
   const live = useShellStore((state) => state.connection === "live");
+  const remote = useRemoteCheck(header);
   const facts = header?.facts;
   if (!live || !facts || header?.state !== "fresh") return null;
-  const label = facts.upstream_state === "tracked" ? t("checkoutGit.sync", { target: facts.upstream, ahead: facts.ahead, behind: facts.behind }) : t(`checkoutGit.upstream.${facts.upstream_state}`);
-  if (facts.upstream_state === "tracked" && facts.ahead === 0 && facts.behind === 0) return null;
-  return <Detail label={label} data-checkout-upstream={facts.upstream_state} mark={facts.upstream_state === "tracked" ? <>{facts.ahead ? <><ArrowUpIcon className={`${iconClass} text-success`} /><span>{facts.ahead}</span></> : null}{facts.behind ? <><ArrowDownIcon className={`${iconClass} text-warning`} /><span>{facts.behind}</span></> : null}</> : <GitCompareArrowsIcon className={iconClass} />}>
-    <p>{label}</p>{facts.upstream ? <p className="font-mono">{facts.upstream}</p> : null}<p className="text-muted-foreground">{t("checkoutGit.fetched", { time: facts.last_fetch_unix_ms ? new Date(facts.last_fetch_unix_ms).toLocaleString(i18n.language) : t("checkoutGit.notKnown") })}</p>
+  const state = facts.upstream_state;
+  const tracked = state === "tracked";
+  const label = state === "tracked" ? t("checkoutGit.sync", { target: facts.upstream, ahead: facts.ahead, behind: facts.behind }) : t(`checkoutGit.upstream.${state}`);
+  // Zero counts stay quiet, but the detail still opens to say when the
+  // remote was last seen (B7); a failing fetch dims the counts (B5).
+  const quiet = !tracked || (!facts.ahead && !facts.behind);
+  return <Detail label={[label, remote.failure].filter(Boolean).join(" · ")} className={remote.failing ? "opacity-50" : ""} data-checkout-upstream={facts.upstream_state} data-checkout-remote={remote.failing ? "failing" : "ok"} mark={quiet ? <GitCompareArrowsIcon className={`${iconClass} ${tracked ? "text-muted-foreground" : ""}`} /> : <>{facts.ahead ? <><ArrowUpIcon className={`${iconClass} text-success`} /><span>{facts.ahead}</span></> : null}{facts.behind ? <><ArrowDownIcon className={`${iconClass} text-warning`} /><span>{facts.behind}</span></> : null}</>}>
+    <p>{label}</p>{facts.upstream ? <p className="font-mono">{facts.upstream}</p> : null}<p className="text-muted-foreground" data-checkout-remote-checked="true">{remote.checked}</p>{remote.failure ? <p className="text-muted-foreground" role="status">{remote.failure}</p> : null}
   </Detail>;
 }
 
 const ciIcons = { loading: LoaderCircleIcon, passing: CheckIcon, failed: XIcon, pending: LoaderCircleIcon, none: CircleMinusIcon, unknown: CircleHelpIcon, unavailable: TriangleAlertIcon, stale: ClockIcon };
 const ciColors = { loading: "text-muted-foreground", passing: "text-success", failed: "text-destructive", pending: "text-warning", none: "text-muted-foreground", unknown: "text-muted-foreground", unavailable: "text-muted-foreground", stale: "text-muted-foreground" };
 
-function CommitHistoryRow({ commit, ci, header, view, actions }: { commit: CheckoutCommitRecord; ci: CheckoutCi | null; header: Header; view: WorkspaceView; actions: Actions }) {
+/** Opens a commit's GitHub page from the header in front, never one a newer frame no longer offers. */
+function openCommit(sha: string, url: string, view: WorkspaceView, actions: Actions) {
+  const current = useShellStore.getState().rest?.workspace_view;
+  if (current?.device_id === view.device_id && current.path === view.path && useShellStore.getState().connection === "live" && current.git?.commit_links?.some((link) => link.sha === sha && link.url === url)) actions.openBrowser(url, { device_id: view.device_id, path: view.path });
+}
+
+function CommitHistoryRow({ commit, ci, header, view, actions, incoming = false }: { commit: CheckoutCommitRecord; ci: CheckoutCi | null; header: Header; view: WorkspaceView; actions: Actions; incoming?: boolean }) {
   const { t, i18n } = useInterfaceTranslation();
   const live = useShellStore((state) => state.connection === "live");
   const elapsed = useElapsed(commit.commit_unix_seconds == null ? null : commit.commit_unix_seconds * 1000);
@@ -54,12 +82,16 @@ function CommitHistoryRow({ commit, ci, header, view, actions }: { commit: Check
   const Icon = ciIcons[state];
   const label = t(`checkoutGit.ci.${state}`);
   const canOpen = Boolean(ci?.url && state !== "stale");
-  return <li className="min-w-0 py-xs" data-commit-history-item={commit.sha}>
-    <p className="line-clamp-2 break-words text-caption font-medium">{commit.subject}</p>
+  const link = header.commit_links?.find((candidate) => candidate.sha === commit.sha)?.url ?? null;
+  const unpushed = Boolean(header.commit_pages && !incoming && header.facts?.unpushed_commits?.includes(commit.sha));
+  const subject = <p className="line-clamp-2 break-words text-caption font-medium">{commit.subject}</p>;
+  return <li className={`min-w-0 py-xs ${incoming ? "opacity-60" : ""}`} data-commit-history-item={commit.sha} data-commit-incoming={incoming ? "true" : undefined}>
+    {link ? <button type="button" className="block w-full min-w-0 cursor-pointer rounded-sm text-left hover:underline focus-visible:outline focus-visible:outline-ring" aria-label={`${commit.subject} · ${t("checkoutGit.openCommit")}`} data-commit-link={commit.sha} onClick={() => openCommit(commit.sha, link, view, actions)}>{subject}</button> : subject}
     <div className="mt-xxs flex min-w-0 items-center gap-sm text-micro text-muted-foreground">
       <span className="shrink-0 font-mono">{commit.sha.slice(0, 7)}</span>
       <time className="min-w-0 truncate" dateTime={commit.commit_unix_seconds == null ? undefined : new Date(commit.commit_unix_seconds * 1000).toISOString()} title={commit.commit_unix_seconds == null ? undefined : new Date(commit.commit_unix_seconds * 1000).toLocaleString(i18n.language)}>{elapsed ? t("checkoutGit.ago", { time: elapsed }) : t("checkoutGit.notKnown")}</time>
-      {ci && ci.state !== "none" ? <Hint label={`${label} · ${t("checkoutGit.checked", { time: ci.checked_at_unix_ms ? new Date(ci.checked_at_unix_ms).toLocaleString(i18n.language) : t("checkoutGit.notKnown") })}`}><button type="button" disabled={!canOpen} aria-label={`${label}${canOpen ? ` · ${t("checkoutGit.openChecks")}` : ""}`} data-commit-ci={state} className={`ml-auto inline-flex shrink-0 items-center gap-xxs rounded-sm text-micro ${ciColors[state]} enabled:cursor-pointer enabled:hover:underline focus-visible:outline focus-visible:outline-ring`} onClick={() => {
+      {incoming ? <span className="ml-auto shrink-0" data-commit-state="incoming">{t("checkoutGit.incoming")}</span> : unpushed ? <span className="ml-auto shrink-0" data-commit-state="unpushed">{t("checkoutGit.unpushed")}</span> : null}
+      {!incoming && ci && ci.state !== "none" ? <Hint label={`${label} · ${t("checkoutGit.checked", { time: ci.checked_at_unix_ms ? new Date(ci.checked_at_unix_ms).toLocaleString(i18n.language) : t("checkoutGit.notKnown") })}`}><button type="button" disabled={!canOpen} aria-label={`${label}${canOpen ? ` · ${t("checkoutGit.openChecks")}` : ""}`} data-commit-ci={state} className={`ml-auto inline-flex shrink-0 items-center gap-xxs rounded-sm text-micro ${ciColors[state]} enabled:cursor-pointer enabled:hover:underline focus-visible:outline focus-visible:outline-ring`} onClick={() => {
         const current = useShellStore.getState().rest?.workspace_view;
         const currentCi = current?.git?.recent_ci?.find((row) => row.sha === commit.sha) ?? (current?.git?.ci?.sha === commit.sha ? current.git.ci : null);
         if (current?.device_id === view.device_id && current.path === view.path && current.git?.facts?.head_sha === header.facts?.head_sha && current.git?.state === "fresh" && useShellStore.getState().connection === "live" && currentCi?.state !== "stale" && currentCi?.url === ci.url && currentCi.checked_at_unix_ms != null && Date.now() - currentCi.checked_at_unix_ms <= 90_000) actions.openBrowser(ci.url!, { device_id: view.device_id, path: view.path });
@@ -71,9 +103,14 @@ function CommitHistoryRow({ commit, ci, header, view, actions }: { commit: Check
 function CommitHistory({ header, view, actions }: { header: Header; view: WorkspaceView; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const live = useShellStore((state) => state.connection === "live");
+  const remote = useRemoteCheck(header);
   const facts = header.facts;
   const commits = facts?.recent_commits?.length ? facts.recent_commits.slice(0, 5) : facts?.head_sha ? [{ sha: facts.head_sha, subject: facts.subject ?? facts.head_sha.slice(0, 7), commit_unix_seconds: facts.commit_unix_seconds }] : [];
-  return <section data-commit-history="true"><p className="mb-xs text-caption font-medium">{t("checkoutGit.history")}</p>{!live || header.state !== "fresh" ? <p role="status" className="text-micro text-muted-foreground">{t("checkoutGit.stale")}</p> : null}<ol className="m-0 list-none divide-y divide-border p-0">{commits.map((commit) => <CommitHistoryRow key={commit.sha} commit={commit} header={header} view={view} actions={actions} ci={header.recent_ci?.find((row) => row.sha === commit.sha) ?? (header.ci?.sha === commit.sha ? header.ci : null)} />)}</ol></section>;
+  // The upstream's commits not pulled yet sit above the local ones, dimmed
+  // (D-04); while the fetch fails they are the last ones received (B11).
+  const incoming = facts?.upstream_state === "tracked" ? (facts.incoming_commits ?? []).slice(0, 5) : [];
+  const more = Math.max(0, (facts?.behind ?? 0) - incoming.length);
+  return <section data-commit-history="true"><p className="mb-xs text-caption font-medium">{t("checkoutGit.history")}</p>{!live || header.state !== "fresh" ? <p role="status" className="text-micro text-muted-foreground">{t("checkoutGit.stale")}</p> : null}{incoming.length && remote.failure ? <p role="status" className="text-micro text-muted-foreground" data-commit-incoming-age="true">{remote.failure}</p> : null}<ol className="m-0 list-none divide-y divide-border p-0">{incoming.map((commit) => <CommitHistoryRow key={`incoming:${commit.sha}`} incoming commit={commit} header={header} view={view} actions={actions} ci={null} />)}{more && incoming.length ? <li className="py-xs text-micro text-muted-foreground opacity-60" data-commit-incoming-more={more}>{t("checkoutGit.incomingMore", { count: more })}</li> : null}{commits.map((commit) => <CommitHistoryRow key={commit.sha} commit={commit} header={header} view={view} actions={actions} ci={header.recent_ci?.find((row) => row.sha === commit.sha) ?? (header.ci?.sha === commit.sha ? header.ci : null)} />)}</ol></section>;
 }
 
 export function CheckoutCommit({ header, view, actions, title, time }: { header: Header | null | undefined; view: WorkspaceView; actions: Actions; title: boolean; time: boolean }) {

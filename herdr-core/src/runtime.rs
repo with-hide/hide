@@ -28,6 +28,7 @@ mod documents;
 mod drawn_ahead;
 mod editor;
 mod events;
+mod fetch;
 mod first_run;
 mod github_poll;
 pub(crate) mod group_starts;
@@ -79,6 +80,7 @@ mod view_feedback;
 mod workspace_control;
 mod workspace_view;
 
+pub(crate) use fetch::{FetchJob, RemoteCheck};
 pub use hosts::WorkspaceRemoteRoute;
 pub(crate) use kit::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob};
 pub use snapshot_delta::serialize_snapshot_delta;
@@ -1228,6 +1230,7 @@ pub struct Runtime {
     /// The device and folder `snapshot.changes` was read for.
     changes_published_key: Option<crate::changes::ChangesKey>,
     checkout_header: checkout_git::State,
+    fetch: fetch::State,
     /// Each device's session as its Herdr reported it, before its projects
     /// are grouped from the helper's facts (`device_catalog`).
     device_raw_sessions: HashMap<String, RemoteSessionSnapshot>,
@@ -2131,6 +2134,7 @@ impl Runtime {
             last_host_generation: 0,
             changes_published_key: None,
             checkout_header: checkout_git::State::default(),
+            fetch: fetch::State::default(),
             device_raw_sessions: HashMap::new(),
             device_facts: HashMap::new(),
             device_recent_tabs: HashMap::new(),

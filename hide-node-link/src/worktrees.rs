@@ -32,6 +32,60 @@ pub struct CheckoutGit {
     pub last_fetch_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_url: Option<String>,
+    /// The upstream's commits HEAD does not have yet, newest first, at most
+    /// [`CHECKOUT_COMMIT_LIMIT`]; `behind` counts them all.
+    #[serde(default)]
+    pub incoming_commits: Vec<CheckoutCommit>,
+    /// Which of `recent_commits` no remote-tracking ref holds: commits not
+    /// pushed anywhere this clone knows of.
+    #[serde(default)]
+    pub unpushed_commits: Vec<String>,
+}
+
+/// The most a node gives one background fetch (`Call::FetchRemote`).
+pub const FETCH_TIME: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long a core waits for a node's fetch. It is longer than
+/// [`FETCH_TIME`], so a fetch that runs out is the node's answer while its
+/// core still waits.
+pub const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(75);
+
+const _: () = assert!(FETCH_TIME.as_secs() + 10 <= FETCH_TIMEOUT.as_secs());
+
+/// What a background fetch of a repository's `origin` did
+/// (`Call::FetchRemote`, PRD git-freshness D-01).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum FetchOutcome {
+    /// `origin`'s remote-tracking refs are as the remote has them now.
+    Fetched,
+    /// Nothing was asked of the remote, and nothing failed.
+    Skipped { reason: FetchSkip },
+    /// The remote was asked and did not answer. `reason` is Git's last
+    /// fatal line with any URL credentials taken out.
+    Failed {
+        failure: FetchFailure,
+        reason: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FetchSkip {
+    /// The repository has no `origin` remote.
+    NoOrigin,
+    /// Another Git (the operator's own fetch) held a ref lock.
+    Busy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FetchFailure {
+    /// A credential was needed that nothing could give without asking.
+    Auth,
+    /// The host could not be reached, or did not answer in time.
+    Offline,
+    Other,
 }
 
 /// One linked worktree as Git registers it, read with NUL porcelain so no

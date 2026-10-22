@@ -199,7 +199,11 @@ use crate::error::HostError;
 /// 51: kit calls distinguish attaching to a saved Herdr session from server
 /// replacement consent, and pane proofs carry passive hook observations.
 /// Older helpers could replace the selected server or reject its observation.
-pub const PROTOCOL_VERSION: u32 = 51;
+/// 52: the core fetches a node's repositories in the background
+/// (`Call::FetchRemote`), reads a header's incoming and unpushed commits, and
+/// names GitHub's default branch to the worktree read. An older helper cannot
+/// fetch without prompting and is upgraded at Hello.
+pub const PROTOCOL_VERSION: u32 = 52;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -299,6 +303,12 @@ pub enum Call {
     Hello,
     /// Read-only status and current commit for the front checkout's header.
     CheckoutGit {
+        path: String,
+    },
+    /// Fetches `origin` of the repository that holds `path` without asking
+    /// for anything (`hide_host::worktrees::fetch_remote`), within
+    /// `worktrees::FETCH_TIME`; answers `worktrees::FetchOutcome`.
+    FetchRemote {
         path: String,
     },
     RootOpen {
@@ -954,6 +964,7 @@ impl Call {
             | Self::Project { .. }
             | Self::Worktrees { .. }
             | Self::CheckoutGit { .. }
+            | Self::FetchRemote { .. }
             | Self::BranchCheck { .. }
             | Self::Directory { .. }
             | Self::Registrable { .. }

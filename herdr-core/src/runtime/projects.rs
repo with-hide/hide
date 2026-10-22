@@ -609,8 +609,8 @@ impl Runtime {
                     project
                 }),
         };
-        // The pull request list the sidebar judges merges from, for this
-        // machine's project; a node's has none here (`MergeBasis::heads`).
+        // The pull request list the sidebar judges merges from; a node's
+        // project this core has not read asks per branch (`MergeBasis::heads`).
         let base = listed
             .as_ref()
             .and_then(|project| project.base_branch.clone());
@@ -620,7 +620,12 @@ impl Runtime {
                     self.github.project(&workspace.path),
                     base.as_deref(),
                 ),
-                Some(_) => None,
+                Some(node) => crate::worktrees::merged_heads(
+                    self.device_github
+                        .get(node)
+                        .and_then(|github| github.project(&workspace.path)),
+                    base.as_deref(),
+                ),
             },
             base,
         };

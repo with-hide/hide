@@ -27,6 +27,9 @@ fn header_fences_late_git_ci_and_reconnect_results_and_ages_without_false_clean(
         reason: None,
         ci: None,
         recent_ci: Vec::new(),
+        remote: None,
+        commit_links: Vec::new(),
+        commit_pages: false,
     });
     let facts = CheckoutGit {
         head_sha: Some("a".repeat(40)),
@@ -105,6 +108,9 @@ fn header_keeps_provider_identity_without_exposing_origin_credentials_to_the_ren
         reason: None,
         ci: None,
         recent_ci: Vec::new(),
+        remote: None,
+        commit_links: Vec::new(),
+        commit_pages: false,
     });
     let facts = CheckoutGit {
         head_sha: Some("a".repeat(40)),
@@ -149,6 +155,9 @@ fn history_ci_is_fenced_by_every_ordered_sha_and_all_links_expire() {
         reason: None,
         ci: None,
         recent_ci: Vec::new(),
+        remote: None,
+        commit_links: Vec::new(),
+        commit_pages: false,
     });
     let mut facts = CheckoutGit {
         head_sha: Some("a".repeat(40)),

@@ -16,7 +16,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
-use hide_node_link::worktrees::{GIT_WATCH_LIMIT, WORKTREES_READ_TIME};
+use hide_node_link::worktrees::{FETCH_TIME, FetchOutcome, GIT_WATCH_LIMIT, WORKTREES_READ_TIME};
 
 use hide_platform::process::OwnedChild;
 
@@ -50,39 +50,12 @@ pub fn checkout_git(path: &Path) -> HostResult<hide_node_link::worktrees::Checko
     )
     .map_err(fail)?;
     let mut facts = checkout_status(&status).map_err(fail)?;
-    if let Some(head) = facts.head_sha.as_deref() {
-        let log = git_within_limit(
-            path,
-            &["log", "-z", "-5", "--format=%H%x00%ct%x00%s", head, "--"],
-            until.saturating_duration_since(Instant::now()),
-            Some(64 * 1024),
-        )
-        .map_err(fail)?;
-        let fields: Vec<_> = log.split_terminator('\0').collect();
-        let (records, remainder) = fields.as_chunks::<3>();
-        if records.is_empty()
-            || !remainder.is_empty()
-            || records.len() > hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT
-        {
-            return Err(fail("Git returned an invalid commit history".to_owned()));
-        }
-        for record in records {
-            if !matches!(record[0].len(), 40 | 64)
-                || !record[0].bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                return Err(fail("Git returned an invalid commit SHA".to_owned()));
-            }
-            facts
-                .recent_commits
-                .push(hide_node_link::worktrees::CheckoutCommit {
-                    sha: record[0].to_owned(),
-                    subject: record[2].to_owned(),
-                    commit_unix_seconds: record[1]
-                        .parse()
-                        .map_err(|_| fail("Git returned an invalid commit time".to_owned()))?,
-                });
-        }
-        let latest = &facts.recent_commits[0];
+    if let Some(head) = facts.head_sha.clone() {
+        facts.recent_commits = commit_records(path, &head, until).map_err(fail)?;
+        let latest = facts
+            .recent_commits
+            .first()
+            .ok_or_else(|| fail("Git returned an invalid commit history".to_owned()))?;
         if latest.sha != head {
             return Err(fail(
                 "Git history did not start at the requested HEAD".to_owned(),
@@ -90,6 +63,34 @@ pub fn checkout_git(path: &Path) -> HostResult<hide_node_link::worktrees::Checko
         }
         facts.commit_unix_seconds = Some(latest.commit_unix_seconds);
         facts.subject = Some(latest.subject.clone());
+        // The newest commits no remote-tracking ref holds; the walk is the
+        // log's own order, so the five newest unpushed are among its first.
+        let unpushed = git_within_limit(
+            path,
+            &[
+                "rev-list",
+                &format!(
+                    "--max-count={}",
+                    hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT
+                ),
+                &head,
+                "--not",
+                "--remotes",
+                "--",
+            ],
+            until.saturating_duration_since(Instant::now()),
+            Some(4 * 1024),
+        )
+        .map_err(fail)?;
+        facts.unpushed_commits = unpushed
+            .lines()
+            .filter(|sha| facts.recent_commits.iter().any(|commit| commit.sha == *sha))
+            .map(str::to_owned)
+            .collect();
+        if facts.upstream_state == "tracked" && facts.behind.is_some_and(|behind| behind > 0) {
+            facts.incoming_commits =
+                commit_records(path, &format!("{head}..@{{upstream}}"), until).map_err(fail)?;
+        }
     }
     let repository = hide_project::git::discover(path)
         .ok_or_else(|| fail("The checkout's Git directory is unavailable".to_owned()))?;
@@ -104,6 +105,167 @@ pub fn checkout_git(path: &Path) -> HostResult<hide_node_link::worktrees::Checko
         .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
         .and_then(|time| u64::try_from(time.as_millis()).ok());
     Ok(facts)
+}
+
+/// The newest commits `revision` names, at most
+/// [`hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT`], with their times
+/// and subjects; their output at most 64 KiB together.
+fn checkout_commits_text(path: &Path, revision: &str, until: Instant) -> Result<String, String> {
+    git_within_limit(
+        path,
+        &[
+            "log",
+            "-z",
+            &format!("-{}", hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT),
+            "--format=%H%x00%ct%x00%s",
+            revision,
+            "--",
+        ],
+        until.saturating_duration_since(Instant::now()),
+        Some(64 * 1024),
+    )
+}
+
+fn commit_records(
+    path: &Path,
+    revision: &str,
+    until: Instant,
+) -> Result<Vec<hide_node_link::worktrees::CheckoutCommit>, String> {
+    let log = checkout_commits_text(path, revision, until)?;
+    let fields: Vec<_> = log.split_terminator('\0').collect();
+    let (records, remainder) = fields.as_chunks::<3>();
+    if !remainder.is_empty() || records.len() > hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT {
+        return Err("Git returned an invalid commit history".to_owned());
+    }
+    records
+        .iter()
+        .map(|record| {
+            if !matches!(record[0].len(), 40 | 64)
+                || !record[0].bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err("Git returned an invalid commit SHA".to_owned());
+            }
+            Ok(hide_node_link::worktrees::CheckoutCommit {
+                sha: record[0].to_owned(),
+                subject: record[2].to_owned(),
+                commit_unix_seconds: record[1]
+                    .parse()
+                    .map_err(|_| "Git returned an invalid commit time".to_owned())?,
+            })
+        })
+        .collect()
+}
+
+/// Fetches `origin` of the repository that holds `path` (PRD git-freshness
+/// D-01): every branch's remote-tracking ref moves to the remote's, refs the
+/// remote deleted are pruned, no tag is fetched and `FETCH_HEAD`, the time
+/// an operator's own fetch is read by, is not written. Local branches and
+/// the working tree are never touched. Nothing can prompt (`git_run`), and
+/// the run ends within [`FETCH_TIME`].
+pub fn fetch_remote(path: &Path) -> FetchOutcome {
+    use hide_node_link::worktrees::{FetchFailure, FetchSkip};
+    let Some(repository) = hide_project::git::discover(path) else {
+        return FetchOutcome::Failed {
+            failure: FetchFailure::Other,
+            reason: "The folder is not a Git repository".to_owned(),
+        };
+    };
+    match repository.config() {
+        Ok(config) if config.origin_url().is_some() => {}
+        Ok(_) => {
+            return FetchOutcome::Skipped {
+                reason: FetchSkip::NoOrigin,
+            };
+        }
+        Err(reason) => {
+            return FetchOutcome::Failed {
+                failure: FetchFailure::Other,
+                reason,
+            };
+        }
+    }
+    let output = crate::git_run::output(
+        crate::git_run::at(path).env("LC_ALL", "C").args([
+            "fetch",
+            "--quiet",
+            "--prune",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "origin",
+        ]),
+        FETCH_TIME,
+        Some(64 * 1024),
+    );
+    match output {
+        Ok(Some(output)) if output.status.success() => FetchOutcome::Fetched,
+        Ok(Some(output)) => fetch_failure(
+            &String::from_utf8_lossy(&output.stderr),
+            output.status.code(),
+        ),
+        Ok(None) => FetchOutcome::Failed {
+            failure: FetchFailure::Offline,
+            reason: format!(
+                "git fetch did not finish within {} seconds and was stopped",
+                FETCH_TIME.as_secs()
+            ),
+        },
+        Err(error) => FetchOutcome::Failed {
+            failure: FetchFailure::Other,
+            reason: format!("git fetch could not be run: {error}"),
+        },
+    }
+}
+
+/// Git's words for a failed fetch, read in the C locale. A ref lock another
+/// Git holds is the operator's own fetch running beside this one, which is
+/// no failure (D-02).
+fn fetch_failure(stderr: &str, code: Option<i32>) -> FetchOutcome {
+    use hide_node_link::worktrees::{FetchFailure, FetchSkip};
+    let said = |needle: &str| stderr.contains(needle);
+    if said("cannot lock ref")
+        || (said("Unable to create") && said(".lock"))
+        || said("but expected")
+    {
+        return FetchOutcome::Skipped {
+            reason: FetchSkip::Busy,
+        };
+    }
+    let failure = if said("Authentication failed")
+        || said("could not read Username")
+        || said("could not read Password")
+        || said("terminal prompts disabled")
+        || said("Permission denied")
+        || said("Host key verification failed")
+        || said("Repository not found")
+        || said("returned error: 403")
+        || said("returned error: 401")
+    {
+        FetchFailure::Auth
+    } else if said("Could not resolve host")
+        || said("Could not resolve hostname")
+        || said("Connection refused")
+        || said("Connection timed out")
+        || said("Operation timed out")
+        || said("Network is unreachable")
+        || said("No route to host")
+        || said("Failed to connect")
+    {
+        FetchFailure::Offline
+    } else {
+        FetchFailure::Other
+    };
+    let reason = stderr
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("fatal:").map(str::trim))
+        .map(crate::clone::redact)
+        .unwrap_or_else(|| {
+            format!(
+                "git fetch stopped with status {}",
+                code.map_or("unknown".to_owned(), |code| code.to_string())
+            )
+        });
+    FetchOutcome::Failed { failure, reason }
 }
 
 fn checkout_status(status: &str) -> Result<hide_node_link::worktrees::CheckoutGit, String> {
@@ -3029,5 +3191,56 @@ mod measure_tests {
         assert_eq!(files, GIT_WATCH_LIMIT);
         let last = PathBuf::from(format!("/repository-{GIT_WATCH_LIMIT}"));
         assert!(kept_file(folder.path(), &last).is_file());
+    }
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::fetch_failure;
+    use hide_node_link::worktrees::{FetchFailure, FetchOutcome, FetchSkip};
+
+    #[test]
+    fn the_operators_own_fetch_holding_a_ref_is_a_skip_not_a_failure() {
+        for stderr in [
+            "error: cannot lock ref 'refs/remotes/origin/main': is at 1 but expected 2",
+            "fatal: Unable to create '/r/.git/refs/remotes/origin/main.lock': File exists.",
+        ] {
+            assert_eq!(
+                fetch_failure(stderr, Some(1)),
+                FetchOutcome::Skipped {
+                    reason: FetchSkip::Busy
+                },
+                "{stderr}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_fetch_names_its_kind_and_never_its_credentials() {
+        let case = |stderr: &str| match fetch_failure(stderr, Some(128)) {
+            FetchOutcome::Failed { failure, reason } => (failure, reason),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            case(
+                "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+            )
+            .0,
+            FetchFailure::Auth
+        );
+        assert_eq!(
+            case("git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.").0,
+            FetchFailure::Auth
+        );
+        assert_eq!(
+            case("ssh: Could not resolve hostname github.com: nodename nor servname provided\nfatal: Could not read from remote repository.").0,
+            FetchFailure::Offline
+        );
+        let (failure, reason) = case(
+            "fatal: unable to access 'https://me:token@example.com/x.git/': The requested URL returned error: 500",
+        );
+        assert_eq!(failure, FetchFailure::Other);
+        assert!(!reason.contains("token"), "{reason}");
+        assert_eq!(case("").1, "git fetch stopped with status 128");
     }
 }

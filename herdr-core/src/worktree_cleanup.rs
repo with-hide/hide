@@ -233,9 +233,9 @@ pub(crate) struct MergeBasis {
     /// none is known, and then nothing can be proven merged.
     pub base: Option<String>,
     /// The head commits of the pull requests GitHub merged into `base`,
-    /// from the pull request list the sidebar reads too. `None` when this
-    /// core holds no list for the project (a node's), which is then asked
-    /// of GitHub one branch at a time.
+    /// from the pull request list the sidebar reads too, a device's own
+    /// list for a device project. `None` when this core has read no list
+    /// for the project, which is then asked of GitHub one branch at a time.
     pub heads: Option<BTreeSet<String>>,
 }
 
@@ -694,7 +694,7 @@ fn inspect(
             .github
             .as_ref()
             .map_err(|why| format!("GitHub merge proof is unavailable: {why}"))?;
-        let base = base.expect("a merge is judged only against a known base");
+        let base = base.ok_or("No default branch is known to judge a merge against")?;
         Ok(heads_into(
             github::merged_pull_request_proofs(github.node.as_ref(), &github.place, branch)?,
             base,
@@ -712,6 +712,8 @@ fn heads_into(proofs: Vec<github::MergedPullRequestProof>, base: &str) -> BTreeS
         .collect()
 }
 
+// The test seam of `inspect`: its merge proofs come from the caller.
+#[allow(clippy::too_many_arguments)]
 fn inspect_with_merge_proofs(
     node: &dyn NodeLink,
     root: &Path,

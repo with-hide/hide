@@ -15,9 +15,18 @@ The Workspace's path and icons sit in the center of the window's top row (see [T
 The path is `project / checkout`, where the project opens that project's panel on the Overview's Projects (PRD sidebar-task-lens B41), led by the device's colored band when the Workspace is not this Mac's; a tab in Home reads `~/hide`, since Home is no project.
 After the path, a Git checkout shows a small neutral FileDiff and the whole checkout's uncommitted tracked/untracked status-record count; zero is hidden, and a rename can count as two records because rename folding is disabled.
 Clicking the count opens Changes idempotently and leaves terminal keyboard ownership in place; its tooltip explains the count, while a conflict, loading, unavailable or stale read has a distinct small mark and never claims a clean tree.
-Upstream differences use ↑/↓ counts against the tracking branch, with zero hidden and no-upstream/gone distinct; the small detail names the tracking ref and the last FETCH_HEAD time, which is the last local remote observation, not a live remote comparison.
+Upstream differences use ↑/↓ counts against the tracking branch, with zero counts drawn as a quiet compare mark and no-upstream/gone distinct; the counts compare with the remote as Hide last fetched it (PRD git-freshness D-01, D-02).
+Hide fetches every registered repository with an `origin` in the background on the machine that holds it, a connected device's with that device's credentials: the one in front at most once a minute and again when the window comes forward after a minute, every other one at most every five minutes, one fetch per machine at a time, and none while no window is attached.
+The fetch is `git fetch --prune --no-tags origin` without `FETCH_HEAD`, so it moves only remote-tracking refs and never a branch, the index or a file, and it never opens a terminal prompt, askpass, keychain or Credential Manager window; a lock left by the operator's own Git skips that turn.
+The detail opens even at 0/0 and names the tracking ref and when the remote was last checked (`N분 전 확인`), or `아직 확인 안 함` before Hide's first successful fetch.
+A failed fetch keeps the last counts dimmed and says since when they are old; a credential or network failure waits for the window to come forward, any other failure retries after 1, 2, 5 and then 15 minutes, and the failure goes to the diagnostic log once.
+With the background fetch turned off in Project settings the project is not fetched and the detail shows the last `FETCH_HEAD` time, the operator's own fetch.
+`herdr-core/src/runtime/fetch.rs` owns the schedule, `herdr-core/src/fetch.rs` runs it, and `hide-host/src/worktrees.rs` (`fetch_remote`) is the node's fetch.
 Only the ↑ arrow uses the existing success green and only the ↓ arrow uses warning orange; both counts and the file count remain neutral, including when the branch is ahead and behind at once.
 At the right, the current HEAD's subject and relative age open a compact history popover directly below that trigger, with up to five newest commits from the captured HEAD; no commit is invented for an unborn branch.
+Above them, dimmed and marked `들어올 커밋`, sit up to five of the tracking branch's commits not yet in HEAD, with `+N개 더` when more are behind; while the fetch fails they are the ones last received and the list says since when.
+A local commit no remote has is marked `푸시 안 됨` when `origin` is on GitHub.
+A commit GitHub can show, one some remote already has or an incoming one, opens its GitHub commit page in the Browser View from its subject; a commit only this checkout has does not.
 Each compact item has its subject on the first line and short SHA and relative time on the second, with the exact local time available on the timestamp.
 Its associated CI result sits at the right of that second line; commits with no CI omit the result.
 The adjacent CI mark describes only that exact SHA, using GitHub's aggregate statusCheckRollup even on main without a PR, and distinguishes passing, pending, failed, none, unknown, unavailable and stale.
@@ -2314,6 +2323,8 @@ A new-worktree start asks for its branch and actual base before starting and pre
 An explicit checkout, issue or pull-request start, CLI target, resume, wake, fork and running agent keep their existing behavior.
 The base branch is also the project's existing Git comparison and merge base; an absent saved branch falls back to an existing branch with a reason.
 Plain folders cannot select worktree creation or a Git base.
+Check the remote in the background (원격 자동 확인) is on for every Git project, including one whose record predates it; turned off, Hide stops fetching that project and its header detail falls back to the operator's last fetch, and turned on again it fetches within the minute (PRD git-freshness B9).
+A plain folder shows it off and unavailable with the existing Git project reason.
 
 Below the base branch, the Guardrails group (보호) holds four switches, each with one line on what it stops: Guard working folders, Guard the base branch, Block risky Git commands and Guard files (PRD agent-guardrails B1).
 Every switch starts off, and a record saved before the group existed reads with all four off (B2, B30).

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use super::Runtime;
 use crate::changes::ChannelRef;
 use crate::checkout_git::{
-    Ci, CiAnswer, CiRequest, CiState, GitAnswer, GitRequest, GitState, Header,
+    Ci, CiAnswer, CiRequest, CiState, CommitLink, GitAnswer, GitRequest, GitState, Header,
 };
 
 #[derive(Default)]
@@ -57,6 +57,9 @@ impl Runtime {
                 reason: None,
                 ci: None,
                 recent_ci: Vec::new(),
+                remote: None,
+                commit_links: Vec::new(),
+                commit_pages: false,
             });
             self.checkout_header.last_git = None;
             self.checkout_header.last_ci = None;
@@ -250,7 +253,19 @@ impl Runtime {
         if target.root.device_id != key.0 || target.root.path != key.1 {
             return None;
         }
-        self.checkout_header.header.clone()
+        let mut header = self.checkout_header.header.clone()?;
+        header.remote = self.remote_check(&key.0, &key.1);
+        header.commit_links = commit_links(self.checkout_header.repository.as_deref(), &header);
+        header.commit_pages = self.checkout_header.repository.is_some();
+        Some(header)
+    }
+
+    /// The header the last snapshot carries.
+    pub(crate) fn published_checkout_header(&self) -> Option<Header> {
+        self.snapshot
+            .workspace_view
+            .as_ref()
+            .and_then(|view| view.git.clone())
     }
 
     pub(crate) fn refresh_checkout_header(&mut self) -> Option<Header> {
@@ -267,4 +282,24 @@ impl Runtime {
         }
         header
     }
+}
+
+/// The GitHub commit page of each recent commit some remote holds and of
+/// each incoming one, for a checkout whose origin is a validated GitHub
+/// repository; a commit no remote holds has no page to open (D-05).
+fn commit_links(repository: Option<&str>, header: &Header) -> Vec<CommitLink> {
+    let (Some(repository), Some(facts)) = (repository, header.facts.as_ref()) else {
+        return Vec::new();
+    };
+    facts
+        .recent_commits
+        .iter()
+        .filter(|commit| !facts.unpushed_commits.contains(&commit.sha))
+        .chain(&facts.incoming_commits)
+        .filter(|commit| hide_node_link::gh::is_commit(&commit.sha))
+        .map(|commit| CommitLink {
+            sha: commit.sha.clone(),
+            url: format!("https://github.com/{repository}/commit/{}", commit.sha),
+        })
+        .collect()
 }

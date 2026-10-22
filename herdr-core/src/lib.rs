@@ -25,6 +25,7 @@ mod effects;
 mod environment;
 #[cfg(test)]
 mod fake_herdr;
+mod fetch;
 mod files;
 pub use files::{FileRoots, inode_text};
 mod agent_groups;

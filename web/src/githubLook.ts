@@ -41,3 +41,24 @@ export function useGithubLook(actions: Actions): void {
     };
   }, [actions, live, project]);
 }
+
+/**
+ * Says the window came forward, for the background fetch, each time the page
+ * gains focus or becomes visible, whichever device's checkout is in front. A
+ * burst adds no fetch: the core fetches only when the last one is old.
+ */
+export function useFetchLook(actions: Actions): void {
+  const live = useShellStore((s) => s.connection === "live");
+  useEffect(() => {
+    if (!live) return undefined;
+    const look = () => {
+      if (document.visibilityState === "visible") actions.lookForFetch();
+    };
+    window.addEventListener("focus", look);
+    document.addEventListener("visibilitychange", look);
+    return () => {
+      window.removeEventListener("focus", look);
+      document.removeEventListener("visibilitychange", look);
+    };
+  }, [actions, live]);
+}

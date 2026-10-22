@@ -35,6 +35,22 @@ pub(crate) struct Header {
     pub reason: Option<String>,
     pub ci: Option<Ci>,
     pub recent_ci: Vec<Ci>,
+    /// What the background fetch last saw of the remote, filled when the
+    /// header is projected (`Runtime::remote_check`).
+    pub remote: Option<crate::runtime::RemoteCheck>,
+    /// The GitHub page of each recent or incoming commit a remote holds,
+    /// made by the core from the validated repository (PRD git-freshness
+    /// D-05); the renderer never receives a remote URL.
+    pub commit_links: Vec<CommitLink>,
+    /// The checkout's origin is a GitHub repository, so a commit with no
+    /// page in `commit_links` is one no remote holds (`푸시 안 됨`).
+    pub commit_pages: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct CommitLink {
+    pub sha: String,
+    pub url: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

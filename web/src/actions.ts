@@ -1488,6 +1488,15 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "github_request", payload: { workspace_id: workspaceId, refresh: false, look: true } });
     },
 
+    /**
+     * Says the operator's window came forward; the core fetches the repository
+     * in front when its last fetch is older than a minute and lets a fetch
+     * that stopped on a credential or the network try again (PRD git-freshness D-02).
+     */
+    lookForFetch() {
+      dispatch({ schema_version: 2, kind: "fetch_look", payload: {} });
+    },
+
     /** Reads each of these local Git projects' GitHub answer again (General's GitHub row, Check again). */
     refreshGithub(workspaceIds: readonly string[]) {
       for (const workspaceId of workspaceIds) dispatch({ schema_version: 2, kind: "github_request", payload: { workspace_id: workspaceId, refresh: true } });

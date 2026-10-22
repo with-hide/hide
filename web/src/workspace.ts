@@ -83,8 +83,18 @@ export type CheckoutGitHeader = {
     ahead: number | null;
     behind: number | null;
     last_fetch_unix_ms: number | null;
+    /** The upstream's commits HEAD does not have yet, newest first, at most five; `behind` counts them all. */
+    incoming_commits?: CheckoutCommitRecord[];
+    /** The recent commits no remote-tracking ref holds. */
+    unpushed_commits?: string[];
   } | null;
   ci: CheckoutCi | null;
+  /** What Hide's background fetch last saw of the remote; absent from an older core. */
+  remote?: { auto: boolean; checked_at_unix_ms: number | null; failing: boolean } | null;
+  /** The GitHub page of each recent or incoming commit a remote holds, made by the core. */
+  commit_links?: { sha: string; url: string }[];
+  /** The origin is a GitHub repository, so a commit with no page is not pushed. */
+  commit_pages?: boolean;
 };
 
 export type CheckoutCommitRecord = { sha: string; subject: string; commit_unix_seconds: number | null };

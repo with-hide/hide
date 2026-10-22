@@ -58,15 +58,30 @@ impl Runtime {
                     }
                     continue;
                 };
+                let mut listed = listed.clone();
+                // The one merged judgment, from the device's own pull
+                // requests when this core reads them (PRD git-freshness D-06).
+                let merged_heads = crate::worktrees::merged_heads(
+                    self.device_github
+                        .get(target)
+                        .and_then(|github| github.project(&project.path)),
+                    listed.base_branch.as_deref(),
+                );
+                for worktree in &mut listed.worktrees {
+                    worktree.merged = crate::worktrees::merged(
+                        worktree.in_base,
+                        worktree.head_sha.as_deref(),
+                        merged_heads.as_ref(),
+                    );
+                }
                 match measured {
                     Some(disk) => {
-                        let mut listed = listed.clone();
                         super::projects::measure_worktrees(&mut listed, disk);
                         device_catalog::apply_worktrees(project, &listed, own_rows);
                         let marks = self.disk_sweep_marks(Some(target), &project.path);
                         project.disk = super::projects::project_disk(Some(&listed), marks);
                     }
-                    None => device_catalog::apply_worktrees(project, listed, own_rows),
+                    None => device_catalog::apply_worktrees(project, &listed, own_rows),
                 }
                 if let Some(found) = self
                     .device_github
@@ -578,18 +593,25 @@ impl Runtime {
         if wanted.is_empty() {
             return false;
         }
+        // The chosen base and GitHub's default branch, by repository.
         let bases: BTreeMap<_, _> = wanted
             .iter()
             .map(|root| {
                 (
                     root.clone(),
-                    crate::project_settings::base_choice(
-                        &self.snapshot.ui_state.project_settings,
-                        &self.snapshot.ui_state.project_base_branches,
-                        target,
-                        root,
-                    )
-                    .map(str::to_owned),
+                    (
+                        crate::project_settings::base_choice(
+                            &self.snapshot.ui_state.project_settings,
+                            &self.snapshot.ui_state.project_base_branches,
+                            target,
+                            root,
+                        )
+                        .map(str::to_owned),
+                        self.device_github
+                            .get(target)
+                            .and_then(|github| github.project(root))
+                            .and_then(|project| project.issues.default_branch.clone()),
+                    ),
                 )
             })
             .collect();
@@ -772,7 +794,7 @@ fn ask_worktrees(
     channel: &dyn crate::node_access::NodeLink,
     target: &str,
     roots: &[String],
-    bases: &BTreeMap<String, Option<String>>,
+    bases: &BTreeMap<String, (Option<String>, Option<String>)>,
     notes: bool,
 ) -> WorktreesAnswer {
     let (answers, failure) = ask_repositories(channel, roots, bases);
@@ -811,7 +833,7 @@ fn ask_worktrees(
 fn ask_repositories(
     channel: &dyn crate::node_access::NodeLink,
     roots: &[String],
-    bases: &BTreeMap<String, Option<String>>,
+    bases: &BTreeMap<String, (Option<String>, Option<String>)>,
 ) -> (
     Vec<(String, Option<crate::model::ProjectWorktreesSnapshot>)>,
     Option<String>,
@@ -823,10 +845,8 @@ fn ask_repositories(
             hide_node_link::protocol::Call::Worktrees {
                 path: root.clone(),
                 bases: Default::default(),
-                base_override: bases.get(root).cloned().flatten(),
-                // This core reads no pull requests of a device's repository,
-                // so its default is the device's `origin/HEAD`.
-                remote_default: None,
+                base_override: bases.get(root).and_then(|base| base.0.clone()),
+                remote_default: bases.get(root).and_then(|base| base.1.clone()),
                 reuse_unchanged: false,
             },
             WORKTREES_TIMEOUT,
