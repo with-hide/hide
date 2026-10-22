@@ -51,7 +51,7 @@ describe("shortcut registry", () => {
     for (const host of ["browser", "electron"] as const) expect(displayCommand("add_backlog", host, pc, "pc"), host).toBe("Alt+Shift+M");
   });
 
-  it("offers Add project only in the desktop app, which has the folder picker", () => {
+  it("gives Add project a chord only in the desktop app, since Chrome keeps ⇧⌘N", () => {
     expect(displayCommand("new_workspace", "browser", REGISTRY, "mac")).toBe("");
     expect(displayCommand("new_workspace", "electron", REGISTRY, "mac")).toBe("⇧⌘N");
   });

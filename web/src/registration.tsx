@@ -43,6 +43,7 @@ export function useRegistration(registrations: readonly WorkspaceRegistration[])
   const [sent, setSent] = useState<Sent | null>(null);
   const [shellRefusal, setShellRefusal] = useState<{ path: string; reason: string } | null>(null);
   const coreError = useErrorSince(sent?.at ?? null, ["workspace.create", "workspace.remove_in_flight"]);
+  const coreKind = useShellStore((s) => s.rest?.status?.last_error?.kind ?? null);
   const added = sent !== null && registrations.some((row) => row.device_id === sent.device && !sent.known.has(row.id));
 
   const hidedReason = sent && pathRefusal?.kind === "create_workspace" && pathRefusal.path === sent.path ? pathRefusal.reason : null;
@@ -51,7 +52,9 @@ export function useRegistration(registrations: readonly WorkspaceRegistration[])
     : sent && hidedReason
       ? { path: sent.path, reason: hidedReason, text: refusalText(hidedReason, t) }
       : sent && coreError
-        ? { path: sent.path, reason: "core", text: coreError }
+        ? coreKind === "workspace.create_registered"
+          ? { path: sent.path, reason: "already_registered", text: refusalText("already_registered", t) }
+          : { path: sent.path, reason: "core", text: coreError }
         : null;
 
   // The project appearing is the answer; the dialog closes on it.

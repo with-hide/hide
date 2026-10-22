@@ -32,13 +32,13 @@ export function addProjectHosts(devices: readonly Device[] | undefined, t: TFunc
  * window's own machine takes a typed `~/` path too, judged by its node like
  * any other machine's.
  */
-export type HostWays = { browse: boolean; otherWays: boolean; pickParent: boolean };
+export type HostWays = { own: boolean; browse: boolean; otherWays: boolean; pickParent: boolean };
 
 export function hostWays(host: string, devices: readonly Device[] | undefined, picker: boolean): HostWays {
   const own = host === windowDeviceId(devices);
   const core = isCoreMachine(devices, host);
   const browse = own && picker;
-  return { browse, otherWays: core, pickParent: browse && core };
+  return { own, browse, otherWays: core, pickParent: browse && core };
 }
 
 /** The host the dialog opens on: the focused device while it is still listed, this Mac otherwise. */

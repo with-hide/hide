@@ -111,6 +111,15 @@ test("the Search row and the Overview row under the device, with no Home row, an
     await field.fill("~/projects/typed-project");
     await field.press("Enter");
     await expect(page.locator("[data-project]", { hasText: "typed-project" })).toBeVisible({ timeout: 20_000 });
+    // The same folder typed again is answered by the core as already a project; the shell cannot match
+    // `~/` against the stored absolute path itself.
+    await addProject.click();
+    await field.fill("~/projects/typed-project/");
+    await field.press("Enter");
+    await expect(dialog.locator('[data-registration-reason="already_registered"]')).toBeVisible();
+    await expect(dialog.locator("[data-registration-pending]")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
 
     // The direct commands focus this list or restore the Overview's last tab (overview-redesign B1).
     await page.keyboard.press(chord("sidebar_projects"));

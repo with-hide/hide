@@ -26,7 +26,6 @@ import { prMarkParts } from "./prMark";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected, frontDeviceId } from "./devices";
 import { hideAiWords, homeTurnLine } from "./hideAiOrigin";
-import { hostBridge } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { numberedPanes, numberOf } from "./numbering";
@@ -159,18 +158,16 @@ function NoTasks({ actions }: { actions: Actions }) {
   );
 }
 
-/** No project on the device (B42): the first step, with Add project where the host can pick a folder. */
+/** No project on the device (B42): the first step, with Add project and its chord where the host has one. */
 function NoProject({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const chord = commandLabel("new_workspace");
   return (
     <div className="flex flex-col items-start gap-sm px-md py-md text-caption text-muted-foreground" data-tasks-no-project="true">
       <p>{t("taskLens.noProject")}</p>
-      {hostBridge() ? (
-        <Hint label={t("taskLens.addProject")} shortcut={chord || null}>
-          <Button variant="outline" size="sm" onClick={() => actions.openAddProject()} data-tasks-add-project="true"><PlusIcon />{t("taskLens.addProject")}</Button>
-        </Hint>
-      ) : null}
+      <Hint label={t("taskLens.addProject")} shortcut={chord || null}>
+        <Button variant="outline" size="sm" onClick={() => actions.openAddProject()} data-tasks-add-project="true"><PlusIcon />{t("taskLens.addProject")}</Button>
+      </Hint>
     </div>
   );
 }

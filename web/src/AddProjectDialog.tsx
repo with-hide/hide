@@ -246,7 +246,7 @@ export function AddProjectViews({
                       {t("common.add")}
                     </Button>
                   </div>
-                  <p className="text-body text-muted-foreground">{t("addProject.homeNote", { host: host.label })}</p>
+                  <p className="text-body text-muted-foreground">{ways.own ? t("addProject.homeNoteOwn") : t("addProject.homeNote", { host: host.label })}</p>
                 </div>
               )}
               <RegistrationStatus registration={registration} />
