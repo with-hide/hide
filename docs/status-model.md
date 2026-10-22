@@ -968,7 +968,8 @@ A blocked menu takes Approval before an unread AI question's Answer.
 A current native `user_turn.kind = question` instead takes Answer while its session holds for a reply, including after it is read and when its content is absent.
 Native plan approval keeps Approval; the typed native wait, rather than a provider name or an AI question label, distinguishes these cases.
 Reading an AI question skips its demand rung and leaves a dimmed question; menu and plan approval stay in Needs You until answered.
-`row.state.pr` is the row's own PR summary (PRD D-18, D-39): the live PRs it holds the duty of, never a descendant's, with the count, the worst state and each PR worst first, each state the one rule of Pull request visual states decides; a closed PR is not counted.
+`row.state.pr` is the row's own PR summary (PRD D-18, D-39): the live PRs it holds the duty of and every merged one however long ago it merged, never a descendant's, with the count, the worst state and each PR worst first, each state the one rule of Pull request visual states decides; a closed PR is not counted.
+A merged pull request keeps its mark after the operator's next request, because the mark says what the row made; only the verb's `result` and the `live` flag follow D-43.
 Without a label line the row keeps its outline but carries no invented line.
 Delegated children are never tasks of their own: they are drawn under their root through every row the operator expands, at any depth (`sessions_expanded_agent_pane_ids` in core UI state holds each expanded pane).
 A Hide AI row for a home is a task only while it is in Needs You, where it draws the home's turn under the agent's own ask or block cause and opens the home when chosen.

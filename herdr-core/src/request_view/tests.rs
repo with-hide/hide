@@ -140,7 +140,7 @@ fn saved_pr_is_drawn_before_confirmation_without_assigning_current_work() {
     run(&mut rows, &[("resumed", "main")], &github);
     assert_eq!(verb(&rows[0]), RequestVerb::Idle);
     let shown = crate::agent_state::sessions::own_prs(&rows[0]).unwrap();
-    assert_eq!(shown.count, 1, "the merged historical PR stays filtered");
+    assert_eq!(shown.count, 2, "the merged historical PR stays drawn");
     let pull = &rows[0].request.as_ref().unwrap().pull_requests[shown.pulls[0].index];
     assert_eq!(pull.number, 32);
     assert!(pull.provisional);
@@ -518,6 +518,17 @@ fn a_session_that_made_pull_requests_on_main_shows_the_one_to_look_at_first() {
         shown,
         [(11, true, true), (12, true, true), (10, false, true)],
         "a PR it did not make is not its"
+    );
+    let marked: Vec<_> = crate::agent_state::sessions::own_prs(&rows[0])
+        .unwrap()
+        .pulls
+        .iter()
+        .map(|own| request.pull_requests[own.index].number)
+        .collect();
+    assert_eq!(
+        marked,
+        [11, 12, 10],
+        "a PR merged before the last request keeps its mark"
     );
 }
 

@@ -212,7 +212,9 @@ pub(crate) fn row(agent: &SidebarAgentSnapshot) -> Row {
 /// display only, never its descendants' (PRD D-18,
 /// D-39): how many, the worst state, and each PR as an
 /// index into `request.pull_requests`, worst first, each in the one PR state
-/// ([`PrState::of`]). Closed PRs are not counted.
+/// ([`PrState::of`]). A merged PR keeps its place however long ago it
+/// merged, since the mark says what the row made, not what it still owes;
+/// closed PRs are not counted.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PrSummary {
     pub count: usize,
@@ -231,7 +233,9 @@ pub(crate) fn own_prs(agent: &SidebarAgentSnapshot) -> Option<PrSummary> {
         .request
         .iter()
         .flat_map(|request| request.pull_requests.iter().enumerate())
-        .filter(|(_, pull)| (pull.duty || pull.provisional) && pull.live)
+        .filter(|(_, pull)| {
+            (pull.duty || pull.provisional) && (pull.live || pull.state() == PrState::Merged)
+        })
         .map(|(index, pull)| OwnPr {
             index,
             state: pull.state(),
