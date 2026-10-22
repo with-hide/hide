@@ -16,7 +16,9 @@ use serde::Deserialize;
 
 use super::view_areas::Reconciled;
 use super::*;
-use crate::model::{BrowserAreaScopeRow, BrowserViewInventoryRow, WorkspaceViewSnapshot};
+use crate::model::{
+    BrowserAreaScopeRow, BrowserViewInventoryRow, LaneCallSide, WorkspaceViewSnapshot,
+};
 use crate::view_layout::DisplayKind;
 use crate::workspace_views::{self, Tool, WorkspaceView, WorkspaceViews};
 
@@ -121,7 +123,7 @@ pub(super) struct WorkspaceViewStore {
     /// page's own moment. Runtime only: whether the lane floats now is never
     /// stored (D-11).
     pub(super) lane_calls: u64,
-    pub(super) lane_called: HashMap<WorkspaceKey, u64>,
+    pub(super) lane_called: HashMap<WorkspaceKey, (u64, LaneCallSide)>,
     /// The Workspace the operator last chose, in this process or before it
     /// started: the one the app opens on (D-11); none on a first run.
     resumable: Option<WorkspaceKey>,
@@ -230,11 +232,13 @@ where
 }
 
 impl WorkspaceViewStore {
-    /// Numbers a call that opened `key`'s lane. The call history has the
-    /// store's bound; it is pruned only when crossing it, never on a repeat.
-    pub(super) fn call_lane(&mut self, key: &WorkspaceKey) {
+    /// Numbers a call that opened `key`'s lane and records which column it
+    /// brought forward. The call history has the store's bound; it is
+    /// pruned only when crossing it, never on a repeat.
+    pub(super) fn call_lane(&mut self, key: &WorkspaceKey, side: LaneCallSide) {
         self.lane_calls += 1;
-        self.lane_called.insert(key.clone(), self.lane_calls);
+        self.lane_called
+            .insert(key.clone(), (self.lane_calls, side));
         if self.lane_called.len() > workspace_views::MAX_WORKSPACES {
             let views = &self.views;
             self.lane_called
@@ -679,7 +683,7 @@ impl Runtime {
             let before = (entry.open, entry.tool);
             entry.show_tool(Tool::Memory);
             let changed = before != (entry.open, entry.tool);
-            store.call_lane(key);
+            store.call_lane(key, LaneCallSide::Tool);
             if changed {
                 self.persist_workspace_views();
             }
@@ -718,7 +722,13 @@ impl Runtime {
             AreaIntent::Explorer => entry.show_tool(Tool::Explorer),
         }
         let changed = before != (entry.open, entry.documents, entry.tool);
-        store.call_lane(key);
+        store.call_lane(
+            key,
+            match intent {
+                AreaIntent::Documents => LaneCallSide::View,
+                AreaIntent::Explorer => LaneCallSide::Tool,
+            },
+        );
         if changed {
             self.persist_workspace_views();
         }
@@ -789,6 +799,8 @@ impl Runtime {
             );
             return true;
         }
+        let detail_shown =
+            self.snapshot.ui_state.detail.shown && !self.snapshot.ui_state.detail.items.is_empty();
         let store = self.workspace_views.as_mut().expect("checked above");
         let entry = store.views.entry(&key.0, &key.1);
         let before = entry.clone();
@@ -817,8 +829,9 @@ impl Runtime {
             Some(true) => {
                 entry.open = true;
                 // A lane that had no column comes back on the documents when
-                // there are some, else on the Explorer (B15).
-                if !entry.has_column() {
+                // there are some, else on the Explorer (B15); the window's
+                // 보기 slot, still shown, is a column of its own.
+                if !entry.has_column() && !detail_shown {
                     if entry.layout.display_count() > 0 {
                         entry.documents = true;
                     } else {
@@ -848,11 +861,17 @@ impl Runtime {
             || payload.open == Some(true)
             || payload.reveal.is_some();
         if called {
-            store.call_lane(&key);
+            let side = if matches!(tool, Some(Some(_))) || payload.reveal.is_some() {
+                LaneCallSide::Tool
+            } else {
+                LaneCallSide::View
+            };
+            store.call_lane(&key, side);
         }
-        // The documents brought in front stand before the 보기 slot, and a
-        // closed lane draws nothing; the slot stays on the rail (B10, B11).
-        let leaves_detail = payload.documents == Some(true) || payload.open == Some(false);
+        // The documents brought in front stand before the 보기 slot, which
+        // stays on the rail (B10, B11); a lane closed whole keeps the slot
+        // shown, so ⌘E brings it back (B15).
+        let leaves_detail = payload.documents == Some(true);
         let width_request_changed = if payload.document_width.is_some()
             || payload.detail_width.is_some()
             || payload.explorer_width.is_some()
@@ -1237,7 +1256,11 @@ impl Runtime {
                     .as_ref()
                     .filter(|(workspace, _)| workspace == key)
                     .map(|(_, request)| request.clone()),
-                lane_called: store.lane_called.get(key).copied().unwrap_or(0),
+                lane_called: store.lane_called.get(key).map_or(0, |(call, _)| *call),
+                lane_called_side: store
+                    .lane_called
+                    .get(key)
+                    .map_or(LaneCallSide::View, |(_, side)| *side),
                 lane_calls: store.lane_calls,
                 resumed: Some(key) == store.resumable.as_ref(),
                 feedback: self.view_feedback_snapshot(key, &layout),

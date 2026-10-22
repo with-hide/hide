@@ -95,6 +95,9 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
     // Without a tool column the same holds at 360.
     expect(frame({ view: "documents", pinned: true, body: 848 })).toMatchObject({ mode: "docked", agents: 480, width: 360 });
     expect(frame({ view: "documents", pinned: true, body: 847 })).toMatchObject({ mode: "overlay", narrowPin: true });
+    // A body narrower than one column is the lane's whole width, never wider than the body.
+    expect(frame({ view: "documents", tool: "explorer", pinned: true, body: 332 })).toMatchObject({ mode: "overlay", stacked: true, width: 332, view: column("document_width", 332, 360), tool: null });
+    expect(frame({ tool: "explorer", shown: true, body: 120 })).toMatchObject({ mode: "overlay", width: 120, tool: column("explorer_width", 120, 180) });
     // Widening again brings the stored shape back: nothing narrow is stored.
     expect(frame({ view: "documents", tool: "explorer", pinned: true, body: 1600 })).toMatchObject({ mode: "docked", stacked: false, width: 768 });
   });

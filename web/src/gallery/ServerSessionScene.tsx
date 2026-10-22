@@ -23,7 +23,7 @@ export function ServerSessionScene({ scene: kind, theme, scale, content, state =
     scene.agents = scene.agents.filter((row) => row.pane_id === pane.id);
     scene.rest.navigator!.focused_workspace_id = workspace.id;
     scene.rest.navigator!.focused_checkout_id = checkout.id;
-    scene.rest.workspace_view = {device_id:"local",path:checkout.path,open:false,documents:false,tool:null,prs:{only_checkout:false},pinned:false,document_width:null,detail_width:null,explorer_width:null,panel_width:null,lane_called:0,lane_calls:0};
+    scene.rest.workspace_view = {device_id:"local",path:checkout.path,open:false,documents:false,tool:null,prs:{only_checkout:false},pinned:false,document_width:null,detail_width:null,explorer_width:null,panel_width:null,lane_called:0,lane_calls:0,lane_called_side:"view"};
     if (kind === "checkout-git") {
       const head = "a".repeat(40);
       workspace.label = content === "long" ? "한글과 English가 섞인 매우 긴 프로젝트 이름" : "herdr-ide";

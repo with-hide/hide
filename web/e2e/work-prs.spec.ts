@@ -17,12 +17,12 @@ import { startHerdr } from "./herdr-fixture";
 import { startHided } from "./hided-fixture";
 import { fakeGh, git, head, moveHead, skewCardHead, writes, type ExtraQuery } from "./work-prs-fixture";
 import { chord } from "./chords";
-import { chooseTheme, countSent, screenshot, showProjectRow, showTool, setLanePinned } from "./wire";
+import { chooseTheme, countSent, registerFolder, screenshot, showProjectRow, showTool, setLanePinned } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
 /** A project on a private Herdr and hided with the fake `gh`, the PRs tool open. */
-async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>> }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean } = {}): Promise<void> {
+async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>>; daemon: { origin: string; token: string; home: string } }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean } = {}): Promise<void> {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const herdr = await startHerdr();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
@@ -50,7 +50,7 @@ async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: stri
     await showTool(page, "prs");
     const work = page.locator('aside[data-lane="prs"]');
     await expect(work.locator("[data-pr-group]").first()).toBeVisible({ timeout: 30_000 });
-    await fn({ gh, work, sent, last });
+    await fn({ gh, work, sent, last, daemon });
   } finally {
     daemon?.stop();
     herdr.stop();
@@ -264,6 +264,48 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
     await expect(work.locator('[data-pr-group="needs_you"] [data-pr="31"]')).toHaveCount(0);
     await work.locator('[data-pr-group="merged"] [data-pr-focus="group"]').click();
     await expect(work.locator('[data-pr-group="merged"] [data-pr="31"]')).toHaveCount(1);
+  });
+});
+
+test("the lane chord brings the card back with its tool and alone, and the slot button opens another checkout's closed lane (lane-two-columns B15, B22)", async ({ page }) => {
+  await openWork(page, async ({ work, daemon }) => {
+    const screen = page.locator("[data-workspace-screen]");
+    const slot = page.locator('[data-lane-tool="detail"]');
+    await work.locator('[data-pr-row="31"]').click();
+    const card = cardOf(page, 31);
+    await expect(card).toBeVisible({ timeout: 30_000 });
+    await expect(screen).toHaveAttribute("data-lane-shows", "prs");
+
+    // Closed whole beside the PRs tool, the chord brings both back (B15).
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(screen).toHaveAttribute("data-lane-mode", "closed");
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(card).toBeVisible();
+    await expect(screen).toHaveAttribute("data-lane-shows", "prs");
+
+    // The card alone, its tool column folded by the PRs icon, comes back alone.
+    await page.locator('[data-lane-tool="prs"]').click();
+    await expect(screen).toHaveAttribute("data-lane-shows", "none");
+    await expect(card).toBeVisible();
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(screen).toHaveAttribute("data-lane-mode", "closed");
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(card).toBeVisible();
+    await expect(screen).toHaveAttribute("data-lane-shows", "none");
+
+    // A checkout whose lane was never opened: the window's slot still holds
+    // the card, and its button opens that checkout's lane on it (B22).
+    const other = path.join(daemon.home, "projects", "other");
+    fs.mkdirSync(other, { recursive: true });
+    fs.writeFileSync(path.join(other, "README.md"), "# other\n");
+    await registerFolder(page, daemon, other);
+    await expect(page.locator("[data-project]")).toHaveCount(2, { timeout: 20_000 });
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "other" }).locator("[data-checkout]").first())).click();
+    await expect(screen).toHaveAttribute("data-lane-mode", "closed");
+    await expect(slot).toHaveAttribute("aria-pressed", "false");
+    await slot.click();
+    await expect(card).toBeVisible();
+    await expect(slot).toHaveAttribute("aria-pressed", "true");
   });
 });
 

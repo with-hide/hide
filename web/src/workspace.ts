@@ -61,6 +61,8 @@ export type WorkspaceView = {
   lane_called: number;
   /** How many lane calls the core has numbered, in any Workspace. */
   lane_calls: number;
+  /** Which column the last call brought forward (B19): the viewing column for an open, the 보기 slot or ⌘E, the tool column for a tool, a reveal or a folder link. */
+  lane_called_side: LaneSide;
   /** The Workspace the operator last chose, now or before a restart, so the page opens on it (PRD right-lane D-11). */
   resumed?: boolean;
   /** The View areas (S7); absent only from a core that predates them. */
@@ -233,17 +235,19 @@ export function laneFrame(input: LaneInput): LaneFrame {
   const column = (want: Want, width: number): LaneColumn => ({ field: want.field, width, min: want.min });
   // What the lane wants in `room`: both columns, the front one alone when
   // stacked, or the one column it has.
-  const place = (room: number): { view: LaneColumn | null; tool: LaneColumn | null; stacked: boolean; width: number } | null => {
+  // `squeezed`, a column too narrow for its minimum takes `room` anyway: a
+  // body narrower than one column is the lane's whole width (B19).
+  const place = (room: number, squeezed = false): { view: LaneColumn | null; tool: LaneColumn | null; stacked: boolean; width: number } | null => {
     if (view && tool) {
       const fit = fitColumns(view, tool, room, sizes.divider);
       if (fit) return { view: column(view, fit.view), tool: column(tool, fit.tool), stacked: false, width: fit.view + sizes.divider + fit.tool };
       const front = input.front === "tool" ? tool : view;
-      if (front.min > room) return null;
+      if (front.min > room && !squeezed) return null;
       const width = Math.min(front.want, room);
       return { view: front === view ? column(view, width) : null, tool: front === tool ? column(tool, width) : null, stacked: true, width };
     }
     const one = (view ?? tool)!;
-    if (one.min > room) return null;
+    if (one.min > room && !squeezed) return null;
     const width = Math.min(one.want, room);
     return { view: view ? column(view, width) : null, tool: tool ? column(tool, width) : null, stacked: false, width };
   };
@@ -259,8 +263,9 @@ export function laneFrame(input: LaneInput): LaneFrame {
     return { mode, agents: docks ? body - sizes.divider - place(dockRoom)!.width : body, width: body, view: view ? column(one, body) : null, tool: tool ? column(one, body) : null, stacked: false, narrowPin: false };
   }
   // Docked, the lane takes what it wants of the agents' spare; over them it
-  // may take the body, giving way inside itself like a narrow dock.
-  const placed = docks ? place(dockRoom)! : (place(body) ?? place(Math.max(body, (view ?? tool)!.min))!);
+  // may take the body, giving way inside itself like a narrow dock, and a
+  // body narrower than one column is the whole lane.
+  const placed = docks ? place(dockRoom)! : place(body, true)!;
   const agents = docks ? body - sizes.divider - placed.width : body;
   return { mode, agents, width: placed.width, view: placed.view, tool: placed.tool, stacked: placed.stacked, narrowPin: input.pinned && !docks };
 }

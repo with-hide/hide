@@ -1441,7 +1441,10 @@ fn workspace_lane_calls_forget_evicted_workspaces() {
         "studio".to_owned(),
         format!("/srv/workspace-{}", crate::workspace_views::MAX_WORKSPACES),
     );
-    assert_eq!(store.lane_called.get(&last), Some(&store.lane_calls));
+    assert_eq!(
+        store.lane_called.get(&last),
+        Some(&(store.lane_calls, crate::model::LaneCallSide::View))
+    );
 }
 
 /// PRD lane-two-columns B12: closing the last view, a page or a file,

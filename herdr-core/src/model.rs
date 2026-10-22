@@ -233,11 +233,23 @@ impl<T: Serialize> Serialize for Edited<T> {
     }
 }
 
+/// The column a lane call brought forward (PRD lane-two-columns B19).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaneCallSide {
+    /// The viewing column: the documents or the 보기 slot.
+    #[default]
+    View,
+    /// The tool column.
+    Tool,
+}
+
 /// What the front Workspace shows: its right lane (the tool, the pin, the
 /// file tree and both widths) and its View area tree (PRD right-lane D-11).
 /// The editor's `active_tab_id` is the document of the active area's active
 /// display.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+
 pub struct WorkspaceViewSnapshot {
     pub device_id: String,
     pub path: String,
@@ -274,6 +286,11 @@ pub struct WorkspaceViewSnapshot {
     /// core started; a number past `lane_calls` as the shell last read it is
     /// a call the shell shows by drawing the lane (D-02, B16).
     pub lane_called: u64,
+    /// Which column the last call brought forward, so a lane too narrow to
+    /// draw both knows which to draw (PRD lane-two-columns B19): the
+    /// viewing column for an open, the 보기 slot or ⌘E, the tool column for
+    /// a tool, a reveal or a folder link.
+    pub lane_called_side: LaneCallSide,
     /// How many lane calls the core has numbered, in any Workspace.
     pub lane_calls: u64,
     /// Whether this is the Workspace the operator last chose, now or before a

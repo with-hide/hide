@@ -538,7 +538,7 @@ fn a_select_calls_the_lane_only_from_the_pane_the_operator_is_in() {
         .unwrap()
         .lane_called
         .get(&(key.0.to_owned(), key.1.to_owned()))
-        .copied();
+        .map(|(number, _)| *number);
     assert_eq!(
         numbered,
         Some(1),

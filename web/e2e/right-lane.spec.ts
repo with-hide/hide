@@ -322,6 +322,8 @@ test("closing the last view closes the lane when no tool shows, hands the keyboa
     await expect(page.locator('[data-lane="explorer"]')).toHaveCount(0);
     await expect(pane(page, lane.herdr.panes[0]!).locator(".xterm-helper-textarea")).toBeFocused();
     await expect(railTool(page, "documents")).toBeDisabled();
+    await railTool(page, "documents").hover();
+    await expect(page.locator('[role="tooltip"]')).toHaveText(/No open document/);
 
     // A lane with no column and no document comes back on the Explorer.
     await page.keyboard.press(chord("toggle_lane"));
@@ -347,6 +349,7 @@ test("the Explorer opens beside the document without narrowing it, stays through
     await expect(page.locator('[data-lane="explorer"] [data-explorer]')).toBeVisible();
     await expect(railTool(page, "explorer")).toHaveAttribute("aria-pressed", "true");
     await expect(railTool(page, "documents")).toHaveAttribute("aria-pressed", "true");
+    await expect(railTool(page, "documents").locator("[data-lane-badge]")).toHaveText("1");
     expect(Math.abs((await documentArea(page).boundingBox())!.width - width)).toBeLessThanOrEqual(1);
     // The Explorer has nothing of its own to turn off: no toggle, no hint about a tree alone (B5).
     await expect(page.locator("[data-lane-tree-toggle], [data-lane-tree-footer]")).toHaveCount(0);
@@ -426,9 +429,10 @@ test("the rail shows icons alone and names each tool in its hint in four languag
     await openFile(lane, lane.herdr.panes[0]!, "a.md");
     await expect(railTool(page, "documents")).toHaveAttribute("aria-pressed", "true");
     const rail = page.locator("[data-tool-rail]");
-    // The rail draws no text of its own: a tool's name is its accessible name
-    // and the hint that opens on hover, with the tool's scope and chord.
-    await expect(rail).toHaveText("");
+    // The rail draws no text of its own but the documents count: a tool's name
+    // is its accessible name and the hint that opens on hover, with the tool's
+    // scope and chord.
+    await expect(rail).toHaveText("1");
     for (const [language, theme] of [
       ["en", "light"],
       ["ko", "dark"],

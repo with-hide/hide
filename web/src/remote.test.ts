@@ -154,7 +154,7 @@ function deviceViews(views: boolean): WorkspaceView {
     detail_width: null,
     explorer_width: null,
     panel_width: null,
-    lane_called: 0, lane_calls: 0,
+    lane_called: 0, lane_calls: 0, lane_called_side: "view",
     layout: { root: { area: { id: "a1", active: "d2", displays: [notes] } }, active_area: "a1", limits: { areas: 6, depth: 3, displays: 64 }, display_count: 1 },
   };
 }

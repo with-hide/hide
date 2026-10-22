@@ -205,7 +205,7 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
     await expect(lane.locator('[data-tab-kind="file"]')).toHaveCount(2);
-    await expect(documentsIcon.locator("[data-lane-badge]")).toHaveCount(0);
+    await expect(documentsIcon.locator("[data-lane-badge]")).toHaveText("2");
 
     // An agent chosen from the sidebar changes no lane (B22, D-17).
     await page.locator(`[data-agent-open="${parent}"]`).first().click();

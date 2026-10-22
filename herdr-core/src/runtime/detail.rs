@@ -152,8 +152,14 @@ impl Runtime {
     /// it, and the slot stays on the rail to come back to.
     pub(super) fn show_detail(&mut self, shown: bool) -> bool {
         let detail = &mut self.snapshot.ui_state.detail;
-        if detail.items.is_empty() || detail.shown == shown {
+        if detail.items.is_empty() {
             return false;
+        }
+        if detail.shown == shown {
+            // The slot is the window's: shown, it may still stand in a
+            // checkout whose own lane is closed, and the button opens that
+            // lane (B22, B11).
+            return shown && self.open_front_lane();
         }
         detail.shown = shown;
         if shown {
@@ -168,21 +174,22 @@ impl Runtime {
     }
 
     /// Opens the front Workspace's lane, so the slot is drawn; its columns
-    /// come back as they were (lane-two-columns B15).
-    fn open_front_lane(&mut self) {
+    /// come back as they were (lane-two-columns B15). Whether it was closed.
+    fn open_front_lane(&mut self) -> bool {
         let Some(key) = self.front_workspace_key() else {
-            return;
+            return false;
         };
         let Some(store) = self.workspace_views.as_mut() else {
-            return;
+            return false;
         };
         let entry = store.views.entry(&key.0, &key.1);
         if entry.open {
-            return;
+            return false;
         }
         entry.open = true;
-        store.call_lane(&key);
+        store.call_lane(&key, crate::model::LaneCallSide::View);
         self.persist_workspace_views();
+        true
     }
 
     /// The slot emptied: the documents take the viewing column when the

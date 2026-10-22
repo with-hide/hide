@@ -107,6 +107,20 @@ describe("the Memory tab", () => {
     expect(container.querySelector('[data-lane-tool-dot="memory"]')).not.toBeNull();
   });
 
+  it("counts the open documents on the rail while they show as well as while they are folded (PRD lane-two-columns B2)", async () => {
+    const withViews = { ...rest, workspace_view: { ...(rest.workspace_view ?? {}), device_id: "local", path: "/p", open: true, documents: true, tool: "explorer", pinned: false, prs: { only_checkout: false }, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout: { root: { area: { id: "a1", active: null, displays: [] } }, active_area: "a1", display_count: 2, limits: { max_view_areas: 6, max_split_depth: 3, max_displays: 32 } } } } as unknown as SnapshotRest;
+    const actions = createActions((event) => { events.push(event); return accepted; });
+    for (const view of ["documents", "none"] as const) {
+      await act(async () => {
+        useShellStore.setState({ connection: "live", rest: withViews, memory: { project: null } });
+        useUiStore.setState({ laneShown: true, drawnLane: { mode: "overlay", view, tool: "explorer", stacked: false } });
+        root.render(<TooltipProvider><ToolRail actions={actions} /></TooltipProvider>);
+      });
+      expect(container.querySelector('[data-lane-tool="documents"]')?.getAttribute("aria-pressed")).toBe(view === "documents" ? "true" : "false");
+      expect(container.querySelector('[data-lane-tool="documents"] [data-lane-badge]')?.textContent).toBe("2");
+    }
+  });
+
   it("gives Settings the only Memory read slot and restores Tools on close", async () => {
     const actions = createActions((event) => { events.push(event); return true; });
     function SettingsReader() { useMemoryProject(actions, "other-project"); return null; }

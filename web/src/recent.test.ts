@@ -68,7 +68,7 @@ function session(checkoutId: string, tabId: string, displays: ViewDisplaySnapsho
       explorer_width: null,
       panel_width: null,
       lane_called: 0,
-      lane_calls: 0,
+      lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "a1", active: displays[0]?.id ?? null, displays } }, active_area: "a1", limits: { areas: 4, depth: 3, displays: 64 }, display_count: displays.length },
     },
   } as unknown as SnapshotRest;

@@ -1263,6 +1263,41 @@ test("a window too narrow to dock opens the pinned lane over the agents with one
   }
 });
 
+test("in a stacked lane, Select in File Tree brings the Explorer in front even when it is already the tool (lane-two-columns B8, B19)", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  const stack = await startStack(page, "s7-stacked-reveal", { "a.txt": "a\n" });
+  try {
+    await keepOpenInTurn(page, ["a.txt"], (name) => explorerRow(page, stack, name));
+    const workspace = page.locator("[data-workspace-screen]");
+    const sidebar = (await boxOf(page.locator("[data-lane-row]"))).x;
+    await page.setViewportSize({ width: Math.round(sidebar + 440), height: 1080 });
+    await expect(workspace).toHaveAttribute("data-lane-stacked", "true");
+    await expect(workspace).toHaveAttribute("data-lane-view", "documents");
+    // Pinned where docking has no room, the menu's pin says what is drawn (B19).
+    await setLanePinned(page, true);
+    await page.setViewportSize({ width: Math.round(sidebar + 300), height: 1080 });
+    await page.locator("[data-lane-more]").click();
+    await expect(page.locator('[data-lane-menu-item="pin"][data-lane-pin="narrow"]')).toHaveText("Pin · too narrow, drawn over");
+    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: Math.round(sidebar + 440), height: 1080 });
+    await expect(workspace).toHaveAttribute("data-lane-stacked", "true");
+
+    // The tool is the Explorer already, so the reveal changes no lane field;
+    // the core still records which column it called, and that one comes to
+    // the front (B19), the row chosen.
+    await tabMenu(page, page, "a.txt", "select_in_tree");
+    await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
+    await expect(explorerRow(page, stack, "a.txt")).toHaveAttribute("data-selected", "true");
+    await showDocuments(page);
+    await expect(workspace).toHaveAttribute("data-lane-view", "documents");
+    await tabMenu(page, page, "a.txt", "select_in_tree");
+    await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
+    expectFrontWorkspaceOnEveryViewEvent(stack);
+  } finally {
+    stopStack(stack);
+  }
+});
+
 /** The pane and tab ids the private Herdr holds, to show a restart used them as they were (B15). */
 function herdrIds(herdr: HerdrFixture): string[] {
   const text = JSON.stringify(herdr.run(["api", "snapshot"]));

@@ -71,7 +71,7 @@ Only when the window's frame itself cannot draw does the line take the whole win
 
 The Workspace body, under the top row, is Agent Views (the Agent area), one right lane, and the tool rail, 48px wide, at the window's right edge.
 The lane has two columns (PRD lane-two-columns B1): the viewing column on the agents' side, which holds the checkout's documents (the View areas) or the 보기 slot, and the tool column beside the rail, which holds one tool; both, or one alone, are drawn, and with neither the lane is closed.
-The rail's top is the viewing column's: the 보기 button, while the slot holds something, with the mark of what it holds (a pull request as its PR mark in its state's icon and colour, a record or a mission as a page), then the documents button (a file icon) with a badge counting the open views while they are out of sight, also given as its accessible description; with no document the button is off and its hint says `No open document` (B2).
+The rail's top is the viewing column's: the 보기 button, while the slot holds something, with the mark of what it holds (a pull request as its PR mark in its state's icon and colour, a record or a mission as a page), then the documents button (a file icon) with a badge counting the open views, shown or folded, also given as its accessible description; with no document the button is off, still answering a hover or the keyboard with its hint `No open document` (B2).
 Below a short rule the rail lists the tools, Memory, PRs, Explorer and Changes from the top, the Project's tools before the checkout's, each an icon alone (a brain, a pull request, a folder tree, a file diff) whose name, scope and chord are its hint on hover (`Memory · herdr-ide  ⇧⌘L`, `PRs · all of hide  ⇧⌘R`, `Explorer · settings-ui  ⇧⌘E`, `Changes · settings-ui  ⇧⌘G`) and whose name is its accessible name (B3).
 There is no Work tool and no Files tool; the Sessions list is the sidebar's 태스크 list, the PRs lens is the PRs tool (PRD sidebar-task-lens D-16, D-17), and what Files held is split between the documents and the Explorer (PRD lane-two-columns D-03).
 A second short rule between PRs and Explorer marks where the Project's tools end and the checkout's begin (PRD work-tab-pr-lens D-37); it is derived from each tool's scope, so a tool of the other scope moves it.
@@ -95,7 +95,7 @@ A pinned lane docks in any window where its columns' minimums fit beside 480px o
 Expand gives the lane the whole body between the sidebar and the rail, the tool column keeping its width and the viewing column taking the rest; Expand again or Escape returns to the pin, widths and terminal layout as they were, no terminal resizes meanwhile, and Agent Views under an expanded lane take no pointer or keyboard (B15).
 While the keyboard is in the lane, a document, a page, the 보기 slot or the tool, the Zoom pane chord (⇧⌘↩, Alt+Shift+Enter on Windows and Linux) is Expand and Expand again, so one key fills the window with whatever the operator works in; anywhere else it zooms the focused pane.
 The tool column's `✕`, the pressed tool icon and the tool's chord close the tool column alone, closing no view; the viewing column closes with its last document or the slot's `✕`; and a lane whose last column closes is closed, the keyboard going to the focused pane (B12, B13, B14).
-⌘E (`Toggle right lane`) closes the lane while it shows and otherwise brings it back with the columns it had, so a lane closed whole by ⌘E or the path menu's Hide right lane returns both columns; a lane whose columns were closed one by one has nothing to bring back and opens on the documents when the checkout has some, else on the Explorer (B15).
+⌘E (`Toggle right lane`) closes the lane while it shows and otherwise brings it back with the columns it had, so a lane closed whole by ⌘E or the path menu's Hide right lane returns both columns, the 보기 slot included when it stood in the viewing column; a lane whose columns were closed one by one has nothing to bring back and opens on the documents when the checkout has some, else on the Explorer (B15).
 The columns are kept with the Workspace, so ⌘E after an app restart brings back the same, and the path menu's Show right lane does the same as ⌘E.
 Documents coming back take the keyboard into their active View area, the editor of the document there or the page, as an open does, so typing, ⌘S and ⌘W act on what came back rather than on the terminal it was pressed from; a tool, or the 보기 slot, leaves the keyboard where it was (B16).
 
@@ -121,7 +121,7 @@ When several tabs request the same file during its read, they share the read and
 A buffer opened through another path before the read answers retains its draft and save state, and the pending GUI displays still open in their requesting tabs.
 Closing that buffer's last current display does not cancel another tab's pending GUI open.
 Choosing an agent or a tab from the sidebar, the palette, a tab cycle or the tab strip, or a terminal taking the keyboard, leaves the lane where it is, pinned or not; the lane keeps its columns and pin, and the documents keep showing the checkout's Views (see File Views per checkout).
-A new checkout in front changes the documents and the Explorer to that checkout's; the 보기 slot, the window's, stays (B22).
+A new checkout in front changes the documents and the Explorer to that checkout's; the 보기 slot, the window's, stays, and its rail button opens that checkout's lane when it is closed (B22).
 
 ⌘⇧P shows and focuses the sidebar.
 `Toggle device rail` has no default chord either and is bound the same way; it shows or hides the device rail.
@@ -163,7 +163,7 @@ Closing a view is always called Close view, distinct from moving a file to the T
 The close chord, ⌘W in the desktop app and ⌥W in a browser, closes the smallest unit that holds the keyboard: the focused View area's active display, or the focused terminal pane.
 The page records its last focused region as View area, pane, the lane's tool, the 보기 slot, or none from focus events, including native browser-page focus; the chord does not walk the active DOM element or choose a region from panel size.
 When the desktop app hands the keyboard back from a native page to deliver a menu command, the focus the shell's last element regains is not a move while that command runs, so ⌘W and ⌘T pressed in a page act on that page's View area; once the command has run, the keyboard's owner is the shell element holding it, so after any other command from a page the next chord acts where the operator now types.
-While the lane draws the 보기 slot, the chord closes the slot as its `✕` does when the keyboard is in the lane or nowhere (the sidebar row or the rail button that opened it); a pane or a View that holds the keyboard keeps the chord.
+While the viewing column draws the 보기 slot, the chord closes the slot as its `✕` does when the keyboard is in the slot or nowhere (the sidebar row or the rail button that opened it); a pane or a View that holds the keyboard keeps the chord, and the tool column closes nothing (PRD lane-two-columns B13, B16).
 Otherwise, with the lane's tool or nothing focused, nothing closes and a diagnostic states why (PRD lane-two-columns B16).
 Tabs close only from their own close control or menu; closing a tab's only pane still removes its tab through Herdr.
 An unavailable or retired keyboard target never falls through to closing a different pane or a whole tab.
@@ -490,7 +490,7 @@ Web owners: `web/src/ViewComments.tsx`, `web/src/viewFeedback.ts`, `web/src/edit
 
 Whether a pinned lane docks depends on the Workspace body's width, not the window's, so hiding the sidebar with ⌘B can dock it again.
 A pinned lane docks while its columns' minimums and Agent Views' 480px fit side by side with the dividers, the viewing column narrowing first and the tool column after; when both columns cannot stand side by side they stack, the one the rail last brought forward drawn and the other behind it, and in a body too narrow for even one column the lane opens over Agent Views with its pin still filled; widening the body docks it again (PRD lane-two-columns B19).
-The lane opens at any width: in a body narrower than the lane it takes the whole body, giving up the viewing column's width down to its minimum first and the tool column's after.
+The lane opens at any width: in a body narrower than the lane it takes the whole body, giving up the viewing column's width down to its minimum first and the tool column's after, and a body narrower than one column's minimum is still the lane's whole width, never the sidebar's.
 When the View areas cannot all have their minimum, only the active area shows, with an area switcher to the others.
 Widening the window brings back what the Workspace stores, the lane's columns, pin, widths and the area sizes, because none of these narrow arrangements is stored, and another Workspace's lane never changes while one is narrow.
 
@@ -1231,7 +1231,7 @@ Whatever opens a card or a record opens it there, in front of the documents in t
 Its head reads `←`, the item's mark and name (`PR #N · <project>`, `기록 · <title>` or `미션 · <title>`), `↗` (GitHub) on a card, and `✕` (B47); a card's mark is its PR mark, in its state's icon and colour, here and on the rail.
 The head keeps the lane's surface and what the slot holds sits on the page's background, a card and a record alike, as the 보기 screens draw it.
 Opening another item puts it in front, and `←` steps back through the ones opened before, at most 20, the oldest leaving first; `✕` empties the slot and the viewing column goes back to the documents, or closes when the checkout has none, the lane closing with it when there is no tool column (PRD lane-two-columns B13).
-The close chord (⌘W) is the slot's `✕` while the keyboard is in the lane or nowhere, as the close chord's rule says ([The right lane](#the-right-lane)).
+The close chord (⌘W) is the slot's `✕` while the keyboard is in the slot or nowhere, as the close chord's rule says ([The right lane](#the-right-lane)); in the tool column it closes nothing.
 While the slot holds something, the rail carries a 보기 button at its top with its mark, pressed while the viewing column draws the slot; the documents brought in front, or the button pressed while the slot is in front, fold it and the button stays, so pressing it comes back to the slot (B46; PRD lane-two-columns B11).
 A changed file pressed on a card opens its diff among the checkout's documents, which come in front of the slot, the slot staying on the rail (B49; lane-two-columns B10).
 At Home, with no Workspace in front, a record opens in the Overview's panel beside the tabs and a PR mark opens the pull request's Workspace with its card in the slot (B17).

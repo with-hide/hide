@@ -88,8 +88,6 @@ export function ToolRail({ actions }: { actions: Actions }) {
   const up = laneUp(drawn.mode);
   const documentsChord = commandLabel("toggle_lane_documents", uiState);
   const documentsShown = up && drawn.view === "documents";
-  // The count is for documents out of sight (PRD right-lane B17); shown, they count themselves.
-  const documentsBadge = documentsShown ? 0 : views;
   // The rail is always drawn, so Memory's dot reads its Project whichever tool shows.
   useMemoryProject(actions);
   return (
@@ -101,16 +99,17 @@ export function ToolRail({ actions }: { actions: Actions }) {
           aria-pressed={documentsShown}
           aria-label={t("panes.lane.documents")}
           aria-description={views > 0 ? t("panes.workspace.viewsOpen", { count: views }) : t("panes.lane.noDocuments")}
-          disabled={views === 0}
-          className={cn(RAIL_BUTTON, documentsShown ? "bg-secondary font-medium text-foreground" : "text-muted-foreground")}
+          // `aria-disabled`, not `disabled`: a disabled button takes no pointer events, so its hint could never open (B2).
+          aria-disabled={views === 0}
+          className={cn(RAIL_BUTTON, "aria-disabled:opacity-(--opacity-disabled) aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground", documentsShown ? "bg-secondary font-medium text-foreground" : "text-muted-foreground")}
           data-lane-tool="documents"
-          onClick={() => actions.toggleDocuments()}
+          onClick={() => views > 0 && actions.toggleDocuments()}
         >
           {documentsShown ? <span aria-hidden="true" className="absolute -left-xxs inset-y-sm w-(--size-tab-indicator) rounded-full bg-primary" data-lane-tool-bar="true" /> : null}
           <FilesIcon aria-hidden="true" className="size-(--size-icon-lg)" />
-          {documentsBadge > 0 ? (
-            <span aria-hidden="true" className="absolute right-0 top-0 flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full bg-primary px-xxs text-micro text-primary-foreground" data-lane-badge={documentsBadge}>
-              {documentsBadge}
+          {views > 0 ? (
+            <span aria-hidden="true" className="absolute right-0 top-0 flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full bg-primary px-xxs text-micro text-primary-foreground" data-lane-badge={views}>
+              {views}
             </span>
           ) : null}
         </button>
@@ -201,7 +200,7 @@ function LaneMenu({ actions }: { actions: Actions }) {
       <DropdownMenuContent align="end" side="left" aria-label={t("panes.lane.more")} data-lane-menu="true">
         {view ? (
           <DropdownMenuItem data-lane-menu-item="pin" data-lane-pin={view.pinned ? (drawn.mode === "overlay" && up ? "narrow" : "on") : "off"} onSelect={() => actions.setLanePinned(!view.pinned)}>
-            {view.pinned ? t("panes.lane.unpinHint") : t("panes.lane.pinHint")}
+            {view.pinned ? (drawn.mode === "overlay" && up ? t("panes.lane.narrowPinHint") : t("panes.lane.unpinHint")) : t("panes.lane.pinHint")}
           </DropdownMenuItem>
         ) : null}
         {up ? (
