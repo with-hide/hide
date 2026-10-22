@@ -424,11 +424,22 @@ export function createActions(send: DispatchFn) {
 
   /** A rail icon (B2, B20): the tool showing closes the lane, otherwise the lane opens on it. */
   const toggleTool = (tool: Tool) => (laneUpWith(tool) ? closeLane() : showTool(tool));
-  /** ⌘E and the path's menu (B20): the lane closes while it shows, and otherwise comes back on the tool it last showed, Files for a Workspace whose lane never showed one. */
+  /**
+   * ⌘E and the path's menu (B20): the lane closes while it shows, and
+   * otherwise comes back on the tool it last showed, Files for a Workspace
+   * whose lane never showed one. Files coming back with a view takes the
+   * keyboard into its active area, so typing and ⌘W act on the document the
+   * operator brought back rather than on the terminal behind it.
+   */
   const toggleLane = () => {
     const { mode } = ui().drawnLane;
     if (mode !== "closed" && mode !== "hidden") return closeLane();
-    showTool(workspaceViewOf(rest())?.last_tool ?? "files");
+    const view = workspaceViewOf(rest());
+    const tool = view?.last_tool ?? "files";
+    showTool(tool);
+    if (tool === "files" && view?.layout && (view.layout.display_count ?? 0) > 0) {
+      followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
+    }
   };
 
   /**

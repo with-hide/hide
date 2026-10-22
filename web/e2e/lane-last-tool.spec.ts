@@ -1,8 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord, commandLabel, mod } from "./chords";
-import { chooseLane, enterWorkspace, screenshot } from "./wire";
+import { chooseLane, enterWorkspace, screenshot, showExplorer } from "./wire";
 
 // A closed lane remembers the tool it last showed, and ⇧⌘L/R/G open its
 // project and checkout tools. Each test starts one stack and asserts one contract.
@@ -59,6 +61,35 @@ test("⌘E reopens the tool the lane last showed, however it was closed, and Fil
     await closed(page);
     await chooseLane(page);
     await shows(page, "memory");
+  } finally {
+    daemon?.stop();
+    herdr.stop();
+  }
+});
+
+test("⌘E bringing Files back with a view hands the keyboard to that view's document", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const herdr = await startHerdr({ agents: false });
+  let daemon: Daemon | null = null;
+  try {
+    fs.writeFileSync(path.join(herdr.root, "fixture", "notes.md"), "# Notes\n");
+    daemon = await startHided(herdr, "lane-toggle-keyboard");
+    await open(page, daemon);
+    await showExplorer(page);
+    await page.locator('[data-explorer-row$="/notes.md"]').click();
+    const editor = page.locator("[data-editor-body] .cm-content");
+    await expect(editor).toBeFocused();
+
+    // From a terminal, ⌘E brings the document back and the keyboard with it.
+    await page.keyboard.press(chord("toggle_lane"));
+    await closed(page);
+    const terminal = page.locator("[data-pane-view] .xterm-helper-textarea").first();
+    await terminal.focus();
+    await expect(terminal).toBeFocused();
+    await page.keyboard.press(chord("toggle_lane"));
+    await shows(page, "files");
+    await expect(editor).toBeFocused();
   } finally {
     daemon?.stop();
     herdr.stop();
