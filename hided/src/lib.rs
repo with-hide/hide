@@ -22,6 +22,7 @@ pub mod desktop_notices;
 pub mod ending;
 pub mod env;
 pub mod file_url;
+pub mod guide;
 pub mod herdr_handoff;
 pub mod index;
 pub mod login_item;

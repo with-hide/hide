@@ -9,6 +9,7 @@ Derived UI escalation is separate: the core maps the existing delivery and watch
 ## Commands and caller identity
 
 These commands, the `hide agent` commands among them, need the running daemon and a current agent pane in a registered checkout; they work without an open renderer.
+`hide guide` is an agent's guide to all of them, and to the Workspace commands and Project Memory, and needs neither: it prints `hided/assets/guide.md` with the session-start rules (`hide_agent_hooks::PURPOSE_CONTEXT`) inside it, so the guide and the session note cannot say two different things, and a skill or a hook that teaches an agent Hide points at it rather than copying it.
 The daemon binds the caller through the existing Workspace credential boundary and resolves the actual pane, provider and native-session identity from Herdr.
 Only a pane-bound caller is accepted: a checkout-bound caller (a plain terminal, or a tool shell inside Codex's shared app-server daemon) is refused `agent_pane_required` whatever pane it names, and its next step is to run the command inside the agent's own pane, or to run that Codex without the shared daemon (`--no-daemon`).
 A pane hint cannot replace that binding: a pane-bound caller whose hint names another pane is refused `caller_identity_conflict`, and an absent, ambiguous or changed occupant returns an explicit error.

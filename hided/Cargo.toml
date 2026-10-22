@@ -14,6 +14,8 @@ path = "src/bin/hide.rs"
 
 [dependencies]
 hide-agent-adapter = { path = "../hide-agent-adapter" }
+# The session-start rules `hide guide` prints (`guide.rs`).
+hide-agent-hooks = { path = "../hide-agent-hooks" }
 herdr-core = { path = "../herdr-core" }
 hide-host = { path = "../hide-host" }
 hide-node = { path = "../hide-node" }
@@ -53,7 +55,6 @@ tempfile = "=3.27.0"
 md5 = "=0.8.1"
 rusqlite = { version = "=0.32.1", features = ["bundled"] }
 anyhow = "=1.0.104"
-hide-agent-hooks = { path = "../hide-agent-hooks" }
 # The core's Memory store a journey seeds, keyed by the Project it reads.
 hide-memory = { path = "../hide-memory" }
 hide-project = { path = "../hide-project" }
