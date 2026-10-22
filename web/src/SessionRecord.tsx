@@ -513,9 +513,11 @@ function Prs({ record, actions }: { record: RecordValue; actions: Actions }) {
     {!all.length ? <p className="py-xs text-micro text-muted-foreground">{t("recordCard.noPrs")}</p> : null}
     {record.pr_groups.map((group) => {
       const shown = unfolded ? group.outputs : group.outputs.filter((output) => !settledOutput(output));
+      // A group whose PRs all sit in the fold draws no empty name line.
+      if (!shown.length) return null;
       return <div key={group.child ? workKey(group.child) : "own"} className="min-w-0" data-record-pr-group={group.child ? group.child.session_id : "own"}>
         {record.pr_groups.length > 1 || group.child ? <p className="truncate pt-xs text-micro text-muted-foreground" title={group.name}>{group.child ? group.name : t("record.thisSession")}</p> : null}
-        {orderedOutputs(shown).length ? rows(orderedOutputs(shown)) : null}
+        {rows(orderedOutputs(shown))}
       </div>;
     })}
     {settled.length && !unfolded ? <button type="button" className={cn(ROW, "flex items-center gap-xxs py-xs text-micro text-muted-foreground hover:text-foreground")} aria-expanded="false" onClick={() => setUnfolded(true)} data-record-settled={settled.length}>{t("record.settledPrs", { count: settled.length })}<ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" /></button> : null}

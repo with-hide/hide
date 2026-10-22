@@ -181,12 +181,13 @@ it("groups descendants' PRs under the direct child and folds merged and closed o
   const { container, unmount } = await mount(BASE);
   try {
     expect(container.querySelector('[data-record-pr-group="own"] [data-record-pr-row="1100"]')).not.toBeNull();
-    const childGroup = container.querySelector('[data-record-pr-group="child"]')!;
-    expect(text(childGroup)).toContain("Child work");
-    expect(childGroup.querySelector('[data-record-pr-row="1093"]')).toBeNull();
+    // A group whose PRs are all folded draws no name line.
+    expect(container.querySelector('[data-record-pr-group="child"]')).toBeNull();
     const fold = container.querySelector<HTMLButtonElement>("[data-record-settled]")!;
     expect(text(fold)).toContain("1 merged or closed");
     await act(async () => fold.click());
+    const childGroup = container.querySelector('[data-record-pr-group="child"]')!;
+    expect(text(childGroup)).toContain("Child work");
     expect(childGroup.querySelector('[data-record-pr-row="1093"]')).not.toBeNull();
   } finally { await unmount(); }
 });
