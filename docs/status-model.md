@@ -57,7 +57,8 @@ A wake the core sends the Conductor for a pull request change is a letter from `
 
 ### A plan waiting for review is a question
 
-A plan an agent put up with `--ask` (PRD hide-plan D-12, D-30) adds no status, mark, colour or group: the core lays it on the agent's row as the question it is, a `user_turn` of kind question whose words are `계획 검토 · N단계`, before the read axis and the lineage run, so the row waits on the operator, the pane's ask band and the sidebar's second line say those words, and the bell and the phone follow the ask's own path once.
+A plan an agent put up with `--ask` (PRD hide-plan D-12, D-30) adds no status, mark, colour or group: the core lays it on the agent's row as the question it is, a `user_turn` of kind question with no text and the row's `ask_subject` `{cause: "plan_review", steps}`, before the read axis and the lineage run, so the row waits on the operator and the ask's own path carries it once.
+The core sends what is asked, never the words: the row's line, its `ask` and the pane band carry the same `subject`, a bell or phone notice carries it beside `detail`, and the window, the bell and the phone word it in their own interface language (`plan.askReview`, `계획 검토 · N단계` in Korean, `Plan review · N steps` in English); the phone's service worker gets those words from the page with `{{count}}` left in.
 The agent's own question, any other demand and a working agent come first: the plan's question is laid only on a resting row with none of them, and it is gone once the agent runs `hide plan approve`, `set` without `--ask` over a finished plan, or `drop` ([delivery.md: Plans](delivery.md#plans)).
 The same rule holds for a device's rows.
 

@@ -185,7 +185,7 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
   const origin = raised?.verb === "draft" ? agentsByPane(agents).get(raised.raised_pane_id) : null;
   const originTitle = raised?.origin_title ?? (raised?.verb === "draft" ? origin?.identity_label : raised?.title);
   const originDepth = raised ? raised.path.length + (raised.verb === "draft" ? 1 : 0) : 0;
-  const what = raised ? askWhat(t, raised.verb, raised.what) : band.kind === "approval" || band.kind === "answer" ? askWhat(t, band.kind, band.reason) : band.reason;
+  const what = raised ? askWhat(t, raised.verb, raised.what) : band.kind === "approval" || band.kind === "answer" ? askWhat(t, band.kind, band.reason, band.subject) : band.reason;
   const minutes = band.since_unix_ms == null ? null : Math.max(0, Math.floor((Date.now() - band.since_unix_ms) / 60_000));
   // The path from the root already ends with the agent named; the wait is its verb's (B5).
   const who = raised ? [

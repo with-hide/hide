@@ -46,6 +46,7 @@
   "label_end": ["working", "question", "blocked", "done", "waiting", "unfinished", "limited"],
   "request_verb": ["answer", "blocked", "fix", "review", "stopped", "result", "working", "waiting", "idle"],
   "user_turn_kind": ["plan_approval", "question"],
+  "ask_subject_cause": ["plan_review"],
   "review_decision": ["review_required", "changes_requested", "approved"],
   "session_group": ["needs_you", "working", "done", "idle", "resolved"],
   "sidebar_lens": ["projects", "tasks"],

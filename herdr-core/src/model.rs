@@ -1229,6 +1229,17 @@ fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 
+/// A question the core asks on an agent's row for it, sent as what it is
+/// rather than as words, so each shell, the bell and the phone say it in
+/// their own language (hide-plan B14).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "cause", rename_all = "snake_case")]
+pub enum AskSubject {
+    /// The agent's proposed plan of `steps` steps waits for the operator's
+    /// review.
+    PlanReview { steps: u32 },
+}
+
 /// An agent's state on four independent lifecycle axes, plus the values the shell draws
 /// from them.
 ///
@@ -1362,6 +1373,11 @@ pub struct SidebarAgentSnapshot {
     /// state. Missing source content remains absent rather than inferred.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_turn: Option<hide_session::turns::UserTurnFact>,
+    /// What the core asks on this row for the agent, when the question is
+    /// the core's and not the agent's own; the row then draws no sentence
+    /// of its own and every surface words the subject.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ask_subject: Option<AskSubject>,
     /// Derived: whether the row draws its status word. It leaves working and
     /// read rows, where the mark already says it, and stays on rows that
     /// still concern the operator.
@@ -6977,6 +6993,19 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "user_turn_kind", &user_turns);
         checked.insert("user_turn_kind");
+
+        let subjects = [AskSubject::PlanReview { steps: 1 }];
+        for variant in subjects {
+            match variant {
+                AskSubject::PlanReview { .. } => {}
+            }
+        }
+        let causes = subjects
+            .iter()
+            .map(|subject| serde_json::to_value(subject).unwrap()["cause"].clone())
+            .collect::<Vec<_>>();
+        assert_wire(&contract, "ask_subject_cause", &causes);
+        checked.insert("ask_subject_cause");
 
         let statuses = [
             ChangedFileStatus::Modified,

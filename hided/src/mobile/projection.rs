@@ -196,6 +196,7 @@ mod tests {
                 mode: "news".into(),
                 tone: "news",
                 pull_request: None,
+                subject: None,
             })
         );
         assert_eq!(done.key().herdr_pane_id(), "w2:p1");

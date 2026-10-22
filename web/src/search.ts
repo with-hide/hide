@@ -17,6 +17,7 @@ import { PR_LOOK } from "./prMark";
 import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
 import type { AgentRow, Checkout, Device, GithubSearchResult, PrState, PullRequest, SessionWorkSearch, SnapshotRest, Task, WorkSession, Workspace } from "./snapshot";
 import { workKey } from "./sessionWork";
+import { askSubjectText } from "./askSubject";
 
 /** The header an entry is drawn under: one per kind of thing; `label` is the catalog key the palette translates where it draws the header. */
 export type SearchGroup = { id: string; label: MessageKey };
@@ -196,7 +197,7 @@ function agentStatus(agent: Pick<AgentRow, "state" | "status_code">, t: TFunctio
  * title already reads as is not drawn twice.
  */
 export function agentEntry(scope: SearchDevice, agent: AgentRow, place: string | null, front: string, t: TFunction<"translation">): SearchEntry {
-  const sentence = agent.detail || statusText(t, agent.status_code);
+  const sentence = agent.detail || (agent.ask_subject ? askSubjectText(t, agent.ask_subject) : statusText(t, agent.status_code));
   const name = agent.herdr_name && agent.herdr_name.toLowerCase() !== agent.identity_label.toLowerCase() ? agent.herdr_name : null;
   return {
     id: `agent:${agent.pane_id}`,

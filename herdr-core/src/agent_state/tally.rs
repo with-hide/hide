@@ -353,6 +353,7 @@ pub mod phone {
     use serde_json::Value;
 
     pub use crate::agent_sleep::{DormantPhase, SleepId};
+    use crate::model::AskSubject;
 
     /// The groups in the order the phone draws them.
     pub const GROUP_ORDER: [&str; 5] = ["needs_you", "done", "revisit", "working", "seen"];
@@ -367,6 +368,10 @@ pub mod phone {
         pub tone: &'static str,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub pull_request: Option<u64>,
+        /// A request the core asks for the agent, which the phone words in
+        /// place of `text` (`RowLine::subject`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub subject: Option<AskSubject>,
     }
 
     /// What a sleeping agent's pane says about it (`AgentSleepSnapshot`): the
@@ -413,6 +418,10 @@ pub mod phone {
         /// the compact phone row may not draw. Used only by notice transport.
         #[serde(skip)]
         pub detail: Option<String>,
+        /// What the core asks on the row for the agent, which a notice
+        /// carries for the receiver to word. Used only by notice transport.
+        #[serde(skip)]
+        pub subject: Option<AskSubject>,
         pub status_code: String,
         pub demand: String,
         /// Present while the agent's process is ended and its pane holds a
@@ -538,6 +547,11 @@ pub mod phone {
         *value == 0
     }
 
+    /// A line's `subject` or a row's `ask_subject`, as the core wrote it.
+    fn subject_of(subject: Option<&Value>) -> Option<AskSubject> {
+        AskSubject::deserialize(subject?).ok()
+    }
+
     fn str_of<'a>(value: &'a Value, field: &str) -> &'a str {
         value.get(field).and_then(Value::as_str).unwrap_or("")
     }
@@ -556,6 +570,7 @@ pub mod phone {
                     mode: "kept".to_owned(),
                     tone: "subtle",
                     pull_request: None,
+                    subject: None,
                 });
             }
             _ => {}
@@ -575,6 +590,7 @@ pub mod phone {
             mode: mode.to_owned(),
             tone,
             pull_request: line.get("pull_request").and_then(Value::as_u64),
+            subject: subject_of(line.get("subject")),
         })
     }
 
@@ -750,6 +766,7 @@ pub mod phone {
                     .and_then(Value::as_str)
                     .filter(|text| !text.is_empty())
                     .map(str::to_owned),
+                subject: subject_of(agent.get("ask_subject")),
                 status_code: str_of(agent, "status_code").to_owned(),
                 demand: agent
                     .get("demand")

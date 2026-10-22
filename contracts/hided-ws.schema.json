@@ -641,7 +641,8 @@
               "state": { "type": "string", "enum": ["needs_you", "done"] },
               "place": { "type": "string" },
               "status_code": { "description": "The root row's status word code. Optional for older frames.", "type": ["string", "null"], "enum": ["error", "question", "approval", "working", "done", "idle", "unknown", "waiting", "unfinished", "stopped", "attached", "sleeping", "waking", "sleep_failed", null] },
-              "detail": { "description": "The core's chosen row detail, untranslated; absent or null means the original state-and-project body.", "type": ["string", "null"], "maxLength": 80 }
+              "detail": { "description": "The core's chosen row detail, untranslated; absent or null means the original state-and-project body.", "type": ["string", "null"], "maxLength": 80 },
+              "subject": { "description": "A question the core asks on the row for the agent, which the window words in the interface language in place of detail: `plan_review` is a proposed plan of `steps` steps waiting for the operator's review (ask_subject_cause in snapshot-wire-enums.json).", "type": ["object", "null"], "additionalProperties": false, "required": ["cause", "steps"], "properties": { "cause": { "type": "string", "enum": ["plan_review"] }, "steps": { "type": "integer", "minimum": 0 } } }
             }
           }
         },

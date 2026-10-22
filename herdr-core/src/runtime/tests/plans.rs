@@ -7,6 +7,7 @@ use super::*;
 use crate::delivery::Actor;
 use crate::handle::ChangeNotifier;
 use crate::links::ledger::SessionIdentity;
+use crate::model::AskSubject;
 use crate::plans::{PLAN_LIMIT, Plan, PlanCommand, Review, Step, StepStatus};
 use crate::runtime::delivery::tests::{authority, fixture};
 use serde_json::{Value, json};
@@ -106,12 +107,16 @@ fn the_rows_already_shown_ask_and_stop_asking_as_the_review_moves_without_herdr_
     let asking = shown(&mut runtime);
     assert_eq!(
         (asking.demand.as_str(), asking.detail.as_deref()),
-        ("question", Some("계획 검토 · 3단계"))
+        ("question", None)
+    );
+    assert_eq!(
+        asking.ask_subject,
+        Some(AskSubject::PlanReview { steps: 3 })
     );
 
     command(&mut runtime, &sender, json!({"verb": "approve"})).unwrap();
     let approved = shown(&mut runtime);
-    assert_eq!(approved.user_turn, None);
+    assert_eq!((approved.user_turn, approved.ask_subject), (None, None));
     assert_eq!(
         (approved.demand.as_str(), approved.group.as_str()),
         (resting.demand.as_str(), resting.group.as_str())
@@ -150,10 +155,31 @@ fn a_plan_put_up_for_review_waits_on_the_operator_until_the_agent_approves_it() 
         (&json!(1), &json!(3))
     );
 
-    // B14: the row asks the operator, by the question's own path.
+    // B14: the row asks the operator, by the question's own path, and
+    // sends what it asks rather than words, so each surface says it in
+    // its own language.
     let row = reviewed(&mut runtime);
     assert_eq!(row.demand, "question");
-    assert_eq!(row.detail.as_deref(), Some("계획 검토 · 3단계"));
+    let wire = serde_json::to_value(&row).unwrap();
+    let subject = json!({"cause": "plan_review", "steps": 3});
+    assert_eq!(
+        (
+            &wire["ask_subject"],
+            &wire["state"]["ask"]["subject"],
+            &wire["state"]["line"]["subject"],
+            &wire["state"]["line"]["text"],
+            &wire["detail"],
+        ),
+        (&subject, &subject, &subject, &json!(""), &Value::Null)
+    );
+    let band =
+        crate::agent_state::header::of(&pane("session", "/work/app"), Some(&row), None, None)
+            .band
+            .unwrap();
+    assert_eq!(
+        (band.kind.as_str(), band.reason, band.subject),
+        ("answer", None, Some(AskSubject::PlanReview { steps: 3 }))
+    );
     // A working agent asks nothing yet.
     let mut working = vec![resting_row()];
     working[0].activity = "working".into();

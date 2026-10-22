@@ -184,7 +184,7 @@ export function turnResponse(t: TFunction<"translation">, header: PaneHeader | u
   const band = header?.band ?? null;
   if (band?.raised) return { verb: t(`agentSessions.verb.${band.raised.verb}`), asks: true, text: askWhat(t, band.raised.verb, band.raised.what) };
   if (band) {
-    if (band.kind === "approval" || band.kind === "answer") return { verb: t(`agentSessions.verb.${band.kind}`), asks: true, text: askWhat(t, band.kind, band.reason) };
+    if (band.kind === "approval" || band.kind === "answer") return { verb: t(`agentSessions.verb.${band.kind}`), asks: true, text: askWhat(t, band.kind, band.reason, band.subject) };
     return { verb: t(band.kind === "blocked" ? "agentSessions.tag.blocked" : "agentSessions.tag.stopped"), asks: true, text: band.reason };
   }
   if (header?.finished) return { verb: t("paneTurn.finished"), asks: false, text: header.progress ?? null };

@@ -4,7 +4,8 @@
 // shows the unreachable line rather than a blank page. Agent state, rows,
 // replies and the push subscription travel on /ws and are never cached here.
 //
-// A push carries the core's chosen row sentence as detail, the status_code,
+// A push carries the core's chosen row sentence as detail (or, for a question
+// the core asks for the agent, its subject, worded here), the status_code,
 // the agent's title, its state
 // ("needs_you" | "done" | "observer_unconfirmed" | "letter_undelivered") and
 // its place. The words for the state belong to the
@@ -97,7 +98,7 @@ self.addEventListener("message", (event) => {
   if (!data || data.type !== "words" || !data.words || typeof data.words !== "object") return;
   const { needs_you, done, observer_unconfirmed, letter_undelivered } = data.words;
   if (!isWord(needs_you) || !isWord(done)) return;
-  const statusWords = Object.fromEntries(["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished"].map((code) => [`status_${code}`, data.words[`status_${code}`]]).filter(([, word]) => isWord(word)));
+  const statusWords = Object.fromEntries([...["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished"].map((code) => `status_${code}`), "subject_plan_review"].map((key) => [key, data.words[key]]).filter(([, word]) => isWord(word)));
   const words = JSON.stringify({ needs_you, done, observer_unconfirmed, letter_undelivered, ...statusWords });
   event.waitUntil(
     caches
@@ -105,6 +106,14 @@ self.addEventListener("message", (event) => {
       .then((cache) => cache.put(WORDS_URL, new Response(words, { headers: { "Content-Type": "application/json" } }))),
   );
 });
+
+// A question the core asks for the agent comes as its subject; the page
+// posted its words with `{{count}}` left for the steps.
+function subjectWords(words, subject) {
+  if (!subject || typeof subject !== "object" || typeof subject.cause !== "string") return null;
+  const template = words[`subject_${subject.cause}`];
+  return isWord(template) ? template.replace("{{count}}", String(subject.steps)) : null;
+}
 
 async function storedWords() {
   const hit = await (await caches.open(WORDS_CACHE)).match(WORDS_URL);
@@ -134,7 +143,7 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     Promise.all([closeTags(payload.clear), storedWords()]).then(([, words]) =>
       self.registration.showNotification(payload.title, {
-        body: [words[`status_${payload.status_code}`] || words[payload.state], payload.detail, payload.place].filter(isWord).join(" · "),
+        body: [words[`status_${payload.status_code}`] || words[payload.state], subjectWords(words, payload.subject) || payload.detail, payload.place].filter(isWord).join(" · "),
         tag: payload.tag,
         icon: "/m/icon-192.png",
         badge: "/m/icon-192.png",

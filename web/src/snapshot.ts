@@ -29,7 +29,7 @@ export type AgentState = {
   title_emphasized: boolean; selection_emphasizes_title: boolean;
   asking: boolean; working: boolean; waits_on_children: boolean;
   chip_tone: StatusTone; mark_tone: StatusTone;
-  line: { text: string; mode: LineMode; tone: StatusTone; pull_request?: number } | null;
+  line: { text: string; mode: LineMode; tone: StatusTone; pull_request?: number; subject?: AskSubject } | null;
   branch_badge: string | null;
   bucket: "turn" | "working" | "delegating" | "resting";
   attention_rank: number;
@@ -38,7 +38,7 @@ export type AgentState = {
   link: "working" | "question" | "idle"; link_rank: 0 | 1 | 2;
   verb: RequestVerb; request_todo: boolean; descendant_asking: number; request_since: number | null;
   /** A Needs You row's second line: a verb and what to do; `more` counts the other asks under the same root. */
-  ask: { verb: RaiseVerb; what: string | null; more: number } | null;
+  ask: { verb: RaiseVerb; what: string | null; more: number; subject?: AskSubject } | null;
   /** Where the row stands among its siblings in a tree: asking, working, finished unread, the rest. */
   tree_rank: number;
   /** The row's own PRs, worst first; never its descendants'. `index` points into `request.pull_requests`. */
@@ -127,6 +127,8 @@ export type AgentRow = {
   message?: string | null;
   /** Native unanswered question/plan, bounded and session/state-proven by the core. */
   user_turn?: UserTurnFact;
+  /** A question the core asks on this row for the agent (`AskSubject`); the row then has no sentence of its own. */
+  ask_subject?: AskSubject;
   /** When the core last saw this agent change state (epoch ms), retained for state ordering. */
   changed_at_unix_ms: number | null;
   /** Latest actual native request in the proven session (epoch ms). Absent when unknown; never fall back to state observation time. */
@@ -178,6 +180,10 @@ export type UserTurnFact = {
   kind: typeof USER_TURN_KINDS[number];
   content: { text: string; choices: string[]; truncated: boolean } | null;
 };
+
+export const ASK_SUBJECT_CAUSES = ["plan_review"] as const;
+/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language. */
+export type AskSubject = { cause: typeof ASK_SUBJECT_CAUSES[number]; steps: number };
 
 /** How the label read a turn's end (`LabelEnd`). */
 export type LabelEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
@@ -991,7 +997,7 @@ export type PaneHeader = {
 export type PaneTurnRequest = {text: string | null; images: number};
 export type PaneNotice = {kind: string; tone: "muted" | "warning" | "error"; reason: string | null; since_unix_ms: number | null; exit_code: number | null};
 /** The pane's own approval, answer, block or stop, or a raised descendant's ask; `read` once the operator has looked. */
-export type PaneBand = {kind: "approval" | "answer" | "blocked" | "stopped" | "raised"; reason: string | null; since_unix_ms: number | null; read: boolean; action: {pane_id: string; label: string} | null; more: number; raised?: RaisedAsk};
+export type PaneBand = {kind: "approval" | "answer" | "blocked" | "stopped" | "raised"; reason: string | null; since_unix_ms: number | null; read: boolean; action: {pane_id: string; label: string} | null; more: number; raised?: RaisedAsk; subject?: AskSubject};
 
 export type TerminalPane = {
   pane_id: string;

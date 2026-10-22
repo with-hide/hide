@@ -28,6 +28,7 @@ import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement
 import { PlanGraph } from "./PlanGraph";
 import { planCount, planOfSession, planWorkLine } from "./plans";
 import { statusText } from "./agentStatus";
+import { askSubjectText } from "./askSubject";
 import { useShellStore } from "./store";
 import { summariesEnabled } from "./hideAi";
 import { PR_LOOK } from "./prMark";
@@ -222,7 +223,7 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
   // While it works on a plan, the line is its step, as on the pane's second row (B7).
   const livePlan = useShellStore((s) => planOfSession(s.rest, record.session)) ?? record.plan ?? null;
   const step = kind === "working" && !settled && livePlan ? planWorkLine(livePlan) : null;
-  const said = settled ? settledPrs(t, settled) : recorded ? recorded.line || null : kind === "question" ? question ?? agent?.state.ask?.what ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
+  const said = settled ? settledPrs(t, settled) : recorded ? recorded.line || null : kind === "question" ? question ?? (agent?.state.ask?.subject ? askSubjectText(t, agent.state.ask.subject) : agent?.state.ask?.what) ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
   const pane = agent?.pane_id ?? null;
   const button = pane === null ? <RestoreSession record={record} checkout={checkout} actions={actions} /> : kind === "question" ? (
     <Button size="sm" onClick={() => actions.openAgent(pane)} data-record-now-button="answer"><CircleHelpIcon aria-hidden="true" />{t("links.answer")}</Button>

@@ -455,7 +455,7 @@ function ProjectColumn({ model, query, setQuery, hidden, toggle, point, locate, 
       <h3>{t("overviewGraph.waiting")} <span>{waiting.length}</span></h3>
       {waiting.map((row) => <div key={row.id} className="og-ask" data-graph-ask={row.agent.pane_id}>
         <button type="button" className="og-ask-who" aria-label={rowAccessibleName(t, row.agent, row.device)} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} /><span><AgentRecordTitle agent={row.agent} /></span><small>{row.project.label}</small>{hidden.has(row.projectId) ? <small className="og-hidden-mark">{t("overviewGraph.hiddenProject")}</small> : null}</button>
-        <p>{row.agent.state.ask ? askWhat(t, row.agent.state.ask.verb, row.agent.state.ask.what) : <GraphLine agent={row.agent} />}</p>
+        <p>{row.agent.state.ask ? askWhat(t, row.agent.state.ask.verb, row.agent.state.ask.what, row.agent.state.ask.subject) : <GraphLine agent={row.agent} />}</p>
         <Button variant="secondary" size="sm" onClick={() => actions.openAgent(askingPane(row, model))}>{t("overviewGraph.answer")}</Button>
       </div>)}
     </section> : null}
@@ -481,7 +481,7 @@ function SessionPreview({ row, model, actions, openRecord, close, choose }: { ro
     <p className="og-context">{row.project.label} · {row.checkout.branch ?? row.checkout.label}{row.device ? ` · ${row.device}` : ""}</p>
     <p className="og-context">{agentProductName(row.agent.agent_kind)}{row.launchModel ? ` · ${t("overviewGraph.launchModel", { model: row.launchModel })}` : ""}</p>
     {!ask && hasGraphLine(row.agent) ? <div className="og-now"><b>{t("overviewGraph.now")}</b><GraphLine agent={row.agent} /></div> : null}
-    {ask ? <div className="og-ask"><small>{t("overviewGraph.asks")}</small><p>{askWhat(t, ask.verb, ask.what)}</p></div> : null}
+    {ask ? <div className="og-ask"><small>{t("overviewGraph.asks")}</small><p>{askWhat(t, ask.verb, ask.what, ask.subject)}</p></div> : null}
     <div className="og-details-actions"><Button variant="outline" size="sm" onClick={() => actions.openAgent(row.agent.pane_id)}>{t("overviewGraph.openSession")}</Button>{session ? <Button variant="secondary" size="sm" onClick={() => openRecord(session)}>{t("overviewGraph.openRecord")}</Button> : null}</div>
     {team.length > 0 ? <section className="og-team-list" aria-label={t("overviewGraph.team", { count: team.length })}><h3>{t("overviewGraph.team", { count: team.length })}</h3>{team.map(({ row: member, depth }) => <button key={member.id} type="button" style={{ paddingInlineStart: `calc(var(--spacing-md) * ${depth - 1})` }} aria-label={rowAccessibleName(t, member.agent, member.device)} onClick={(event) => choose(member.id, event.currentTarget)}><StatusMark mark={member.agent.mark} /><span><AgentRecordTitle agent={member.agent} /></span><small>{markWords(t, member.agent)}</small></button>)}</section> : null}
     {talks.length > 0 ? <section className="og-talks" aria-label={t("overviewGraph.counterparts")}><h3>{t("overviewGraph.counterparts")}</h3>{talks.map((talk) => { const other = rows.get(talk.other)!; return <div key={talk.other} title={t("overviewGraph.exchange", { letters: talk.letters, direct: talk.direct })}><AgentMark kind={other.agent.agent_kind} /><span><AgentRecordTitle agent={other.agent} /></span><small>{[talk.sent ? t("overviewGraph.sent", { count: talk.sent }) : null, talk.received ? t("overviewGraph.received", { count: talk.received }) : null].filter(Boolean).join(" · ")}</small></div>; })}</section> : null}

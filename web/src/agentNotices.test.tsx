@@ -84,7 +84,12 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
     receiveAgentNotice({ notices: [{ tag: "node|w1:p1", device_id: "node", pane_id: "w1:p1", title: "Add a dark mode switch", state: "needs_you", status_code: "approval", detail: null, place: "my-app" }], clear: [] });
   });
   expect(shown.slice(-2).map((notice) => notice[2])).toEqual(["끝남 · my-app", "승인 · my-app"]);
+  // A question the core asks for the agent comes as its subject, worded in the window's language (hide-plan B14).
+  const review = { tag: "node|w1:p1", device_id: "node", pane_id: "w1:p1", title: "Add a dark mode switch", state: "needs_you", status_code: "question", detail: null, subject: { cause: "plan_review", steps: 5 }, place: "my-app" } as const;
+  await act(async () => receiveAgentNotice({ notices: [review], clear: [] }));
   await act(async () => { await clientI18n.changeLanguage("en"); });
+  await act(async () => receiveAgentNotice({ notices: [review], clear: [] }));
+  expect(shown.slice(-2).map((notice) => notice[2])).toEqual(["질문 · 계획 검토 · 5단계 · my-app", "Question · Plan review · 5 steps · my-app"]);
 
   await act(async () => open?.("agent:node|w1:p1"));
   expect(events.some((event) => event.kind === "focus_pane" && event.payload.pane_id === "w1:p1")).toBe(true);
@@ -95,7 +100,7 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
   });
   expect(events.filter((event) => event.kind === "desktop_notices").at(-1)?.payload).toEqual({ wanted: false });
   await act(async () => receiveAgentNotice({ notices: [{ tag: "node|w1:p2", device_id: "node", pane_id: "w1:p2", title: "x", state: "done", place: "" }], clear: [] }));
-  expect(shown).toHaveLength(10);
+  expect(shown).toHaveLength(12);
   await act(async () => root.unmount());
   useShellStore.setState(saved, true);
 });

@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::Runtime;
 use crate::delivery::Actor;
 use crate::links::ledger::{LedgerAnswer, LedgerCall, LedgerUpdate, SessionIdentity};
-use crate::model::SidebarAgentSnapshot;
+use crate::model::{AskSubject, SidebarAgentSnapshot};
 use crate::plans::{self, PLAN_LIMIT, Plan, PlanCommand, PlanView, Review, view_of};
 use crate::workspace_control::{Caller, Context, Query};
 use hide_agent_hooks::plan_record::{
@@ -46,10 +46,11 @@ pub(crate) struct PlanRuntime {
     laid_at: u64,
 }
 
-/// What laying a review changed on a row: the question it put there and
-/// the demand the row had before.
+/// What laying a review changed on a row: the question it put there, what
+/// it asks, and the demand the row had before.
 struct Laid {
     turn: hide_session::turns::UserTurnFact,
+    subject: AskSubject,
     demand: String,
 }
 
@@ -82,10 +83,12 @@ fn row_session(device: &str, agent: &SidebarAgentSnapshot) -> Option<SessionIden
     })
 }
 
-/// The words the band, the second line and the phone show for a plan that
-/// waits for the operator's review (B14).
-pub(crate) fn review_line(plan: &Plan) -> String {
-    format!("계획 검토 · {}단계", plans::progress(plan).total)
+/// What a plan that waits for the operator's review asks on its row; the
+/// band, the second line, the bell and the phone each word it (B14).
+pub(crate) fn review_subject(plan: &Plan) -> AskSubject {
+    AskSubject::PlanReview {
+        steps: plans::progress(plan).total,
+    }
 }
 
 fn step_name(plan: &Plan, key: Option<&str>) -> Option<StepName> {
@@ -503,10 +506,10 @@ impl Runtime {
     }
 
     /// Lays a proposed plan on its agent's row as the question it is (B14,
-    /// D-30): the row then waits on the operator, its second line and band
-    /// say `계획 검토 · N단계`, and the bell and the phone follow the ask's
-    /// own path. The agent's own question comes first, and a working agent
-    /// asks nothing.
+    /// D-30): the row then waits on the operator, carrying the review as
+    /// its subject, which the band, the second line, the bell and the phone
+    /// word in their own language. The agent's own question comes first,
+    /// and a working agent asks nothing.
     pub(super) fn lay_plan_reviews(&mut self, device: &str, agents: &mut [SidebarAgentSnapshot]) {
         // Rows Herdr just sent carry nothing laid.
         for agent in agents.iter() {
@@ -573,8 +576,11 @@ impl Runtime {
                 continue;
             };
             // A question the agent asked since is its own, and stays.
-            if agent.user_turn.as_ref() == Some(&laid.turn) {
+            if agent.user_turn.as_ref() == Some(&laid.turn)
+                && agent.ask_subject == Some(laid.subject)
+            {
                 agent.user_turn = None;
+                agent.ask_subject = None;
                 agent.demand = laid.demand;
                 crate::agent_state::derive_from_axes(agent);
             }
@@ -605,21 +611,23 @@ impl Runtime {
             else {
                 continue;
             };
+            // The question holds the row as a native one does; it carries
+            // no words, only its subject.
             let turn = hide_session::turns::UserTurnFact {
                 kind: hide_session::turns::UserTurnKind::Question,
-                content: Some(hide_session::turns::UserTurnContent::new(
-                    &review_line(plan),
-                    [],
-                )),
+                content: None,
             };
+            let subject = review_subject(plan);
             self.plans.laid.insert(
                 agent.pane_id.clone(),
                 Laid {
                     turn: turn.clone(),
+                    subject,
                     demand: std::mem::replace(&mut agent.demand, "question".to_owned()),
                 },
             );
             agent.user_turn = Some(turn);
+            agent.ask_subject = Some(subject);
             crate::agent_state::derive_from_axes(agent);
         }
     }

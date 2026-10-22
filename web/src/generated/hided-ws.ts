@@ -596,6 +596,13 @@ export interface AgentNotice {
      * The core's chosen row detail, untranslated; absent or null means the original state-and-project body.
      */
     detail?: string | null;
+    /**
+     * A question the core asks on the row for the agent, which the window words in the interface language in place of detail: `plan_review` is a proposed plan of `steps` steps waiting for the operator's review (ask_subject_cause in snapshot-wire-enums.json).
+     */
+    subject?: {
+      cause: "plan_review";
+      steps: number;
+    } | null;
   }[];
   clear: string[];
 }

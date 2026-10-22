@@ -117,6 +117,7 @@ fn frame<'a>(notices: &[Notice], clear: impl Iterator<Item = &'a AgentKey>) -> V
                 "state": notice.state.as_str(),
                 "status_code": notice.status_code,
                 "detail": notice.detail,
+                "subject": notice.subject,
                 "place": notice.place,
             })).collect::<Vec<_>>(),
             "clear": clear.map(AgentKey::tag).collect::<Vec<_>>(),

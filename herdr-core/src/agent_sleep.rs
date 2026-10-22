@@ -716,6 +716,7 @@ mod tests {
             detail: None,
             message: None,
             user_turn: None,
+            ask_subject: None,
             status_word_visible: true,
             changed_at_unix_ms: Some(1_788_871_000_000),
             last_prompt_at_unix_ms: None,
