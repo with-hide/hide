@@ -6,7 +6,7 @@
 // operator saw what ends (D-13).
 
 import { ArrowRightIcon, CheckIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { Note, Status } from "./components/settings-rows";
 import { Badge } from "./components/ui/badge";
@@ -22,20 +22,31 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { checkForUpdates } from "./updates";
 
+/** How long a restart that went through holds its button while the core's look takes the offer away. */
+export const RESTART_HOLD_MS = 15_000;
+
 /** The host's restart, one at a time from this page: `restarting` while it runs, and how the last one ended. */
-function useHerdrRestart(): { restarting: boolean; ended: HerdrRestart | null; restart: () => void } {
+function useHerdrRestart(actions: Actions): { restarting: boolean; ended: HerdrRestart | null; restart: () => void } {
   const [restarting, setRestarting] = useState(false);
   const [ended, setEnded] = useState<HerdrRestart | null>(null);
+  // A restart that went through asks the core to look at the server, since the connection state may not have
+  // moved, and holds the button while that look takes the offer away: a second press would stop Hide's own
+  // Herdr and end the panes' commands again. The hold is bounded, so an offer that stays never strands the step.
+  const held = restarting && ended === "restarted";
+  useEffect(() => {
+    if (!held) return;
+    const timer = setTimeout(() => setRestarting(false), RESTART_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [held]);
   const restart = () => {
     const bridge = hostBridge();
     if (!bridge || restarting) return;
     setRestarting(true);
     setEnded(null);
-    // A restart that went through keeps the button held until the core's next look takes the offer away:
-    // a second press would stop Hide's own Herdr and end the panes' commands again.
     const settle = (answer: HerdrRestart) => {
       setEnded(answer);
       setRestarting(answer === "restarted");
+      if (answer === "restarted") actions.herdrTakeover("look");
     };
     void bridge.restartHerdr().then(settle, () => settle("stop_failed"));
   };
@@ -226,7 +237,7 @@ export function FirstRunHerdr({ actions, takeover, primary, onLater, onMoved }: 
   onMoved: () => void;
 }) {
   const { t } = useInterfaceTranslation();
-  const restart = useHerdrRestart();
+  const restart = useHerdrRestart(actions);
   const parts = herdrStepParts({ takeover, actions, restart, t, onLater, onMoved });
   primary.current = parts.primary;
   return (
@@ -259,7 +270,7 @@ export function HerdrOverview({ actions }: { actions: Actions }) {
   const herdr = useShellStore((s) => s.rest?.status?.herdr);
   const desktop = hostBridge() !== null;
   const shown = overviewTakeover(takeover);
-  const restart = useHerdrRestart();
+  const restart = useHerdrRestart(actions);
   const [confirming, setConfirming] = useState(false);
   if (!shown) return herdr?.state === "protocol_mismatch" ? <Mismatch herdr={herdr} /> : null;
   const current = takeover!;

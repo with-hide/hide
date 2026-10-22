@@ -332,3 +332,16 @@ fn a_moved_step_cannot_be_left_for_later() {
     assert!(!act(&mut runtime, "later"));
     assert_eq!(takeover(&runtime)["stage"], "moved");
 }
+
+/// B12: after the desktop host restarts the server, the shell asks for a
+/// look, so the offer goes even when the connection state never changed.
+#[test]
+fn a_look_the_shell_asks_for_runs_without_a_connection_change() {
+    let mut runtime = installed();
+    runtime.ingest_herdr_look(offer(OfferKind::Restart, "0.9.1", PROTOCOL));
+    assert!(!runtime.herdr_takeover_looking_for_test());
+    act(&mut runtime, "look");
+    assert!(runtime.herdr_takeover_looking_for_test());
+    runtime.ingest_herdr_look(Look::Nothing);
+    assert_eq!(takeover(&runtime), serde_json::Value::Null);
+}

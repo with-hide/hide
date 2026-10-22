@@ -3,9 +3,10 @@
 //!
 //! The core decides what the screen offers and when; the work itself (who
 //! runs the server, its ping, the handoff and its confirmation, the record
-//! of handoffs that failed) is `hided`'s, which installs a [`HerdrTakeover`]
-//! only in a daemon that runs from a desktop package with that package's own
-//! Herdr (`hided/src/herdr_handoff.rs`). Every call blocks on a socket or a
+//! of handoffs that failed) is `hided`'s, which installs a working
+//! [`HerdrTakeover`] only in a daemon that runs from a desktop package with
+//! that package's own Herdr and one that finds nothing (`NoTakeover`) in any
+//! other (`hided/src/herdr_handoff.rs`). Every call blocks on a socket or a
 //! child process, so the core makes it on a worker of its own, never under
 //! the runtime lock.
 

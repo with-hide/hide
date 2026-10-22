@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { FirstRunWizard, useSetupWalk } from "./FirstRunWizard";
-import { HerdrMovedLine, HerdrOverview } from "./HerdrTakeover";
+import { HerdrMovedLine, HerdrOverview, RESTART_HOLD_MS } from "./HerdrTakeover";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { HerdrTakeover } from "./snapshot";
 import { useShellStore } from "./store";
@@ -145,15 +145,24 @@ it("a restart shows what ends, takes no Enter, and runs only on its own button (
   await unmount();
 });
 
-it("a restart that went through keeps its button held, so a second press cannot end the panes again", async () => {
-  const restartHerdr = desktop();
-  const { unmount } = await mount(state(offer({ kind: "restart", server_version: "0.9.1", same_protocol: true })));
-  await act(async () => button("[data-herdr-takeover-restart]")!.click());
-  expect(restartHerdr).toHaveBeenCalledTimes(1);
-  expect(button("[data-herdr-takeover-restart]")!.disabled).toBe(true);
-  await act(async () => button("[data-herdr-takeover-restart]")!.click());
-  expect(restartHerdr).toHaveBeenCalledTimes(1);
-  await unmount();
+it("a restart that went through asks the core to look and holds its button for a bounded time", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const restartHerdr = desktop();
+    const { events, unmount } = await mount(state(offer({ kind: "restart", server_version: "0.9.1", same_protocol: true })));
+    await act(async () => button("[data-herdr-takeover-restart]")!.click());
+    expect(restartHerdr).toHaveBeenCalledTimes(1);
+    expect(sent(events)).toEqual([{ action: "look" }]);
+    expect(button("[data-herdr-takeover-restart]")!.disabled).toBe(true);
+    await act(async () => button("[data-herdr-takeover-restart]")!.click());
+    expect(restartHerdr).toHaveBeenCalledTimes(1);
+    // An offer the look did not take away never strands the step.
+    await act(async () => { vi.advanceTimersByTime(RESTART_HOLD_MS); });
+    expect(button("[data-herdr-takeover-restart]")!.disabled).toBe(false);
+    await unmount();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("a browser tab's wizard is the agent step alone, whatever the core's step (B19, D-24)", async () => {

@@ -1,7 +1,9 @@
 //! What the screen offers for the operator's own older Herdr server on this
 //! machine's socket, and the move itself (PRD herdr-takeover).
 //!
-//! `hided` installs the [`HerdrTakeover`] that does the work; the core asks
+//! `hided` installs the [`HerdrTakeover`] that does the work (one that finds
+//! nothing when the daemon does not run from a desktop package with its own
+//! Herdr); the core asks
 //! it on a worker of its own, one call at a time, whenever this machine's
 //! Herdr connection changes state, and when the operator asks for the move.
 //! Nothing moves without that press (D-14): the look only decides what is
@@ -54,6 +56,9 @@ pub(super) enum TakeoverAction {
     Later,
     /// The moved server's step was read.
     Continue,
+    /// Look at the server again: the desktop host restarted it, which the
+    /// connection state may not show when the stop and start are quick.
+    Look,
 }
 
 impl Runtime {
@@ -163,6 +168,13 @@ impl Runtime {
     }
 
     pub(super) fn herdr_takeover_action(&mut self, action: TakeoverAction) -> bool {
+        if action == TakeoverAction::Look {
+            if self.herdr_takeover.worker.is_none() {
+                return refused(action, "this app cannot look at Herdr");
+            }
+            self.look_at_herdr_server();
+            return false;
+        }
         let Some(shown) = self.snapshot.status.herdr_takeover.clone() else {
             return refused(action, "nothing is offered");
         };
@@ -238,6 +250,7 @@ impl Runtime {
                 }));
                 true
             }
+            TakeoverAction::Look => false,
             TakeoverAction::Continue => {
                 if shown.stage != "moved" {
                     return refused(action, "nothing was moved");
@@ -309,6 +322,11 @@ impl Runtime {
                     || [OfferKind::Move.as_str(), OfferKind::Restart.as_str()]
                         .contains(&shown.kind.as_str())
             })
+    }
+
+    #[cfg(test)]
+    pub(super) fn herdr_takeover_looking_for_test(&self) -> bool {
+        self.herdr_takeover.looking
     }
 
     /// The wizard closed with the move unanswered stays closed (B9).

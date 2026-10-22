@@ -625,8 +625,9 @@ impl Core {
     }
 
     /// What moves this machine's Herdr server onto the Herdr this app ships
-    /// (PRD herdr-takeover); a daemon outside a desktop package installs
-    /// none, and then nothing is ever offered. Looks at the server at once.
+    /// (PRD herdr-takeover); a daemon outside a desktop package installs one
+    /// that finds nothing (`NoTakeover`), so nothing is offered and a saved
+    /// Herdr step goes on. Looks at the server at once.
     pub fn set_herdr_takeover(&self, takeover: Arc<dyn crate::herdr_takeover::HerdrTakeover>) {
         if check_owner_thread(self, "set_herdr_takeover") {
             let mut runtime = lock_recover(&self.runtime);
