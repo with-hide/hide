@@ -267,8 +267,6 @@ pub struct WorkspaceViewSnapshot {
     pub documents: bool,
     /// The tool column's tool, or null while there is none.
     pub tool: Option<crate::workspace_views::Tool>,
-    /// The PRs tool's scope chip, kept for this Workspace.
-    pub prs: crate::workspace_views::PrsView,
     /// Whether the lane is pinned beside Agent Views (right-lane D-03).
     pub pinned: bool,
     /// The viewing column's width with the documents, in CSS pixels, or
@@ -278,7 +276,7 @@ pub struct WorkspaceViewSnapshot {
     pub detail_width: Option<u32>,
     /// The tool column's width with the Explorer, the same way.
     pub explorer_width: Option<u32>,
-    /// The tool column's width with Memory, PRs or Changes, the same way.
+    /// The tool column's width with the Project or Changes, the same way.
     pub panel_width: Option<u32>,
     /// The last width request the core accepted for this Workspace. Runtime
     /// only, so a shell can distinguish its latest intent from an older echo.
@@ -3552,13 +3550,15 @@ fn serialize_interface_language<S: serde::Serializer>(
 }
 
 /// Which list the sidebar shows under its head (PRD sidebar-task-lens
-/// D-10): the projects tree, or every task of the rail's device.
+/// D-10; lane-two-columns D-20): the projects tree, every task of the rail's
+/// device, or every pull request of its projects.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarLens {
     #[default]
     Projects,
     Tasks,
+    Prs,
 }
 
 impl SidebarLens {
@@ -3566,6 +3566,7 @@ impl SidebarLens {
         match value {
             "projects" => Some(Self::Projects),
             "tasks" => Some(Self::Tasks),
+            "prs" => Some(Self::Prs),
             _ => None,
         }
     }
@@ -3574,6 +3575,7 @@ impl SidebarLens {
         match self {
             Self::Projects => "projects",
             Self::Tasks => "tasks",
+            Self::Prs => "prs",
         }
     }
 }
@@ -3625,6 +3627,11 @@ pub enum DetailItem {
     Plan {
         session: crate::links::ledger::SessionIdentity,
     },
+    /// A project's Git worktrees, from its Project tool (PRD lane-two-columns
+    /// B30).
+    Worktrees { workspace_id: String },
+    /// A project's last seven days of cost, from its Project tool (B31).
+    Cost { workspace_id: String },
 }
 
 /// The lane's 보기 slot (PRD sidebar-task-lens D-50): what it opened, oldest
@@ -7091,10 +7098,10 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "session_group", &session_groups);
         checked.insert("session_group");
-        let lenses = [SidebarLens::Projects, SidebarLens::Tasks];
+        let lenses = [SidebarLens::Projects, SidebarLens::Tasks, SidebarLens::Prs];
         for variant in lenses {
             match variant {
-                SidebarLens::Projects | SidebarLens::Tasks => {}
+                SidebarLens::Projects | SidebarLens::Tasks | SidebarLens::Prs => {}
             }
         }
         assert_wire(&contract, "sidebar_lens", &lenses);
@@ -7826,6 +7833,12 @@ mod wire_enum_tests {
             DetailItem::Mission {
                 mission: "mission-1".into(),
             },
+            DetailItem::Worktrees {
+                workspace_id: "w".into(),
+            },
+            DetailItem::Cost {
+                workspace_id: "w".into(),
+            },
             DetailItem::Plan { session },
         ];
         for item in &items {
@@ -7833,6 +7846,8 @@ mod wire_enum_tests {
                 DetailItem::PullRequest { .. }
                 | DetailItem::Record { .. }
                 | DetailItem::Mission { .. }
+                | DetailItem::Worktrees { .. }
+                | DetailItem::Cost { .. }
                 | DetailItem::Plan { .. } => {}
             }
         }

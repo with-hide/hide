@@ -726,6 +726,11 @@ pub struct SessionWorkSummary {
     pub open_missed: usize,
     pub subtree_open_missed: usize,
     pub missed: Vec<MissedWork>,
+    /// The record's open asks (D-12), which are no missed work: the Project
+    /// tool's 할 일 counts the session as waiting on the operator while one
+    /// stands (PRD lane-two-columns B34). Core only.
+    #[serde(skip)]
+    pub open_asks: usize,
 }
 
 impl LedgerUpdate {

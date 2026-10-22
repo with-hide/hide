@@ -3,6 +3,7 @@ mod cleanup;
 pub(crate) use cleanup::cleanup_facts;
 mod close;
 pub(crate) mod lineage;
+pub mod project_status;
 mod relations;
 pub mod scope;
 pub mod tasks;

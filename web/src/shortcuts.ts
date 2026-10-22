@@ -125,6 +125,8 @@ export type CommandId =
   | "toggle_sidebar_lens"
   | LaneToolCommandId
   | "toggle_lane_documents"
+  | "open_project_memory"
+  | "open_sidebar_prs"
   | "keep_open"
   | "find_in_pane"
   | "save_file"
@@ -167,22 +169,21 @@ export type AreaCommandId = (typeof AREA_COMMANDS)[number];
 /**
  * One command per rail icon (PRD lane-last-tool-chords; PRD sidebar-task-lens
  * D-19, D-29): the lane opens on that tool, or closes when it already shows
- * it, as pressing the icon does. Each tool's chord is a letter of its name
- * (⇧⌘L Memory, ⇧⌘R PRs, ⇧⌘E Explorer, ⇧⌘G Changes), Alt+Shift with the
- * same letter elsewhere (PRD lane-two-columns D-08). In a browser tab Chrome
- * keeps ⇧⌘R (reload), so PRs moves to ⌥⇧R.
+ * it, as pressing the icon does. The checkout's tools take a letter of their
+ * name (⇧⌘E Explorer, ⇧⌘G Changes), Alt+Shift with the same letter elsewhere
+ * (PRD lane-two-columns D-08); the Project tool has no chord until one is
+ * bound, because ⇧⌘L opens its 기억 tab (`open_project_memory`) and ⇧⌘R the
+ * sidebar's PR list (`open_sidebar_prs`, B25).
  */
 export type LaneToolCommandId = `toggle_lane_${Tool}`;
 export const LANE_TOOL_COMMANDS: readonly LaneToolCommandId[] = TOOLS.map((tool): LaneToolCommandId => `toggle_lane_${tool}`);
 const LANE_TOOL_TITLES: Record<LaneToolCommandId, string> = {
-  toggle_lane_memory: "Toggle Memory tool",
-  toggle_lane_prs: "Toggle PRs tool",
+  toggle_lane_project: "Toggle Project tool",
   toggle_lane_explorer: "Toggle Explorer tool",
   toggle_lane_changes: "Toggle Changes tool",
 };
 const LANE_TOOL_CHORDS: Record<LaneToolCommandId, { browser: Chord | null; electron: Chord | null; moved: boolean }> = {
-  toggle_lane_memory: { browser: { code: "KeyL", meta: true, shift: true }, electron: { code: "KeyL", meta: true, shift: true }, moved: false },
-  toggle_lane_prs: { browser: { code: "KeyR", alt: true, shift: true }, electron: { code: "KeyR", meta: true, shift: true }, moved: true },
+  toggle_lane_project: { browser: null, electron: null, moved: false },
   toggle_lane_explorer: { browser: { code: "KeyE", meta: true, shift: true }, electron: { code: "KeyE", meta: true, shift: true }, moved: false },
   toggle_lane_changes: { browser: { code: "KeyG", meta: true, shift: true }, electron: { code: "KeyG", meta: true, shift: true }, moved: false },
 };
@@ -267,7 +268,7 @@ export const REGISTRY: readonly Command[] = [
   { id: "open_file", title: "Open file", group: "Navigate", browser: { code: "KeyP", meta: true }, electron: { code: "KeyP", meta: true }, moved: false },
   { id: "toggle_left_sidebar", title: "Toggle left sidebar", group: "Panels", browser: { code: "KeyB", meta: true }, electron: { code: "KeyB", meta: true }, moved: false },
   // Chrome keeps ⇧⌘B (bookmarks bar), so a browser tab turns the lens with ⌥⇧B (PRD sidebar-task-lens D-32).
-  { id: "toggle_sidebar_lens", title: "Switch Projects and Tasks", group: "Panels", browser: { code: "KeyB", alt: true, shift: true }, electron: { code: "KeyB", meta: true, shift: true }, moved: true },
+  { id: "toggle_sidebar_lens", title: "Switch sidebar list", group: "Panels", browser: { code: "KeyB", alt: true, shift: true }, electron: { code: "KeyB", meta: true, shift: true }, moved: true },
   { id: "overview", title: "Overview", group: "Navigate", browser: { code: "KeyO", meta: true, shift: true }, electron: { code: "KeyO", meta: true, shift: true }, moved: false },
   // Chrome keeps ⌘⇧M for the profile menu, so the browser form is ⌥⇧M (PRD overview-device-tasks B37).
   { id: "add_backlog", title: "Add to backlog", group: "Navigate", browser: { code: "KeyM", alt: true, shift: true }, electron: { code: "KeyM", meta: true, shift: true }, moved: true },
@@ -277,6 +278,9 @@ export const REGISTRY: readonly Command[] = [
   ...LANE_TOOL_COMMANDS.map((id): Command => ({ id, title: LANE_TOOL_TITLES[id], group: "Panels", ...LANE_TOOL_CHORDS[id] })),
   // The documents button has no chord until one is bound: an open brings the documents in front.
   { id: "toggle_lane_documents", title: "Toggle documents", group: "Panels", browser: null, electron: null, moved: false },
+  { id: "open_project_memory", title: "Open Project Memory", group: "Panels", browser: { code: "KeyL", meta: true, shift: true }, electron: { code: "KeyL", meta: true, shift: true }, moved: false },
+  // In a browser tab Chrome keeps ⇧⌘R (reload), so the PR list moves to ⌥⇧R.
+  { id: "open_sidebar_prs", title: "Open PR list", group: "Panels", browser: { code: "KeyR", alt: true, shift: true }, electron: { code: "KeyR", meta: true, shift: true }, moved: true },
   { id: "find_in_pane", title: "Find in pane", group: "Panes", browser: { code: "KeyF", meta: true }, electron: { code: "KeyF", meta: true }, moved: false },
   { id: "save_file", title: "Save file", group: "Panes", browser: { code: "KeyS", meta: true }, electron: { code: "KeyS", meta: true }, moved: false },
   { id: "keep_open", title: "Keep open", group: "Panes", browser: { code: "KeyK", meta: true, shift: true }, electron: { code: "KeyK", meta: true, shift: true }, moved: false },
@@ -345,7 +349,7 @@ export const PC_KEYS: Readonly<Partial<Record<CommandId, { chord?: Chord; browse
   move_to_trash: { chord: { code: "Delete" }, passthrough: "explorer" },
   // The rule would give Copy Relative Path the same Alt+Shift+C as Copy Path,
   // VS Code's own chord for it is a two-step sequence this registry cannot
-  // hold, and Alt+Shift+R opens the PRs tool (PRD sidebar-task-lens B25), so
+  // hold, and Alt+Shift+R opens the sidebar's PR list (PRD lane-two-columns B25), so
   // it takes the free Alt+Shift+H.
   copy_relative_path: { chord: { code: "KeyH", alt: true, shift: true }, passthrough: "explorer" },
   // A terminal copies with Ctrl+Shift+C there, so Ctrl+C, X and V are free for the tree, as in every file manager.
@@ -477,6 +481,8 @@ export const EDITABLE_PANE_COMMANDS: readonly CommandId[] = [
   "toggle_device_rail",
   "toggle_sidebar_lens",
   ...LANE_TOOL_COMMANDS,
+  "open_project_memory",
+  "open_sidebar_prs",
   "split_right",
   "split_down",
   "toggle_zoom",
@@ -691,12 +697,34 @@ export type EffectiveRegistry = { registry: readonly Command[]; diagnostic: stri
 /** Stored commands that no longer exist: ignored with a diagnostic, never a reason to drop the rest of the set (`sidebar_agents`, PRD overview-device-tasks D-16; `toggle_file_tree` and `toggle_lane_files`, PRD lane-two-columns D-03, D-10). */
 const RETIRED_KEYS: readonly string[] = ["toggle_sidebar_view", "project_home", "sidebar_agents", "toggle_lane_work", "toggle_file_tree", "toggle_lane_files"];
 
+/**
+ * Stored commands read as the command that took their place. The Memory and
+ * PRs tools became the Project tool's 기억 tab and the sidebar's PR list, and
+ * a chord the operator bound to either keeps doing what it did, now there
+ * (PRD lane-two-columns B25). The new name, once stored, wins over the old.
+ */
+const RENAMED_KEYS: Readonly<Record<string, CommandId>> = {
+  toggle_lane_memory: "open_project_memory",
+  toggle_lane_prs: "open_sidebar_prs",
+};
+
+/** The stored set with each renamed key under its command's own key on `host`. */
+function renamedEntries(stored: Record<string, string>, host: HostKind): [string, string][] {
+  const entries = Object.entries(stored);
+  return entries.flatMap(([key, text]): [string, string][] => {
+    const command = RENAMED_KEYS[key];
+    if (!command) return [[key, text]];
+    const current = storedKey(command, host);
+    return current in stored ? [] : [[current, text]];
+  });
+}
+
 export function effectiveRegistry(stored: Record<string, string> | null | undefined, host: HostKind, system: KeySystem): EffectiveRegistry {
   const which = host === "electron" ? "pane" : "browser";
   const defaults = systemRegistry(system);
   const retired = Object.keys(stored ?? {}).some((key) => RETIRED_KEYS.includes(key));
   const diagnostic = retired ? "Stored project_home, toggle_sidebar_view, sidebar_agents, toggle_lane_work, toggle_file_tree or toggle_lane_files shortcut is retired and was ignored." : null;
-  const entries = Object.entries(stored ?? {}).filter(([key]) => !RETIRED_KEYS.includes(key) && !(host === "electron" && MACOS_ONLY_KEYS.includes(key)));
+  const entries = renamedEntries(stored ?? {}, host).filter(([key]) => !RETIRED_KEYS.includes(key) && !(host === "electron" && MACOS_ONLY_KEYS.includes(key)));
   if (entries.length === 0) return { registry: defaults, diagnostic };
   let registry: Command[] = [...defaults];
   const applied: [CommandId, Chord][] = [];

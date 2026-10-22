@@ -3,6 +3,7 @@
 
 pub mod ai_usage;
 pub mod prices;
+pub mod project_cost;
 pub mod query;
 pub mod store;
 pub mod worker;

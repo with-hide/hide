@@ -18,13 +18,13 @@ import { BACKLOG_FILTERS, backlogLabels, backlogOf, BACKLOG_SHOWN, filterRows, p
 import { isMemoKey, itemToken, projectOrder } from "./overviewTasks";
 import { issueDate, type BoardProject } from "./projectBoard";
 import { MissedRow } from "./SessionRecord";
-import { openMissedWork, workKey } from "./sessionWork";
+import { MISSED_FOLD, openMissedWork, workKey } from "./sessionWork";
 import type { BacklogItem, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { IssueLabelDot, IssueLabelView } from "./issueMarks";
 import { useIssueDetail } from "./issueDetails";
 import { MarkdownText } from "./MarkdownText";
-import { useUiStore, type OverviewPanel } from "./ui";
+import { toggledFold, useUiStore, type OverviewPanel } from "./ui";
 
 const LINK = "inline-flex whitespace-nowrap items-center gap-xxs rounded-xs px-xxs text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring";
 
@@ -155,7 +155,12 @@ function ItemRow({ row, project, actions }: { row: BacklogRow; project: Workspac
 
 function MissedGroup({ projects, actions }: { projects: readonly BoardProject[]; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const [open, setOpen] = useState(false);
+  // Kept with the Overview's folds, so the Project tool's 놓친 일 N opens it (PRD lane-two-columns B28).
+  const open = useUiStore((s) => s.overview.open.includes(MISSED_FOLD));
+  const setOpen = (next: boolean) => {
+    const { overview, setOverview } = useUiStore.getState();
+    if (next !== overview.open.includes(MISSED_FOLD)) setOverview({ open: toggledFold(overview.open, MISSED_FOLD) });
+  };
   const enabled = useShellStore((s) => summariesEnabled(s.rest?.status?.background_ai));
   const links = useShellStore((s) => s.linkSummaries);
   const missed = useMemo(() => (enabled ? openMissedWork(projects.flatMap((project) => links?.projects[project.workspace.id]?.work ?? [])) : []), [enabled, projects, links]);

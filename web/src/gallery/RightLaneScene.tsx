@@ -15,7 +15,7 @@ import { WorkspaceScreen } from "../WorkspaceScreen";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["closed", "overlay", "pinned", "explorer-overlay", "explorer-only", "expanded", "prs", "memory", "changes", "narrow"] as const;
+const STATES = ["closed", "overlay", "pinned", "explorer-overlay", "explorer-only", "expanded", "project", "memory", "changes", "narrow"] as const;
 type LaneState = (typeof STATES)[number];
 /** `documents`: the checkout has views and the viewing column shows them; `tool`: the tool column. */
 type Lane = { tool: Tool | null; pinned: boolean; documents: boolean; expanded: boolean };
@@ -27,8 +27,8 @@ const LANES: Record<LaneState, Lane> = {
   "explorer-overlay": { tool: "explorer", pinned: false, documents: true, expanded: false },
   "explorer-only": { tool: "explorer", pinned: true, documents: false, expanded: false },
   expanded: { tool: "explorer", pinned: false, documents: true, expanded: true },
-  prs: { tool: "prs", pinned: true, documents: true, expanded: false },
-  memory: { tool: "memory", pinned: true, documents: true, expanded: false },
+  project: { tool: "project", pinned: true, documents: true, expanded: false },
+  memory: { tool: "project", pinned: true, documents: true, expanded: false },
   changes: { tool: "changes", pinned: true, documents: true, expanded: false },
   narrow: { tool: "explorer", pinned: true, documents: true, expanded: false },
 };
@@ -82,7 +82,7 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
     scene.rest.navigator!.focused_checkout_id = checkout.id;
     scene.rest.ui_state = { ...scene.rest.ui_state!, expanded_paths: Object.keys(listings), selected_path: lane.documents ? tabs[0]!.path : null };
     scene.rest.workspace_view = {
-      device_id: "local", path: root, open: state !== "closed", documents: lane.documents, tool: lane.tool, prs: { only_checkout: false }, pinned: lane.pinned, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+      device_id: "local", path: root, open: state !== "closed", documents: lane.documents, tool: lane.tool, pinned: lane.pinned, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "a1", active: displays[0]?.id ?? null, displays } }, active_area: "a1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
     };
     return { scene, editor: { tabs: lane.documents ? tabs : [], active_tab_id: lane.documents ? "t1" : null }, documents, listings };
@@ -90,7 +90,7 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.scene.rest, agents: fixture.scene.agents, connection: "live", editor: fixture.editor, documents: fixture.documents, listings: fixture.listings });
-    useUiStore.setState({ screen: { kind: "workspace" }, laneShown: state !== "closed", laneExpanded: lane.expanded, stackFront: "view" });
+    useUiStore.setState({ screen: { kind: "workspace" }, laneShown: state !== "closed", laneExpanded: lane.expanded, stackFront: "view", projectTab: state === "memory" ? "memory" : "status" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));

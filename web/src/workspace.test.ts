@@ -40,7 +40,7 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
   it("draws an unpinned lane over Agent Views with both columns at their widths, Agent Views keeping its own (B20)", () => {
     expect(frame({ view: "documents", shown: true, body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 520, view: column("document_width", 520, 360), tool: null });
     expect(frame({ view: "documents", tool: "explorer", shown: true, body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 520 + 8 + 240, view: column("document_width", 520, 360), tool: column("explorer_width", 240, 180) });
-    expect(frame({ tool: "prs", shown: true, panelWidth: 700, body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 700, view: null, tool: column("panel_width", 700, 360) });
+    expect(frame({ tool: "project", shown: true, panelWidth: 700, body: 1200 })).toMatchObject({ mode: "overlay", agents: 1200, width: 700, view: null, tool: column("panel_width", 700, 360) });
   });
 
   it("draws each column from its own width, docked or drawn over (B17, D-09)", () => {
@@ -49,12 +49,12 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
       expect(frame({ view: "documents", ...placed, ...widths, body: 2400 }).view).toEqual(column("document_width", 900, 360));
       expect(frame({ view: "detail", ...placed, ...widths, body: 2400 }).view).toEqual(column("detail_width", 600, 360));
       expect(frame({ tool: "explorer", ...placed, ...widths, body: 2400 }).tool).toEqual(column("explorer_width", 300, 180));
-      for (const tool of ["memory", "prs", "changes"] as const) {
+      for (const tool of ["project", "changes"] as const) {
         expect(frame({ tool, ...placed, ...widths, body: 2400 }).tool).toEqual(column("panel_width", 440, 360));
       }
     }
     // A wide document leaves a column never resized at its default.
-    expect(frame({ tool: "memory", shown: true, documentWidth: 900, body: 1600 }).width).toBe(400);
+    expect(frame({ tool: "project", shown: true, documentWidth: 900, body: 1600 }).width).toBe(400);
     expect(frame({ view: "detail", shown: true, documentWidth: 900, body: 1600 }).width).toBe(520);
     expect(frame({ view: "documents", shown: true, panelWidth: 440, body: 1600 }).width).toBe(520);
   });
@@ -63,7 +63,7 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
     expect(frame({ view: "documents", pinned: true, body: 1200 })).toMatchObject({ mode: "docked", agents: 1200 - 8 - 520, width: 520 });
     expect(frame({ view: "documents", tool: "explorer", pinned: true, body: 1400 })).toMatchObject({ mode: "docked", agents: 1400 - 8 - 768, width: 768 });
     // The pin is the lane's, whichever column shows.
-    expect(frame({ tool: "memory", pinned: true, body: 1200 })).toMatchObject({ mode: "docked", agents: 1200 - 8 - 400 });
+    expect(frame({ tool: "project", pinned: true, body: 1200 })).toMatchObject({ mode: "docked", agents: 1200 - 8 - 400 });
   });
 
   it("keeps a stored width the same docked or drawn over, never under the column's minimum", () => {
@@ -112,7 +112,7 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
   it("expands over the whole body, the tool column keeping its width and the viewing column taking the rest, while Agent Views keeps the width it had (B15)", () => {
     expect(frame({ view: "documents", tool: "explorer", shown: true, expanded: true, body: 1400 })).toMatchObject({ mode: "expanded", agents: 1400, width: 1400, view: column("document_width", 1400 - 8 - 240, 360), tool: column("explorer_width", 240, 180) });
     expect(frame({ view: "documents", pinned: true, expanded: true, body: 1400 })).toMatchObject({ mode: "expanded", agents: 1400 - 8 - 520, width: 1400, view: column("document_width", 1400, 360) });
-    expect(frame({ tool: "prs", shown: true, expanded: true, body: 1400 })).toMatchObject({ mode: "expanded", width: 1400, view: null, tool: column("panel_width", 1400, 360) });
+    expect(frame({ tool: "project", shown: true, expanded: true, body: 1400 })).toMatchObject({ mode: "expanded", width: 1400, view: null, tool: column("panel_width", 1400, 360) });
   });
 
   it("places nothing before the body is measured, so no terminal fits to a guess", () => {
@@ -137,7 +137,7 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
     expect(laneLanding({ x: 1590, body: 1600, frame: over, sizes })).toEqual({ document_width: 360 });
     // The 보기 slot and a tool alone land their own widths.
     expect(laneLanding({ x: 1600 - 520 - 8 - 100, body: 1600, frame: frame({ view: "detail", shown: true, documentWidth: 900, body: 1600 }), sizes })).toEqual({ detail_width: 620 });
-    expect(laneLanding({ x: 1600 - 400 - 8 - 100, body: 1600, frame: frame({ tool: "memory", shown: true, documentWidth: 900, body: 1600 }), sizes })).toEqual({ panel_width: 500 });
+    expect(laneLanding({ x: 1600 - 400 - 8 - 100, body: 1600, frame: frame({ tool: "project", shown: true, documentWidth: 900, body: 1600 }), sizes })).toEqual({ panel_width: 500 });
   });
 
   it("trades width between the two columns, so the lane and Agent Views keep theirs (B17)", () => {
@@ -273,6 +273,6 @@ describe("readCalls", () => {
 
 describe("the rail's tool scopes (PRD work-tab-pr-lens D-37)", () => {
   it("lists the Project's tools before the checkout's, so the rail draws one boundary", () => {
-    expect(TOOLS.map((tool) => TOOL_SCOPES[tool])).toEqual(["project", "project", "checkout", "checkout"]);
+    expect(TOOLS.map((tool) => TOOL_SCOPES[tool])).toEqual(["project", "checkout", "checkout"]);
   });
 });

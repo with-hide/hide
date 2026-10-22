@@ -39,8 +39,8 @@ describe("shortcut registry", () => {
 
   it("marks exactly the ten moved chords", () => {
     const moved = REGISTRY.filter((command) => command.moved).map((command) => command.id).sort();
-    // Chrome keeps ⇧⌘R (reload) and ⇧⌘B (bookmarks bar), so PRs and the sidebar lens move to ⌥⇧ in a tab (PRD sidebar-task-lens D-32).
-    expect(moved).toEqual(["add_backlog", "close_pane", "close_tab", "new_tab", "previous_recent_area_tab", "recent_area_tab", "reopen_closed_tab", "settings", "toggle_lane_prs", "toggle_sidebar_lens"].sort());
+    // Chrome keeps ⇧⌘R (reload) and ⇧⌘B (bookmarks bar), so the PR list and the sidebar lens move to ⌥⇧ in a tab (PRD sidebar-task-lens D-32).
+    expect(moved).toEqual(["add_backlog", "close_pane", "close_tab", "new_tab", "previous_recent_area_tab", "recent_area_tab", "reopen_closed_tab", "settings", "open_sidebar_prs", "toggle_sidebar_lens"].sort());
   });
 
   it("adds to the backlog with ⇧⌘M in the desktop app and ⌥⇧M in a browser, where Chrome keeps ⇧⌘M (PRD overview-device-tasks B37)", () => {
@@ -87,11 +87,12 @@ describe("shortcut registry", () => {
       sidebar_projects: "⇧⌘P",
       toggle_device_rail: "",
       toggle_lane: "⌘E",
-      toggle_lane_memory: "⇧⌘L",
-      toggle_lane_prs: "⇧⌘R",
+      toggle_lane_project: "",
       toggle_lane_explorer: "⇧⌘E",
       toggle_lane_changes: "⇧⌘G",
       toggle_lane_documents: "",
+      open_project_memory: "⇧⌘L",
+      open_sidebar_prs: "⇧⌘R",
       find_in_pane: "⌘F",
       save_file: "⌘S",
       keep_open: "⇧⌘K",
@@ -284,12 +285,12 @@ describe("browser pane chord overrides (S5 B9, B10)", () => {
     expect(effectiveRegistry({ split_right: "alt+KeyR", split_down: "alt+KeyR" }, "browser", "mac").registry).toBe(REGISTRY);
   });
 
-  it("edits the pane commands, the cycle commands, the sidebar switch, the device rail toggle, the four lane tool toggles and the eight area commands", () => {
+  it("edits the pane commands, the cycle commands, the sidebar switch, the device rail toggle, the three lane tool toggles, the Project's 기억 and the PR list, and the eight area commands", () => {
     expect([...EDITABLE_PANE_COMMANDS].sort()).toEqual(
       [
         "recent_area_tab", "previous_recent_area_tab", "recent_panel", "previous_recent_panel",
         "close_pane", "split_down", "split_right", "text_larger", "text_reset", "text_smaller", "toggle_device_rail", "overview", "sidebar_projects", "toggle_zoom", "toggle_plan",
-        "toggle_sidebar_lens", "toggle_lane_memory", "toggle_lane_prs", "toggle_lane_explorer", "toggle_lane_changes",
+        "toggle_sidebar_lens", "toggle_lane_project", "toggle_lane_explorer", "toggle_lane_changes", "open_project_memory", "open_sidebar_prs",
         "focus_next_agent_area", "focus_previous_agent_area", "grow_agent_area", "shrink_agent_area",
         "focus_next_view_area", "focus_previous_view_area", "grow_view_area", "shrink_view_area",
         "copy_path", "copy_relative_path",
@@ -426,11 +427,12 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
       sidebar_projects: "Alt+Shift+P",
       toggle_device_rail: "",
       toggle_lane: "Ctrl+Shift+E",
-      toggle_lane_memory: "Alt+Shift+L",
-      toggle_lane_prs: "Alt+Shift+R",
+      toggle_lane_project: "",
       toggle_lane_explorer: "Alt+Shift+E",
       toggle_lane_changes: "Alt+Shift+G",
       toggle_lane_documents: "",
+      open_project_memory: "Alt+Shift+L",
+      open_sidebar_prs: "Alt+Shift+R",
       find_in_pane: "Ctrl+Shift+F",
       save_file: "Ctrl+Shift+S",
       keep_open: "Alt+Shift+K",
@@ -521,8 +523,8 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     expect(matchHost(pcPress("Delete"), pc, "electron")).toBeNull();
   });
 
-  it("opens Memory, PRs and Changes with ⇧⌘L/R/G and turns the sidebar lens with ⇧⌘B on a Mac, Alt+Shift elsewhere, ⌥⇧R and ⌥⇧B in a Mac browser tab, and leaves ⌥⌘1-4 unbound (PRD sidebar-task-lens B24, B25)", () => {
-    const letters = { toggle_lane_memory: "KeyL", toggle_lane_prs: "KeyR", toggle_lane_changes: "KeyG", toggle_sidebar_lens: "KeyB" } as const;
+  it("opens the Project's 기억, the PR list and Changes with ⇧⌘L/R/G and turns the sidebar lens with ⇧⌘B on a Mac, Alt+Shift elsewhere, ⌥⇧R and ⌥⇧B in a Mac browser tab, and leaves ⌥⌘1-4 unbound (PRD sidebar-task-lens B24; lane-two-columns B25)", () => {
+    const letters = { open_project_memory: "KeyL", open_sidebar_prs: "KeyR", toggle_lane_changes: "KeyG", toggle_sidebar_lens: "KeyB" } as const;
     for (const [id, code] of Object.entries(letters)) {
       expect(matchHost({ code, metaKey: true, altKey: false, shiftKey: true, ctrlKey: false }, REGISTRY, "electron")?.id, `electron mac ${id}`).toBe(id);
       for (const host of ["electron", "browser"] as const) {
@@ -531,7 +533,7 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
         expect(matchHost(pcPress(code, { alt: true, shift: true }), pc, host)?.id, `${host} pc ${id}`).toBe(id);
       }
     }
-    expect(matchHost({ code: "KeyR", metaKey: false, altKey: true, shiftKey: true, ctrlKey: false }, REGISTRY, "browser")?.id).toBe("toggle_lane_prs");
+    expect(matchHost({ code: "KeyR", metaKey: false, altKey: true, shiftKey: true, ctrlKey: false }, REGISTRY, "browser")?.id).toBe("open_sidebar_prs");
     expect(matchHost({ code: "KeyB", metaKey: false, altKey: true, shiftKey: true, ctrlKey: false }, REGISTRY, "browser")?.id).toBe("toggle_sidebar_lens");
     for (const command of pc.filter((row) => row.id in letters)) expect(command.browser && isChromeReserved(command.browser, "pc"), command.id).toBeFalsy();
     for (const host of ["electron", "browser"] as const) {
@@ -542,13 +544,24 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     expect(matchHost(pcPress("Digit1", { ctrl: true, shift: true }), pc, "electron")?.id).toBe("select_device_1");
   });
 
-  it("reads a stored lane tool chord on both systems, drops a stored Work tool chord without refusing the set, and refuses a chord a lane tool holds", () => {
-    const stored = { toggle_lane_memory: "command+option+9" };
-    expect(displayCommand("toggle_lane_memory", "electron", effectiveRegistry(stored, "electron", "mac").registry, "mac")).toBe("⌥⌘9");
-    expect(displayCommand("toggle_lane_memory", "electron", effectiveRegistry(stored, "electron", "pc").registry, "pc")).toBe("Alt+Shift+9");
+  it("reads a stored lane tool chord on both systems, drops a stored Work tool chord without refusing the set, and refuses a chord a lane command holds", () => {
+    const stored = { toggle_lane_project: "command+option+9" };
+    expect(displayCommand("toggle_lane_project", "electron", effectiveRegistry(stored, "electron", "mac").registry, "mac")).toBe("⌥⌘9");
+    expect(displayCommand("toggle_lane_project", "electron", effectiveRegistry(stored, "electron", "pc").registry, "pc")).toBe("Alt+Shift+9");
     const retired = effectiveRegistry({ toggle_lane_work: "command+option+1", split_right: "command+option+1" }, "electron", "mac");
     expect(retired.registry.find((command) => command.id === "split_right")?.electron).toEqual({ code: "Digit1", meta: true, alt: true });
-    expect(effectiveRegistry({ split_right: "command+shift+l" }, "electron", "mac").diagnostic).toContain("conflict toggle_lane_memory");
+    expect(effectiveRegistry({ split_right: "command+shift+l" }, "electron", "mac").diagnostic).toContain("conflict open_project_memory");
+  });
+
+  it("runs a chord bound to the removed Memory and PRs tools as the Project's 기억 and the sidebar's PR list, the new name winning (PRD lane-two-columns B25)", () => {
+    const electron = effectiveRegistry({ toggle_lane_memory: "command+option+9", toggle_lane_prs: "command+option+8" }, "electron", "mac");
+    expect(electron.diagnostic).toBeNull();
+    expect(displayCommand("open_project_memory", "electron", electron.registry, "mac")).toBe("⌥⌘9");
+    expect(displayCommand("open_sidebar_prs", "electron", electron.registry, "mac")).toBe("⌥⌘8");
+    const browser = effectiveRegistry({ toggle_lane_prs: "alt+shift+Digit7" }, "browser", "mac");
+    expect(browser.registry.find((command) => command.id === "open_sidebar_prs")?.browser).toEqual({ code: "Digit7", alt: true, shift: true });
+    const both = effectiveRegistry({ toggle_lane_memory: "command+option+9", open_project_memory: "command+option+7" }, "electron", "mac");
+    expect(displayCommand("open_project_memory", "electron", both.registry, "mac")).toBe("⌥⌘7");
   });
 
   it("stores a chord as the macOS chord it stands for, so one set reads the same on both systems", () => {
@@ -575,7 +588,7 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     expect(bindingProblem("split_right", { code: "KeyR", ctrl: true }, pc, "electron", "pc")).toEqual({ code: "modifier", modifier: "desktop_pc" });
     expect(bindingProblem("split_right", { code: "KeyR", alt: true }, pc, "electron", "pc")).toMatchObject({ code: "modifier" });
     expect(bindingProblem("split_right", { code: "KeyY", alt: true, shift: true }, pc, "electron", "pc")).toBeNull();
-    expect(bindingProblem("split_right", { code: "KeyR", alt: true, shift: true }, pc, "electron", "pc")).toEqual({ code: "conflict", chord: "Alt+Shift+R", commandId: "toggle_lane_prs" });
+    expect(bindingProblem("split_right", { code: "KeyR", alt: true, shift: true }, pc, "electron", "pc")).toEqual({ code: "conflict", chord: "Alt+Shift+R", commandId: "open_sidebar_prs" });
     // Ctrl+Alt+Shift stands for no macOS chord, so a set holding it would be refused on a Mac.
     expect(bindingProblem("split_right", { code: "KeyR", ctrl: true, alt: true, shift: true }, pc, "electron", "pc")).toMatchObject({ code: "modifier" });
     expect(bindingProblem("split_right", { code: "KeyD", alt: true, shift: true }, pc, "electron", "pc")).toEqual({ code: "conflict", chord: "Alt+Shift+D", commandId: "split_down" });

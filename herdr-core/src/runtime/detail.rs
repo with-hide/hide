@@ -12,7 +12,7 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SidebarLensPayload {
-    /// `projects` or `tasks`.
+    /// `projects`, `tasks` or `prs`.
     pub(super) lens: String,
     /// Shows the sidebar in the same event: ⇧⌘B with the sidebar hidden
     /// shows it on the other lens (B2, D-47).
@@ -57,7 +57,7 @@ impl Runtime {
             self.set_error(
                 "sidebar_lens.unknown",
                 format!(
-                    "{} is not a sidebar lens; expected projects or tasks",
+                    "{} is not a sidebar lens; expected projects, tasks or prs",
                     payload.lens
                 ),
                 false,
@@ -342,8 +342,16 @@ impl Runtime {
             Some(DetailItem::Record { session }) => {
                 self.open_session_record(super::links::RecordOpenPayload { session });
             }
-            // A map draws the mission or the plan the snapshot already carries.
-            Some(DetailItem::Mission { .. } | DetailItem::Plan { .. }) | None => {
+            // A map draws the mission or the plan the snapshot already
+            // carries, and a project's worktrees and cost what its row and
+            // the usage frame already carry.
+            Some(
+                DetailItem::Mission { .. }
+                | DetailItem::Plan { .. }
+                | DetailItem::Worktrees { .. }
+                | DetailItem::Cost { .. },
+            )
+            | None => {
                 if matches!(before, Some(DetailItem::Record { .. })) {
                     self.close_session_record();
                 }

@@ -87,7 +87,7 @@ export async function screenshot(page: Page, name: string): Promise<unknown> {
   return page.screenshot({ path: path.join(dir, `${name}.png`) });
 }
 
-export type LaneTool = "memory" | "prs" | "explorer" | "changes";
+export type LaneTool = "project" | "explorer" | "changes";
 
 /**
  * Shows one tool in the lane's tool column: its rail icon opens the column
@@ -100,6 +100,21 @@ export async function showTool(page: Page, tool: LaneTool): Promise<void> {
   if ((await icon.getAttribute("aria-pressed")) !== "true") await icon.click();
   await expect(icon).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(`aside[data-lane="${tool}"]`)).toBeVisible();
+}
+
+/** Shows the Project tool on its 기억 tab, the front checkout's Project's Memory (PRD lane-two-columns B26, B40). */
+export async function showProjectMemory(page: Page): Promise<void> {
+  await showTool(page, "project");
+  const tab = page.locator('aside[data-lane="project"] [data-project-tab="memory"]');
+  if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
+  await expect(page.locator('aside[data-lane="project"] [data-project-panel="memory"]')).toBeVisible();
+}
+
+/** Turns the sidebar to its PR list (PRD lane-two-columns B41). */
+export async function showSidebarPrs(page: Page): Promise<void> {
+  const option = page.locator('[data-sidebar-lens-option="prs"]');
+  if ((await option.getAttribute("aria-pressed")) !== "true") await option.click();
+  await expect(page.locator("[data-sidebar-prs]")).toBeVisible();
 }
 
 /** Brings the checkout's documents in front of the viewing column from the rail (B2, B11); a pressed button is left alone, since a press would fold them. */

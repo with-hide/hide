@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import { startHerdr } from "../../web/e2e/herdr-fixture";
-import { countSent, sendEvent, setLanePinned, showProjectRow, showTool } from "../../web/e2e/wire";
+import { countSent, sendEvent, setLanePinned, showProjectMemory, showProjectRow } from "../../web/e2e/wire";
 import { fitWindow, isolate, launch, screenshot, test } from "./fixture";
 import { seedReconciliation } from "./memory-reconcile-fixture";
 import { placedProgressBatch, progressGithub } from "./memory-progress-fixture";
@@ -49,15 +49,15 @@ test("Memory progress expands whole rows and follows the live promotion agent th
     if (evidence) fs.writeFileSync(path.join(evidence, "memory-todo-candidate.json"), JSON.stringify({ candidate, home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: herdr.socket, fixture: "synthetic card/GitHub/agent data", capture: "candidate-window renderer through its own CDP" }, null, 2));
     countSent(page, sent);
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click();
-    await showTool(page, "memory");
+    await showProjectMemory(page);
     await page.locator('[data-memory-switch="off"]').click();
     await expect(page.locator('[data-memory="on"]')).toBeVisible({ timeout: 30_000 });
     seedReconciliation(run, "acme/memory-fixture");
     await page.reload();
     await expect(page.locator('[data-workspace-screen]')).toBeVisible();
     await expect(page.locator('[data-connection]')).toHaveCount(0);
-    await showTool(page, "memory");
-    const tab = page.locator('[data-lane="memory"]');
+    await showProjectMemory(page);
+    const tab = page.locator('[data-lane="project"]');
     const quiet = tab.locator('[data-memory-pr-group="72"]');
     await expect(quiet).toContainText("Awaiting review");
     await expect(quiet.locator("[data-memory-agent]")).toHaveCount(0);
@@ -97,7 +97,7 @@ test("Memory progress expands whole rows and follows the live promotion agent th
     await progress.locator('[data-memory-agent="1"]').click();
     await expect(page.locator(`[data-pane-view="${placed.pane}"]`)).toHaveAttribute("data-focused", "true");
     expect(sent.get("focus_pane")?.pane_id).toBe(placed.pane);
-    await showTool(page, "memory");
+    await showProjectMemory(page);
     await progress.locator('[data-memory-row-toggle="1"]').press("Space");
     await expect(progress.locator("[data-memory-progress-detail]")).toHaveCount(0);
     await fitWindow(app, { width: 1440, height: 900 });
@@ -111,7 +111,7 @@ test("Memory progress expands whole rows and follows the live promotion agent th
       await page.locator(`[data-language-option="${language}"]`).click();
       await expect(page.locator("html")).toHaveAttribute("lang", language);
       await page.keyboard.press("Escape");
-      await showTool(page, "memory");
+      await showProjectMemory(page);
       await expect.poll(() => tab.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
       await captureMemory(page, tab, `memory-todo-narrow-${language}`);
     }

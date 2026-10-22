@@ -573,8 +573,8 @@ test("browser: a shell layer never has a page drawn over it, and a page tab's hi
   await fitWindow(app, { width: 720, height: WINDOW.height });
   await showDocuments(page);
   await expectOnSlot(page, url, a);
-  await page.locator('[data-lane-tool="prs"]').click();
-  await expect(page.locator('[data-lane="prs"]')).toBeVisible();
+  await page.locator('[data-lane-tool="project"]').click();
+  await expect(page.locator('[data-lane="project"]')).toBeVisible();
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-stacked", "true");
   await expect.poll(shown, { message: "the tool in front of the stacked lane hides the page" }).toBe(false);
   await windowShot("browser-narrow-tools");

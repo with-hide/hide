@@ -174,8 +174,8 @@ function PrRow({ entry, actions, showProject, folded }: { entry: PrEntry; action
           {author ? <span className="max-w-[30%] shrink-0 truncate text-micro text-muted-foreground group-focus-within/pr-row:invisible group-hover/pr-row:invisible group-has-data-[state=open]/pr-row:invisible" data-pr-author={author}>{t("work.row.author", { name: author })}</span> : null}
           <AgentMarks entry={entry} actions={actions} />
           <span className="relative flex shrink-0 items-center justify-end">
-            <Elapsed since={pr.updated_at_unix_ms} className={cn("shrink-0 text-micro text-muted-foreground", "group-focus-within/pr-row:invisible group-hover/pr-row:invisible group-has-data-[state=open]/pr-row:invisible")} data-pr-age={pr.number} />
-            <RowActions entry={entry} actions={actions} linking={linking} onLinking={setLinking} />
+            <Elapsed since={pr.updated_at_unix_ms} className={cn("shrink-0 text-micro text-muted-foreground", "group-focus-within/pr-row:invisible group-hover/pr-row:invisible group-has-data-[state=open]/pr-row:invisible", entry.agents.length > 0 && "absolute right-0")} data-pr-age={pr.number} />
+            <RowActions entry={entry} actions={actions} linking={linking} onLinking={setLinking} inFlow={entry.agents.length > 0} />
           </span>
         </div>
         <div className="pointer-events-none relative flex min-w-0 pl-[calc(var(--size-pr-icon)+var(--spacing-xs))]">
@@ -220,10 +220,12 @@ function AgentMarks({ entry, actions }: { entry: PrEntry; actions: Actions }) {
  * still here, else GitHub, each with `⋯` for Link issue, New issue, Copy
  * branch name and Assign (B19).
  */
-function RowActions({ entry, actions, linking, onLinking }: { entry: PrEntry; actions: Actions; linking: boolean; onLinking: (open: boolean) => void }) {
+function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrEntry; actions: Actions; linking: boolean; onLinking: (open: boolean) => void; inFlow: boolean }) {
   const { t } = useInterfaceTranslation();
   const { pr, project, row } = entry;
-  const reveal = "invisible absolute inset-y-0 right-0 flex items-center gap-xxs group-focus-within/pr-row:visible group-hover/pr-row:visible has-data-[state=open]:visible";
+  // Over the time slot, or, beside agent marks, holding its own width so a
+  // hover never covers a mark the pointer is about to press (B41).
+  const reveal = cn("invisible flex items-center gap-xxs group-focus-within/pr-row:visible group-hover/pr-row:visible has-data-[state=open]:visible", !inFlow && "absolute inset-y-0 right-0");
   const pointer = "pointer-events-auto";
   const merged = row.group === "merged" && pr.state === "merged";
   const checkout = row.checkout_id ? project.checkouts.find((candidate) => candidate.id === row.checkout_id) ?? null : null;

@@ -85,18 +85,19 @@ Only when the window's frame itself cannot draw does the line take the whole win
 
 The Workspace body, under the top row, is Agent Views (the Agent area), one right lane, and the tool rail, 48px wide, at the window's right edge.
 The lane has two columns (PRD lane-two-columns B1): the viewing column on the agents' side, which holds the checkout's documents (the View areas) or the 보기 slot, and the tool column beside the rail, which holds one tool; both, or one alone, are drawn, and with neither the lane is closed.
-The rail's top is the viewing column's: the 보기 button, while the slot holds something, with the mark of what it holds (a pull request as its PR mark in its state's icon and colour, a record or a mission as a page), then the documents button (a file icon) with a badge counting the open views, shown or folded, also given as its accessible description; with no document the button is off, still answering a hover or the keyboard with its hint `No open document` (B2).
-Below a short rule the rail lists the tools, Memory, PRs, Explorer and Changes from the top, the Project's tools before the checkout's, each an icon alone (a brain, a pull request, a folder tree, a file diff) whose name, scope and chord are its hint on hover (`Memory · herdr-ide  ⇧⌘L`, `PRs · all of hide  ⇧⌘R`, `Explorer · settings-ui  ⇧⌘E`, `Changes · settings-ui  ⇧⌘G`) and whose name is its accessible name (B3).
-There is no Work tool and no Files tool; the Sessions list is the sidebar's 태스크 list, the PRs lens is the PRs tool (PRD sidebar-task-lens D-16, D-17), and what Files held is split between the documents and the Explorer (PRD lane-two-columns D-03).
-A second short rule between PRs and Explorer marks where the Project's tools end and the checkout's begin (PRD work-tab-pr-lens D-37); it is derived from each tool's scope, so a tool of the other scope moves it.
+The rail's top is the viewing column's: the 보기 button, while the slot holds something, with the mark of what it holds (a pull request as its PR mark in its state's icon and colour, a record or a mission as a page, a project's worktrees as a Git folder, its cost as coins), then the documents button (a file icon) with a badge counting the open views, shown or folded, also given as its accessible description; with no document the button is off, still answering a hover or the keyboard with its hint `No open document` (B2).
+Below a short rule the rail lists the tools, Project, Explorer and Changes from the top, the Project's tool before the checkout's, each an icon alone (a dashboard, a folder tree, a file diff) whose name, scope and chord are its hint on hover (`Project · herdr-ide`, `Explorer · settings-ui  ⇧⌘E`, `Changes · settings-ui  ⇧⌘G`) and whose name is its accessible name (B3; PRD lane-two-columns B25).
+There is no Work tool, no Files tool and no Memory or PRs tool: the Sessions list is the sidebar's 태스크 list, the pull requests are the sidebar's PR list, Memory is the Project tool's 기억 tab (PRD lane-two-columns D-20), and what Files held is split between the documents and the Explorer (D-03).
+A second short rule between Project and Explorer marks where the Project's tools end and the checkout's begin (PRD work-tab-pr-lens D-37); it is derived from each tool's scope, so a tool of the other scope moves it.
 A rail button is drawn pressed, with a primary bar at the rail's edge, while its column shows it: a tool icon while the tool column shows that tool, the documents or 보기 button while the viewing column draws it.
 Pressing a tool icon opens the tool column on that tool, or swaps the tool it shows; pressing the pressed one closes the tool column, and the viewing column stays (B14).
 Pressing the documents or 보기 button brings it to the front of the viewing column; pressed while it is in front, it folds the viewing column, and pressing it again brings the same content back (B11).
-Memory's icon carries a dot while its Project has questions waiting, and PRs' a warning-coloured number counting the PRs tool's Needs You rows (folded rows not counted, a session's Needs You never).
+The Project icon carries a warning-coloured number counting its project's 할 일 (see The Project tool), no number at 0; worktrees to remove, memory to move into documents and bots' pull requests are never in it (B38).
 The rail's `…` menu holds Pin or Unpin and Expand, which move both columns together (B15).
 A Workspace seen for the first time shows Agent Views alone, its lane closed.
-The tool column's header names its tool, then its scope behind one small icon, a folder for the Project (Memory, PRs) and a branch for the checkout (Explorer, Changes), in the scope text's colour, and ends with `✕`, which closes the tool column (B14); the icon is decoration.
-The scopes read `Memory · <project>`, `PRs · all of <project>`, `Explorer · <checkout>` and `Changes · <checkout>`; a new checkout in front updates the checkout scopes and leaves Memory and PRs as they are.
+The Explorer's and Changes' header names its tool, then its scope behind one small icon, a branch for the checkout, in the scope text's colour, and ends with `✕`, which closes the tool column (B14); the icon is decoration.
+The scopes read `Explorer · <checkout>` and `Changes · <checkout>`; a new checkout in front updates them.
+The Project tool has a head of its own (see The Project tool).
 The viewing column has no header of its own: the documents draw their View areas with their tabs, and the 보기 slot its head (see The 보기 slot).
 
 Unpinned, the lane opens over Agent Views at their right edge, set apart by a shadow and a left border in both themes; the terminals under it keep their grid and layout, are not dimmed, and keep their input and output (B20).
@@ -119,12 +120,14 @@ The Explorer tool is the file tree as it was, its rows, menu, drags and file man
 Opening a file, a diff or a page from the Explorer, Changes, ⌘P, a terminal link, Open in Browser or Open server shows the documents in the viewing column with the opened tab in front, over the agents or docked as the pin says, and leaves the tool column as it is (B6, B7); the preview, Keep open and Open to the side rules are unchanged.
 A diff opened from Changes, a commit or a changed file, opens in the viewing column while the Changes list stays in the tool column (B7).
 Select in File Tree, a reveal, or a terminal link that names a folder turns the tool column to the Explorer with the row unfolded and selected, and leaves the viewing column as it is (B8).
-A pull request's card, a session's record or a mission's map opens in the 보기 slot, in front of the documents in the viewing column, and leaves the tool column as it is; the documents stay on the rail's documents button, and `←` steps back through the items opened before (B9).
+A pull request's card, a session's record, a mission's map, or a project's worktree table or cost opens in the 보기 slot, in front of the documents in the viewing column, and leaves the tool column as it is; the documents stay on the rail's documents button, and `←` steps back through the items opened before (B9).
 A changed file pressed on a card opens its diff among the documents in the viewing column, the card staying on the rail's 보기 button, which brings it back (B10).
 Closing a document tab closes that view alone, the unsaved-draft protection as it was; closing the last one closes the viewing column, the lane staying while it has a tool column and closing otherwise, and the 보기 slot never comes forward on its own (B12).
-⇧⌘E (`Toggle Explorer tool`), ⇧⌘L (`Toggle Memory tool`), ⇧⌘R (`Toggle PRs tool`) and ⇧⌘G (`Toggle Changes tool`) press that tool's rail icon: the tool column opens on it, swaps to it, or closes when it already shows it (PRD lane-two-columns D-08; sidebar-task-lens D-19, D-29).
+⇧⌘E (`Toggle Explorer tool`) and ⇧⌘G (`Toggle Changes tool`) press that tool's rail icon: the tool column opens on it, swaps to it, or closes when it already shows it (PRD lane-two-columns D-08; sidebar-task-lens D-19, D-29); `Toggle Project tool` does the same for the Project icon and has no chord until one is bound.
+⇧⌘L (`Open Project Memory`) opens the Project tool on its 기억 tab, and ⇧⌘R (`Open PR list`) turns the sidebar to its PR list, the whole device's, showing the sidebar when it is hidden; neither closes what it opened when pressed again (B25).
 `Toggle documents` presses the documents button and has no chord until one is bound.
-On Windows and Linux the tool chords are Alt+Shift+E, L, R and G; in a browser tab Chrome keeps ⇧⌘R for reload, so PRs is ⌥⇧R there, and ⌥⌘1-4 do nothing anywhere.
+On Windows and Linux these chords are Alt+Shift+E, L, R and G; in a browser tab Chrome keeps ⇧⌘R for reload, so the PR list is ⌥⇧R there, and ⌥⌘1-4 do nothing anywhere.
+A chord the operator had bound to `Toggle Memory tool` or `Toggle PRs tool` runs `Open Project Memory` or `Open PR list` instead, unless that command has a chord of its own (B25).
 A chord the operator had bound to the retired `Toggle Work tool`, `Toggle Files tool` or `Toggle File Tree` is dropped without an error, and the rest of their set stays.
 The desktop app's View menu names the lane commands, and a chord bound to any of them in Settings, Shortcuts keeps doing the same.
 Each sends the value the lane should end at, so the same command arriving twice lands where it did once.
@@ -144,7 +147,7 @@ The lane has a divider at its left edge, docked or over the agents, and one betw
 A divider shows its grip on hover, keyboard focus and while dragging; a drag moves a guide with the pointer and lands once on release, and a focused divider moves one 32px step per arrow key, each a separator that reports its width.
 Fast arrow presses retain every step before the preceding width has been confirmed, and reloading restores the final width.
 The column divider trades width between the viewing column and the tool column, so the lane and Agent Views keep theirs; the lane's divider changes the width of the column at the lane's edge, against Agent Views when docked, and over them otherwise, where it may reach the body's left edge.
-The lane keeps four widths (D-09): the documents start at 520px and are never narrower than 360px, the 보기 slot the same, the Explorer starts at 240px and is never narrower than 180px, and Memory, PRs and Changes share one width that starts at 400px and is never narrower than 360px; Agent Views keep 480px beside a docked lane.
+The lane keeps four widths (D-09): the documents start at 520px and are never narrower than 360px, the 보기 slot the same, the Explorer starts at 240px and is never narrower than 180px, and the Project tool and Changes share one width that starts at 400px and is never narrower than 360px; Agent Views keep 480px beside a docked lane.
 The widths are the Workspace's and the same over the agents and docked, so a width dragged over the agents is the width the pin docks at, and documents widened to read a page leave the 보기 slot and the tools as they were.
 A web page opened into the lane widens the documents, when they are narrower than 900px, to 900px, so a site lays out its desktop screen: an open from the Explorer, a terminal link, `hide browser open` from the operator's pane, History, Recent Panels or a page's own new tab that puts a page in front of its area (PRD browser-width-zoom B1-B5; lane-two-columns B18).
 It widens over the agents and docked alike only as far as Agent Views keeps 480px beside both columns, so a narrow window gives the page less than 900px, and it never narrows wider documents.
@@ -694,7 +697,7 @@ A row has one line, and its second line is the agent's ask or its block's cause,
 The row's accessible name carries `Hide AI`, the task and the turn (`Hide AI · Memory 올리기 · m72 · PR #924 리뷰`).
 An attempt with no live agent (a failure with no pull request, an open pull request after the operator closed the pane) never has a row; the Memory tab alone shows it, as it did.
 
-Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the Tools lane on the Memory tab of the row's Project with that attempt's To resolve row open, and the `Agent ↗` link there opens the pane.
+Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the lane on the Project tool's 기억 tab of the row's Project with that attempt's To resolve row open, and the `Agent ↗` link there opens the pane.
 A row whose Project the core has not yet named opens the pane as any row does.
 The phone's Needs You row opens the agent's detail.
 The digits that number agent rows follow the drawn order, so a Hide AI row is numbered with the Needs You rows above the tree and no checkout of its own takes a digit.
@@ -805,10 +808,42 @@ A pane on an SSH device, and a page outside the desktop app, links URLs only, be
 A path with a space in it is a link only where the program marks it (OSC 8), since plain text gives no way to tell where it ends.
 Web owner: `web/src/terminalLinks.ts` (detection), `web/src/terminalLinkProvider.ts` (the check and the routes), `web/src/terminals.ts` (pointer-to-cell lookup), `web/src/PaneRelations.tsx` (target-specific menu), `web/src/actions.ts` (`openLink`, `openTerminalPath`), `web/src/editor/lineRequest.ts` (the line); desktop owner: `desktop/src/main/localPath.ts`.
 
-## Project Memory: the Memory tab
+## The Project tool
+
+Web owner: `web/src/ProjectTool.tsx`, `web/src/projectStatus.ts` and `web/src/ProjectDetail.tsx` (the worktree table and the cost in the 보기 slot); core owner: `herdr-core/src/agent_state/tally/project_status.rs` (the 현황 counts and the 할 일) and `herdr-core/src/usage_ledger/project_cost.rs` (the cost).
+The Project tool is the rail's first tool and is about the project of the checkout in front (PRD lane-two-columns D-14, B26).
+Its head names the project, then its repository, path and machine on one dim line, then ⚙, which opens Project Settings, and `✕`, which closes the tool column; under it two tabs, `현황` and `기억`, the 기억 tab dotted while Memory has something to handle.
+The page keeps the tab chosen; ⇧⌘L and a Memory link elsewhere open the tool on 기억.
+
+현황 is four tiles, then 할 일, then the recent memory (D-15).
+Each tile says where it goes at its top right, `사이드바` or `보기`, and `닫기 ✕` while the viewing column shows what it opened, which a second press folds (B32).
+A tile's number is a quiet bar until the core has answered, and a 0 is drawn as 0; nothing the system did not make is drawn (B33).
+
+- 세션: the live sessions and a bar of 기다림, 일함, 대기 and 쉼; pressing it turns the sidebar to 태스크, narrowed to the project behind a `<project>만` chip whose `✕` lifts it (B27).
+  While Hide AI's summaries are on and the project has open missed work, `놓친 일 N` in the warning colour sits in its corner, and pressing it opens the Overview's backlog for the project with its 놓친 일 group unfolded; it is never counted in 할 일 or on the rail (B28).
+- PR: the open pull requests and a bar of 머지 가능, 실패, 리뷰 and 검사 중; pressing it turns the sidebar to the PR list, narrowed to the project (B29).
+  A project with no GitHub remote reads `GitHub 원격 없음` alone, and after a failed read a ⚠ stands beside the number with the last read's age.
+- Git: the worktrees, how far main is behind origin, and one mark per worktree, changed, not pushed or removable; pressing it opens the worktree table in the viewing column (B30).
+  The table has the project's disk bar, a row for every worktree of the project, however many the tile's marks stop at, with its mark, branch, pull request and size, and the removable ones folded under `정리할 것 N` with `정리…`, which opens the disk cleanup sheet and its confirmation; the table reads the worktrees again when it opens and measures the disk while it shows.
+- 비용 · 7일: the last seven days' total at API prices, a small bar per day and each agent's share; pressing it opens the cost in the viewing column, with a bar per day, the amount per model and the three sessions that spent the most, each opening its record (B31).
+  Only calls whose session ran inside one of the project's checkouts on the core's own machine count, since reading another device's usage would be a new remote call, so a project on a connected device reads `이 기기에서 돈 것만 세요`.
+  An agent with a call Hide has no price for is named `가격 없음` apart, those calls in no amount, and when its other calls are priced the total reads `≥`.
+  Before the core's first reading the tile is the quiet bar and the page a placeholder; a reading that found no priced call is `$0.00`; when no reading has succeeded, the usage store failing to open included, the tile reads `–` and the page says so, and after a later failure the page keeps the last amounts and says they are the last read.
+
+할 일 holds only what stops without the operator (D-16, B34-B37).
+Its first group, `에이전트가 나를 기다림`, lists the questions and decisions not read yet, then `다시 볼 것`, the read and unanswered questions and the ★ tasks, the rows of the sidebar's 태스크 Needs You and 다시 볼 것; a live session whose record still holds an open question joins them though its row asks nothing now, as a new ask while unread and under 다시 볼 것 once read, one line per pane; reading an ask moves its row down and keeps the count, answering it or lifting the ★ takes it out.
+Its second group, `내 PR · 내 리뷰`, lists the project's pull requests the PR list puts in Needs You, the team's review asks and bots' left out; one opened from a Memory card wears `◆ 기억에서`, and a review left on GitHub or a moved state takes it out on the next read.
+A row has no button: an agent's row says `pane` and brings that pane forward with the keyboard, a pull request's says `보기` and opens its card in the viewing column (B36).
+Past five rows the list shows five in that order and `+N 더`, which shows the rest the core sent; past the core's 64 rows a last line sends each kind left over to the sidebar list that holds it, narrowed to the project: `나머지 N개는 사이드바 태스크에서` for the agents' rows and `나머지 PR N개는 사이드바 PR 목록에서` for the pull requests, one link per kind there is; with nothing to do it reads a dim `할 일 없음`.
+
+The recent memory is the five newest cards of all Memory holds, a search in 기억 narrowing only that tab, each title with its date, `처리할 것 N` at its head while Memory asks something, and `기억에서 자세히 ›`; a card or the chip opens 기억 at its place, and with no card the part is not drawn (B39).
+
+The core derives the counts and the 할 일 only on a publish whose inputs moved, and nothing on that path reads a file or runs a process (B42; [ARCHITECTURE.md](ARCHITECTURE.md#project-status-and-cost)).
+
+## Project Memory: the 기억 tab
 
 Web owner: `web/src/MemoryTab.tsx`, `web/src/memoryList.ts`; core owner: `herdr-core/src/runtime/project_memory.rs`, `herdr-core/src/runtime/memory_promotion.rs`.
-Memory is the rail's first tool, before PRs, the Explorer and Changes, and shows the Project of the checkout in front (PRD project-memory-v2 D-17, B19-B32).
+Memory is the Project tool's 기억 tab and shows the Project of the checkout in front, with what the Memory tool held: what to handle, what is in progress, the cards and the search (PRD project-memory-v2 D-17, B19-B32; lane-two-columns B40).
 The core opens one Project's Memory per daemon; the rail, whatever the lane holds, names its Project when it shows, when the front Project changes and when its window comes forward after another window named another Project, so the Memory icon's dot is current, and the tool reads until the core answers for its own.
 Its head is the `Auto memory 사용` switch and the Hide AI chip, the agent Hide AI asks now with its logo (the listed agent standing in while Runs on is past the usage limit or cannot answer); with Memory off, one line says what is sent where and a `데이터 삭제` link sits under it while the Project has cards.
 Turning the switch on when this Mac's agent hooks do not carry Memory yet updates them first and turns it on once they land.
@@ -1166,9 +1201,9 @@ A link panel's `대화 보기` and parent line open that session's record, in th
 The Overview starts on Work when the window loads and keeps the tab chosen while that window runs; obsolete Home places resolve to a current view rather than an empty screen.
 The old copied Conversation history and its index remain removed; retained-request History follows the session-work retention choice described in [Project sessions and Memory](ARCHITECTURE.md#project-sessions-and-memory).
 
-## Tasks, the 보기 slot and the PRs tool
+## Tasks, the 보기 slot and the PR list
 
-Web owner: `web/src/TaskLens.tsx` and `web/src/taskList.ts` (the sidebar's 태스크 list), `web/src/DetailPanel.tsx` (the lane's 보기 slot), `web/src/SessionRecord.tsx` and `web/src/sessionWork.ts` (the session record), `web/src/PrsPanel.tsx`, `web/src/PrList.tsx`, `web/src/PrCard.tsx`, `web/src/prWork.ts`, `web/src/prCardModel.ts` and `web/src/prReason.tsx` (the PRs tool and the PR card), `web/src/PrDialogs.tsx` (이슈 잇기 and 맡기기), `web/src/prDelegate.ts` (맡기기's first prompt), `web/src/LinkSessions.tsx` and `web/src/linkPanel.ts` (the link record's sections); a row's agent line follows `web/src/agentRow.ts`.
+Web owner: `web/src/TaskLens.tsx` and `web/src/taskList.ts` (the sidebar's 태스크 list), `web/src/DetailPanel.tsx` (the lane's 보기 slot), `web/src/SessionRecord.tsx` and `web/src/sessionWork.ts` (the session record), `web/src/SidebarPrs.tsx`, `web/src/PrList.tsx`, `web/src/PrCard.tsx`, `web/src/prWork.ts`, `web/src/prCardModel.ts` and `web/src/prReason.tsx` (the sidebar's PR list and the PR card), `web/src/PrDialogs.tsx` (이슈 잇기 and 맡기기), `web/src/prDelegate.ts` (맡기기's first prompt), `web/src/LinkSessions.tsx` and `web/src/linkPanel.ts` (the link record's sections); a row's agent line follows `web/src/agentRow.ts`.
 The core owns the lens, the view option and the slot (`herdr-core/src/runtime/detail.rs`, `ui_state.sidebar_lens`, `task_view` and `detail`) and every task's state and order (`herdr-core/src/agent_state/tally/tasks.rs`).
 
 ### The sidebar's 태스크 list
@@ -1188,8 +1223,8 @@ Saved questions, approvals and work state do not become the current row's status
 A new hook reference removes the old title and PR display before its own read completes.
 
 
-Under the sidebar's head (search ⌘K, Overview ⇧⌘O), right above the list, a `프로젝트 | 태스크` switch picks the list (PRD sidebar-task-lens D-10, B1, B39): 프로젝트 is the projects tree as before, with its raised Needs You and Done, and 태스크 the device's tasks.
-⌘B shows and hides the sidebar, and ⇧⌘B (`Switch Projects and Tasks`; Alt+Shift+B on Windows and Linux; in a browser tab ⌥⇧B on macOS, where Chrome keeps ⇧⌘B, and Ctrl+Alt+Shift+B on Windows and Linux, where it keeps Alt+Shift+B) turns the switch; with the sidebar hidden it shows the sidebar on the other list (B2).
+Under the sidebar's head (search ⌘K, Overview ⇧⌘O), right above the list, a `프로젝트 | 태스크 | PR` switch picks the list (PRD sidebar-task-lens D-10, B1, B39; lane-two-columns B41): 프로젝트 is the projects tree as before, with its raised Needs You and Done, 태스크 the device's tasks, and PR the device's pull requests (see The PR list and the PR card).
+⌘B shows and hides the sidebar, and ⇧⌘B (`Switch sidebar list`; Alt+Shift+B on Windows and Linux; in a browser tab ⌥⇧B on macOS, where Chrome keeps ⇧⌘B, and Ctrl+Alt+Shift+B on Windows and Linux, where it keeps Alt+Shift+B) turns the switch to the next list, 프로젝트, 태스크, PR and round; with the sidebar hidden it shows the sidebar on that list (B2).
 A window starts on 프로젝트, and then the last list and view option chosen stay, through a restart too (B3).
 
 The list follows the rail's front device, every project of it at once, and turns with the rail (B19).
@@ -1336,17 +1371,15 @@ GitHub values that cannot be refreshed stay dimmed with their last-read time in 
 Web owners: `web/src/SessionRecord.tsx`, `web/src/DetailPanel.tsx`, and `web/e2e/session-panel.spec.ts`.
 
 
-### The PRs tool and the PR card
+### The PR list and the PR card
 
-PRs is the rail's second tool, a pull request icon, its hint and lane header `PRs · <project> 전체` (PRD sidebar-task-lens D-17, B26).
-Its head holds the scope chip, `All checkouts` or `<checkout> only`, remembered per Workspace across restarts, then ⚠ while the last GitHub read failed or left a question unanswered, and `열린 PR N`.
-A Workspace saved on the old Work tool (`work` or `agent_sessions`) opens once on PRs, and the rest of its lane (pin, tree, widths) and its View layout stay (B30).
-The rail icon's number is the tool's Needs You rows, the folded lines left out; a session's Needs You is not counted (B29).
+The sidebar's PR list replaces the lane's PRs tool (PRD lane-two-columns D-20, B41); ⇧⌘R and the switch's `PR` open it, and the sidebar keeps it through a restart.
+Its first line reads `PR N`, then ⚠ while the last GitHub read failed or left a question unanswered, and, while a 현황 tile narrowed it, the `<project>만` chip whose `✕` shows every project again.
+A lane saved on the PRs or Memory tool opens with no tool column, the rest of its lane and its View layout as they were (D-10).
 A project with no GitHub remote reads `GitHub 원격 없음` alone.
 
-The PRs tool lists the pull requests of the project that concern the operator: their own, those their Hide sessions made or worked on, those asked of them or of their team for review, and bots'.
-At Home it gathers the device's projects and puts the project's name on each row, and a project on a connected device lists like the rest with the device's name on its rows.
-`<checkout> only` keeps the pull requests that checkout's sessions made or worked on, and with none reads `이 체크아웃의 세션이 만든 PR 없음` with `All checkouts`.
+The PR list lists the pull requests of the rail's device that concern the operator: their own, those their Hide sessions made or worked on, those asked of them or of their team for review, and bots'.
+Every row names its project, and a project on a connected device lists like the rest with the device's name on its rows.
 The core decides the group, the reason and the order (`herdr-core/src/agent_state/work/board.rs`; the rules are `docs/status-model.md`, Pull request groups); the web draws them, and every pull request is in the first group it fits.
 
 The groups, in order, are `Needs You`, `Agent is working`, `Blocked · no agent`, `Waiting`, `Drafts`, `Bots` and `Merging · merged`; the last four start folded, a group with no row is not drawn, and `Needs You` carries the review asks of a team as one folded line, `팀 리뷰 요청 N`, which opens to rows `리뷰 · <팀>에 요청 · N시간째`.
@@ -1372,7 +1405,7 @@ The tool and a card each hold that one demand, and it is released only when the 
 #### The PR card
 
 A card opens in the lane's 보기 slot (PRD sidebar-task-lens D-43, D-50): the Workspace in front, its Agent tab and the keyboard stay where they were, and the slot's head reads `←`, `PR #N · <project>`, `↗` (GitHub) and `✕`.
-A card opens from a row, a 태스크 row's PR mark, the sidebar's PR card, ⌘K, a session's PR chip, Memory's PR button, a session record's PR and Recent Panels, and `이슈 없는 PR N` opens the PRs tool instead; at Home the pull request's Workspace opens with the card in its lane.
+A card opens from a row, a 태스크 row's PR mark, the sidebar's PR card, ⌘K, a session's PR chip, Memory's PR button, a session record's PR and Recent Panels, and `이슈 없는 PR N` opens the PR list instead; at Home the pull request's Workspace opens with the card in its lane.
 A stored `PR #N` tab from an older build is dropped when the app starts, and the rest of the checkout's Views stay; a pull request on a device this core does not read opens on GitHub.
 
 From the top the card reads (B32-B36):
@@ -1822,7 +1855,7 @@ Search continues to index the complete project tree; choosing a folded result br
 
 ### Tools and Overview
 
-The rail's tools are Memory, PRs, Explorer and Changes (History), with the documents button and, while it holds something, the 보기 slot's button above them (PRD lane-two-columns B2, B3); the device's task list is the sidebar's, described in [The sidebar's 태스크 list](#the-sidebars-태스크-list).
+The rail's tools are the Project tool, the Explorer and Changes (History), with the documents button and, while it holds something, the 보기 slot's button above them (PRD lane-two-columns B2, B3); the device's task list is the sidebar's, described in [The sidebar's 태스크 list](#the-sidebars-태스크-list).
 The top row's Overview button opens [Overview](#overview), `Work · Projects · Backlog · History · Usage`, with device and optional project scope for the four device views and global core-machine scope for Usage.
 
 
@@ -2363,13 +2396,13 @@ A refusal reaches only the agent, as an English reason naming the protection and
 The group promises a guardrail, not security (B28).
 
 Memory uses the existing consent and kit; its row shows hook preparation, pending writes and project-scoped failure with Retry, while retaining the confirmed value.
-That Retry applies only to enabling or disabling Memory; card actions stay in the Memory tool with their existing confirmations.
+That Retry applies only to enabling or disabling Memory; card actions stay in the 기억 tab with their existing confirmations.
 Memory promotion PR rows retain their original repository-qualified link after Connections changes; checks, status and agent identity join only that exact URL.
 A legacy promotion whose original repository cannot be proven shows PR verification unavailable and keeps its PR button disabled.
 Turning it off keeps existing cards.
 While the dialog is open its project owns the daemon's single Memory read slot, and the tool rail's project is restored when it closes.
-Open project Memory is one scoped navigation intent that closes the dialog and opens that project's usable checkout with the right lane on its Memory tool; a delayed remote focus changes the lane only on arrival, and refusal leaves the earlier checkout's lane unchanged.
-The shell waits for both the target checkout and its Memory tool; the core's lane call then brings the lane forward, over the agents in a narrow window.
+Open project Memory is one scoped navigation intent that closes the dialog and opens that project's usable checkout with the right lane on the Project tool's 기억 tab; a delayed remote focus changes the lane only on arrival, and refusal leaves the earlier checkout's lane unchanged.
+The shell waits for both the target checkout and its Project tool; the core's lane call then brings the lane forward, over the agents in a narrow window.
 A newer explicit navigation cancels the delayed Memory choice so its later arrival cannot take the screen back.
 Without a usable checkout it gives a local recovery reason.
 All pages use the four interface languages, existing settings rows, system controls, dialog keyboard containment and theme tokens.
@@ -2706,10 +2739,10 @@ Each exception has a dominant convention on Windows and Linux, or a chord the sy
 - The recent project cycle is Ctrl+Shift+` (previous Ctrl+Alt+Shift+`): Alt+Tab is the system's window switcher on Windows and Linux and never reaches an app, so the cycle moves to ` under the rule, the key macOS keeps for its own window cycle.
   Going back adds Alt to the Ctrl+Shift the cycle already holds, the one four-key desktop chord: a held cycle commits when its Ctrl is released, so the rule's Alt+Shift+` could not step back inside it, and GNOME keeps Alt+Shift+` for switching between an app's windows.
 - In a browser tab, Reopen closed tab is Ctrl+Alt+Shift+T: Chrome keeps Alt+Shift+T to focus its toolbar, which keyboard users rely on, and the macOS browser chord ⌥⇧T is those same keys there.
-- In a browser tab, Switch Projects and Tasks is Ctrl+Alt+Shift+B for the same reason: Chrome keeps Alt+Shift+B to focus its bookmarks bar.
+- In a browser tab, Switch sidebar list is Ctrl+Alt+Shift+B for the same reason: Chrome keeps Alt+Shift+B to focus its bookmarks bar.
 - Not yet handled: a browser tab's area cycle is Alt+` and Alt+Shift+` on Windows and Linux (Chrome keeps Ctrl+Tab, as it keeps ⌃Tab on macOS), and stock GNOME and KDE take both to switch between an app's windows, so on those desktops the cycle reaches the page only once the desktop's keys are changed or the cycle is bound to another chord in Settings, Shortcuts.
 - Move to Trash in the Explorer is Delete, as in Windows Explorer and the Linux file managers.
-- Copy Relative Path is Alt+Shift+H: the rule would give it Copy Path's Alt+Shift+C, VS Code's own chord for it is a two-step sequence (Ctrl+K, then Ctrl+Shift+C) that the registry cannot hold, and Alt+Shift+R opens the PRs tool.
+- Copy Relative Path is Alt+Shift+H: the rule would give it Copy Path's Alt+Shift+C, VS Code's own chord for it is a two-step sequence (Ctrl+K, then Ctrl+Shift+C) that the registry cannot hold, and Alt+Shift+R opens the PR list.
   A browser tab has neither path chord, because Chrome keeps ⌥⌘C (Inspect); the menu items work there.
 - Cut, Copy and Paste in the Explorer are the system's own clipboard chords: ⌘X, ⌘C and ⌘V on a Mac, Ctrl+X, Ctrl+C and Ctrl+V on Windows and Linux.
   The tree answers them only while it holds the keyboard, so a terminal keeps ⌘C for its selection and Ctrl+C for the interrupt, and a text field keeps its own.
@@ -2770,11 +2803,12 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Add to backlog | `⇧⌘M` | `Alt+Shift+M` | `⌥⇧M` | `Alt+Shift+M` |
 | Focus sidebar | `⇧⌘P` | `Alt+Shift+P` | `⇧⌘P` | `Alt+Shift+P` |
 | Toggle left sidebar | `⌘B` | `Ctrl+Shift+B` | `⌘B` | `Ctrl+Shift+B` |
-| Switch Projects and Tasks (exception) | `⇧⌘B` | `Alt+Shift+B` | `⌥⇧B` | `Ctrl+Alt+Shift+B` |
+| Switch sidebar list (exception) | `⇧⌘B` | `Alt+Shift+B` | `⌥⇧B` | `Ctrl+Alt+Shift+B` |
 | Toggle device rail | none | none | none | none |
 | Toggle right lane | `⌘E` | `Ctrl+Shift+E` | `⌘E` | `Ctrl+Shift+E` |
-| Toggle Memory tool | `⇧⌘L` | `Alt+Shift+L` | `⇧⌘L` | `Alt+Shift+L` |
-| Toggle PRs tool | `⇧⌘R` | `Alt+Shift+R` | `⌥⇧R` | `Alt+Shift+R` |
+| Toggle Project tool | none | none | none | none |
+| Open Project Memory | `⇧⌘L` | `Alt+Shift+L` | `⇧⌘L` | `Alt+Shift+L` |
+| Open PR list | `⇧⌘R` | `Alt+Shift+R` | `⌥⇧R` | `Alt+Shift+R` |
 | Toggle documents | none | none | none | none |
 | Toggle Changes tool | `⇧⌘G` | `Alt+Shift+G` | `⇧⌘G` | `Alt+Shift+G` |
 | Toggle Explorer tool | `⇧⌘E` | `Alt+Shift+E` | `⇧⌘E` | `Alt+Shift+E` |

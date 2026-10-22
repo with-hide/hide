@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ExternalLinkIcon, FileTextIcon, GitPullRequestIcon, ListChecksIcon, WaypointsIcon, XIcon } from "lucide-react";
+import { ArrowLeftIcon, CoinsIcon, ExternalLinkIcon, FileTextIcon, FolderGit2Icon, GitPullRequestIcon, ListChecksIcon, WaypointsIcon, XIcon } from "lucide-react";
 import { cn } from "./lib/utils";
 import { PR_LOOK } from "./prMark";
 import type { Actions } from "./actions";
@@ -7,6 +7,7 @@ import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { MissionMap } from "./MissionMap";
 import { PlanMap } from "./PlanMap";
+import { ProjectCostView, WorktreesView } from "./ProjectDetail";
 import { missionOf } from "./missions";
 import { PrCardView } from "./PrCard";
 import { SlotSessionRecord } from "./SessionRecord";
@@ -18,8 +19,9 @@ import { useShellStore } from "./store";
 
 // The lane's 보기 slot (PRD sidebar-task-lens D-50, B46-B49): one pull
 // request's card, one session's record, a mission's map (PRD
-// software-factory-conductor D-14) or a session's plan (PRD hide-plan B11),
-// a window's and no checkout's, so
+// software-factory-conductor D-14), a session's plan (PRD hide-plan B11),
+// or a project's worktrees or cost (PRD lane-two-columns B30, B31), a
+// window's and no checkout's, so
 // it stays when the Agent tab or the checkout changes. The core keeps what
 // it holds and its history; this draws the item in front under the slot's
 // head of ←, its name, GitHub for a card, and ✕.
@@ -46,6 +48,10 @@ function useItemTitle(item: DetailItem | null): string {
       return t("detail.pr", { number: item.number, project: project?.label ?? "" });
     }
     if (item.kind === "mission") return t("detail.mission", { title: missionOf(s.rest, item.mission)?.title ?? item.mission });
+    if (item.kind === "worktrees" || item.kind === "cost") {
+      const project = catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id)?.label ?? "";
+      return t(item.kind === "worktrees" ? "projectTool.worktrees.title" : "projectTool.cost.title", { project });
+    }
     const title = sessionTitle(s, item.session);
     if (item.kind === "plan") return title ? t("detail.plan", { title }) : t("detail.planUntitled");
     return title ? t("detail.record", { title }) : t("detail.recordUntitled");
@@ -64,6 +70,8 @@ export function DetailIcon({ item, className }: { item: DetailItem; className?: 
     : null);
   if (item.kind === "mission") return <WaypointsIcon aria-hidden="true" className={className} data-detail-mark="mission" />;
   if (item.kind === "plan") return <ListChecksIcon aria-hidden="true" className={className} data-detail-mark="plan" />;
+  if (item.kind === "worktrees") return <FolderGit2Icon aria-hidden="true" className={className} data-detail-mark="worktrees" />;
+  if (item.kind === "cost") return <CoinsIcon aria-hidden="true" className={className} data-detail-mark="cost" />;
   if (item.kind !== "pull_request") return <FileTextIcon aria-hidden="true" className={className} />;
   const look = state ? PR_LOOK[state] : null;
   const Icon = look?.icon ?? GitPullRequestIcon;
@@ -87,7 +95,7 @@ export function DetailPanel({ actions }: { actions: Actions }) {
     return catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id)?.pull_requests?.find((row) => row.number === item.number)?.url ?? null;
   });
   if (!item) return null;
-  const key = item.kind === "pull_request" ? `pr:${item.workspace_id}:${item.number}` : item.kind === "mission" ? `mission:${item.mission}` : `${item.kind}:${workKey(item.session)}`;
+  const key = item.kind === "pull_request" ? `pr:${item.workspace_id}:${item.number}` : item.kind === "mission" ? `mission:${item.mission}` : item.kind === "record" || item.kind === "plan" ? `${item.kind}:${workKey(item.session)}` : `${item.kind}:${item.workspace_id}`;
   return (
     // The slot reads as a page on the lane: its head keeps the lane's surface
     // and what it holds, a card or a record alike, sits on the page's.
@@ -127,7 +135,11 @@ export function DetailPanel({ actions }: { actions: Actions }) {
             ? <MissionMap missionId={item.mission} actions={actions} />
             : item.kind === "plan"
               ? <PlanMap session={item.session} actions={actions} />
-              : <SlotSessionRecord actions={actions} target={item.session} />}
+              : item.kind === "worktrees"
+                ? <WorktreesView workspaceId={item.workspace_id} actions={actions} />
+                : item.kind === "cost"
+                  ? <ProjectCostView workspaceId={item.workspace_id} actions={actions} />
+                  : <SlotSessionRecord actions={actions} target={item.session} />}
       </div>
     </aside>
   );
