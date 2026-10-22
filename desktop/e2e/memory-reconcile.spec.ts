@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, type ElectronApplication } from "@playwright/test";
 import { startHerdr } from "../../web/e2e/herdr-fixture";
-import { countSent, setLanePinned, showProjectRow, showTool } from "../../web/e2e/wire";
+import { countSent, setLanePinned, showProjectMemory, showProjectRow } from "../../web/e2e/wire";
 import { isolate, launch, fitWindow, screenshot, test } from "./fixture";
 import { seedReconciliation } from "./memory-reconcile-fixture";
 import { progressGithub } from "./memory-progress-fixture";
@@ -29,7 +29,7 @@ test("Memory compares sources, limits a batch and groups a confirmed PR", async 
     const sent = new Map<string, Record<string, unknown>>();
     countSent(page, sent);
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click();
-    await showTool(page, "memory");
+    await showProjectMemory(page);
     await expect(page.locator('[data-memory="off"]')).toBeVisible();
     await page.locator('[data-memory-switch="off"]').click();
     await expect(page.locator('[data-memory="on"]')).toBeVisible({ timeout: 30000 });
@@ -37,8 +37,8 @@ test("Memory compares sources, limits a batch and groups a confirmed PR", async 
     await page.reload();
     await expect(page.locator('[data-workspace-screen]')).toBeVisible();
     await expect(page.locator('[data-connection]')).toHaveCount(0);
-    await showTool(page, "memory");
-    const tab = page.locator('[data-lane="memory"]');
+    await showProjectMemory(page);
+    const tab = page.locator('[data-lane="project"]');
     await expect(tab.locator('[data-memory="on"]')).toBeVisible();
     await expect(tab.locator('[data-memory-pr-group="72"]')).toContainText("m9 · m10");
     await expect(tab).toContainText("Personal");
@@ -79,15 +79,15 @@ test("Memory compares sources, limits a batch and groups a confirmed PR", async 
     await expect(page.locator("[data-overview-page]")).toHaveCount(0);
     // Return to this Memory, then the light/narrow state.
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click();
-    await showTool(page, "memory");
+    await showProjectMemory(page);
     await page.evaluate(() => { document.documentElement.classList.remove("dark"); document.documentElement.classList.add("light"); });
     await fitWindow(app, { width: 900, height: 760 });
-    await showTool(page, "memory");
+    await showProjectMemory(page);
     await screenshot(page, "memory-compact-light-narrow");
     // Pinned, the lane has a divider that proves its minimum width (PRD
     // right-lane B6).
     await fitWindow(app, { width: 1440, height: 900 });
-    await showTool(page, "memory");
+    await showProjectMemory(page);
     await setLanePinned(page, true);
     const divider = page.locator('[data-lane-divider="lane"]');
     for (let step = 0; step < 6; step++) await divider.press("ArrowRight");
@@ -98,7 +98,7 @@ test("Memory compares sources, limits a batch and groups a confirmed PR", async 
       await page.locator(`[data-language-option="${language}"]`).click();
       await expect(page.locator("html")).toHaveAttribute("lang", language);
       await page.keyboard.press("Escape");
-      await showTool(page, "memory");
+      await showProjectMemory(page);
       await expect.poll(() => tab.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
       await expect(tab.locator('[data-memory-pr-group="72"]')).toContainText("72");
       await tab.locator('[data-memory-cards] [data-memory-card="4"]').scrollIntoViewIfNeeded();

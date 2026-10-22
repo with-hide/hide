@@ -362,6 +362,7 @@ fn limits_and_ledger_publications_preserve_each_others_values() {
     runtime.ingest_ledger(Publication::prepare(
         Report {
             projection: Some(std::sync::Arc::new(projection)),
+            projects: Default::default(),
             progress: Vec::new(),
             failure: None,
             price_failure: None,
@@ -431,6 +432,7 @@ fn limits_and_ledger_publications_preserve_each_others_values() {
     let own = &runtime.snapshot.usage.nodes[0];
     assert!(
         !runtime.ingest_ledger(Publication {
+            projects: Default::default(),
             history: own.history.clone(),
             agents: own
                 .agents
@@ -446,6 +448,7 @@ fn limits_and_ledger_publications_preserve_each_others_values() {
             .is_none()
     );
     assert!(runtime.ingest_ledger(Publication {
+        projects: Default::default(),
         history: None,
         agents: vec![(
             "claude".into(),

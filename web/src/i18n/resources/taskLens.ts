@@ -1,11 +1,12 @@
 import type { Catalog, Catalogs } from "../schema";
 
-// The sidebar's 프로젝트 | 태스크 switch and 태스크 list, the lane's 보기 slot
-// and the PRs tool (PRD sidebar-task-lens).
+// The sidebar's 프로젝트 | 태스크 | PR switch and 태스크 list, the lane's 보기
+// slot and the PR list (PRD sidebar-task-lens; lane-two-columns B41).
 export const taskLensEnglish = {
   "taskLens.switch": "Sidebar list",
   "taskLens.lens.projects": "Projects",
   "taskLens.lens.tasks": "Tasks",
+  "taskLens.lens.prs": "PRs",
   "taskLens.count": "Tasks {{count}}",
   "taskLens.countLoading": "Tasks …",
   "taskLens.view": "Group tasks",
@@ -54,6 +55,7 @@ const ko: Messages = {
   "taskLens.switch": "사이드바 목록",
   "taskLens.lens.projects": "프로젝트",
   "taskLens.lens.tasks": "태스크",
+  "taskLens.lens.prs": "PR",
   "taskLens.count": "태스크 {{count}}",
   "taskLens.countLoading": "태스크 …",
   "taskLens.view": "태스크 묶기",
@@ -100,6 +102,7 @@ const zh: Messages = {
   "taskLens.switch": "侧栏列表",
   "taskLens.lens.projects": "项目",
   "taskLens.lens.tasks": "任务",
+  "taskLens.lens.prs": "PR",
   "taskLens.count": "任务 {{count}}",
   "taskLens.countLoading": "任务 …",
   "taskLens.view": "任务分组",
@@ -146,6 +149,7 @@ const ja: Messages = {
   "taskLens.switch": "サイドバーの一覧",
   "taskLens.lens.projects": "プロジェクト",
   "taskLens.lens.tasks": "タスク",
+  "taskLens.lens.prs": "PR",
   "taskLens.count": "タスク {{count}}",
   "taskLens.countLoading": "タスク …",
   "taskLens.view": "タスクのまとめ方",

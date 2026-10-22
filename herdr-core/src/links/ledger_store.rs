@@ -1910,6 +1910,38 @@ impl LinkStore {
                 held = parent;
             }
         }
+        // The open asks by session, for the Project tool's 할 일 (PRD
+        // lane-two-columns B34): one bounded grouped read, like the counts.
+        let asks = self
+            .connection
+            .prepare(
+                "SELECT device,agent,id,count(*) FROM ledger_missed \
+            WHERE status=?1 AND kind=?3 GROUP BY device,agent,id LIMIT ?2",
+            )
+            .map_err(failed)?
+            .query_map(
+                params![
+                    encoded(&MissedStatus::Open)?,
+                    SUMMARY_SESSION_LIMIT as i64 + 1,
+                    encoded(&MissedKind::Ask)?
+                ],
+                |r| {
+                    Ok((
+                        SessionIdentity {
+                            device_id: r.get(0)?,
+                            agent: r.get(1)?,
+                            session_id: r.get(2)?,
+                        },
+                        r.get::<_, i64>(3)? as usize,
+                    ))
+                },
+            )
+            .map_err(failed)?
+            .collect::<Result<BTreeMap<_, _>, _>>()
+            .map_err(failed)?;
+        if asks.len() > SUMMARY_SESSION_LIMIT {
+            return Err("ledger_summary_capacity".into());
+        }
         let sessions = self
             .all_sessions()?
             .into_iter()
@@ -1965,6 +1997,7 @@ impl LinkStore {
                 open_missed: counts.get(&identity).copied().unwrap_or(0),
                 subtree_open_missed: subtree.get(&identity).copied().unwrap_or(0),
                 missed,
+                open_asks: asks.get(&identity).copied().unwrap_or(0),
                 session: identity,
             });
         }

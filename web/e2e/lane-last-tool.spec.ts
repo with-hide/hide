@@ -7,8 +7,9 @@ import { chord, commandLabel, mod } from "./chords";
 import { chooseLane, enterWorkspace, screenshot, showExplorer } from "./wire";
 
 // A lane closed whole keeps its columns for the next ⌘E, a lane whose last
-// column closed comes back on the Explorer, and ⇧⌘L/R/G open its project and
-// checkout tools (PRD lane-two-columns B14, B15, B24). Each test starts one
+// column closed comes back on the Explorer, ⇧⌘L opens the Project tool's 기억,
+// ⇧⌘R the sidebar's PR list and ⇧⌘G Changes (PRD lane-two-columns B14, B15,
+// B24, B25). Each test starts one
 // stack and asserts one contract.
 
 const screen = (page: Page) => page.locator("[data-workspace-screen]");
@@ -36,34 +37,34 @@ test("⌘E reopens the tool a whole-lane close kept, and the Explorer for a lane
     await closed(page);
 
     // The rail icon hints show their chord after the name and scope.
-    await page.locator('[data-lane-tool="memory"]').hover();
-    await expect(page.locator('[data-slot="tooltip-content"]')).toContainText(commandLabel("toggle_lane_memory"));
+    await page.locator('[data-lane-tool="changes"]').hover();
+    await expect(page.locator('[data-slot="tooltip-content"]')).toContainText(commandLabel("toggle_lane_changes"));
     await screenshot(page, "lane-last-tool-rail-hint");
-    await page.locator('[data-lane-tool="memory"]').click();
-    await shows(page, "memory");
-    await screenshot(page, "lane-last-tool-memory-hint");
+    await page.locator('[data-lane-tool="project"]').click();
+    await shows(page, "project");
+    await screenshot(page, "lane-last-tool-project");
 
-    // ⌘E and the path menu close the lane whole, so the next ⌘E brings Memory back (B15).
+    // ⌘E and the path menu close the lane whole, so the next ⌘E brings the Project tool back (B15).
     await page.keyboard.press(chord("toggle_lane"));
     await closed(page);
     await page.keyboard.press(chord("toggle_lane"));
-    await shows(page, "memory");
+    await shows(page, "project");
     await chooseLane(page);
     await closed(page);
     await page.keyboard.press(chord("toggle_lane"));
-    await shows(page, "memory");
-    await screenshot(page, "lane-last-tool-reopened-memory");
+    await shows(page, "project");
+    await screenshot(page, "lane-last-tool-reopened-project");
 
     // The path menu's Show right lane returns to it too.
     await page.keyboard.press(chord("toggle_lane"));
     await closed(page);
     await chooseLane(page);
-    await shows(page, "memory");
+    await shows(page, "project");
 
     // The icon, and the column's own ✕, close the tool column; with no column
     // left the lane closes, and the next ⌘E has nothing to bring back, so it
     // opens the Explorer (B14, B15).
-    await page.locator('[data-lane-tool="memory"]').click();
+    await page.locator('[data-lane-tool="project"]').click();
     await closed(page);
     await page.keyboard.press(chord("toggle_lane"));
     await shows(page, "explorer");
@@ -106,7 +107,7 @@ test("⌘E bringing the documents back hands the keyboard to the shown document"
   }
 });
 
-test("⇧⌘L, ⇧⌘R and ⇧⌘G open Memory, PRs and Changes and close the tool showing, ⌥⌘1-4 do nothing, and the last tool survives a restart (B24)", async ({ page }) => {
+test("⇧⌘L opens the Project's 기억, ⇧⌘R the sidebar's PR list, ⇧⌘G Changes and closes it showing, ⌥⌘1-4 do nothing, and the last tool survives a restart (B24, B25)", async ({ page }) => {
   test.setTimeout(120_000);
   await page.setViewportSize({ width: 1600, height: 900 });
   const herdr = await startHerdr({ agents: false });
@@ -114,13 +115,22 @@ test("⇧⌘L, ⇧⌘R and ⇧⌘G open Memory, PRs and Changes and close the to
   try {
     daemon = await startHided(herdr, "lane-tool-chords");
     await open(page, daemon);
-    for (const [tool, key] of [["memory", "L"], ["prs", "R"], ["changes", "G"]] as const) {
-      const id = `toggle_lane_${tool}` as const;
-      expect(commandLabel(id), tool).toMatch(new RegExp(`${key}$`));
-      await page.keyboard.press(chord(id));
-      await shows(page, tool);
-      await expect(page.locator(`[data-lane-tool="${tool}"]`)).toHaveAttribute("aria-pressed", "true");
-    }
+    expect(commandLabel("open_project_memory")).toMatch(/L$/);
+    await page.keyboard.press(chord("open_project_memory"));
+    await shows(page, "project");
+    await expect(page.locator('aside[data-lane="project"] [data-project-tab="memory"]')).toHaveAttribute("aria-selected", "true");
+    // ⇧⌘L again leaves the tool on its 기억; it opens, never toggles.
+    await page.keyboard.press(chord("open_project_memory"));
+    await shows(page, "project");
+    expect(commandLabel("open_sidebar_prs")).toMatch(/R$/);
+    await page.keyboard.press(chord("open_sidebar_prs"));
+    await expect(page.locator('[data-sidebar-lens-option="prs"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("[data-sidebar-prs]")).toBeVisible();
+    await shows(page, "project");
+    expect(commandLabel("toggle_lane_changes")).toMatch(/G$/);
+    await page.keyboard.press(chord("toggle_lane_changes"));
+    await shows(page, "changes");
+    await expect(page.locator('[data-lane-tool="changes"]')).toHaveAttribute("aria-pressed", "true");
     // The loop ended on Changes, so its chord closes the tool column, and
     // with it the lane; ⌘E then opens the Explorer, and ⇧⌘G brings Changes.
     await page.keyboard.press(chord("toggle_lane_changes"));

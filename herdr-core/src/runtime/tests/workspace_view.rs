@@ -537,41 +537,30 @@ fn a_file_open_shows_the_documents_and_an_agent_choice_moves_no_lane_state() {
     assert_eq!(lane(&runtime), (true, true, None, true));
 }
 
-/// PRD sidebar-task-lens B26: the PRs tool's checkout filter is the
-/// Workspace's own, sent with the tool, and a tool this build does not know
-/// (the removed Work tool's name included) is refused with the lane unchanged.
+/// PRD lane-two-columns D-20: a tool this build does not know, the removed
+/// Memory, PRs and Work tools' names included, is refused with the lane
+/// unchanged.
 #[test]
-fn the_prs_checkout_filter_is_stored_and_an_unknown_tool_is_refused() {
+fn a_removed_tool_is_refused_and_the_lane_stays() {
     let (runtime, _checkout_id, directory) = strip_checkout("lane-work");
     let (_views, state) = views_path("lane-work");
     let mut runtime = with_views(runtime, &state);
     with_tabs(&mut runtime, &directory);
-    let prs = |runtime: &Runtime| {
-        runtime
-            .snapshot
-            .workspace_view
-            .as_ref()
-            .expect("a front Workspace")
-            .prs
-    };
-    assert!(!prs(&runtime).only_checkout);
-    layout(
-        &mut runtime,
-        serde_json::json!({"tool": "prs", "prs_only_checkout": true}),
-    );
-    assert_eq!(lane(&runtime).2, Some(Tool::Prs));
-    assert!(prs(&runtime).only_checkout);
-
-    runtime.dispatch_json(&explorer_event(
-        "workspace_view",
-        serde_json::json!({"tool": "work"}),
-    ));
-    assert!(runtime.snapshot.status.last_error.is_some());
-    assert_eq!(
-        lane(&runtime).2,
-        Some(Tool::Prs),
-        "a refused call changes nothing, the tool included"
-    );
+    layout(&mut runtime, serde_json::json!({"tool": "project"}));
+    assert_eq!(lane(&runtime).2, Some(Tool::Project));
+    for retired in ["work", "memory", "prs"] {
+        runtime.snapshot.status.last_error = None;
+        runtime.dispatch_json(&explorer_event(
+            "workspace_view",
+            serde_json::json!({"tool": retired}),
+        ));
+        assert!(runtime.snapshot.status.last_error.is_some(), "{retired}");
+        assert_eq!(
+            lane(&runtime).2,
+            Some(Tool::Project),
+            "a refused call changes nothing, the tool included"
+        );
+    }
 }
 
 /// PRD right-lane D-12, B2, B5, B7, B11, B20; lane-two-columns B14, B15,
@@ -599,14 +588,14 @@ fn each_lane_field_ends_at_its_sent_value_and_a_repeat_converges() {
     )));
 
     let before = called(&runtime);
-    layout(&mut runtime, serde_json::json!({"tool": "prs"}));
-    assert_eq!(lane(&runtime), (true, true, Some(Tool::Prs), true));
+    layout(&mut runtime, serde_json::json!({"tool": "project"}));
+    assert_eq!(lane(&runtime), (true, true, Some(Tool::Project), true));
     assert_eq!(called(&runtime), before + 1);
     // The same tool again changes nothing stored but is a call the page
     // shows, so it reports a change.
     assert!(runtime.dispatch_json(&explorer_event(
         "workspace_view",
-        serde_json::json!({"tool": "prs"})
+        serde_json::json!({"tool": "project"})
     )));
     assert_eq!(called(&runtime), before + 2);
 
@@ -616,11 +605,11 @@ fn each_lane_field_ends_at_its_sent_value_and_a_repeat_converges() {
         (true, true, None, true),
         "a tool's close leaves the documents (B14)"
     );
-    layout(&mut runtime, serde_json::json!({"tool": "memory"}));
+    layout(&mut runtime, serde_json::json!({"tool": "project"}));
     layout(&mut runtime, serde_json::json!({"open": false}));
     assert_eq!(
         lane(&runtime),
-        (false, true, Some(Tool::Memory), true),
+        (false, true, Some(Tool::Project), true),
         "closing the lane keeps both columns and the pin (B15)"
     );
     assert_eq!(called(&runtime), before + 3, "a close is no call");
@@ -642,12 +631,12 @@ fn each_lane_field_ends_at_its_sent_value_and_a_repeat_converges() {
     layout(&mut runtime, serde_json::json!({"open": true}));
     assert_eq!(
         lane(&runtime),
-        (true, true, Some(Tool::Memory), true),
+        (true, true, Some(Tool::Project), true),
         "the reopen brings both columns back"
     );
     assert_eq!(active_label(&runtime).as_deref(), Some("notes.md"));
     layout(&mut runtime, serde_json::json!({"documents": false}));
-    assert_eq!(lane(&runtime), (true, false, Some(Tool::Memory), true));
+    assert_eq!(lane(&runtime), (true, false, Some(Tool::Project), true));
 
     layout(
         &mut runtime,
@@ -686,7 +675,7 @@ fn each_lane_field_ends_at_its_sent_value_and_a_repeat_converges() {
             saved.document_width,
             saved.panel_width
         ),
-        (true, false, Some(Tool::Memory), true, Some(700), Some(440))
+        (true, false, Some(Tool::Project), true, Some(700), Some(440))
     );
     let written = std::fs::read_to_string(&state).unwrap();
     for retired in [
@@ -731,9 +720,9 @@ fn a_closed_lane_comes_back_in_the_shape_it_had_across_a_restart() {
         "with a document and no column, the documents come back"
     );
 
-    layout(&mut runtime, serde_json::json!({"tool": "memory"}));
+    layout(&mut runtime, serde_json::json!({"tool": "project"}));
     layout(&mut runtime, serde_json::json!({"open": false}));
-    assert_eq!(lane(&runtime), (false, true, Some(Tool::Memory), false));
+    assert_eq!(lane(&runtime), (false, true, Some(Tool::Project), false));
     layout(&mut runtime, serde_json::json!({"tool": "changes"}));
     assert_eq!(
         lane(&runtime),
@@ -831,18 +820,18 @@ fn an_open_leaves_the_tool_column_as_it_is() {
     };
     layout(
         &mut runtime,
-        serde_json::json!({"tool": "memory", "documents": false}),
+        serde_json::json!({"tool": "project", "documents": false}),
     );
     runtime.dispatch_json(&page("not an address"));
     assert!(runtime.snapshot.status.last_error.is_some());
     assert_eq!(
         lane(&runtime),
-        (true, false, Some(Tool::Memory), false),
+        (true, false, Some(Tool::Project), false),
         "refused"
     );
     runtime.dispatch_json(&page("https://example.test/page"));
     assert_eq!(runtime.snapshot.status.last_error, None);
-    assert_eq!(lane(&runtime), (true, true, Some(Tool::Memory), false));
+    assert_eq!(lane(&runtime), (true, true, Some(Tool::Project), false));
 }
 
 /// PRD right-lane B16, D-13; lane-two-columns B6, B8: a reveal shows the
@@ -876,7 +865,7 @@ fn a_reveal_or_a_linked_folder_shows_the_explorer_and_a_linked_file_the_document
         "a reveal opens nothing"
     );
 
-    layout(&mut runtime, serde_json::json!({"tool": "memory"}));
+    layout(&mut runtime, serde_json::json!({"tool": "project"}));
     let checkout_id = runtime
         .snapshot
         .navigator
@@ -893,7 +882,7 @@ fn a_reveal_or_a_linked_folder_shows_the_explorer_and_a_linked_file_the_document
     assert_eq!(runtime.snapshot.status.last_error, None);
     assert_eq!(
         lane(&runtime),
-        (true, true, Some(Tool::Memory), false),
+        (true, true, Some(Tool::Project), false),
         "a linked file shows the documents and leaves the tool"
     );
     assert_eq!(called(&runtime), before + 3);
@@ -934,9 +923,7 @@ fn the_lane_drives_the_panel_the_readers_gate_on() {
     };
     layout(&mut runtime, serde_json::json!({"tool": "changes"}));
     assert_eq!(panel(&runtime), (true, RightPanelSection::Changes));
-    layout(&mut runtime, serde_json::json!({"tool": "prs"}));
-    assert_eq!(panel(&runtime), (true, RightPanelSection::AgentSessions));
-    layout(&mut runtime, serde_json::json!({"tool": "memory"}));
+    layout(&mut runtime, serde_json::json!({"tool": "project"}));
     assert_eq!(panel(&runtime), (true, RightPanelSection::Memory));
     layout(&mut runtime, serde_json::json!({"tool": "explorer"}));
     assert_eq!(panel(&runtime), (true, RightPanelSection::Explorer));
@@ -1662,7 +1649,7 @@ fn an_explicit_file_visit_supersedes_a_delayed_memory_visit() {
     assert_eq!(active_label(&runtime).as_deref(), Some("notes.md"));
     assert_ne!(
         runtime.snapshot.workspace_view.as_ref().unwrap().tool,
-        Some(Tool::Memory)
+        Some(Tool::Project)
     );
     assert!(
         runtime

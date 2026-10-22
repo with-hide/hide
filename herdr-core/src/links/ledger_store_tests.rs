@@ -2593,6 +2593,17 @@ fn an_ask_waits_in_the_record_and_never_reaches_the_backlogs_missed_work() {
             .collect::<Vec<_>>(),
         [MissedKind::Problem]
     );
+    // The summary still says the session waits on the operator, for the
+    // Project tool's 할 일 (PRD lane-two-columns B34), until an answer.
+    assert_eq!(mine.open_asks, 1);
+    request(&mut store, 2, "범위는 Q4 전체로");
+    end(&mut store, 2, TurnJudgment::default());
+    let summaries = store.ledger_summaries(&project.key).unwrap();
+    let mine = summaries
+        .iter()
+        .find(|summary| summary.session == session())
+        .unwrap();
+    assert_eq!(mine.open_asks, 0);
 }
 
 /// Only Claude Code and Codex have `/goal`; the same words typed to another

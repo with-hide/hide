@@ -5,6 +5,7 @@ import { overviewHistoryCatalogs, overviewHistoryEnglish } from "../overviewHist
 import { overviewGraphCatalogs, overviewGraphEnglish } from "../overviewGraphMessages";
 import { menusCatalogs, menusEnglish } from "./resources/menus";
 import { projectSettingsCatalogs, projectSettingsEnglish } from "./resources/projectSettings";
+import { projectToolCatalogs, projectToolEnglish } from "./resources/projectTool";
 import { usageCatalogs, usageEnglish } from "./resources/usage";
 import { commandsCatalogs, commandsEnglish } from "./resources/commands";
 import { agentSessionsCatalogs, agentSessionsEnglish } from "./resources/agentSessions";
@@ -99,6 +100,7 @@ export const english = {
   ...firstRunEnglish,
   ...memoryEnglish,
   ...projectSettingsEnglish,
+  ...projectToolEnglish,
 } as const;
 
 export type MessageKey = keyof typeof english;
@@ -155,6 +157,7 @@ export const catalogs = {
     ...firstRunCatalogs.ko,
     ...memoryCatalogs.ko,
     ...projectSettingsCatalogs.ko,
+    ...projectToolCatalogs.ko,
   },
   "zh-CN": {
     ...groupTabsCatalogs["zh-CN"],
@@ -206,6 +209,7 @@ export const catalogs = {
     ...firstRunCatalogs["zh-CN"],
     ...memoryCatalogs["zh-CN"],
     ...projectSettingsCatalogs["zh-CN"],
+    ...projectToolCatalogs["zh-CN"],
   },
   ja: {
     ...groupTabsCatalogs.ja,
@@ -257,5 +261,6 @@ export const catalogs = {
     ...firstRunCatalogs.ja,
     ...memoryCatalogs.ja,
     ...projectSettingsCatalogs.ja,
+    ...projectToolCatalogs.ja,
   },
 } satisfies Catalogs<typeof english>;

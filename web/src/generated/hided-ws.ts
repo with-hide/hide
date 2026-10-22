@@ -209,6 +209,14 @@ export interface NodeUsage {
   node: string;
   agents: AgentUsage[];
   history: UsageHistory | null;
+  /**
+   * Each of the node's projects' last seven days of cost (PRD lane-two-columns B31): absent until the first build succeeds, so a cost not read yet is not drawn as zero (B33); a project that ran no priced call is not listed. Amounts are millionths of a dollar.
+   */
+  projects?: ProjectCost[];
+  /**
+   * The latest build of projects failed; the last built list stays. Absent otherwise.
+   */
+  projects_failed?: boolean;
 }
 export interface AgentUsage {
   agent: string;
@@ -412,6 +420,42 @@ export interface UsageShare {
    * @maxItems 32
    */
   providers: string[];
+}
+export interface ProjectCost {
+  workspace_id: string;
+  micro_usd: number;
+  /**
+   * @maxItems 7
+   */
+  days: {
+    date: string;
+    micro_usd: number;
+  }[];
+  /**
+   * @maxItems 16
+   */
+  models: {
+    agent: string;
+    model: string | null;
+    micro_usd: number;
+  }[];
+  /**
+   * @maxItems 3
+   */
+  sessions: {
+    agent: string;
+    session_id: string;
+    micro_usd: number;
+  }[];
+  agents: {
+    agent: string;
+    micro_usd: number;
+  }[];
+  unpriced_agents: string[];
+  partial: boolean;
+  waiting: boolean;
+  stale: boolean;
+  limited: boolean;
 }
 export interface ClientEvent {
   schema_version: 2;

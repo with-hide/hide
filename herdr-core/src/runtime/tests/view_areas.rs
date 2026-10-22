@@ -1662,7 +1662,7 @@ fn a_schema_1_views_file_migrates_into_one_area() {
     );
     let written: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
-    assert_eq!(written["schema_version"], 4);
+    assert_eq!(written["schema_version"], 5);
 }
 
 /// Contract 3.1, B19: the documents on screen ride their own section, each
@@ -2230,7 +2230,7 @@ fn every_way_the_slot_comes_forward_is_a_viewing_column_call() {
             view.lane_called_side,
         )
     };
-    layout(&mut runtime, serde_json::json!({"tool": "prs"}));
+    layout(&mut runtime, serde_json::json!({"tool": "project"}));
     let (_, _, tool_call, _) = called(&runtime);
     for (step, event, payload) in [
         (
@@ -2262,7 +2262,7 @@ fn every_way_the_slot_comes_forward_is_a_viewing_column_call() {
         );
         assert_eq!(
             (open, tool, side),
-            (true, Some(Tool::Prs), LaneCallSide::View),
+            (true, Some(Tool::Project), LaneCallSide::View),
             "{step}"
         );
         assert!(runtime.snapshot.ui_state.detail.shown, "{step}");

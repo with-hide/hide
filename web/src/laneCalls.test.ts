@@ -11,7 +11,7 @@ import { NO_CALLS_SEEN, type LaneSide, type Tool } from "./workspace";
 // open the viewing column's, whether or not the tool changed.
 
 const view = (lane_called: number, lane_calls: number, lane_called_side: LaneSide, tool: Tool | null) => ({
-  device_id: "local", path: "/p", open: true, documents: true, tool, pinned: false, prs: { only_checkout: false },
+  device_id: "local", path: "/p", open: true, documents: true, tool, pinned: false, 
   document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called, lane_calls, lane_called_side,
 });
 

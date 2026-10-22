@@ -37,6 +37,13 @@ fn the_lens_and_view_option_are_kept_and_a_hidden_sidebar_opens_on_the_other_len
         serde_json::json!({"view": "project"})
     ));
     assert_eq!(runtime.snapshot.ui_state.task_view, TaskView::Project);
+    // The PR list is the third lens (PRD lane-two-columns B41).
+    assert!(event(
+        &mut runtime,
+        "sidebar_lens_set",
+        serde_json::json!({"lens": "prs"})
+    ));
+    assert_eq!(runtime.snapshot.ui_state.sidebar_lens, SidebarLens::Prs);
     event(
         &mut runtime,
         "sidebar_lens_set",
@@ -45,7 +52,7 @@ fn the_lens_and_view_option_are_kept_and_a_hidden_sidebar_opens_on_the_other_len
     assert!(runtime.snapshot.status.last_error.is_some());
     assert_eq!(
         runtime.snapshot.ui_state.sidebar_lens,
-        SidebarLens::Tasks,
+        SidebarLens::Prs,
         "a lens this build does not know changes nothing"
     );
 }

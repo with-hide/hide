@@ -21,7 +21,8 @@ import { Button } from "./components/ui/button";
 import { Keycap } from "./components/ui/keycap";
 import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/entry-menu";
 import { PartsMark } from "./components/pr-mark";
-import { archivedRows, archiveOffer } from "./archive";
+import { archivedProject, archivedRows, archiveOffer } from "./archive";
+import { SidebarProjectChip, useSidebarProject } from "./SidebarPrs";
 import { prMarkParts } from "./prMark";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected, frontDeviceId } from "./devices";
@@ -38,7 +39,7 @@ import { sessionOfAgentOn } from "./sessionWork";
 import { commandLabel } from "./shortcutLabels";
 import { revealRow, sidebarFocusPane } from "./sidebarFocus";
 import type { SidebarTreeLine } from "./sidebarTree";
-import { catalogWorkspaces, localDeviceId, type AgentRow, type TaskView } from "./snapshot";
+import { catalogWorkspaces, localDeviceId, SIDEBAR_LENSES, type AgentRow, type TaskView } from "./snapshot";
 import { useShellStore } from "./store";
 import { drawnTasks, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
@@ -61,7 +62,7 @@ export function SidebarLensSwitch({ actions }: { actions: Actions }) {
     <div className="shrink-0 px-sm pt-xs pb-xxs">
       <Hint label={t("taskLens.switch")} shortcut={chord || null}>
         <div role="group" aria-label={t("taskLens.switch")} className="flex min-w-0 rounded-sm bg-muted p-xxs" data-sidebar-lens={lens}>
-          {(["projects", "tasks"] as const).map((id) => (
+          {SIDEBAR_LENSES.map((id) => (
             <button key={id} type="button" aria-pressed={lens === id} data-sidebar-lens-option={id}
               className={cn("flex min-w-0 flex-1 items-center justify-center rounded-xs px-sm py-xxs text-caption outline-none focus-visible:ring-1 focus-visible:ring-ring", lens === id ? "bg-background font-medium text-foreground shadow-xs" : "text-subtle-foreground hover:text-foreground")}
               onClick={() => lens !== id && actions.setSidebarLens(id)}>
@@ -85,7 +86,9 @@ export function TaskLens({ actions }: { actions: Actions }) {
   const rest = useShellStore((s) => s.rest);
   const localAgents = useShellStore((s) => s.agents);
   const deviceId = frontDeviceId(rest);
-  const scope = deviceScope(rest, deviceId);
+  // A 현황 tile narrows the list to its project, read from that project's own scope (PRD lane-two-columns B27).
+  const filter = useSidebarProject(deviceId);
+  const scope = filter ? (catalogWorkspaces(rest).find((row) => row.id === filter.projectId && row.device_id === deviceId)?.agent_scope ?? null) : deviceScope(rest, deviceId);
   const view: TaskView = rest?.ui_state?.task_view ?? "status";
   const folds = rest?.ui_state?.sessions_expanded_agent_pane_ids ?? NO_FOLDS;
   const connected = deviceConnected(rest, deviceId);
@@ -95,7 +98,10 @@ export function TaskLens({ actions }: { actions: Actions }) {
   const agents = useMemo(() => everyPaneAgent(localAgents, rest?.status?.remote), [localAgents, rest?.status?.remote]);
   const byPane = useMemo(() => agentsByPane(agents), [agents]);
   const projects = useMemo(() => catalogWorkspaces(rest), [rest]);
-  const archived = useMemo(() => archivedRows(rest, deviceId), [rest, deviceId]);
+  const archived = useMemo(() => {
+    const rows = archivedRows(rest, deviceId);
+    return filter ? rows.filter((row) => archivedProject(row, catalogWorkspaces(rest))?.id === filter.projectId) : rows;
+  }, [rest, deviceId, filter]);
   const list = useMemo(() => taskList(scope?.tasks, byPane, projects, view, archived), [scope?.tasks, byPane, projects, view, archived]);
   const noProject = rest !== null && projects.every((project) => project.is_home || project.device_id !== deviceId);
   const unresponsive = rest !== null && !connected ? (rest.navigator?.devices?.find((device) => device.id === deviceId) ? machineName(rest.navigator?.devices, deviceId, t) : deviceId) : null;
@@ -103,6 +109,7 @@ export function TaskLens({ actions }: { actions: Actions }) {
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-lens={view}>
       <div className="flex shrink-0 items-center gap-xs px-md py-xs text-micro text-muted-foreground">
         <span className="min-w-0 flex-1 truncate" data-task-count={scope ? list.total : undefined}>{scope ? t("taskLens.count", { count: list.total }) : t("taskLens.countLoading")}</span>
+        {filter ? <SidebarProjectChip filter={filter} /> : null}
         <ViewSwitch view={view} actions={actions} />
       </div>
       {unresponsive ? (

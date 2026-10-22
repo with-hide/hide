@@ -44,7 +44,7 @@
   "user_turn_kind": ["plan_approval", "question"],
   "review_decision": ["review_required", "changes_requested", "approved"],
   "session_group": ["needs_you", "working", "done", "idle", "resolved"],
-  "sidebar_lens": ["projects", "tasks"],
+  "sidebar_lens": ["projects", "tasks", "prs"],
   "task_view": ["status", "project"],
   "overview_graph_focus": ["all", "turn", "working", "results"],
   "raise_verb": ["approval", "answer", "confirm", "draft"],

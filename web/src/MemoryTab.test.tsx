@@ -101,14 +101,13 @@ describe("the Memory tab", () => {
     expect(sent("memory_open")).toHaveLength(2);
   });
 
-  it("opens the Project and shows the rail's dot from any tool while its Project has a question", async () => {
+  it("opens the front Project's Memory from the rail whichever tool shows", async () => {
     await render(memory({ questions: [{ kind: "failed", number: 7, title: "card 7", start_failure: null }] }), "explorer");
     expect(sent("memory_open")).toEqual([{ workspace_id: "p" }]);
-    expect(container.querySelector('[data-lane-tool-dot="memory"]')).not.toBeNull();
   });
 
   it("counts the open documents on the rail while they show as well as while they are folded (PRD lane-two-columns B2)", async () => {
-    const withViews = { ...rest, workspace_view: { ...(rest.workspace_view ?? {}), device_id: "local", path: "/p", open: true, documents: true, tool: "explorer", pinned: false, prs: { only_checkout: false }, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout: { root: { area: { id: "a1", active: null, displays: [] } }, active_area: "a1", display_count: 2, limits: { max_view_areas: 6, max_split_depth: 3, max_displays: 32 } } } } as unknown as SnapshotRest;
+    const withViews = { ...rest, workspace_view: { ...(rest.workspace_view ?? {}), device_id: "local", path: "/p", open: true, documents: true, tool: "explorer", pinned: false, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout: { root: { area: { id: "a1", active: null, displays: [] } }, active_area: "a1", display_count: 2, limits: { max_view_areas: 6, max_split_depth: 3, max_displays: 32 } } } } as unknown as SnapshotRest;
     const actions = createActions((event) => { events.push(event); return accepted; });
     for (const view of ["documents", "none"] as const) {
       await act(async () => {

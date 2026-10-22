@@ -4,6 +4,28 @@ import type { AgentRow, DescendantCounts, MarkCounts, RequestVerb, SnapshotRest 
 export type AgentRef = { pane_id: string; occurrence: number };
 
 
+/** One row of a project's 할 일 (B34, B35): an agent by its pane, or a pull request by its number. */
+/** `record`: an open ask the session's record holds, which no 태스크 card shows (PRD lane-two-columns B34). */
+export type ProjectTodo = { kind: "ask" | "revisit"; pane_id: string; record?: true } | { kind: "pr"; number: number };
+
+/** A project's 현황 tiles' counts and its 할 일 as the core derived them (`agent_state/tally/project_status.rs`). */
+export type ProjectStatus = {
+  todo: ProjectTodo[];
+  /** Every 할 일 row, the ones the core left off past its cap included: the rail's number (B38). */
+  todo_total: number;
+  /** How many of `todo_total` are agents' rows, the rest pull requests: where the rows past the core's cap are (B37). */
+  todo_agents: number;
+  prs: { open: number; mergeable: number; failed: number; review: number; checking: number };
+  git: {
+    worktrees: number;
+    behind?: number;
+    changed: number;
+    unpushed: number;
+    removable: number;
+    dots: { checkout_id: string; state: "changed" | "unpushed" | "removable" | "clean" }[];
+  };
+};
+
 export type AgentScope = {
   overview_needs_you: number;
   has_working: boolean;
@@ -18,6 +40,10 @@ export type AgentScope = {
   owners: Record<string, string>;
   badge_total: number;
   prs: PrBoard;
+  /** A project's 현황 (PRD lane-two-columns D-15, D-16), derived by the core with its tasks and PRs; absent from a checkout's or a device's scope. */
+  status?: ProjectStatus;
+  /** A Git checkout's own mark, the rule its project's dots use, uncapped (PRD lane-two-columns B30); absent elsewhere and while its worktree is unread. */
+  git_mark?: ProjectStatus["git"]["dots"][number]["state"];
   rows: AgentRef[];
   total: number;
   overview_total: number;

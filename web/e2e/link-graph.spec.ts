@@ -18,7 +18,7 @@ import { agentsIn, claudeProjects, startHerdr } from "./herdr-fixture";
 import { OMP_ID, PI_ID, prepareNativeWriter } from "./session-reader-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
-import { countSent, screenshot, showProjectRow, showTool } from "./wire";
+import { countSent, screenshot, showProjectRow, showSidebarPrs } from "./wire";
 import { chord } from "./chords";
 import { animationsFinished } from "./wait";
 import { initGithubRepository } from "./github-remote";
@@ -109,13 +109,13 @@ function writeSessions(projects: string, cwd: string): Record<string, string> {
 }
 
 /**
- * The pull request's card, opened from the PRs tool into the lane's 보기
+ * The pull request's card, opened from the sidebar's PR list into the lane's 보기
  * slot (PRD sidebar-task-lens B27), its folded `연결` line opened so the link
  * record shows; the card keeps that line open while the app runs.
  */
 async function openCard(page: Page, number: number, fresh = true): Promise<Locator> {
   if (fresh) await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-checkout]").first())).click();
-  await showTool(page, "prs");
+  await showSidebarPrs(page);
   // Waiting starts folded (B7); a group opens from its header.
   await page.locator('[data-pr-group] [data-pr-focus="group"]').first().waitFor({ timeout: 30_000 });
   for (const header of await page.locator('[data-pr-group][data-folded="true"] [data-pr-focus="group"]').all()) await header.click();

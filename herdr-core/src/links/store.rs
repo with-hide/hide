@@ -15,7 +15,9 @@ use super::{
 use crate::links::ledger::SessionIdentity;
 use hide_session::ConversationCheckpoint;
 use hide_session::links::ReadAnswer;
-use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, Transaction, params};
+use rusqlite::{
+    Connection, ErrorCode, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -708,7 +710,13 @@ impl LinkStore {
         stamp: &str,
         origin_before: Option<u64>,
     ) -> Result<(), String> {
-        let tx = self.connection.transaction().map_err(failed)?;
+        // Takes the write lock at the start: a deferred transaction that reads
+        // and then writes after another connection committed fails busy at once,
+        // without the busy timeout, where this one waits for that writer.
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(failed)?;
         let path = answer.path.as_str();
         if let Some(error) = answer.error.as_deref() {
             if error == "session_file_missing" {

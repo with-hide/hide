@@ -1,5 +1,6 @@
-// The PRs tool and the pull request decision card on an isolated pinned
-// Herdr and hided (PRD work-tab-pr-lens; PRD sidebar-task-lens B26-B37): a
+// The sidebar's PR list and the pull request decision card on an isolated
+// pinned Herdr and hided (PRD work-tab-pr-lens; PRD sidebar-task-lens
+// B26-B37; PRD lane-two-columns B35, B38, B41): a
 // Git project whose pull requests a fake `gh` answers and records every write
 // of, so nothing reaches GitHub. The list groups by whose move it is with a
 // reason line per row (B6, B8, B24); a row opens the card in the lane's 보기
@@ -10,19 +11,34 @@
 // HIDE_E2E_SCREENSHOT_DIR.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { initGithubRepository } from "./github-remote";
-import { startHerdr } from "./herdr-fixture";
+import { setFixtureLifecycle, startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided } from "./hided-fixture";
 import { fakeGh, git, head, moveHead, skewCardHead, writes, type ExtraQuery } from "./work-prs-fixture";
 import { chord } from "./chords";
-import { chooseTheme, countSent, registerFolder, screenshot, showProjectRow, showTool, setLanePinned } from "./wire";
+import { chooseTheme, countSent, registerFolder, screenshot, showProjectRow, showSidebarPrs, showTool, setLanePinned } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
-/** A project on a private Herdr and hided with the fake `gh`, the PRs tool open. */
-async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>>; daemon: { origin: string; token: string; home: string } }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean } = {}): Promise<void> {
+/** Waits for the fixture shell's prompt in `pane`. */
+async function prompt(herdr: HerdrFixture, pane: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
+    if (read.status === 0 && read.stdout.includes("fixture %")) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`no prompt in pane ${pane}`);
+}
+
+/**
+ * A project on a private Herdr and hided with the fake `gh`, the sidebar on
+ * its PR list; `agentOn` starts a working agent in a worktree of that branch.
+ */
+async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>>; daemon: { origin: string; token: string; home: string } }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean; agentOn?: string } = {}): Promise<void> {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const herdr = await startHerdr();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
@@ -39,6 +55,15 @@ async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: stri
     git(repo, ["push", "-q", "origin", "main"]);
     git(repo, ["remote", "set-head", "origin", "main"]);
     herdr.run(["workspace", "create", "--cwd", repo, "--label", "repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
+    if (options.agentOn) {
+      const worktree = path.join(herdr.root, "repo-agent");
+      git(repo, ["worktree", "add", "-q", "-b", options.agentOn, worktree]);
+      const created = herdr.run(["workspace", "create", "--cwd", worktree, "--label", "repo-agent", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as { result: { root_pane: { pane_id: string } } };
+      const pane = created.result.root_pane.pane_id;
+      await prompt(herdr, pane);
+      herdr.run(["agent", "start", "agent-on-branch", "--kind", "claude", "--pane", pane]);
+      await setFixtureLifecycle(herdr, pane, "working");
+    }
 
     const gh = fakeGh(herdr.root, options);
     daemon = await startHided(herdr, "work-prs", undefined, { PATH: `${gh.bin}${path.delimiter}${herdr.fixturePath}` });
@@ -47,8 +72,8 @@ async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: stri
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-checkout]").first())).click();
     await chooseTheme(page, "light");
-    await showTool(page, "prs");
-    const work = page.locator('aside[data-lane="prs"]');
+    await showSidebarPrs(page);
+    const work = page.locator("[data-sidebar-prs]");
     await expect(work.locator("[data-pr-group]").first()).toBeVisible({ timeout: 30_000 });
     await fn({ gh, work, sent, last, daemon });
   } finally {
@@ -67,13 +92,13 @@ async function unfold(card: Locator, section: "files"): Promise<void> {
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
 }
 
-test("the PRs tool groups by whose move it is and says why on each row", async ({ page }) => {
+test("the PR list groups by whose move it is and says why on each row", async ({ page }) => {
   await openWork(page, async ({ work }) => {
-    // The rail is the documents button, then Memory · PRs | Explorer · Changes, PRs pressed (B23; PRD lane-two-columns B2).
-    await expect(page.locator("[data-lane-tool]")).toHaveCount(5);
-    await expect(page.locator('[data-lane-tool="prs"]')).toHaveAttribute("aria-pressed", "true");
-    // The PRs icon carries the number of its Needs You rows: the three Needs You PRs (B29).
-    await expect(page.locator('[data-lane-tool="prs"] [data-lane-prs-count]')).toHaveText("3");
+    // The rail is the documents button, then Project | Explorer · Changes; the list is the sidebar's (PRD lane-two-columns B25, B41).
+    await expect(page.locator("[data-lane-tool]")).toHaveCount(4);
+    await expect(page.locator('[data-sidebar-lens-option="prs"]')).toHaveAttribute("aria-pressed", "true");
+    // The Project icon counts its to-do: the three Needs You PRs (B35, B38).
+    await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveText("3");
 
     // The groups by whose move it is; each row says why in its second line (B6, B8, B24).
     const groups = work.locator("[data-pr-group]");
@@ -95,7 +120,7 @@ test("the PRs tool groups by whose move it is and says why on each row", async (
   });
 });
 
-/** The groups the PRs tool draws and the pull requests in each, in the order drawn. */
+/** The groups the PR list draws and the pull requests in each, in the order drawn. */
 async function groupsOf(work: Locator): Promise<Record<string, string[]>> {
   // Everything after Blocked starts folded (B7); a group opens from its header.
   for (const group of ["waiting", "drafts", "bots", "merged"]) {
@@ -109,7 +134,7 @@ async function groupsOf(work: Locator): Promise<Record<string, string[]>> {
 
 // Issue #1189: the pull request list alone decides whether a project's read
 // succeeds. A question beside it that fails leaves the judgments derived from
-// it unknown, the list stays, and the ⚠ in the PRs tool's head says which question it was.
+// it unknown, the list stays, and the ⚠ in the PR list's head says which question it was.
 const UNREAD = '[data-prs-header] [data-prs-stale="true"]';
 const warning = (work: Locator) => work.locator(UNREAD);
 /** The ⚠ says `text` in its tooltip, and its accessible name; the lane is captured with the tooltip open, cropped so no pane or terminal prompt is in it. */
@@ -145,8 +170,8 @@ test("an unreadable account keeps the list and leaves every pull request's owner
       expect((await groupsOf(work)).drafts).toEqual(["35"]);
       expect((await groupsOf(work)).bots).toEqual(["36"]);
       expect((await groupsOf(work)).merged).toEqual(["37"]);
-      // Nothing is asked of the operator, so the rail's PRs icon carries no number.
-      await expect(page.locator('[data-lane-tool="prs"] [data-lane-prs-count]')).toHaveCount(0);
+      // Nothing is asked of the operator, so the rail's Project icon carries no number.
+      await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveCount(0);
       await warnsWith(page, work, "GitHub read incomplete · could not read the signed-in account", "work-prs-unread-account-light");
     },
     { failing: ["account"] },
@@ -183,7 +208,7 @@ test("an unreadable merge queue keeps the list and holds back only the pull requ
         await expect(reasonOf(work, number)).toHaveAttribute("data-pr-reason", "unjudged");
         await expect(reasonOf(work, number)).toContainText("Not judged · can't tell if it is in the merge queue");
       }
-      await expect(page.locator('[data-lane-tool="prs"] [data-lane-prs-count]')).toHaveText("1");
+      await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveText("1");
       await warnsWith(page, work, "GitHub read incomplete · could not read the merge queue", "work-prs-unread-merge-queue-light");
     },
     { failing: ["merge_queue"] },
@@ -198,8 +223,8 @@ test("all three extra questions failing still lists every pull request and names
       expect(Object.keys(groups)).toEqual(["waiting", "drafts", "bots", "merged"]);
       expect(groups.waiting).toEqual(["31", "32", "33", "34", "38"]);
       await expect(reasonOf(work, 31)).toContainText("Not judged · can't tell if it is yours");
-      // Plain Waiting says nothing of whose move it is, so the rail's PRs icon carries no number.
-      await expect(page.locator('[data-lane-tool="prs"] [data-lane-prs-count]')).toHaveCount(0);
+      // Plain Waiting says nothing of whose move it is, so the rail's Project icon carries no number.
+      await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveCount(0);
       await warnsWith(page, work, "GitHub read incomplete · could not read the signed-in account, review requests, the merge queue", "work-prs-unread-all-light");
     },
     { failing: ["account", "review_requests", "merge_queue"], teamAsk: true },
@@ -216,9 +241,9 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
     await expect(card).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('[data-view-tab-bar] [role="tab"]', { hasText: "#31" })).toHaveCount(0);
     // The rail's slot button draws the card's PR mark in its state and stands
-    // apart from the tools by one rule, so it is not read as a second PRs (B46).
+    // apart from the tools by one rule (B46).
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? "divider"));
-    expect(rail).toEqual(["detail", "documents", "divider", "memory", "prs", "divider", "explorer", "changes"]);
+    expect(rail).toEqual(["detail", "documents", "divider", "project", "divider", "explorer", "changes"]);
     await expect(page.locator('[data-lane-tool="detail"] [data-detail-mark]')).toHaveAttribute("data-detail-mark", "mergeable");
     await expect(card.locator('[data-pr-card-reason="merge"]')).toBeVisible();
     // Issue linking lives in the menu and hands focus to its picker.
@@ -256,8 +281,7 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
     expect(last.get("pr_merge")).toMatchObject({ pr_number: 31, head: head(gh.state, 31) });
     expect(writes(gh.state)).toEqual([["pr", "merge", "31", "--merge", "--match-head-commit", head(gh.state, 31)]]);
     // The merged pull request's card draws no Merge, and the list, still in
-    // the tool column beside the card (PRD lane-two-columns B9), has it out
-    // of Needs You.
+    // the sidebar beside the card, has it out of Needs You.
     await expect(card.locator("[data-pr-card-merge]")).toHaveCount(0);
     await expect(card).toBeVisible();
     await expect(work.locator('[data-pr-group="needs_you"] [data-pr]').first()).toBeVisible();
@@ -271,20 +295,21 @@ test("the lane chord brings the card back with its tool and alone, and the slot 
   await openWork(page, async ({ work, daemon }) => {
     const screen = page.locator("[data-workspace-screen]");
     const slot = page.locator('[data-lane-tool="detail"]');
+    await showTool(page, "project");
     await work.locator('[data-pr-row="31"]').click();
     const card = cardOf(page, 31);
     await expect(card).toBeVisible({ timeout: 30_000 });
-    await expect(screen).toHaveAttribute("data-lane-shows", "prs");
+    await expect(screen).toHaveAttribute("data-lane-shows", "project");
 
-    // Closed whole beside the PRs tool, the chord brings both back (B15).
+    // Closed whole beside the Project tool, the chord brings both back (B15).
     await page.keyboard.press(chord("toggle_lane"));
     await expect(screen).toHaveAttribute("data-lane-mode", "closed");
     await page.keyboard.press(chord("toggle_lane"));
     await expect(card).toBeVisible();
-    await expect(screen).toHaveAttribute("data-lane-shows", "prs");
+    await expect(screen).toHaveAttribute("data-lane-shows", "project");
 
-    // The card alone, its tool column folded by the PRs icon, comes back alone.
-    await page.locator('[data-lane-tool="prs"]').click();
+    // The card alone, its tool column folded by the Project icon, comes back alone.
+    await page.locator('[data-lane-tool="project"]').click();
     await expect(screen).toHaveAttribute("data-lane-shows", "none");
     await expect(card).toBeVisible();
     await page.keyboard.press(chord("toggle_lane"));
@@ -299,8 +324,10 @@ test("the lane chord brings the card back with its tool and alone, and the slot 
     fs.mkdirSync(other, { recursive: true });
     fs.writeFileSync(path.join(other, "README.md"), "# other\n");
     await registerFolder(page, daemon, other);
-    await expect(page.locator("[data-project]")).toHaveCount(2, { timeout: 20_000 });
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "other" }).locator("[data-checkout]").first())).click();
+    await page.locator('[data-sidebar-lens-option="projects"]').click();
+    const otherRow = page.locator("[data-project]", { hasText: "other" });
+    await expect(otherRow).toHaveCount(1, { timeout: 20_000 });
+    await (await showProjectRow(page, otherRow.locator("[data-checkout]").first())).click();
     await expect(screen).toHaveAttribute("data-lane-mode", "closed");
     await expect(slot).toHaveAttribute("aria-pressed", "false");
     await slot.click();
@@ -309,31 +336,65 @@ test("the lane chord brings the card back with its tool and alone, and the slot 
   });
 });
 
-test("in a stacked lane with the PRs tool in front, a row brings its card forward over the tool (lane-two-columns B9, B19)", async ({ page }) => {
+test("in a stacked lane with the Project tool in front, every way of opening the viewing column brings it forward (lane-two-columns B9, B19, B30, B35)", async ({ page }) => {
   await openWork(page, async ({ work }) => {
     const screen = page.locator("[data-workspace-screen]");
-    // A document in the viewing column and the PRs tool, pinned, in a body
-    // with room for one column only: the lane stacks with the tool in front.
+    const tool = page.locator('aside[data-lane="project"]');
+    // A document in the viewing column and the Project tool, pinned, in a
+    // body with room for one column only: the lane stacks with the tool in front.
     await showTool(page, "explorer");
     await page.locator('[data-explorer-row$="/README.md"]').dblclick();
     await expect(screen).toHaveAttribute("data-lane-view", "documents");
-    await showTool(page, "prs");
+    await showTool(page, "project");
     await setLanePinned(page, true);
     await page.setViewportSize({ width: 1100, height: 1000 });
     await expect(screen).toHaveAttribute("data-lane-stacked", "true");
-    await expect(screen).toHaveAttribute("data-lane-shows", "prs");
-    await expect(screen).toHaveAttribute("data-lane-view", "none");
+    const toolInFront = async () => {
+      await showTool(page, "project");
+      await expect(screen).toHaveAttribute("data-lane-shows", "project");
+      await expect(screen).toHaveAttribute("data-lane-view", "none");
+    };
+    await toolInFront();
+    // The sidebar's PR row.
     await work.locator('[data-pr-row="31"]').click();
     await expect(cardOf(page, 31)).toBeVisible({ timeout: 30_000 });
     await expect(screen).toHaveAttribute("data-lane-view", "detail");
     await expect(screen).toHaveAttribute("data-lane-shows", "none");
-    // The PRs icon brings the tool back in front, and the slot button the card.
-    await showTool(page, "prs");
-    await expect(screen).toHaveAttribute("data-lane-view", "none");
+    // The 할 일's pull request row.
+    await toolInFront();
+    await tool.locator('[data-todo-pr="33"] button').click();
+    await expect(cardOf(page, 33)).toBeVisible({ timeout: 30_000 });
+    await expect(screen).toHaveAttribute("data-lane-view", "detail");
+    // The Git tile.
+    await toolInFront();
+    await tool.locator('[data-project-tile-press="git"]').click();
+    await expect(page.locator('aside[data-lane="detail"] [data-worktrees-view]')).toBeVisible({ timeout: 30_000 });
+    await expect(screen).toHaveAttribute("data-lane-view", "detail");
+    // The cost tile.
+    await toolInFront();
+    await tool.locator('[data-project-tile-press="cost"]').click();
+    await expect(page.locator('aside[data-lane="detail"][data-detail="cost"]')).toBeVisible({ timeout: 30_000 });
+    await expect(screen).toHaveAttribute("data-lane-view", "detail");
+    // The slot button brings the card back after the tool.
+    await toolInFront();
     await page.locator('[data-lane-tool="detail"]').click();
-    await expect(cardOf(page, 31)).toBeVisible();
     await expect(screen).toHaveAttribute("data-lane-view", "detail");
   });
+});
+
+test("an agent's mark on a pull request row takes the press while the row's buttons show (lane-two-columns B41)", async ({ page }) => {
+  await openWork(page, async ({ work, sent }) => {
+    const row = work.locator('[data-pr="31"]');
+    const mark = row.locator("[data-pr-agent]").first();
+    await expect(mark).toBeVisible({ timeout: 30_000 });
+    // The row's buttons show under the pointer and by the keyboard, beside the mark rather than over it.
+    await row.locator('[data-pr-title="31"]').hover();
+    await expect(row.locator('[data-pr-github="31"]')).toBeVisible();
+    const before = sent.get("focus_pane") ?? 0;
+    // No force: a click Playwright finds covered fails here.
+    await mark.click({ timeout: 5_000 });
+    await expect.poll(() => sent.get("focus_pane") ?? 0).toBeGreaterThan(before);
+  }, { agentOn: "feat/clean" });
 });
 
 test("a branch update on a pull request that moved is refused, looked at again, then goes out on the new head", async ({ page }) => {
@@ -394,15 +455,12 @@ test("the list and the card read without sideways scrolling in each language and
       await page.locator(`[data-theme-option="${theme}"]`).click();
       await page.keyboard.press("Escape");
       await expect(page.locator('[data-settings="true"]')).toHaveCount(0);
-      // One thing shows at a time: the card in the 보기 slot, then the list in PRs,
-      // and the same row brings the card back in front.
+      // The card in the 보기 slot and the list in the sidebar beside it.
       await expect(review).toBeVisible();
       await expect.poll(() => overflow(review)).toBeLessThanOrEqual(0);
-      await showTool(page, "prs");
       await expect(work.locator('[data-prs-view="board"]')).toBeVisible();
       await expect.poll(() => overflow(work.locator('[data-prs-view="board"]'))).toBeLessThanOrEqual(0);
       await screenshot(page, `work-prs-${language}-${theme}`);
-      await work.locator('[data-pr-row="33"]').click();
     }
   });
 });

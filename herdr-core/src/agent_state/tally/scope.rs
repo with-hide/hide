@@ -125,6 +125,13 @@ pub struct Scope {
     pub tasks: super::tasks::Tasks,
     pub closes: BTreeMap<String, super::close::Consequence>,
     pub prs: crate::agent_state::work::board::Board,
+    /// A project's 현황 (PRD lane-two-columns B27-B38); absent elsewhere.
+    #[serde(skip_serializing_if = "super::project_status::ProjectStatus::is_absent")]
+    pub status: super::project_status::ProjectStatus,
+    /// A Git checkout's mark, the one its project's dots use (B30); absent
+    /// on a project's or device's scope and while the worktree is unread.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_mark: Option<&'static str>,
     pub raised: Vec<Raised>,
     pub owners: BTreeMap<String, String>,
     pub badge_total: usize,
@@ -515,7 +522,24 @@ struct PlaceInput {
     checkout_work: Vec<(Option<String>, bool, bool, Option<String>)>,
     checkout_labels: Vec<(String, Option<String>, Option<u32>)>,
     checkouts: Vec<CheckoutInput>,
+    /// What the Project tool's Git counts read (B30).
+    git_facts: Vec<GitInput>,
+    /// The sessions whose record holds an open ask, which the Project
+    /// tool's 할 일 reads (B34).
+    record_asks: Vec<super::project_status::RecordAsk>,
 }
+
+/// A checkout's worktree (missing, main, dirty, behind its upstream), its
+/// unpushed count, commits since its base, whether it has a pull request,
+/// is primary and has landed.
+type GitInput = (
+    Option<(bool, bool, bool, Option<u32>)>,
+    Option<u32>,
+    u32,
+    bool,
+    bool,
+    bool,
+);
 
 #[derive(Clone, Debug, PartialEq)]
 struct DeviceInput {
@@ -544,6 +568,9 @@ pub(crate) struct Cache {
     /// Where each pull request stood on the last projection, by project: a
     /// pull request GitHub has not judged yet keeps its place (B12).
     placements: HashMap<(String, String), HashMap<u32, &'static str>>,
+    /// The projects whose to-do list was past its cap on the last
+    /// projection, so a crossing is logged once.
+    todo_over: HashSet<(String, String)>,
 }
 
 #[derive(Default)]
@@ -643,6 +670,11 @@ fn device_rows(snapshot: &crate::model::Snapshot) -> Vec<DeviceRows<'_>> {
 impl Cache {
     pub(crate) fn refresh(&mut self, snapshot: &mut crate::model::Snapshot, now: u64) -> bool {
         let devices = device_rows(snapshot);
+        let record_asks = super::project_status::record_asks(
+            snapshot.link_summaries.as_ref(),
+            devices[0].id,
+            &devices[0].projects,
+        );
         let input = Input {
             clock_minute: now / 60_000,
             devices: devices
@@ -704,6 +736,26 @@ impl Cache {
                             )
                         })
                         .collect(),
+                    record_asks: record_asks
+                        .get(&(p.device_id.clone(), p.id.clone()))
+                        .cloned()
+                        .unwrap_or_default(),
+                    git_facts: p
+                        .checkouts
+                        .iter()
+                        .map(|c| {
+                            (
+                                c.worktree
+                                    .as_ref()
+                                    .map(|w| (w.missing, w.is_main, w.dirty, w.behind_upstream)),
+                                c.unpushed.as_ref().map(|u| u.count),
+                                c.ahead,
+                                c.pull_request.is_some(),
+                                c.is_primary,
+                                c.landed,
+                            )
+                        })
+                        .collect(),
                     checkouts: p
                         .checkouts
                         .iter()
@@ -733,6 +785,7 @@ impl Cache {
         let mut checkouts = HashMap::new();
         let mut device_scopes = HashMap::new();
         let mut placements = HashMap::new();
+        let mut todo_over = HashSet::new();
         let all: Vec<_> = devices
             .iter()
             .flat_map(|d| d.agents.iter().copied())
@@ -840,6 +893,28 @@ impl Cache {
                 projected.tasks = tasks
                     .remove(&(project.device_id.clone(), project.id.clone()))
                     .unwrap_or_default();
+                projected.status = super::project_status::project(
+                    project,
+                    &projected.tasks,
+                    &projected.prs,
+                    record_asks
+                        .get(&(project.device_id.clone(), project.id.clone()))
+                        .map_or(&[], Vec::as_slice),
+                    &device.agents,
+                );
+                let key = (project.device_id.clone(), project.id.clone());
+                let over = projected.status.todo_total > super::project_status::TODO_LIMIT;
+                if over && !self.todo_over.contains(&key) {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "project_status", "kind": "todo_capacity",
+                        "device": project.device_id, "project": project.id,
+                        "count": projected.status.todo_total,
+                        "limit": super::project_status::TODO_LIMIT,
+                    }));
+                }
+                if over {
+                    todo_over.insert(key);
+                }
                 for checkout in &project.checkouts {
                     let pane_ids: HashSet<_> = checkout
                         .tabs
@@ -876,6 +951,7 @@ impl Cache {
                         .get_mut(&(project.device_id.clone(), checkout.id.clone()))
                         .expect("checkout scope just inserted");
                     value.has_working = checkout.agent_summary.working > 0;
+                    value.git_mark = super::project_status::checkout_mark(project, checkout);
                     value.badge_total = checkout.agent_summary.needs_you
                         + checkout.agent_summary.done
                         + checkout.agent_summary.working
@@ -1030,6 +1106,7 @@ impl Cache {
             overall,
         };
         self.placements = placements;
+        self.todo_over = todo_over;
         self.previous = Some(input);
         self.apply(snapshot)
     }

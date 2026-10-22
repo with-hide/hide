@@ -102,13 +102,13 @@ test("Project settings keep confirmed values through a failed save and restart",
     await expect(sheet).toHaveCount(0);
     await expect(gear()).toBeFocused();
     // CI's work area can be a narrow window. Opening Memory must call the
-    // lane forward on its Memory tool there too.
+    // lane forward on the Project tool's 기억 there too.
     await fitWindow(app, { width: 1024, height: 681 });
     await gear().click();
     await sheet.getByRole("tab", { name: "Memory", exact: true }).click();
     await sheet.getByRole("button", { name: "Open project Memory" }).click();
     await expect(sheet).toHaveCount(0);
-    await expect(page.locator('aside[data-lane="memory"] [data-memory]')).toBeVisible();
+    await expect(page.locator('aside[data-lane="project"] [data-memory]')).toBeVisible();
     await captureNativeWindow(app, "project-settings-memory-open-native", { build: "worktree debug", project: repo, daemonPid: run.daemonPid() });
     await app.close();
     app = null;

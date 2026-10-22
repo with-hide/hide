@@ -19,6 +19,9 @@ const OUTPUT_ORDER: Record<string, number> = { ci_failed: 0, review: 1, open: 2,
 export function orderedOutputs(outputs: readonly WorkOutput[]): WorkOutput[] {
   return [...outputs].sort((a, b) => (OUTPUT_ORDER[a.state] ?? 5) - (OUTPUT_ORDER[b.state] ?? 5) || b.created_at_unix_ms - a.created_at_unix_ms);
 }
+/** The Overview fold that holds the backlog's 놓친 일 group open (`OverviewPlace.open`). */
+export const MISSED_FOLD = "missed";
+
 /**
  * Every open missed item of the sessions given, of a live session as much as
  * of an ended one: a session that works again keeps what it missed in the

@@ -13,7 +13,7 @@ import path from "node:path";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { aiSettingsFile, startHided, type Daemon } from "./hided-fixture";
 import { fixtureExecutable, fixtureProgram, fixtureToolPath } from "./platform-fixture";
-import { enterWorkspace, screenshot, showTool } from "./wire";
+import { enterWorkspace, screenshot, showProjectMemory } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
 
@@ -118,8 +118,8 @@ async function captureSettings(page: Page, name: string) {
 /** Closes Settings and turns Auto memory on for the front Project, leaving the Memory tab shown. */
 async function openMemory(page: Page) {
   await page.keyboard.press("Escape");
-  await showTool(page, "memory");
-  const memory = page.locator('[data-lane="memory"]');
+  await showProjectMemory(page);
+  const memory = page.locator('[data-lane="project"]');
   await expect(memory.locator('[data-memory-switch="off"]')).toBeEnabled({ timeout: 20_000 });
   await memory.locator('[data-memory-switch="off"]').click();
   await expect(memory.locator('[data-memory-switch="on"]')).toBeVisible({ timeout: 20_000 });
@@ -132,7 +132,7 @@ async function captureMemory(page: Page, name: string) {
     await page.locator("[data-open-settings]").click();
     await chooseTheme(page, theme);
     await page.keyboard.press("Escape");
-    await expect(page.locator('[data-lane="memory"]')).toBeVisible();
+    await expect(page.locator('[data-lane="project"]')).toBeVisible();
     await settle(page);
     await screenshot(page, `usage-limit-${name}-${theme}`);
   }
