@@ -360,6 +360,9 @@ pub struct WorkChapter {
     pub id: String,
     pub goal: String,
     pub at_unix_ms: u64,
+    /// How the flow ended, as the label that opened the next one said
+    /// (PRD session-record-fact-status D-02).
+    pub closed_result: Option<String>,
 }
 
 /// How a turn ended and its one line.
@@ -378,6 +381,45 @@ pub struct RecordStatus {
     pub line: String,
     pub at_unix_ms: u64,
     pub limited: Option<String>,
+    /// The current flow's pull requests, when all of them settled after
+    /// that turn (PRD session-record-fact-status D-01, B2): shown in place
+    /// of its line.
+    pub settled: Option<PrSettlement>,
+}
+
+/// Every pull request a flow made, merged or closed, from the stored PR
+/// facts and never from a label (PRD session-record-fact-status D-01).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PrSettlement {
+    pub state: SettledState,
+    /// The merged ones when any merged, else the closed ones.
+    pub numbers: Vec<u64>,
+    /// When the last of them settled.
+    pub at_unix_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettledState {
+    Merged,
+    Closed,
+}
+
+/// What a flow's result line shows, newest knowledge first (PRD
+/// session-record-fact-status D-01, D-02, D-04).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FlowResult {
+    /// Its last finished turn, else its last turn a limit did not stop,
+    /// else its last turn.
+    Turn(TurnOutcome),
+    /// The line the label that opened the next flow gave this one.
+    Closing { line: String, at_unix_ms: u64 },
+    /// It stopped on a question or a wait and the operator went on to the
+    /// next flow; the line is its last turn's.
+    MovedOn { line: String, at_unix_ms: u64 },
+    /// Its pull requests all settled after its line.
+    Settled(PrSettlement),
 }
 
 /// One goal flow (D-03, D-05): the requests sent while it was open, placed
@@ -391,7 +433,7 @@ pub struct WorkFlow {
     pub requests: Vec<RecordedRequest>,
     /// The lines that are requests: letters do not count.
     pub request_count: usize,
-    pub result: Option<TurnOutcome>,
+    pub result: Option<FlowResult>,
 }
 
 /// The pull requests of this session or of one direct child's subtree (D-14).
@@ -533,6 +575,9 @@ pub enum LedgerUpdate {
         goal: String,
         at_unix_ms: u64,
         change: FlowChange,
+        /// With a new flow, how the one before it ended (PRD
+        /// session-record-fact-status D-02).
+        closed_result: Option<String>,
     },
     /// Summaries one analysis gave, at either boundary (D-06).
     Summaries {
@@ -599,6 +644,12 @@ pub struct WorkOutput {
     pub created_at_unix_ms: u64,
     pub source: SessionIdentity,
     pub source_name: String,
+    /// When its session first printed it, which places it in a flow.
+    #[serde(skip)]
+    pub sighted_at_unix_ms: u64,
+    /// When GitHub merged or closed it, from the link reader's PR facts.
+    #[serde(skip)]
+    pub settled_at_unix_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]

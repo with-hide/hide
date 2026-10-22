@@ -165,6 +165,18 @@ ALTER TABLE ledger_titles ADD COLUMN omitted_requests INTEGER NOT NULL DEFAULT 0
 INSERT OR REPLACE INTO meta(key,value) VALUES('summaries_owed_since',CAST(CAST(unixepoch('subsec')*1000 AS INTEGER) AS TEXT));
 ";
 
+/// Version 8 (PRD session-record-fact-status D-02): a flow keeps the line
+/// the label that closed it gave. Nothing recorded changes.
+pub(super) const CLOSED_FLOW_SCHEMA: &str = "
+ALTER TABLE ledger_chapters ADD COLUMN closed_result TEXT;
+";
+
+/// The inverse of [`CLOSED_FLOW_SCHEMA`], for tests that open an older record.
+#[cfg(test)]
+pub(super) const UNDO_CLOSED_FLOW_SCHEMA: &str = "
+ALTER TABLE ledger_chapters DROP COLUMN closed_result;
+";
+
 /// The inverse of [`FLOW_SCHEMA`], for tests that open a version 6 record.
 #[cfg(test)]
 pub(super) const UNDO_FLOW_SCHEMA: &str = "
@@ -1019,6 +1031,7 @@ impl LinkStore {
                 goal,
                 at_unix_ms,
                 change,
+                closed_result,
             } => {
                 let previous: Option<(String, String)> = tx
                     .query_row(
@@ -1043,8 +1056,21 @@ impl LinkStore {
                     // A flow opened at this same request (the turn's start)
                     // and replaced at its end is one flow, under the newer name.
                     _ => {
+                        // The flow this one follows keeps how the label
+                        // said it ended (D-02); a start and an end that open
+                        // the same flow both say it, and the later stands.
+                        if let Some(line) = closed_result
+                            && *change == FlowChange::New
+                        {
+                            tx.execute(
+                                "UPDATE ledger_chapters SET closed_result=?5 WHERE rowid=(SELECT rowid FROM ledger_chapters \
+                                 WHERE device=?1 AND agent=?2 AND id=?3 AND at<?4 ORDER BY at DESC,rowid DESC LIMIT 1)",
+                                params![session.device_id, session.agent, session.session_id, *at_unix_ms as i64, line],
+                            )
+                            .map_err(failed)?;
+                        }
                         tx.execute(
-                            "INSERT INTO ledger_chapters VALUES(?1,?2,?3,?4,?5,?6) \
+                            "INSERT INTO ledger_chapters(device,agent,id,chapter,goal,at) VALUES(?1,?2,?3,?4,?5,?6) \
                              ON CONFLICT(device,agent,id,chapter) DO UPDATE SET goal=excluded.goal",
                             params![
                                 session.device_id,
@@ -1139,6 +1165,18 @@ impl LinkStore {
                 // A turn with no request of its own starts at the input that
                 // woke it (D-03).
                 let start_at = start.unwrap_or(*started_at_unix_ms).min(*at_unix_ms);
+                // The first turn of a flow that follows another: moving on
+                // answered the questions before it, so this turn cannot list
+                // one of them again (PRD session-record-fact-status D-03).
+                let opens_flow: bool = tx
+                    .query_row(
+                        "SELECT (SELECT COUNT(*) FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3)>1 \
+                         AND NOT EXISTS(SELECT 1 FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 \
+                         AND start_at>=(SELECT MAX(at) FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3))",
+                        params![session.device_id, session.agent, session.session_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(failed)?;
                 tx.execute(
                     "INSERT INTO ledger_turns(device,agent,id,offset,start_at,end_at,end,line,artifacts) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                     params![
@@ -1188,11 +1226,15 @@ impl LinkStore {
                     }
                     // A turn a letter woke repeats a question still open, or one
                     // the operator put away: one line, and a put-away one stays put away.
+                    // A question of a past flow is no longer open, so asking it
+                    // again in a later turn of this one opens it again (D-03, B6).
                     if missed.kind == MissedKind::Ask
                         && tx
                             .query_row(
-                                "SELECT 1 FROM ledger_missed WHERE device=?1 AND agent=?2 AND id=?3 \
-                                AND kind=?4 AND status IN (?5,?7) AND trim(text)=?6 LIMIT 1",
+                                "WITH flow(at) AS (SELECT COALESCE(MAX(at),0) FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3) \
+                                SELECT 1 FROM ledger_missed, flow WHERE device=?1 AND agent=?2 AND id=?3 \
+                                AND kind=?4 AND trim(text)=?6 AND (status=?7 OR (status=?5 AND ledger_missed.at>=flow.at) \
+                                OR (?8 AND ledger_missed.at<flow.at)) LIMIT 1",
                                 params![
                                     session.device_id,
                                     session.agent,
@@ -1200,7 +1242,8 @@ impl LinkStore {
                                     encoded(&MissedKind::Ask)?,
                                     encoded(&MissedStatus::Open)?,
                                     missed.text.trim(),
-                                    encoded(&MissedStatus::Dismissed)?
+                                    encoded(&MissedStatus::Dismissed)?,
+                                    opens_flow
                                 ],
                                 |_| Ok(()),
                             )
@@ -1355,7 +1398,7 @@ impl LinkStore {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT chapter,goal,at FROM ledger_chapters \
+                "SELECT chapter,goal,at,closed_result FROM ledger_chapters \
             WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at,rowid",
             )
             .map_err(failed)?;
@@ -1365,6 +1408,7 @@ impl LinkStore {
                     id: r.get(0)?,
                     goal: r.get(1)?,
                     at_unix_ms: r.get(2)?,
+                    closed_result: r.get(3)?,
                 })
             })
             .map_err(failed)?
@@ -1427,18 +1471,33 @@ impl LinkStore {
             }
             requests.reverse();
             record.flows = place_flows(&chapters, requests, &turns);
+            // The record is named after the flow the operator asked most of,
+            // the later one on a tie (D-06, B9); the pane keeps the current
+            // flow's name.
+            if !chapters.is_empty()
+                && let Some(largest) = record.flows.iter().max_by_key(|flow| flow.request_count)
+            {
+                record.title.clone_from(&largest.name);
+            }
         }
         record.missed = self.ledger_missed(session)?;
+        let current_start = chapters.last().map(|chapter| chapter.at_unix_ms);
         record.asks = record
             .missed
             .iter()
-            .filter(|missed| missed.kind == MissedKind::Ask && missed.status == MissedStatus::Open)
+            .filter(|missed| {
+                missed.kind == MissedKind::Ask
+                    && missed.status == MissedStatus::Open
+                    && waits(missed, current_start)
+            })
             .cloned()
             .collect();
         let mut statement = self
             .connection
             .prepare(
-                "SELECT o.kind,o.repo,o.number,o.title,o.url,o.state,o.created_at,COALESCE(f.stale,1),f.read_at \
+                "SELECT o.kind,o.repo,o.number,o.title,o.url,o.state,o.created_at,COALESCE(f.stale,1),f.read_at,o.sighted_at, \
+            (SELECT COALESCE(p.merged_at,p.closed_at) FROM repo_names n JOIN prs p ON p.repo=n.repo AND p.number=o.number \
+            WHERE o.kind='pr' AND (n.name=o.repo OR n.repo=o.repo) LIMIT 1) \
             FROM ledger_outputs o LEFT JOIN ledger_output_facts f ON f.repo=o.repo AND f.kind=o.kind AND f.number=o.number \
             WHERE o.device=?1 AND o.agent=?2 AND o.id=?3 ORDER BY o.created_at DESC LIMIT 2001",
             )
@@ -1457,6 +1516,8 @@ impl LinkStore {
                     last_read_at_unix_ms: r.get(8)?,
                     source: session.clone(),
                     source_name: record.title.clone(),
+                    sighted_at_unix_ms: r.get(9)?,
+                    settled_at_unix_ms: r.get(10)?,
                 })
             })
             .map_err(failed)?
@@ -1559,6 +1620,7 @@ impl LinkStore {
             .artifacts
             .retain(|artifact| artifacts_seen.insert(artifact.clone()));
         record.artifacts.truncate(ARTIFACT_LIMIT);
+        settle(&mut record);
         Ok(record)
     }
 
@@ -1602,6 +1664,17 @@ impl LinkStore {
 
     fn ledger_missed(&self, session: &SessionIdentity) -> Result<Vec<MissedWork>, String> {
         ledger_missed_rows(&self.connection, session)
+    }
+
+    /// When the session's current flow opened, if it has flows.
+    fn current_flow_start(&self, session: &SessionIdentity) -> Result<Option<u64>, String> {
+        self.connection
+            .query_row(
+                "SELECT MAX(at) FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3",
+                params![session.device_id, session.agent, session.session_id],
+                |r| r.get(0),
+            )
+            .map_err(failed)
     }
 
     /// What a later turn of `session` needs from the ledger: who delegated
@@ -1667,11 +1740,13 @@ impl LinkStore {
             .map_err(failed)?;
         Ok(LedgerContext {
             parent_name,
-            open_missed: self
-                .ledger_missed(session)?
-                .into_iter()
-                .filter(|missed| missed.status == MissedStatus::Open)
-                .collect(),
+            open_missed: {
+                let since = self.current_flow_start(session)?;
+                self.ledger_missed(session)?
+                    .into_iter()
+                    .filter(|missed| missed.status == MissedStatus::Open && waits(missed, since))
+                    .collect()
+            },
             owed,
             newest_offset,
             artifacts: self.recorded_artifacts(session)?,
@@ -2216,14 +2291,108 @@ fn status_of(turns: &[TurnRow]) -> Option<RecordStatus> {
             line: turn.line.clone(),
             at_unix_ms: turn.end_at,
             limited,
+            settled: None,
         }),
         None => Some(RecordStatus {
             end: LabelEnd::Blocked,
             line: String::new(),
             at_unix_ms: newest.end_at,
             limited,
+            settled: None,
         }),
     }
+}
+
+/// Whether an open question still waits on the operator: one asked in the
+/// current flow, since moving to the next flow answers the ones before it
+/// (PRD session-record-fact-status D-03, B6).
+fn waits(missed: &MissedWork, current_start: Option<u64>) -> bool {
+    missed.kind != MissedKind::Ask || current_start.is_none_or(|start| missed.at_unix_ms >= start)
+}
+
+/// Hide's facts over the labels' lines (PRD session-record-fact-status
+/// D-01, B1-B3): a flow whose pull requests all merged or closed after its
+/// result reads as that. The top state does the same with every pull
+/// request not settled when its turn ended, wherever it was printed: a flow
+/// can open after the pull request its turn waits on, and a child's can come
+/// after the turn; a turn that asks the operator, is blocked or hit a limit
+/// stays on top.
+fn settle(record: &mut SessionRecord) {
+    if record.flows.is_empty() {
+        return;
+    }
+    let starts: Vec<u64> = record.flows.iter().map(|flow| flow.at_unix_ms).collect();
+    let mut made: Vec<Vec<&WorkOutput>> = vec![Vec::new(); starts.len()];
+    for output in record.outputs.iter().filter(|output| output.kind == "pr") {
+        let index = starts
+            .iter()
+            .rposition(|start| *start <= output.sighted_at_unix_ms)
+            .unwrap_or(0);
+        made[index].push(output);
+    }
+    let settlements: Vec<Option<PrSettlement>> = made.iter().map(|prs| settlement(prs)).collect();
+    for (flow, settled) in record.flows.iter_mut().zip(&settlements) {
+        let Some(settled) = settled else { continue };
+        let line_at = match &flow.result {
+            Some(FlowResult::Turn(turn)) => Some(turn.at_unix_ms),
+            Some(
+                FlowResult::Closing { at_unix_ms, .. } | FlowResult::MovedOn { at_unix_ms, .. },
+            ) => Some(*at_unix_ms),
+            Some(FlowResult::Settled(_)) | None => None,
+        };
+        if line_at.is_none_or(|at| settled.at_unix_ms > at) {
+            flow.result = Some(FlowResult::Settled(settled.clone()));
+        }
+    }
+    if let Some(status) = record.status.as_mut()
+        && status.limited.is_none()
+        && !matches!(status.end, LabelEnd::Question | LabelEnd::Blocked)
+    {
+        let pending: Vec<&WorkOutput> = record
+            .outputs
+            .iter()
+            .filter(|output| {
+                output.kind == "pr"
+                    && output
+                        .settled_at_unix_ms
+                        .is_none_or(|at| at > status.at_unix_ms)
+            })
+            .collect();
+        status.settled = settlement(&pending);
+    }
+}
+
+/// The settlement of a flow's pull requests, when every one of them is
+/// merged or closed at a known time; one still open, or a time the link
+/// reader has not read, settles nothing.
+fn settlement(prs: &[&WorkOutput]) -> Option<PrSettlement> {
+    if prs.is_empty() {
+        return None;
+    }
+    let mut merged = Vec::new();
+    let mut closed = Vec::new();
+    let mut at = 0;
+    for pr in prs {
+        let settled_at = pr.settled_at_unix_ms?;
+        match pr.state.as_str() {
+            "merged" => merged.push(pr.number),
+            "closed" => closed.push(pr.number),
+            _ => return None,
+        }
+        at = at.max(settled_at);
+    }
+    let (state, mut numbers) = if merged.is_empty() {
+        (SettledState::Closed, closed)
+    } else {
+        (SettledState::Merged, merged)
+    };
+    numbers.sort_unstable();
+    numbers.dedup();
+    Some(PrSettlement {
+        state,
+        numbers,
+        at_unix_ms: at,
+    })
 }
 
 /// A request's words as the record shows them (D-18, B15, B25): attachment
@@ -2285,11 +2454,11 @@ fn place_flows(
     requests: Vec<RecordedRequest>,
     turns: &[TurnRow],
 ) -> Vec<WorkFlow> {
-    let starts: Vec<(String, Option<String>, u64)> = if chapters.is_empty() {
+    let starts: Vec<(String, Option<String>, u64, Option<String>)> = if chapters.is_empty() {
         let Some(first) = requests.first() else {
             return Vec::new();
         };
-        vec![("flow-start".to_owned(), None, first.at_unix_ms)]
+        vec![("flow-start".to_owned(), None, first.at_unix_ms, None)]
     } else {
         chapters
             .iter()
@@ -2298,6 +2467,7 @@ fn place_flows(
                     chapter.id.clone(),
                     Some(chapter.goal.clone()),
                     chapter.at_unix_ms,
+                    chapter.closed_result.clone(),
                 )
             })
             .collect()
@@ -2305,9 +2475,12 @@ fn place_flows(
     let flow_of = |at: u64| {
         starts
             .iter()
-            .rposition(|(_, _, start)| *start <= at)
+            .rposition(|(_, _, start, _)| *start <= at)
             .unwrap_or(0)
     };
+    let next_starts: Vec<Option<u64>> = (0..starts.len())
+        .map(|index| starts.get(index + 1).map(|(_, _, at, _)| *at))
+        .collect();
     let mut placed: Vec<Vec<RecordedRequest>> = vec![Vec::new(); starts.len()];
     for request in requests {
         placed[flow_of(request.at_unix_ms)].push(request);
@@ -2320,7 +2493,8 @@ fn place_flows(
         .into_iter()
         .zip(placed)
         .zip(flow_turns)
-        .map(|(((id, goal, at), requests), turns)| {
+        .zip(next_starts)
+        .map(|((((id, goal, at, closed), requests), turns), next)| {
             // Repeats merge within a flow, so the message that opened one is
             // never folded into the flow before it.
             let requests = merge_repeats(requests);
@@ -2337,8 +2511,9 @@ fn place_flows(
                     .unwrap_or_default()
             });
             // The flow's result (D-11): its last finished turn, else its last
-            // turn a limit did not stop.
-            let result = turns
+            // turn a limit did not stop, else its last turn, so a flow with a
+            // judged turn always has one (D-04, B7).
+            let last = turns
                 .iter()
                 .rev()
                 .find(|turn| turn.end == LabelEnd::Done)
@@ -2348,7 +2523,26 @@ fn place_flows(
                         .rev()
                         .find(|turn| turn.end != LabelEnd::Limited)
                 })
+                .or_else(|| turns.last())
                 .map(|turn| turn.outcome());
+            // A past flow ends where the next begins: the line the label that
+            // opened it gave, else a question or a wait the operator moved
+            // on from reads as moved on (D-02, B4, B5).
+            let result = match (next, closed, last) {
+                (Some(next), Some(line), _) => Some(FlowResult::Closing {
+                    line,
+                    at_unix_ms: next,
+                }),
+                (Some(_), None, Some(turn))
+                    if matches!(turn.end, LabelEnd::Question | LabelEnd::Waiting) =>
+                {
+                    Some(FlowResult::MovedOn {
+                        line: turn.line,
+                        at_unix_ms: turn.at_unix_ms,
+                    })
+                }
+                (_, _, last) => last.map(FlowResult::Turn),
+            };
             WorkFlow {
                 id,
                 name,

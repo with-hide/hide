@@ -1893,6 +1893,7 @@ mod tests {
                 goal: "Ship the release".into(),
                 at_unix_ms: CREATED,
                 change: crate::links::ledger::FlowChange::New,
+                closed_result: None,
             })
             .unwrap();
         store

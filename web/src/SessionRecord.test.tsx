@@ -29,7 +29,7 @@ const request = (offset: number, text: string, patch: Partial<WorkRequest> = {})
 const ask = (id: string, text: string): MissedWork => ({ id, kind: "ask", text, status: "open", at_unix_ms: AT, turn_offset: 1, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const output = (number: number, state: string, source: WorkSession): WorkOutput => ({ kind: "pr", repository: "acme/app", number, title: `PR title ${number}`, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT + number, source, source_name: source.session_id });
 const flow = (id: string, name: string, at: number, requests: WorkRequest[], result: WorkFlow["result"] = null): WorkFlow => ({ id, name, at_unix_ms: at, requests, request_count: requests.filter((one) => !one.letter_from).length, result });
-const status = (end: RecordStatus["end"], line: string, limited: string | null = null): RecordStatus => ({ end, line, at_unix_ms: AT + 20 * MIN, limited });
+const status = (end: RecordStatus["end"], line: string, limited: string | null = null): RecordStatus => ({ end, line, at_unix_ms: AT + 20 * MIN, limited, settled: null });
 const EMPTY = { status: null, asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] };
 const child: RecordValue = { ...EMPTY, session: CHILD, title: "Child work", fallback_title: "Codex", native_title: null, manual_title: null, state: "idle", cwd: null, path: null, started_at_unix_ms: AT + 2, ended_at_unix_ms: null, status: status("done", "Report sent") };
 const BASE: RecordValue = {
@@ -37,7 +37,7 @@ const BASE: RecordValue = {
   session: SESSION, title: "Session goal", fallback_title: "Claude", native_title: null, manual_title: null, state: "idle", cwd: null, path: null, started_at_unix_ms: AT, ended_at_unix_ms: null,
   status: status("done", "Record written"),
   flows: [
-    flow("flow-1", "Board drawing", AT, [request(1, "Draw the record board", { summary: "Draw the record board" })], { end: "done", line: "Board drawn", at_unix_ms: AT + 5 * MIN }),
+    flow("flow-1", "Board drawing", AT, [request(1, "Draw the record board", { summary: "Draw the record board" })], { kind: "turn", end: "done", line: "Board drawn", at_unix_ms: AT + 5 * MIN }),
     flow("flow-2", "Record PRD", AT + 10 * MIN, [request(10, "Write the PRD now", { summary: "Write the PRD" }), request(11, "How is it going?", { summary: "Question: how far along" })]),
   ],
   outputs: [output(1100, "review", SESSION), output(1093, "merged", CHILD)],
@@ -98,6 +98,37 @@ it("opens the current flow and folds a past one to its result, which a click ope
     expect(current.querySelector("[data-record-flow-result]")).toBeNull();
     await toggleFlow(container, "flow-1");
     expect(past.querySelectorAll("[data-record-request]")).toHaveLength(1);
+  } finally { await unmount(); }
+});
+
+it("draws a past flow's settled pull requests, a moved-on wait and a closing line, and the current flow's merge on top (fact-status B1-B5)", async () => {
+  const record: RecordValue = {
+    ...BASE,
+    status: { ...status("waiting", "Waiting for CI"), settled: { state: "merged", numbers: [1100], at_unix_ms: AT + 30 * MIN } },
+    flows: [
+      flow("flow-1", "Board drawing", AT, [request(1, "Draw it")], { kind: "settled", state: "merged", numbers: [1093, 1094], at_unix_ms: AT + 9 * MIN }),
+      flow("flow-2", "Interview", AT + 10 * MIN, [request(10, "Interview me")], { kind: "moved_on", line: "Pick the scope", at_unix_ms: AT + 11 * MIN }),
+      flow("flow-3", "Record PRD", AT + 12 * MIN, [request(12, "Write the PRD")], { kind: "closing", line: "PRD written, 12 decisions", at_unix_ms: AT + 13 * MIN }),
+      flow("flow-4", "Spike", AT + 14 * MIN, [request(14, "Try it")], { kind: "settled", state: "closed", numbers: [1095], at_unix_ms: AT + 15 * MIN }),
+      flow("flow-5", "Record build", AT + 16 * MIN, [request(16, "Build it")]),
+    ],
+  };
+  const { container, unmount } = await mount(record);
+  try {
+    const result = (id: string) => flowOf(container, id).querySelector("[data-record-flow-result]")!;
+    expect(result("flow-1").getAttribute("data-record-flow-result")).toBe("settled");
+    expect(text(result("flow-1"))).toContain("Merged");
+    expect(text(result("flow-1"))).toContain("2 PRs");
+    expect(result("flow-1").querySelector("time")).not.toBeNull();
+    expect(text(result("flow-2"))).toBe("Moved onPick the scope");
+    expect(text(result("flow-2"))).not.toContain("Question");
+    expect(text(result("flow-3"))).toBe("PRD written, 12 decisions");
+    expect(text(result("flow-4"))).toContain("Closed");
+    expect(text(result("flow-4"))).toContain("#1095");
+    const now = container.querySelector("[data-record-now]")!;
+    expect(text(now)).toContain("Merged");
+    expect(text(now.querySelector("[data-record-now-words]"))).toBe("#1100");
+    expect(text(now)).not.toContain("Waiting for CI");
   } finally { await unmount(); }
 });
 

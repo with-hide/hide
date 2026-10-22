@@ -2414,6 +2414,9 @@ impl LabelWorker {
                             } else {
                                 FlowChange::Rename
                             },
+                            closed_result: analysis.closed_result.clone().filter(|_| {
+                                goal_changed && change == FlowChange::New && previous_goal.is_some()
+                            }),
                         })
                     {
                         crate::diagnostic!(

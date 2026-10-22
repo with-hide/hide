@@ -24,7 +24,7 @@ import { useSessionResume } from "./useSessionResume";
 import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
-import type { AgentRow, Checkout, MissedWork, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
+import type { AgentRow, Checkout, FlowResult, MissedWork, PrSettlement, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
 import { statusText } from "./agentStatus";
 import { useShellStore } from "./store";
 import { summariesEnabled } from "./hideAi";
@@ -213,9 +213,11 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
   const status = summaries ? record.status : null;
   const recorded = status && (live === "ended" || (live === "blocked" && status.limited !== null)) ? status : null;
   const kind = recorded ? (recorded.end === "question" ? "question" : recorded.end === "blocked" || recorded.end === "limited" ? "blocked" : recorded.end === "working" ? "working" : "ended") : live;
-  const since = recorded ? recorded.at_unix_ms : kind === "ended" ? record.ended_at_unix_ms ?? agent?.changed_at_unix_ms ?? null : agent?.changed_at_unix_ms ?? null;
-  const word = recorded ? t(`requests.end.${recorded.end}`) : kind === "working" ? t("agents.status.working") : kind === "question" ? t("agents.status.question") : kind === "blocked" ? t("agents.status.error") : agent && agent.status_code !== "done" ? statusText(t, agent.status_code) : t("sessionWork.done");
-  const said = recorded ? recorded.line || null : kind === "question" ? question ?? agent?.state.ask?.what ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
+  // The current flow's pull requests, all settled after that turn, stand for its line (fact-status B2).
+  const settled = recorded?.settled ?? null;
+  const since = settled ? settled.at_unix_ms : recorded ? recorded.at_unix_ms : kind === "ended" ? record.ended_at_unix_ms ?? agent?.changed_at_unix_ms ?? null : agent?.changed_at_unix_ms ?? null;
+  const word = settled ? t(settled.state === "merged" ? "record.merged" : "record.closed") : recorded ? t(`requests.end.${recorded.end}`) : kind === "working" ? t("agents.status.working") : kind === "question" ? t("agents.status.question") : kind === "blocked" ? t("agents.status.error") : agent && agent.status_code !== "done" ? statusText(t, agent.status_code) : t("sessionWork.done");
+  const said = settled ? settledPrs(t, settled) : recorded ? recorded.line || null : kind === "question" ? question ?? agent?.state.ask?.what ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
   const pane = agent?.pane_id ?? null;
   const button = pane === null ? <RestoreSession record={record} checkout={checkout} actions={actions} /> : kind === "question" ? (
     <Button size="sm" onClick={() => actions.openAgent(pane)} data-record-now-button="answer"><CircleHelpIcon aria-hidden="true" />{t("links.answer")}</Button>
@@ -399,6 +401,34 @@ function EndMark({ end }: { end: WorkEnd }) {
   return <span className={cn("shrink-0 text-micro font-medium", tone)} data-record-end={end}>{t(`requests.end.${end}`)}</span>;
 }
 
+/** `#n` for one pull request, `PR n개` for several (fact-status B1). */
+function settledPrs(t: ReturnType<typeof useInterfaceTranslation>["t"], settled: PrSettlement): string {
+  return settled.numbers.length === 1 ? `#${settled.numbers[0]}` : t("record.prCount", { count: settled.numbers.length });
+}
+
+/**
+ * A past flow's result (fact-status B1-B5): Hide's PR fact with its time, a
+ * question or wait it moved on from, the line its closing label gave, or the
+ * end of its last turn.
+ */
+function FlowResultLine({ result }: { result: FlowResult }) {
+  const { t } = useInterfaceTranslation();
+  const line = (text: string) => text ? <span className="min-w-0 truncate text-micro text-subtle-foreground" title={text}>{text}</span> : null;
+  return <span className="mt-xxs flex min-w-0 items-baseline gap-xs" data-record-flow-result={result.kind}>
+    {result.kind === "settled" ? <>
+      <span className={cn("shrink-0 text-micro font-medium", result.state === "merged" ? "text-success" : "text-muted-foreground")} data-record-end={result.state}>{t(result.state === "merged" ? "record.merged" : "record.closed")}</span>
+      <span className="min-w-0 truncate text-micro text-subtle-foreground">{settledPrs(t, result)}</span>
+      <RequestTime at={result.at_unix_ms} />
+    </> : result.kind === "moved_on" ? <>
+      <span className="shrink-0 text-micro font-medium text-muted-foreground" data-record-end="moved_on">{t("record.movedOn")}</span>
+      {line(result.line)}
+    </> : result.kind === "closing" ? line(result.line) : <>
+      <EndMark end={result.end} />
+      {line(result.line)}
+    </>}
+  </span>;
+}
+
 /**
  * The goal flows (D-03, B3, B13): each with its name, when it began and how
  * many requests it holds. The current one is open; a past one is folded to
@@ -428,10 +458,7 @@ function Flows({ record, locator }: { record: RecordValue; locator?: RequestLoca
               <span className="mt-xxs flex min-w-0 flex-wrap items-center gap-x-xs text-micro text-muted-foreground">
                 <RequestTime at={flow.at_unix_ms} /><span>·</span><span>{isCurrent ? t("record.flowNow") : t("record.flowRequests", { count: flow.request_count })}</span>
               </span>
-              {!isCurrent && flow.result ? <span className="mt-xxs flex min-w-0 items-baseline gap-xs" data-record-flow-result="true">
-                <EndMark end={flow.result.end} />
-                {flow.result.line ? <span className="min-w-0 truncate text-micro text-subtle-foreground" title={flow.result.line}>{flow.result.line}</span> : null}
-              </span> : null}
+              {!isCurrent && flow.result ? <FlowResultLine result={flow.result} /> : null}
             </span>
           </button>
           {expanded ? <ol className={cn("min-w-0 pb-sm", LANE)} data-record-flow-requests={flow.requests.length}>

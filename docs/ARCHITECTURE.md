@@ -1215,7 +1215,8 @@ An unknown original repository or a confirmed connection to another repository r
 Every external create remains pinned to the original reserved repository, and a retry reconciles that durable attempt before another effect; a retry the ledger refuses because the repository changed fails with `repository_changed` rather than make an issue in the new one.
 The helper's version 32 supplies canonical request senders and letter kinds from every supported native reader; an older helper keeps its existing raw requests and PR facts until updated.
 
-The record retains requests of at most 500 characters with their summaries, goal chapters (the flows), END judgments with their lines and artifacts, created outputs and missed work, including asks.
+Version 8 adds each goal chapter's `closed_result`, the line the label gave as the flow closed ([status-model.md](status-model.md#the-session-work-record)); it adds a column and changes no stored row.
+The record retains requests of at most 500 characters with their summaries, goal chapters (the flows) with their closing lines, END judgments with their lines and artifacts, created outputs and missed work, including asks.
 A Claude Code command record (`<command-name>`) is a request only when what Claude Code wrote after it shows the command went to the model: a command it answers itself, such as `/model` with its `<local-command-stdout>` or a `local_command` system record, is neither a request nor a Sessions last request, a search hit or label context.
 The incremental reader holds a command record that has no reply in the bytes it read, rereads it with the next poll and so neither loses nor repeats it; a reader of a whole page or file with no reply after the command counts it as a request.
 Requests already stored from before this rule are not filtered on read.

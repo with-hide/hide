@@ -1315,6 +1315,10 @@ fn direct_observation_schema_migrates_existing_v4_without_recreating_retention_a
     let (store, _) = LinkStore::open(&path).unwrap();
     store
         .connection
+        .execute_batch(ledger::UNDO_CLOSED_FLOW_SCHEMA)
+        .unwrap();
+    store
+        .connection
         .execute_batch(ledger::UNDO_FLOW_SCHEMA)
         .unwrap();
     store.connection.execute_batch("DROP TABLE direct_observations;
