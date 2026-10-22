@@ -249,8 +249,8 @@ pub const COMMANDS: &[Spec] = &[
             optional("--path", Text),
             optional("--model", Text),
             optional("--effort", Text),
-            optional("--brief", Text),
-            optional("--brief-file", Text),
+            cleared("--brief", Text, &["--brief-file"]),
+            cleared("--brief-file", Text, &["--brief"]),
             switch("--help"),
             switch("--json"),
         ],
@@ -785,6 +785,7 @@ mod tests {
         matches!(
             parse_args(argv),
             Ok(CommandKind::Delivery(_)
+                | CommandKind::AgentSpawnBriefFile { .. }
                 | CommandKind::Mission(_)
                 | CommandKind::AgentCatalog { .. }
                 | CommandKind::Ps(_))
@@ -830,10 +831,16 @@ mod tests {
                         .iter()
                         .find(|other| other.name == *conflict)
                         .unwrap();
+                    // The conflict goes before `--`: after it, every word
+                    // is the agent's own, not an option of the command.
                     let mut both = allowed.clone();
-                    both.push(other.name.to_owned());
+                    let at = both
+                        .iter()
+                        .position(|word| word == "--")
+                        .unwrap_or(both.len());
+                    both.insert(at, other.name.to_owned());
                     if let Some(value) = other.value {
-                        both.push(sample(value).0);
+                        both.insert(at + 1, sample(value).0);
                     }
                     assert!(
                         !takes(&both),

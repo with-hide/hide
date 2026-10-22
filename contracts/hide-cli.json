@@ -1964,6 +1964,9 @@
                     }
                 },
                 {
+                    "conflicts": [
+                        "--brief-file"
+                    ],
                     "name": "--brief",
                     "required": false,
                     "requires": [],
@@ -1972,6 +1975,9 @@
                     }
                 },
                 {
+                    "conflicts": [
+                        "--brief"
+                    ],
                     "name": "--brief-file",
                     "required": false,
                     "requires": [],
@@ -2936,7 +2942,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:4cc1633145bc8d83a728809e96fac80e7418b4b34dec8399a85d427f1cea13f9",
+    "digest": "sha256:e24be4e805b7bc1903522a5114329c808667e0bce8b25bed5df8cfa5218ca833",
     "envelopes": {
         "agent": {
             "answer": "value",
