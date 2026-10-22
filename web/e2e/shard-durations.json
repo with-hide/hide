@@ -275,7 +275,7 @@
   "sidebar-root-only.spec.ts \u203a a worktree with only a delegated child draws no checkout line, and the root's tree reaches the child": 26.2,
   "sidebar-shell.spec.ts \u203a at the smallest window and the largest Interface text, long names shorten and no icon hides": 10.4,
   "sidebar-shell.spec.ts \u203a the Help menu opens the shortcut sheet, copies the diagnostics, opens the new-issue page and names the version": 10.4,
-  "sidebar-shell.spec.ts \u203a the Search row and the Overview row under the device, with no Home row and no Add project in a browser tab": 10.4,
+  "sidebar-shell.spec.ts \u203a the Search row and the Overview row under the device, with no Home row, and Add project by a typed path in a browser tab": 10.4,
   "sidebar-shell.spec.ts \u203a the window's top row names the device over the rail and the sidebar, and carries the Workspace's path and icons": 10.4,
   "sidebar-status.spec.ts \u203a roots stay in one sidebar, open their children in place, and the header's tree button opens the tree": 13.0,
   "sidebar-tab-groups.spec.ts \u203a 2-1-2 tab segments share one root column right of the kind glyph, with guides under it": 21.8,

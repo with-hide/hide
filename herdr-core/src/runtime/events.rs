@@ -2304,6 +2304,30 @@ impl Runtime {
                         );
                         return true;
                     }
+                    // A folder that is a project already is answered, not made
+                    // again, once a removal closing its panes has had its say: the shell refuses a spelling it can match itself,
+                    // but a typed `~/` path reaches the core as the absolute one
+                    // hided's boundary resolved, which only the core can match.
+                    if !payload.new_folder {
+                        let wanted = payload.path.trim_end_matches('/');
+                        let registered = self
+                            .snapshot
+                            .ui_state
+                            .workspace_registrations
+                            .iter()
+                            .find(|row| {
+                                row.device_id == self.node.as_str()
+                                    && row.path.trim_end_matches('/') == wanted
+                            });
+                        if let Some(existing) = registered {
+                            self.set_error(
+                                "workspace.create_registered",
+                                format!("{} is already a project", existing.label),
+                                false,
+                            );
+                            return true;
+                        }
+                    }
                     if !self
                         .workspace_creations_in_flight
                         .insert(payload.path.clone())

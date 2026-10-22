@@ -3,8 +3,8 @@
 // The browser column is what Chrome lets a page claim. Five chords Chrome keeps
 // for itself (⌘T ⌘W ⌘⇧T ⌃Tab ⌃⇧Tab) moved to the ⌥ family, and ⌘⇧W
 // (Chrome's close-window) moved with them (D-06); `moved` marks each so the
-// sheet can say so. ⌘⇧N, Add project, has no browser chord: adding a project
-// needs the desktop app's folder picker, which a browser tab does not have. The Electron column is the macOS chord set: the desktop host
+// sheet can say so. ⌘⇧N, Add project, has no browser chord, since Chrome
+// keeps it; a browser tab opens Add project from its rows and buttons. The Electron column is the macOS chord set: the desktop host
 // has no browser keeping chords, so the moved ones return to their native
 // keys there. The one exception is ⌘E, which shows the Explorer in both
 // hosts (issue 170) while the macOS set keeps it on the sidebar switch; the

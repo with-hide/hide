@@ -50,7 +50,7 @@ import {
   type CheckoutPresentation,
   type ProjectRow,
 } from "./projects";
-import { editorHost, hostBridge, revealHost } from "./host";
+import { editorHost, revealHost } from "./host";
 import { commandLabel } from "./shortcutLabels";
 import type { Digit } from "./shortcuts";
 import { contextAgents, contextAllWorkspaces, contextWorkspaces, deviceCatalogLine, herdrPaneId, remoteContext, remoteView } from "./remote";
@@ -147,7 +147,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
           <SidebarHeader
             compact={(preview ?? storedWidth ?? tokenPx("--size-sidebar-ideal")) < tokenPx("--size-sidebar-ideal")}
             overview={{ selected: overviewSelected, count: overviewCount, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
-            addProject={hostBridge() ? { chord: commandLabel("new_workspace") || null, onOpen: () => actions.openAddProject() } : undefined}
+            addProject={{ chord: commandLabel("new_workspace") || null, onOpen: () => actions.openAddProject() }}
             searchChord={commandLabel("search") || null}
             onSearch={() => actions.openSearch()}
           />

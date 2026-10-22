@@ -200,7 +200,8 @@ function DeviceUnanswered({ device, availability, actions }: { device: Device; a
 /**
  * The Home with no project (PRD first-run-onboarding D-16, B27; PRD
  * sidebar-task-lens B42): the next step in one sentence with Add project and
- * its chord. A browser tab cannot pick a folder, so it shows the sentence alone.
+ * its chord; a browser tab has no chord for it (Chrome keeps ⇧⌘N), so the
+ * button stands alone there.
  */
 function NoProjectView({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -211,14 +212,12 @@ function NoProjectView({ actions }: { actions: Actions }) {
     <div className="flex min-h-full flex-1 flex-col items-center justify-center gap-md p-xl text-center" data-main-empty-home="no_project">
       {firstRun === null && setup === null ? <BrandOwl pose="ai" className="size-(--size-owl-empty)" /> : null}
       <p className="text-subhead break-keep text-subtle-foreground">{t("firstRun.home.noProject")}</p>
-      {hostBridge() ? (
-        <span className="flex items-center gap-sm">
-          <Button onClick={() => actions.openAddProject()} data-main-empty-home-action="new_workspace">
-            {t("firstRun.home.addProject")}
-          </Button>
-          {chord ? <Kbd aria-hidden="true">{chord}</Kbd> : null}
-        </span>
-      ) : null}
+      <span className="flex items-center gap-sm">
+        <Button onClick={() => actions.openAddProject()} data-main-empty-home-action="new_workspace">
+          {t("firstRun.home.addProject")}
+        </Button>
+        {chord ? <Kbd aria-hidden="true">{chord}</Kbd> : null}
+      </span>
     </div>
   );
 }
