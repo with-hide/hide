@@ -17,7 +17,7 @@ import { startHerdr } from "./herdr-fixture";
 import { startHided } from "./hided-fixture";
 import { fakeGh, git, head, moveHead, skewCardHead, writes, type ExtraQuery } from "./work-prs-fixture";
 import { chord } from "./chords";
-import { chooseTheme, countSent, screenshot, showProjectRow, showTool } from "./wire";
+import { chooseTheme, countSent, screenshot, showProjectRow, showTool, setLanePinned } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -218,7 +218,7 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
     // The rail's slot button draws the card's PR mark in its state and stands
     // apart from the tools by one rule, so it is not read as a second PRs (B46).
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? "divider"));
-    expect(rail).toEqual(["detail", "divider", "memory", "prs", "divider", "files", "changes"]);
+    expect(rail).toEqual(["detail", "documents", "divider", "memory", "prs", "divider", "explorer", "changes"]);
     await expect(page.locator('[data-lane-tool="detail"] [data-detail-mark]')).toHaveAttribute("data-detail-mark", "mergeable");
     await expect(card.locator('[data-pr-card-reason="merge"]')).toBeVisible();
     // Issue linking lives in the menu and hands focus to its picker.
@@ -300,9 +300,7 @@ test("a branch update on a pull request that moved is refused, looked at again, 
 test("the list and the card read without sideways scrolling in each language and both themes", async ({ page }) => {
   await openWork(page, async ({ work }) => {
     // The lane opens unpinned, over the agents; a pinned one would dock and redraw under the keys.
-    // The pin is in the tool's head, so it is read before the card takes the slot, whose head has none.
-    if ((await page.locator("[data-lane-pin]").getAttribute("data-lane-pin")) !== "off") await page.locator("[data-lane-pin]").click();
-    await expect(page.locator("[data-lane-pin]")).toHaveAttribute("data-lane-pin", "off");
+    await setLanePinned(page, false);
     await work.locator('[data-pr-row="33"]').click();
     const review = cardOf(page, 33);
     await expect(review).toBeVisible({ timeout: 30_000 });

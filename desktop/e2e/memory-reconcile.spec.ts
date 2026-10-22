@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, type ElectronApplication } from "@playwright/test";
 import { startHerdr } from "../../web/e2e/herdr-fixture";
-import { countSent, showProjectRow, showTool } from "../../web/e2e/wire";
+import { countSent, setLanePinned, showProjectRow, showTool } from "../../web/e2e/wire";
 import { isolate, launch, fitWindow, screenshot, test } from "./fixture";
 import { seedReconciliation } from "./memory-reconcile-fixture";
 import { progressGithub } from "./memory-progress-fixture";
@@ -88,7 +88,7 @@ test("Memory compares sources, limits a batch and groups a confirmed PR", async 
     // right-lane B6).
     await fitWindow(app, { width: 1440, height: 900 });
     await showTool(page, "memory");
-    await page.locator('[data-lane-pin="off"]').click();
+    await setLanePinned(page, true);
     const divider = page.locator('[data-lane-divider="lane"]');
     for (let step = 0; step < 6; step++) await divider.press("ArrowRight");
     await expect.poll(() => page.locator("[data-lane-frame]").evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(360);

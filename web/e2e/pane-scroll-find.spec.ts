@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, enterWorkspace, screenshot, showExplorer } from "./wire";
+import { countSent, enterWorkspace, screenshot, setLanePinned, showExplorer } from "./wire";
 import { chord } from "./chords";
 
 test.describe.configure({ timeout: 180_000 });
@@ -76,7 +76,7 @@ test("an observed agent pane scrolls, Cmd+F finds in the focused pane, and closi
     // opens that pane's find bar, not the document's. The lane is pinned, so
     // it docks beside them (PRD right-lane B5).
     await showExplorer(page);
-    await page.locator("[data-lane-pin]").click();
+    await setLanePinned(page, true);
     const workspace = page.locator("[data-workspace-screen]");
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await page.locator(`[data-explorer-row$="/notes.txt"]`).dblclick();
@@ -122,15 +122,16 @@ test("an observed agent pane scrolls, Cmd+F finds in the focused pane, and closi
     await expect(bar).toHaveCount(0);
     await page.keyboard.press("Escape");
 
-    // Closing the last view keeps the docked lane with the tree filling it,
-    // so the next file brings the View areas back beside the tree (PRD
-    // right-lane B12).
-    await expect(workspace).toHaveAttribute("data-lane-shows", "files");
+    // Closing the last view keeps the docked lane with the Explorer alone in
+    // its column, so the next file brings the View areas back beside it (PRD
+    // lane-two-columns B12).
+    await expect(workspace).toHaveAttribute("data-lane-view", "documents");
     const viewTab = page.locator('[data-view-tab-bar] [role="tab"][data-display]').first();
     await viewTab.hover();
     await viewTab.getByRole("button", { name: /Close view/ }).click();
     await expect(page.locator("[data-view-area]")).toHaveCount(0);
-    await expect(page.locator('[data-lane-tree="only"] [data-explorer]')).toBeVisible();
+    await expect(page.locator('[data-lane="explorer"] [data-explorer]')).toBeVisible();
+    await expect(workspace).toHaveAttribute("data-lane-view", "none");
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await screenshot(page, "view-region-gone");
     await page.locator(`[data-explorer-row$="/notes.txt"]`).dblclick();

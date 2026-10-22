@@ -4,17 +4,18 @@ import path from "node:path";
 import { fixtureExecutable } from "./platform-fixture";
 import { runInPane, startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, screenshot, showTool } from "./wire";
+import { enterWorkspace, screenshot, showDocuments, showExplorer } from "./wire";
 
-// The files tool stays mounted under another lane tool, out of sight. Nothing
-// drawn in it shows through: a selected view tab draws its close button
-// visible on its own, and `visibility` alone on the hidden wrapper let that
-// button show over the PRs panel (seen 2026-10-16).
+// Folded documents stay mounted in the viewing column, out of sight (PRD
+// lane-two-columns B3). Nothing drawn in them shows through: a selected view
+// tab draws its close button visible on its own, and `visibility` alone on
+// the hidden wrapper let that button show over the tool beside it (seen
+// 2026-10-16).
 
 test.describe.configure({ timeout: 120_000 });
 test.use({ actionTimeout: 15_000 });
 
-test("the files tool kept under another tool shows nothing through it", async ({ page }) => {
+test("folded documents kept behind the tool column show nothing through them", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | null = null;
@@ -24,7 +25,7 @@ test("the files tool kept under another tool shows nothing through it", async ({
     daemon = await startHided(herdr, "lane-hidden-tool");
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    await showTool(page, "files");
+    await showExplorer(page);
     const hide = path.resolve("..", "target", "debug", fixtureExecutable("hide"));
     const ran = await runInPane(herdr, herdr.panes[0], "cli-1", { env: { HIDE_STATE_DIR: daemon.stateDir }, argv: [hide, "file", "open", "a.md"] });
     expect(ran.status, ran.stderr).toBe(0);
@@ -33,16 +34,17 @@ test("the files tool kept under another tool shows nothing through it", async ({
     const close = selected.locator("button[aria-label]").last();
     await expect(close).toBeVisible();
 
-    await showTool(page, "prs");
+    await page.locator('[data-lane-tool="documents"]').click();
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "none");
     const hidden = page.locator("[data-lane-frame] [data-lane-hidden]");
     await expect(hidden).toHaveAttribute("inert", "");
     // The button keeps its own visibility, so the wrapper's opacity is what hides it.
     await expect(close).toHaveCSS("visibility", "visible");
     await expect(hidden).toHaveCSS("visibility", "hidden");
     await expect(hidden).toHaveCSS("opacity", "0");
-    await screenshot(page, "lane-hidden-tool-prs");
+    await screenshot(page, "lane-hidden-documents");
 
-    await showTool(page, "files");
+    await showDocuments(page);
     await expect(close).toBeVisible();
     await expect(close).toHaveCSS("opacity", "1");
   } finally {

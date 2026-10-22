@@ -4,7 +4,7 @@ import path from "node:path";
 import { fixtureExecutable } from "./platform-fixture";
 import { runInPane, startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, enterWorkspace, screenshot, showTool } from "./wire";
+import { countSent, enterWorkspace, screenshot, setLanePinned, showExplorer } from "./wire";
 
 // CLI background Views: the checkout owns one list, and each Agent tab only
 // leaves its selection alone. An agent in any
@@ -64,10 +64,10 @@ test("Agent switching preserves the selected View and background opens stay behi
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await expect(agentTab(page, second)).toBeVisible();
-    // The files tool pinned open, so the agents' opens behind the operator are
-    // seen through the tab clicks below (PRD right-lane B5).
-    await showTool(page, "files");
-    await page.locator("[data-lane-pin]").click();
+    // The lane pinned open on the Explorer, so the agents' opens behind the
+    // operator are seen through the tab clicks below (PRD right-lane B5).
+    await showExplorer(page);
+    await setLanePinned(page, true);
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
 
     // Tab 1 is in front and opens a.md.

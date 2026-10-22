@@ -1,6 +1,7 @@
 // Right-lane acceptance in a real, privately owned desktop window (PRD
-// right-lane B3, B5, B6, B19, B22, B24): the terminals' resize count and
-// their input through every lane change are observed here.
+// right-lane B3, B5, B6, B19, B22, B24; PRD lane-two-columns B17, B19,
+// B20, B21): the terminals' resize count and their input through every
+// lane change are observed here.
 // Native captures are optional run artifacts; the behavioral assertions run in CI.
 import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
@@ -9,7 +10,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { chord } from "../../web/e2e/chords";
-import { countSent, enterWorkspace, keyboardFocus, rest, sendEvent, showExplorer, showProjectRow } from "../../web/e2e/wire";
+import { chooseExpand, countSent, enterWorkspace, keyboardFocus, pinState, rest, sendEvent, setLanePinned, showExplorer, showProjectRow } from "../../web/e2e/wire";
 import { deviceHome, proveDeviceHome, resetDeviceHome, stageBuild, writeSshConfig } from "./device-home";
 import { isolate, launchShell, nodeOf, test } from "./fixture";
 
@@ -48,7 +49,7 @@ async function nativeCapture(app: ElectronApplication, page: Page, name: string)
       mode: document.querySelector<HTMLElement>("[data-workspace-screen]")?.dataset.laneMode ?? null,
       agents: box("[data-agent-area]"),
       lane: box("[data-lane-frame]"),
-      tree: box("[data-lane-tree]"),
+      explorer: box('[data-lane="explorer"]'),
       rail: Array.from(document.querySelectorAll<HTMLElement>("[data-lane-tool]")).map((control) => ({ name: control.getAttribute("aria-label"), pressed: control.getAttribute("aria-pressed"), badge: control.querySelector("[data-lane-badge]")?.textContent ?? null, focused: control.matches(":focus-visible") })),
       tooltip: document.querySelector<HTMLElement>('[data-slot="tooltip-content"]')?.textContent ?? null,
     };
@@ -108,7 +109,7 @@ async function echo(page: Page, herdr: HerdrFixture, pane: string, phase: string
   return { method: "send-text CLI return to xterm write callback, 20 native-window samples, nearest-rank p95; candidate observation, no baseline comparison", samples, p95_ms: values[Math.ceil(values.length * 0.95) - 1] };
 }
 
-type Saved = { workspaces: { device_id: string; path: string; tool: string | null; pinned: boolean; tree: boolean; lane_width?: number; tree_width?: number }[] };
+type Saved = { workspaces: { device_id: string; path: string; open: boolean; documents: boolean; tool: string | null; pinned: boolean; document_width?: number; explorer_width?: number }[] };
 
 function saved(stateDir: string): Saved {
   return JSON.parse(fs.readFileSync(path.join(stateDir, "workspace-views.json"), "utf8")) as Saved;
@@ -147,30 +148,34 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
     await nativeCapture(app, page, "lane-closed");
     const resizeCount = () => sent.get("terminal_resize") ?? 0;
     const panesShown = await page.locator("[data-pane-view]").count();
-    const files = page.locator('[data-lane-tool="files"]');
-    const pin = page.locator("[data-lane-pin]");
+    // ⌘E closes the lane and brings both columns back (PRD lane-two-columns B15).
+    const toggleLane = () => page.keyboard.press(chord("toggle_lane", "electron"));
 
-    // Over the agents the lane opens, stays through a terminal click, closes
-    // and comes back without fitting a terminal again (B3, B4, B24).
+    // Over the agents the lane opens with the Explorer and the document
+    // beside it, stays through a terminal click, closes and comes back
+    // without fitting a terminal again (B3, B4, B24; lane-two-columns B20).
     const beforeOverlay = await stableCount(resizeCount);
     await showExplorer(page);
     await page.locator('[data-explorer-row$="/notes.md"]').click();
     await expect(page.locator("[data-editor-body] .cm-content")).toBeVisible();
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(workspace).toHaveAttribute("data-lane-view", "documents");
+    await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
     await nativeCapture(app, page, "lane-overlay");
     await page.locator(`[data-terminal-host="${herdr.panes[0]}"]`).click({ position: { x: 20, y: 20 } });
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
     for (const mode of ["closed", "overlay"]) {
-      await files.click();
+      await toggleLane();
       await expect(workspace).toHaveAttribute("data-lane-mode", mode);
     }
+    await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
     expect(await stableCount(resizeCount)).toBe(beforeOverlay);
 
     // Each pin change fits every pane on screen once (B5, B24).
     const pins: { mode: string; resizes: number }[] = [];
     for (const mode of ["docked", "overlay", "docked"]) {
       const before = await stableCount(resizeCount);
-      await pin.click();
+      await setLanePinned(page, mode === "docked");
       await expect(workspace).toHaveAttribute("data-lane-mode", mode);
       await expect.poll(resizeCount).toBeGreaterThan(before);
       const resizes = await stableCount(resizeCount) - before;
@@ -196,7 +201,7 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
     await expect.poll(resizeCount).toBeGreaterThan(before);
     const resizeAfterRelease = await stableCount(resizeCount) - before;
     expect(resizeAfterRelease).toBe(panesShown);
-    await expect.poll(() => saved(run.env.HIDE_STATE_DIR!).workspaces.find((entry) => entry.path === checkout)).toMatchObject({ tool: "files", pinned: true, tree: true, lane_width: 488 });
+    await expect.poll(() => saved(run.env.HIDE_STATE_DIR!).workspaces.find((entry) => entry.path === checkout)).toMatchObject({ open: true, documents: true, tool: "explorer", pinned: true, document_width: 488 });
     await page.reload();
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await expect(divider).toHaveAttribute("aria-valuenow", "488");
@@ -236,13 +241,13 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
       expect(await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id), pane)).toContain("lane driven output");
     };
     try {
-      const changes = [[pin, "overlay", panesShown], [files, "closed", 0], [files, "overlay", 0], [pin, "docked", panesShown]] as const;
+      const changes = [[() => setLanePinned(page, false), "overlay", panesShown], [toggleLane, "closed", 0], [toggleLane, "overlay", 0], [() => setLanePinned(page, true), "docked", panesShown]] as const;
       drivenChanges = await echo(page, herdr, pane, "change", async (index) => {
         if (index % 5 !== 0) return;
         const [control, mode, expected] = changes[index / 5]!;
         const before = await stableCount(resizeCount);
         const start_ms = Date.now();
-        await control.click();
+        await control();
         await expect(workspace).toHaveAttribute("data-lane-mode", mode);
         if (expected > 0) await expect.poll(resizeCount).toBeGreaterThan(before);
         const resizes = await stableCount(resizeCount) - before;
@@ -284,8 +289,8 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
     }
     if (dir) fs.writeFileSync(path.join(dir, "lane-echo.json"), JSON.stringify({ identity, pins, divider: { resizeDuringDrag: 0, resizeAfterRelease, panesShown, restoredLaneWidth: 488 }, transitions: { actions: transitionActions, originalSession, newViewRequests: newViews - beforeNewViews, terminalElementsRetained: true, drivenChanges, drivenDrag }, load: spawnSync("uptime", { encoding: "utf8" }).stdout.trim(), workload: "two visible shell panes; idle cat and driven line every 8ms in measured pane; 20 markers per idle, driven, driven-change and driven-drag phase; native captures at action states, no continuous blank-frame recording, baseline or speed claim", idle, driven }, null, 2));
     if (dir) {
-      // Closing the lane left the tree on, so its rows are already there.
-      await expect(page.locator("[data-lane-tree]")).toBeVisible();
+      // Closing the lane left the Explorer in its column, so its rows are already there.
+      await expect(page.locator('[data-lane="explorer"]')).toBeVisible();
       await page.locator(`[data-explorer-row$="/${longName}"]`).click();
       await expect(page.locator("[data-view-tab-bar]")).toContainText(longName);
       for (const theme of ["dark", "light"] as const) {
@@ -304,7 +309,7 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
         await keyboardFocus(page, divider);
         await nativeCapture(app, page, `lane-${theme}-divider-focus`);
         await rest(page);
-        for (const [tool, name] of [["files", "Files"], ["prs", "PRs"]] as const) {
+        for (const [tool, name] of [["documents", "Documents"], ["prs", "PRs"]] as const) {
           await page.locator(`[data-lane-tool="${tool}"]`).hover();
           const tooltip = page.locator('[data-slot="tooltip-content"]');
           await expect(tooltip).toContainText(name);
@@ -315,17 +320,30 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
         await expect(page.locator('[data-slot="tooltip-content"]')).toContainText(path.join(checkout, longName));
         await nativeCapture(app, page, `lane-${theme}-full-file-path-tooltip`);
         await rest(page);
-        // Too narrow for even the lane's minimum beside 480, the pinned lane opens over the agents (B19).
+        // Too narrow for both columns' minimums beside 480, the pinned lane
+        // stacks them, the document in front; too narrow for even one, it
+        // opens over the agents (B19).
+        await bodyWidth(app, page, 1000);
+        await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
+        await expect(workspace).toHaveAttribute("data-lane-stacked", "true");
+        await expect(workspace).toHaveAttribute("data-lane-view", "documents");
+        await expect(workspace).toHaveAttribute("data-lane-shows", "none");
+        await page.locator('[data-lane-tool="explorer"]').click();
+        await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
+        await expect(workspace).toHaveAttribute("data-lane-view", "none");
+        await nativeCapture(app, page, `lane-${theme}-stacked-pinned`);
         await bodyWidth(app, page, 800);
         await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
-        await expect(pin).toHaveAttribute("data-lane-pin", "narrow");
+        expect(await pinState(page)).toBe("narrow");
         await nativeCapture(app, page, `lane-${theme}-narrow-pinned`);
         await bodyWidth(app, page, 1600);
         await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
-        await page.locator("[data-lane-expand]").click();
+        await expect(workspace).not.toHaveAttribute("data-lane-stacked", "true");
+        await expect(workspace).toHaveAttribute("data-lane-view", "documents");
+        await chooseExpand(page);
         await expect(workspace).toHaveAttribute("data-lane-mode", "expanded");
         await nativeCapture(app, page, `lane-${theme}-expanded`);
-        await page.locator("[data-lane-expand]").click();
+        await chooseExpand(page);
         await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
       }
     }
@@ -350,12 +368,15 @@ test("lane dividers retain every rapid arrow step before a snapshot arrives", as
     await bodyWidth(app, page, 1600);
     await showExplorer(page);
     await page.locator('[data-explorer-row$="/notes.md"]').click();
-    await page.locator('[data-lane-pin="off"]').click();
+    await setLanePinned(page, true);
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
     const lane = page.locator('[data-lane-divider="lane"]');
-    const tree = page.locator('[data-lane-divider="tree"]');
+    const column = page.locator('[data-lane-divider="column"]');
+    const explorer = () => page.locator('[data-lane-column="tool"]').evaluate((element) => element.clientWidth);
+    // Both dividers name the document's width: the lane's at its edge, the column's as its position.
     await expect(lane).toHaveAttribute("aria-valuenow", "520");
-    await expect(tree).toHaveAttribute("aria-valuenow", "240");
+    await expect(column).toHaveAttribute("aria-valuenow", "520");
+    await expect.poll(explorer).toBe(240);
     const burst = async (divider: typeof lane, key: "ArrowLeft" | "ArrowRight") => {
       await divider.focus();
       // Deliver both keys in one browser turn, so the regression does not
@@ -366,23 +387,26 @@ test("lane dividers retain every rapid arrow step before a snapshot arrives", as
         }
       }, key);
     };
-    // The lane's divider widens the document; the tree's trades its width with
-    // the document and leaves the lane and Agent Views as they are (B6, B10).
+    // The lane's divider widens the document; the column divider trades the
+    // document's width with the Explorer's and leaves the lane and Agent
+    // Views as they are (B6, B10; lane-two-columns B17).
     await burst(lane, "ArrowLeft");
     await expect(lane).toHaveAttribute("aria-valuenow", "584");
     const agents = await page.locator("[data-agent-area]").evaluate((element) => element.clientWidth);
-    await burst(tree, "ArrowRight");
-    await expect(tree).toHaveAttribute("aria-valuenow", "304");
+    await burst(column, "ArrowLeft");
+    await expect(column).toHaveAttribute("aria-valuenow", "520");
     await expect(lane).toHaveAttribute("aria-valuenow", "520");
+    await expect.poll(explorer).toBe(304);
     await expect(page.locator("[data-agent-area]")).toHaveJSProperty("clientWidth", agents);
-    await burst(tree, "ArrowLeft");
-    await expect(tree).toHaveAttribute("aria-valuenow", "240");
-    await expect(lane).toHaveAttribute("aria-valuenow", "584");
+    await burst(column, "ArrowRight");
+    await expect(column).toHaveAttribute("aria-valuenow", "584");
+    await expect.poll(explorer).toBe(240);
     await burst(lane, "ArrowRight");
     await expect(lane).toHaveAttribute("aria-valuenow", "520");
     await page.reload();
     await expect(lane).toHaveAttribute("aria-valuenow", "520");
-    await expect(tree).toHaveAttribute("aria-valuenow", "240");
+    await expect(column).toHaveAttribute("aria-valuenow", "520");
+    await expect.poll(explorer).toBe(240);
     await nativeCapture(app, page, "lane-rapid-keys-restored");
   } finally {
     await app?.close().catch(() => undefined);
@@ -444,8 +468,8 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
     const workspace = page.locator("[data-workspace-screen]");
     await bodyWidth(app, page, 1600);
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed");
-    // ⌘⇧E opens the files tool with its tree; ⌘E closes and opens the lane (B9, B20).
-    await page.keyboard.press(chord("toggle_file_tree", "electron"));
+    // ⌘⇧E opens the Explorer; ⌘E closes and opens the lane with both columns (lane-two-columns B4, B15).
+    await page.keyboard.press(chord("toggle_lane_explorer", "electron"));
     await expect(page.locator('[data-explorer-row$="/한글-notes.md"]')).toBeVisible({ timeout: 60_000 });
     await page.locator('[data-explorer-row$="/한글-notes.md"]').click();
     await expect(page.locator("[data-editor-body] .cm-content")).toContainText("Remote lane notes");
@@ -453,11 +477,11 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed");
     await page.keyboard.press(chord("toggle_lane", "electron"));
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
-    await page.keyboard.press(chord("toggle_file_tree", "electron"));
-    await expect(page.locator('[data-lane-tree="beside"]')).toBeVisible();
-    // Pinned, a released drag and an arrow key on the tree's divider save
-    // this device's widths (B6, B10, B22).
-    await page.locator('[data-lane-pin="off"]').click();
+    await expect(workspace).toHaveAttribute("data-lane-view", "documents");
+    await expect(page.locator('[data-lane="explorer"]')).toBeVisible();
+    // Pinned, a released drag and an arrow key on the column divider save
+    // this device's widths (B6, B10, B22; lane-two-columns B17).
+    await setLanePinned(page, true);
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     const divider = page.locator('[data-lane-divider="lane"]');
     const box = (await divider.boundingBox())!;
@@ -467,14 +491,14 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
     await expect(page.locator("[data-lane-guide]")).toBeVisible();
     await page.mouse.up();
     await expect(divider).toHaveAttribute("aria-valuenow", "424");
-    await page.locator('[data-lane-divider="tree"]').press("ArrowLeft");
-    await expect(page.locator('[data-lane-divider="tree"]')).toHaveAttribute("aria-valuenow", "208");
-    await expect(divider).toHaveAttribute("aria-valuenow", "456");
-    await expect.poll(() => saved(run!.env.HIDE_STATE_DIR!).workspaces.find((entry) => entry.device_id === "lane-ssh" && entry.path === shared)).toMatchObject({ tool: "files", pinned: true, tree: true, lane_width: 456, tree_width: 208 });
+    await page.locator('[data-lane-divider="column"]').press("ArrowLeft");
+    await expect(page.locator('[data-lane-divider="column"]')).toHaveAttribute("aria-valuenow", "392");
+    await expect(divider).toHaveAttribute("aria-valuenow", "392");
+    await expect.poll(() => saved(run!.env.HIDE_STATE_DIR!).workspaces.find((entry) => entry.device_id === "lane-ssh" && entry.path === shared)).toMatchObject({ open: true, documents: true, tool: "explorer", pinned: true, document_width: 392, explorer_width: 272 });
     await nativeCapture(app, page, "remote-lane-saved");
     await bodyWidth(app, page, 800);
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
-    await expect(page.locator("[data-lane-pin]")).toHaveAttribute("data-lane-pin", "narrow");
+    expect(await pinState(page)).toBe("narrow");
     await nativeCapture(app, page, "remote-lane-narrow");
     await bodyWidth(app, page, 1600);
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
@@ -494,10 +518,10 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed");
     await row("shared-lane").click();
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
-    await expect(divider).toHaveAttribute("aria-valuenow", "456");
+    await expect(divider).toHaveAttribute("aria-valuenow", "392");
     await page.reload();
-    await expect(divider).toHaveAttribute("aria-valuenow", "456");
-    await expect(page.locator('[data-lane-divider="tree"]')).toHaveAttribute("aria-valuenow", "208");
+    await expect(divider).toHaveAttribute("aria-valuenow", "392");
+    await expect(page.locator('[data-lane-divider="column"]')).toHaveAttribute("aria-valuenow", "392");
     await nativeCapture(app, page, "remote-lane-restored");
     if (dir) fs.writeFileSync(path.join(dir, "remote-lane-saved.json"), JSON.stringify(saved(run.env.HIDE_STATE_DIR!), null, 2));
   } catch (error) {
@@ -542,7 +566,7 @@ test("a Workspace switch cancels its lane drag without changing another Workspac
       await showExplorer(page);
       await page.locator('[data-explorer-row$="/notes.md"]').click();
       await expect(page.locator("[data-editor-body] .cm-content")).toBeVisible();
-      if ((await page.locator("[data-lane-pin]").getAttribute("data-lane-pin")) === "off") await page.locator("[data-lane-pin]").click();
+      await setLanePinned(page, true);
       await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
     };
     await (await showProjectRow(page, row("beta"))).click();
@@ -576,7 +600,7 @@ test("a Workspace switch cancels its lane drag without changing another Workspac
       await paint(page);
       expect(sent.get("workspace_view") ?? 0).toBe(before);
       await expect(divider).toHaveAttribute("aria-valuenow", "520");
-      expect(saved(run.env.HIDE_STATE_DIR!).workspaces.every((entry) => entry.lane_width === undefined)).toBe(true);
+      expect(saved(run.env.HIDE_STATE_DIR!).workspaces.every((entry) => entry.document_width === undefined)).toBe(true);
       await nativeCapture(app, page, `lane-${theme}-drag-switch-cancelled`);
     }
   } finally {

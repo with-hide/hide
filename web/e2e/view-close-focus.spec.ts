@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, showExplorer } from "./wire";
+import { chooseExpand, enterWorkspace, setLanePinned, showExplorer } from "./wire";
 import { chord } from "./chords";
 
 test("View close follows MRU, preserves background input and hands collapsed areas their keyboard", async ({ page }) => {
@@ -16,7 +16,7 @@ test("View close follows MRU, preserves background input and hands collapsed are
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
-    await page.locator("[data-lane-pin]").click();
+    await setLanePinned(page, true);
     for (const name of ["a.txt", "b.txt", "c.txt"]) await page.locator(`[data-explorer-row$="/${name}"]`).dblclick();
     const tabs = page.locator('[data-view-tab-bar] [role="tab"]');
     const tab = (name: string) => tabs.filter({ hasText: name });
@@ -37,7 +37,7 @@ test("View close follows MRU, preserves background input and hands collapsed are
     await expect(editor).toContainText("kept-input");
 
     // A context close in another area keeps the original editor's input.
-    await page.locator("[data-lane-expand]").click();
+    await chooseExpand(page);
     await page.locator('[data-explorer-row$="/c.txt"]').dblclick();
     await tab("c.txt").click({ button: "right" });
     await page.getByRole("menuitem", { name: "Split", exact: true }).hover();
@@ -63,8 +63,9 @@ test("View close follows MRU, preserves background input and hands collapsed are
     await expect(tab("b.txt")).toHaveAttribute("aria-selected", "true");
     await expect(editor).toBeFocused();
     await expect(editor).toContainText("kept-input");
-    // With the Explorer off the final close returns to the live Agent pane.
-    await page.locator("[data-lane-tree-toggle]").click();
+    // With the Explorer off the final close closes the lane and returns to the live Agent pane.
+    await page.keyboard.press(chord("toggle_lane_explorer"));
+    await expect(page.locator('[data-lane="explorer"]')).toHaveCount(0);
     await editor.click();
     await page.keyboard.press(chord("close_tab"));
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "closed");

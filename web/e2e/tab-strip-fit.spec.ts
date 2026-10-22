@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { dumpOnFailure, tabsBothSides } from "./failure-dump";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, screenshot, showExplorer } from "./wire";
+import { enterWorkspace, screenshot, setLanePinned, showExplorer } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 
 test.describe.configure({ timeout: 180_000 });
@@ -194,8 +194,8 @@ test("File View tabs use the same shrinking strip and transfer the longest title
     const tabs = page.locator("[data-view-tab-bar] [role=tab]");
     for (const name of names) await page.locator(`[data-explorer-row="${toPage(root)}/${name}"]`).dblclick();
     await expect(tabs).toHaveCount(names.length);
-    // Pinned, the lane docks with a divider that widens it (PRD right-lane B5, B6).
-    await page.locator("[data-lane-pin]").click();
+    // Pinned, the lane docks with a divider at its edge that widens the column there (PRD right-lane B5, B6; lane-two-columns B17).
+    await setLanePinned(page, true);
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
     const handle = page.locator('[data-lane-divider="lane"]');
     const divider = await handle.boundingBox();

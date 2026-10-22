@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, showExplorer } from "./wire";
+import { enterWorkspace, setLanePinned, showExplorer } from "./wire";
 import { chord } from "./chords";
 
 test("View toolbar shortcuts keep New tab, Close, recent tabs and Find in the View", async ({ page }) => {
@@ -15,7 +15,7 @@ test("View toolbar shortcuts keep New tab, Close, recent tabs and Find in the Vi
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
-    await page.locator("[data-lane-pin]").click();
+    await setLanePinned(page, true);
     for (const name of ["a.txt", "b.txt"]) await page.locator(`[data-explorer-row$="/${name}"]`).dblclick();
     await page.locator(".cm-content").click();
     const views = page.locator('[data-view-tab-bar] [role="tab"]');
