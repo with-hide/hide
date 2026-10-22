@@ -118,6 +118,7 @@ type PaneMenuId =
   | "sleep_agent"
   | "archive_session"
   | "revisit"
+  | "open_in_overview"
   | "fork_agent"
   | "fork_agent_side"
   | "copy_name"
@@ -144,7 +145,8 @@ type PaneMenuId =
 /** 다시 볼 것 on a root agent's pane (PRD revisit-group D-08, B10): `star` offers the ★, `done` offers 다 봤음. */
 export type RevisitOffer = "hidden" | "star" | "done";
 
-export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden"): MenuEntry<PaneMenuId>[] {
+/** `overview`: the pane runs an agent, so `개요에서 보기` is offered (PRD pane-open-in-overview D-07). */
+export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden", overview = false): MenuEntry<PaneMenuId>[] {
   const relationLabel = { parent: "panes.relation.parent", sibling: "panes.relation.sibling" } as const;
   const items: MenuEntry<PaneMenuId>[] = relationEntries(pane).map((entry) => ({
     id: `open:${entry.paneId}` as const,
@@ -183,6 +185,8 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
   }
   if (revisitEntry && !pane.sleep_action) agentActions.push(revisitEntry);
   if (archiveEntry && !pane.sleep_action) agentActions.push(archiveEntry);
+  // 개요에서 보기 (PRD pane-open-in-overview D-07, B11): the header button's action, on an agent pane only.
+  if (overview) agentActions.unshift({ id: "open_in_overview", icon: "overview", label: translate("panes.menu.openInOverview"), unavailable: null });
   if (agentActions.length > 0) items.push(...agentActions.map((item, index) => (index === 0 ? { ...item, separated: items.length > 0 } : item)));
   items.push({ id: "copy_name", group: "copy", menuLabel: translate("menus.terminalName"), icon: "copy", label: translate("panes.menu.copyName"), unavailable: null, separated: items.length > 0 });
   items.push({ id: "copy_pane_id", group: "copy", menuLabel: translate("menus.terminalId"), icon: "id", label: translate("panes.menu.copyPaneId"), unavailable: null });
@@ -208,7 +212,7 @@ export type TerminalMenuContext = {
  * A right-click in the terminal: its link first, editing the text, then the tab's
  * layout around this pane, then everything the header menu offers.
  */
-export function terminalMenuItems(pane: PaneRow, title: string, context: TerminalMenuContext, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden"): MenuEntry<PaneMenuId>[] {
+export function terminalMenuItems(pane: PaneRow, title: string, context: TerminalMenuContext, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden", overview = false): MenuEntry<PaneMenuId>[] {
   const { chords } = context;
   const items: MenuEntry<PaneMenuId>[] = [];
   const { target, found } = context.link ?? {};
@@ -243,7 +247,7 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
     },
   );
   if (editingStart > 0) items[editingStart] = { ...items[editingStart]!, separated: true };
-  const paneItems = paneMenuItems(pane, title, archive, revisit).map((item, index) => (index === 0 ? { ...item, separated: true } : item));
+  const paneItems = paneMenuItems(pane, title, archive, revisit, overview).map((item, index) => (index === 0 ? { ...item, separated: true } : item));
   return [...items, ...paneItems];
 }
 
@@ -282,6 +286,8 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
         return actions.sleepAgent(pane.id);
       case "archive_session":
         return actions.archiveSession(pane.id);
+      case "open_in_overview":
+        return actions.openPaneInOverview(pane.id);
       case "revisit":
         return revisit === "done" ? actions.finishRevisit(pane.id) : actions.starSession(pane.id);
       case "fork_agent":
@@ -314,7 +320,8 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
   // menu says what the header says now.
   const archive = useArchiveOffer(pane.id, open !== null);
   const revisit = useRevisitOffer(pane.id, open !== null);
-  const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive, revisit) : paneMenuItems(pane, title, archive, revisit);
+  const overview = useShellStore((s) => open !== null && agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(pane.id));
+  const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive, revisit, overview) : paneMenuItems(pane, title, archive, revisit, overview);
   if (move?.mutationBlocked(pane.id)) {
     for (const item of items) if (["close_pane", "split_right", "split_down", "toggle_zoom", "sleep_agent", "archive_session", "fork_agent", "fork_agent_side"].includes(item.id)) item.unavailable = t("menus.paneMove.busy");
   }

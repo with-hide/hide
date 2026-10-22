@@ -5,7 +5,7 @@ import {
   MinimizeIcon, MoonIcon, NetworkIcon, PanelBottomIcon, PanelLeftIcon,
   PanelRightIcon, PanelTopIcon, PencilIcon, PinIcon, PlayIcon, PlusIcon,
   RefreshCwIcon, SearchIcon, SquareDashedIcon, SquareTerminalIcon, StarIcon, StarOffIcon, Trash2Icon,
-  XIcon,
+  WaypointsIcon, XIcon,
 } from "lucide-react";
 
 /** The same action has the same symbol in every menu; labels still name it. */
@@ -17,6 +17,7 @@ export const menuSymbols = {
   split_down: PanelBottomIcon, split_left: PanelLeftIcon, split_right: PanelRightIcon, split_up: PanelTopIcon,
   rename: PencilIcon, pin: PinIcon, resume: PlayIcon, add: PlusIcon, refresh: RefreshCwIcon,
   find: SearchIcon, select: SquareDashedIcon, star: StarIcon, unstar: StarOffIcon, terminal: SquareTerminalIcon, delete: Trash2Icon, close: XIcon,
+  overview: WaypointsIcon,
 } as const;
 
 export type MenuSymbol = keyof typeof menuSymbols;

@@ -1790,7 +1790,25 @@ export function createActions(send: DispatchFn) {
       const target = state.overlay === "search" ? state.searchReturnFocus : document.activeElement instanceof HTMLElement ? document.activeElement : null;
       if (view) state.setMainView(view);
       state.setOverview({ deviceId, projectId: null, panel: null, ...patch });
-      useUiStore.setState({ opening: null, overviewOpen: modal || state.overviewOpen, overviewReturnFocus: state.overviewOpen ? state.overviewReturnFocus : target, overlay: "none", ...(!modal && !state.overviewOpen ? { screen: { kind: "main" as const, deviceId } } : {}) });
+      useUiStore.setState({ opening: null, overviewOpen: modal || state.overviewOpen, overviewReturnFocus: state.overviewOpen ? state.overviewReturnFocus : target, overviewReveal: null, overlay: "none", ...(!modal && !state.overviewOpen ? { screen: { kind: "main" as const, deviceId } } : {}) });
+    },
+
+    /**
+     * A pane's `개요에서 보기` (PRD pane-open-in-overview D-02, B4): the Overview's
+     * Work tab on the device the pane runs on, with its session chosen on the map,
+     * and Escape at the end hands the keyboard back to that pane's terminal.
+     */
+    openPaneInOverview(paneId: string) {
+      const agent = allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote).find((row) => row.pane_id === paneId);
+      const deviceId = agent?.device_id ?? localDeviceId(rest());
+      const session = agent ? sessionOfAgent(agent, rest()) : null;
+      this.openOverview(deviceId, { view: "work" });
+      // A pane whose session is not reported yet opens Work with nothing chosen (B10).
+      if (!session) useShellStore.getState().noteDiagnostic(`overview: pane ${paneId} has no session to choose on the map`);
+      useUiStore.setState({
+        overviewReveal: session ? { deviceId, paneId, sessionId: session.session_id } : null,
+        overviewReturnFocus: document.querySelector<HTMLElement>(`[data-pane-view="${CSS.escape(paneId)}"] .xterm-helper-textarea`) ?? ui().overviewReturnFocus,
+      });
     },
 
     /** A project's panel on the Overview's Projects (PRD sidebar-task-lens B41): a breadcrumb's project, a cross-project chip, a Recent Panels project. */
@@ -2463,6 +2481,7 @@ export function createActions(send: DispatchFn) {
       }
       // Every open starts on the rail's front device with no project chosen (B1), as a page or as a layer.
       state.setOverview({ deviceId: null, projectId: null, panel: null });
+      useUiStore.setState({ overviewReveal: null });
       if (state.screen?.kind !== "workspace" || !frontCheckout(rest()) || !rest()?.workspace_view) {
         state.setScreen({ kind: "main" });
         return;

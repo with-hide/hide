@@ -152,3 +152,65 @@ test("Overview's work map keeps a hidden project and a dropped session across a 
     await expect.poll(place).toBe(fresh);
   } finally { daemon?.stop(); herdr.stop(); }
 });
+
+// PRD pane-open-in-overview B1, B2, B4-B7, B12: an agent pane's header opens the Overview's Work map with
+// that pane's session chosen, its hidden project shown again, framed, and Escape steps back to the pane.
+test("a pane's Show in Overview opens Work with its session chosen and gives the keyboard back", async ({ page }) => {
+  const herdr = await startHerdr();
+  let daemon: Daemon | undefined;
+  try {
+    daemon = await startHided(herdr, "overview-map-pane");
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await openOverview(page, "work");
+    const graph = page.locator("[data-overview-graph]");
+    await expect(graph).toHaveAttribute("data-graph-phase", "ready", { timeout: 30_000 });
+    const current = graph.locator('.og-session[data-current="true"]');
+    const pane = (await current.getAttribute("data-graph-session"))!;
+    // The project is hidden and another tab was last; the button opens Work and shows the project again (B4, B7).
+    const row = graph.locator("[data-graph-project-row]").first();
+    await row.getByRole("button", { name: /^Hide .* on the map$/ }).click();
+    await expect(row).toHaveAttribute("data-hidden", "true");
+    await openOverview(page, "projects");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("[data-overview-page]")).toHaveCount(0);
+    // B1, B2: hidden until the header is pointed at or holds the keyboard, and nothing moves when it shows.
+    const header = page.locator(`[data-pane-view="${pane}"] > header`);
+    const button = header.locator(`[data-pane-open-overview="${pane}"]`);
+    const title = header.locator("[data-pane-move-title]").first();
+    await page.mouse.move(1, 1);
+    await expect(button).toHaveCSS("opacity", "0");
+    const before = await title.boundingBox();
+    await title.hover();
+    await expect(button).toHaveCSS("opacity", "1");
+    await expect(button).toHaveAccessibleName("Show in Overview");
+    expect(await title.boundingBox()).toEqual(before);
+    await page.mouse.move(1, 1);
+    await button.focus();
+    await expect(button).toHaveCSS("opacity", "1");
+    await button.click();
+    await expect(page.locator('[data-main-view="work"]')).toBeVisible();
+    await expect(graph).toHaveAttribute("data-graph-phase", "ready", { timeout: 30_000 });
+    // B5: chosen, with its details open and the camera on it.
+    await expect(graph.locator("[data-graph-preview]")).toHaveCount(1);
+    await expect(current.locator(".og-session-target")).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(async () => {
+      const canvas = await graph.locator(".og-canvas").boundingBox();
+      const orb = await current.locator(".og-orb").boundingBox();
+      return canvas && orb ? Math.hypot(orb.x + orb.width / 2 - canvas.x - canvas.width / 2, orb.y + orb.height / 2 - canvas.y - canvas.height / 2) < 24 : false;
+    }).toBe(true);
+    // B6: Escape closes the details back to the projects, then the Overview, and the pane has the keyboard.
+    await page.keyboard.press("Escape");
+    await expect(graph.locator("[data-graph-preview]")).toHaveCount(0);
+    await expect(graph.locator("[data-graph-projects]")).toBeVisible();
+    await expect(row).toHaveAttribute("data-hidden", "false");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("[data-overview-page]")).toHaveCount(0);
+    await expect(page.locator(`[data-pane-view="${pane}"] .xterm-helper-textarea`)).toBeFocused();
+    // B12: the sidebar's Overview only highlights the current pane's session.
+    await openOverview(page, "work");
+    await expect(graph).toHaveAttribute("data-graph-phase", "ready", { timeout: 30_000 });
+    await expect(current.locator(".og-session-target")).toHaveAttribute("aria-pressed", "true");
+    await expect(graph.locator("[data-graph-preview]")).toHaveCount(0);
+  } finally { daemon?.stop(); herdr.stop(); }
+});

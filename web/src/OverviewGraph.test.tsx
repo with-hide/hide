@@ -211,3 +211,134 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
     expect(container.querySelector('[data-focus="turn"]')?.getAttribute("aria-pressed")).toBe("true");
   } finally { await act(async () => reactRoot.unmount()); }
 });
+
+// PRD pane-open-in-overview B4-B7, B10, B12: a pane's Show in Overview opens Work on the
+// pane's device with its session chosen, opening what hid it; any other opening only highlights.
+it("opens Work with a pane's session chosen, showing its hidden project and folded team, and only once", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  initializeInterfaceI18n("en");
+  const checkout = (workspace: string): Checkout => ({ id: `${workspace}-main`, workspace_id: workspace, label: "main", path: `/fixture/${workspace}`, branch: "feat/map", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() });
+  const root = legacyAgentRow({ id: "r", pane_id: "r", identity_label: "배포 확인", agent_kind: "claude", session_id: "native-r", group: "working", activity: "working" });
+  const child = legacyAgentRow({ id: "c", pane_id: "c", identity_label: "검증 자식", agent_kind: "codex", session_id: "native-c", group: "working", activity: "working", delegated: true, lineage_parent_pane_id: "r" });
+  const fresh = legacyAgentRow({ id: "n", pane_id: "n", identity_label: "새 세션", agent_kind: "claude", session_id: "native-n", group: "working", activity: "working" });
+  const row = checkout("alpha");
+  const projects: BoardProject[] = [{ agents: [root, child], device: null, workspace: { id: "alpha", label: "알파", device_id: "local", path: "/fixture/alpha", registered: true, temporary: false, pinned: false, checkouts: [row], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: ["r", "c"].map((pane_id) => ({ pane_id, project_id: "alpha", checkout_id: row.id })) } } }];
+  const alpha = { device_id: "local", workspace_id: "alpha" };
+  const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local" }, status: {},
+    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: ["r", "c"].map((pane) => ({ device_id: "local", pane_id: pane, session_digest: `digest-${pane}`, launch_model: null })) },
+    ui_state: { overview_graph: { ...GRAPH_CHOICES_DEFAULTS, hidden_projects: [alpha], folded_projects: [alpha], team_folds: [{ session: { device_id: "local", pane_id: "r", session: "digest-r" }, folded: true }] } },
+  } as unknown as SnapshotRest;
+  // `n` runs in a pane the map has no project for yet.
+  useShellStore.setState({ rest, agents: [root, child, fresh], focusedPaneId: null, connection: "live", linkSummaries: null, diagnostics: [] });
+  useUiStore.setState({ overviewOpen: false, opening: null, screen: { kind: "main", deviceId: "local" }, mainView: "projects" });
+  const events: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { events.push(event); return true; });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const reactRoot = createRoot(container);
+  const preview = () => container.querySelector("[data-graph-preview]");
+  const graph = () => <TooltipProvider><OverviewGraph projects={projects} deviceId={useUiStore.getState().overview.deviceId!} actions={actions} /></TooltipProvider>;
+  try {
+    actions.openPaneInOverview("c");
+    // B4: Work, whichever tab was last, on the pane's device.
+    expect(useUiStore.getState().mainView).toBe("work");
+    expect(useUiStore.getState().overview.deviceId).toBe("local");
+    await act(async () => reactRoot.render(graph()));
+    // B5: the session is chosen and its details are open.
+    expect(preview()?.querySelector(".og-details-head")?.textContent).toContain("검증 자식");
+    // B7: the hidden project shows again, it unfolds, and so does the team folded under its root.
+    expect(events.filter((event) => event.kind === "overview_graph_change").map((event) => (event.payload as { change: unknown }).change)).toEqual([
+      { kind: "project_hidden", project: alpha, hidden: false },
+      { kind: "project_folded", project: alpha, folded: false },
+      { kind: "team_folded", session: { device_id: "local", pane_id: "r", session: "digest-r" }, folded: false },
+    ]);
+    // The core's answer does not end the choice.
+    await act(async () => useShellStore.setState({ rest: { ...rest, ui_state: { overview_graph: GRAPH_CHOICES_DEFAULTS } } as unknown as SnapshotRest }));
+    expect(preview()?.querySelector(".og-details-head")?.textContent).toContain("검증 자식");
+    // B6: Escape closes the details, back to the projects and what waits.
+    await act(async () => useUiStore.getState().escapeLayers.at(-1)!());
+    expect(preview()).toBeNull();
+    expect(container.querySelector("[data-graph-projects]")).not.toBeNull();
+    // B12: another opening of the Overview chooses nothing, even right after the button.
+    await act(async () => reactRoot.render(<TooltipProvider><div /></TooltipProvider>));
+    actions.openPaneInOverview("c");
+    actions.openOverview("local");
+    await act(async () => reactRoot.render(graph()));
+    expect(preview()).toBeNull();
+    // B10: a session the map does not know opens Work with nothing chosen, said only in the log.
+    await act(async () => reactRoot.render(<TooltipProvider><div /></TooltipProvider>));
+    actions.openPaneInOverview("n");
+    await act(async () => reactRoot.render(graph()));
+    expect(preview()).toBeNull();
+    expect(useUiStore.getState().overviewReveal).toBeNull();
+    expect(useShellStore.getState().diagnostics.at(-1)).toContain("pane n");
+  } finally { await act(async () => reactRoot.unmount()); }
+});
+
+// PRD pane-open-in-overview B7-B9 for a sleeping pane: the map it opens draws the chosen session though resting
+// sessions are left out, so its quiet team unfolds and a project of sleepers alone is no budget overflow.
+it("opens a sleeping pane's session drawn on the whole map, its quiet team unfolded", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  initializeInterfaceI18n("en");
+  const board = (id: string, agents: ReturnType<typeof legacyAgentRow>[]): BoardProject => {
+    const row: Checkout = { id: `${id}-main`, workspace_id: id, label: "main", path: `/fixture/${id}`, branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
+    return { agents, device: null, workspace: { id, label: id, device_id: "local", path: `/fixture/${id}`, registered: true, temporary: false, pinned: false, checkouts: [row], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: agents.map((agent) => ({ pane_id: agent.pane_id, project_id: id, checkout_id: row.id })) } } };
+  };
+  const root = legacyAgentRow({ id: "r", pane_id: "r", identity_label: "부모", agent_kind: "claude", session_id: "native-r", group: "working", activity: "working" });
+  const sleeper = legacyAgentRow({ id: "s", pane_id: "s", identity_label: "잠든 자식", agent_kind: "claude", session_id: "native-s", mark: "asleep", status_code: "sleeping", delegated: true, lineage_parent_pane_id: "r" });
+  const alone = legacyAgentRow({ id: "z", pane_id: "z", identity_label: "혼자 잠듦", agent_kind: "claude", session_id: "native-z", mark: "asleep", status_code: "sleeping" });
+  const projects = [board("alpha", [root, sleeper]), board("beta", [alone])];
+  const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local" }, status: {},
+    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: ["r", "s", "z"].map((pane) => ({ device_id: "local", pane_id: pane, session_digest: `digest-${pane}`, launch_model: null })) } } as unknown as SnapshotRest;
+  useShellStore.setState({ rest, agents: [root, sleeper, alone], focusedPaneId: null, connection: "live", linkSummaries: null });
+  useUiStore.setState({ overviewOpen: false, opening: null, screen: { kind: "main", deviceId: "local" } });
+  const events: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { events.push(event); return true; });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const reactRoot = createRoot(container);
+  const head = () => container.querySelector("[data-graph-preview] .og-details-head")?.textContent;
+  const open = async (pane: string) => {
+    await act(async () => reactRoot.render(<TooltipProvider><div /></TooltipProvider>));
+    actions.openPaneInOverview(pane);
+    await act(async () => reactRoot.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));
+  };
+  try {
+    await open("s");
+    expect(head()).toContain("잠든 자식");
+    expect(events.map((event) => (event.payload as { change: unknown }).change)).toEqual([{ kind: "team_folded", session: { device_id: "local", pane_id: "r", session: "digest-r" }, folded: false }]);
+    await open("z");
+    expect(head()).toContain("혼자 잠듦");
+    expect(useUiStore.getState().overview.projectId).toBeNull();
+  } finally { await act(async () => reactRoot.unmount()); }
+});
+
+// PRD pane-open-in-overview B9: a pane whose project the graph budget leaves out opens that project's scope with its session chosen.
+it("opens the project scope for a pane outside the graph budget", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  initializeInterfaceI18n("en");
+  const projects = Array.from({ length: 401 }, (_, index): BoardProject => {
+    const id = `project-${String(index).padStart(3, "0")}`;
+    const pane = `pane-${index}`;
+    const checkout: Checkout = { id: `${id}-main`, workspace_id: id, label: "main", path: `/fixture/${id}`, branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
+    const agent = legacyAgentRow({ id: pane, pane_id: pane, identity_label: `Session ${index}`, agent_kind: "claude", session_id: `native-${index}`, group: "working", activity: "working" });
+    return { agents: [agent], device: null, workspace: { id, label: id, device_id: "local", path: `/fixture/${id}`, registered: true, temporary: false, pinned: false, checkouts: [checkout], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: [{ pane_id: pane, project_id: id, checkout_id: checkout.id }] } } };
+  });
+  const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local" }, status: {},
+    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: projects.map((project) => ({ device_id: "local", pane_id: project.agents[0]!.pane_id, session_digest: `digest-${project.agents[0]!.pane_id}`, launch_model: null })) } } as unknown as SnapshotRest;
+  useShellStore.setState({ rest, agents: projects.flatMap((project) => project.agents), focusedPaneId: null, connection: "live", linkSummaries: null });
+  useUiStore.setState({ overviewOpen: false, opening: null, screen: { kind: "main", deviceId: "local" } });
+  const actions = createActions(() => true);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const reactRoot = createRoot(container);
+  try {
+    actions.openPaneInOverview("pane-400");
+    await act(async () => reactRoot.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));
+    expect(useUiStore.getState().overview.projectId).toBe("project-400");
+    expect(container.querySelector("[data-graph-preview] .og-details-head")?.textContent).toContain("Session 400");
+  } finally { await act(async () => reactRoot.unmount()); }
+});

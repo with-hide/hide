@@ -77,3 +77,20 @@ describe("the pane menu's Fork agent items", () => {
     expect(items.filter((item) => item.separated).map((item) => item.id)).toEqual(["copy_name", "close_pane"]);
   });
 });
+
+// PRD pane-open-in-overview B3, B11: the header button's action, first among an agent pane's own items, never on a shell.
+describe("the pane menu's Show in Overview item", () => {
+  const row = { id: "w1:p1", children: null, lineage_path: [], sleep_action: { available: true } } as unknown as PaneRow;
+
+  it("leads an agent pane's actions", () => {
+    expect(paneMenuItems(row, "reviewer", undefined, undefined, true).map((item) => item.id)).toEqual(["open_in_overview", "sleep_agent", "copy_name", "copy_pane_id", "close_pane"]);
+    expect(paneMenuItems(row, "reviewer", undefined, undefined, true)[0]).toMatchObject({ label: "Show in Overview", unavailable: null });
+  });
+
+  it("is absent on a shell, in the header menu and the terminal's", () => {
+    const shell = { id: "w1:p2", children: null, lineage_path: [] } as unknown as PaneRow;
+    expect(paneMenuItems(shell, "zsh").some((item) => item.id === "open_in_overview")).toBe(false);
+    expect(terminalMenuItems(shell, "zsh", context({})).some((item) => item.id === "open_in_overview")).toBe(false);
+    expect(terminalMenuItems(row, "reviewer", context({}), undefined, undefined, true).some((item) => item.id === "open_in_overview")).toBe(true);
+  });
+});

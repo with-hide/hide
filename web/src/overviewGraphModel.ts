@@ -6,7 +6,8 @@ import type { AgentRow, GraphProjectKey, OverviewGraphFocus, GraphScope, GraphSe
 export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null };
 export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; roots: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null };
 export type GraphFocus = OverviewGraphFocus;
-export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; pinned?: readonly string[]; selected?: string | null };
+/** `chosen`: the session whose details are open, drawn whatever the filter says (PRD pane-open-in-overview D-05). */
+export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; pinned?: readonly string[]; selected?: string | null; chosen?: string | null };
 export type GraphActivity = Exclude<GraphFocus, "all"> | "unknown" | "idle" | "resting";
 export const GRAPH_FOCUS_DEFAULTS: GraphFocusOptions = { focus: "all", includeResting: false };
 
@@ -158,7 +159,7 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
   const retained = new Set<string>();
   const visited = new Set<string>();
   // Stop at already visited ancestors: linear work across all paths, cycles included.
-  for (const row of allAgents.filter(present)) {
+  for (const row of allAgents.filter((row) => present(row) || row.id === options.chosen)) {
     let current: GraphAgent | undefined = row;
     while (current && !visited.has(current.id)) {
       visited.add(current.id);
@@ -166,7 +167,7 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
       current = parentRows.get(current.id);
     }
   }
-  const context = new Set([...retained].filter((id) => !matching.has(id)));
+  const context = new Set([...retained].filter((id) => !matching.has(id) && id !== options.chosen));
   const children = new Map<string, GraphAgent[]>();
   for (const row of allAgents) {
     const parent = parentRows.get(row.id);
