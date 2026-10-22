@@ -470,12 +470,13 @@ function LetterRun({ letters, locator }: { letters: readonly WorkRequest[]; loca
   const [open, setOpen] = useState(holds);
   useEffect(() => { if (holds) setOpen(true); }, [holds, locator?.query]);
   const senders = [...new Set(letters.map((letter) => letter.letter_from!))];
+  const count = letters.reduce((total, letter) => total + letter.count, 0);
   return <li className="min-w-0 py-xxs" data-record-letter-run={letters.length}>
     <button type="button" className={cn(ROW, "flex w-full min-w-0 items-baseline gap-sm py-xxs text-muted-foreground hover:bg-accent")} aria-expanded={open} onClick={() => setOpen(!open)}>
       <RequestTime at={letters[0]!.at_unix_ms} />
       <span className="flex min-w-0 flex-1 items-baseline gap-xs">
         <MailIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 self-center" />
-        <span className="shrink-0 text-micro">{t("record.letterRun", { count: letters.length })}</span>
+        <span className="shrink-0 text-micro">{t("record.letterRun", { count })}</span>
         <span className="min-w-0 flex-1 truncate text-micro" title={senders.join(", ")}>{senders.join(", ")}</span>
       </span>
     </button>

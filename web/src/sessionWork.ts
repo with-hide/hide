@@ -46,7 +46,6 @@ export function requestPreview(request: Pick<WorkRequest, "summary" | "text">): 
   return chars.length > PREVIEW_CHARS ? { text: `${chars.slice(0, PREVIEW_CHARS).join("")}…`, summarized: false, cut: true } : { text: flat, summarized: false, cut: false };
 }
 
-/** A pull request nothing more happens to: merged, or closed unmerged (B19). */
 /** A flow's lines with each run of two or more letters in a row held as one (B24). */
 export type RequestRun = { kind: "request"; request: WorkRequest } | { kind: "letters"; requests: readonly WorkRequest[] };
 
@@ -67,6 +66,7 @@ export function holdsRequest(request: Pick<WorkRequest, "offset" | "repeats">, o
   return request.offset === offset || (request.repeats ?? []).includes(offset);
 }
 
+/** A pull request nothing more happens to: merged, or closed unmerged (B19). */
 export const settledOutput = (output: Pick<WorkOutput, "state">) => output.state === "merged" || output.state === "closed";
 
 /** Where a session works: the project and checkout its pane is in, else the registered checkout holding its folder. */
