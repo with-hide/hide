@@ -95,9 +95,17 @@ static int fit_schema(char *label, int argc, char **argv) {
      newest id the input lists as owed (context_label.v20); with none, or an
      empty summary, the answer summarizes nothing and the request shows its
      own words. */
-  if (strstr(schema, "\"requests\"")) {
+  if (strstr(schema, "\"requests\"") && !strstr(label, "\"request\":\"")) {
+    /* Recorded markers from before context_label.v19 carry no request
+       summary: they summarize nothing. */
+    const char *field = "\"requests\":[],";
+    size_t length = strlen(label);
+    size_t capacity = sizeof prompt - (size_t)(label - prompt);
+    if (label[0] != '{' || length + strlen(field) >= capacity) return 0;
+    memmove(label + 1 + strlen(field), label + 1, length);
+    memcpy(label + 1, field, strlen(field));
+  } else if (strstr(schema, "\"requests\"")) {
     char *field = strstr(label, "\"request\":\"");
-    if (!field) return 0;
     char *text = field + strlen("\"request\":\"");
     char *close = text;
     while (*close && *close != '"') close += *close == '\\' && close[1] ? 2 : 1;
