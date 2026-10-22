@@ -3225,10 +3225,6 @@ fn a_request_the_operator_submitted_is_theirs_and_survives_a_restart_without_a_r
     assert!(operator.first);
     let other = facts.other_request.as_ref().unwrap();
     assert_eq!(other.requester, Requester::Named("ci-lead".to_owned()));
-    assert_eq!(
-        facts.reply.as_ref().unwrap().text,
-        "만들었습니다\nPR을 열었어요"
-    );
     let row = shown_row(&worker, &idle);
     assert_eq!(row.last_prompt_at_unix_ms, Some(turn_at(2)));
     assert_ne!(row.changed_at_unix_ms, row.last_prompt_at_unix_ms);
@@ -3487,7 +3483,8 @@ fn a_usage_limited_turn_clears_its_line_and_recovers_when_the_provider_wait_ends
     assert_eq!(saved["w1:p1"].line, "");
     assert_eq!(saved["w1:p1"].end, None);
     assert!(
-        saved["w1:p1"].facts.reply.is_some(),
+        saved["w1:p1"].facts.operator_request.is_some()
+            || saved["w1:p1"].facts.other_request.is_some(),
         "native facts survive an unavailable judgment"
     );
 

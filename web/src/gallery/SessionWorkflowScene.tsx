@@ -30,7 +30,7 @@ const RAISED: RaisedAsk = { verb: "approval", what: "검증 명령 실행 권한
 const PANE_RAISED: RaisedAsk = { ...RAISED, raised_pane_id: "pane-raised-child", origin_title: "UI 검증", pane_id: "pane-raised-child", open_pane_id: "pane-raised-child", title: "UI 검증", what: "권한 승인을 기다리고 있어요", path: ["Group tab 기능 설계", "UI 검증"] };
 const NO_NOTICE = { notice: null, band: null };
 const TURN_REQUEST = { text: "제안대로 진행 + 애매한 상태 더 점검", images: 0 };
-/** The turn card's facts for the request cases: the raw request, its summary, the last reply and two earlier turns. */
+/** The turn card's facts for the request cases: the raw request, its summary and two earlier turns. */
 const TURN_VIEW = {
   request: { text: "ㅇㅇㅇㅇ 그렇게 해. 읽을 것으로 두긴 해야할 것 같긴 한데?\n그 외에 뭔가 상태 애매한 거 있는지 점검들 좀 해줘", cut: false, images: 0, at_unix_ms: Date.now() - 180_000, sender: { kind: "operator" as const } },
   request_summary: TURN_REQUEST.text,
@@ -38,7 +38,6 @@ const TURN_VIEW = {
     { request: "완료 후 흰 원 표시 방식 제안", end: "done" as const, line: "두 가지 안을 정리함", at_unix_ms: Date.now() - 720_000 },
     { request: "미확인 상태 원인 조사", end: "done" as const, line: null, at_unix_ms: Date.now() - 1_860_000 },
   ],
-  reply: { text: "애매한 상태 3곳을 찾았어요:\n① 완료 후 미확인 원\n② 대기 중 편지가 있는 쉬는 pane\n③ 오래된 링", cut: false, at_unix_ms: Date.now() - 180_000 },
   later_by: null,
 };
 const HEADERS: [string, Omit<PaneHeader, "working">][] = [
@@ -105,7 +104,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
         state: { ...seed.state, verb, mark_tone: { kind: tone, read: false }, chip_tone: { kind: tone, read: false }, session: { group: example.group, line: example.line, unfinished: example.unfinished ?? false }, ask: example.ask ?? null, tree_rank: 1,
           pr: example.pr ? { count: 1, worst: example.pr, pulls: [{ index: 0, state: example.pr }] } : null,
           request_since: Date.now() - 180_000, line: example.line ? { text: example.line, mode: "request", tone: { kind: "subtle", read: false } } : null },
-        request: { verb, verb_since_unix_ms: Date.now(), line: example.line ?? undefined, request: null, later_by: null, reply: null, pull_requests: example.pr ? [{ number: 220 + index, title: example.title, url: `https://example.invalid/pull/${220 + index}`, badge: example.pr === "merged" ? "merged" : "open", checks: example.pr === "failed" ? "failed" : example.pr === "pending" ? "pending" : "passing", review: example.pr === "mergeable" ? "approved" : "review_required", head_branch: "prd/session-ui", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }] : [] },
+        request: { verb, verb_since_unix_ms: Date.now(), line: example.line ?? undefined, request: null, later_by: null, pull_requests: example.pr ? [{ number: 220 + index, title: example.title, url: `https://example.invalid/pull/${220 + index}`, badge: example.pr === "merged" ? "merged" : "open", checks: example.pr === "failed" ? "failed" : example.pr === "pending" ? "pending" : "passing", review: example.pr === "mergeable" ? "approved" : "review_required", head_branch: "prd/session-ui", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }] : [] },
         resolved: example.group === "resolved" ? { at_unix_ms: Date.now(), source: "operator" } : null,
         // A quiet task starred to revisit, and a working one that keeps its group with a ★ (PRD revisit-group B6, B7).
         revisit: index === 6 || index === 4 ? { starred: true, read_ask: false, since_unix_ms: Date.now() - 600_000 } : null,
@@ -135,7 +134,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       const line = index === 0 ? "브랜치와 진행 설명을 분리하는 중" : index === 2 ? "좁은 화면 검증을 끝냈습니다" : null;
       return { ...child, lineage_parent_pane_id: index === 2 ? "a1c1" : "s5", lineage_child_pane_ids: index === 0 ? ["a1g1"] : [],
         state: { ...child.state, session: { group: index === 0 ? "working" : "idle", line, unfinished: false }, pr: { count: 1, worst: state, pulls: [{ index: 0, state }] }, branch_badge: index === 0 ? "feat/session-row-clarity-and-branch-label" : null },
-        request: { verb: index === 0 ? "working" : "idle", verb_since_unix_ms: Date.now(), request: null, later_by: null, reply: null, pull_requests: [{ number, title: child.identity_label, url: `https://example.invalid/pull/${number}`, badge: "open", checks: state === "failed" ? "failed" : state === "pending" ? "pending" : "passing", review: state === "mergeable" ? "approved" : "review_required", head_branch: "feat/session-row-clarity-and-branch-label", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }] } };
+        request: { verb: index === 0 ? "working" : "idle", verb_since_unix_ms: Date.now(), request: null, later_by: null, pull_requests: [{ number, title: child.identity_label, url: `https://example.invalid/pull/${number}`, badge: "open", checks: state === "failed" ? "failed" : state === "pending" ? "pending" : "passing", review: state === "mergeable" ? "approved" : "review_required", head_branch: "feat/session-row-clarity-and-branch-label", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }] } };
     });
     const childPanes = children.map((child) => ({ ...pane, id: child.pane_id, identity_label: child.identity_label }));
     feature.tabs[0]!.panes.push(childPanes[0]!);
@@ -147,7 +146,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       const state = id === "fix" ? "failed" as const : "mergeable" as const;
       return {
         state: { ...seed.state, pr: { count: 1, worst: state, pulls: [{ index: 0, state }] } },
-        request: { verb: "working", verb_since_unix_ms: Date.now(), line: undefined, request: null, later_by: null, reply: null, pull_requests: [{ number: 221, title: "세션 상태 투영 정리", url: "https://github.com/acme/app/pull/221", badge: "open", checks: state === "failed" ? "failed" : "passing", review: "approved", head_branch: "prd/session-ui", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }] },
+        request: { verb: "working", verb_since_unix_ms: Date.now(), line: undefined, request: null, later_by: null, pull_requests: [{ number: 221, title: "세션 상태 투영 정리", url: "https://github.com/acme/app/pull/221", badge: "open", checks: state === "failed" ? "failed" : "passing", review: "approved", head_branch: "prd/session-ui", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }] },
       };
     };
     // B2's full aggregate, unknown and empty examples use explicit snapshot

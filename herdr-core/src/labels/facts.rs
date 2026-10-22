@@ -1,12 +1,11 @@
 //! What a pane's session says without any AI (PRD overview-request-view
 //! D-12, D-14, D-19, D-31): its own title, the last request and who sent it,
-//! the last reply, and the pull request addresses its tools printed.
+//! and the pull request addresses its tools printed.
 //!
 //! The worker folds each read into these facts and keeps them in the pane's
 //! record, so a restarted daemon shows a pane with no new turn from what it
-//! stored rather than reading its conversation again (B31). The request and
-//! the reply are the conversation's own words, each cut to
-//! [`MAX_TEXT_BYTES`]; local records live in the private `labels.json`.
+//! stored rather than reading its conversation again (B31). The request is
+//! the conversation's own words, cut to [`MAX_TEXT_BYTES`]; local records live in the private `labels.json`.
 //! Device records stay in memory, bar their marks: the session proof, the analyzed turns and the label (`store.rs`).
 //!
 //! Who sent a request is decided once per message and kept with its offset
@@ -26,7 +25,7 @@ use serde_json::json;
 
 use super::input::Submit;
 
-/// The most of a request's or a reply's text kept.
+/// The most of a request's text kept.
 pub(crate) const MAX_TEXT_BYTES: usize = 8 * 1024;
 /// Pull request addresses kept per session, newest (by first sighting) last.
 pub(crate) const MAX_SIGHTINGS: usize = 20;
@@ -103,14 +102,6 @@ pub(crate) struct Request {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Reply {
-    pub(crate) text: String,
-    #[serde(default)]
-    pub(crate) cut: bool,
-    pub(crate) at_unix_ms: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Verdict {
     offset: u64,
     requester: Requester,
@@ -131,8 +122,6 @@ pub(crate) struct SessionFacts {
     #[serde(default)]
     pub(crate) other_request: Option<Request>,
     #[serde(default)]
-    pub(crate) reply: Option<Reply>,
-    #[serde(default)]
     pub(crate) sightings: Vec<PrSighting>,
     /// The pull requests the session made, judged once against GitHub's
     /// creation time and kept (D-31), oldest first.
@@ -152,7 +141,6 @@ type Shown = (
     Option<String>,
     Option<Request>,
     Option<Request>,
-    Option<Reply>,
     usize,
 );
 
@@ -205,17 +193,8 @@ impl SessionFacts {
                 .map(|event| event.offset);
         }
         for event in read.events {
-            match event.kind {
-                LabelEventKind::Human => self.request(event, &mut input, log),
-                LabelEventKind::Assistant if !event.text.trim().is_empty() => {
-                    let (text, cut) = capped(&event.text);
-                    self.reply = Some(Reply {
-                        text,
-                        cut,
-                        at_unix_ms: event.at_unix_ms,
-                    });
-                }
-                _ => {}
+            if event.kind == LabelEventKind::Human {
+                self.request(event, &mut input, log);
             }
         }
         self.sight(read.sightings, log);
@@ -307,7 +286,6 @@ impl SessionFacts {
             self.custom_title.clone(),
             self.operator_request.clone(),
             self.other_request.clone(),
-            self.reply.clone(),
             self.sightings.len(),
         )
     }

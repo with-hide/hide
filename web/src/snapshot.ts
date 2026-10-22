@@ -195,7 +195,7 @@ export type AgentRequest = {
   verb: RequestVerb;
   /** When the row took this verb; kept across a restart (D-40). */
   verb_since_unix_ms: number;
-  /** The label's line for the turn (B18, B47); absent with summaries off or no analysis, when the reply stands in (D-12). */
+  /** The label's line for the turn (B18, B47); absent with summaries off or no analysis. */
   line?: string;
   /** How the label read the turn's end (`contracts/snapshot-wire-enums.json`: `label_end`). */
   end?: LabelEnd;
@@ -207,8 +207,6 @@ export type AgentRequest = {
   recent_turns?: AgentTurn[];
   /** Who sent a request after the operator's last one (B4). */
   later_by: RequestSender | null;
-  /** The agent's last words. */
-  reply: { text: string; cut: boolean; at_unix_ms: number } | null;
   /** The chip first (D-46), then the other live ones, then settled ones. */
   pull_requests: AgentPullRequest[];
 };

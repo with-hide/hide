@@ -14,7 +14,7 @@ import { useShellStore } from "./store";
 /** How long the pointer may cross the gap between a trigger and its card before the card closes. */
 const LEAVE_MS = 150;
 
-/** The handlers a turn card's trigger wears; `pinned` is set only on a trigger that pins. */
+/** The handlers a turn card's trigger wears. */
 export type TurnCardTrigger = {
   open: boolean;
   pinned: boolean;
@@ -24,21 +24,19 @@ export type TurnCardTrigger = {
   onBlur: (event: FocusEvent) => void;
   /** Moves the keyboard into an open card on Tab. */
   onKeyDown: (event: KeyboardEvent) => void;
-  /** Pins or unpins the card; absent on a trigger whose press does something else. */
-  onToggle?: () => void;
-  /** Closes the card, for a trigger whose press opens something in its place. */
-  close: () => void;
+  /** Pins or unpins the card. */
+  onToggle: () => void;
 };
 
 /**
- * The pane's turn card (PRD pane-last-request D-05, D-12, B6-B9): what the
- * operator asked, what the agent is doing about it, its last words and the
- * turns before, under the pane's head. The pointer or the keyboard's focus
- * on its trigger opens it; a trigger that pins takes a press to pin it and a
- * second press or Esc to close it. Opening never takes the keyboard from the
+ * The pane's turn card (PRD pane-last-request D-05, B6-B9): what the
+ * operator asked, what the agent is doing about it and the turns before,
+ * under the request on the pane's second row, its only trigger. The pointer
+ * or the keyboard's focus on the request opens it; a press pins it and a
+ * second press or Esc closes it. Opening never takes the keyboard from the
  * terminal, and Esc on a card neither pinned nor focused stays the terminal's.
  */
-export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { paneId: string; actions: Actions; pinnable: boolean; head?: { title: string; product: string; words: string | null }; trigger: (state: TurnCardTrigger) => ReactNode }) {
+export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; actions: Actions; trigger: (state: TurnCardTrigger) => ReactNode }) {
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const [pinned, setPinned] = useState(false);
@@ -103,12 +101,11 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
       event.preventDefault();
       first.focus();
     },
-    onToggle: pinnable ? () => {
+    onToggle: () => {
       setDismissed(false);
       if (pinned) close();
       else setPinned(true);
-    } : undefined,
-    close,
+    },
   };
   const session = agent ? sessionOfAgentOn(agent, localId) : null;
   return (
@@ -161,7 +158,7 @@ export function PaneTurnCard({ paneId, actions, pinnable, head, trigger }: { pan
             dismiss();
           }}
         >
-          <TurnCard agent={agent} header={header} head={head} onRecord={session ? () => {
+          <TurnCard agent={agent} header={header} onRecord={session ? () => {
             close();
             actions.openSessionRecord(session);
           } : null} />
@@ -238,35 +235,28 @@ function pastDot(end: LabelEnd | null): RailDot {
 }
 
 /**
- * The card's body: the head the title's hint carried, then the session as one
- * conversation read top to bottom on a rail: the turns before (oldest first,
- * dimmed, each ringed in how it ended), the shown request in a bubble under
- * who sent it (its summary and its own first two lines, who asked after), and
- * the agent's half: what it does about it as a coloured verb with its words,
- * and its last words. `기록 열기` closes it. A part with nothing to say is not
- * drawn (B7).
+ * The card's body: the session as one conversation read top to bottom on a
+ * rail: the turns before (oldest first, dimmed, each ringed in how it ended),
+ * the shown request in a bubble under who sent it (its summary and its own
+ * first two lines, who asked after), and the agent's half: what it does about
+ * it as a coloured verb with the label's words. The agent's own words stay in
+ * the record, which `기록 열기` opens. A part with nothing to say is not drawn
+ * (B7).
  */
-function TurnCard({ agent, header, head, onRecord }: { agent: AgentRow; header: PaneHeader | undefined; head?: { title: string; product: string; words: string | null }; onRecord: (() => void) | null }) {
+function TurnCard({ agent, header, onRecord }: { agent: AgentRow; header: PaneHeader | undefined; onRecord: (() => void) | null }) {
   const { t } = useInterfaceTranslation();
   const view = agent.request;
   const raw = view?.request ?? null;
   const summary = view?.request_summary ?? null;
   const response = turnResponse(t, header, agent);
-  const reply = view?.reply?.text.trim() || null;
   // The core sends the turns before newest first; the rail reads in time order.
   const earlier = [...(view?.recent_turns ?? [])].reverse();
   const original = raw?.text.trim() || null;
   const tone: Tone = response?.asks ? "asks" : header?.working ? "working" : header?.finished ? "done" : "quiet";
-  const rail = raw !== null || response !== null || reply !== null || earlier.length > 0;
+  const rail = raw !== null || response !== null || earlier.length > 0;
   return (
     <div className="flex min-w-0 flex-col [word-break:keep-all]" data-turn-card="true">
       <div className="flex flex-col gap-sm px-sm pt-sm">
-        {head ? (
-          <div className="flex min-w-0 flex-col" data-turn-card-head="true">
-            <span className="truncate font-semibold text-foreground">{head.title}</span>
-            <span className="truncate text-micro text-muted-foreground">{[head.product, head.words].filter(Boolean).join(" · ")}</span>
-          </div>
-        ) : null}
         {rail ? (
           <ol className="relative flex min-w-0 flex-col gap-sm pl-lg before:absolute before:top-sm before:bottom-sm before:left-xs before:w-px before:bg-muted-foreground/40">
             {earlier.length > 0 ? (
@@ -293,20 +283,12 @@ function TurnCard({ agent, header, head, onRecord }: { agent: AgentRow; header: 
                 {view?.later_by ? <p className="mt-xxs text-micro text-muted-foreground" data-turn-card-later="true">{t("paneTurn.laterBy", { name: senderName(t, view.later_by) })}</p> : null}
               </RailItem>
             ) : null}
-            {response || reply ? (
-              <RailItem dot={tone} className="flex flex-col gap-xxs">
-                {response ? (
-                  <p className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" data-turn-card-response="true">
-                    <span className={cn("mr-xs inline-flex items-center rounded-full px-xs font-semibold", TONE[tone])}>{response.verb}</span>
-                    {response.text ? <span className={response.asks ? "text-warning" : "text-foreground"}>{response.text}</span> : null}
-                  </p>
-                ) : null}
-                {reply ? (
-                  <div data-turn-card-reply="true">
-                    <h3 className="sr-only">{t("paneTurn.reply")}</h3>
-                    <p className="line-clamp-3 whitespace-pre-line text-subtle-foreground [overflow-wrap:anywhere]">{reply}</p>
-                  </div>
-                ) : null}
+            {response ? (
+              <RailItem dot={tone}>
+                <p className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" data-turn-card-response="true">
+                  <span className={cn("mr-xs inline-flex items-center rounded-full px-xs font-semibold", TONE[tone])}>{response.verb}</span>
+                  {response.text ? <span className={response.asks ? "text-warning" : "text-foreground"}>{response.text}</span> : null}
+                </p>
               </RailItem>
             ) : null}
           </ol>

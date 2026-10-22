@@ -76,7 +76,7 @@ function agent(spec: AgentSpec, now: number): AgentRow {
     lineage_parent_pane_id: spec.parent ?? null,
     lineage_depth: spec.parent ? 1 : 0,
     lineage_child_pane_ids: spec.children ?? [],
-    request: { verb: spec.look === "working" ? "working" : "idle", verb_since_unix_ms: now - spec.ago, request: null, later_by: null, reply: null, pull_requests: pulls.map((one) => one.pr) },
+    request: { verb: spec.look === "working" ? "working" : "idle", verb_since_unix_ms: now - spec.ago, request: null, later_by: null, pull_requests: pulls.map((one) => one.pr) },
   } as AgentRow;
 }
 

@@ -369,7 +369,7 @@ it("opens the card of the displayed repository even when another project has the
 function pullRow(pane: string, numbers: number[], children: string[] = [], states: PrState[] = numbers.map(() => "pending")): AgentRow {
   const seed = legacyAgentRow({ pane_id: pane, identity_label: `${pane} 세션`, lineage_child_pane_ids: children });
   const pulls: AgentPullRequest[] = numbers.map((number) => ({ number, title: `PR ${number}`, url: `https://github.com/acme/app/pull/${number}`, badge: "open", checks: "pending", head_branch: "feat/work", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }));
-  return { ...seed, state: { ...seed.state, pr: numbers.length ? { count: numbers.length, worst: states[0]!, pulls: numbers.map((_, index) => ({ state: states[index]!, index })) } : null }, request: { verb: "working", verb_since_unix_ms: 0, request: null, later_by: null, reply: null, pull_requests: pulls } };
+  return { ...seed, state: { ...seed.state, pr: numbers.length ? { count: numbers.length, worst: states[0]!, pulls: numbers.map((_, index) => ({ state: states[index]!, index })) } : null }, request: { verb: "working", verb_since_unix_ms: 0, request: null, later_by: null, pull_requests: pulls } };
 }
 
 async function mountChip(paneId: string, agents: AgentRow[]) {
@@ -582,7 +582,6 @@ function turnAgent(): AgentRow {
         { request: "Why unread states stick", end: null, line: null, at_unix_ms: 1 },
       ],
       later_by: { kind: "named", name: "lead" },
-      reply: { text: "Found three unclear states:\n1. finished but unread\n2. idle with letters\n3. stale ring\n4. more", cut: false, at_unix_ms: 3 },
       pull_requests: [],
     },
   } as Partial<AgentRow>);
@@ -603,7 +602,6 @@ it("opens the turn card from the request and pins it on a press until Esc", asyn
     expect(card()?.querySelector("[data-turn-card-original]")?.textContent).toContain("ok do that.");
     expect(card()?.querySelector("[data-turn-card-later]")?.textContent).toBe("Next request from lead");
     expect(card()?.querySelector("[data-turn-card-response]")?.textContent).toBe("QuestionBundle questions 1-3 into one PR?");
-    expect(card()?.querySelector("[data-turn-card-reply]")?.textContent).toContain("Found three unclear states");
     expect(card()?.querySelector("[data-turn-card-sender]")?.textContent).toBe("Me");
     // The rail reads in time order, so the older of the two turns before comes first.
     expect([...card()!.querySelectorAll("[data-turn-card-earlier-item]")].map((item) => [...item.querySelectorAll("p")].map((line) => line.textContent))).toEqual([
@@ -673,10 +671,9 @@ it("moves the keyboard into the turn card with Tab and back", async () => {
   } finally { await unmount(); }
 });
 
-// PRD pane-last-request B11, D-12: the title shows the same card on the
-// pointer in place of its hint, headed by its title, product and state words;
-// a press still opens the session record.
-it("shows the turn card on the record button's hover, headed by the title", async () => {
+// The pane title opens nothing on the pointer: the turn card opens from the
+// request on the second row only, and a press still opens the session record.
+it("opens no card on the record button's hover", async () => {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   initializeInterfaceI18n("en");
@@ -687,10 +684,8 @@ it("shows the turn card on the record button's hover, headed by the title", asyn
   await act(async () => root.render(<TooltipProvider><PaneRecordButton paneId="solo" title="Unread-state marks" product="Claude Code" actions={createActions(() => true)} plain={<span />}>Unread-state marks</PaneRecordButton></TooltipProvider>));
   try {
     const button = container.querySelector<HTMLButtonElement>("[data-pane-record]")!;
-    await act(async () => button.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
-    const card = document.querySelector<HTMLElement>("[data-pane-turn-card=solo]")!;
-    expect(card.querySelector("[data-turn-card-head]")?.textContent).toMatch(/^Unread-state marksClaude Code/);
-    expect(card.querySelector("[data-turn-card-summary]")?.textContent).toBe("Proceed as proposed + check unclear states");
+    await act(async () => { button.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })); button.focus(); vi.advanceTimersByTime(1_000); });
+    expect(document.querySelector("[data-pane-turn-card]")).toBeNull();
     expect(document.querySelector("[role=tooltip]")).toBeNull();
   } finally { await act(async () => root.unmount()); }
 });

@@ -117,7 +117,7 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
       {tree || request ? (
         <div key="request" className="flex h-(--size-pane-header) min-w-0 max-w-full shrink items-center gap-xs" data-pane-turn-part="request">
           {tree}
-          {request ? <PaneTurnCard paneId={paneId} actions={actions} pinnable trigger={(state) => <TurnRequestButton paneId={paneId} request={request} state={state} />} /> : null}
+          {request ? <PaneTurnCard paneId={paneId} actions={actions} trigger={(state) => <TurnRequestButton paneId={paneId} request={request} state={state} />} /> : null}
         </div>
       ) : null}
       <div key="answer" className={cn("flex h-(--size-pane-header) min-w-0 max-w-full grow items-center gap-xs", !request && "basis-0")} data-pane-turn-part="answer">
@@ -252,34 +252,22 @@ export function PaneRecordButton({ paneId, title, product, actions, children, pl
   const localId = useShellStore((s) => localDeviceId(s.rest));
   const session = agent ? sessionOfAgentOn(agent, localId) : null;
   if (!session) return <>{plain}</>;
-  // The mark's words ride the button's name and the turn card's head, which the mark sits inside (status-marks B36).
+  // The mark's words ride the button's name, which the mark sits inside (status-marks B36).
   const words = agent ? [markWords(t, agent), recordWords(t, agent), agent.record_summary].filter(Boolean).join(" · ") : null;
   return (
     // The button names the agent as the plain head does, then what a press
-    // does; the pointer or focus on it opens the turn card in place of a
-    // hint, whose head carries the title the head cuts short (PRD
-    // pane-last-request D-12).
-    <PaneTurnCard paneId={paneId} actions={actions} pinnable={false} head={{ title, product, words: words || null }} trigger={(state) => (
-      <button
-        type="button"
-        className="flex min-w-0 items-center gap-sm rounded-sm px-xxs -mx-xxs outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-        aria-label={[title, product, words, t("record.recordHint")].filter(Boolean).join(", ")}
-        aria-expanded={state.open}
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => {
-          state.close();
-          actions.togglePaneRecord(session);
-        }}
-        onPointerEnter={state.onPointerEnter}
-        onPointerLeave={state.onPointerLeave}
-        onFocus={state.onFocus}
-        onBlur={state.onBlur}
-        onKeyDown={state.onKeyDown}
-        data-pane-record={session.session_id}
-      >
-        {children}
-      </button>
-    )} />
+    // does. The pointer opens nothing here: the turn card opens from the
+    // request on the second row only, and the record shows the whole title.
+    <button
+      type="button"
+      className="flex min-w-0 items-center gap-sm rounded-sm px-xxs -mx-xxs outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+      aria-label={[title, product, words, t("record.recordHint")].filter(Boolean).join(", ")}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => actions.togglePaneRecord(session)}
+      data-pane-record={session.session_id}
+    >
+      {children}
+    </button>
   );
 }
 

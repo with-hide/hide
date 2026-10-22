@@ -2,7 +2,7 @@
 //! B9-B16, B48, B54, B56), on rows projected the way Herdr's agents are.
 
 use super::*;
-use crate::labels::facts::{Reply, Request, Requester};
+use crate::labels::facts::{Request, Requester};
 use crate::model::{GithubProjectSnapshot, PullRequestSnapshot};
 use crate::sidebar::{SessionSnapshotPayload, project_agents};
 
@@ -756,11 +756,6 @@ fn who_sent_the_shown_request_and_who_came_after() {
     ));
     rows[1].row_facts = Some(RowFacts {
         operator_request: Some(request("맡긴 일", Requester::Unobserved, ASKED, true)),
-        reply: Some(Reply {
-            text: "끝".to_owned(),
-            cut: false,
-            at_unix_ms: ASKED + 9,
-        }),
         ..RowFacts::default()
     });
     run(&mut rows, &[], &GithubSnapshot::default());
@@ -779,7 +774,6 @@ fn who_sent_the_shown_request_and_who_came_after() {
         RequestSender::Named("요청 보기".to_owned()),
         "a delegated child's first request is its parent's"
     );
-    assert_eq!(child.reply.as_ref().unwrap().text, "끝");
 }
 
 #[test]

@@ -17,7 +17,7 @@ it("preserves physical counts, root headings and scope-dependent request exclusi
     id: pane, pane_id: pane, identity_label: pane, agent_kind: "claude",
     mark: "quiet", group, demand: "none", activity: "stopped", unread: false,
     emphasized: false, status_code: "idle", changed_at_unix_ms: 10,
-    request: { verb, verb_since_unix_ms: 10, request: null, later_by: null, reply: null, pull_requests: [] }, ...extra,
+    request: { verb, verb_since_unix_ms: 10, request: null, later_by: null, pull_requests: [] }, ...extra,
   })) as AgentRow;
   const agents = [
     row("root", "working", "waiting", { wait: "children", lineage_child_pane_ids: ["child"], close_descendant_pane_ids: ["child"] }),
