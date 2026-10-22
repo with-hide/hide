@@ -1713,6 +1713,22 @@ export type HerdrStatus = {
   received_version?: string | null;
 };
 
+/**
+ * The operator's own older Herdr server on this machine and how far moving it
+ * went (PRD herdr-takeover): `kind` is `move`, `restart` (Herdr cannot hand it
+ * over here) or `update_hide` (a newer protocol); `stage` is `offered`,
+ * `moving`, `failed`, or `moved` while the operator's own `herdr` is behind.
+ */
+export type HerdrTakeover = {
+  kind: "move" | "restart" | "update_hide";
+  stage: "offered" | "moving" | "failed" | "moved";
+  server_version: string;
+  version: string;
+  same_protocol: boolean;
+  failure: "refused" | "not_confirmed" | "unreadable" | null;
+  path_herdr_behind: string | null;
+};
+
 export type EnvironmentStatus = {
   key: string;
   required: boolean;
@@ -2255,6 +2271,8 @@ export type SnapshotRest = {
   status?: {
     server_discovery?: { loading: boolean; failure: string | null };
     herdr?: HerdrStatus;
+    /** What Hide offers for the operator's own older Herdr server on this machine (PRD herdr-takeover); absent when nothing. */
+    herdr_takeover?: HerdrTakeover;
     remote?: RemoteStatus[];
     environment?: EnvironmentStatus[];
     agent_hooks?: AgentHooks;

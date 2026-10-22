@@ -102,6 +102,9 @@ export type BrowserBridge = {
   onEvent(listener: (event: BrowserHostEvent) => void): () => void;
 };
 
+/** How a Herdr restart went: `stop_failed` changed nothing; `unavailable` is a host with no bundled Herdr. */
+export type HerdrRestart = "restarted" | "stop_failed" | "failed" | "unavailable" | "refused";
+
 /** A path on this computer as the host found it: its physical path in the wire spelling (`/` between names, `C:/...` on Windows) and whether it is a folder; null when it does not exist. */
 export type ProbedPath = { real: string; kind: "file" | "directory" } | null;
 
@@ -158,6 +161,13 @@ export type HostBridge = {
    * window; the host logs the outcome without the path and shows nothing (B16).
    */
   openInEditor(path: string): void;
+  /**
+   * Restarts the operator's Herdr server on this app's Herdr where Herdr
+   * cannot hand it over live (PRD herdr-takeover B12), once the operator
+   * confirmed what ends; a second call while one runs answers with it.
+   * `failed` has already put the start failure on the window's status page.
+   */
+  restartHerdr(): Promise<HerdrRestart>;
   browser: BrowserBridge;
   /** This app's own updates (PRD auto-update), which only the desktop host has. */
   updates: UpdatesBridge;

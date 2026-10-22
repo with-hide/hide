@@ -1301,6 +1301,14 @@ export function createActions(send: DispatchFn) {
     backFirstRun(from: "devices" | "notifications" | "project") {
       dispatch({ schema_version: 2, kind: "first_run_back", payload: { from } });
     },
+    /**
+     * The operator's answer to moving their older Herdr server (PRD herdr-takeover): `move` hands it to Hide's Herdr, `later` leaves the
+     * wizard's Herdr step without moving, `continue` closes a moved server's step. One press is one event; a second `move` while one
+     * runs is the same move.
+     */
+    herdrTakeover(action: "move" | "later" | "continue") {
+      dispatch({ schema_version: 2, kind: "herdr_takeover", payload: { action } });
+    },
     saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_path?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
       dispatch({ schema_version: 2, kind: "first_run_draft", payload: draft });
     },

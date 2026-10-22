@@ -31,6 +31,7 @@ import { OverviewGraph } from "./OverviewGraph";
 import { OverviewHistory } from "./OverviewHistory";
 import { workKey } from "./sessionWork";
 import { OverviewProjectHome } from "./OverviewProjectHome";
+import { HerdrMovedLine, HerdrOverview } from "./HerdrTakeover";
 
 // The five Overview tabs share a device and project scope. Account usage
 // keeps its global scope. A wide detail retains the list beneath it, so
@@ -71,6 +72,8 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
   // Esc closes the panel before the Overview (B16).
   useEscapeLayer(panel !== null, () => useUiStore.getState().setOverview({ panel: null }));
   const unavailable = availability.state === "unavailable" && section ? section.device : null;
+  // This machine's Herdr on another protocol: its version and what Hide can do about it, in place of "not answering" (PRD herdr-takeover B16, B18).
+  const herdrPlace = useShellStore((s) => s.rest?.status?.herdr?.state === "protocol_mismatch");
   const needsLiveDevice = view !== "usage" && view !== "history";
   // A Home with no project says what to do first in the backlog's and the Projects' place (sidebar-task-lens B42).
   const noProject = availability.state === "ready" && projects.length === 0;
@@ -98,8 +101,9 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
         </Tabs>
         {view !== "usage" ? <ProjectChip projects={projects.map(({ workspace }) => workspace)} /> : null}
       </div>
+      <HerdrMovedLine actions={actions} />
       {unavailable && needsLiveDevice ? (
-        <DeviceUnanswered device={unavailable} availability={availability} actions={actions} />
+        section?.local && herdrPlace ? <HerdrOverview actions={actions} /> : <DeviceUnanswered device={unavailable} availability={availability} actions={actions} />
       ) : (
         <div className="relative flex min-h-0 flex-1">
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-overview-body={view} inert={widePanel || undefined} aria-hidden={widePanel || undefined}>
