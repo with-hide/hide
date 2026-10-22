@@ -3,7 +3,7 @@ import { usePaneMove } from "./PaneMoveControls";
 import { useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
 import { markWords } from "./agentRow";
-import { CircleAlertIcon, EllipsisIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
+import { CircleAlertIcon, EllipsisIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, WaypointsIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import type { Actions } from "./actions";
 import { refusalText, submitFiles } from "./attachments";
@@ -341,7 +341,7 @@ export const PaneView = memo(function PaneView({
       onDrop={drop}
     >
       <header
-        className={`relative flex h-[var(--size-pane-header)] shrink-0 items-center gap-sm px-sm text-caption ${
+        className={`group/header relative flex h-[var(--size-pane-header)] shrink-0 items-center gap-sm px-sm text-caption ${
           input ? "bg-primary/[var(--opacity-selected-fill)] text-foreground" : "bg-card text-muted-foreground"
         }`}
         onPointerDown={(event) => {
@@ -390,6 +390,21 @@ export const PaneView = memo(function PaneView({
         {agentKind ? <PaneViews paneId={paneId} name={title} actions={actions} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
         <PaneConnectionChip pane={pane} actions={actions} local={local} />
+        {/* 개요에서 보기 (PRD pane-open-in-overview D-01, D-08): shown while the header is pointed at or holds the keyboard, its place kept so nothing moves. */}
+        {agentKind ? (
+          <Hint label={t("panes.menu.openInOverview")}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="shrink-0 text-subtle-foreground opacity-0 hover:bg-popover hover:text-foreground group-hover/header:opacity-100 group-focus-within/header:opacity-100 hoverless:opacity-100"
+              aria-label={t("panes.menu.openInOverview")}
+              data-pane-open-overview={paneId}
+              onClick={() => actions.openPaneInOverview(paneId)}
+            >
+              <WaypointsIcon aria-hidden="true" />
+            </Button>
+          </Hint>
+        ) : null}
         {zoomed ? (
           <Hint label={zoomChord ? t("panes.unzoomChord", { chord: zoomChord }) : t("panes.unzoom")}>
             <Button

@@ -80,6 +80,14 @@ export type OverviewPlace = {
   open: readonly string[];
 };
 
+/**
+ * A pane's `개요에서 보기` (PRD pane-open-in-overview D-02): the session the
+ * Overview's Work map opens chosen, named by the device, the pane and the native
+ * session the pane showed when it was pressed. The map takes it once; any other
+ * opening clears it, so ⌘⇧O only highlights (D-03).
+ */
+export type OverviewReveal = { deviceId: string; paneId: string; sessionId: string };
+
 export const OVERVIEW_ENTRY: OverviewPlace = { deviceId: null, projectId: null, panel: null, backlogQuery: "", backlogLabels: [], bySize: false, open: [] };
 
 /** `folds` with `fold` opened, or closed again when it was open. */
@@ -177,6 +185,7 @@ type UiStore = {
   overviewOpen: boolean;
   overview: OverviewPlace;
   overviewReturnFocus: HTMLElement | null;
+  overviewReveal: OverviewReveal | null;
   /** ⌘⇧M's input (PRD overview-device-tasks B37-B42), and where the keyboard goes back to when it closes. */
   quickAdd: { returnFocus: HTMLElement | null } | null;
   searchReturnFocus: HTMLElement | null;
@@ -353,6 +362,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   overviewOpen: false,
   overview: OVERVIEW_ENTRY,
   overviewReturnFocus: null,
+  overviewReveal: null,
   quickAdd: null,
   searchReturnFocus: null,
   setOverviewOpen: (overviewOpen) => set({ overviewOpen }),

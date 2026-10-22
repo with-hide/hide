@@ -266,6 +266,16 @@ describe("Overview focus", () => {
     expect(panes(restored)).toEqual(["idle", "sleeping"]);
     expect(restored.projects.map((group) => group.project.workspace.id).sort()).toEqual(["idle", "sleeping"]);
   });
+  // PRD pane-open-in-overview B8: a chosen session is drawn whatever the filter, and counts stay the filter's.
+  it("draws a chosen sleeping session the resting filter leaves out, as itself rather than context", () => {
+    const projects = [project("idle", [agent("idle", { mark: "quiet" })]), project("sleeping", [agent("sleeping", { mark: "asleep" })])];
+    const chosen = idOf(overviewGraphModel(projects, undefined, null), "sleeping");
+    expect(overviewGraphModel(projects, undefined, null, { focus: "turn", includeResting: false }).visible.map((row) => row.agent.pane_id)).toEqual(["idle"]);
+    const graph = overviewGraphModel(projects, undefined, null, { focus: "turn", includeResting: false, chosen });
+    expect(graph.visible.map((row) => row.agent.pane_id).sort()).toEqual(["idle", "sleeping"]);
+    expect(graph.context.has(chosen)).toBe(false);
+    expect(graph.counts).toEqual(overviewGraphModel(projects, undefined, null, { focus: "turn", includeResting: false }).counts);
+  });
   it("keeps the map when no session matches the filter, without mutating input", () => {
     const projects = [project("empty", []), project("rest", [agent("sleep", { mark: "asleep" })]), project("busy", [agent("busy")])];
     const before = JSON.stringify(projects);

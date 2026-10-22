@@ -39,20 +39,21 @@ const READABLE_ZOOM = 0.5;
 /** Production Overview owns the graph; the Factory continues to own its separate worker. */
 export function OverviewGraph(props: Props) {
   const projectId = useUiStore((state) => state.overview.projectId);
-  const [scopedSelection, setScopedSelection] = useState<{ deviceId: string; projectId: string; sessionId: string } | null>(null);
-  const revealProjectSession = (row: GraphAgent) => {
-    setScopedSelection({ deviceId: props.deviceId, projectId: row.project.id, sessionId: row.id });
+  const [scopedSelection, setScopedSelection] = useState<{ deviceId: string; projectId: string; sessionId: string; shown: boolean } | null>(null);
+  const revealProjectSession = (row: GraphAgent, shown = false) => {
+    setScopedSelection({ deviceId: props.deviceId, projectId: row.project.id, sessionId: row.id, shown });
     useUiStore.getState().setOverview({ projectId: row.project.id });
   };
-  const initialSelection = scopedSelection?.deviceId === props.deviceId && scopedSelection.projectId === projectId ? scopedSelection.sessionId : null;
-  useEffect(() => { if (initialSelection) setScopedSelection(null); }, [initialSelection]);
-  return <ReactFlowProvider key={`${props.deviceId}:${projectId ?? "all"}`}><WorkGraph {...props} projectId={projectId} initialSelection={initialSelection} revealProjectSession={revealProjectSession} /></ReactFlowProvider>;
+  const initial = scopedSelection?.deviceId === props.deviceId && scopedSelection.projectId === projectId ? scopedSelection : null;
+  useEffect(() => { if (initial) setScopedSelection(null); }, [initial]);
+  return <ReactFlowProvider key={`${props.deviceId}:${projectId ?? "all"}`}><WorkGraph {...props} projectId={projectId} initialSelection={initial?.sessionId ?? null} initialShown={initial?.shown ?? false} revealProjectSession={revealProjectSession} /></ReactFlowProvider>;
 }
 
-type GraphProps = Props & { projectId: string | null; initialSelection: string | null; revealProjectSession: (row: GraphAgent) => void };
+/** `initialShown`: the initial selection is a pane's `개요에서 보기`, unfolded and framed like one taken on this map. */
+type GraphProps = Props & { projectId: string | null; initialSelection: string | null; initialShown: boolean; revealProjectSession: (row: GraphAgent, shown?: boolean) => void };
 
 /** The filter, the hidden and folded projects, the hand team folds and the dropped places are the core's (PRD overview-graph-remembered D-05): every change is one event and the view draws what the snapshot says. */
-function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initialSelection, revealProjectSession }: GraphProps) {
+function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initialSelection, initialShown, revealProjectSession }: GraphProps) {
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((state) => state.rest);
   const choices: OverviewGraphChoices = rest?.ui_state?.overview_graph ?? GRAPH_CHOICES_DEFAULTS;
@@ -94,12 +95,14 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   const host = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const theme = useGraphTheme();
-  const model = useMemo(() => overviewGraphModel(projects, rest?.overview_graph, projectId, { focus, includeResting, pinned: entry ? [entry.id] : [], selected: highlightedSession }), [projects, rest?.overview_graph, projectId, focus, includeResting, entry, highlightedSession]);
+  const model = useMemo(() => overviewGraphModel(projects, rest?.overview_graph, projectId, { focus, includeResting, pinned: entry ? [entry.id] : [], selected: highlightedSession, chosen: selection }), [projects, rest?.overview_graph, projectId, focus, includeResting, entry, highlightedSession, selection]);
   const layout = useOverviewGraphLayout(model, host, retry, remembered);
   const flow = useReactFlow();
   const { fitView, zoomIn, zoomOut } = flow;
   const nodesInitialized = useNodesInitialized();
   const cameraInitialized = useRef(false);
+  // The session a pane's 개요에서 보기 chose, until the camera has framed it.
+  const framing = useRef<string | null>(initialShown ? initialSelection : null);
   const current = model.allAgents.find((row) => row.id === entry?.id && row.agent.session_id === entry.native);
   const shownProject = (id: string) => !hiddenProjects.has(id);
   const centerOn = useCallback((ids: readonly string[]) => { if (ids.length) void fitView({ nodes: ids.map((id) => ({ id })), padding: 0.2, maxZoom: 1, duration: 0 }); }, [fitView]);
@@ -153,6 +156,40 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
     }
     rememberOpener(target); setHighlightedSession(id); setSelection(id);
   }, [rememberOpener, model.allAgents, model.projects, revealProjectSession, hiddenProjects, actions]);
+  // A pane's 개요에서 보기 (PRD pane-open-in-overview D-02, D-05): the session is chosen
+  // with no opener, so Escape closes its details and leaves the keyboard on the Overview,
+  // and what hides it - its project hidden or folded, its team folded - opens.
+  const showSession = useCallback((row: GraphAgent) => {
+    if (hiddenProjects.has(row.projectId)) {
+      revealing.current = row.projectId;
+      actions.changeOverviewGraph({ kind: "project_hidden", project: graphProjectKey(row.project), hidden: false });
+    }
+    if (foldedProjects.has(row.projectId)) actions.changeOverviewGraph({ kind: "project_folded", project: graphProjectKey(row.project), folded: false });
+    const root = teamRootOf(row.id, model.layoutParents);
+    const session = root !== row.id && teamFolded(root) ? sessionKeyOf(root) : undefined;
+    if (session) actions.changeOverviewGraph({ kind: "team_folded", session, folded: false });
+    opener.current = null;
+    framing.current = row.id;
+    setHighlightedSession(row.id);
+    setSelection(row.id);
+  }, [hiddenProjects, foldedProjects, model.layoutParents, teamFolded, sessionKeyOf, actions]);
+  const reveal = useUiStore((state) => state.overviewReveal);
+  useEffect(() => {
+    if (!reveal || reveal.deviceId !== deviceId) return;
+    useUiStore.setState({ overviewReveal: null });
+    const row = model.allAgents.find((row) => row.deviceId === reveal.deviceId && row.agent.pane_id === reveal.paneId && row.agent.session_id === reveal.sessionId);
+    // The map does not know the session yet: Work opens with nothing chosen (B10).
+    if (!row) { useShellStore.getState().noteDiagnostic(`overview: pane ${reveal.paneId} session is not on the map yet`); return; }
+    if (!model.projects.some((group) => group.id === row.projectId)) { revealProjectSession(row, true); return; }
+    showSession(row);
+  }, [reveal, deviceId, model.allAgents, model.projects, revealProjectSession, showSession]);
+  const shownInitially = useRef(false);
+  useEffect(() => {
+    if (shownInitially.current || !initialShown || !initialSelection) return;
+    shownInitially.current = true;
+    const row = model.allAgents.find((row) => row.id === initialSelection);
+    if (row) showSession(row);
+  }, [initialShown, initialSelection, model.allAgents, showSession]);
   const returnFocus = useReturnFocus(selection !== null, { target: () => opener.current, within: () => host.current?.querySelector<HTMLElement>(".og-details") ?? null });
   const close = useCallback(() => {
     returnFocus(new Event("closeAutoFocus", { cancelable: true }));
@@ -181,6 +218,14 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   const agentsById = new Map(model.allAgents.map((row) => [row.id, row]));
   const pointOf = (id: string) => points.get(id) ?? points.get(projectsById.get(agentsById.get(id)?.projectId ?? "")?.revealSlot ?? "");
   const teamOf = (id: string) => pointOf(id)?.team ?? id;
+  // A chosen session is framed at a readable size once the map has placed it (B5).
+  const framePoint = framing.current ? pointOf(framing.current) : undefined;
+  useEffect(() => {
+    if (!framePoint || !nodesInitialized || layout.phase !== "ready") return;
+    framing.current = null;
+    cameraInitialized.current = true;
+    void flow.setCenter(framePoint.x, framePoint.y, { zoom: 1, duration: 0 });
+  }, [framePoint, nodesInitialized, layout.phase, flow]);
   const chosenTeam = selection ? teamOf(selection) : null;
   const lineageTeam = selection ? model.teams.get(selection) ?? selection : null;
   const counterparts = new Set(model.communication.flatMap((pair) => pair.source === selection ? [pair.target] : pair.target === selection ? [pair.source] : []));
@@ -373,6 +418,14 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
       {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn model={model} query={projectQuery} setQuery={setProjectQuery} hidden={hiddenProjects} toggle={toggleProject} point={setPointedProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} actions={actions} />}
     </div> : null}
   </div>;
+}
+
+/** The drawn root of a session's team: its nearest drawn ancestor with no drawn parent. */
+function teamRootOf(id: string, parents: ReadonlyMap<string, string | null>): string {
+  const seen = new Set([id]);
+  let root = id;
+  for (let parent = parents.get(root); parent && !seen.has(parent); parent = parents.get(root)) { seen.add(parent); root = parent; }
+  return root;
 }
 
 /** Who to answer for a root whose turn it is: the root itself when it asks, else the first descendant that does. */
