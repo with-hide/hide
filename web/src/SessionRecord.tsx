@@ -15,7 +15,7 @@ import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import { holdsRequest, orderedOutputs, outputPrState, recordTitle, recordTree, requestPreview, sessionOfAgentOn, sessionPlace, settledOutput, workKey } from "./sessionWork";
+import { holdsRequest, orderedOutputs, requestRuns, outputPrState, recordTitle, recordTree, requestPreview, sessionOfAgentOn, sessionPlace, settledOutput, workKey } from "./sessionWork";
 import { boardProjects } from "./navigation";
 import { cardLine, cardOfPane, cardQuestion, everyAgent } from "./overviewTasks";
 import { destinationOf } from "./overviewBacklog";
@@ -435,7 +435,9 @@ function Flows({ record, locator }: { record: RecordValue; locator?: RequestLoca
             </span>
           </button>
           {expanded ? <ol className={cn("min-w-0 pb-sm", LANE)} data-record-flow-requests={flow.requests.length}>
-            {flow.requests.map((request) => <RequestRow key={request.offset} request={request} locator={locator} />)}
+            {requestRuns(flow.requests).map((run) => run.kind === "request"
+              ? <RequestRow key={run.request.offset} request={run.request} locator={locator} />
+              : <LetterRun key={run.requests[0]!.offset} letters={run.requests} locator={locator} />)}
           </ol> : null}
         </li>;
       })}
@@ -456,6 +458,29 @@ function RawRequests({ record, locator }: { record: RecordValue; locator?: Reque
     <ol className="min-w-0">{requests.map((request) => <RequestRow key={request.offset} request={{ ...request, summary: null, answers: null }} locator={locator} />)}</ol>
     {record.omitted_requests ? <p className="pt-sm text-micro text-muted-foreground" data-record-omitted={record.omitted_requests}>{t("record.omitted", { count: record.omitted_requests })}</p> : null}
   </section>;
+}
+
+/**
+ * Letters in a row (B24): one dim line with their count and senders, which
+ * opens to each letter's own line. A History hit inside opens it.
+ */
+function LetterRun({ letters, locator }: { letters: readonly WorkRequest[]; locator?: RequestLocator }) {
+  const { t } = useInterfaceTranslation();
+  const holds = locator !== undefined && letters.some((letter) => holdsRequest(letter, locator.request_offset));
+  const [open, setOpen] = useState(holds);
+  useEffect(() => { if (holds) setOpen(true); }, [holds, locator?.query]);
+  const senders = [...new Set(letters.map((letter) => letter.letter_from!))];
+  return <li className="min-w-0 py-xxs" data-record-letter-run={letters.length}>
+    <button type="button" className={cn(ROW, "flex w-full min-w-0 items-baseline gap-sm py-xxs text-muted-foreground hover:bg-accent")} aria-expanded={open} onClick={() => setOpen(!open)}>
+      <RequestTime at={letters[0]!.at_unix_ms} />
+      <span className="flex min-w-0 flex-1 items-baseline gap-xs">
+        <MailIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 self-center" />
+        <span className="shrink-0 text-micro">{t("record.letterRun", { count: letters.length })}</span>
+        <span className="min-w-0 flex-1 truncate text-micro" title={senders.join(", ")}>{senders.join(", ")}</span>
+      </span>
+    </button>
+    {open ? <ol className="min-w-0 pl-(--size-control)">{letters.map((letter) => <RequestRow key={letter.offset} request={letter} locator={locator} />)}</ol> : null}
+  </li>;
 }
 
 /** A History hit's notes: how long requests are kept, and that this one is gone. */

@@ -64,6 +64,7 @@ const words = {
   "record.flowRequests": ["{{count}} requests", "요청 {{count}}", "依頼 {{count}}", "请求 {{count}}"],
   "record.images": ["{{count}} images", "이미지 {{count}}장", "画像 {{count}}枚", "图片 {{count}} 张"],
   "record.letterFrom": ["Letter from {{name}}", "{{name}}의 편지", "{{name}} からの手紙", "来自 {{name}} 的信"],
+  "record.letterRun": ["{{count}} letters", "편지 {{count}}통", "手紙 {{count}}通", "信件 {{count}} 封"],
   "record.answers": ["Answers: {{question}}", "답한 질문: {{question}}", "答えた質問: {{question}}", "回答的问题：{{question}}"],
   "record.repeated": ["Sent {{count}} times", "{{count}}번 보냄", "{{count}}回送信", "发送了 {{count}} 次"],
   "record.goalCommand": ["Set with /goal", "/goal로 정함", "/goal で設定", "用 /goal 设定"],

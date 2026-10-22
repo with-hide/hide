@@ -129,6 +129,27 @@ it("draws a request as its summary and opens the words as sent in place, or cuts
   } finally { await unmount(); }
 });
 
+it("folds letters in a row into one line that opens to each, and leaves a lone letter as its own line (B24)", async () => {
+  const record = { ...BASE, flows: [flow("flow-1", "Only", AT, [
+    request(1, "Draw it", { summary: "Draw it" }),
+    request(2, "🦉 report", { letter_from: "impl-a" }),
+    request(3, "🦉 report", { letter_from: "impl-b" }),
+    request(4, "🦉 report", { letter_from: "impl-a" }),
+    request(5, "Ship it", { summary: "Ship it" }),
+    request(6, "🦉 report", { letter_from: "impl-a" }),
+  ])] };
+  const { container, unmount } = await mount(record);
+  try {
+    const run = container.querySelector('[data-record-letter-run="3"]')!;
+    expect(text(run)).toContain("3 letters");
+    expect(text(run)).toContain("impl-a, impl-b");
+    expect(run.querySelector("[data-record-request]")).toBeNull();
+    await act(async () => run.querySelector<HTMLButtonElement>("button")!.click());
+    expect(run.querySelectorAll("[data-record-letter]").length).toBe(3);
+    expect(container.querySelector('[data-record-request="6"]')!.getAttribute("data-record-letter")).toBe("impl-a");
+  } finally { await unmount(); }
+});
+
 it("marks a reply with the question it answers, a letter dim under its sender, a repeat, an image count and a /goal (B7, B15, B23-B25)", async () => {
   const record = { ...BASE, flows: [flow("flow-1", "Only", AT, [
     request(1, "1", { summary: "Plan A", answers: "Which plan" }),

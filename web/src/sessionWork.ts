@@ -47,6 +47,21 @@ export function requestPreview(request: Pick<WorkRequest, "summary" | "text">): 
 }
 
 /** A pull request nothing more happens to: merged, or closed unmerged (B19). */
+/** A flow's lines with each run of two or more letters in a row held as one (B24). */
+export type RequestRun = { kind: "request"; request: WorkRequest } | { kind: "letters"; requests: readonly WorkRequest[] };
+
+export function requestRuns(requests: readonly WorkRequest[]): RequestRun[] {
+  const runs: RequestRun[] = [];
+  for (const request of requests) {
+    const last = runs.at(-1);
+    if (request.letter_from === null) runs.push({ kind: "request", request });
+    else if (last?.kind === "letters") runs[runs.length - 1] = { kind: "letters", requests: [...last.requests, request] };
+    else if (last?.kind === "request" && last.request.letter_from !== null) runs[runs.length - 1] = { kind: "letters", requests: [last.request, request] };
+    else runs.push({ kind: "request", request });
+  }
+  return runs;
+}
+
 /** Whether a record line is the message at `offset`, or a repeat merged into it (B23). */
 export function holdsRequest(request: Pick<WorkRequest, "offset" | "repeats">, offset: number): boolean {
   return request.offset === offset || (request.repeats ?? []).includes(offset);
