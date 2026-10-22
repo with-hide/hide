@@ -245,16 +245,12 @@ struct AnalysisMeta {
     turn: u64,
     phase: AnalysisPhase,
     task_input_cursor: Option<u64>,
-    initial_context: bool,
     goal_evidence: Option<String>,
     goal_evidence_start: Option<u64>,
     goal_evidence_refresh: Option<String>,
     /// The turn began with the operator's request, so it may move the goal
     /// (D-09).
     operator_turn: bool,
-    /// The turn's end is asked without its start having been asked (it ended
-    /// within the start delay), so this one call names the goal too.
-    start_skipped: bool,
     context_chars: usize,
 }
 
@@ -1972,8 +1968,6 @@ impl LabelWorker {
             .iter()
             .rfind(|event| event.kind == LabelEventKind::Human)
             .is_some_and(operator);
-        let start_skipped =
-            phase == AnalysisPhase::TurnEnd && record.analysis_turn_start != Some(turn);
         let ledger_session = record.native_session_id.as_ref().map(|id| SessionIdentity {
             device_id: self
                 .target
@@ -2149,7 +2143,10 @@ impl LabelWorker {
             .rfind(|event| event.kind == LabelEventKind::Human)
             .and_then(|event| hide_session::label_transcript::work_turn(events, event.offset))
             .map(|turn| turn.witness());
+        // Only Claude Code and Codex have the command; the same words typed
+        // to another agent are an ordinary request (B15).
         let goal_command = operator_turn
+            && goal_command_agent(pane.agent.as_str())
             && events
                 .iter()
                 .rfind(|event| event.kind == LabelEventKind::Human)
@@ -2202,12 +2199,10 @@ impl LabelWorker {
             turn,
             phase,
             task_input_cursor: task_input_cursor(events),
-            initial_context,
             goal_evidence: evidence,
             goal_evidence_start: evidence_start,
             goal_evidence_refresh: evidence_refresh,
             operator_turn,
-            start_skipped,
             context_chars: context.chars().count(),
         };
         self.analysis_in_flight = Some(pane_id.to_owned());
@@ -2263,8 +2258,8 @@ impl LabelWorker {
             return false;
         }
         // Reads and analyses can finish in either order. Keep an older
-        // turn's task judgment, but never publish its sentence over a newer
-        // Human turn that the reader has already proven.
+        // turn's judgment in the record, but never publish its sentence over
+        // a newer Human turn that the reader has already proven.
         let stale_turn = self
             .panes
             .get_mut(pane_id)
@@ -2283,11 +2278,13 @@ impl LabelWorker {
             Ok((provider, analysis)) => {
                 let record = self.records.get_mut(pane_id).expect("checked above");
                 let previous_goal = record.goal.clone();
-                // A new assignment still belongs to the operator's first
-                // boundary. A clearer name for that same assignment may
-                // arrive at its end; another agent's letter cannot rename it.
-                // The operator's `/goal` opens a flow whatever the answer
-                // says (D-09, B15); a goal the parser refused keeps the flow.
+                // Only the operator's turn moves the goal; another agent's
+                // letter cannot. Either boundary may open a flow, the turn's
+                // end first of all, since it reads what the turn made (D-09,
+                // B14); a start and an end that both open one at the same
+                // request are one flow. The operator's `/goal` opens a flow
+                // whatever the answer says (B15); a goal the parser refused
+                // keeps the flow.
                 let goal_update = if outcome.goal_command && analysis.goal.is_some() {
                     GoalUpdate::Replace
                 } else {
@@ -2295,14 +2292,11 @@ impl LabelWorker {
                 };
                 let may_update_goal = previous_goal.is_none()
                     || (outcome.operator_turn
-                        && !stale_display
-                        && goal_update == GoalUpdate::Refine)
-                    || ((outcome.initial_context
-                        || outcome.phase == AnalysisPhase::TurnStart
-                        || outcome.start_skipped
-                        || outcome.goal_command)
-                        && outcome.operator_turn
-                        && goal_update == GoalUpdate::Replace);
+                        && match goal_update {
+                            GoalUpdate::Replace => true,
+                            GoalUpdate::Refine => !stale_display,
+                            GoalUpdate::Keep => false,
+                        });
                 let goal_changed =
                     may_update_goal && analysis.goal.is_some() && previous_goal != analysis.goal;
                 if goal_changed {
@@ -2338,15 +2332,25 @@ impl LabelWorker {
                         .find(|summary| summary.offset == offset)
                         .map(|summary| summary.summary.clone())
                 });
-                record.note_summarized(summaries.iter().map(|summary| summary.offset));
-                if let Some(session) = outcome.ledger_session.clone()
-                    && !summaries.is_empty()
-                    && let Some(client) = self.ledger.lock().ok().and_then(|client| client.clone())
-                    && let Err(code) = client.ledger(LedgerUpdate::Summaries { session, summaries })
-                {
-                    crate::diagnostic!(
-                        json!({"component":"labels","kind":"ledger.enqueue_failed","pane_id":pane_id,"code":code})
-                    );
+                // A summary the ledger did not take is asked again; one with
+                // no ledger to take it is not, since nothing would keep it.
+                let offsets = summaries.iter().map(|summary| summary.offset).collect::<Vec<_>>();
+                let client = self.ledger.lock().ok().and_then(|client| client.clone());
+                let kept = match (outcome.ledger_session.clone(), client) {
+                    _ if summaries.is_empty() => true,
+                    (Some(session), Some(client)) => match client.ledger(LedgerUpdate::Summaries { session, summaries }) {
+                        Ok(()) => true,
+                        Err(code) => {
+                            crate::diagnostic!(
+                                json!({"component":"labels","kind":"ledger.enqueue_failed","pane_id":pane_id,"code":code})
+                            );
+                            false
+                        }
+                    },
+                    _ => true,
+                };
+                if kept {
+                    record.note_summarized(offsets);
                 }
                 if record.goal.is_some()
                     && (previous_goal.is_none()
@@ -2543,9 +2547,9 @@ impl LabelWorker {
                     self.log_failure(pane_id, "analysis.retried", &failure.detail());
                     return cleared;
                 }
-                // Only a turn that can move a task leaves an unknown on one
-                // when its judgment fails: a watch alert or a reply moves
-                // none (B4, D-09).
+                // Only a turn the session's own work began is recorded as
+                // unjudged when its judgment fails: a watch alert or a reply
+                // leaves no mark (B4, D-09).
                 if outcome.phase == AnalysisPhase::TurnEnd
                     && outcome.work_author
                     && let Some(session) = outcome.ledger_session.clone()
@@ -2587,10 +2591,11 @@ impl LabelWorker {
     }
 }
 
-/// The record of the moment a session's read stopped proving background work
-/// (status-model.md, A quiet row that waits). The two causes call for
-/// different action, so each has a kind of its own: one is a limit to raise,
-/// the other a record this reader could not follow.
+/// Whether the agent has a `/goal` command: Claude Code and Codex.
+fn goal_command_agent(agent: &str) -> bool {
+    matches!(agent, "claude" | "codex")
+}
+
 /// Whether a message is the operator's `/goal` command, as the session
 /// reader writes it.
 fn goal_command(text: &str) -> bool {
@@ -2615,7 +2620,14 @@ fn owed_requests(
 ) -> Vec<(u64, OwedLine)> {
     let mut owed = std::collections::BTreeMap::new();
     if let Some(ledger) = ledger {
-        for request in &ledger.owed {
+        // A row the link reader stored before its sender was known (a bell
+        // line) is no request once these events show whose it is.
+        for request in ledger.owed.iter().filter(|request| {
+            events
+                .iter()
+                .find(|event| event.offset == request.offset)
+                .is_none_or(|event| feeds_work(event))
+        }) {
             owed.insert((request.at_unix_ms, request.offset), request.text.clone());
         }
     }
@@ -2662,12 +2674,15 @@ fn owed_requests(
         .into_iter()
         .enumerate()
         .map(|(index, key)| {
+            // One attachment can be both a path in the words and an image
+            // the reader counted: the larger count is the message's.
             let (text, images) = without_attachments(&owed[&key]);
-            let images = images
-                + events
+            let images = images.max(
+                events
                     .iter()
                     .find(|event| event.offset == key.1)
-                    .map_or(0, |event| event.images);
+                    .map_or(0, |event| event.images),
+            );
             let text = match images {
                 0 => text,
                 n => format!("[image ×{n}] {text}").trim().to_owned(),
@@ -2684,6 +2699,10 @@ fn owed_requests(
         .collect()
 }
 
+/// The record of the moment a session's read stopped proving background work
+/// (status-model.md, A quiet row that waits). The two causes call for
+/// different action, so each has a kind of its own: one is a limit to raise,
+/// the other a record this reader could not follow.
 fn wake_loss_diagnostic(pane_id: &str, cause: hide_session::turns::WakeLoss) -> serde_json::Value {
     use hide_session::turns::WakeLoss;
     match cause {

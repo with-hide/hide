@@ -305,8 +305,19 @@ pub struct RecordedRequest {
     /// included; 1 for one message.
     #[serde(default = "one")]
     pub count: u32,
+    /// The offsets of the later copies merged into this line, so a History
+    /// hit or a missed line on one of them finds it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repeats: Vec<u64>,
     #[serde(default)]
     pub goal_command: bool,
+}
+
+impl RecordedRequest {
+    /// Whether this line is the message at `offset`, or one merged into it.
+    pub fn holds(&self, offset: u64) -> bool {
+        self.offset == offset || self.repeats.contains(&offset)
+    }
 }
 
 fn one() -> u32 {

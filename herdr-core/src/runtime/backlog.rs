@@ -1536,12 +1536,12 @@ fn read_origin(
     let flow = record.flows.iter().find(|flow| {
         flow.requests
             .iter()
-            .any(|request| request.offset == origin.missed.turn_offset)
+            .any(|request| request.holds(origin.missed.turn_offset))
     });
     let request = flow.and_then(|flow| {
         flow.requests
             .iter()
-            .find(|request| request.offset == origin.missed.turn_offset)
+            .find(|request| request.holds(origin.missed.turn_offset))
     });
     slot.flow_name = flow
         .or_else(|| {

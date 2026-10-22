@@ -2578,3 +2578,21 @@ fn an_ask_waits_in_the_record_and_never_reaches_the_backlogs_missed_work() {
         [MissedKind::Problem]
     );
 }
+
+/// Only Claude Code and Codex have `/goal`; the same words typed to another
+/// agent stay an ordinary request, with no mark (B15).
+#[test]
+fn a_goal_command_is_marked_only_in_the_agents_that_have_it() {
+    let request = |text: &str| RecordedRequest {
+        text: text.into(),
+        ..RecordedRequest::default()
+    };
+    for agent in ["claude", "codex"] {
+        let shown = shown_request(agent, request("/goal 출시 전 검수"));
+        assert!(shown.goal_command, "{agent}");
+        assert_eq!(shown.text, "출시 전 검수");
+    }
+    let shown = shown_request("opencode", request("/goal 출시 전 검수"));
+    assert!(!shown.goal_command);
+    assert_eq!(shown.text, "/goal 출시 전 검수");
+}

@@ -377,7 +377,8 @@ pub(crate) fn parse(
             .map(|answers| truncate_phrase(&answers, ANSWERS_CHARS));
         summaries.push(RequestLine {
             id: request.id,
-            summary: truncate_phrase(&summary, limits.line),
+            // Two asks in one message keep both (B8): the bound is the schema's.
+            summary: truncate_phrase(&summary, limits.line * 2),
             answers,
         });
     }

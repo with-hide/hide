@@ -444,8 +444,8 @@ impl Doorbell {
                     other.id != letter.id && other.recipient.same_identity(&letter.recipient)
                 })
                 .count();
-            let line = bell_line(owner, &ledger, letter, others);
             let sender = bell_sender(owner, &ledger, letter);
+            let line = bell_line(&sender, letter, others);
             match deliver(
                 owner,
                 client,
@@ -562,10 +562,9 @@ impl Doorbell {
 /// and this line is read by a person. A watch warning names the agent it
 /// watches. Memory only: the ledger is the pass's copy and the title one short
 /// look under the lock.
-fn bell_line(owner: &Mutex<Runtime>, ledger: &Ledger, letter: &Letter, others: usize) -> String {
-    let name = bell_sender(owner, ledger, letter);
+fn bell_line(name: &str, letter: &Letter, others: usize) -> String {
     super::bell::line(&super::bell::Ring {
-        sender: &name,
+        sender: name,
         kind: &letter.kind,
         body: &letter.body,
         others,
@@ -1632,7 +1631,9 @@ mod tests {
             1,
         )
         .unwrap();
-        let line = |ledger: &Ledger, letter: &Letter| bell_line(&runtime, ledger, letter, 1);
+        let line = |ledger: &Ledger, letter: &Letter| {
+            bell_line(&bell_sender(&runtime, ledger, letter), letter, 1)
+        };
         // No registration and no row: the runtime's name, never an id.
         assert_eq!(
             line(&ledger, &letter),

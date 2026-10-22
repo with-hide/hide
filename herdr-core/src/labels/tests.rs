@@ -1846,7 +1846,7 @@ fn another_agents_follow_up_cannot_refine_the_operators_goal() {
 /// letter does not, and neither does the end of a turn whose start was
 /// asked, whatever replacement the model returns (D-04).
 #[test]
-fn an_end_renames_only_an_operator_turn_whose_start_was_never_asked() {
+fn an_end_moves_the_goal_of_an_operator_turn_and_never_of_a_turn_no_operator_submitted() {
     let renaming = |goal: &str| {
         json!({
             "goal": goal, "goal_update": "replace", "line": "끝냄", "end": "done",
@@ -1882,8 +1882,8 @@ fn an_end_renames_only_an_operator_turn_whose_start_was_never_asked() {
         Some("첫 요청에 붙은 작업 이름")
     );
 
-    // An operator turn that worked past the delay: its start is asked and
-    // keeps the name, and its end may not move it.
+    // An operator turn that worked past the delay: its start keeps the name,
+    // and its end, which read the whole turn, decides the flow (D-09, B14).
     turns.extend([("user", "긴 작업 해줘"), ("assistant", "하는 중")]);
     harness.session("a", "native-a", &turns);
     harness.input.record("w1:p1", turn_at(4) - 300, false);
@@ -1907,10 +1907,7 @@ fn an_end_renames_only_an_operator_turn_whose_start_was_never_asked() {
     observe(&mut worker, &idle);
     settle(&mut worker, &woken);
     assert_eq!(harness.backend.calls(), named + 3);
-    assert_eq!(
-        task(shown(&worker, &idle)).as_deref(),
-        Some("첫 요청에 붙은 작업 이름")
-    );
+    assert_eq!(task(shown(&worker, &idle)).as_deref(), Some("끝에서 바꾼 이름"));
 }
 
 #[test]
@@ -2870,8 +2867,11 @@ fn a_label_request_carries_its_language_and_that_languages_lengths() {
         let parsed = parse(AnalysisPhase::TurnStart, language, answer.clone()).unwrap();
         assert_eq!(parsed.goal.unwrap().chars().count(), goal);
         assert_eq!(parsed.line.chars().count(), line);
-        // The request summary is drawn in the same one line (D-08).
-        assert_eq!(parsed.requests[0].summary.chars().count(), line);
+        // A request summary wraps under its time, so it is held to two lines' worth (B8).
+        assert_eq!(parsed.requests[0].summary.chars().count(), line + 5);
+        answer["requests"][0]["summary"] = json!("r".repeat(line * 2 + 5));
+        let parsed = parse(AnalysisPhase::TurnStart, language, answer.clone()).unwrap();
+        assert_eq!(parsed.requests[0].summary.chars().count(), line * 2);
         answer["goal"] = json!("w".repeat(goal));
         let parsed = parse(AnalysisPhase::TurnStart, language, answer).unwrap();
         assert_eq!(parsed.goal.unwrap(), "w".repeat(goal));
@@ -3407,6 +3407,38 @@ fn only_a_turn_the_operator_started_moves_the_goal() {
         task(shown(&worker, &working)).as_deref(),
         Some("요청 보기와 설정 화면")
     );
+}
+
+/// The turn's end opens a flow when it reads that what is being made
+/// changed, though the turn's start kept the goal (D-09, B14).
+#[test]
+fn a_turn_end_that_reads_a_new_deliverable_opens_a_flow() {
+    let harness = Harness::new();
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    let mut turns = vec![("user", "요청 보기 목업 그려줘"), ("assistant", "목업을 그렸어요")];
+    let path = harness.session("a", "native-a", &turns);
+    harness.input.record("w1:p1", turn_at(0) - 300, false);
+    harness.backend.answer("요청 보기 목업 그리기", "done", "");
+    observe(&mut worker, &agent(&path, "idle", 1));
+    settle(&mut worker, &woken);
+
+    turns.extend([("user", "좋아 이걸로 PRD 써줘"), ("assistant", "PRD 초안을 썼어요")]);
+    harness.session("a", "native-a", &turns);
+    harness.input.record("w1:p1", turn_at(2) - 300, false);
+    harness.backend.begin("요청 보기 목업 그리기");
+    let working = agent(&path, "working", 2);
+    observe(&mut worker, &working);
+    settle(&mut worker, &woken);
+    assert_eq!(task(shown(&worker, &working)).as_deref(), Some("요청 보기 목업 그리기"));
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "요청 보기 PRD 작성", "goal_update": "replace",
+        "line": "PRD 초안 작성", "end": "done",
+        "work": {"missed": [], "resolved": [], "artifacts": []},
+    }));
+    let idle = agent(&path, "idle", 3);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert_eq!(task(shown(&worker, &idle)).as_deref(), Some("요청 보기 PRD 작성"));
 }
 
 /// B3, D-06: a block lasts until the agent runs again; a working state ends it

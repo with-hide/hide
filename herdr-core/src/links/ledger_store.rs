@@ -1361,7 +1361,7 @@ impl LinkStore {
                 *request_budget -= 1;
                 let (offset, at, text, author, summary, answers, letter_from, images) =
                     row.map_err(failed)?;
-                requests.push(shown_request(RecordedRequest {
+                requests.push(shown_request(&session.agent, RecordedRequest {
                     offset,
                     at_unix_ms: at,
                     text,
@@ -1371,11 +1371,12 @@ impl LinkStore {
                     answers,
                     letter_from,
                     count: 1,
+                    repeats: Vec::new(),
                     goal_command: false,
                 }));
             }
             requests.reverse();
-            record.flows = place_flows(&chapters, merge_repeats(requests), &turns);
+            record.flows = place_flows(&chapters, requests, &turns);
         }
         record.missed = self.ledger_missed(session)?;
         record.asks = record
@@ -1878,7 +1879,7 @@ impl LinkStore {
                 .replace('%', "\\%")
                 .replace('_', "\\_")
         );
-        let mut values = "SELECT r.device,r.agent,r.id,r.text,r.at,'request' AS kind,r.offset FROM ledger_requests r JOIN scoped s USING(device,agent,id) WHERE r.author='\"operator\"'".to_owned();
+        let mut values = "SELECT r.device,r.agent,r.id,r.text,r.at,'request' AS kind,r.offset FROM ledger_requests r JOIN scoped s USING(device,agent,id) WHERE r.author='\"operator\"' AND r.letter_from IS NULL".to_owned();
         // A flow's name is matched where a task's was (B32).
         if options.include_flows && summaries {
             values.push_str(" UNION ALL SELECT r.device,r.agent,r.id,r.goal,r.at,'flow',NULL FROM ledger_chapters r JOIN scoped s USING(device,agent,id)");
@@ -1920,7 +1921,7 @@ impl LinkStore {
                     s.cwd,s.project,s.status,
                     CASE WHEN ?2 THEN MAX(COALESCE(s.last_request_at,0),COALESCE(s.ended_at,0),COALESCE(s.started_at,0),COALESCE(m.at,0)) ELSE m.at END activity,
                     CASE WHEN ?2 THEN 0 ELSE COALESCE(m.count,0) END match_count,
-                    (SELECT COUNT(*) FROM ledger_requests r WHERE r.device=s.device AND r.agent=s.agent AND r.id=s.id AND r.author='"operator"') request_count
+                    (SELECT COUNT(*) FROM ledger_requests r WHERE r.device=s.device AND r.agent=s.agent AND r.id=s.id AND r.author='"operator"' AND r.letter_from IS NULL) request_count
                 FROM scoped s LEFT JOIN totals m USING(device,agent,id) LEFT JOIN ledger_titles t USING(device,agent,id)
                 WHERE ?2 OR m.count>0
             ) SELECT c.*,
@@ -2141,14 +2142,16 @@ fn status_of(turns: &[TurnRow]) -> Option<RecordStatus> {
 }
 
 /// A request's words as the record shows them (D-18, B15, B25): attachment
-/// paths become a count, and a `/goal` command keeps its words and a mark.
-fn shown_request(mut request: RecordedRequest) -> RecordedRequest {
+/// paths become a count, and a `/goal` command keeps its words and a mark,
+/// in the agents that have the command (Claude Code, Codex).
+fn shown_request(agent: &str, mut request: RecordedRequest) -> RecordedRequest {
     let (text, found) = without_attachments(&request.text);
     if found > 0 {
         request.text = text;
         request.images = request.images.max(found);
     }
-    if let Some(rest) = request.text.trim_start().strip_prefix("/goal")
+    if matches!(agent, "claude" | "codex")
+        && let Some(rest) = request.text.trim_start().strip_prefix("/goal")
         && (rest.is_empty() || rest.starts_with(char::is_whitespace))
     {
         request.goal_command = true;
@@ -2171,6 +2174,7 @@ fn merge_repeats(requests: Vec<RecordedRequest>) -> Vec<RecordedRequest> {
             && request.at_unix_ms.saturating_sub(*last_at) <= REPEAT_WINDOW_MS
         {
             held.count += 1;
+            held.repeats.push(request.offset);
             *last_at = request.at_unix_ms;
             if held.summary.is_none() {
                 held.summary = request.summary;
@@ -2232,6 +2236,9 @@ fn place_flows(
         .zip(placed)
         .zip(flow_turns)
         .map(|(((id, goal, at), requests), turns)| {
+            // Repeats merge within a flow, so the message that opened one is
+            // never folded into the flow before it.
+            let requests = merge_repeats(requests);
             let name = goal.unwrap_or_else(|| {
                 requests
                     .iter()
