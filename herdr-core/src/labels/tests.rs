@@ -3441,6 +3441,35 @@ fn a_blocked_turn_ends_when_the_agent_works_again() {
     assert!(!shown(&worker, &working).is_some_and(|label| label.blocked));
 }
 
+/// B9: a turn the provider refused is drawn on the pane as a block, its
+/// line the cause, on the second row and in the turn card alike.
+#[test]
+fn a_limited_turn_is_drawn_on_the_pane_as_a_block() {
+    let harness = Harness::new();
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    let path = harness.session(
+        "a",
+        "native-a",
+        &[
+            ("user", "검증 돌려줘"),
+            ("assistant", "You've hit your usage limit"),
+        ],
+    );
+    harness.backend.answer("검증 레인 정리 작업", "limited", "");
+    let idle = agent(&path, "idle", 3);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert!(shown(&worker, &idle).expect("the turn is labelled").blocked);
+    let facts = shown_facts(&worker, &idle).unwrap();
+    assert_eq!(facts.end, Some(super::analysis::LabelEnd::Blocked));
+    assert!(
+        facts
+            .recent_turns
+            .iter()
+            .all(|turn| turn.end != Some(super::analysis::LabelEnd::Limited))
+    );
+}
+
 /// task-line-restoration B6/B8: quota clears the current judgment, then the
 /// existing provider deadline can restore that same turn on every projection.
 #[test]
