@@ -91,22 +91,44 @@ static int fit_schema(char *label, int argc, char **argv) {
     memmove(legacy + new_length, legacy + old_length, strlen(legacy + old_length) + 1);
     memcpy(legacy, replacement, new_length);
   }
-  /* Recorded markers from before context_label.v19 carry no request summary:
-     they answer none, which the product reads as the request's own words. */
-  if (strstr(schema, "\"request\"") && !strstr(label, "\"request\":")) {
-    const char *field = "\"request\":\"\",";
-    size_t length = strlen(label);
-    size_t capacity = sizeof prompt - (size_t)(label - prompt);
-    if (label[0] != '{' || length + strlen(field) >= capacity) return 0;
-    memmove(label + 1 + strlen(field), label + 1, length);
-    memcpy(label + 1, field, strlen(field));
+  /* The marker's `request` is the summary of the turn's own request, the
+     newest id the input lists as owed (context_label.v20); with none, or an
+     empty summary, the answer summarizes nothing and the request shows its
+     own words. */
+  if (strstr(schema, "\"requests\"")) {
+    char *field = strstr(label, "\"request\":\"");
+    if (!field) return 0;
+    char *text = field + strlen("\"request\":\"");
+    char *close = text;
+    while (*close && *close != '"') close += *close == '\\' && close[1] ? 2 : 1;
+    if (*close != '"') return 0;
+    char *after = close + 1;
+    if (*after == ',') after++;
+    char id[32] = "";
+    const char *owed = strstr(prompt, "<unsummarized-requests>");
+    const char *owed_end = owed ? strstr(owed, "</unsummarized-requests>") : NULL;
+    for (const char *at = owed; owed_end && (at = strstr(at, "[r")) != NULL && at < owed_end; at++) {
+      size_t digits = strspn(at + 2, "0123456789");
+      if (digits && digits < sizeof id - 2 && at[2 + digits] == ']' && (at[-1] == '\n' || at[-1] == 'n')) {
+        memcpy(id, at + 1, digits + 1);
+        id[digits + 1] = 0;
+      }
+    }
+    char replacement[4096];
+    int written = id[0] && close > text
+      ? snprintf(replacement, sizeof replacement, "\"requests\":[{\"id\":\"%s\",\"summary\":\"%.*s\",\"answers\":null}],", id, (int)(close - text), text)
+      : snprintf(replacement, sizeof replacement, "\"requests\":[],");
+    if (written < 0 || (size_t)written >= sizeof replacement) return 0;
+    size_t tail = strlen(after);
+    size_t capacity = sizeof prompt - (size_t)(field - prompt);
+    if ((size_t)written + tail >= capacity) return 0;
+    memmove(field + written, after, tail + 1);
+    memcpy(field, replacement, (size_t)written);
   }
   if (strstr(schema, "\"end\"")) {
-    /* Recorded native-format fixtures retain their old label marker. This
-       controlled provider gives that unrelated reader journey no work judgment
-       under the current END schema, without rewriting the recorded blobs. */
+    /* A marker with no work judgment answers the empty one END requires. */
     if (strstr(schema, "\"work\"") && !strstr(label, ",\"work\":")) {
-      const char *work = ",\"work\":{\"task\":{\"kind\":\"none\"},\"missed\":[],\"resolved\":[],\"output_task_id\":null}}";
+      const char *work = ",\"work\":{\"missed\":[],\"resolved\":[],\"artifacts\":[]}}";
       size_t length = strlen(label);
       size_t capacity = sizeof prompt - (size_t)(label - prompt);
       if (!length || label[length - 1] != '}' || length - 1 + strlen(work) >= capacity) return 0;
