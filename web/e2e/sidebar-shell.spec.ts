@@ -4,7 +4,7 @@
 // carries a Workspace's path and icons; under it the Search row opens the ⌘K
 // palette with the chord as bound, the Overview row opens All projects, the
 // free app has no Factory entry, and no Home row is left;
-// a browser tab offers no Add project; the footer's Help menu opens the
+// a browser tab adds a project by a typed path; the footer's Help menu opens the
 // shortcut sheet, copies the diagnostics, opens the new-issue page and names
 // the version. Captured in Dark and Light.
 
@@ -41,8 +41,8 @@ async function withShell(
   }
 }
 
-test("the Search row and the Overview row under the device, with no Home row and no Add project in a browser tab", async ({ page }) => {
-  await withShell(page, "sidebar-shell", async () => {
+test("the Search row and the Overview row under the device, with no Home row, and Add project by a typed path in a browser tab", async ({ page }) => {
+  await withShell(page, "sidebar-shell", async ({ daemon }) => {
     const sidebar = page.locator("nav[data-sidebar]");
     const list = page.locator("[data-project-list]");
     // B3: Projects is the first tab and the one shown.
@@ -91,11 +91,26 @@ test("the Search row and the Overview row under the device, with no Home row and
     await expect(modal).toHaveCount(0);
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
 
-    // B5: a browser tab has no folder picker, so neither the sidebar nor the chord offers Add project
-    // (the desktop app draws it under Overview: desktop/e2e/add-project.spec.ts).
-    await expect(page.locator("[data-sidebar-new-workspace], [data-main-add-project]")).toHaveCount(0);
+    // B5: a browser tab has no folder picker and no chord for Add project (Chrome keeps ⇧⌘N), so the row
+    // under Overview carries no keycap and the desktop chord opens nothing; the row opens the dialog with
+    // this machine's `~/` path field in place of Browse folder, and a typed `~/` folder, read against
+    // the daemon's home, registers the project (the desktop app's picker: desktop/e2e/add-project.spec.ts).
+    const addProject = page.locator("[data-sidebar-new-workspace]");
+    await expect(addProject).toBeVisible();
+    await expect(addProject.locator("kbd")).toHaveCount(0);
     await page.keyboard.press(chord("new_workspace", "electron"));
     await expect(page.locator("[data-add-project]")).toHaveCount(0);
+    fs.mkdirSync(path.join(daemon.home, "projects", "typed-project"), { recursive: true });
+    await addProject.click();
+    const dialog = page.locator("[data-add-project]");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator("[data-add-project-browse]")).toHaveCount(0);
+    const field = dialog.locator("[data-add-project-path]");
+    await expect(field).toBeFocused();
+    await screenshot(page, "sidebar-shell-add-project-browser");
+    await field.fill("~/projects/typed-project");
+    await field.press("Enter");
+    await expect(page.locator("[data-project]", { hasText: "typed-project" })).toBeVisible({ timeout: 20_000 });
 
     // The direct commands focus this list or restore the Overview's last tab (overview-redesign B1).
     await page.keyboard.press(chord("sidebar_projects"));

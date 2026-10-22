@@ -27,14 +27,18 @@ export function addProjectHosts(devices: readonly Device[] | undefined, t: TFunc
  * path that machine's node judges anywhere else; the other ways to add only on
  * the core's machine, the one a new project can be made on (the core refuses
  * a new folder on any other), and their parent picker only when the window
- * runs there too.
+ * runs there too. `picker` is whether this window can open the system's
+ * folder picker (the desktop app can, a browser tab cannot): without it the
+ * window's own machine takes a typed `~/` path too, judged by its node like
+ * any other machine's.
  */
 export type HostWays = { browse: boolean; otherWays: boolean; pickParent: boolean };
 
-export function hostWays(host: string, devices: readonly Device[] | undefined): HostWays {
+export function hostWays(host: string, devices: readonly Device[] | undefined, picker: boolean): HostWays {
   const own = host === windowDeviceId(devices);
   const core = isCoreMachine(devices, host);
-  return { browse: own, otherWays: core, pickParent: own && core };
+  const browse = own && picker;
+  return { browse, otherWays: core, pickParent: browse && core };
 }
 
 /** The host the dialog opens on: the focused device while it is still listed, this Mac otherwise. */

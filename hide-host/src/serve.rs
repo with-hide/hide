@@ -643,6 +643,20 @@ fn to_value(value: impl serde::Serialize) -> HostResult<Value> {
 
 /// A repository path from the core. Only an absolute path names a folder on
 /// this machine; anything else is refused before Git sees it.
+/// `~` and `~/...` are this host's home, as a shell on it would read them;
+/// any other spelling is kept. The one rule for a path the operator typed
+/// for this machine, whether it is judged (`Registrable`) or made
+/// (`ProjectCreate`), so a browser tab, which types a path instead of
+/// picking a folder, reaches the same place a device's field does.
+fn home_relative(path: String, home: &Path) -> String {
+    match path.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+            format!("{}{rest}", home.to_string_lossy())
+        }
+        _ => path,
+    }
+}
+
 fn absolute(path: &str) -> HostResult<std::path::PathBuf> {
     let path = Path::new(path);
     if !path.is_absolute() {
@@ -1037,14 +1051,10 @@ pub fn handle_with_progress(
         Call::Directory { path } => to_value(worktrees::directory(&absolute(&path)?)),
         Call::Registrable { path } => {
             let home = env.home("HOME is not set, so no folder can be judged against it")?;
-            // `~` is this host's home, as a shell on it would read it.
-            let path = match path.strip_prefix('~') {
-                Some(rest) if rest.is_empty() || rest.starts_with('/') => {
-                    format!("{}{rest}", home.to_string_lossy())
-                }
-                _ => path,
-            };
-            to_value(crate::register::check(&absolute(&path)?, Path::new(&home))?)
+            to_value(crate::register::check(
+                &absolute(&home_relative(path, &home))?,
+                Path::new(&home),
+            )?)
         }
         Call::HomeSync { projects } => {
             let home = env.home("HOME is not set, so Hide's Home folder has no place to live")?;
@@ -1082,10 +1092,17 @@ pub fn handle_with_progress(
             path,
             new_folder,
             initialize_git,
-        } => to_value(
-            crate::project::create(&absolute(&path)?, new_folder, initialize_git)
+        } => {
+            let home = env.home("HOME is not set, so no folder can be judged against it")?;
+            to_value(
+                crate::project::create(
+                    &absolute(&home_relative(path, &home))?,
+                    new_folder,
+                    initialize_git,
+                )
                 .map_err(|reason| HostError::new(ErrorCode::Io, reason))?,
-        ),
+            )
+        }
         Call::PathFacts { paths } => to_value(crate::catalog::path_facts(&paths)?),
         Call::RealPaths { paths } => to_value(crate::cleanup::real_paths(&paths)),
         Call::Repository { path } => to_value(crate::cleanup::repository(&absolute(&path)?)),
@@ -1658,6 +1675,20 @@ pub fn handle_with_progress(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// A typed `~` is this host's home for a project made here, as it is
+    /// for one judged here, and any other spelling is kept as written.
+    #[test]
+    fn a_typed_tilde_is_this_hosts_home() {
+        let home = Path::new("/Users/me");
+        assert_eq!(home_relative("~".to_owned(), home), "/Users/me");
+        assert_eq!(
+            home_relative("~/work/app".to_owned(), home),
+            "/Users/me/work/app"
+        );
+        assert_eq!(home_relative("~me/app".to_owned(), home), "~me/app");
+        assert_eq!(home_relative("/srv/app".to_owned(), home), "/srv/app");
+    }
 
     /// An OpenCode route proof that meets OpenCode writing its database
     /// answers busy, which the core reads again (Windows run 39104633599

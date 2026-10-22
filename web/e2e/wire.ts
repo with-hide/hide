@@ -240,9 +240,8 @@ export { sidebarColumns, sidebarOverflow, sidebarRowsFit } from "./sidebar-geome
 /**
  * Sends one client event on a socket of its own, as a second client would,
  * and returns the first frame `answered` accepts, or null right after the
- * send when no answer is awaited. The browser shell has no Add project (the
- * desktop app's folder picker is its only way in), so a spec registers a
- * folder this way.
+ * send when no answer is awaited. A spec registers a folder this way when
+ * the dialog is not what it tests.
  */
 export async function sendEvent(
   page: Page,

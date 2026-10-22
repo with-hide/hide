@@ -938,7 +938,7 @@ Native browser displays use the existing dialog still rules without reloading.
 Every tab, the device switch, the project chip, a row, a fold line and every button of the panel take the keyboard with a visible focus ring and an accessible name, and a state is written as a word (`묻는 중`, `일하는 중`) as well as drawn in its colour (B64).
 The Overview draws its first screen from the snapshot without waiting for any disk or GitHub read, and a closed Overview adds nothing to terminal output or key input (B63).
 
-The Home with no project shows `Add a project to start an agent.` and Add project with its chord (⇧⌘N), which a browser tab, unable to pick a folder, shows as the sentence alone.
+The Home with no project shows `Add a project to start an agent.` and Add project with its chord (⇧⌘N); a browser tab has no chord for it (Chrome keeps ⇧⌘N), so the button stands alone there.
 With projects and no agent, Work shows its empty state and the existing New agent route; the backlog remains available.
 Before the first snapshot the shell's own connecting state shows instead.
 
@@ -1225,7 +1225,7 @@ Resolve reads the row at once and moves it to 쉬는 중 only after the core sav
 A merged pull request rests a task on its own only once its finish was read and nothing is left to wait on; until then it stays under 읽을 것 or 대기.
 The PR mark shows one pull request as its state's icon and `#number`, several as each state's icon and count, worst first; one opens its card in the 보기 slot on a press, several list each first, and ⌘-press opens GitHub (B14); under the pointer or focus it shows what the 프로젝트 row's mark shows, the PR card with the title, review and checks for one PR and each PR's state and title for several.
 A stale GitHub read dims the mark, with `GitHub 읽기 실패 · N분 전 값` in its tooltip, and never draws a zero (B20).
-While the first snapshot is read the list shows a small skeleton and no number; with no task it reads `진행 중인 일감 없음` and `New agent`, which opens the start panel; a device with no project reads `Add a project to start an agent.` with Add project (⇧⌘N, the sentence alone in a browser tab); and a device that does not answer keeps its last rows dimmed under `<device> 응답 없음`, their actions off (B20, B42).
+While the first snapshot is read the list shows a small skeleton and no number; with no task it reads `진행 중인 일감 없음` and `New agent`, which opens the start panel; a device with no project reads `Add a project to start an agent.` with Add project (⇧⌘N; no chord in a browser tab); and a device that does not answer keeps its last rows dimmed under `<device> 응답 없음`, their actions off (B20, B42).
 Every control is reachable from the keyboard with a visible ring and an accessible name, and a state reads as a word as well as a colour (`묻는 중`, `일하는 중`; B21).
 A hidden list draws no rows, the elapsed clock updates only its own text, and the list adds no work to a key or a terminal frame (B22).
 
@@ -1705,7 +1705,7 @@ The same root-only sidebar and 태스크 list rules apply while an SSH device is
 A checkout whose root came from another checkout prefixes its purpose line with the Return glyph and the parent checkout's branch, adding `+N` when more than one external root raised it.
 Folding a project by its row or chevron, or using a checkout chevron changes the list only: the center, the focused pane and tab, read state, groups and running processes stay as they were.
 Before the first snapshot arrives the Agents and Projects lists say they are connecting rather than drawing an empty list, and a local Projects list with no registered project says so in a line with no button of its own.
-In the desktop app an `Add project` row sits directly under the Overview row, drawn whether or not a project is registered, with the current chord (`⇧⌘N`, `Alt+Shift+N` off macOS) on its right and no + on the section titles; it is the sidebar's one Add project (PRD first-run-onboarding B51, B52).
+An `Add project` row sits directly under the Overview row, drawn whether or not a project is registered, with the current chord (`⇧⌘N`, `Alt+Shift+N` off macOS; none in a browser tab) on its right and no + on the section titles; it is the sidebar's one Add project (PRD first-run-onboarding B51, B52).
 The sidebar has no Home row (PRD sidebar-titlebar-refresh D-06, D-07): a Home agent is found and opened from Needs You and Done, the 태스크 list and ⌘K, the ⌘N start panel can target the Home, and ⌥n numbers the visible rows without it.
 Every device's sidebar starts with the Search row and the shared Overview row, under the device title in the window's top row, followed by one project/checkout/root list with no mode strip.
 Overview shows its glyph, label, Needs You count and current shortcut; zero, an absent snapshot or a disconnected device hides the count.
@@ -1837,7 +1837,7 @@ Hover, filter and checkbox changes are local: they dispatch no core event and st
 Web owner: `web/src/AddProjectDialog.tsx`, `web/src/addProject.ts`; desktop owner: the `hide:pick-folder` channel in `desktop/src/main/host.ts`.
 Add project opens one centered `Add a project` dialog from each of its entry points: the Add project row under Overview, the empty Home's center button (B27), ⌘⇧N and the File menu; Escape and × close it.
 With projects registered the Add project row under Overview is the only one on screen; with none it and the empty Home's button are the two (PRD first-run-onboarding B51, B52).
-Only the desktop app offers it, because the native folder picker is how a local project is added: a plain browser tab draws none of those entry points and has no chord for it.
+A browser tab offers the same entry points without the chord (Chrome keeps ⇧⌘N); having no folder picker, it adds a project on this machine by a typed path, the `~/` field a remote host gets, which this machine's node judges (`hostWays` in `web/src/addProject.ts`, `home_relative` in `hide-host/src/serve.rs`).
 The Host selector lists this Mac and every registered device, and starts on the focused device.
 This Mac here is the machine the window runs on, which on a window of a machine whose core runs elsewhere is not the core's (`hostWays` in `web/src/addProject.ts`).
 On this Mac the primary `Browse folder` row holds the keyboard, so Enter activates it; it opens macOS's own folder picker as a sheet on the window, which can also make a new folder, and a cancelled pick leaves the dialog as it was.

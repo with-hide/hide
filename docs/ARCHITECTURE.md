@@ -3488,7 +3488,7 @@ The table below is written in macOS chords; Windows and Linux press each one thr
 | Select device 1-9 (the nth tile of the device rail) | ⌘1-⌘9 | none (Chrome keeps ⌘1-9) | ⌘1-⌘9 |
 | Close focused View or pane | ⌘W | ⌥W (moved) | ⌘W |
 | Reopen closed tab | ⌘⇧T | ⌥⇧T (moved) | ⌘⇧T |
-| Add project | ⌘⇧N | none (a browser tab has no folder picker, so it offers no Add project) | ⌘⇧N |
+| Add project | ⌘⇧N | none (Chrome keeps ⌘⇧N); the Add project row under Overview and the empty Home's button open it | ⌘⇧N |
 | Start agent (the start panel) | - | none (Chrome keeps ⌘N); ⌘K `에이전트 시작…`, found by typing, opens it | ⌘N, also File › Start agent |
 | Next / previous recent tab (the Agent pane or focused View tab) | ⌃Tab / ⌃⇧Tab | ⌥` / ⌥⇧` | ⌃Tab / ⌃⇧Tab, committed on releasing ⌃ |
 | Next / previous panel (all projects) | none by default | none by default; bindable in Settings | none by default; the menu selects immediately |

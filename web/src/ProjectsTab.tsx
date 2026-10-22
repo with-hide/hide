@@ -22,7 +22,6 @@ import { settingsTarget } from "./projectSettings";
 import { useShellStore } from "./store";
 import { useUiStore, type OverviewPanel } from "./ui";
 import { primaryCheckout } from "./workspaceManage";
-import { hostBridge } from "./host";
 
 // The Projects tab (PRD overview-device-tasks D-14, D-15, D-24..D-28,
 // B47-B57): the device's disk on one line, then a row per project with its
@@ -62,7 +61,7 @@ export function OverviewProjects({ projects, deviceId, actions }: { projects: re
     <div className="mx-auto flex w-full max-w-(--size-overview-sheet-w) flex-col gap-lg px-xl py-xxl" data-overview-projects="true">
       <div className="flex items-center justify-between gap-sm pb-sm">
         <h2 className="text-headline font-semibold">{t("overview.projects")}</h2>
-        {hostBridge() ? <Button variant="outline" size="sm" onClick={() => actions.openAddProject()}><PlusIcon />{t("firstRun.home.addProject")}</Button> : null}
+        <Button variant="outline" size="sm" onClick={() => actions.openAddProject()}><PlusIcon />{t("firstRun.home.addProject")}</Button>
       </div>
       {dialed ? null : (
         <p className="flex flex-wrap items-center gap-x-sm text-caption text-subtle-foreground" data-projects-disk-line="true">
