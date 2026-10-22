@@ -355,8 +355,9 @@ fn pane_bands_leave_pull_requests_and_results_to_the_header() {
 
 /// The second row leads with the turn's request while it shows the turn: an
 /// ask, the agent working, or a finished turn the operator has not looked at,
-/// which says its result. A read finished turn, a wait and an idle pane have
-/// no row (PRD pane-last-request B1, B10, B11).
+/// which says its result, or a wait on working children. A read finished
+/// turn, any other wait and an idle pane have no row (PRD pane-last-request
+/// B1, B10, B11).
 #[test]
 fn pane_header_leads_with_the_request_only_while_its_row_shows_the_turn() {
     use crate::agent_state::{RequestVerb, header};
@@ -416,6 +417,33 @@ fn pane_header_leads_with_the_request_only_while_its_row_shows_the_turn() {
             "{verb:?}"
         );
     }
+    // A wait on working children shows the request and their count; a wait
+    // on anything else, or on children that no longer work, has no row.
+    agent.state.verb = RequestVerb::Waiting;
+    agent.wait = Some(crate::model::AgentWait::Children);
+    agent.descendant_counts.working = 2;
+    let waiting = header::of(&pane, Some(&agent), None, None);
+    assert_eq!(
+        (
+            waiting.waiting_on_children,
+            waiting.request,
+            waiting.progress
+        ),
+        (Some(2), summary.clone(), None)
+    );
+    agent.descendant_counts.working = 0;
+    assert_eq!(
+        header::of(&pane, Some(&agent), None, None).waiting_on_children,
+        None
+    );
+    agent.descendant_counts.working = 2;
+    agent.wait = Some(crate::model::AgentWait::Background);
+    let background = header::of(&pane, Some(&agent), None, None);
+    assert_eq!(
+        (background.waiting_on_children, background.request),
+        (None, None)
+    );
+    agent.wait = None;
     // A pane whose terminal is not live shows no turn.
     agent.state.verb = RequestVerb::Working;
     assert_eq!(

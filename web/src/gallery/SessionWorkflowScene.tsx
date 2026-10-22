@@ -74,8 +74,9 @@ const PANE_HEADER_CASES: [string, string, Omit<PaneHeader, "working">][] = [
   ["turn-finished", "15 · 끝났는데 아직 안 봄", { ...NO_NOTICE, request: { text: "원격 조회 3초로 바꿔 PR·머지", images: 0 }, finished: true, progress: "원격 조회 주기를 3초로 바꾸고 머지함" }],
   ["turn-narrow", "16 · 좁은 pane · 두 줄", { ...NO_NOTICE, request: TURN_REQUEST, band: { kind: "answer", reason: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", since_unix_ms: null, read: false, action: null, more: 0 } }],
   ["turn-image", "17 · 이미지만 보낸 요청", { ...NO_NOTICE, request: { text: null, images: 2 }, progress: "보낸 화면의 여백을 맞추고 있어요" }],
+  ["turn-children", "18 · 요청 → 자식 기다림", { ...NO_NOTICE, request: { text: "요청 추출 누락 원인 찾아줘", images: 0 }, waiting_on_children: 2 }],
 ];
-const TURN_CASES = ["turn-question", "turn-working", "turn-finished", "turn-narrow", "turn-image"];
+const TURN_CASES = ["turn-question", "turn-working", "turn-finished", "turn-narrow", "turn-image", "turn-children"];
 
 // Frozen visual examples, not a second implementation of core judgments.
 const MARKS: [RowMark, StatusTone["kind"], RequestVerb][] = [
@@ -171,7 +172,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       descendant_mark: id === "raised" ? { kind: "raised" as const, count: 2 } : id === "raised-case" ? { kind: "raised" as const, count: 1 } : null,
       raised: id === "raised" ? [RAISED, { ...RAISED, raised_pane_id: "a1c2", origin_title: children[1]!.identity_label, pane_id: "a1c2", open_pane_id: "a1c2", title: children[1]!.identity_label, verb: "answer" as const, what: "PR을 함께 올릴까요?" }] : id === "raised-case" ? [PANE_RAISED] : [],
       // A childless approval and merge show the row only for the ask, and none for a PR.
-      lineage_child_pane_ids: ["idle", "approval", "merge", "solo", "empty", "turn-question", "turn-working", "turn-finished", "turn-image"].includes(id) ? [] : id === "raised-case" ? [raisedChild.pane_id, ...childExamples.slice(1, 3).map((child) => child.pane_id)] : id === "popover" ? popoverChildren.map((child) => child.pane_id) : id === "narrow" ? narrowChildren.map((child) => child.pane_id) : ["children", "progress", "question", "approval-case", "blocked-case", "stopped", "tree-only", "finished", "turn-narrow"].includes(id) ? childExamples.slice(0, 3).map((child) => child.pane_id) : id === "unknown" ? ["b2-unknown"] : ["a1c1", "a1c2"],
+      lineage_child_pane_ids: ["idle", "approval", "merge", "solo", "empty", "turn-question", "turn-working", "turn-finished", "turn-image"].includes(id) ? [] : id === "raised-case" ? [raisedChild.pane_id, ...childExamples.slice(1, 3).map((child) => child.pane_id)] : id === "popover" ? popoverChildren.map((child) => child.pane_id) : id === "narrow" ? narrowChildren.map((child) => child.pane_id) : ["children", "progress", "question", "approval-case", "blocked-case", "stopped", "tree-only", "finished", "turn-narrow", "turn-children"].includes(id) ? childExamples.slice(0, 3).map((child) => child.pane_id) : id === "unknown" ? ["b2-unknown"] : ["a1c1", "a1c2"],
       direct_child_counts: id === "narrow" ? { error: 0, approval: 0, question: 0, working: 12, done: 0 } : ["children", "progress", "question", "approval-case", "blocked-case", "raised-case", "stopped", "tree-only", "finished", "popover", "turn-narrow"].includes(id) ? { error: 0, approval: 0, question: 1, working: 1, done: 1 } : id === "unknown" ? { error: 0, approval: 0, question: 0, working: 0, done: 0 } : { error: 0, approval: 0, question: 0, working: 1, done: 0 },
       ...(id === "fix" || id === "merge" ? ownPr(id) : {}),
       ...(TURN_CASES.includes(id) ? { session_id: `turn-${id}`, state: { ...seed.state, pr: null }, request: { verb: "answer" as const, verb_since_unix_ms: Date.now(), line: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", end: "question" as const, pull_requests: [], ...TURN_VIEW } } : {}) }));

@@ -361,7 +361,12 @@ fn stage(rows: &[&Place<'_>]) -> Option<u8> {
             .flat_map(|r| &r.pull_requests)
             .collect::<Vec<_>>();
         for own in &summary.pulls {
-            if let Some(pull) = pulls.get(own.index).filter(|pull| !pull.provisional) {
+            // A PR merged before the operator's last request keeps the row's
+            // mark but is not this request's progress.
+            if let Some(pull) = pulls
+                .get(own.index)
+                .filter(|pull| !pull.provisional && pull.live)
+            {
                 states.entry(pull.url.as_str()).or_insert(own.state);
             }
         }
