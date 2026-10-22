@@ -74,7 +74,7 @@ function recordFor(base: RecordValue, kind: string | null): RecordValue {
     record.flows[0]!.result = { kind: "settled", state: "merged", numbers: [1533], at_unix_ms: AT + 44 * MIN };
     record.flows.splice(1, 0, flow("flow-1b", "체크리스트 개선 인터뷰", 42, [request(14, 42, "체크리스트를 어떻게 고칠지 인터뷰해줘", { summary: "체크리스트 개선 인터뷰" })], { kind: "moved_on", line: "Q2 범위를 정해 주세요", at_unix_ms: AT + 45 * MIN }));
     record.flows[2]!.result = { kind: "closing", line: "세션 11개 검증, 흐름 묶기 안으로 결정", at_unix_ms: AT + 230 * MIN };
-    record.status = { end: "waiting", line: "PR CI 기다리는 중", at_unix_ms: AT + 240 * MIN, limited: null, settled: { state: "merged", numbers: [1548], at_unix_ms: AT + 262 * MIN } };
+    record.status = { end: "waiting", line: "PR CI 기다리는 중", at_unix_ms: AT + 240 * MIN, limited: null, settled: { state: "merged", numbers: [1541], at_unix_ms: AT + 262 * MIN } };
     record.asks = [];
   }
   if (kind === "omitted") record.omitted_requests = 37;

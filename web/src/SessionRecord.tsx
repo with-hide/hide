@@ -416,7 +416,7 @@ function FlowResultLine({ result }: { result: FlowResult }) {
   const line = (text: string) => text ? <span className="min-w-0 truncate text-micro text-subtle-foreground" title={text}>{text}</span> : null;
   return <span className="mt-xxs flex min-w-0 items-baseline gap-xs" data-record-flow-result={result.kind}>
     {result.kind === "settled" ? <>
-      <span className={cn("shrink-0 text-micro font-medium", result.state === "merged" ? "text-success" : "text-muted-foreground")} data-record-end={result.state}>{t(result.state === "merged" ? "record.merged" : "record.closed")}</span>
+      <span className={cn("shrink-0 text-micro font-medium", result.state === "merged" ? "text-pr-merged" : "text-pr-closed")} data-record-end={result.state}>{t(result.state === "merged" ? "record.merged" : "record.closed")}</span>
       <span className="min-w-0 truncate text-micro text-subtle-foreground">{settledPrs(t, result)}</span>
       <RequestTime at={result.at_unix_ms} />
     </> : result.kind === "moved_on" ? <>
