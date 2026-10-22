@@ -331,7 +331,7 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
 
 // PRD lane-two-columns B15, B19: a pinned lane too narrow for both columns'
 // minimums beside Agent Views' 480 stacks them, the one the rail last brought
-// forward drawn; too narrow for even one, it opens over the agents; the
+// forward drawn; too narrow for the one in front, it opens over the agents; the
 // width coming back restores both, and Expand gives the viewing column the rest.
 test("a pinned lane stacks its columns in a narrow body, opens over the agents in a narrower one, and expands as one", async () => {
   const herdr = await startHerdr({ agents: false });
@@ -361,6 +361,9 @@ test("a pinned lane stacks its columns in a narrow body, opens over the agents i
     await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
     await expect(workspace).toHaveAttribute("data-lane-view", "none");
     await nativeCapture(app, page, "lane-stacked-pinned");
+    // The documents in front again: a body too narrow for their minimum beside 480 draws the lane over the agents.
+    await page.locator('[data-lane-tool="documents"]').click();
+    await expect(workspace).toHaveAttribute("data-lane-view", "documents");
     await bodyWidth(app, page, 800);
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
     expect(await pinState(page)).toBe("narrow");
