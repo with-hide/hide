@@ -3,8 +3,9 @@ use std::time::{Duration, Instant};
 use super::Runtime;
 use crate::changes::ChannelRef;
 use crate::checkout_git::{
-    Ci, CiAnswer, CiRequest, CiState, GitAnswer, GitRequest, GitState, Header,
+    Ci, CiAnswer, CiRequest, CiState, CommitLink, GitAnswer, GitRequest, GitState, Header,
 };
+use crate::observed::{Freshness, Observation, now_unix_ms};
 
 #[derive(Default)]
 pub(super) struct State {
@@ -13,7 +14,13 @@ pub(super) struct State {
     pub(super) header: Option<Header>,
     repository: Option<String>,
     last_git: Option<Instant>,
+    /// When the Git read last succeeded, published only once the read fails
+    /// or ages, so an unchanged read every two seconds publishes nothing.
+    last_git_unix_ms: Option<u64>,
     last_ci: Option<Instant>,
+    /// The last read could not say which commits a remote holds, so none
+    /// has a page; the reason goes to the log, never to the renderer.
+    commits_unread: bool,
 }
 
 impl Runtime {
@@ -54,13 +61,19 @@ impl Runtime {
             self.checkout_header.header = self.checkout_header.target.as_ref().map(|_| Header {
                 state: GitState::Loading,
                 facts: None,
+                observed: None,
                 reason: None,
                 ci: None,
                 recent_ci: Vec::new(),
+                remote: None,
+                commit_links: Vec::new(),
+                commit_pages: false,
             });
             self.checkout_header.last_git = None;
+            self.checkout_header.last_git_unix_ms = None;
             self.checkout_header.last_ci = None;
             self.checkout_header.repository = None;
+            self.checkout_header.commits_unread = false;
         }
         self.checkout_header.target.clone()
     }
@@ -124,6 +137,7 @@ impl Runtime {
             .header
             .as_mut()
             .expect("an active target has a header");
+        let mut unread_moved = false;
         match answer {
             Ok(mut facts) => {
                 // The node needs the configured URL; the renderer must never receive
@@ -158,7 +172,7 @@ impl Runtime {
                             } else {
                                 CiState::Unavailable
                             },
-                            checked_at_unix_ms: None,
+                            observed: None,
                             url: None,
                         })
                         .collect();
@@ -166,8 +180,29 @@ impl Runtime {
                     self.checkout_header.last_ci = None;
                 }
                 self.checkout_header.repository = repository;
+                let unread = facts.commits_unread.take();
+                if let Some(reason) = unread
+                    .as_ref()
+                    .filter(|_| !self.checkout_header.commits_unread)
+                {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "checkout_git",
+                        "kind": "checkout_git.commits_unread",
+                        "message": reason,
+                    }));
+                }
+                unread_moved = self.checkout_header.commits_unread != unread.is_some();
+                self.checkout_header.commits_unread = unread.is_some();
                 header.facts = Some(facts);
                 header.state = GitState::Fresh;
+                let read_at = now_unix_ms();
+                self.checkout_header.last_git_unix_ms = Some(read_at);
+                if header
+                    .observed
+                    .is_none_or(|observed| observed.freshness != Freshness::Fresh)
+                {
+                    header.observed = Some(Observation::fresh(read_at));
+                }
                 header.reason = None;
                 self.checkout_header.last_git = Some(now);
             }
@@ -177,14 +212,19 @@ impl Runtime {
                 } else {
                     GitState::Unavailable
                 };
+                header.observed = Some(Observation {
+                    freshness: Freshness::Failed,
+                    read_at_unix_ms: self.checkout_header.last_git_unix_ms,
+                });
                 header.reason = Some(reason);
+                // The results stay, for a commit the header no longer knows
+                // is still HEAD (D-09).
                 for ci in header.ci.iter_mut().chain(header.recent_ci.iter_mut()) {
-                    ci.state = CiState::Stale;
-                    ci.url = None;
+                    ci.observed = ci.observed.map(Observation::aged);
                 }
             }
         }
-        before != self.checkout_header.header
+        unread_moved || before != self.checkout_header.header
     }
 
     pub(crate) fn ingest_checkout_ci(&mut self, (request, answer): CiAnswer, now: Instant) -> bool {
@@ -196,6 +236,31 @@ impl Runtime {
             .header
             .as_mut()
             .expect("the CI request has a header");
+        let answer = match answer {
+            Ok(answer) => answer,
+            // GitHub could not be read: each commit keeps the result it last
+            // had, marked as a failed read, and one never answered says so
+            // (B22).
+            Err(_) => request
+                .commits
+                .iter()
+                .map(|sha| {
+                    let before = header.recent_ci.iter().find(|ci| &ci.sha == sha);
+                    match before.filter(|ci| ci.observed.is_some()) {
+                        Some(before) => Ci {
+                            observed: Some(Observation::failed(before.observed)),
+                            ..before.clone()
+                        },
+                        None => Ci {
+                            sha: sha.clone(),
+                            state: CiState::Unavailable,
+                            observed: Some(Observation::failed(None)),
+                            url: None,
+                        },
+                    }
+                })
+                .collect(),
+        };
         if answer.iter().map(|ci| &ci.sha).ne(request.commits.iter()) {
             return false;
         }
@@ -215,11 +280,12 @@ impl Runtime {
         let states = |header: &Header| {
             (
                 header.state,
-                header.ci.as_ref().map(|ci| ci.state),
+                header.observed,
+                header.ci.as_ref().map(|ci| ci.observed),
                 header
                     .recent_ci
                     .iter()
-                    .map(|ci| ci.state)
+                    .map(|ci| ci.observed)
                     .collect::<Vec<_>>(),
             )
         };
@@ -230,6 +296,11 @@ impl Runtime {
             .is_some_and(|read| now.saturating_duration_since(read) > Duration::from_secs(5))
         {
             header.state = GitState::Stale;
+            let read_at_unix_ms = self.checkout_header.last_git_unix_ms;
+            header.observed = header.observed.map(|observed| Observation {
+                read_at_unix_ms,
+                ..observed.aged()
+            });
         }
         if header.state != GitState::Fresh
             || self
@@ -238,8 +309,7 @@ impl Runtime {
                 .is_some_and(|read| now.saturating_duration_since(read) > Duration::from_secs(90))
         {
             for ci in header.ci.iter_mut().chain(header.recent_ci.iter_mut()) {
-                ci.state = CiState::Stale;
-                ci.url = None;
+                ci.observed = ci.observed.map(Observation::aged);
             }
         }
         states(header) != before
@@ -250,7 +320,23 @@ impl Runtime {
         if target.root.device_id != key.0 || target.root.path != key.1 {
             return None;
         }
-        self.checkout_header.header.clone()
+        let mut header = self.checkout_header.header.clone()?;
+        header.remote = self.remote_check(&key.0, &key.1);
+        header.commit_links = if self.checkout_header.commits_unread {
+            Vec::new()
+        } else {
+            commit_links(self.checkout_header.repository.as_deref(), &header)
+        };
+        header.commit_pages = self.checkout_header.repository.is_some();
+        Some(header)
+    }
+
+    /// The header the last snapshot carries.
+    pub(crate) fn published_checkout_header(&self) -> Option<Header> {
+        self.snapshot
+            .workspace_view
+            .as_ref()
+            .and_then(|view| view.git.clone())
     }
 
     pub(crate) fn refresh_checkout_header(&mut self) -> Option<Header> {
@@ -267,4 +353,24 @@ impl Runtime {
         }
         header
     }
+}
+
+/// The GitHub commit page of each recent commit some remote holds and of
+/// each incoming one, for a checkout whose origin is a validated GitHub
+/// repository; a commit no remote holds has no page to open (D-05).
+fn commit_links(repository: Option<&str>, header: &Header) -> Vec<CommitLink> {
+    let (Some(repository), Some(facts)) = (repository, header.facts.as_ref()) else {
+        return Vec::new();
+    };
+    facts
+        .recent_commits
+        .iter()
+        .filter(|commit| !facts.unpushed_commits.contains(&commit.sha))
+        .chain(&facts.incoming_commits)
+        .filter(|commit| hide_node_link::gh::is_commit(&commit.sha))
+        .map(|commit| CommitLink {
+            sha: commit.sha.clone(),
+            url: format!("https://github.com/{repository}/commit/{}", commit.sha),
+        })
+        .collect()
 }

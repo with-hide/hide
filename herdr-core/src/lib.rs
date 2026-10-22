@@ -26,6 +26,7 @@ mod effects;
 mod environment;
 #[cfg(test)]
 mod fake_herdr;
+mod fetch;
 mod files;
 pub use files::{FileRoots, inode_text};
 mod agent_groups;
@@ -53,6 +54,7 @@ mod model;
 pub mod node;
 pub mod node_access;
 pub mod node_migration;
+mod observed;
 mod pane_reopen;
 mod persistence;
 pub mod pet;

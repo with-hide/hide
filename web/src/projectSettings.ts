@@ -10,9 +10,9 @@ export type Guardrails = {
 export type ProjectSettings = {
   version: number; device_id: string; root: string;
   repository?: RepositoryConnection; issue_source?: "auto" | "github" | "local";
-  new_work?: "checkout" | "worktree"; base_branch?: BaseBranchChoice; guardrails?: Guardrails;
+  new_work?: "checkout" | "worktree"; base_branch?: BaseBranchChoice; auto_fetch?: boolean; guardrails?: Guardrails;
 };
-export type ProjectSettingsPatch = Partial<Pick<ProjectSettings, "repository" | "issue_source" | "new_work" | "base_branch" | "guardrails">>;
+export type ProjectSettingsPatch = Partial<Pick<ProjectSettings, "repository" | "issue_source" | "new_work" | "base_branch" | "auto_fetch" | "guardrails">>;
 
 /** The newest record this build reads and writes; version 1 is the same record without guardrails (PRD agent-guardrails D-23). */
 export const PROJECT_SETTINGS_VERSION = 2;

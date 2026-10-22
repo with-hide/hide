@@ -76,6 +76,8 @@ export type WorkspaceView = {
 /** Whole-checkout facts from its owning node, never Changes' scoped rows. */
 export type CheckoutGitHeader = {
   state: "loading" | "fresh" | "stale" | "unavailable";
+  /** The Git read behind `facts`; absent before the first answer. */
+  observed?: import("./observed").Observation | null;
   reason: string | null;
   recent_ci?: CheckoutCi[];
   facts: {
@@ -90,15 +92,26 @@ export type CheckoutGitHeader = {
     ahead: number | null;
     behind: number | null;
     last_fetch_unix_ms: number | null;
+    /** The upstream's commits HEAD does not have yet, newest first, at most five; `behind` counts them all. */
+    incoming_commits?: CheckoutCommitRecord[];
+    /** The recent commits no remote-tracking ref holds. */
+    unpushed_commits?: string[];
   } | null;
   ci: CheckoutCi | null;
+  /** What Hide's background fetch last saw of the remote; absent from an older core. */
+  remote?: { auto: boolean; observed: import("./observed").Observation | null } | null;
+  /** The GitHub page of each recent or incoming commit a remote holds, made by the core. */
+  commit_links?: { sha: string; url: string }[];
+  /** The origin is a GitHub repository, so a commit with no page is not pushed. */
+  commit_pages?: boolean;
 };
 
 export type CheckoutCommitRecord = { sha: string; subject: string; commit_unix_seconds: number | null };
 export type CheckoutCi = {
   sha: string;
-  state: "loading" | "passing" | "pending" | "failed" | "none" | "unknown" | "unavailable" | "stale";
-  checked_at_unix_ms: number | null;
+  /** GitHub's last answer for the commit; `observed` says how current it is (B22). */
+  state: "loading" | "passing" | "pending" | "failed" | "none" | "unknown" | "unavailable";
+  observed: import("./observed").Observation | null;
   url: string | null;
 };
 

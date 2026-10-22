@@ -158,6 +158,24 @@ fn repo(origin: Option<&str>, branch: &str) -> Repo {
     }
 }
 
+/// Gives the repository the `origin/HEAD` a clone has, naming `main` its
+/// default branch: the base a merge is judged against (PRD git-freshness
+/// D-07), which no code assumes any more.
+fn with_origin_head(repo: &Repo) {
+    git(
+        &repo.root,
+        &["update-ref", "refs/remotes/origin/main", "main"],
+    );
+    git(
+        &repo.root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+}
+
 /// A runtime a node dials in to, whose session holds the repository's two
 /// checkouts, with the node's facts, worktrees and branch notes read through
 /// its link. This machine's node is `own`.
@@ -1702,6 +1720,7 @@ fn a_node_s_merged_worktree_is_removed_on_the_node_and_a_changed_one_is_refused(
     let _listener =
         std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port is bindable");
     let repo = repo(None, "feature");
+    with_origin_head(&repo);
     let changed = format!("{}-changed", repo.root);
     git(
         &repo.root,
@@ -2679,6 +2698,7 @@ fn a_node_cleanup_says_why_github_cannot_prove_a_merge() {
     let _listener =
         std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port is bindable");
     let repo = repo(None, "feature");
+    with_origin_head(&repo);
     git(
         &repo.linked,
         &[

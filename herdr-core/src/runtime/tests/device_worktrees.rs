@@ -595,3 +595,194 @@ fn scoped_remote_base_reaches_real_git_facts_and_obsolete_read_is_discarded() {
     });
     assert_eq!(host.bases.lock().unwrap().last(), Some(&None));
 }
+
+/// The fixture device, whose Git watch streams its reports as a helper's
+/// does; the documents double answers every other call.
+struct Watching(Arc<FakeDevice>);
+
+impl crate::node_access::NodeLink for Watching {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: Duration,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        crate::node_access::NodeLink::call(self.0.as_ref(), call, timeout)
+    }
+
+    fn call_with_progress(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: Duration,
+        progress: &mut dyn FnMut(serde_json::Value) -> bool,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        hide_node::Local::of_process().call_with_progress(call, timeout, progress)
+    }
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // polls the watch between observations, bounded by a deadline
+fn a_branch_made_on_a_device_is_read_again_without_a_reconnect() {
+    let repo = repo();
+    let shared = device_runtime_with_host(&repo, Arc::new(Watching(FakeDevice::new())));
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .push(crate::model::DeviceRegistration {
+                id: DEVICE.into(),
+                label: "Fixture".into(),
+                origin: crate::model::LinkOrigin::Inbound,
+                herdr_socket_path: None,
+                herdr_session: None,
+                host_consent: None,
+            });
+    }
+    wait(&shared, "the device's first worktree read", |runtime| {
+        runtime.device_worktrees[DEVICE]
+            .projects
+            .contains_key(&repo.root)
+    });
+    // No window, no watch.
+    shared.lock().unwrap().ui_attached = false;
+    assert!(shared.lock().unwrap().device_git_watch_sets().is_none());
+    shared.lock().unwrap().ui_attached = true;
+    let mut sets = shared.lock().unwrap().device_git_watch_sets().unwrap();
+    assert_eq!(sets.len(), 1);
+    let (device, link, projects) = sets.remove(0);
+    assert_eq!(device, DEVICE);
+    assert_eq!(
+        projects.keys().collect::<Vec<_>>(),
+        [&std::path::PathBuf::from(&repo.root)]
+    );
+    let mut watch = crate::worktrees::DeviceGitWatch::new(link);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !watch.watching() {
+        assert!(watch.changed(projects.clone()).is_empty());
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the device never watched"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    git(&repo.root, &["branch", "made-there"]);
+    let roots = loop {
+        let roots = watch.changed(projects.clone());
+        if !roots.is_empty() {
+            break roots;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the change never arrived"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(roots, [std::path::PathBuf::from(&repo.root)]);
+    shared.lock().unwrap().device_git_changed(DEVICE, roots);
+    wait(
+        &shared,
+        "the device's catalog to read the new branch",
+        |runtime| {
+            runtime.device_worktrees[DEVICE].projects[&repo.root]
+                .branches
+                .iter()
+                .any(|branch| branch == "made-there")
+        },
+    );
+}
+
+/// The fixture device, recording whether each worktree read may reuse
+/// unchanged measurements, and failing reads while `failing` is set.
+struct ReadLog {
+    host: Arc<FakeDevice>,
+    reuse: Mutex<Vec<bool>>,
+    failing: std::sync::atomic::AtomicBool,
+}
+
+impl crate::node_access::NodeLink for ReadLog {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: Duration,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        if let hide_node_link::protocol::Call::Worktrees {
+            reuse_unchanged, ..
+        } = &call
+        {
+            self.reuse.lock().unwrap().push(*reuse_unchanged);
+            if self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(crate::node_access::LinkError::Unknown(
+                    "The read timed out".into(),
+                ));
+            }
+        }
+        crate::node_access::NodeLink::call(self.host.as_ref(), call, timeout)
+    }
+}
+
+#[test]
+fn a_watched_change_reuses_unmoved_worktrees_and_a_failed_read_is_tried_again() {
+    let repo = repo();
+    let host = Arc::new(ReadLog {
+        host: FakeDevice::new(),
+        reuse: Mutex::new(Vec::new()),
+        failing: false.into(),
+    });
+    let shared = device_runtime_with_host(&repo, host.clone());
+    let read = |runtime: &Runtime| {
+        runtime.device_worktrees[DEVICE].in_flight.is_none()
+            && runtime.device_worktrees[DEVICE]
+                .projects
+                .contains_key(&repo.root)
+    };
+    wait(&shared, "the device's first worktree read", read);
+    // The first read measures every worktree.
+    assert_eq!(*host.reuse.lock().unwrap(), [false]);
+
+    // A change the Git watch reports is read from the worktrees that moved.
+    git(&repo.root, &["branch", "made-there"]);
+    shared
+        .lock()
+        .unwrap()
+        .device_git_changed(DEVICE, vec![repo.root.clone().into()]);
+    wait(&shared, "the watched change's read", |runtime| {
+        runtime.device_worktrees[DEVICE].in_flight.is_none()
+            && runtime.device_worktrees[DEVICE].projects[&repo.root]
+                .branches
+                .iter()
+                .any(|branch| branch == "made-there")
+    });
+    assert_eq!(*host.reuse.lock().unwrap(), [false, true]);
+
+    // A read that fails keeps the change: once its pause is over, every
+    // repository is read again, and not before.
+    host.failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    git(&repo.root, &["branch", "made-later"]);
+    shared
+        .lock()
+        .unwrap()
+        .device_git_changed(DEVICE, vec![repo.root.clone().into()]);
+    wait(&shared, "the failed read", |runtime| {
+        runtime.device_worktrees[DEVICE].unavailable.is_some()
+    });
+    host.failing
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let now = std::time::Instant::now();
+    assert!(!shared.lock().unwrap().retry_device_reads(now));
+    assert_eq!(host.reuse.lock().unwrap().len(), 3);
+    shared
+        .lock()
+        .unwrap()
+        .retry_device_reads(now + Duration::from_secs(31));
+    wait(&shared, "the read tried again", |runtime| {
+        runtime.device_worktrees[DEVICE].in_flight.is_none()
+            && runtime.device_worktrees[DEVICE].unavailable.is_none()
+            && runtime.device_worktrees[DEVICE].projects[&repo.root]
+                .branches
+                .iter()
+                .any(|branch| branch == "made-later")
+    });
+    assert_eq!(*host.reuse.lock().unwrap(), [false, true, true, false]);
+}

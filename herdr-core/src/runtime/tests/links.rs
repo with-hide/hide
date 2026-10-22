@@ -570,6 +570,7 @@ fn links_runtime(pull_requests: Vec<PullRequestSnapshot>, read: bool) -> Runtime
                 overflow: false,
                 dependencies_failure: None,
                 repository_id: Some("R_kgDO".into()),
+                default_branch: None,
             },
             status: crate::model::GithubStatusSnapshot {
                 available: true,

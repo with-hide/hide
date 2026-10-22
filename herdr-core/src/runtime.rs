@@ -28,6 +28,7 @@ mod documents;
 mod drawn_ahead;
 mod editor;
 mod events;
+mod fetch;
 mod first_run;
 mod github_poll;
 pub(crate) mod group_starts;
@@ -79,6 +80,7 @@ mod view_feedback;
 mod workspace_control;
 mod workspace_view;
 
+pub(crate) use fetch::{FetchJob, RemoteCheck};
 pub use hosts::WorkspaceRemoteRoute;
 pub(crate) use kit::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob};
 pub use snapshot_delta::serialize_snapshot_delta;
@@ -1228,6 +1230,7 @@ pub struct Runtime {
     /// The device and folder `snapshot.changes` was read for.
     changes_published_key: Option<crate::changes::ChangesKey>,
     checkout_header: checkout_git::State,
+    fetch: fetch::State,
     /// Each device's session as its Herdr reported it, before its projects
     /// are grouped from the helper's facts (`device_catalog`).
     device_raw_sessions: HashMap<String, RemoteSessionSnapshot>,
@@ -1827,6 +1830,13 @@ pub struct Runtime {
     /// no other review starts and the snapshot cannot be dismissed, so two
     /// workers never overlap however the sheet is opened and closed.
     cleanup_worker: Option<u64>,
+    /// Heads a disk cleanup review proved merged by asking GitHub by branch,
+    /// by project (its node, `None` for this machine, its root and the
+    /// default branch judged against), which the sidebar's landed mark
+    /// joins to the pull request list so the two never disagree (PRD
+    /// git-freshness B17). A merged head stays merged; at most
+    /// `REVIEW_PROOF_LIMIT` per project.
+    pub(super) review_merge_proofs: BTreeMap<(Option<String>, String, String), BTreeSet<String>>,
     /// Bumped when the worktree list itself is known to have changed through a
     /// manual refresh, a refused removal, or an observed Herdr worktree event.
     worktree_generation: u64,
@@ -2139,6 +2149,7 @@ impl Runtime {
             last_host_generation: 0,
             changes_published_key: None,
             checkout_header: checkout_git::State::default(),
+            fetch: fetch::State::default(),
             device_raw_sessions: HashMap::new(),
             device_facts: HashMap::new(),
             device_recent_tabs: HashMap::new(),
@@ -2372,6 +2383,7 @@ impl Runtime {
             cleanup_published_node: None,
             next_cleanup_id: 0,
             cleanup_worker: None,
+            review_merge_proofs: BTreeMap::new(),
             worktree_generation: 0,
             worktree_removals: 0,
             removed_worktrees: Vec::new(),

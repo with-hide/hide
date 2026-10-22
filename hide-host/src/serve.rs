@@ -30,6 +30,13 @@ pub const CONCURRENCY: usize = 4;
 /// admits as many.
 pub const CONTROL_CONCURRENCY: usize = 4;
 
+/// Background Git work (`Call::is_background`: a device's Git watch, which
+/// is held for as long as a window is open, and a background fetch, held up
+/// to a minute) the helper works on at once, on workers of their own, so it
+/// never takes a machine call's worker; the core runs at most one of each
+/// per device and admits as many.
+pub const BACKGROUND_CONCURRENCY: usize = 2;
+
 /// Requests waiting for a worker. The core admits at most [`CONCURRENCY`]
 /// at once, so this fills only behind calls the core stopped waiting for; a
 /// request past it is answered busy, and the reader never waits, so a cancel
@@ -245,12 +252,14 @@ fn serve_in(
     });
     let (sender, receiver) = mpsc::sync_channel::<Request>(QUEUED);
     let (control_sender, control_receiver) = mpsc::sync_channel::<Request>(QUEUED);
+    let (background_sender, background_receiver) = mpsc::sync_channel::<Request>(QUEUED);
     // Only the workers hold the receivers. A worker stops when its answer
     // cannot be written, which means the SSH channel is gone; once the last
     // one of a lane has stopped, the next request's send fails and the
     // helper exits.
     let receiver = Arc::new(Mutex::new(receiver));
     let control_receiver = Arc::new(Mutex::new(control_receiver));
+    let background_receiver = Arc::new(Mutex::new(background_receiver));
     let result = std::thread::scope(|scope| {
         if let Some(terminals) = terminals {
             let output = &output;
@@ -266,7 +275,11 @@ fn serve_in(
             });
         }
         let lanes = std::iter::repeat_n(&receiver, CONCURRENCY)
-            .chain(std::iter::repeat_n(&control_receiver, CONTROL_CONCURRENCY));
+            .chain(std::iter::repeat_n(&control_receiver, CONTROL_CONCURRENCY))
+            .chain(std::iter::repeat_n(
+                &background_receiver,
+                BACKGROUND_CONCURRENCY,
+            ));
         for receiver in lanes {
             let receiver = Arc::clone(receiver);
             let output = &output;
@@ -411,6 +424,7 @@ fn serve_in(
         }
         drop(receiver);
         drop(control_receiver);
+        drop(background_receiver);
         if heartbeat {
             let output = &output;
             let input_ended = &input_ended;
@@ -432,7 +446,7 @@ fn serve_in(
         }
         let result = read_requests(
             input,
-            [&sender, &control_sender],
+            [&sender, &control_sender, &background_sender],
             &output,
             &running,
             terminals,
@@ -441,6 +455,7 @@ fn serve_in(
         input_ended.1.notify_all();
         drop(sender);
         drop(control_sender);
+        drop(background_sender);
         // The connection is gone: the terminal sessions end with it, so no
         // attach child outlives the link that asked for it (D-20, B20).
         if let Some(terminals) = terminals {
@@ -497,10 +512,11 @@ fn label_socket(
     }
 }
 
-/// Reads requests and hands each to its lane: `[machine, control]`.
+/// Reads requests and hands each to its lane: `[machine, control,
+/// background]`.
 fn read_requests(
     mut input: impl BufRead,
-    [sender, control_sender]: [&mpsc::SyncSender<Request>; 2],
+    [sender, control_sender, background_sender]: [&mpsc::SyncSender<Request>; 3],
     output: &Mutex<impl Write>,
     running: &Mutex<HashMap<u64, bool>>,
     terminals: Option<&dyn Terminals>,
@@ -585,6 +601,8 @@ fn read_requests(
         lock(running).insert(id, false);
         let lane = if request.call.is_control() {
             control_sender
+        } else if request.call.is_background() {
+            background_sender
         } else {
             sender
         };
@@ -1018,15 +1036,18 @@ pub fn handle_with_progress(
         }
         Call::Project { path } => to_value(project_facts(&path)?),
         Call::CheckoutGit { path } => to_value(worktrees::checkout_git(&absolute(&path)?)?),
+        Call::FetchRemote { path } => to_value(worktrees::fetch_remote(&absolute(&path)?)),
         Call::Worktrees {
             path,
             bases,
             base_override,
+            remote_default,
             reuse_unchanged,
         } => to_value(worktrees::read(
             &absolute(&path)?,
             &bases,
             base_override.as_deref(),
+            remote_default.as_deref(),
             &env.worktrees,
             reuse_unchanged,
         )),
@@ -1927,9 +1948,9 @@ mod tests {
         }
     }
 
-    /// Every worker held by a call that reports until stopped: the reader
-    /// still queues, answers past its queue busy, reads each cancel, and
-    /// ends at the end of its input.
+    /// Every background worker held by a Git watch, which reports until
+    /// stopped: the reader still queues, answers past its queue busy, reads
+    /// each cancel, and ends at the end of its input.
     #[cfg(unix)]
     #[test]
     fn the_reader_never_waits_for_a_worker() {
@@ -1974,12 +1995,12 @@ mod tests {
             text.push_str(std::str::from_utf8(&bytes).unwrap());
             text.clone()
         };
-        for id in 1..=CONCURRENCY as u64 {
+        for id in 1..=BACKGROUND_CONCURRENCY as u64 {
             input.write_all(&line(id, watch())).unwrap();
         }
-        // Every worker holds a watch once each has reported.
+        // Every background worker holds a watch once each has reported.
         let mut reported = std::collections::BTreeSet::new();
-        while reported.len() < CONCURRENCY {
+        while reported.len() < BACKGROUND_CONCURRENCY {
             for progress in next()
                 .lines()
                 .filter_map(|line| serde_json::from_str::<Progress>(line).ok())
@@ -1987,13 +2008,15 @@ mod tests {
                 reported.insert(progress.progress);
             }
         }
-        // A machine call, so it queues behind the watches (a greeting is
-        // link control and runs in its own lane).
-        let machine = || Call::RealPaths { paths: Vec::new() };
+        // A fetch is background work too, so it queues behind the watches;
+        // the folder is no repository, so each answers at once once it runs.
+        let fetch = || Call::FetchRemote {
+            path: common.path().to_string_lossy().into_owned(),
+        };
         for id in 0..=QUEUED as u64 {
-            input.write_all(&line(100 + id, machine())).unwrap();
+            input.write_all(&line(100 + id, fetch())).unwrap();
         }
-        for request in 1..=CONCURRENCY as u64 {
+        for request in 1..=BACKGROUND_CONCURRENCY as u64 {
             input
                 .write_all(&line(200 + request, Call::Cancel { request }))
                 .unwrap();
@@ -2020,9 +2043,9 @@ mod tests {
             answers.contains(&(busy, Some(ErrorCode::Busy))),
             "{answers:?}"
         );
-        for id in (1..=CONCURRENCY as u64)
+        for id in (1..=BACKGROUND_CONCURRENCY as u64)
             .chain(100..busy)
-            .chain(201..=200 + CONCURRENCY as u64)
+            .chain(201..=200 + BACKGROUND_CONCURRENCY as u64)
         {
             assert!(
                 answers
@@ -2033,12 +2056,12 @@ mod tests {
         }
     }
 
-    /// Every machine worker held by a call that reports until stopped: link
-    /// control (a greeting, a Herdr stream, a pane's proof answer) is still
-    /// answered at once, from its own lane.
+    /// Every background worker held by a Git watch, which reports until
+    /// stopped: link control (a greeting) and a machine call are still
+    /// answered at once, each from its own lane.
     #[cfg(unix)]
     #[test]
-    fn link_control_is_answered_while_every_machine_worker_is_held() {
+    fn link_control_and_machine_calls_are_answered_while_every_background_worker_is_held() {
         use std::os::unix::net::UnixStream;
         struct Lines(mpsc::Sender<Vec<u8>>);
         impl Write for Lines {
@@ -2067,14 +2090,14 @@ mod tests {
                 Services::none(),
             );
         });
-        for id in 1..=CONCURRENCY as u64 {
+        for id in 1..=BACKGROUND_CONCURRENCY as u64 {
             let watch = Call::GitWatch {
                 common_dirs: vec![common.path().to_string_lossy().into_owned()],
             };
             input.write_all(&line(id, watch)).unwrap();
         }
         let mut reported = std::collections::BTreeSet::new();
-        while reported.len() < CONCURRENCY {
+        while reported.len() < BACKGROUND_CONCURRENCY {
             let bytes = lines
                 .recv_timeout(Duration::from_secs(20))
                 .expect("the helper went quiet");
@@ -2087,21 +2110,24 @@ mod tests {
             }
         }
         input.write_all(&line(100, Call::Hello)).unwrap();
-        let answered = loop {
+        input
+            .write_all(&line(101, Call::RealPaths { paths: Vec::new() }))
+            .unwrap();
+        let mut answered = std::collections::BTreeMap::new();
+        while answered.len() < 2 {
             let bytes = lines
                 .recv_timeout(Duration::from_secs(5))
-                .expect("the greeting waited behind the machine workers");
-            if let Some(answer) = std::str::from_utf8(&bytes)
+                .expect("a call waited behind the Git watches");
+            for answer in std::str::from_utf8(&bytes)
                 .unwrap()
                 .lines()
                 .filter_map(|line| serde_json::from_str::<Response>(line).ok())
-                .find(|answer| answer.id == 100)
             {
-                break answer;
+                answered.insert(answer.id, matches!(answer.outcome, Outcome::Ok(_)));
             }
-        };
-        assert!(matches!(answered.outcome, Outcome::Ok(_)));
-        for request in 1..=CONCURRENCY as u64 {
+        }
+        assert_eq!(answered, [(100, true), (101, true)].into());
+        for request in 1..=BACKGROUND_CONCURRENCY as u64 {
             input
                 .write_all(&line(200 + request, Call::Cancel { request }))
                 .unwrap();

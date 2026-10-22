@@ -2050,6 +2050,12 @@ fn ingest_github_poll(context: &SessionSyncContext, poll: crate::github_poll::Po
         return false;
     };
     guard.note_polled_changes(poll.changed);
+    let held = guard.note_poll_held(poll.held);
+    drop(guard);
+    drop(runtime);
+    if held {
+        context.notifier.notify();
+    }
     true
 }
 
@@ -3932,6 +3938,7 @@ mod window_reads_tests {
                 root_path: std::path::PathBuf::from("/a"),
                 bases: Default::default(),
                 base_override: None,
+                remote_default: None,
                 generation: 0,
             }],
             generation: 0,

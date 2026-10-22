@@ -63,8 +63,11 @@ test("checkout Git header fits the isolated native candidate at 720 by 480", asy
         if (next) expect(next.left - control.right, `${control.attribute} is separate from ${next.attribute}`).toBeGreaterThanOrEqual(2);
       }
       await page.locator('[data-checkout-ci]').click();
-      await expect(page.locator('[data-commit-history-item]')).toHaveCount(5);
-      await expect(page.locator('[data-commit-history-item]').first()).toHaveAttribute("data-commit-history-item", fixture.sha);
+      // The one commit origin has and HEAD does not is listed first, then the five local ones.
+      await expect(page.locator('[data-commit-history-item][data-commit-incoming="true"]')).toHaveCount(1);
+      const local = page.locator('[data-commit-history-item]:not([data-commit-incoming])');
+      await expect(local).toHaveCount(5);
+      await expect(local.first()).toHaveAttribute("data-commit-history-item", fixture.sha);
       await captureElectronWindow(app, `checkout-history-renderer-720-${theme}`, { sha: fixture.sha, commits: 5, provider: "private synthetic exact-SHA GraphQL rollups", home: run.env.HOME, socket: herdr.socket, state: run.env.HIDE_STATE_DIR });
       await page.keyboard.press("Escape");
       await page.locator('[data-open-overview]').click();

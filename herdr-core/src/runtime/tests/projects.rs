@@ -4202,3 +4202,78 @@ fn a_sleeping_project_stays_open_until_it_wakes() {
     assert!(runtime.dispatch_json(&no_agents));
     assert!(runtime.snapshot.navigator.no_agent_projects[0].expanded);
 }
+
+/// A worktree whose pull request is older than the list the sidebar reads is
+/// proved merged by the cleanup review's branch lookup; from then on the
+/// sidebar's landed mark gives the same answer (PRD git-freshness B17).
+#[test]
+fn a_merge_the_cleanup_review_proved_by_branch_marks_the_sidebar_too() {
+    let mut runtime = runtime();
+    let head = "a".repeat(40);
+    let mut project = workspace(
+        "w",
+        "repo",
+        "/repo",
+        vec![checkout("w", "w-checkout", "/repo", None)],
+    );
+    project.is_git = true;
+    runtime.snapshot.navigator.workspaces = vec![project];
+    runtime.worktree_catalog.projects = vec![crate::model::ProjectWorktreesSnapshot {
+        root_path: "/repo".into(),
+        base_branch: Some("main".into()),
+        worktrees: vec![crate::model::WorktreeSnapshot {
+            path: "/repo-old".into(),
+            branch: Some("old".into()),
+            head_sha: Some(head.clone()),
+            in_base: Some(false),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    runtime.refresh_worktree_projection();
+    let merged = |runtime: &Runtime| runtime.worktree_catalog.projects[0].worktrees[0].merged;
+    assert_ne!(merged(&runtime), Some(true));
+
+    runtime.cleanup = Some(crate::live::cleanup::CleanupSnapshot {
+        id: 7,
+        workspace_id: "w".into(),
+        repository_root: "/repo".into(),
+        phase: "loading".into(),
+        ..Default::default()
+    });
+    assert!(
+        runtime.ingest_cleanup(crate::live::cleanup::CleanupSnapshot {
+            id: 7,
+            workspace_id: "w".into(),
+            repository_root: "/repo".into(),
+            phase: "ready".into(),
+            merge_proofs: [head.clone()].into(),
+            merge_base: Some("main".into()),
+            ..Default::default()
+        })
+    );
+    assert_eq!(merged(&runtime), Some(true));
+    // A later step of the same review carries no proofs and forgets none.
+    runtime.ingest_cleanup(crate::live::cleanup::CleanupSnapshot {
+        id: 7,
+        workspace_id: "w".into(),
+        repository_root: "/repo".into(),
+        phase: "ready".into(),
+        ..Default::default()
+    });
+    runtime.refresh_worktree_projection();
+    assert_eq!(merged(&runtime), Some(true));
+    // A proof judged against another default branch marks nothing.
+    runtime.review_merge_proofs.clear();
+    runtime.ingest_cleanup(crate::live::cleanup::CleanupSnapshot {
+        id: 7,
+        workspace_id: "w".into(),
+        repository_root: "/repo".into(),
+        phase: "ready".into(),
+        merge_proofs: [head].into(),
+        merge_base: Some("develop".into()),
+        ..Default::default()
+    });
+    runtime.refresh_worktree_projection();
+    assert_ne!(merged(&runtime), Some(true));
+}

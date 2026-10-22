@@ -6,6 +6,7 @@ import { Button } from "./components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
+import { Switch } from "./components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected } from "./devices";
@@ -157,6 +158,9 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
                   </Row>
                   <Row label={t("projectSettings.base")} detail={<><Note>{workspace?.is_git ? t("projectSettings.baseNote") : t("workspace.unavailable.notGit")}</Note>{base.missing ? <Note tone="warn">{t("projectSettings.branchMissing", { branch: base.missing, fallback: base.branch })}</Note> : null}{stateFor("base_branch")}</>}>
                     <Select value={baseValue} disabled={blocked || !workspace?.is_git} onValueChange={(value) => save("base_branch", { base_branch: value === "auto" ? { mode: "auto" } : { mode: "branch", branch: value.slice("branch:".length) } })}><SelectTrigger aria-label={t("projectSettings.base")}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="auto">{t("projectSettings.automatic")}{base.branch ? ` · ${base.branch}` : ""}</SelectItem>{branches.map((branch) => <SelectItem key={branch} value={`branch:${branch}`}>{branch}</SelectItem>)}</SelectContent></Select>
+                  </Row>
+                  <Row label={t("projectSettings.autoFetch")} detail={<><Note>{workspace?.is_git ? t("projectSettings.autoFetchNote") : t("workspace.unavailable.notGit")}</Note>{stateFor("auto_fetch")}</>}>
+                    <Switch aria-label={t("projectSettings.autoFetch")} checked={workspace?.is_git ? record?.auto_fetch ?? true : false} disabled={blocked || !workspace?.is_git} onCheckedChange={(checked) => save("auto_fetch", { auto_fetch: checked })} />
                   </Row>
                 </Group>
                 <ProjectGuardrails rules={guardrails} isGit={workspace?.is_git ?? false} base={workspace ? guardedBase(rest, workspace, record) : null} disabled={blocked}

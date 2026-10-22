@@ -80,6 +80,9 @@ export function fixtureHomeEnv(home: string): Record<string, string> {
     XDG_STATE_HOME: path.join(home, ".local", "state"),
     CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
     CODEX_HOME: path.join(home, ".codex"),
+    // The background fetch runs `git fetch origin` for every registered repository; a fixture's
+    // `https://github.com/example/...` origin is refused as a transport here and never reaches the network.
+    GIT_ALLOW_PROTOCOL: "file",
   };
 }
 

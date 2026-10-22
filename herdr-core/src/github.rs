@@ -741,6 +741,14 @@ fn read_issues(
     )?;
     let repository: serde_json::Value = serde_json::from_str(&repository_json)
         .map_err(|error| GhFailure::network(format!("GitHub repository response: {error}")))?;
+    // An empty repository has no default branch, which GitHub answers as
+    // `null` or an empty name.
+    let default_branch = repository
+        .get("defaultBranchRef")
+        .and_then(|reference| reference.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned);
     let repository_id = repository
         .get("id")
         .and_then(serde_json::Value::as_str)
@@ -856,6 +864,7 @@ fn read_issues(
             overflow,
             dependencies_failure,
             repository_id,
+            default_branch,
             public,
         },
         warning,

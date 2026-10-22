@@ -15,12 +15,26 @@ The Workspace's path and icons sit in the center of the window's top row (see [T
 The path is `project / checkout`, where the project opens that project's panel on the Overview's Projects (PRD sidebar-task-lens B41), led by the device's colored band when the Workspace is not this Mac's; a tab in Home reads `~/hide`, since Home is no project.
 After the path, a Git checkout shows a small neutral FileDiff and the whole checkout's uncommitted tracked/untracked status-record count; zero is hidden, and a rename can count as two records because rename folding is disabled.
 Clicking the count opens Changes idempotently and leaves terminal keyboard ownership in place; its tooltip explains the count, while a conflict, loading, unavailable or stale read has a distinct small mark and never claims a clean tree.
-Upstream differences use ↑/↓ counts against the tracking branch, with zero hidden and no-upstream/gone distinct; the small detail names the tracking ref and the last FETCH_HEAD time, which is the last local remote observation, not a live remote comparison.
+Upstream differences use ↑/↓ counts against the tracking branch, with zero counts drawn as a quiet compare mark and no-upstream/gone distinct; the counts compare with the remote as Hide last fetched it (PRD git-freshness D-01, D-02).
+Hide fetches every registered repository with an `origin` in the background on the machine that holds it, a connected device's with that device's credentials: the one in front at most once a minute and again when the window comes forward after a minute, every other one at most every five minutes, one fetch per machine at a time, and none while no window is attached.
+The fetch is `git fetch --prune --no-tags --no-recurse-submodules origin` without `FETCH_HEAD` and with automatic gc and maintenance off, so it moves only remote-tracking refs and never a branch, the index, a file or a submodule: of `origin`'s configured refspecs only those that write under `refs/remotes/origin/` are passed, with `--refmap=` so no other one applies, and a repository whose refspecs write only elsewhere (a mirror into its own branches) is not fetched at all, and it never opens a terminal prompt, askpass, keychain or Credential Manager window; Git before 2.29 cannot leave `FETCH_HEAD` alone, so there the fetch writes it.
+A ref lock left by the operator's own Git skips that turn; a lock still held on the third fetch in a row, or two refs that cannot both exist, is a failure like any other.
+The detail opens even at 0/0 and names the tracking ref and when the remote was last checked (`N분 전 확인`), or `아직 확인 안 함` before Hide's first successful fetch.
+A failed fetch keeps the last counts dimmed and says since when they are old; a credential or network failure waits for the window to come forward, any other failure retries after 1, 2, 5 and then 15 minutes, and the failure goes to the diagnostic log once.
+With the background fetch turned off in Project settings the project is not fetched and the detail shows the last `FETCH_HEAD` time, the operator's own fetch.
+`herdr-core/src/runtime/fetch.rs` owns the schedule, `herdr-core/src/fetch.rs` runs it, and `hide-host/src/worktrees.rs` (`fetch_remote`) is the node's fetch.
 Only the ↑ arrow uses the existing success green and only the ↓ arrow uses warning orange; both counts and the file count remain neutral, including when the branch is ahead and behind at once.
 At the right, the current HEAD's subject and relative age open a compact history popover directly below that trigger, with up to five newest commits from the captured HEAD; no commit is invented for an unborn branch.
+Above them, dimmed and marked `들어올 커밋`, sit up to five of the tracking branch's commits not yet in HEAD, with `+N개 더` when more are behind; while the fetch fails they are the ones last received and the list says since when.
+A local commit no remote has is marked `푸시 안 됨` when `origin` is on GitHub.
+When Git cannot say in time which commits a remote holds, or the upstream was pruned during the read, the header keeps its other facts, lists no incoming commit, and no commit opens a page; the reason goes to the diagnostic log once.
+A commit GitHub can show, one some remote already has or an incoming one, opens its GitHub commit page in the Browser View from its subject; a commit only this checkout has does not.
 Each compact item has its subject on the first line and short SHA and relative time on the second, with the exact local time available on the timestamp.
 Its associated CI result sits at the right of that second line; commits with no CI omit the result.
-The adjacent CI mark describes only that exact SHA, using GitHub's aggregate statusCheckRollup even on main without a PR, and distinguishes passing, pending, failed, none, unknown, unavailable and stale.
+The adjacent CI mark describes only that exact SHA, using GitHub's aggregate statusCheckRollup even on main without a PR, and distinguishes passing, pending, failed, none, unknown and unavailable.
+The header's Git read, each CI result and the remote check share one observed shape (PRD git-freshness D-09, `herdr-core/src/observed.rs`): the last value read stays, with when it was read and whether it is fresh, stale or behind a failed read.
+A CI read that fails, or ages past 90 seconds, keeps each commit's last result dimmed, not openable, with `GitHub 읽기 실패 · N분 전 값` or `N분 전 값` in its hint (B22); a commit GitHub never answered for reads unavailable.
+A Git read that fails keeps the ↑/↓ counts dimmed with `Git 읽기 실패 · N분 전 값` instead of hiding them.
 Its trigger opens the same history below itself, with initial focus on the content so no CI hint covers the first item; Tab reaches the CI links and their read-time hints.
 Each CI result opens only the provider-returned URL validated against that repository and exact commit in the existing Browser View.
 An outside click closes the history and keeps the clicked destination's focus; Escape closes it and returns focus to its trigger.
@@ -945,6 +959,7 @@ An agent Hide AI started for a home (PRD hide-ai-work-home) is a task only while
 The core derives the tasks from facts it already holds, stores none of them, and rebuilds them only when their inputs change, so a new agent, an ended one or a new pull request changes the task in place.
 A fork is a root of its own and so a task of its own.
 A task belongs to the device its root agent runs on.
+A connected device's branches, worktrees and fetched refs follow within seconds of changing there, through that device's own Git watch, without a reconnect (PRD git-freshness B19); while the device is not connected its rows keep their last values dimmed, and a reconnect reads them afresh (B21).
 The Overview reads the same tasks for the Projects tab's `지금` counts and the order of Backlog's sections.
 
 ### Work
@@ -1813,9 +1828,13 @@ Checkboxes sit on each cell, on each row (its build cache and dependencies, neve
 Choosing a worktree cell shows the same row's cache cells as included: they cannot be chosen apart and are not counted twice, and they leave with the worktree folder.
 A checkout is in use while an agent there is working or waiting on the operator (a question, an approval or a blocked prompt, or an activity Herdr does not report), an agent it delegated to is working or waiting wherever that agent runs, a terminal pane in it runs a process that is not a shell, or a server listens on a port opened from inside it.
 A finished or idle agent and a shell prompt are not use: a pane that is merely open blocks neither a cache nor the worktree.
-A worktree cell can be chosen only for a linked checkout that is merged into main, clean, is not the checkout in front, is not locked and holds no nested git repository, and has no live pane that is not one of its own; otherwise it is disabled and its tooltip says which.
-Merged into main means HEAD is in local `main` or in `origin/main` as of the last fetch (the review never fetches), or GitHub answers that a pull request into `main` merged exactly this HEAD; a squash or rebase merge needs that last proof, and it needs no merge commit in a local ref.
-A pull request merged into another branch proves nothing until that branch is in main, and with neither `main` nor `origin/main` the sheet judges no worktree.
+A worktree cell can be chosen only for a linked checkout that is merged into the repository's default branch, clean, is not the checkout in front, is not locked and holds no nested git repository, and has no live pane that is not one of its own; otherwise it is disabled and its tooltip says which.
+The default branch is the base branch chosen in Project Settings, else the one GitHub names, else what `origin/HEAD` names (PRD git-freshness D-07), never a branch the code assumes.
+Merged is the one judgment the sidebar's landed mark also reads (`worktrees::merged` in `herdr-core/src/worktrees.rs`, D-06): HEAD is in the local default branch or in its `origin/` copy as of the last fetch (the review never fetches; the background fetch keeps that copy current), or a pull request GitHub merged into the default branch has exactly this HEAD as its head; a squash or rebase merge needs that last proof, and it needs no merge commit in a local ref.
+GitHub's answer is the pull request list the project's read already holds, the last one kept while a read fails; that list holds only the 200 newest pull requests, so the review asks GitHub by branch for a HEAD the list does not name, and a worktree whose lookup fails is unverified rather than not merged, and a device's project, whose pull requests this core does not read, always asks by branch; with no GitHub answer only the ancestry counts.
+A head the review proved by branch is kept by the core for that project and default branch (at most 1024, `review_merge_proofs`) and joined to the list the sidebar's landed mark reads, so the row is marked landed when the review offers it (B17); before any review the sidebar knows only the list.
+A HEAD that moved past its merged pull request's head is not merged, a pull request merged into another branch proves nothing until that branch is in the default branch, and with no known default branch, or neither it nor its `origin/` copy present, the sheet judges no worktree.
+Deletion still happens only when the operator confirms the reviewed rows; the Hide AI attempt retirement keeps its own rule (GitHub answering that attempt's pull request merged or closed).
 When Hide cannot read what is in use, the sheet says so above the table with a retry and every checkbox is disabled; no banner or alert appears.
 
 The bottom line reads `N칸 · X` (`N칸 · 워크트리 M · X` when a worktree is chosen, and a part that is zero is left out, so a worktree alone reads `워크트리 M · X`) and `정리` runs at once for caches and dependencies alone.
@@ -2309,6 +2328,8 @@ A new-worktree start asks for its branch and actual base before starting and pre
 An explicit checkout, issue or pull-request start, CLI target, resume, wake, fork and running agent keep their existing behavior.
 The base branch is also the project's existing Git comparison and merge base; an absent saved branch falls back to an existing branch with a reason.
 Plain folders cannot select worktree creation or a Git base.
+Check the remote in the background (원격 자동 확인) is on for every Git project, including one whose record predates it; turned off, Hide stops fetching that project and its header detail falls back to the operator's last fetch, and turned on again it fetches within the minute (PRD git-freshness B9).
+A plain folder shows it off and unavailable with the existing Git project reason.
 
 Below the base branch, the Guardrails group (보호) holds four switches, each with one line on what it stops: Guard working folders, Guard the base branch, Block risky Git commands and Guard files (PRD agent-guardrails B1).
 Every switch starts off, and a record saved before the group existed reads with all four off (B2, B30).

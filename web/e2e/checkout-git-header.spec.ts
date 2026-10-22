@@ -75,3 +75,46 @@ test("checkout header reads working files with Changes closed, current-SHA statu
     daemon?.stop(); herdr.stop();
   }
 });
+
+test("a commit pushed to origin shows as one to receive, with its row and GitHub page, without a manual fetch", async ({ page }) => {
+  test.setTimeout(90_000);
+  const herdr = await startHerdr();
+  let daemon: Daemon | undefined;
+  try {
+    // A GitHub-named origin whose fetch is rewritten to a local bare repository, so the header
+    // makes commit pages while the fetch stays on this machine (the fixture allows `file` only).
+    const root = fs.realpathSync(path.join(herdr.root, "fixture"));
+    const bare = path.join(herdr.root, "origin.git");
+    const origin = "https://github.com/example/freshness.git";
+    const local = `file://${bare.replaceAll("\\", "/")}`;
+    git(herdr.root, ["init", "--bare", bare]);
+    git(root, ["init"]);
+    git(root, ["commit", "--allow-empty", "-m", "base"]);
+    git(root, ["remote", "add", "origin", origin]);
+    git(root, ["config", `url.${local}.insteadOf`, origin]);
+    git(root, ["push", "-u", "origin", "main"]);
+    const theirs = path.join(herdr.root, "theirs");
+    git(herdr.root, ["clone", local, theirs]);
+    git(theirs, ["commit", "--allow-empty", "-m", "Pushed elsewhere"]);
+    git(theirs, ["push", "origin", "main"]);
+    const incoming = git(theirs, ["rev-parse", "HEAD"]).trim();
+    daemon = await startHided(herdr, "checkout-freshness");
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    const upstream = page.locator('[data-checkout-upstream="tracked"]');
+    await expect(upstream).toHaveText("1", { timeout: 30_000 });
+    await upstream.click();
+    await expect(page.locator("[data-checkout-remote-checked]")).toHaveText(/^Remote checked /);
+    await page.keyboard.press("Escape");
+    await page.locator("[data-checkout-commit]").click();
+    const row = page.locator(`[data-commit-history-item="${incoming}"]`);
+    await expect(row).toHaveAttribute("data-commit-incoming", "true");
+    await expect(row.locator("[data-commit-link]")).toHaveAttribute("aria-label", "Pushed elsewhere · Open commit on GitHub");
+    await screenshot(page, "checkout-freshness-browser");
+    // The fetch moved only the remote-tracking ref: the branch and the files are the operator's.
+    expect(git(root, ["rev-parse", "HEAD"]).trim()).not.toBe(incoming);
+    expect(git(root, ["rev-parse", "origin/main"]).trim()).toBe(incoming);
+  } finally {
+    daemon?.stop(); herdr.stop();
+  }
+});

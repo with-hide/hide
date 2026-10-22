@@ -432,6 +432,10 @@ impl Runtime {
                     &workspace.path,
                 )
                 .map(str::to_owned),
+                remote_default: self
+                    .github
+                    .project(&workspace.path)
+                    .and_then(|project| project.issues.default_branch.clone()),
                 bases: self
                     .github
                     .project(&workspace.path)
@@ -605,6 +609,26 @@ impl Runtime {
                     project
                 }),
         };
+        // The pull request list the sidebar judges merges from; a node's
+        // project this core has not read asks per branch (`MergeBasis::heads`).
+        let base = listed
+            .as_ref()
+            .and_then(|project| project.base_branch.clone());
+        let merge = live::cleanup::MergeBasis {
+            heads: match node {
+                None => crate::worktrees::merged_heads(
+                    self.github.project(&workspace.path),
+                    base.as_deref(),
+                ),
+                Some(node) => crate::worktrees::merged_heads(
+                    self.device_github
+                        .get(node)
+                        .and_then(|github| github.project(&workspace.path)),
+                    base.as_deref(),
+                ),
+            },
+            base,
+        };
         let worktrees = listed.iter().flat_map(|project| &project.worktrees);
         let current = match node {
             None => self
@@ -632,6 +656,7 @@ impl Runtime {
                     Some((PathBuf::from(&worktree.path), worktree.disk.total_bytes?))
                 })
                 .collect(),
+            merge,
         };
         Some((node.map(str::to_owned), input))
     }
@@ -720,7 +745,18 @@ impl Runtime {
                     .iter()
                     .any(|cell| cell.outcome == "removed"));
         let node = self.cleanup_node(&answer.workspace_id);
+        let proved = self.keep_review_merge_proofs(node.as_deref(), &answer);
         self.cleanup = Some(answer);
+        if proved && !removed {
+            match node.as_deref() {
+                None => {
+                    self.refresh_worktree_projection();
+                }
+                Some(node) => {
+                    self.refresh_device_catalog(node);
+                }
+            }
+        }
         if removed {
             match node.as_deref() {
                 None => self.refresh_worktrees(),
@@ -732,6 +768,70 @@ impl Runtime {
         }
         self.publish_cleanup(node.as_deref());
         true
+    }
+
+    /// Keeps the heads review `answer` proved merged by branch, so the
+    /// sidebar's landed mark reads them too; whether any was new.
+    fn keep_review_merge_proofs(
+        &mut self,
+        node: Option<&str>,
+        answer: &live::cleanup::CleanupSnapshot,
+    ) -> bool {
+        if answer.merge_proofs.is_empty() {
+            return false;
+        }
+        // Proofs of a project that left the catalog or whose default branch
+        // changed are dropped; a review judged against a base that is no
+        // longer the project's keeps nothing.
+        let proofs = std::mem::take(&mut self.review_merge_proofs);
+        self.review_merge_proofs = proofs
+            .into_iter()
+            .filter(|((node, root, base), _)| {
+                self.listed_base(node.as_deref(), root).as_ref() == Some(base)
+            })
+            .collect();
+        let Some(base) = answer
+            .merge_base
+            .clone()
+            .filter(|base| self.listed_base(node, &answer.repository_root).as_ref() == Some(base))
+        else {
+            return false;
+        };
+        let kept = self
+            .review_merge_proofs
+            .entry((
+                node.map(str::to_owned),
+                answer.repository_root.clone(),
+                base,
+            ))
+            .or_default();
+        let before = kept.len();
+        for head in &answer.merge_proofs {
+            if kept.len() >= REVIEW_PROOF_LIMIT {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "cleanup",
+                    "kind": "review.merge_proofs_full",
+                    "project": answer.repository_root,
+                    "limit": REVIEW_PROOF_LIMIT,
+                }));
+                break;
+            }
+            kept.insert(head.clone());
+        }
+        kept.len() != before
+    }
+
+    /// The default branch the worktree read of `root` judged merges
+    /// against, on this machine or on node `node`.
+    fn listed_base(&self, node: Option<&str>, root: &str) -> Option<String> {
+        match node {
+            None => self.worktree_catalog.project(root),
+            Some(node) => self
+                .device_worktrees
+                .get(node)
+                .and_then(|listed| listed.projects.get(root)),
+        }
+        .and_then(|project| project.base_branch.clone())
     }
 
     pub(super) fn review_cleanup(&mut self, workspace_id: &str) -> bool {
@@ -906,6 +1006,7 @@ impl Runtime {
             .collect();
         let github = self.github.clone();
         let disk_usage = self.disk_usage.clone();
+        let review_proofs = self.review_merge_proofs.clone();
 
         for project in &mut self.worktree_catalog.projects {
             let github_project = github.project(&project.root_path);
@@ -926,7 +1027,19 @@ impl Runtime {
                 })
                 .unwrap_or_default();
             project.pull_request_window = crate::github::PULL_REQUEST_LIMIT.into();
+            let merged_heads = with_review_proofs(
+                crate::worktrees::merged_heads(github_project, project.base_branch.as_deref()),
+                &review_proofs,
+                None,
+                &project.root_path,
+                project.base_branch.as_deref(),
+            );
             for worktree in &mut project.worktrees {
+                worktree.merged = crate::worktrees::merged(
+                    worktree.in_base,
+                    worktree.head_sha.as_deref(),
+                    merged_heads.as_ref(),
+                );
                 let panes = pane_rows.get(&worktree.path);
                 worktree.pane_count = panes.map_or(0, HashSet::len);
                 worktree.agent_line = worktree_agent_line(
@@ -4839,6 +4952,32 @@ fn checkout_card(
             .worktree
             .as_ref()
             .map(|worktree| worktree.deletion_gate.clone()),
+    }
+}
+
+/// The most heads a project keeps from cleanup reviews' branch lookups; one
+/// past it is not kept and is logged (`review.merge_proofs_full`).
+pub(super) const REVIEW_PROOF_LIMIT: usize = 1024;
+
+/// GitHub's merged heads for a project's sidebar mark: the pull request list
+/// joined with what a cleanup review proved by branch for the same default
+/// branch, so the mark and the review give one answer (PRD git-freshness
+/// B17). With neither, GitHub has not answered.
+pub(super) fn with_review_proofs(
+    listed: Option<BTreeSet<String>>,
+    proofs: &BTreeMap<(Option<String>, String, String), BTreeSet<String>>,
+    node: Option<&str>,
+    root: &str,
+    base: Option<&str>,
+) -> Option<BTreeSet<String>> {
+    let proved = base
+        .and_then(|base| proofs.get(&(node.map(str::to_owned), root.to_owned(), base.to_owned())));
+    match (listed, proved) {
+        (listed, None) => listed,
+        (None, Some(proved)) => Some(proved.clone()),
+        (Some(listed), Some(proved)) => {
+            Some(listed.into_iter().chain(proved.iter().cloned()).collect())
+        }
     }
 }
 

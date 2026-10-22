@@ -77,6 +77,7 @@ pub struct Core {
     _delivery: Option<crate::delivery::worker::Worker>,
     _terminal_reports: Option<crate::terminal_reports::ReportPump>,
     _changes: Option<crate::changes::ChangesPump>,
+    _fetch: Option<crate::fetch::FetchPump>,
     _kit: Option<crate::kit::KitPump>,
     _session_sync: Option<crate::session_sync::SessionSyncHandle>,
     _links: Option<crate::links::worker::LinkWorker>,
@@ -112,6 +113,7 @@ impl Drop for Core {
         self._links.take();
         self._terminal_reports.take();
         self._changes.take();
+        self._fetch.take();
         self._session_sync.take();
         // Taken under the lock, joined outside it: a coordinator's last act is
         // to lock the runtime, so a join under the lock never returns.
@@ -185,6 +187,7 @@ impl Core {
             own_node,
             _terminal_reports: None,
             _changes: None,
+            _fetch: None,
             _kit: None,
             _session_sync: None,
             _links: None,
@@ -420,6 +423,16 @@ impl Core {
                     None
                 }
             };
+        // The background fetch asks each repository's own node, so it runs
+        // whether or not this machine has a Herdr session.
+        let fetch = match crate::fetch::FetchPump::spawn(Arc::downgrade(&runtime), notifier.clone())
+        {
+            Ok(pump) => Some(pump),
+            Err(error) => {
+                lock_recover(&runtime).set_error("fetch.pump_unavailable", error.to_string(), true);
+                None
+            }
+        };
         // This machine's install kit runs on its own node whether or not
         // Herdr answers; only retiring the old labels plugin needs it (PRD
         // labels-in-hided D-12). Without a socket from the embedder the node
@@ -464,6 +477,7 @@ impl Core {
             _delivery: delivery,
             _terminal_reports: terminal_reports,
             _changes: changes,
+            _fetch: fetch,
             _kit: kit,
             own_node,
             _session_sync: session_sync,

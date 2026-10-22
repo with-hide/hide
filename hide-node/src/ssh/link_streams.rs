@@ -851,18 +851,18 @@ mod tests {
         assert_eq!(open.len(), MAX_HERDR_STREAMS);
     }
 
-    /// Every machine call slot held by a call that runs until stopped: a
-    /// Herdr stream still opens, writes and reads at once, since link
-    /// control has its own lane at both ends (R4).
+    /// Every background slot held by a Git watch, which runs until stopped:
+    /// a machine call still answers and a Herdr stream still opens, writes
+    /// and reads at once, since each has its own lane at both ends (R4).
     #[test]
-    fn herdr_streams_do_not_wait_behind_machine_calls() {
+    fn machine_calls_and_herdr_streams_do_not_wait_behind_git_watches() {
         let folder = tempfile::tempdir().unwrap();
         let common = folder.path().join("common");
         std::fs::create_dir_all(common.join("refs/heads")).unwrap();
         let link = linked_node(echo_herdr(folder.path()));
         let (reported, reports) = mpsc::channel();
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let watches: Vec<_> = (0..crate::ssh::host::MAX_RUNNING)
+        let watches: Vec<_> = (0..crate::ssh::host::MAX_BACKGROUND_RUNNING)
             .map(|_| {
                 let link = link.clone();
                 let common = common.to_string_lossy().into_owned();
@@ -882,12 +882,25 @@ mod tests {
                 })
             })
             .collect();
-        for _ in 0..crate::ssh::host::MAX_RUNNING {
+        for _ in 0..crate::ssh::host::MAX_BACKGROUND_RUNNING {
             reports
                 .recv_timeout(Duration::from_secs(20))
                 .expect("a watch that reports");
         }
         let started = Instant::now();
+        let machine = link.call(
+            Call::Directory {
+                path: folder.path().to_string_lossy().into_owned(),
+            },
+            Duration::from_secs(10),
+        );
+        assert!(
+            !matches!(
+                machine,
+                Err(hide_node_link::LinkError::Busy | hide_node_link::LinkError::Unknown(_))
+            ),
+            "{machine:?}"
+        );
         let mut stream = link.herdr_connector().connect().expect("a stream");
         stream.write_all(b"{\"id\":\"c\"}\n").unwrap();
         assert_eq!(
@@ -898,7 +911,7 @@ mod tests {
         );
         assert!(
             started.elapsed() < Duration::from_secs(4),
-            "the stream waited {:?} behind machine calls",
+            "the call and the stream waited {:?} behind Git watches",
             started.elapsed()
         );
         stop.store(true, Ordering::SeqCst);

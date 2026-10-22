@@ -679,6 +679,7 @@ fn idle_and_working_tree_edits_do_not_reread_but_manual_refresh_does() {
         root_path: root.to_path_buf(),
         bases: BTreeMap::new(),
         base_override: None,
+        remote_default: None,
         generation: 0,
     };
     let mut request = WorktreeRequest {
@@ -819,6 +820,7 @@ fn a_commit_in_one_project_does_not_rerun_status_in_another() {
                 root_path: repo.0.clone(),
                 bases: BTreeMap::new(),
                 base_override: None,
+                remote_default: None,
                 generation: 0,
             })
             .collect(),
@@ -864,6 +866,7 @@ fn a_commit_in_one_worktree_measures_that_worktree_alone_until_a_refresh() {
                 root_path: repo.0.clone(),
                 bases: BTreeMap::new(),
                 base_override: None,
+                remote_default: None,
                 generation: 0,
             })
             .collect(),
@@ -938,6 +941,7 @@ fn moved_remote_ref_refreshes_one_project_once_after_a_burst() {
                 root_path: repo.0.clone(),
                 bases: BTreeMap::new(),
                 base_override: None,
+                remote_default: None,
                 generation: 0,
             })
             .collect(),
@@ -992,6 +996,7 @@ fn a_watch_change_during_a_read_keeps_the_old_answer_stale() {
             root_path: repo.0.clone(),
             bases: BTreeMap::new(),
             base_override: None,
+            remote_default: None,
             generation: 0,
         }],
         generation: 0,
