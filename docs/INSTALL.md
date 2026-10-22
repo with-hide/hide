@@ -417,6 +417,10 @@ hide can show and drive a Herdr server on another machine.
 Open Settings, choose Devices, and add the machine with a label and the alias `~/.ssh/config` already knows it by; that alias is the only thing hide stores about it.
 Authentication stays with SSH: the alias's `IdentityFile`, or the running SSH agent, is what hide signs in with, and hide never asks for or keeps a password.
 
+An agent you ask to add a machine does it with `hide device add <alias> [--name <name>] [--socket <path>]`, run on the machine that runs Hide; `hide device list` shows each machine's id, state and helper, and `hide device remove <id>` removes one as Settings does.
+The command registers the machine without Hide's helper, and its answer tells the agent to ask you to choose Allow and install on the machine's row in Settings › Devices: installing writes that account's hook files, which only you agree to, and until then the machine's files, Git and terminals wait.
+A remove is refused while a file tab of that machine is open, because Settings stores the tab's draft first and the command cannot; a command run on a connected machine is refused with `machine_not_permitted`.
+
 The remote machine needs Herdr installed where a non-login shell finds it (`~/.local/bin`, Homebrew, or the system paths) and a running `herdr server` the first time; hide does not install Herdr or start a server there.
 hide asks that machine `herdr status server --json` to learn where the server socket is, so nothing about the remote user or home directory is configured on this side.
 After that the machine's Herdr follows this app: when its system and processor are ones the app carries (an Apple Silicon Mac from the Mac app, a Linux x64 machine from the Linux package), each connection puts this app's pinned Herdr in `~/.hide/host-helper/herdr`, once per Herdr version, and moves the Herdr server on the registered socket onto it when that server runs an older Herdr release, with its panes and the agents in them still running.

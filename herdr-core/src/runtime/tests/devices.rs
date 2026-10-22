@@ -764,3 +764,134 @@ fn a_device_id_holding_a_colon_is_refused_and_never_connected() {
         Some("HOME is unavailable, so the SSH config cannot be resolved")
     );
 }
+
+/// `hide device add` registers the device under an id made from its alias,
+/// without Hide's helper, and its answer tells the agent the operator
+/// allows the helper on the device's row; `list` shows it and `remove`
+/// forgets it.
+#[test]
+fn hide_device_adds_without_the_helper_and_says_who_allows_it() {
+    use crate::device_command::DeviceCommand;
+    let mut runtime = runtime();
+    let core = crate::node::TEST_NODE;
+    let (answer, changed) = runtime
+        .device_command(
+            core,
+            DeviceCommand::Add {
+                ssh_alias: "Studio.local".into(),
+                name: None,
+                herdr_socket_path: None,
+            },
+        )
+        .expect("added");
+    assert!(changed);
+    assert_eq!(answer["device"]["id"], "studio-local");
+    assert_eq!(answer["device"]["label"], "Studio.local");
+    assert_eq!(answer["device"]["helper"]["consent"], "none");
+    assert!(
+        answer["next_action"]
+            .as_str()
+            .is_some_and(|next| next.contains("Allow and install"))
+    );
+    let registration = &runtime.snapshot.ui_state.device_registrations[0];
+    assert!(registration.host_consent.is_none());
+
+    let (list, changed) = runtime
+        .device_command(core, DeviceCommand::List)
+        .expect("listed");
+    assert!(!changed);
+    let ids: Vec<_> = list["devices"]
+        .as_array()
+        .expect("devices")
+        .iter()
+        .map(|device| device["id"].clone())
+        .collect();
+    assert_eq!(ids, [serde_json::json!("studio-local")]);
+
+    let again = runtime.device_command(
+        core,
+        DeviceCommand::Add {
+            ssh_alias: "Studio.local".into(),
+            name: Some("Second".into()),
+            herdr_socket_path: None,
+        },
+    );
+    assert_eq!(
+        again.expect("a second registration").0["device"]["id"],
+        "studio-local-2"
+    );
+
+    runtime
+        .device_command(
+            core,
+            DeviceCommand::Remove {
+                device_id: "studio-local".into(),
+            },
+        )
+        .expect("removed");
+    assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
+}
+
+/// Only the core's machine adds or removes a device, an alias `ssh` would
+/// read as an option is refused, and a device with a file tab open is not
+/// removed, since its draft is the shell's to store first.
+#[test]
+fn hide_device_refuses_a_device_caller_an_option_alias_and_open_files() {
+    use crate::device_command::DeviceCommand;
+    let mut runtime = runtime();
+    let core = crate::node::TEST_NODE;
+    assert_eq!(
+        runtime
+            .device_command("studio", DeviceCommand::List)
+            .err()
+            .as_deref(),
+        Some("machine_not_permitted")
+    );
+    let add = |alias: &str| DeviceCommand::Add {
+        ssh_alias: alias.into(),
+        name: None,
+        herdr_socket_path: None,
+    };
+    assert_eq!(
+        runtime
+            .device_command(core, add("-oProxyCommand=x"))
+            .err()
+            .as_deref(),
+        Some("device_invalid")
+    );
+    assert!(runtime.snapshot.ui_state.device_registrations.is_empty());
+
+    runtime.device_command(core, add("studio")).expect("added");
+    runtime.snapshot.editor.tabs.push(EditorTabSnapshot {
+        id: "file:device".to_owned(),
+        workspace_id: "remote:studio:workspace:w1".to_owned(),
+        checkout_id: "remote:studio:checkout:/srv/p".to_owned(),
+        path: "/srv/p/README.md".to_owned(),
+        label: "README.md".to_owned(),
+        kind: EditorTabKind::File,
+        diff_committed: None,
+        markdown_live: false,
+        wrap: false,
+        dirty: true,
+        preview: false,
+        unavailable_reason: None,
+    });
+    let remove = || DeviceCommand::Remove {
+        device_id: "studio".into(),
+    };
+    assert_eq!(
+        runtime.device_command(core, remove()).err().as_deref(),
+        Some("device_files_open")
+    );
+    runtime.snapshot.editor.tabs.clear();
+    assert_eq!(
+        runtime
+            .device_command(core, remove())
+            .map(|(answer, _)| answer),
+        Ok(serde_json::json!({"device_id": "studio"}))
+    );
+    assert_eq!(
+        runtime.device_command(core, remove()).err().as_deref(),
+        Some("device_unknown")
+    );
+}

@@ -462,6 +462,28 @@ pub fn request_agent_catalog(
     })
 }
 
+/// `hide device`: the core's own device registrations. A `list` is a read;
+/// an `add` or `remove` run again after a lost answer is refused as a
+/// duplicate or an unknown device, never applied twice.
+pub fn request_device(
+    credential: &mut Credential,
+    command: &herdr_core::device_command::DeviceCommand,
+) -> Result<Value, String> {
+    let action = !matches!(command, herdr_core::device_command::DeviceCommand::List);
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange(
+            path,
+            &reference,
+            json!({"type":"device","request_id":request_id,"command":command}),
+            &request_id,
+            action,
+            after,
+        )
+    })
+}
+
 /// `hide ps`: read from what the core holds.
 pub fn request_ps(credential: &mut Credential, all: bool) -> Result<Value, String> {
     credential.run(|path, after| {

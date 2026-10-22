@@ -547,6 +547,43 @@
             "title": "Confirmed",
             "type": "object"
         },
+        "device_added": {
+            "properties": {
+                "device": {
+                    "type": "object"
+                },
+                "next_action": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "device",
+                "next_action"
+            ],
+            "type": "object"
+        },
+        "device_list": {
+            "properties": {
+                "devices": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "devices"
+            ],
+            "type": "object"
+        },
+        "device_removed": {
+            "properties": {
+                "device_id": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "device_id"
+            ],
+            "type": "object"
+        },
         "inbox": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -2057,6 +2094,101 @@
         },
         {
             "answers": [
+                "device_list"
+            ],
+            "arguments": [],
+            "command": "device list",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_not_permitted"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_added"
+            ],
+            "arguments": [
+                {
+                    "name": "ssh_alias",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device add",
+            "options": [
+                {
+                    "name": "--name",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--socket",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_not_permitted",
+                "device_invalid",
+                "device_duplicate"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_removed"
+            ],
+            "arguments": [
+                {
+                    "name": "device_id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device remove",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_not_permitted",
+                "device_unknown",
+                "device_local_remove_denied",
+                "device_files_open"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "letter"
             ],
             "arguments": [
@@ -2942,9 +3074,14 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e24be4e805b7bc1903522a5114329c808667e0bce8b25bed5df8cfa5218ca833",
+    "digest": "sha256:73903cc8d07f2256d160546a965c17c6b97db8a10673b585413fbbbe3974f7c4",
     "envelopes": {
         "agent": {
+            "answer": "value",
+            "code": "error.code",
+            "ok": "ok"
+        },
+        "device": {
             "answer": "value",
             "code": "error.code",
             "ok": "ok"
