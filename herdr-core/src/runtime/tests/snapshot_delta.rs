@@ -57,6 +57,34 @@ fn semantic_selection_preserves_large_sections_and_legacy_complete_rest() {
     );
 }
 
+/// The rest wire names each field it carries, so a field added to a section's
+/// snapshot and not to its wire list never reached the shell (the Herdr
+/// takeover's status did not, PRD herdr-takeover B1).
+#[test]
+fn the_complete_rest_carries_every_field_of_each_section() {
+    let mut runtime = runtime();
+    let snapshot = serde_json::to_value(runtime.snapshot()).unwrap();
+    let complete: serde_json::Value = serde_json::from_slice(
+        &serialize_snapshot_delta(&runtime.snapshot_delta_payload(0)).unwrap(),
+    )
+    .unwrap();
+    for section in ["navigator", "terminal", "status"] {
+        let keys = |value: &serde_json::Value| {
+            value[section]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let missing: Vec<_> = keys(&snapshot)
+            .difference(&keys(&complete["rest"]))
+            .cloned()
+            .collect();
+        assert!(missing.is_empty(), "{section} leaves out {missing:?}");
+    }
+}
+
 /// A slow reader accumulates current replacements; reset restores every field.
 #[test]
 fn semantic_readers_converge_with_null_empty_reordering_and_future_reset() {

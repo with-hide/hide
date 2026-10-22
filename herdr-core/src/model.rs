@@ -5751,7 +5751,6 @@ pub struct StatusSnapshot {
     pub server_discovery: ServerDiscoverySnapshot,
     pub tab_rename: Option<TabRenameSnapshot>,
     pub herdr: ProviderStatusSnapshot,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub herdr_takeover: Option<HerdrTakeoverSnapshot>,
     pub remote: Vec<RemoteStatusSnapshot>,
     pub environment: Vec<EnvironmentStatusSnapshot>,

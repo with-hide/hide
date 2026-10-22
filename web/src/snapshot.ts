@@ -2272,7 +2272,7 @@ export type SnapshotRest = {
     server_discovery?: { loading: boolean; failure: string | null };
     herdr?: HerdrStatus;
     /** What Hide offers for the operator's own older Herdr server on this machine (PRD herdr-takeover); absent when nothing. */
-    herdr_takeover?: HerdrTakeover;
+    herdr_takeover?: HerdrTakeover | null;
     remote?: RemoteStatus[];
     environment?: EnvironmentStatus[];
     agent_hooks?: AgentHooks;
