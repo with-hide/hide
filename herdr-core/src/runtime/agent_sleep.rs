@@ -625,6 +625,13 @@ impl Runtime {
             return false;
         };
         let codex_daemon = self.codex_daemon_for_pane(pane_id);
+        // A wake is the operator's attention, as a look is: the conversation
+        // it resumes is as old as the sleep, so without this an agent woken
+        // from the menu or the phone off screen would be due again at once.
+        self.snapshot
+            .ui_state
+            .agent_sleep
+            .mark_seen([pane_id], unix_milliseconds());
         let Some(record) = self.snapshot.ui_state.agent_sleep.records.get_mut(pane_id) else {
             return false;
         };
