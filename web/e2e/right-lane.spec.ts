@@ -68,7 +68,7 @@ function savedViewFacts(read: SavedRead, fixture: string): unknown {
     const views = saved.workspaces.filter((view) => view.path.replaceAll("\\", "/") === fixture.replaceAll("\\", "/"));
     if (views.length !== 1) return { ...metadata, status: "workspace_match_error", schema_version: saved.schema_version, matches: views.length };
     const view = views[0]!;
-    if (typeof view.pinned !== "boolean" || typeof view.open !== "boolean" || typeof view.documents !== "boolean" || ![null, "explorer", "prs", "memory", "changes"].includes(view.tool)) throw new TypeError();
+    if (typeof view.pinned !== "boolean" || typeof view.open !== "boolean" || typeof view.documents !== "boolean" || ![null, "explorer", "project", "changes"].includes(view.tool)) throw new TypeError();
     const layout = (value: SavedLayout) => {
       const areas: { id: string; active: string | null; displays: { id: string; basename?: string; kind?: string }[] }[] = [];
       const identity = (id: string) => { if (typeof id !== "string") throw new TypeError(); return hash(id); };
@@ -140,17 +140,17 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await screenshot(page, "right-lane-documents-wide");
 
     // A tool opens beside the documents at a width of its own: the wide
-    // document leaves Memory at the default, the column divider trades width
-    // between the two, and the tool's × leaves the documents at the width
-    // that trade left them (B14, B17).
-    await railTool(page, "memory").click();
-    await expect(page.locator("[data-lane-header]")).toContainText("Memory");
-    await expect(screen(page)).toHaveAttribute("data-lane-shows", "memory");
+    // document leaves the Project tool at the default, the column divider
+    // trades width between the two, and the tool's × leaves the documents at
+    // the width that trade left them (B14, B17).
+    await railTool(page, "project").click();
+    await expect(page.locator("[data-lane-header]")).toContainText("fixture");
+    await expect(screen(page)).toHaveAttribute("data-lane-shows", "project");
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
     const memory = () => page.locator('[data-lane-column="tool"]').boundingBox().then((box) => Math.round(box!.width));
     await expect.poll(memory).toBe(400);
     expect(Math.abs((await documentArea(page).boundingBox())!.width - wide)).toBeLessThanOrEqual(1);
-    await screenshot(page, "right-lane-memory-beside");
+    await screenshot(page, "right-lane-project-beside");
     // The divider between the columns trades width between them; the lane keeps its own.
     const laneWide = await widened();
     const columnGrip = page.locator('[data-lane-divider="column"]');
@@ -161,7 +161,7 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await page.mouse.up();
     await expect.poll(memory).toBe(460);
     expect(await widened()).toBe(laneWide);
-    await page.locator('[data-lane-tool-close="memory"]').click();
+    await page.locator('[data-lane-tool-close="project"]').click();
     await expect(screen(page)).toHaveAttribute("data-lane-shows", "none");
     await expect.poll(widened).toBe(wide - 60);
     await expect(pane(page, lane.herdr.panes[0]!)).toBeVisible();
@@ -211,9 +211,15 @@ test("the rail draws the viewing column's buttons over a rule and one divider be
   try {
     // The documents' button, a rule, then one short rule where the Project's tools end and the checkout's begin.
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? `divider:${node.getAttribute("data-tool-rail-divider")}`));
-    expect(rail).toEqual(["documents", "divider:view", "memory", "prs", "divider:true", "explorer", "changes"]);
-    // Every tool reads `name · scope`, with decoration only, and closes with one ×.
-    for (const [tool, name, icon] of [["memory", "Memory", "folder"], ["prs", "PRs", "folder"], ["explorer", "Explorer", "git-branch"], ["changes", "Changes", "git-branch"]] as const) {
+    expect(rail).toEqual(["documents", "divider:view", "project", "divider:true", "explorer", "changes"]);
+    // The Project tool's head names the project and where it is, with ⚙ and × (PRD lane-two-columns B26).
+    await showTool(page, "project");
+    const projectHeader = page.locator('aside[data-lane="project"] [data-lane-header]');
+    await expect(projectHeader.locator('[data-lane-scope-kind="project"]')).toContainText("fixture");
+    await expect(projectHeader.getByRole("button")).toHaveCount(2);
+    await expect(projectHeader.locator('[data-lane-tool-close="project"]')).toBeVisible();
+    // Every checkout tool reads `name · scope`, with decoration only, and closes with one ×.
+    for (const [tool, name, icon] of [["explorer", "Explorer", "git-branch"], ["changes", "Changes", "git-branch"]] as const) {
       await showTool(page, tool);
       const header = page.locator("[data-lane-header]");
       const scope = header.locator("[data-lane-scope]");
@@ -254,8 +260,8 @@ test("the pin docks the lane once, keeps it through a terminal click, a tool and
     await pane(page, lane.herdr.panes[0]!).click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     // A tool opens beside the documents and fits each terminal once more (B21).
-    await railTool(page, "prs").click();
-    await expect(page.locator("[data-lane]")).toHaveAttribute("data-lane", "prs");
+    await railTool(page, "project").click();
+    await expect(page.locator("[data-lane]")).toHaveAttribute("data-lane", "project");
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await expect.poll(() => resizes(lane)).toBe(before + 2 * attached);
@@ -275,7 +281,7 @@ test("the pin docks the lane once, keeps it through a terminal click, a tool and
     // prove the asynchronous save the next process will restore has landed.
     const fixture = path.join(lane.herdr.root, "fixture");
     const stored = () => savedViewFacts(readSavedViews(lane.daemon.stateDir), fixture);
-    await expect.poll(stored).toMatchObject({ status: "read", open: true, documents: true, tool: "prs", pinned: true, views: { display_count: 2, active_basename: "b.md" } });
+    await expect.poll(stored).toMatchObject({ status: "read", open: true, documents: true, tool: "project", pinned: true, views: { display_count: 2, active_basename: "b.md" } });
     const savedBeforeExit = readSavedViews(lane.daemon.stateDir);
     let savedAfterExit: SavedRead | undefined;
     try {
@@ -288,20 +294,20 @@ test("the pin docks the lane once, keeps it through a terminal click, a tool and
     await page.goto("about:blank");
     await page.goto(`${lane.daemon.origin}/?probe=1#token=${lane.daemon.token}`);
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
-    await expect(screen(page)).toHaveAttribute("data-lane-shows", "prs");
+    await expect(screen(page)).toHaveAttribute("data-lane-shows", "project");
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
 
     // Unpinned, the lane goes back over Agent Views with both columns, and a
     // restart brings it back there: the operator never took it down.
     await setLanePinned(page, false);
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
-    await expect.poll(stored).toMatchObject({ status: "read", open: true, documents: true, tool: "prs", pinned: false, views: { display_count: 2, active_basename: "b.md" } });
+    await expect.poll(stored).toMatchObject({ status: "read", open: true, documents: true, tool: "project", pinned: false, views: { display_count: 2, active_basename: "b.md" } });
     lane.daemon = await lane.daemon.restart();
     await page.goto("about:blank");
     await page.goto(`${lane.daemon.origin}/?probe=1#token=${lane.daemon.token}`);
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
     await expect(railTool(page, "documents")).toHaveAttribute("aria-pressed", "true");
-    await expect(railTool(page, "prs")).toHaveAttribute("aria-pressed", "true");
+    await expect(railTool(page, "project")).toHaveAttribute("aria-pressed", "true");
   } finally {
     lane.daemon.stop();
     lane.herdr.stop();

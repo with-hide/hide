@@ -312,7 +312,7 @@
   "work-prs.spec.ts \u203a all three extra questions failing still lists every pull request and names all three": 12.4,
   "work-prs.spec.ts \u203a an unreadable account keeps the list and leaves every pull request's owner unjudged": 12.4,
   "work-prs.spec.ts \u203a an unreadable merge queue keeps the list and holds back only the pull requests a queue could hold": 12.5,
-  "work-prs.spec.ts \u203a the PRs tool groups by whose move it is and says why on each row": 10.7,
+  "work-prs.spec.ts \u203a the PR list groups by whose move it is and says why on each row": 10.7,
   "work-prs.spec.ts \u203a the card opens in the \ubcf4\uae30 slot and Merge goes out on the head it showed": 12.4,
   "work-prs.spec.ts \u203a the list and the card read without sideways scrolling in each language and both themes": 12.6,
   "work-prs.spec.ts \u203a unreadable review requests keep the list and judge a team's ask only as unknown": 12.5,

@@ -309,7 +309,7 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
         await keyboardFocus(page, divider);
         await nativeCapture(app, page, `lane-${theme}-divider-focus`);
         await rest(page);
-        for (const [tool, name] of [["documents", "Documents"], ["prs", "PRs"]] as const) {
+        for (const [tool, name] of [["documents", "Documents"], ["project", "Project"]] as const) {
           await page.locator(`[data-lane-tool="${tool}"]`).hover();
           const tooltip = page.locator('[data-slot="tooltip-content"]');
           await expect(tooltip).toContainText(name);

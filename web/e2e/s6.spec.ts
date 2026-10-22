@@ -103,30 +103,30 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     // scope in its hint, and reads pressed only while its column shows it;
     // with no document the documents button is off and says so.
     const documentsIcon = page.locator('[data-lane-tool="documents"]');
-    const prsIcon = page.locator('[data-lane-tool="prs"]');
+    const projectIcon = page.locator('[data-lane-tool="project"]');
     await expect(documentsIcon).toHaveAttribute("aria-pressed", "false");
     await expect(documentsIcon).toBeDisabled();
-    await prsIcon.hover();
-    await expect(page.locator('[data-slot="tooltip-content"]')).toContainText("PRs");
+    await projectIcon.hover();
+    await expect(page.locator('[data-slot="tooltip-content"]')).toContainText("Project");
     await page.mouse.move(bodyBox.x + 40, bodyBox.y + 40);
 
-    // The PRs icon opens the tool column on PRs over the agents, the path's
+    // The Project icon opens the tool column on the Project tool over the agents, the path's
     // menu closes the lane, ⌘E brings the closed lane back in its shape, and
     // the rail swaps the one tool the column holds (B2, B20; lane-two-columns B14, B15).
     const lane = page.locator("[data-lane-frame]");
     const agentArea = page.locator("[data-agent-area]");
-    await prsIcon.click();
-    await expect(workspace).toHaveAttribute("data-lane-shows", "prs");
+    await projectIcon.click();
+    await expect(workspace).toHaveAttribute("data-lane-shows", "project");
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
-    await expect.poll(() => last.get("workspace_view")).toEqual({ tool: "prs" });
-    await expect(prsIcon).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(() => last.get("workspace_view")).toEqual({ tool: "project" });
+    await expect(projectIcon).toHaveAttribute("aria-pressed", "true");
     const panelIdeal = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--size-lane-panel-ideal")));
     expect((await lane.boundingBox())!.width).toBeCloseTo(panelIdeal, 0);
     await chooseLane(page);
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed");
     await expect.poll(() => last.get("workspace_view")).toEqual({ open: false });
     await page.keyboard.press(chord("toggle_lane"));
-    await expect(workspace).toHaveAttribute("data-lane-shows", "prs");
+    await expect(workspace).toHaveAttribute("data-lane-shows", "project");
     await page.locator('[data-lane-tool="changes"]').click();
     await expect.poll(() => last.get("workspace_view")).toEqual({ tool: "changes" });
     await expect(page.locator('[data-lane="changes"]')).toBeVisible();
