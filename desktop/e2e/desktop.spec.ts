@@ -63,7 +63,8 @@ test("attach: the app starts hided, shows the shell, and runs the native chords 
   // channel, the pane-chord report, the file manager reveal, Add a project's folder
   // picker, the browser displays' views (issue 155), the Factory's and the
   // agents' system notifications with their click back and withdrawal, and
-  // macOS's notification permission with its settings page.
+  // macOS's notification permission with its settings page, and the restart of
+  // the operator's older Herdr server (PRD herdr-takeover B12).
   expect(
     await page.evaluate(() => ({
       require: typeof (globalThis as { require?: unknown }).require,
@@ -71,7 +72,7 @@ test("attach: the app starts hided, shows the shell, and runs the native chords 
       bridge: Object.keys(window.hideHost ?? {}).sort(),
       kind: window.hideHost?.kind,
     })),
-  ).toEqual({ require: "undefined", process: "undefined", bridge: ["browser", "editorAvailable", "kind", "notificationPermission", "notify", "onCommand", "onNotificationOpen", "onWindowChrome", "openInEditor", "openNotificationSettings", "openPath", "pickFolder", "platform", "probePaths", "reportBadge", "reportBindings", "reportLanguage", "revealPath", "updates", "withdrawNotifications"], kind: "electron" });
+  ).toEqual({ require: "undefined", process: "undefined", bridge: ["browser", "editorAvailable", "kind", "notificationPermission", "notify", "onCommand", "onNotificationOpen", "onWindowChrome", "openInEditor", "openNotificationSettings", "openPath", "pickFolder", "platform", "probePaths", "reportBadge", "reportBindings", "reportLanguage", "restartHerdr", "revealPath", "updates", "withdrawNotifications"], kind: "electron" });
   // sidebar-titlebar-refresh B17, B23: the host says what its frame takes of the shell's top row, traffic lights on macOS only, and the row keeps their room.
   const chrome = await page.evaluate(() => new Promise((resolve) => window.hideHost!.onWindowChrome(resolve)));
   expect(chrome).toEqual({ trafficLights: process.platform === "darwin", fullscreen: false });
