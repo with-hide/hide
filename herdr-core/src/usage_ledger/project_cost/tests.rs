@@ -172,3 +172,33 @@ fn a_project_without_calls_has_no_cost() {
             .is_empty()
     );
 }
+
+/// PRD lane-two-columns B31, D-19: an agent with a priced model and one Hide
+/// has no price for keeps its priced amount, is still named apart for the
+/// rest, and the total says it is a lower bound.
+#[test]
+fn an_agent_with_priced_and_unpriced_models_stays_named_apart() {
+    let calls = vec![
+        call(
+            "opencode",
+            "2026-10-23",
+            "s1",
+            Some("/work/hide"),
+            "sonnet",
+            Some(2_000_000),
+        ),
+        call(
+            "opencode",
+            "2026-10-23",
+            "s1",
+            Some("/work/hide"),
+            "glm",
+            None,
+        ),
+    ];
+    let costs = prepare(&calls, false, &projects(), None, today(), 0).unwrap();
+    let hide = costs.iter().find(|c| c.workspace_id == "hide").unwrap();
+    assert_eq!(hide.micro_usd, 2_000_000);
+    assert_eq!(hide.unpriced_agents, ["opencode"]);
+    assert!(hide.partial, "the unpriced calls leave the total short");
+}

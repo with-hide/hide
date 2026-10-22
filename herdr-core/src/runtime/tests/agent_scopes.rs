@@ -1374,6 +1374,112 @@ fn the_project_to_do_list_follows_the_task_rows_and_the_operator_s_pull_requests
     );
 }
 
+/// PRD lane-two-columns B34: an open ask the session's record holds stands in
+/// 할 일 though no 태스크 card asks: new while the row is unread, 다시 볼 것
+/// once it is read with the number unchanged, and gone once the record
+/// resolves it. A row a Needs You card already shows stays one line.
+#[test]
+fn a_record_s_open_ask_stands_in_the_to_do_list_until_it_is_answered() {
+    let mut runtime = runtime();
+    let mut base = rows().remove(1);
+    base.lineage_parent_pane_id = None;
+    let agent = |id: &str, group: &str, demand: &str, session: &str| {
+        let mut agent = base.clone();
+        agent.pane_id = id.into();
+        agent.group = group.into();
+        agent.demand = demand.into();
+        agent.activity = "stopped".into();
+        agent.agent_kind = "claude".into();
+        agent.session_id = Some(session.into());
+        agent.unread = true;
+        agent
+    };
+    runtime.snapshot.navigator.agents = vec![
+        agent("finished", "seen", "none", "s-finished"),
+        agent("asks", "needs_you", "question", "s-asks"),
+    ];
+    let checkouts: Vec<_> = ["finished", "asks"]
+        .iter()
+        .map(|name| {
+            checkout(
+                "project",
+                name,
+                &format!("/fixture/{name}"),
+                Some(pane(name, &format!("/fixture/{name}"))),
+            )
+        })
+        .collect();
+    runtime.snapshot.navigator.workspaces =
+        vec![workspace("project", "Project", "/fixture", checkouts)];
+    assert!(runtime.refresh_agent_scopes());
+    let device = runtime.snapshot.navigator.workspaces[0].device_id.clone();
+    let summary = |session: &str, asks: usize| crate::links::ledger::SessionWorkSummary {
+        session: crate::links::ledger::SessionIdentity {
+            device_id: device.clone(),
+            agent: "claude".into(),
+            session_id: session.into(),
+        },
+        title: String::new(),
+        fallback_title: String::new(),
+        native_title: None,
+        manual_title: None,
+        cwd: None,
+        ended_at_unix_ms: None,
+        open_missed: 0,
+        subtree_open_missed: 0,
+        missed: Vec::new(),
+        open_asks: asks,
+    };
+    let record = |runtime: &mut Runtime, asks: usize| {
+        let project = crate::links::ProjectLinkSummary {
+            work: vec![summary("s-finished", asks), summary("s-asks", 1)],
+            ..Default::default()
+        };
+        runtime.ingest_link_summaries([("project".to_owned(), project)].into());
+    };
+    let todo = |runtime: &Runtime| {
+        let status = &runtime.snapshot.navigator.workspaces[0].agent_scope.status;
+        assert_eq!(status.todo_total, status.todo.len());
+        status
+            .todo
+            .iter()
+            .map(|todo| {
+                (
+                    todo.kind,
+                    todo.pane_id.clone().unwrap_or_default(),
+                    todo.record,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(todo(&runtime), [("ask", "asks".to_owned(), false)]);
+
+    // The finished row's record asks; the asking row's ask is its card's line.
+    record(&mut runtime, 1);
+    assert_eq!(
+        todo(&runtime),
+        [
+            ("ask", "asks".to_owned(), false),
+            ("ask", "finished".to_owned(), true),
+        ]
+    );
+
+    // Read: down to 다시 볼 것, the number unchanged.
+    runtime.snapshot.navigator.agents[0].unread = false;
+    assert!(runtime.refresh_agent_scopes());
+    assert_eq!(
+        todo(&runtime),
+        [
+            ("ask", "asks".to_owned(), false),
+            ("revisit", "finished".to_owned(), true),
+        ]
+    );
+
+    // Answered: the record resolves the ask and the line goes.
+    record(&mut runtime, 0);
+    assert_eq!(todo(&runtime), [("ask", "asks".to_owned(), false)]);
+}
+
 /// PRD lane-two-columns B30: the Git counts name every worktree of the
 /// project, how far main is behind, and each worktree's mark, changed
 /// before unpushed before removable.
@@ -1437,5 +1543,57 @@ fn the_project_git_counts_mark_each_worktree() {
             ("landed", "removable"),
             ("main", "clean"),
         ]
+    );
+    let marks: Vec<_> = runtime.snapshot.navigator.workspaces[0]
+        .checkouts
+        .iter()
+        .filter_map(|c| c.agent_scope.git_mark.map(|mark| (c.id.as_str(), mark)))
+        .collect();
+    assert_eq!(
+        marks.len(),
+        4,
+        "each checkout carries the mark its dot shows"
+    );
+    assert!(
+        git.dots
+            .iter()
+            .all(|dot| marks.contains(&(dot.checkout_id.as_str(), dot.state)))
+    );
+}
+
+/// PRD lane-two-columns B30: the tile's dots stop at `DOT_LIMIT`, and the
+/// worktree table still finds every worktree's mark on its checkout.
+#[test]
+fn every_worktree_keeps_its_mark_past_the_tile_s_dot_cap() {
+    let mut runtime = runtime();
+    let limit = crate::agent_state::tally::project_status::DOT_LIMIT;
+    let checkouts: Vec<_> = (0..limit + 4)
+        .map(|index| {
+            let mut row = checkout(
+                "project",
+                &format!("w{index}"),
+                &format!("/fixture/w{index}"),
+                None,
+            );
+            row.is_worktree = true;
+            row.worktree = Some(crate::model::WorktreeSnapshot {
+                dirty: true,
+                ..Default::default()
+            });
+            row
+        })
+        .collect();
+    let mut project = workspace("project", "Project", "/fixture", checkouts);
+    project.is_git = true;
+    runtime.snapshot.navigator.workspaces = vec![project];
+    runtime.refresh_agent_scopes();
+    let project = &runtime.snapshot.navigator.workspaces[0];
+    assert_eq!(project.agent_scope.status.git.dots.len(), limit);
+    assert_eq!(project.agent_scope.status.git.worktrees, limit + 4);
+    assert!(
+        project
+            .checkouts
+            .iter()
+            .all(|c| c.agent_scope.git_mark == Some("changed"))
     );
 }

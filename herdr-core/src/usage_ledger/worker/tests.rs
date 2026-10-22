@@ -404,21 +404,76 @@ fn the_report_carries_the_named_projects_costs() {
             roots: vec!["/work/quiet".into()],
         },
     ]);
-    let report = engine.report(true, &projects);
     assert_eq!(
-        report
-            .projects
+        engine.report(true, &Arc::default()).projects,
+        ProjectCosts::default(),
+        "no project named yet: no cost is known, not zero (B33)"
+    );
+    let report = engine.report(true, &projects);
+    let built = report.projects.built.clone().unwrap();
+    assert_eq!(
+        built
             .iter()
             .map(|cost| cost.workspace_id.as_str())
             .collect::<Vec<_>>(),
         ["hide"]
     );
-    let hide = &report.projects[0];
+    let hide = &built[0];
     assert_eq!(hide.days.len(), 7);
     assert!(hide.waiting, "no price table read yet, so no amount");
     let again = engine.report(true, &Arc::new((*projects).clone()));
     assert!(
-        Arc::ptr_eq(&report.projects, &again.projects),
+        Arc::ptr_eq(&built, again.projects.built.as_ref().unwrap()),
         "nothing moved, nothing built"
     );
+}
+
+/// PRD lane-two-columns B31, B33: a build that fails keeps the last costs,
+/// says so, and is tried again after the rebuild wait until it succeeds.
+#[test]
+fn a_failed_cost_build_keeps_the_last_costs_and_is_tried_again() {
+    let home = tempfile::tempdir().unwrap();
+    let source = fixture(home.path(), "cwd");
+    let mut line: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&source).unwrap()).unwrap();
+    line["cwd"] = "/work/hide/src".into();
+    std::fs::write(&source, format!("{line}\n")).unwrap();
+    let node = OwnNode::new(home.path());
+    let mut engine = Engine::open(
+        &home.path().join("ledger.sqlite3"),
+        "physical-device".into(),
+        AiUsageQueue::new(),
+    )
+    .unwrap();
+    finish(&mut engine, &node);
+    let projects = Arc::new(vec![ProjectRoots {
+        workspace_id: "hide".into(),
+        roots: vec!["/work/hide".into()],
+    }]);
+    let first = engine.report(true, &projects).projects;
+    let kept = first.built.clone().unwrap();
+    assert!(!first.failed);
+
+    let past = Instant::now() - COST_REBUILD;
+    engine
+        .store
+        .execute_for_test("ALTER TABLE events RENAME TO events_gone");
+    engine.costs.dirty = true;
+    engine.costs.built = Some(past);
+    let failed = engine.report(true, &projects).projects;
+    assert!(failed.failed);
+    assert!(Arc::ptr_eq(failed.built.as_ref().unwrap(), &kept));
+    assert!(engine.costs.dirty, "a failed build stays due");
+    assert!(
+        engine.report(true, &projects).projects.failed,
+        "not tried again before the wait"
+    );
+
+    engine
+        .store
+        .execute_for_test("ALTER TABLE events_gone RENAME TO events");
+    engine.costs.built = Some(past);
+    let again = engine.report(true, &projects).projects;
+    assert!(!again.failed);
+    assert_eq!(again.built.unwrap().len(), 1);
 }

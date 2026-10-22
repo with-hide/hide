@@ -2,6 +2,7 @@ import { SettingsIcon, TriangleAlertIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import type { ProjectStatus, ProjectTodo } from "./agentScope";
+import { agentProductName } from "./agentAdapters";
 import { markWords, rowLine } from "./agentRow";
 import { PrMark } from "./components/pr-mark";
 import { StatusMark } from "./components/status-mark";
@@ -12,14 +13,14 @@ import { summariesEnabled } from "./hideAi";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { memoryCards, memoryTime } from "./memoryList";
+import { memoryTime } from "./memoryList";
 import { MemoryTab } from "./MemoryTab";
 import { ageWords } from "./overviewLens";
 import { agentsByPane, allAgents } from "./paneAgents";
 import { ReasonLine } from "./prReason";
 import { hasPullRequests, prListModel } from "./prWork";
 import { projectRepository, settingsTarget } from "./projectSettings";
-import { agentShares, costPrefix, dayHeights, frontProject, missedCount, projectCost, RECENT_CARDS, todoView, usd } from "./projectStatus";
+import { agentShares, costPrefix, dayHeights, frontProject, missedCount, projectCost, recentCards, todoView, usd } from "./projectStatus";
 import { machineName } from "./screenMachine";
 import { sameDetailItem, type AgentRow, type DetailItem, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
@@ -247,22 +248,25 @@ function CostTile({ project, actions }: { project: Workspace; actions: Actions }
   const item: DetailItem = { kind: "cost", workspace_id: project.id };
   const open = useDetailOpen(item);
   const local = useShellStore((s) => project.device_id === localDeviceId(s.rest));
-  const usage = useShellStore((s) => s.usage);
-  const cost = projectCost(usage?.nodes[0]?.projects, project.id);
+  const node = useShellStore((s) => s.usage?.nodes[0]);
+  const read = useMemo(() => projectCost(node, project.id), [node, project.id]);
   if (!local) {
     return <Tile name={t("projectTool.tile.cost")} kind="cost" target="view" disabled value={<span className="text-caption font-normal text-muted-foreground">{t("projectTool.cost.otherDevice")}</span>} onPress={() => {}} />;
   }
+  const cost = read.state === "ready" ? read.cost : null;
   const heights = cost ? dayHeights(cost.days) : [];
+  const value = read.state === "pending" ? null
+    : read.state === "failed" ? <span role="img" aria-label={t("projectTool.cost.failed")} className="text-muted-foreground" data-tile-cost-failed="true">–</span>
+    : <span data-tile-cost={cost?.micro_usd ?? 0}>{cost && cost.micro_usd > 0 ? `${costPrefix(cost)} ${usd(cost.micro_usd, language)}` : usd(0, language)}</span>;
   return (
-    <Tile name={t("projectTool.tile.cost")} kind="cost" target="view" open={open} onPress={() => actions.toggleDetailItem(item)}
-      value={usage === null ? null : <span data-tile-cost={cost?.micro_usd ?? 0}>{cost && cost.micro_usd > 0 ? `${costPrefix(cost)} ${usd(cost.micro_usd, language)}` : usd(0, language)}</span>}>
+    <Tile name={t("projectTool.tile.cost")} kind="cost" target="view" open={open} onPress={() => actions.toggleDetailItem(item)} value={value}>
       {cost ? (
         <>
           <span aria-hidden="true" className="flex h-(--size-control-sm) items-end gap-px">
             {heights.map((height, index) => <span key={cost.days[index]!.date} className="flex-1 rounded-t-xs bg-primary" style={{ height: `${Math.max(height * 100, height > 0 ? 8 : 2)}%`, opacity: height > 0 ? 1 : 0.3 }} data-cost-day={cost.days[index]!.date} />)}
           </span>
-          <span className="truncate">{agentShares(cost).map((row) => `${row.agent} ${Math.round(row.share * 100)}%`).join(" · ")}</span>
-          {cost.unpriced_agents.length > 0 ? <span className="truncate" data-tile-cost-unpriced={cost.unpriced_agents.length}>{t("projectTool.cost.unpriced", { agents: cost.unpriced_agents.join(", ") })}</span> : null}
+          <span className="truncate">{agentShares(cost).map((row) => `${agentProductName(row.agent)} ${Math.round(row.share * 100)}%`).join(" · ")}</span>
+          {cost.unpriced_agents.length > 0 ? <span className="truncate" data-tile-cost-unpriced={cost.unpriced_agents.length}>{t("projectTool.cost.unpriced", { agents: cost.unpriced_agents.map((agent) => agentProductName(agent)).join(", ") })}</span> : null}
         </>
       ) : null}
     </Tile>
@@ -305,6 +309,10 @@ function TodoList({ project, status, actions }: { project: Workspace; status: Pr
         <button type="button" className="self-start rounded-xs px-xs text-caption text-subtle-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={() => setOpen(true)} data-project-todo-more={view.more}>
           {t("projectTool.todo.more", { count: view.more })}
         </button>
+      ) : view.beyond > 0 ? (
+        <button type="button" className="self-start rounded-xs px-xs text-caption text-subtle-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.showProjectInSidebar("tasks", project.device_id, project.id)} data-project-todo-beyond={view.beyond}>
+          {t("projectTool.todo.beyond", { count: view.beyond })}
+        </button>
       ) : null}
     </section>
   );
@@ -331,7 +339,7 @@ function AgentTodo({ row, agent, actions }: { row: ProjectTodo; agent: AgentRow 
   const { t } = useInterfaceTranslation();
   if (row.kind === "pr") return null;
   const words = row.kind === "revisit"
-    ? t(agent?.revisit?.read_ask ? "projectTool.todo.readAsk" : "projectTool.todo.starred")
+    ? t(row.record || agent?.revisit?.read_ask ? "projectTool.todo.readAsk" : "projectTool.todo.starred")
     : (agent ? (rowLine(agent)?.text ?? markWords(t, agent)) : t("projectTool.todo.ask"));
   return (
     <li className="min-w-0" data-project-todo-row={row.kind} data-todo-pane={row.pane_id}>
@@ -374,7 +382,7 @@ function RecentMemory({ project, actions }: { project: Workspace; actions: Actio
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const memory = useShellStore((s) => (s.memory?.project?.workspace_id === project.id ? s.memory.project : null));
-  const cards = useMemo(() => (memory && !memory.search ? memoryCards(memory) : []).slice().sort((a, b) => b.updated_at_unix_ms - a.updated_at_unix_ms).slice(0, RECENT_CARDS), [memory]);
+  const cards = useMemo(() => (memory ? recentCards(memory) : []), [memory]);
   if (!memory || cards.length === 0) return null;
   const toMemory = () => useUiStore.getState().setProjectTab("memory");
   return (

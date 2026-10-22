@@ -44,7 +44,7 @@ fn shared<S: Serializer, T: Serialize>(value: &Arc<T>, serializer: S) -> Result<
 pub(crate) struct Publication {
     pub history: Option<History>,
     pub agents: Vec<(String, Cell<Consumption>)>,
-    pub projects: Arc<Vec<crate::usage_ledger::project_cost::ProjectCost>>,
+    pub projects: crate::usage_ledger::project_cost::ProjectCosts,
 }
 
 impl Publication {

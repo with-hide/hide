@@ -5,7 +5,8 @@ export type AgentRef = { pane_id: string; occurrence: number };
 
 
 /** One row of a project's 할 일 (B34, B35): an agent by its pane, or a pull request by its number. */
-export type ProjectTodo = { kind: "ask" | "revisit"; pane_id: string } | { kind: "pr"; number: number };
+/** `record`: an open ask the session's record holds, which no 태스크 card shows (PRD lane-two-columns B34). */
+export type ProjectTodo = { kind: "ask" | "revisit"; pane_id: string; record?: true } | { kind: "pr"; number: number };
 
 /** A project's 현황 tiles' counts and its 할 일 as the core derived them (`agent_state/tally/project_status.rs`). */
 export type ProjectStatus = {
@@ -39,6 +40,8 @@ export type AgentScope = {
   prs: PrBoard;
   /** A project's 현황 (PRD lane-two-columns D-15, D-16), derived by the core with its tasks and PRs; absent from a checkout's or a device's scope. */
   status?: ProjectStatus;
+  /** A Git checkout's own mark, the rule its project's dots use, uncapped (PRD lane-two-columns B30); absent elsewhere and while its worktree is unread. */
+  git_mark?: ProjectStatus["git"]["dots"][number]["state"];
   rows: AgentRef[];
   total: number;
   overview_total: number;

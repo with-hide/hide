@@ -104,9 +104,12 @@ impl Runtime {
 
     pub(crate) fn ingest_ledger(&mut self, value: Publication) -> bool {
         let own = &mut self.snapshot.usage.nodes[0];
-        let mut changed = own.history != value.history || own.projects != value.projects;
+        let mut changed = own.history != value.history
+            || own.projects != value.projects.built
+            || own.projects_failed != value.projects.failed;
         own.history = value.history;
-        own.projects = value.projects;
+        own.projects = value.projects.built;
+        own.projects_failed = value.projects.failed;
         for (name, consumption) in value.agents {
             if let Some(row) = own.agents.iter_mut().find(|row| row.agent == name) {
                 changed |= row.consumption != consumption;

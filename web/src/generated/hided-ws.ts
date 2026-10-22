@@ -210,9 +210,13 @@ export interface NodeUsage {
   agents: AgentUsage[];
   history: UsageHistory | null;
   /**
-   * Each of the node's projects' last seven days of cost (PRD lane-two-columns B31), absent while none ran a priced call; amounts are millionths of a dollar.
+   * Each of the node's projects' last seven days of cost (PRD lane-two-columns B31): absent until the first build succeeds, so a cost not read yet is not drawn as zero (B33); a project that ran no priced call is not listed. Amounts are millionths of a dollar.
    */
   projects?: ProjectCost[];
+  /**
+   * The latest build of projects failed; the last built list stays. Absent otherwise.
+   */
+  projects_failed?: boolean;
 }
 export interface AgentUsage {
   agent: string;

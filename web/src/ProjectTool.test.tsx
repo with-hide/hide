@@ -13,6 +13,8 @@ import { ToolRail } from "./Tools";
 import { useUiStore } from "./ui";
 import { emptyScope } from "../test/legacyAgentScope";
 import type { DispatchFn } from "./ws";
+import type { UsageSnapshot } from "./generated/hided-ws";
+import { recentCards } from "./projectStatus";
 
 // The Project tool (PRD lane-two-columns B26-B39): the front checkout `c`
 // belongs to project `p`, whose scope carries the core's 현황.
@@ -66,10 +68,10 @@ describe("the Project tool", () => {
     vi.unstubAllGlobals();
   });
 
-  async function render(rest: SnapshotRest, project: ProjectMemory | null = null) {
+  async function render(rest: SnapshotRest, project: ProjectMemory | null = null, usage: UsageSnapshot | null = null) {
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
-      useShellStore.setState({ connection: "live", rest, memory: { project }, usage: null });
+      useShellStore.setState({ connection: "live", rest, memory: { project }, usage });
       useUiStore.setState({ screen: { kind: "workspace" }, laneShown: true, projectTab: "status", sidebarProject: null, drawnLane: { mode: "docked", view: rest.ui_state?.detail?.shown ? "detail" : "none", tool: "project", stacked: false } });
       root.render(<TooltipProvider><ToolRail actions={actions} /><ProjectTool actions={actions} /></TooltipProvider>);
     });
@@ -95,6 +97,18 @@ describe("the Project tool", () => {
     expect(container.querySelector('[data-project-tile="git"] [data-tile-value]')?.getAttribute("data-tile-value")).toBe("pending");
     expect(container.querySelector('[data-project-tile="cost"] [data-tile-value]')?.getAttribute("data-tile-value")).toBe("pending");
     expect(container.querySelector('[data-project-tile="sessions"] [data-tile-value]')?.textContent).toBe("0");
+  });
+
+  it("draws no cost before the core's first build, 0 only after a read, and a dash when no build succeeded (B31, B33)", async () => {
+    const node = (extra: object): UsageSnapshot => ({ nodes: [{ node: "local", agents: [], history: null, ...extra }] });
+    const tile = () => container.querySelector('[data-project-tile="cost"] [data-tile-value]');
+    // The usage section a fresh snapshot carries: no projects key yet.
+    await render(snapshot(status()), null, node({}));
+    expect(tile()?.getAttribute("data-tile-value")).toBe("pending");
+    await render(snapshot(status()), null, node({ projects: [] }));
+    expect(container.querySelector("[data-tile-cost]")?.getAttribute("data-tile-cost")).toBe("0");
+    await render(snapshot(status()), null, node({ projects_failed: true }));
+    expect(container.querySelector("[data-tile-cost-failed]")).not.toBeNull();
   });
 
   it("sends the sessions and PRs tiles to the sidebar narrowed to the project (B27, B29)", async () => {
@@ -134,9 +148,22 @@ describe("the 할 일 cut (B37)", () => {
     expect([all.prs.length, all.more]).toEqual([4, 0]);
   });
 
-  it("counts rows the core left off past its cap", () => {
-    const status: ProjectStatus = { todo: rows(3), todo_total: 70, prs: { open: 0, mergeable: 0, failed: 0, review: 0, checking: 0 }, git: { worktrees: 0, changed: 0, unpushed: 0, removable: 0, dots: [] } };
-    expect(todoView(status, false).more).toBe(67);
+  it("counts only sent rows under +N 더, and the rows past the core's cap apart", () => {
+    const status: ProjectStatus = { todo: rows(8), todo_total: 70, prs: { open: 0, mergeable: 0, failed: 0, review: 0, checking: 0 }, git: { worktrees: 0, changed: 0, unpushed: 0, removable: 0, dots: [] } };
+    expect([todoView(status, false).more, todoView(status, false).beyond]).toEqual([3, 62]);
+    expect([todoView(status, true).more, todoView(status, true).beyond]).toEqual([0, 62]);
+  });
+});
+
+describe("최근 기억 (B39)", () => {
+  it("keeps naming the newest cards while a 기억 search narrows that tab", () => {
+    const card = (number: number, updated: number) => ({ number, title: `card ${number}`, kind: "rule", human_source_count: 1, provided_session_count: 0, pull_count: 0, updated_at_unix_ms: updated, verifying: false, promotion: null });
+    const project = {
+      workspace_id: "p", unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0, evicted_through_unix_ms: null,
+      rows: [card(1, 10), card(2, 30), card(3, 20)], questions: [], analysis: "idle", consent_required: false, usable_cards: 3, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null, expanded: null,
+      search: { query: "x", numbers: [1] },
+    } as unknown as ProjectMemory;
+    expect(recentCards(project).map((row) => row.number)).toEqual([2, 3, 1]);
   });
 });
 

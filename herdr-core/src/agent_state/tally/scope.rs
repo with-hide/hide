@@ -128,6 +128,10 @@ pub struct Scope {
     /// A project's 현황 (PRD lane-two-columns B27-B38); absent elsewhere.
     #[serde(skip_serializing_if = "super::project_status::ProjectStatus::is_absent")]
     pub status: super::project_status::ProjectStatus,
+    /// A Git checkout's mark, the one its project's dots use (B30); absent
+    /// on a project's or device's scope and while the worktree is unread.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_mark: Option<&'static str>,
     pub raised: Vec<Raised>,
     pub owners: BTreeMap<String, String>,
     pub badge_total: usize,
@@ -520,6 +524,9 @@ struct PlaceInput {
     checkouts: Vec<CheckoutInput>,
     /// What the Project tool's Git counts read (B30).
     git_facts: Vec<GitInput>,
+    /// The sessions whose record holds an open ask, which the Project
+    /// tool's 할 일 reads (B34).
+    record_asks: Vec<super::project_status::RecordAsk>,
 }
 
 /// A checkout's worktree (missing, main, dirty, behind its upstream), its
@@ -663,6 +670,11 @@ fn device_rows(snapshot: &crate::model::Snapshot) -> Vec<DeviceRows<'_>> {
 impl Cache {
     pub(crate) fn refresh(&mut self, snapshot: &mut crate::model::Snapshot, now: u64) -> bool {
         let devices = device_rows(snapshot);
+        let record_asks = super::project_status::record_asks(
+            snapshot.link_summaries.as_ref(),
+            devices[0].id,
+            &devices[0].projects,
+        );
         let input = Input {
             clock_minute: now / 60_000,
             devices: devices
@@ -724,6 +736,10 @@ impl Cache {
                             )
                         })
                         .collect(),
+                    record_asks: record_asks
+                        .get(&(p.device_id.clone(), p.id.clone()))
+                        .cloned()
+                        .unwrap_or_default(),
                     git_facts: p
                         .checkouts
                         .iter()
@@ -877,8 +893,15 @@ impl Cache {
                 projected.tasks = tasks
                     .remove(&(project.device_id.clone(), project.id.clone()))
                     .unwrap_or_default();
-                projected.status =
-                    super::project_status::project(project, &projected.tasks, &projected.prs);
+                projected.status = super::project_status::project(
+                    project,
+                    &projected.tasks,
+                    &projected.prs,
+                    record_asks
+                        .get(&(project.device_id.clone(), project.id.clone()))
+                        .map_or(&[], Vec::as_slice),
+                    &device.agents,
+                );
                 let key = (project.device_id.clone(), project.id.clone());
                 let over = projected.status.todo_total > super::project_status::TODO_LIMIT;
                 if over && !self.todo_over.contains(&key) {
@@ -928,6 +951,7 @@ impl Cache {
                         .get_mut(&(project.device_id.clone(), checkout.id.clone()))
                         .expect("checkout scope just inserted");
                     value.has_working = checkout.agent_summary.working > 0;
+                    value.git_mark = super::project_status::checkout_mark(project, checkout);
                     value.badge_total = checkout.agent_summary.needs_you
                         + checkout.agent_summary.done
                         + checkout.agent_summary.working

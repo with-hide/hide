@@ -15,25 +15,23 @@ pub struct NodeUsage {
     pub agents: Vec<AgentUsage>,
     pub history: Option<History>,
     /// Each of the node's projects' last seven days (PRD lane-two-columns
-    /// B31); left off the wire while there are none.
+    /// B31): absent until the first build, so a cost not read yet is not
+    /// drawn as zero (B33); a project that ran no priced call is not listed.
     #[serde(
-        skip_serializing_if = "projects_empty",
+        skip_serializing_if = "Option::is_none",
         serialize_with = "shared_projects"
     )]
-    pub projects: std::sync::Arc<Vec<crate::usage_ledger::project_cost::ProjectCost>>,
-}
-
-fn projects_empty(
-    value: &std::sync::Arc<Vec<crate::usage_ledger::project_cost::ProjectCost>>,
-) -> bool {
-    value.is_empty()
+    pub projects: Option<std::sync::Arc<Vec<crate::usage_ledger::project_cost::ProjectCost>>>,
+    /// The latest build of `projects` failed; the last one stays.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub projects_failed: bool,
 }
 
 fn shared_projects<S: serde::Serializer>(
-    value: &std::sync::Arc<Vec<crate::usage_ledger::project_cost::ProjectCost>>,
+    value: &Option<std::sync::Arc<Vec<crate::usage_ledger::project_cost::ProjectCost>>>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    value.as_slice().serialize(serializer)
+    value.as_deref().map(Vec::as_slice).serialize(serializer)
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AgentUsage {
@@ -133,7 +131,8 @@ impl UsageSnapshot {
                 node: node.into(),
                 agents: AgentUsage::initial_rows(),
                 history: None,
-                projects: Default::default(),
+                projects: None,
+                projects_failed: false,
             }],
         }
     }

@@ -34,6 +34,8 @@ function Missing() {
 }
 
 type DotState = ProjectStatus["git"]["dots"][number]["state"];
+/** Changed first, then not pushed, then clean, as the tile's dots stand. */
+const MARK_ORDER: readonly DotState[] = ["changed", "unpushed", "removable", "clean"];
 const DOT_TONES: Record<DotState, string> = { changed: "bg-warning", unpushed: "bg-agent-working", removable: "bg-pr-merged", clean: "bg-border" };
 
 /**
@@ -58,11 +60,11 @@ export function WorktreesView({ workspaceId, actions }: { workspaceId: string; a
     actions.watchDisk([workspaceId]);
     return () => actions.watchDisk([]);
   }, [actions, workspaceId, measures, overviewOpen]);
-  const states = useMemo(() => new Map((project?.agent_scope.status?.git.dots ?? []).map((dot) => [dot.checkout_id, dot.state])), [project]);
   if (!project) return <Missing />;
-  const rows = project.checkouts.filter((checkout) => states.has(checkout.id));
-  const kept = rows.filter((checkout) => states.get(checkout.id) !== "removable");
-  const removable = rows.filter((checkout) => states.get(checkout.id) === "removable");
+  // Every worktree of the catalog by its own mark, not the tile's capped dots.
+  const rows = project.checkouts.filter((checkout) => checkout.agent_scope.git_mark !== undefined);
+  const kept = rows.filter((checkout) => checkout.agent_scope.git_mark !== "removable").sort((a, b) => MARK_ORDER.indexOf(a.agent_scope.git_mark!) - MARK_ORDER.indexOf(b.agent_scope.git_mark!));
+  const removable = rows.filter((checkout) => checkout.agent_scope.git_mark === "removable");
   const lines = measures ? layerLines(project, t) : null;
   const size = entranceBytes(project);
   return (
@@ -92,7 +94,7 @@ export function WorktreesView({ workspaceId, actions }: { workspaceId: string; a
       ) : null}
       {rows.length === 0 ? <p className="text-muted-foreground">{t("projectTool.worktrees.empty")}</p> : (
         <ul className="flex min-w-0 flex-col" data-worktrees-rows={kept.length}>
-          {kept.map((checkout) => <WorktreeRow key={checkout.id} checkout={checkout} state={states.get(checkout.id)!} />)}
+          {kept.map((checkout) => <WorktreeRow key={checkout.id} checkout={checkout} state={checkout.agent_scope.git_mark!} />)}
         </ul>
       )}
       {removable.length > 0 ? (
@@ -136,12 +138,14 @@ export function ProjectCostView({ workspaceId, actions }: { workspaceId: string;
   const language = requireInterfaceLanguage(i18n.language);
   const project = useProject(workspaceId);
   const local = useShellStore((s) => project?.device_id === localDeviceId(s.rest));
-  const usage = useShellStore((s) => s.usage);
+  const node = useShellStore((s) => s.usage?.nodes[0]);
+  const read = useMemo(() => projectCost(node, workspaceId), [node, workspaceId]);
   const agents = useShellStore((s) => allAgents(s.agents, s.rest?.status?.remote));
   if (!project) return <Missing />;
   if (!local) return <p className="px-md py-sm text-caption text-muted-foreground">{t("projectTool.cost.otherDevice")}</p>;
-  if (usage === null) return <div role="status" className="m-md h-(--size-control-lg) rounded-sm bg-muted" data-cost-view="pending" />;
-  const cost = projectCost(usage.nodes[0]?.projects, project.id);
+  if (read.state === "pending") return <div role="status" aria-label={t("projectTool.cost.reading")} className="m-md h-(--size-control-lg) rounded-sm bg-muted" data-cost-view="pending" />;
+  if (read.state === "failed") return <p className="px-md py-sm text-caption text-muted-foreground" data-cost-view="failed">{t("projectTool.cost.failed")}</p>;
+  const cost = read.cost;
   if (!cost) return <p className="px-md py-sm text-caption text-muted-foreground" data-cost-view="empty">{t("projectTool.cost.empty")}</p>;
   const heights = dayHeights(cost.days);
   const sessionName = (agent: string, sessionId: string) => agents.find((row) => row.session_id === sessionId)?.identity_label ?? t("projectTool.cost.session", { agent: agentProductName(agent) });
@@ -150,7 +154,7 @@ export function ProjectCostView({ workspaceId, actions }: { workspaceId: string;
       <section className="space-y-xxs">
         <p className="text-headline font-semibold tabular-nums text-foreground" data-cost-total={cost.micro_usd}>{costPrefix(cost)} {usd(cost.micro_usd, language)}</p>
         <p className="text-micro text-muted-foreground">
-          {[t("projectTool.cost.apiEquivalent"), cost.partial ? t("projectTool.cost.partial") : null, cost.limited ? t("projectTool.cost.limited") : null, cost.stale ? t("usage.history.stalePrice") : null, cost.waiting ? t("usage.history.waitingPrice") : null].filter(Boolean).join(" · ")}
+          {[t("projectTool.cost.apiEquivalent"), cost.partial ? t("projectTool.cost.partial") : null, cost.limited ? t("projectTool.cost.limited") : null, cost.stale ? t("usage.history.stalePrice") : null, cost.waiting ? t("usage.history.waitingPrice") : null, read.failed ? t("projectTool.cost.failedKept") : null].filter(Boolean).join(" · ")}
         </p>
         {cost.unpriced_agents.length > 0 ? <p className="text-micro text-muted-foreground" data-cost-unpriced={cost.unpriced_agents.length}>{t("projectTool.cost.unpriced", { agents: cost.unpriced_agents.map((agent) => agentProductName(agent)).join(", ") })}</p> : null}
       </section>

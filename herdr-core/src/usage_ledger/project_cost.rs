@@ -3,7 +3,7 @@
 //! whose session ran inside one of the project's checkouts, priced the way a
 //! day is (`prices::cost`). The daily totals and the Overview's Usage are
 //! untouched; a call outside every checkout counts for no project.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hide_session::usage::Event;
 use jiff::{ToSpan, civil::Date};
@@ -31,6 +31,16 @@ pub struct ProjectRoots {
     pub roots: Vec<String>,
 }
 
+/// The projects' costs as a usage frame carries them (B31, B33): `built` is
+/// absent until a build succeeded, so a tile tells a cost not read yet from
+/// a read that found none; `failed` says the latest build failed, the last
+/// built list kept.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ProjectCosts {
+    pub built: Option<std::sync::Arc<Vec<ProjectCost>>>,
+    pub failed: bool,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct ProjectCost {
     pub workspace_id: String,
@@ -42,10 +52,11 @@ pub struct ProjectCost {
     pub sessions: Vec<SessionCost>,
     /// Each priced agent's amount, largest first.
     pub agents: Vec<AgentCost>,
-    /// Agents that ran here and that Hide has no price for (B31): named
-    /// apart and in no amount.
+    /// Agents that ran a call here Hide has no price for (B31): named apart,
+    /// those calls in no amount, the agent's priced ones still counted.
     pub unpriced_agents: Vec<String>,
-    /// Some calls had a price missing: the amount is a lower bound.
+    /// Some calls had a price missing, also from an agent whose other calls
+    /// are priced: the amount is a lower bound.
     pub partial: bool,
     /// The public price table has not been read yet.
     pub waiting: bool,
@@ -172,14 +183,15 @@ pub fn prepare(
                 .collect::<Result<_, _>>()?;
             let mut models: BTreeMap<(String, String), u64> = BTreeMap::new();
             let mut agents: BTreeMap<String, u64> = BTreeMap::new();
-            let mut unpriced: BTreeMap<String, bool> = BTreeMap::new();
+            let mut unpriced: BTreeSet<String> = BTreeSet::new();
             for ((agent, day, model), totals) in &groups.days {
                 let priced = price(agent, day, model, totals, table, now)?;
                 cost.partial |= priced.unpriced && priced.micro_usd > 0;
                 cost.waiting |= priced.waiting;
                 cost.stale |= priced.stale;
-                let held = unpriced.entry(agent.clone()).or_insert(true);
-                *held &= priced.unpriced && priced.micro_usd == 0;
+                if priced.unpriced {
+                    unpriced.insert(agent.clone());
+                }
                 if priced.micro_usd == 0 {
                     continue;
                 }
@@ -217,14 +229,15 @@ pub fn prepare(
                     micro_usd,
                 }
             });
+            let agents_priced: BTreeSet<String> = agents.keys().cloned().collect();
             cost.agents = largest(agents, usize::MAX, |agent, micro_usd| AgentCost {
                 agent,
                 micro_usd,
             });
-            cost.unpriced_agents = unpriced
-                .into_iter()
-                .filter_map(|(agent, unpriced)| unpriced.then_some(agent))
-                .collect();
+            // An agent with a priced amount and an unpriced call leaves the
+            // total short, as a partly priced call does.
+            cost.partial |= unpriced.iter().any(|agent| agents_priced.contains(agent));
+            cost.unpriced_agents = unpriced.into_iter().collect();
             Ok(cost)
         })
         .collect()

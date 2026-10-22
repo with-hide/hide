@@ -558,6 +558,12 @@ impl Store {
         Ok(out)
     }
 
+    /// Runs `sql` on the ledger, for a test that breaks or mends a table.
+    #[cfg(test)]
+    pub(crate) fn execute_for_test(&self, sql: &str) {
+        self.connection.execute_batch(sql).unwrap();
+    }
+
     /// The own node's calls made at `since_ms` or later, newest first, for
     /// the projects' costs (PRD lane-two-columns B31), and whether more than
     /// `limit` were there. It reads only the 45-day `events` table by its
