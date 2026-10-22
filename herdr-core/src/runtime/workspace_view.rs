@@ -188,7 +188,7 @@ pub(super) struct WorkspaceViewPayload {
     /// the viewing column.
     #[serde(default)]
     pub(super) documents: Option<bool>,
-    /// `memory`, `prs`, `explorer` or `changes` shows that tool in the tool
+    /// `project`, `explorer` or `changes` shows that tool in the tool
     /// column, a call the page shows even when the tool was already there;
     /// `null` closes the tool column alone (B14). The viewing column is
     /// left as it is.
@@ -197,9 +197,6 @@ pub(super) struct WorkspaceViewPayload {
     /// Whether the lane is pinned beside Agent Views (right-lane D-03).
     #[serde(default)]
     pub(super) pinned: Option<bool>,
-    /// Whether the PRs tool's scope is `<checkout> only`.
-    #[serde(default)]
-    pub(super) prs_only_checkout: Option<bool>,
     /// The viewing column's width with the documents, in CSS pixels.
     #[serde(default)]
     pub(super) document_width: Option<u32>,
@@ -209,7 +206,7 @@ pub(super) struct WorkspaceViewPayload {
     /// The tool column's width with the Explorer, in CSS pixels.
     #[serde(default)]
     pub(super) explorer_width: Option<u32>,
-    /// The tool column's width with Memory, PRs or Changes, in CSS pixels.
+    /// The tool column's width with the Project or Changes, in CSS pixels.
     #[serde(default)]
     pub(super) panel_width: Option<u32>,
     /// An optional opaque identity for a width intent, at most 128 bytes.
@@ -681,7 +678,7 @@ impl Runtime {
         if let Some(store) = self.workspace_views.as_mut() {
             let entry = store.views.entry(&key.0, &key.1);
             let before = (entry.open, entry.tool);
-            entry.show_tool(Tool::Memory);
+            entry.show_tool(Tool::Project);
             let changed = before != (entry.open, entry.tool);
             store.call_lane(key, LaneCallSide::Tool);
             if changed {
@@ -772,7 +769,7 @@ impl Runtime {
                     self.set_error(
                         "workspace_view.unknown_tool",
                         format!(
-                            "{value} is not a lane tool; expected memory, prs, explorer or changes"
+                            "{value} is not a lane tool; expected project, explorer or changes"
                         ),
                         false,
                     );
@@ -813,9 +810,6 @@ impl Runtime {
             Some(true) => entry.show_documents(),
             Some(false) => entry.documents = false,
             None => {}
-        }
-        if let Some(only) = payload.prs_only_checkout {
-            entry.prs.only_checkout = only;
         }
         if let Some(pinned) = payload.pinned {
             entry.pinned = pinned;
@@ -1245,7 +1239,6 @@ impl Runtime {
                 open: view.open,
                 documents: view.documents,
                 tool: view.tool,
-                prs: view.prs,
                 pinned: view.pinned,
                 document_width: view.document_width,
                 detail_width: view.detail_width,
@@ -1278,10 +1271,8 @@ impl Runtime {
             let (visible, section) = match view.tool.filter(|_| view.open) {
                 Some(Tool::Explorer) => (true, RightPanelSection::Explorer),
                 Some(Tool::Changes) => (true, RightPanelSection::Changes),
-                // The section name is the Sessions tool's; it gates the
-                // running-check re-read the PRs tool needs too.
-                Some(Tool::Prs) => (true, RightPanelSection::AgentSessions),
-                Some(Tool::Memory) => (true, RightPanelSection::Memory),
+                // The Project tool shows its Memory, which no reader gates on.
+                Some(Tool::Project) => (true, RightPanelSection::Memory),
                 None => (false, self.snapshot.ui_state.right_panel_section),
             };
             self.snapshot.ui_state.right_panel_visible = visible;

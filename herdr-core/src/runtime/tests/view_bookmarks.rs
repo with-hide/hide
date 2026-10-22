@@ -368,7 +368,7 @@ fn every_tab_sees_the_checkouts_one_list_and_the_lane_stays_the_workspaces() {
     open(&mut runtime, &checkout, &directory, "b.md");
     view_event(
         &mut runtime,
-        serde_json::json!({"tool": "prs", "pinned": true, "document_width": 444}),
+        serde_json::json!({"tool": "project", "pinned": true, "document_width": 444}),
     );
     focus_tab(&mut runtime, &checkout, &directory, TABS[0]);
     assert_eq!(strip(&runtime, &directory), ["a.md", "b.md"]);
@@ -380,7 +380,7 @@ fn every_tab_sees_the_checkouts_one_list_and_the_lane_stays_the_workspaces() {
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(
         (view.tool, view.pinned, view.document_width),
-        (Some(crate::workspace_views::Tool::Prs), true, Some(444))
+        (Some(crate::workspace_views::Tool::Project), true, Some(444))
     );
 }
 
