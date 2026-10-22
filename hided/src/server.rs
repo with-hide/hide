@@ -1391,6 +1391,11 @@ enum ScopedRequest {
     /// `hide agent catalog`: what a machine's agents take, read from the
     /// core's own reports.
     AgentCatalog(Option<String>),
+    /// `hide ps [--all]`: the live panes and agents, read from the core's
+    /// own state.
+    Ps {
+        all: bool,
+    },
 }
 
 impl ScopedRequest {
@@ -1405,6 +1410,7 @@ impl ScopedRequest {
                 | Self::MemoryHook(..)
                 | Self::Mission(..)
                 | Self::AgentCatalog(..)
+                | Self::Ps { .. }
         )
     }
 }
@@ -1509,6 +1515,13 @@ async fn scoped_client_loop(
                             Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => {
                                 Some(ScopedRequest::AgentCatalog(Some(id.clone())))
                             }
+                            _ => None,
+                        },
+                        Some("ps") => match value.get("all") {
+                            None | Some(Value::Bool(false)) => {
+                                Some(ScopedRequest::Ps { all: false })
+                            }
+                            Some(Value::Bool(true)) => Some(ScopedRequest::Ps { all: true }),
                             _ => None,
                         },
                         _ => None,
@@ -1630,6 +1643,13 @@ async fn scoped_client_loop(
                                 }
                                 ScopedRequest::AgentCatalog(machine) => {
                                     core.agent_catalog(&cap.context.device_id, machine)
+                                        .map_err(|code| {
+                                            let next = crate::server::delivery_next_action(&code);
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::Ps { all } => {
+                                    core.ps(&cap.context.device_id, &cap.pane_id, all)
                                         .map_err(|code| {
                                             let next = crate::server::delivery_next_action(&code);
                                             (code, next)

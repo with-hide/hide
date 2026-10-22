@@ -1,5 +1,5 @@
-//! The contract of the commands other tools call (`hide agent`, `request`,
-//! `inbox`, `watch`, `mission`): each command's words, arguments and options, where its
+//! The contract of the commands other tools call (`hide agent`, `ps`,
+//! `request`, `inbox`, `watch`, `mission`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -18,7 +18,7 @@ use serde_json::{Map, Value, json};
 pub const FORMAT: u32 = 1;
 
 /// The topics whose every command is in the table.
-const TOPICS: &[&str] = &["agent", "request", "inbox", "watch", "mission"];
+const TOPICS: &[&str] = &["agent", "ps", "request", "inbox", "watch", "mission"];
 
 /// What a value must be for the command's parser to take it.
 #[derive(Clone, Copy)]
@@ -272,6 +272,16 @@ pub const COMMANDS: &[Spec] = &[
             "session_too_long",
             "codex_capability_unknown",
         ],
+    },
+    // Without --json it prints the same answer as a tree for a person.
+    Spec {
+        words: &["ps"],
+        arguments: &[],
+        repeats: None,
+        options: &[switch("--all"), switch("--here"), switch("--json")],
+        rest: None,
+        answers: &["ps"],
+        refusals: &["here_unavailable", "ps_answer_unreadable"],
     },
     spec(
         &["request", "send"],
@@ -613,6 +623,7 @@ fn body() -> Value {
         // command fails (a non-zero exit), the failure's code.
         "envelopes": {
             "agent": {"ok": "ok", "answer": "value", "code": "error.code"},
+            "ps": {"ok": "ok", "answer": "value", "code": "error.code"},
             "request": {"ok": "ok", "answer": "result", "code": "reason"},
             "inbox": {"ok": "ok", "answer": "result", "code": "reason"},
             "watch": {"ok": "ok", "answer": "result", "code": "reason"},
@@ -770,7 +781,8 @@ mod tests {
             parse_args(argv),
             Ok(CommandKind::Delivery(_)
                 | CommandKind::Mission(_)
-                | CommandKind::AgentCatalog { .. })
+                | CommandKind::AgentCatalog { .. }
+                | CommandKind::Ps(_))
         )
     }
 

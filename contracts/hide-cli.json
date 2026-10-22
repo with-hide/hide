@@ -1198,6 +1198,259 @@
             ],
             "type": "object"
         },
+        "ps": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "PsAgent": {
+                    "properties": {
+                        "id": {
+                            "description": "The registration id; null for an agent Hide did not register.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "kind": {
+                            "type": "string"
+                        },
+                        "label": {
+                            "description": "The title every surface calls the agent by.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "line": {
+                            "description": "The row's second line: what it asks, did or waits on.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "machine": {
+                            "type": "string"
+                        },
+                        "mission": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/PsMission"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
+                        "name": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "pane": {
+                            "type": "string"
+                        },
+                        "parent": {
+                            "description": "The registration id of the parent the registration names.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "parent_machine": {
+                            "description": "The live agent this one was delegated by, as the screen nests it.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "parent_pane": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "project": {
+                            "description": "The project path the registration names.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "state": {
+                            "$ref": "#/definitions/PsState"
+                        },
+                        "watched_by": {
+                            "description": "The name of the agent watching this one.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "name",
+                        "kind",
+                        "state",
+                        "label",
+                        "line",
+                        "machine",
+                        "pane",
+                        "parent_machine",
+                        "parent_pane",
+                        "parent",
+                        "watched_by",
+                        "mission",
+                        "project"
+                    ],
+                    "type": "object"
+                },
+                "PsMission": {
+                    "description": "The open mission an agent conducts or works a node of.",
+                    "properties": {
+                        "id": {
+                            "type": "string"
+                        },
+                        "role": {
+                            "description": "`conductor`, or the key of the node the agent works.",
+                            "type": "string"
+                        },
+                        "title": {
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "title",
+                        "role"
+                    ],
+                    "type": "object"
+                },
+                "PsPane": {
+                    "properties": {
+                        "agent": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/PsAgent"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ]
+                        },
+                        "checkout": {
+                            "description": "The checkout's branch, or its folder's name.",
+                            "type": "string"
+                        },
+                        "checkout_path": {
+                            "type": "string"
+                        },
+                        "machine": {
+                            "description": "The device id the pane runs on.",
+                            "type": "string"
+                        },
+                        "machine_label": {
+                            "description": "The name another device was registered under, or its id when it has none; null on this machine.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "pane": {
+                            "description": "Herdr's pane id on `machine`.",
+                            "type": "string"
+                        },
+                        "project": {
+                            "type": "string"
+                        },
+                        "project_path": {
+                            "type": "string"
+                        },
+                        "tab": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "tab_id": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "title": {
+                            "description": "The pane's own title, for a pane that holds no agent.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "worktree": {
+                            "type": "boolean"
+                        },
+                        "you": {
+                            "description": "The pane `hide ps` was run from.",
+                            "type": "boolean"
+                        }
+                    },
+                    "required": [
+                        "machine",
+                        "machine_label",
+                        "project",
+                        "project_path",
+                        "checkout",
+                        "checkout_path",
+                        "worktree",
+                        "tab",
+                        "tab_id",
+                        "pane",
+                        "title",
+                        "you",
+                        "agent"
+                    ],
+                    "type": "object"
+                },
+                "PsState": {
+                    "description": "The row's mark as every surface draws it (docs/status-model.md, The mark), `disconnected` for a row on a device that does not answer, and `ended` for an ended registration.",
+                    "enum": [
+                        "turn",
+                        "going",
+                        "waiting",
+                        "done",
+                        "unread",
+                        "quiet",
+                        "unknown",
+                        "asleep",
+                        "disconnected",
+                        "ended"
+                    ],
+                    "type": "string"
+                }
+            },
+            "description": "`hide ps`: every live pane, where it sits and the agent it holds, and the registered agents no live pane holds (`runtime::ps`).",
+            "properties": {
+                "agents": {
+                    "description": "Registered agents with no pane on screen: asleep, on a device that is not connected, or whose pane Hide no longer sees; with `--all` the ended ones too.",
+                    "items": {
+                        "$ref": "#/definitions/PsAgent"
+                    },
+                    "type": "array"
+                },
+                "panes": {
+                    "description": "In the order the sidebar lists them: by project, checkout and tab.",
+                    "items": {
+                        "$ref": "#/definitions/PsPane"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "panes",
+                "agents"
+            ],
+            "title": "Ps",
+            "type": "object"
+        },
         "stopped": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "description": "`hide watch stop`.",
@@ -1738,6 +1991,39 @@
             ],
             "repeats_at_most": null,
             "rest": "the agent's own arguments"
+        },
+        {
+            "answers": [
+                "ps"
+            ],
+            "arguments": [],
+            "command": "ps",
+            "options": [
+                {
+                    "name": "--all",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--here",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "here_unavailable",
+                "ps_answer_unreadable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
         },
         {
             "answers": [
@@ -2626,7 +2912,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e755510f37d047e62f151d6a60225804e586bac519d790a4f0f93f84452721c7",
+    "digest": "sha256:7a04dac26ecb48d846ff5ce327643c74d08bb9b9c694b3d64cb5e84b5fad74f1",
     "envelopes": {
         "agent": {
             "answer": "value",
@@ -2641,6 +2927,11 @@
         "mission": {
             "answer": "result",
             "code": "reason",
+            "ok": "ok"
+        },
+        "ps": {
+            "answer": "value",
+            "code": "error.code",
             "ok": "ok"
         },
         "request": {
