@@ -314,3 +314,31 @@ it("opens a sleeping pane's session drawn on the whole map, its quiet team unfol
     expect(useUiStore.getState().overview.projectId).toBeNull();
   } finally { await act(async () => reactRoot.unmount()); }
 });
+
+// PRD pane-open-in-overview B9: a pane whose project the graph budget leaves out opens that project's scope with its session chosen.
+it("opens the project scope for a pane outside the graph budget", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  initializeInterfaceI18n("en");
+  const projects = Array.from({ length: 401 }, (_, index): BoardProject => {
+    const id = `project-${String(index).padStart(3, "0")}`;
+    const pane = `pane-${index}`;
+    const checkout: Checkout = { id: `${id}-main`, workspace_id: id, label: "main", path: `/fixture/${id}`, branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
+    const agent = legacyAgentRow({ id: pane, pane_id: pane, identity_label: `Session ${index}`, agent_kind: "claude", session_id: `native-${index}`, group: "working", activity: "working" });
+    return { agents: [agent], device: null, workspace: { id, label: id, device_id: "local", path: `/fixture/${id}`, registered: true, temporary: false, pinned: false, checkouts: [checkout], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: [{ pane_id: pane, project_id: id, checkout_id: checkout.id }] } } };
+  });
+  const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local" }, status: {},
+    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: projects.map((project) => ({ device_id: "local", pane_id: project.agents[0]!.pane_id, session_digest: `digest-${project.agents[0]!.pane_id}`, launch_model: null })) } } as unknown as SnapshotRest;
+  useShellStore.setState({ rest, agents: projects.flatMap((project) => project.agents), focusedPaneId: null, connection: "live", linkSummaries: null });
+  useUiStore.setState({ overviewOpen: false, opening: null, screen: { kind: "main", deviceId: "local" } });
+  const actions = createActions(() => true);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const reactRoot = createRoot(container);
+  try {
+    actions.openPaneInOverview("pane-400");
+    await act(async () => reactRoot.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));
+    expect(useUiStore.getState().overview.projectId).toBe("project-400");
+    expect(container.querySelector("[data-graph-preview] .og-details-head")?.textContent).toContain("Session 400");
+  } finally { await act(async () => reactRoot.unmount()); }
+});

@@ -416,7 +416,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   // Moving by hand drops an open still waiting for its Workspace, so a late
   // answer does not pull the screen away from where the operator went.
   setScreen: (screen) => set({ screen, opening: null, overviewOpen: false, overviewReveal: null }),
-  restoreScreen: (screen) => set({ screen, opening: null, overviewOpen: false }),
+  restoreScreen: (screen) => set({ screen, opening: null, overviewOpen: false, overviewReveal: null }),
   setMainView: (mainView) => set({ mainView }),
   setRelation: (relation) => set({ relation }),
   toggleRaised: (group) => {

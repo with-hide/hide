@@ -40,10 +40,10 @@ const READABLE_ZOOM = 0.5;
 export function OverviewGraph(props: Props) {
   const projectId = useUiStore((state) => state.overview.projectId);
   const [scopedSelection, setScopedSelection] = useState<{ deviceId: string; projectId: string; sessionId: string; shown: boolean } | null>(null);
-  const revealProjectSession = (row: GraphAgent, shown = false) => {
+  const revealProjectSession = useCallback((row: GraphAgent, shown = false) => {
     setScopedSelection({ deviceId: props.deviceId, projectId: row.project.id, sessionId: row.id, shown });
     useUiStore.getState().setOverview({ projectId: row.project.id });
-  };
+  }, [props.deviceId]);
   const initial = scopedSelection?.deviceId === props.deviceId && scopedSelection.projectId === projectId ? scopedSelection : null;
   useEffect(() => { if (initial) setScopedSelection(null); }, [initial]);
   return <ReactFlowProvider key={`${props.deviceId}:${projectId ?? "all"}`}><WorkGraph {...props} projectId={projectId} initialSelection={initial?.sessionId ?? null} initialShown={initial?.shown ?? false} revealProjectSession={revealProjectSession} /></ReactFlowProvider>;
@@ -154,15 +154,16 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
       revealing.current = row.projectId;
       actions.changeOverviewGraph({ kind: "project_hidden", project: graphProjectKey(row.project), hidden: false });
     }
-    rememberOpener(target); setHighlightedSession(id); setSelection(id);
+    rememberOpener(target); framing.current = null; setHighlightedSession(id); setSelection(id);
   }, [rememberOpener, model.allAgents, model.projects, revealProjectSession, hiddenProjects, actions]);
   // A pane's 개요에서 보기 (PRD pane-open-in-overview D-02, D-05, D-06): the session is chosen
   // with no opener, so Escape closes its details and leaves the keyboard on the Overview,
   // and what hides it - its project hidden or folded, its team folded - opens. Each of those
   // is read from the map as it is drawn with this session chosen, since a choice draws a
-  // session the filter leaves out and can make its team a quiet one.
+  // session the filter leaves out and can make its team a quiet one. The budget is the map's
+  // as it stands: choosing does not buy a project its admission (B9).
   const showSession = useCallback((row: GraphAgent, scoped: boolean) => {
-    const drawn = overviewGraphModel(projects, rest?.overview_graph, projectId, { focus, includeResting, pinned: entry ? [entry.id] : [], selected: row.id, chosen: row.id });
+    const drawn = overviewGraphModel(projects, rest?.overview_graph, projectId, { focus, includeResting, pinned: entry ? [entry.id] : [], selected: highlightedSession, chosen: row.id });
     if (!scoped && !drawn.projects.some((group) => group.id === row.projectId)) { revealProjectSession(row, true); return; }
     if (hiddenProjects.has(row.projectId)) {
       revealing.current = row.projectId;
@@ -176,7 +177,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
     framing.current = row.id;
     setHighlightedSession(row.id);
     setSelection(row.id);
-  }, [projects, rest?.overview_graph, projectId, focus, includeResting, entry, revealProjectSession, hiddenProjects, foldedProjects, teamFolds, actions]);
+  }, [projects, rest?.overview_graph, projectId, focus, includeResting, entry, highlightedSession, revealProjectSession, hiddenProjects, foldedProjects, teamFolds, actions]);
   const reveal = useUiStore((state) => state.overviewReveal);
   useEffect(() => {
     // Read from the store, so a second run of the effect never takes the same press twice.
@@ -192,15 +193,17 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   const shownInitially = useRef(false);
   useEffect(() => {
     if (shownInitially.current || !initialShown || !initialSelection) return;
-    shownInitially.current = true;
     const row = model.allAgents.find((row) => row.id === initialSelection);
-    if (row) showSession(row, true);
+    if (!row) return;
+    shownInitially.current = true;
+    showSession(row, true);
   }, [initialShown, initialSelection, model.allAgents, showSession]);
   const returnFocus = useReturnFocus(selection !== null, { target: () => opener.current, within: () => host.current?.querySelector<HTMLElement>(".og-details") ?? null });
   const close = useCallback(() => {
     returnFocus(new Event("closeAutoFocus", { cancelable: true }));
     // A show-again the core never answered stops holding the choice open once it closes.
     revealing.current = null;
+    // Every way a choice ends comes through here, and it takes back the camera it asked for.
     framing.current = null;
     setSelection(null);
   }, [returnFocus]);
