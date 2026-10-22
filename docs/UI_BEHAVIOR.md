@@ -1676,12 +1676,14 @@ A tab line selects its owning group, area and tab, while an agent row continues 
 The sidebar keeps a root and its complete lineage subtree together under the root's actual tab; children working in another tab do not inflate that tab's physical agent count.
 Tab names use the manual name or localized `Tab N` from the core's stable number, while a draft reads New tab; automatic tabbar task titles remain independent.
 The tab line's tooltip and accessible name give its name and recognized agent count, or its name alone when it holds no agent; shell panes never count as agents.
-An unnamed tab with exactly one recognized physical agent draws that agent's row alone, without a tab heading or guide, in both ungrouped and named collections.
-Manual-name and multi-agent tabs retain their heading and guide, and terminal-only tabs remain reachable through their tab line.
+Every tab draws its guide and tab line, whatever it holds or is named, in both ungrouped and named collections: an unnamed tab with one agent reads `Tab N, 1 agent`, and a terminal-only or operator-named empty tab keeps its line with its name alone.
+A resolved session whose pane is still live stays a row under its tab, drawn dimmed whole like an unknown row with its mark and line from its own state and `해결됨 · ` leading its hover (PRD sidebar-every-tab-line B3); a live tab is never left as an empty tab line, and a closed pane's resolved session draws no row; a linked worktree whose only agents are resolved stays in the `No agents` fold, and shows the dimmed row once the fold is opened.
+It takes a root shortcut number in physical order, opens its pane when pressed, and brightens again when a new request makes the session unresolved.
 Group, tab and agent controls are stops in Arrow Up/Down and Home/End traversal, and click, Enter and Space use the same navigation.
 Lineage children retain their `--size-lineage-indent` step and elbow rails, and each root's lineage disclosure stays in its trailing slot.
 A tab has no disclosure state of its own; a stored tab fold from an earlier version is ignored on load and dropped on the next write.
-For a catalog without named-group metadata the same single-agent rule applies, and a named empty tab remains reachable.
+A catalog without named-group metadata draws the same tab lines, and a named empty tab remains reachable.
+A folded checkout keeps drawing and numbering only the roots that ask for the operator, and a resolved root asks for nothing even when its session ended on a question.
 Focused sidebar agent and checkout rows use the neutral `--secondary` fill.
 Root shortcuts follow the physical grouping order and deduplicate raised occurrences, with no numbers for group lines, tab lines or children.
 A closed checkout draws its status badge and still shows questioning or blocked Needs You rows.

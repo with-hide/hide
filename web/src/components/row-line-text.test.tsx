@@ -99,3 +99,26 @@ it("draws a resting row's faint hollow ring, undimmed, and an unknown row with n
     await unmount();
   }
 });
+
+it("dims a resolved row whole and leads its hint with 해결됨 while the mark and line stay its own state (sidebar-every-tab-line B3)", async () => {
+  await clientI18n.changeLanguage("ko");
+  const menu: AgentRowMenu = { items: () => [], onSelect: () => {} };
+  const base = { agent_kind: "claude", mark: "quiet", group: "seen", status_code: "idle", activity: "stopped", changed_at_unix_ms: null, emphasized: false, unread: false } as const;
+  const resolved: AgentRow = { ...legacyAgentRow({ id: "r", pane_id: "r", identity_label: "PR 정리", ...base }), resolved: { at_unix_ms: 1, source: "automatic" } };
+  const open: AgentRow = legacyAgentRow({ id: "o", pane_id: "o", identity_label: "그대로", ...base });
+  const tree = { place: { depth: 0, last: true, rails: [] }, open: null, onToggle: () => {}, popover: null };
+  const row = (agent: AgentRow, slot: typeof tree | null = tree) => <SidebarAgentRow agent={agent} device={null} place={null} depth={0} tree={slot} selected={false} onOpen={() => {}} onOpenPullRequest={() => {}} inset="0" menu={menu} />;
+  const { container, unmount } = await render(<ul>{row(resolved)}{row(open)}{row({ ...resolved, id: "x", pane_id: "x" }, null)}</ul>);
+  try {
+    const item = (pane: string) => container.querySelector(`[data-pane="${pane}"]`)!;
+    expect(item("r").className).toContain("opacity-(--opacity-dimmed)");
+    expect(item("r").querySelector('[data-mark="quiet"]')).not.toBeNull();
+    expect(item("o").className).not.toContain("opacity-(--opacity-dimmed)");
+    // The raised lists leave a resolved row out; if one ever reached them it would not dim there.
+    expect(item("x").className).not.toContain("opacity-(--opacity-dimmed)");
+    await act(async () => item("r").querySelector<HTMLButtonElement>("[data-agent-open]")!.focus());
+    expect(document.body.textContent).toContain("해결됨 · PR 정리");
+  } finally {
+    await unmount();
+  }
+});

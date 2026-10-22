@@ -204,6 +204,11 @@ export function rowDimmed(agent: Pick<AgentRow, "mark">): boolean {
   return agent.mark === "unknown";
 }
 
+/** A row the folded checkout still shows and the digits still number: it asks for the operator, and a resolved session rests however it ended. */
+export function asksOperator(agent: Pick<AgentRow, "state" | "resolved">): boolean {
+  return agent.state.needs_you && !agent.resolved;
+}
+
 /** A badge's counts: a project's or checkout's agents, or a parent's children. */
 export type BadgeCounts = Partial<MarkCounts>;
 
