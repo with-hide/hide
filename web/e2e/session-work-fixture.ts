@@ -23,6 +23,13 @@ export async function workRepositoryReady(stateDir: string, repository = "acme/r
   }, { message: "originating fixture repository reached the durable link writer", timeout: 30_000 }).toBe(true);
 }
 
+/**
+ * How long after its creation time a fixture pull request merges: well after
+ * the line of the turn that printed it, whose transcript ends 1 s after its
+ * request, so a flow's merged fact never races that line (fact-status B1).
+ */
+export const MERGE_AFTER_MS = 3_000;
+
 export const FIRST_GOAL = "세션 기록 화면과 결과물 연결 구현";
 export const NEXT_GOAL = "놓친 일 이슈 생성과 검색 검증";
 export const CHILD_GOAL = "자식 세션 결과물 연결 검증";
@@ -56,7 +63,8 @@ fs.appendFileSync(${JSON.stringify(contexts)}, JSON.stringify({args,repository:p
 const out = v => process.stdout.write(JSON.stringify(v).replaceAll("acme/repo",repo) + "\\n");
 const clock = JSON.parse(fs.readFileSync(${JSON.stringify(clock)}, "utf8"));
 const created = fs.existsSync(issueFile) ? JSON.parse(fs.readFileSync(issueFile, "utf8")) : null;
-const pull = (number, title, merged, failed, at) => ({number,title,state:merged?"MERGED":"OPEN",url:"https://github.com/acme/repo/pull/"+number,headRefName:"main",headRefOid:"1".repeat(40),isCrossRepository:false,baseRefName:"main",reviewDecision:"REVIEW_REQUIRED",isDraft:false,mergedAt:merged?new Date(at+1000).toISOString():null,closedAt:null,createdAt:new Date(at+500).toISOString(),updatedAt:new Date(at+1000).toISOString(),closingIssuesReferences:[],statusCheckRollup:[{__typename:"CheckRun",name:"verify",status:"COMPLETED",conclusion:failed?"FAILURE":"SUCCESS"}]});
+const MERGE_AFTER = ${MERGE_AFTER_MS};
+const pull = (number, title, merged, failed, at) => ({number,title,state:merged?"MERGED":"OPEN",url:"https://github.com/acme/repo/pull/"+number,headRefName:"main",headRefOid:"1".repeat(40),isCrossRepository:false,baseRefName:"main",reviewDecision:"REVIEW_REQUIRED",isDraft:false,mergedAt:merged?new Date(at+MERGE_AFTER).toISOString():null,closedAt:null,createdAt:new Date(at+500).toISOString(),updatedAt:new Date(at+(merged?MERGE_AFTER:1000)).toISOString(),closingIssuesReferences:[],statusCheckRollup:[{__typename:"CheckRun",name:"verify",status:"COMPLETED",conclusion:failed?"FAILURE":"SUCCESS"}]});
 const pulls = [pull(31,"기록 화면 구현",true,false,clock.first),pull(32,"이슈와 검색 검증",false,true,clock.next),pull(34,"자식 연결 검증",true,false,clock.first+200)];
 const tracked = {number:41,title:"기록 화면 후속 검증",state:"OPEN",url:"https://github.com/acme/repo/issues/41",createdAt:new Date(clock.first+500).toISOString(),updatedAt:new Date(clock.first+1000).toISOString(),labels:[],author:{login:"reviewer"},assignees:[]};
 const [a,b] = args;

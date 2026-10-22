@@ -85,11 +85,12 @@ test("@platform a native session's record groups its requests by goal flow and k
     await root.hover();
     await page.locator(`[data-task-record="${herdr.panes[0]}"]`).click();
     // A new goal opens a second flow; the first folds to its result and the current one is open (B3, B13, B14).
-    // Its pull requests merge within 200 ms of its line and are seen at the runner's pace, so the result is Hide's merged
-    // fact or its own `끝` line; which one wins is the store tests' to prove (fact-status B1).
+    // Its own and its child's pull requests merged after its last line, so once the link store holds their merge
+    // times Hide's fact stands for its result (fact-status B1).
     await expect(flows).toHaveCount(2, { timeout: 45_000 });
     await expect(flows.last().locator("[data-record-flow-name]")).toHaveText(NEXT_GOAL);
-    await expect(flows.first().locator('[data-record-flow-result="settled"] [data-record-end="merged"], [data-record-flow-result="turn"] [data-record-end="done"]')).toBeVisible({ timeout: 45_000 });
+    await expect.poll(() => mergedPullRequests(daemon!.stateDir), { message: "the link store holds both merge times", timeout: 45_000 }).toEqual([31, 34]);
+    await expect(flows.first().locator('[data-record-flow-result="settled"] [data-record-end="merged"]')).toBeVisible({ timeout: 45_000 });
     await expect(flows.first().locator("[data-record-request]")).toHaveCount(0);
     await expect(flows.last().locator("[data-record-request]")).toContainText(["이슈와 검색 검증 요청"], { timeout: 45_000 });
     // The open PR with failed CI shows; the settled ones stay one fold.
@@ -286,6 +287,14 @@ function createdIn(contexts: string): (string | null)[] {
   if (!fs.existsSync(contexts)) return [];
   return fs.readFileSync(contexts, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { args: string[]; repository: string | null })
     .filter((call) => call.args[0] === "issue" && call.args[1] === "create").map((call) => call.repository);
+}
+
+/** The fixture pull requests whose merge time the link store holds. */
+function mergedPullRequests(stateDir: string): number[] {
+  const db = new DatabaseSync(path.join(stateDir, "links.sqlite3"), { readOnly: true });
+  try {
+    return db.prepare("SELECT number FROM prs WHERE merged_at IS NOT NULL ORDER BY number").all().map((row) => Number(row.number));
+  } finally { db.close(); }
 }
 
 /**
