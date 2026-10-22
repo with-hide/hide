@@ -2491,7 +2491,7 @@ fn a_summary_lands_on_its_request_and_only_newer_unsummarized_requests_are_owed(
         Some("1번 방식(흐름 묶기)으로 진행")
     );
     assert_eq!(answered.answers.as_deref(), Some("무엇으로 묶을지"));
-    for invalid in ["  ", &"가".repeat(MISSED_CHARS + 1)] {
+    for invalid in ["  ", &"가".repeat(SUMMARY_CHARS + 1)] {
         assert_eq!(
             store
                 .apply_ledger_update(&LedgerUpdate::Summaries {
@@ -2747,4 +2747,75 @@ fn a_put_away_ask_listed_again_by_a_letter_turn_stays_away() {
         })
         .unwrap();
     assert!(store.ledger_record(&session()).unwrap().asks.is_empty());
+}
+
+/// B12: the label's `resolved` closes a question only in a turn an answer
+/// came in, so text in a letter cannot hide what waits on the operator.
+#[test]
+fn a_label_cannot_resolve_an_ask_in_a_turn_no_answer_came_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "인터뷰 해줘");
+    chapter(&mut store);
+    end(
+        &mut store,
+        1,
+        TurnJudgment {
+            missed: vec![NewMissedWork {
+                kind: MissedKind::Ask,
+                text: "Q4 범위를 정해 주세요".into(),
+            }],
+            ..Default::default()
+        },
+    );
+    let id = store.ledger_record(&session()).unwrap().asks[0].id.clone();
+    store
+        .apply_ledger_update(&LedgerUpdate::TurnEnd {
+            session: session(),
+            offset: 2,
+            started_at_unix_ms: 2_000,
+            at_unix_ms: 2_500,
+            end: LabelEnd::Done,
+            work_author: false,
+            asks_answered: false,
+            line: String::new(),
+            turn_witness: None,
+            judgment: TurnJudgment {
+                resolved: vec![ResolvedMissedWork {
+                    id,
+                    issue_number: None,
+                }],
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert_eq!(store.ledger_record(&session()).unwrap().asks.len(), 1);
+}
+
+/// B8: an English summary two lines long is kept, not refused with its batch.
+#[test]
+fn a_two_line_english_summary_is_kept() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(
+        &mut store,
+        1,
+        "Fix the sidebar and also write the release notes",
+    );
+    let summary = "w".repeat(SUMMARY_CHARS);
+    store
+        .apply_ledger_update(&LedgerUpdate::Summaries {
+            session: session(),
+            summaries: vec![RequestSummary {
+                offset: 1,
+                summary: summary.clone(),
+                answers: None,
+            }],
+        })
+        .unwrap();
+    let record = store.ledger_record(&session()).unwrap();
+    assert_eq!(
+        record.flows[0].requests[0].summary.as_deref(),
+        Some(summary.as_str())
+    );
 }

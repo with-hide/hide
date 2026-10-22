@@ -13,6 +13,9 @@ pub const SIGHTING_LIMIT: usize = 200;
 pub const MISSED_LIMIT: usize = 200;
 pub const NEW_MISSED_LIMIT: usize = 3;
 pub const MISSED_CHARS: usize = 80;
+/// The longest request summary kept: two lines of the widest language's
+/// line (B8), the one cap the label's schema, its parser and the ledger share.
+pub const SUMMARY_CHARS: usize = 160;
 /// Requests one analysis summarizes, oldest first; the rest wait for the
 /// next one (B34).
 pub const SUMMARY_BATCH: usize = 8;

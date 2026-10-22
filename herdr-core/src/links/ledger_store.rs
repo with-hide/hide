@@ -1066,7 +1066,7 @@ impl LinkStore {
                 }
                 for summary in summaries {
                     if summary.summary.trim().is_empty()
-                        || summary.summary.chars().count() > MISSED_CHARS
+                        || summary.summary.chars().count() > SUMMARY_CHARS
                         || summary
                             .answers
                             .as_ref()
@@ -1242,9 +1242,11 @@ impl LinkStore {
                     } else {
                         MissedStatus::Resolved
                     };
+                    // Only an answer closes a question the operator was asked
+                    // (B12): the label cannot resolve one in a turn none came in.
                     tx.execute(
                         "UPDATE ledger_missed SET status=?5,issue_repo=?6,issue_number=?7,resolved_issue_number=?9,resolved_turn_offset=?10 \
-                        WHERE device=?1 AND agent=?2 AND id=?3 AND missed=?4 AND status=?8",
+                        WHERE device=?1 AND agent=?2 AND id=?3 AND missed=?4 AND status=?8 AND (kind!=?11 OR ?12)",
                         params![
                             session.device_id,
                             session.agent,
@@ -1258,7 +1260,9 @@ impl LinkStore {
                                 .map(|n| n as i64),
                             encoded(&MissedStatus::Open)?,
                             resolved.issue_number.map(|number| number as i64),
-                            *offset as i64
+                            *offset as i64,
+                            encoded(&MissedKind::Ask)?,
+                            *asks_answered
                         ],
                     )
                     .map_err(failed)?;

@@ -5762,3 +5762,17 @@ fn later_session(harness: &Harness, turns: &[(&str, &str)]) -> PathBuf {
     std::fs::write(&path, dated).unwrap();
     path
 }
+
+/// B12: a parent's reply or request answers its delegated session's asks;
+/// its progress and report letters do not, and a doorbell line names no kind.
+#[test]
+fn only_a_parents_reply_or_request_answers_what_its_child_asked() {
+    let letter = |kind: &str| format!("Hide letter letter-1 from lead (claude) [{kind}]\nbody");
+    assert!(super::worker::letter_answers(&letter("reply")));
+    assert!(super::worker::letter_answers(&letter("request")));
+    assert!(!super::worker::letter_answers(&letter("progress")));
+    assert!(!super::worker::letter_answers(&letter("report")));
+    assert!(super::worker::letter_answers(
+        "🦉 lead 답장: 이렇게 해 주세요"
+    ));
+}

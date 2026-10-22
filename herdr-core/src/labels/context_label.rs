@@ -13,6 +13,7 @@ use super::analysis::{
 };
 use crate::links::ledger::{
     ARTIFACT_CHARS, ARTIFACTS_PER_TURN, MISSED_CHARS, NEW_MISSED_LIMIT, SUMMARY_BATCH,
+    SUMMARY_CHARS,
 };
 use anyhow::{Context, Result, anyhow};
 use hide_ai::{AiRequest, OutputLanguage, RequestId};
@@ -129,7 +130,7 @@ fn end_prompt(limits: LabelLimits) -> String {
         "5 done: assigned work is reported finished and no result remains pending. ",
         "With goal=null still judge the actual turn: an answered greeting/name question without a required action has line='' and end=done, never unfinished or 'waiting for instructions'. Do not infer states Herdr already knows, such as an approval prompt. ",
         "work uses the schema's missed, resolved and artifacts. ",
-        "missed: at most 3 items, each {kind:problem|follow_up|ask,text:<max 80 characters>}. ask is a question or decision this turn's answer put to the operator that still waits for their answer, one per distinct question (an interview's next question, an approval, a choice between options); when end=question its question is an ask too. When the operator's request began this turn, every earlier open ask closes as this turn is recorded: list again only an ask that still waits on the operator after this turn, worded as before. ",
+        "missed: at most 3 items, each {kind:problem|follow_up|ask,text:<max 80 characters>}. ask is a question or decision this turn's answer put to the operator that still waits for their answer, one per distinct question (an interview's next question, an approval, a choice between options); when end=question its question is an ask too. When a reply to the agent came this turn (the operator's request, or a letter from the session's parent), every earlier open ask closes as this turn is recorded: list again only an ask that still waits on the operator after this turn, worded as before. ",
         "problem is unrelated breakage found and follow_up a separate proposed deliverable nobody took, both OUTSIDE the assignment and abandoned on session close. Exclude optional offers, work already in an issue/PR by number/link, remaining assigned work, rechecking its result (real app/other environment/pre-release), and merge/install/deploy/app replacement, even if called a follow-up or limitation: the PR and CI already own these. ",
         "resolved: only real <open-missed> IDs actually handled this turn, an ask the operator answered in this turn's requests included, with issue_number null or a number; do not re-list open problem or follow_up items in missed. ",
         "artifacts: at most 3 names of what this turn created or published besides a pull request: a design board, a document such as a PRD, report or interview log, an HTML mockup, a GitHub issue, a release. Name each as the operator would recognize it; never code files, tests, commits, branches or pull requests. Only what this turn newly made or changed; one already in recorded-artifacts keeps that exact name. An empty list when there are none. ",
@@ -146,7 +147,7 @@ fn requests_schema(limits: LabelLimits) -> Value {
             "type": "object", "additionalProperties": false, "required": ["id", "summary", "answers"],
             "properties": {
                 "id": {"type": "string"},
-                "summary": {"type": "string", "maxLength": limits.line * 2},
+                "summary": {"type": "string", "maxLength": (limits.line * 2).min(SUMMARY_CHARS)},
                 "answers": {"type": ["string", "null"]}
             }
         }
@@ -378,7 +379,7 @@ pub(crate) fn parse(
         summaries.push(RequestLine {
             id: request.id,
             // Two asks in one message keep both (B8): the bound is the schema's.
-            summary: truncate_phrase(&summary, limits.line * 2),
+            summary: truncate_phrase(&summary, (limits.line * 2).min(SUMMARY_CHARS)),
             answers,
         });
     }

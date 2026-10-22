@@ -2154,6 +2154,7 @@ impl LabelWorker {
                     || matches!(facts.requester_at(event.offset), Some(super::facts::Requester::Operator))
                     || parent.is_some_and(|parent| {
                         matches!(facts.requester_at(event.offset), Some(super::facts::Requester::Named(name)) if name == parent)
+                            && letter_answers(&event.text)
                     }))
         });
         let turn_witness = events
@@ -2625,6 +2626,14 @@ impl LabelWorker {
 }
 
 /// Whether the agent has a `/goal` command: Claude Code and Codex.
+/// Whether a parent's letter can answer what its delegated session asked: a
+/// reply or a request does, a progress, report, block or watch letter does
+/// not. A doorbell line names no kind, and counts (B12).
+pub(super) fn letter_answers(text: &str) -> bool {
+    hide_session::envelope_header(text)
+        .is_none_or(|(_, kind)| matches!(kind.as_str(), "request" | "reply"))
+}
+
 fn goal_command_agent(agent: &str) -> bool {
     matches!(agent, "claude" | "codex")
 }
