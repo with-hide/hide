@@ -868,6 +868,26 @@ pub(crate) fn assistant(text: &str, at: u64) -> LabelEvent {
 mod tests {
     use super::*;
 
+    /// B14, B15: this turn runs from the message after the last judged turn
+    /// end's request; without that request in view, from the last message.
+    #[test]
+    fn this_turn_starts_after_the_judged_request_or_at_the_last_message() {
+        let events = [
+            human("목업 그려줘", 1),
+            assistant("그렸어요", 2),
+            human("/goal 구현", 3),
+            assistant("시작", 4),
+            human("🦉 impl-a 진행", 5),
+            assistant("끝", 6),
+        ];
+        let judged = turn_key(&events[..2]);
+        let offsets = |slice: &[LabelEvent]| slice.iter().map(|event| event.offset).collect::<Vec<_>>();
+        assert_eq!(offsets(this_turn(&events, judged)), [2, 3, 4, 5, 6]);
+        assert_eq!(offsets(this_turn(&events, None)), [5, 6]);
+        assert_eq!(offsets(this_turn(&events, Some(0))), [5, 6]);
+        assert_eq!(offsets(this_turn(&events, turn_key(&events))), [6]);
+    }
+
     /// The human events as the requests a label still owes a summary.
     fn owed(events: &[LabelEvent]) -> Vec<OwedLine> {
         events

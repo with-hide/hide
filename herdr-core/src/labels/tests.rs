@@ -5664,8 +5664,6 @@ fn a_letter_turn_records_its_sender_and_start_and_a_failed_watch_or_reply_turn_s
     );
 }
 
-/// `Harness::session` with turns dated after the worker switched summaries
-/// on, so the ledger takes their judgments.
 /// B14: a flow a turn opens starts at the operator's request, so a letter
 /// that landed later in the same turn does not leave that request in the
 /// flow before.
@@ -5724,6 +5722,8 @@ fn a_flow_opened_by_a_turn_with_a_late_letter_starts_at_the_operators_request() 
     assert_eq!(starts.last(), Some(&(LATER + 2_000)));
 }
 
+/// `Harness::session` with turns dated after the worker switched summaries
+/// on, so the ledger takes their judgments.
 fn later_session(harness: &Harness, turns: &[(&str, &str)]) -> PathBuf {
     let path = harness.session("a", "native-a", turns);
     let dated = std::fs::read_to_string(&path)

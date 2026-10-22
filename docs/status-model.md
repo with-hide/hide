@@ -991,7 +991,8 @@ The record groups a session's work by goal flows (PRD session-record-goal-flow D
 
 A flow is a stored goal (`ledger_chapters`), at most 200 per session.
 Its boundary is the turn-end reading first (D-09): the label's `goal_update` is `replace` when what the agent makes changes (a board, then an interview or a PRD, then an implementation), which opens a flow at that turn, and `refine` when the same work is named more clearly, which renames the current flow in place; this holds in every agent (B14).
-The operator's `/goal` is a confirming signal only where the agent has the command (Claude Code, Codex): a turn that begins with it opens a flow whatever the answer says, and its request keeps a `goal_command` mark with the command's name taken out of its words (B15).
+A turn is read from the request after the last judged turn end, so a letter that lands while the agent works does not hide the operator's request before it, and a flow the turn opens starts at the operator's first request in it; with no judged end in view, the turn starts at its last message, so an older `/goal` never fires again (`analysis::this_turn`).
+The operator's `/goal` is a confirming signal only where the agent has the command (Claude Code, Codex): a turn that holds it opens a flow whatever the answer says, and its request keeps a `goal_command` mark with the command's name taken out of its words (B15).
 A rename lands within the same turn, at its start or its end (B16); the same goal again opens nothing; a goal naming a pane or agent id (`w9J:pGP`, `agent-7112`) is refused by the parser, which keeps the turn's other answers and the flow's name (B17).
 A session with no stored goal reads as one flow named by its first request's summary, else its first words.
 
@@ -1013,7 +1014,7 @@ A past flow's result is its last `done` turn's line, else its last turn that is 
 A child's status in its parent's record is that child's own top status (B26).
 
 A missed line is a durable Open, Resolved, Issue or Dismissed record of one of three kinds: a problem the agent found outside its work, a separate follow-up it proposed, or an ask, a question or decision it put to the operator and that no later turn answered (D-12).
-An ask is shown in the record's `나를 기다리는 것` and can be dismissed and reopened; the operator's next request answers it, or for a delegated session its parent's next letter: when a turn holding that reply is recorded, every ask from before it is resolved, and the label lists again only a question that still waits, so an answer such as `ㅇㅇ` closes it without the label naming it, and a turn a letter woke that repeats an open ask adds no second line (B12); problems and follow-ups leave the record and stay the Overview backlog's missed work, which never counts an ask (D-13, B31).
+An ask is shown in the record's `나를 기다리는 것` and can be dismissed and reopened; the operator's next request answers it, or for a delegated session its parent's next letter or the operator's own reply in its pane: when a turn holding that reply is recorded, every ask from before it is resolved, and the label lists again only a question that still waits, so an answer such as `ㅇㅇ` closes it without the label naming it, and a turn a letter woke that repeats an open or put-away ask adds no second line (B12); problems and follow-ups leave the record and stay the Overview backlog's missed work, which never counts an ask (D-13, B31).
 Records written before `context_label.v10` may still hold a `leftover` item.
 
 A pull request is a session's output when the link reader saw it printed around GitHub's creation time, or when the label judged that the session made it (`created_prs`, recorded as a `pr` sighting), which finds the ones the reader's window missed (D-14, B21).

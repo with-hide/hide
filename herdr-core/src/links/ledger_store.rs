@@ -1186,19 +1186,21 @@ impl LinkStore {
                     if missed.text.trim().is_empty() || missed.text.chars().count() > MISSED_CHARS {
                         return Err("ledger_missed_invalid".to_owned());
                     }
-                    // A turn a letter woke repeats the question still open: one line.
+                    // A turn a letter woke repeats a question still open, or one
+                    // the operator put away: one line, and a put-away one stays put away.
                     if missed.kind == MissedKind::Ask
                         && tx
                             .query_row(
                                 "SELECT 1 FROM ledger_missed WHERE device=?1 AND agent=?2 AND id=?3 \
-                                AND kind=?4 AND status=?5 AND trim(text)=?6 LIMIT 1",
+                                AND kind=?4 AND status IN (?5,?7) AND trim(text)=?6 LIMIT 1",
                                 params![
                                     session.device_id,
                                     session.agent,
                                     session.session_id,
                                     encoded(&MissedKind::Ask)?,
                                     encoded(&MissedStatus::Open)?,
-                                    missed.text.trim()
+                                    missed.text.trim(),
+                                    encoded(&MissedStatus::Dismissed)?
                                 ],
                                 |_| Ok(()),
                             )

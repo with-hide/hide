@@ -2707,3 +2707,44 @@ fn a_ledger_context_carries_the_recorded_artifacts_newest_first() {
         ["Overview PRD", "Overview 보드"]
     );
 }
+
+/// B12: a question the operator put away stays away when a turn a letter
+/// woke lists it again.
+#[test]
+fn a_put_away_ask_listed_again_by_a_letter_turn_stays_away() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    let ask = || TurnJudgment {
+        missed: vec![NewMissedWork {
+            kind: MissedKind::Ask,
+            text: "PRD로 넘어갈까요?".into(),
+        }],
+        ..Default::default()
+    };
+    request(&mut store, 1, "인터뷰 해줘");
+    chapter(&mut store);
+    end(&mut store, 1, ask());
+    let id = store.ledger_record(&session()).unwrap().asks[0].id.clone();
+    store
+        .apply_ledger_update(&LedgerUpdate::MissedStatus {
+            session: session(),
+            id,
+            status: MissedStatus::Dismissed,
+        })
+        .unwrap();
+    store
+        .apply_ledger_update(&LedgerUpdate::TurnEnd {
+            session: session(),
+            offset: 2,
+            started_at_unix_ms: 2_000,
+            at_unix_ms: 2_500,
+            end: LabelEnd::Question,
+            work_author: false,
+            asks_answered: false,
+            line: String::new(),
+            turn_witness: None,
+            judgment: ask(),
+        })
+        .unwrap();
+    assert!(store.ledger_record(&session()).unwrap().asks.is_empty());
+}

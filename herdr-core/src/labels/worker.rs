@@ -2144,11 +2144,14 @@ impl LabelWorker {
             .iter()
             .rfind(|event| event.kind == LabelEventKind::Human)
             .is_some_and(|event| facts.feeds_work(event, ledger.parent_name.as_deref()));
-        // A delegated session asks its parent, whose letters answer it (B12).
+        // A delegated session asks its parent, whose letters answer it, or
+        // the operator typing into its pane (B12); an ask still waiting after
+        // a mere progress letter is the one the label lists again.
         let parent = ledger.parent_name.as_deref();
         let asks_answered = turn_events.iter().any(|event| {
             event.kind == LabelEventKind::Human
                 && (facts.feeds_work(event, parent)
+                    || matches!(facts.requester_at(event.offset), Some(super::facts::Requester::Operator))
                     || parent.is_some_and(|parent| {
                         matches!(facts.requester_at(event.offset), Some(super::facts::Requester::Named(name)) if name == parent)
                     }))
