@@ -19,7 +19,7 @@ export const PR_260 = { number: 260, title: "Terminal links click path", url: "h
 
 /** The core's request block for an agent tied to each of `pulls` (its branch has it), as its PR mark draws them. */
 export const requestWith = (verb: RequestVerb, pulls: { number: number; title: string; url: string; head_branch: string }[]): AgentRequest => ({
-  verb, verb_since_unix_ms: 0, request: null, later_by: null, reply: null,
+  verb, verb_since_unix_ms: 0, request: null, later_by: null,
   pull_requests: pulls.map(({ number, title, url, head_branch }) => ({ number, title, url, head_branch, badge: "open", checks: "pending", closing_issues: [], live: true, duty: true, created: false, settled_at_unix_ms: null })),
 });
 

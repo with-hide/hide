@@ -294,7 +294,7 @@ fn row_facts(facts: &SessionFacts) -> RowFacts {
         native_custom_title: facts.custom_title.clone(),
         operator_request: facts.operator_request.clone(),
         other_request: facts.other_request.clone(),
-        reply: facts.reply.clone(),
+        last_reply_at_unix_ms: facts.last_reply_at_unix_ms,
         created_prs: facts
             .created_prs
             .iter()

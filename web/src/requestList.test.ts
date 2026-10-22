@@ -34,7 +34,7 @@ function task(number: number): Task {
 }
 
 function block(verb: RequestVerb, extra: Partial<AgentRequest> = {}): AgentRequest {
-  return { verb, verb_since_unix_ms: NOW, request: null, later_by: null, reply: null, pull_requests: [], ...extra };
+  return { verb, verb_since_unix_ms: NOW, request: null, later_by: null, pull_requests: [], ...extra };
 }
 
 function agent(pane: string, verb: RequestVerb | null, extra: Partial<AgentRow> = {}): AgentRow {
@@ -164,23 +164,16 @@ describe("the rows and groups (D-06, D-30, D-40)", () => {
 });
 
 describe("the result line (D-12, B5, B10)", () => {
-  const reply = { text: "테스트를 돌렸습니다.\n\n모두 통과했어요.", cut: false, at_unix_ms: NOW };
-
-  it("is the label's line when the agent has one", () => {
-    const [row] = requestRows([lens(agent("a", "result", { request: block("result", { reply, line: "테스트 통과" }) }))], []);
+  it("is the label's line when the agent has one, and nothing without it", () => {
+    const [row, quiet] = requestRows([lens(agent("a", "result", { request: block("result", { line: "테스트 통과" }) })), lens(agent("q", "result", { request: block("result") }))], []);
     expect(resultLine(row!)).toBe("테스트 통과");
-  });
-
-  it("is the whole last reply on one line while working, and its last line once finished", () => {
-    const [working, done] = requestRows([lens(agent("w", "working", { request: block("working", { reply }) })), lens(agent("d", "result", { request: block("result", { reply }) }))], []);
-    expect(resultLine(working!)).toBe("테스트를 돌렸습니다. 모두 통과했어요.");
-    expect(resultLine(done!)).toBe("모두 통과했어요.");
+    expect(resultLine(quiet!)).toBe("");
   });
 
   it("reads the label's verdict in the expanded row, and nothing without a label (B6)", () => {
     expect(verdictLine(block("answer", { end: "question", line: "어느 쪽으로 할까요?" }), t)).toBe("AI 판정 · 질문 · 어느 쪽으로 할까요?");
     expect(verdictLine(block("stopped", { end: "unfinished" }), t)).toBe("AI 판정 · 덜 끝남");
-    expect(verdictLine(block("result", { reply }), t)).toBeNull();
+    expect(verdictLine(block("result"), t)).toBeNull();
     expect(verdictLine(undefined, t)).toBeNull();
   });
 });

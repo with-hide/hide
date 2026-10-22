@@ -8,7 +8,7 @@ import type { AgentPullRequest, AgentRow, PrState, SnapshotRest, Workspace } fro
 function row(pane: string, numbers: number[] = [], children: string[] = [], states: PrState[] = numbers.map(() => "pending")): AgentRow {
   const agent = legacyAgentRow({ pane_id: pane, identity_label: `${pane} 세션`, lineage_child_pane_ids: children });
   const pulls: AgentPullRequest[] = numbers.map((number) => ({ number, title: `PR ${number}`, url: `https://github.com/acme/app/pull/${number}`, badge: "open", checks: "pending", head_branch: "feat/work", closing_issues: [], live: true, duty: false, created: true, settled_at_unix_ms: null }));
-  return { ...agent, state: { ...agent.state, pr: numbers.length ? { count: numbers.length, worst: states[0]!, pulls: states.map((state, index) => ({ state, index })) } : null }, request: { verb: "working", verb_since_unix_ms: 0, request: null, later_by: null, reply: null, pull_requests: pulls } };
+  return { ...agent, state: { ...agent.state, pr: numbers.length ? { count: numbers.length, worst: states[0]!, pulls: states.map((state, index) => ({ state, index })) } : null }, request: { verb: "working", verb_since_unix_ms: 0, request: null, later_by: null, pull_requests: pulls } };
 }
 const map = (rows: AgentRow[]) => new Map(rows.map((agent) => [agent.pane_id, agent]));
 

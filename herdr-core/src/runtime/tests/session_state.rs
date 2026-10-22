@@ -379,7 +379,6 @@ fn pane_header_leads_with_the_request_only_while_its_row_shows_the_turn() {
         request_summary: Some("제안대로 진행".into()),
         recent_turns: Vec::new(),
         later_by: None,
-        reply: None,
         pull_requests: Vec::new(),
     });
     let summary = Some(header::TurnRequest {

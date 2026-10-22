@@ -21,7 +21,7 @@ use crate::agent_state::work::{Linked, assign_duty, linked_pull_requests, shown_
 use crate::display_text;
 use crate::issues::IssueReference;
 use crate::labels::analysis::{LabelEnd, truncate_phrase};
-use crate::labels::facts::{Reply, Request, Requester};
+use crate::labels::facts::{Request, Requester};
 use crate::labels::store::RecentTurn;
 use crate::model::{
     GithubSnapshot, PullRequestBadge, PullRequestChecks, ReviewDecision, SidebarAgentSnapshot,
@@ -40,7 +40,7 @@ pub struct RowFacts {
     pub(crate) native_custom_title: Option<String>,
     pub(crate) operator_request: Option<Request>,
     pub(crate) other_request: Option<Request>,
-    pub(crate) reply: Option<Reply>,
+    pub(crate) last_reply_at_unix_ms: Option<u64>,
     /// `(lowercase owner/name, number, when its tool printed it)`.
     pub(crate) created_prs: Vec<(String, u64, u64)>,
     /// Every pull request address the session printed, newest twenty, as
@@ -110,13 +110,6 @@ pub struct TurnSnapshot {
     pub at_unix_ms: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ReplySnapshot {
-    pub text: String,
-    pub cut: bool,
-    pub at_unix_ms: u64,
-}
-
 /// One of a row's pull requests.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AgentPullRequestSnapshot {
@@ -158,8 +151,7 @@ pub struct AgentRequestSnapshot {
     pub verb: RequestVerb,
     /// When the row took this verb; kept across a restart (D-40).
     pub verb_since_unix_ms: u64,
-    /// The label's line for the turn (B18, B47); absent without one, when
-    /// the row shows its reply instead (D-12).
+    /// The label's line for the turn (B18, B47); absent without one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<String>,
     /// How the label read the turn's end, shown with the line when the row
@@ -174,7 +166,6 @@ pub struct AgentRequestSnapshot {
     pub recent_turns: Vec<TurnSnapshot>,
     /// Who sent a request after the operator's last one (B4).
     pub later_by: Option<RequestSender>,
-    pub reply: Option<ReplySnapshot>,
     /// The chip first (D-46), then the other live ones, then settled ones.
     pub pull_requests: Vec<AgentPullRequestSnapshot>,
 }
@@ -313,11 +304,6 @@ pub(crate) fn apply<'a>(
             request_summary,
             recent_turns,
             later_by,
-            reply: facts.reply.as_ref().map(|reply| ReplySnapshot {
-                text: display_text::block(&reply.text),
-                cut: reply.cut,
-                at_unix_ms: reply.at_unix_ms,
-            }),
             pull_requests,
         });
         row.state = crate::agent_state::row_state(row);

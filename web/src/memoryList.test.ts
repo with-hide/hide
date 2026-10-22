@@ -16,7 +16,7 @@ describe("Memory promotion rows", () => {
   const agent = (origin = true, linked = agentPull): AgentRow => legacyAgentRow({
     id: "a", pane_id: "w1:p2", identity_label: "memory writer", agent_kind: "claude", group: "working", status_code: "working", changed_at_unix_ms: 1, emphasized: false, unread: false,
     hide_ai: origin ? { task: { kind: "memory_promote", target: "m7" } } : undefined,
-    request: { verb: "working", verb_since_unix_ms: 1, request: null, later_by: null, reply: null, pull_requests: [linked] },
+    request: { verb: "working", verb_since_unix_ms: 1, request: null, later_by: null, pull_requests: [linked] },
   });
 
   it("groups confirmed cards in number order without duplicating the expanded row in Cards", () => {

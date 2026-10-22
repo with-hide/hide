@@ -175,23 +175,9 @@ export function senderWords(sender: RequestSender, t: TFunction<"translation">):
 
 // --- the result line -----------------------------------------------------------
 
-function lastLine(text: string): string {
-  const lines = text.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
-  return lines.at(-1) ?? "";
-}
-
-/**
- * The row's third line (D-12, B5, B10): the agent's label line when it has
- * one, else its own words, all of them on one line while it works and the
- * last line once it has finished.
- */
+/** The row's third line (D-12, B5, B10): the agent's label line, else nothing. */
 export function resultLine(row: RequestRow): string {
-  const { agent } = row.lens;
-  const label = agent.request?.line?.trim();
-  if (label) return label;
-  const reply = agent.request?.reply?.text ?? "";
-  if (row.verb === "working") return reply.split(/\s+/u).filter(Boolean).join(" ");
-  return lastLine(reply);
+  return row.lens.agent.request?.line?.trim() ?? "";
 }
 
 const END_LABEL: Record<LabelEnd, MessageKey> = {

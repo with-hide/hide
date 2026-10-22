@@ -75,7 +75,6 @@ const words = {
   "sessionWork.openRecord": ["Open record", "기록 열기", "記録を開く", "打开记录"],
   "paneTurn.request": ["Request", "요청", "依頼", "请求"],
   "paneTurn.finished": ["Done", "끝남", "完了", "完成"],
-  "paneTurn.reply": ["Last reply", "마지막 답", "最後の返答", "最后回复"],
   "paneTurn.earlier": ["Earlier turns", "앞 턴", "前のターン", "之前的轮次"],
   "paneTurn.unsummarized": ["No summary", "요약 없음", "要約なし", "无摘要"],
   "paneTurn.laterBy": ["Next request from {{name}}", "그 뒤 요청 · {{name}}", "その後の依頼・{{name}}", "之后的请求 · {{name}}"],

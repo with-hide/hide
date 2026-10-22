@@ -38,7 +38,7 @@ function agent(pane: string, label: string, pulls: Pull[], lineage: Partial<Agen
   return {
     ...seed,
     state: { ...seed.state, pr: pulls.length ? { count: pulls.length, worst: pulls[0]!.state, pulls: pulls.map(({ state }, index) => ({ state, index })) } : null },
-    request: { verb: "working", verb_since_unix_ms: 0, request: null, later_by: null, reply: null, pull_requests: rows },
+    request: { verb: "working", verb_since_unix_ms: 0, request: null, later_by: null, pull_requests: rows },
   } as AgentRow;
 }
 
