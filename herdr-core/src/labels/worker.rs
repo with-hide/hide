@@ -239,6 +239,9 @@ struct AnalysisMeta {
     offset: Option<u64>,
     at_unix_ms: u64,
     request_at_unix_ms: u64,
+    /// When the operator's first request in this turn arrived: a flow this
+    /// turn opens starts there, before a letter that landed later (B14).
+    flow_at_unix_ms: u64,
     pane: String,
     generation: u64,
     owner: String,
@@ -2147,6 +2150,11 @@ impl LabelWorker {
             .map(|turn| turn.witness());
         // Only Claude Code and Codex have the command; the same words typed
         // to another agent are an ordinary request (B15).
+        let flow_at_unix_ms = turn_events
+            .iter()
+            .find(|event| event.kind == LabelEventKind::Human && operator(event))
+            .or_else(|| events.iter().rfind(|event| event.kind == LabelEventKind::Human))
+            .map_or(0, |event| event.at_unix_ms);
         let goal_command = goal_command_agent(pane.agent.as_str())
             && turn_events.iter().any(|event| {
                 event.kind == LabelEventKind::Human && operator(event) && goal_command(&event.text)
@@ -2193,6 +2201,7 @@ impl LabelWorker {
                 .iter()
                 .rfind(|event| event.kind == LabelEventKind::Human)
                 .map_or(0, |event| event.at_unix_ms),
+            flow_at_unix_ms,
             pane: pane_id.to_owned(),
             generation,
             owner,
@@ -2374,7 +2383,7 @@ impl LabelWorker {
                         && let Err(code) = client.ledger(LedgerUpdate::Chapter {
                             session: session.clone(),
                             goal,
-                            at_unix_ms: outcome.request_at_unix_ms,
+                            at_unix_ms: outcome.flow_at_unix_ms,
                             change: if goal_changed {
                                 change
                             } else {

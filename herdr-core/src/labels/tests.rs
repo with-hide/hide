@@ -5666,6 +5666,64 @@ fn a_letter_turn_records_its_sender_and_start_and_a_failed_watch_or_reply_turn_s
 
 /// `Harness::session` with turns dated after the worker switched summaries
 /// on, so the ledger takes their judgments.
+/// B14: a flow a turn opens starts at the operator's request, so a letter
+/// that landed later in the same turn does not leave that request in the
+/// flow before.
+#[test]
+fn a_flow_opened_by_a_turn_with_a_late_letter_starts_at_the_operators_request() {
+    use crate::links::ledger::{LedgerContext, LedgerUpdate, SessionIdentity};
+    const LATER: u64 = 4_094_496_000_000;
+    let harness = Harness::new();
+    let store = harness.store();
+    let client = crate::links::worker::LinkClient::open_mailbox_for_test();
+    let node: Arc<dyn crate::node_access::NodeLink> = Arc::new(hide_node::Local::new(Some(
+        harness.home.path().to_path_buf(),
+    )));
+    let (mut worker, woken) = harness.spawn_with_ledger(
+        Arc::clone(&store),
+        LOCAL_TARGET,
+        "local.sock",
+        Arc::new(NodeTranscripts::new(Box::new(move || {
+            Ok(Arc::clone(&node))
+        }))),
+        Arc::new(Mutex::new(Some(client.clone()))),
+    );
+    client.prime_context_for_test(
+        SessionIdentity {
+            device_id: LOCAL_TARGET.into(),
+            agent: "claude".into(),
+            session_id: "native-a".into(),
+        },
+        LedgerContext::default(),
+    );
+    let mut lines = vec![("user", "요청 보기 목업 그려줘"), ("assistant", "목업을 그렸어요")];
+    let path = later_session(&harness, &lines);
+    harness.input.record("w1:p1", LATER - 300, false);
+    harness.backend.answer("요청 보기 목업 그리기", "done", "");
+    observe(&mut worker, &agent(&path, "idle", 1));
+    settle(&mut worker, &woken);
+    lines.extend([
+        ("user", "/goal 요청 보기 구현"),
+        ("assistant", "구현을 시작했어요"),
+        ("user", "Hide letter letter-1 from impl-a (claude) [report]\n끝났어요"),
+        ("assistant", "구현을 마쳤어요"),
+    ]);
+    later_session(&harness, &lines);
+    harness.input.record("w1:p1", LATER + 2_000 - 300, false);
+    harness.backend.answer("요청 보기 구현", "done", "");
+    observe(&mut worker, &agent(&path, "idle", 3));
+    settle(&mut worker, &woken);
+    let starts: Vec<u64> = client
+        .ledger_updates_for_test()
+        .into_iter()
+        .filter_map(|update| match update {
+            LedgerUpdate::Chapter { at_unix_ms, .. } => Some(at_unix_ms),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(starts.last(), Some(&(LATER + 2_000)));
+}
+
 fn later_session(harness: &Harness, turns: &[(&str, &str)]) -> PathBuf {
     let path = harness.session("a", "native-a", turns);
     let dated = std::fs::read_to_string(&path)
