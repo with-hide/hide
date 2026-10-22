@@ -136,6 +136,7 @@ struct Mission {
 struct Answer {
     panes: Vec<Pane>,
     agents: Vec<Agent>,
+    missions_unreadable: bool,
 }
 
 /// The answer as this build reads it; a daemon of another build may answer
@@ -169,12 +170,17 @@ fn lineage(panes: &[Pane]) -> Lineage {
     let mut children: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut roots = Vec::new();
     for index in 0..panes.len() {
+        // A pane whose parents lead back to it would be under nobody that
+        // prints; one that only hangs off such a loop is under its parent.
         let mut seen = HashSet::from([index]);
         let mut up = parent(index);
         let mut cycle = false;
         while let Some(above) = up {
-            if !seen.insert(above) {
+            if above == index {
                 cycle = true;
+                break;
+            }
+            if !seen.insert(above) {
                 break;
             }
             up = parent(above);
@@ -202,19 +208,19 @@ fn select(value: Value, here: bool) -> Result<Value, &'static str> {
         .ok_or("here_unavailable")?;
     let project = (you.machine.as_str(), you.project_path.as_str());
     let lineage = lineage(&answer.panes);
-    let mut kept = HashSet::new();
-    let mut stack: Vec<usize> = lineage
-        .roots
-        .iter()
-        .copied()
+    let mut kept: HashSet<usize> = HashSet::new();
+    // The project's panes, a child of another project's agent included,
+    // and their delegated agents wherever those live.
+    let mut stack: Vec<usize> = (0..answer.panes.len())
         .filter(|&index| {
             let pane = &answer.panes[index];
             (pane.machine.as_str(), pane.project_path.as_str()) == project
         })
         .collect();
     while let Some(index) = stack.pop() {
-        kept.insert(index);
-        stack.extend(lineage.children.get(&index).into_iter().flatten());
+        if kept.insert(index) {
+            stack.extend(lineage.children.get(&index).into_iter().flatten());
+        }
     }
     let paths: HashSet<&str> = answer
         .panes
@@ -410,6 +416,11 @@ fn draw(answer: &Answer) -> String {
     if out.is_empty() {
         out.push_str("no live panes\n");
     }
+    if answer.missions_unreadable {
+        out.push_str(
+            "missions: the mission record could not be read, so no row names its mission\n",
+        );
+    }
     out
 }
 
@@ -466,6 +477,7 @@ mod tests {
                 pane("site", "main", "web", "w3:p2", None),
             ],
             "agents": [],
+            "missions_unreadable": false,
         })
     }
 
@@ -496,10 +508,22 @@ mod tests {
         let mut value = fixture();
         value["panes"][0]["agent"]["parent_machine"] = json!(HERE);
         value["panes"][0]["agent"]["parent_pane"] = json!("w3:p1");
-        let text = draw(&read(&value).unwrap());
-        for id in ["w1:p1", "w2:p1", "w3:p1"] {
+        // An agent hanging off the loop stays under its parent.
+        value["panes"].as_array_mut().unwrap().push(pane(
+            "hide",
+            "main",
+            "Agents",
+            "w4:p1",
+            Some(agent("agent-4", "tail", "w4:p1", Some("w1:p1"))),
+        ));
+        let answer = read(&value).unwrap();
+        let text = draw(&answer);
+        for id in ["w1:p1", "w2:p1", "w3:p1", "w4:p1"] {
             assert_eq!(text.matches(id).count(), 1, "{id}\n{text}");
         }
+        let lineage = lineage(&answer.panes);
+        assert_eq!(lineage.roots, [0, 1, 2, 3, 4]);
+        assert_eq!(lineage.children.get(&0), Some(&vec![5]));
     }
 
     #[test]
@@ -528,9 +552,30 @@ mod tests {
         assert_eq!(select(fixture(), true), Err("here_unavailable"));
     }
 
+    /// A pane of the project whose parent lives in another project is kept,
+    /// the caller's own pane among them, and is drawn in its own tab.
+    #[test]
+    fn here_keeps_a_pane_of_the_project_whose_parent_lives_elsewhere() {
+        let mut value = fixture();
+        value["panes"][3]["you"] = json!(true);
+        let kept = select(value, true).unwrap();
+        let panes: Vec<&str> = kept["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pane| pane["pane"].as_str().unwrap())
+            .collect();
+        assert_eq!(panes, ["w3:p1", "w3:p2"]);
+        let text = draw(&read(&kept).unwrap());
+        assert!(
+            text.contains("tab web\n      ├─ w3:p1  grandchild"),
+            "{text}"
+        );
+    }
+
     #[test]
     fn agents_without_a_pane_and_ended_ones_print_in_their_own_sections() {
-        let mut value = json!({"panes": [], "agents": [
+        let mut value = json!({"panes": [], "missions_unreadable": true, "agents": [
             agent("agent-4", "asleep", "w4:p1", None),
             agent("agent-5", "gone", "w5:p1", None),
         ]});
@@ -541,13 +586,14 @@ mod tests {
             "not in a pane\n\
              └─ w4:p1  asleep [agent-4]  claude  asleep  \"asleep task\"  /p/hide/main\n\
              ended\n\
-             └─ w5:p1  gone [agent-5]  claude  ended  \"gone task\"  /p/hide/main\n"
+             └─ w5:p1  gone [agent-5]  claude  ended  \"gone task\"  /p/hide/main\n\
+             missions: the mission record could not be read, so no row names its mission\n"
         );
         assert_eq!(
-            draw(&read(&json!({"panes": [], "agents": []})).unwrap()),
+            draw(&read(&json!({"panes": [], "agents": [], "missions_unreadable": false})).unwrap()),
             "no live panes\n"
         );
-        assert!(read(&json!({"panes": [{}], "agents": []})).is_err());
+        assert!(read(&json!({"panes": [{}], "agents": [], "missions_unreadable": false})).is_err());
     }
 
     #[test]

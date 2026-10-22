@@ -1436,6 +1436,10 @@
                     },
                     "type": "array"
                 },
+                "missions_unreadable": {
+                    "description": "The mission record could not be read, so no row names its mission.",
+                    "type": "boolean"
+                },
                 "panes": {
                     "description": "In the order the sidebar lists them: by project, checkout and tab.",
                     "items": {
@@ -1446,7 +1450,8 @@
             },
             "required": [
                 "panes",
-                "agents"
+                "agents",
+                "missions_unreadable"
             ],
             "title": "Ps",
             "type": "object"
@@ -2912,7 +2917,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:7a04dac26ecb48d846ff5ce327643c74d08bb9b9c694b3d64cb5e84b5fad74f1",
+    "digest": "sha256:a69ebf327cd0db9be2c892e0b03e7a82703b9428394e42fadabd7fca9d10e993",
     "envelopes": {
         "agent": {
             "answer": "value",

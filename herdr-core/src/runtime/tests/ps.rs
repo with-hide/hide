@@ -250,3 +250,115 @@ fn registrations_no_pane_holds_are_listed_and_ended_ones_only_with_all() {
         ]
     );
 }
+
+fn mission(
+    id: &str,
+    conductor: &str,
+    present: bool,
+    worker: &str,
+) -> crate::runtime::missions::MissionView {
+    use crate::missions::{MissionScope, MissionStatus, NodeKind, NodeStatus};
+    use crate::runtime::missions::{ConductorView, MissionView, NodeView};
+    MissionView {
+        id: id.into(),
+        title: format!("{id} title"),
+        workspace_id: "project".into(),
+        project: "/fixture/main".into(),
+        checkout_path: "/fixture/main".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        status: MissionStatus::Running,
+        scope: MissionScope::Pr,
+        cap: 2,
+        conductor: ConductorView {
+            pane_id: conductor.into(),
+            name: conductor.into(),
+            agent_kind: "claude".into(),
+            session: None,
+            present,
+        },
+        nodes: vec![NodeView {
+            key: "fix".into(),
+            title: "Fix it".into(),
+            kind: NodeKind::Change,
+            depends_on: Vec::new(),
+            status: NodeStatus::Working,
+            blocked: None,
+            delivery: None,
+            worker: None,
+            agent_id: Some(worker.into()),
+            pane_id: None,
+            machine: None,
+            pr: None,
+            base_pr: None,
+            branch: None,
+            pr_state: None,
+            pr_url: None,
+            stage: None,
+            attempts: 0,
+            line: None,
+            change: None,
+            review: None,
+            criteria: None,
+            started_at_unix_ms: None,
+            finished_at_unix_ms: None,
+        }],
+        merge_order: Vec::new(),
+        check: None,
+        github: None,
+        decision: None,
+        delay: None,
+        report: None,
+        created_at_unix_ms: 0,
+        started_at_unix_ms: None,
+        closed_at_unix_ms: None,
+        running: 1,
+        stale: false,
+        github_stale: false,
+        github_read_at_unix_ms: None,
+    }
+}
+
+#[test]
+fn a_mission_names_its_present_conductor_and_its_workers_and_an_unread_record_says_so() {
+    let mut runtime = fixture();
+    runtime.snapshot.missions.items = vec![mission("m1", "lead", true, "agent-2")];
+    let ps = answer(&runtime, false);
+    let role = |pane: &str| {
+        agent(&ps, pane)
+            .mission
+            .as_ref()
+            .map(|m| (m.id.clone(), m.role.clone()))
+    };
+    assert_eq!(
+        role("lead"),
+        Some(("m1".to_owned(), "conductor".to_owned()))
+    );
+    assert_eq!(role("child"), Some(("m1".to_owned(), "fix".to_owned())));
+    assert!(!ps.missions_unreadable);
+    // Another session in the Conductor's former pane is not the Conductor.
+    runtime.snapshot.missions.items = vec![mission("m1", "lead", false, "agent-2")];
+    let ps = answer(&runtime, false);
+    assert_eq!(
+        agent(&ps, "lead").mission.as_ref().map(|m| m.id.as_str()),
+        None
+    );
+    runtime.snapshot.missions.failed = Some("unreadable".into());
+    assert!(answer(&runtime, false).missions_unreadable);
+}
+
+#[test]
+fn the_watcher_is_named_as_its_own_row_names_it() {
+    let mut runtime = fixture();
+    let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
+    // A registration with no name of its own goes by its registration id.
+    ledger
+        .agents
+        .iter_mut()
+        .find(|record| record.id == "agent-1")
+        .unwrap()
+        .name = None;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let ps = answer(&runtime, false);
+    assert_eq!(agent(&ps, "lead").name.as_deref(), Some("agent-1"));
+    assert_eq!(agent(&ps, "child").watched_by.as_deref(), Some("agent-1"));
+}

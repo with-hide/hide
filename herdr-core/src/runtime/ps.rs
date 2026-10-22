@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use crate::delivery::answer::{Ps, PsAgent, PsMission, PsPane, PsState};
 use crate::delivery::ledger::Ledger;
-use crate::missions::MissionStatus;
 use crate::model::SidebarAgentSnapshot;
 
 use super::Runtime;
@@ -27,6 +26,7 @@ pub(crate) struct PsRows {
     disconnected: HashSet<String>,
     /// Open missions' workers, by registration id.
     workers: HashMap<String, PsMission>,
+    missions_unreadable: bool,
     ledger: Arc<Ledger>,
 }
 
@@ -39,10 +39,6 @@ fn split_pane(node: &str, scoped: &str) -> (String, String) {
             || (node.to_owned(), scoped.to_owned()),
             |(machine, pane)| (machine.to_owned(), pane.to_owned()),
         )
-}
-
-fn open(status: MissionStatus) -> bool {
-    !matches!(status, MissionStatus::Done | MissionStatus::Cancelled)
 }
 
 impl Runtime {
@@ -67,17 +63,22 @@ impl Runtime {
             .missions
             .items
             .iter()
-            .filter(|mission| open(mission.status))
+            .filter(|mission| mission.status.open())
         {
             let role = |role: &str| PsMission {
                 id: mission.id.clone(),
                 title: mission.title.clone(),
                 role: role.to_owned(),
             };
-            conductors.insert(
-                split_pane(&mission.device_id, &mission.conductor.pane_id),
-                role("conductor"),
-            );
+            // Only while the Conductor's pane runs its session: another
+            // agent in that pane is not the Conductor. A Conductor's pane id
+            // is scoped unless the pane is on this machine.
+            if mission.conductor.present {
+                conductors.insert(
+                    split_pane(node, &mission.conductor.pane_id),
+                    role("conductor"),
+                );
+            }
             for node in &mission.nodes {
                 if let Some(agent) = &node.agent_id {
                     workers.insert(agent.clone(), role(&node.key));
@@ -196,6 +197,7 @@ impl Runtime {
             sessions,
             disconnected,
             workers,
+            missions_unreadable: self.snapshot.missions.failed.is_some(),
             ledger,
         })
     }
@@ -211,6 +213,7 @@ impl PsRows {
             sessions,
             disconnected,
             workers,
+            missions_unreadable,
             ledger,
         } = self;
         let mut used = HashSet::new();
@@ -276,7 +279,11 @@ impl PsRows {
                     project: record.project.clone(),
                 }),
         );
-        Ps { panes, agents }
+        Ps {
+            panes,
+            agents,
+            missions_unreadable,
+        }
     }
 }
 
@@ -285,5 +292,5 @@ fn watcher(ledger: &Ledger, record: &crate::coordination::AgentRecord) -> Option
         .watches
         .iter()
         .find(|watch| watch.target.same_identity(&record.actor))
-        .map(|watch| watch.parent.name.clone())
+        .map(|watch| crate::coordination::wire_name(ledger, &watch.parent))
 }

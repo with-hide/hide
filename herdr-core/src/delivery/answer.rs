@@ -67,6 +67,8 @@ pub struct Ps {
     /// is not connected, or whose pane Hide no longer sees; with `--all`
     /// the ended ones too.
     pub agents: Vec<PsAgent>,
+    /// The mission record could not be read, so no row names its mission.
+    pub missions_unreadable: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
