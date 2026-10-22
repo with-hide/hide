@@ -388,13 +388,14 @@ test("@platform a migrated session with an unknown original repository can retai
       .toEqual({ session: identity, goal: FIRST_GOAL, end: "done" });
     // Emulate the version 2 store while this owned daemon is stopped,
     // removing every later table and column, including display metadata
-    // (version 6) and the goal flows (version 7, whose task table and
-    // columns come back first). A v2 version number with later columns is
-    // not a v2 store.
+    // (version 6), the goal flows (version 7, whose task table and
+    // columns come back first) and the closed flow's line (version 8). A v2
+    // version number with later columns is not a v2 store.
     daemon = await daemon.restart((stateDir) => {
       const db = new DatabaseSync(path.join(stateDir, "links.sqlite3"));
       try {
         db.exec(`
+          ALTER TABLE ledger_chapters DROP COLUMN closed_result;
           CREATE TABLE ledger_tasks(device TEXT NOT NULL, agent TEXT NOT NULL, id TEXT NOT NULL,
            task TEXT NOT NULL, chapter TEXT NOT NULL, name TEXT NOT NULL, at INTEGER NOT NULL,
            last_at INTEGER NOT NULL, end TEXT NOT NULL, PRIMARY KEY(device,agent,id,task));
