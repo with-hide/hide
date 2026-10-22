@@ -85,10 +85,11 @@ test("@platform a native session's record groups its requests by goal flow and k
     await root.hover();
     await page.locator(`[data-task-record="${herdr.panes[0]}"]`).click();
     // A new goal opens a second flow; the first folds to its result and the current one is open (B3, B13, B14).
-    // Its own and its child's pull requests both merged after its last line, so Hide's fact stands for it (fact-status B1).
+    // Its pull requests merge within 200 ms of its line and are seen at the runner's pace, so the result is Hide's merged
+    // fact or its own `끝` line; which one wins is the store tests' to prove (fact-status B1).
     await expect(flows).toHaveCount(2, { timeout: 45_000 });
     await expect(flows.last().locator("[data-record-flow-name]")).toHaveText(NEXT_GOAL);
-    await expect(flows.first().locator('[data-record-flow-result="settled"] [data-record-end="merged"]')).toBeVisible({ timeout: 45_000 });
+    await expect(flows.first().locator('[data-record-flow-result="settled"] [data-record-end="merged"], [data-record-flow-result="turn"] [data-record-end="done"]')).toBeVisible({ timeout: 45_000 });
     await expect(flows.first().locator("[data-record-request]")).toHaveCount(0);
     await expect(flows.last().locator("[data-record-request]")).toContainText(["이슈와 검색 검증 요청"], { timeout: 45_000 });
     // The open PR with failed CI shows; the settled ones stay one fold.
