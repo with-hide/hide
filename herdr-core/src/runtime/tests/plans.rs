@@ -81,10 +81,53 @@ fn resting_row() -> crate::model::SidebarAgentSnapshot {
     row
 }
 
-fn reviewed(runtime: &Runtime) -> crate::model::SidebarAgentSnapshot {
+fn reviewed(runtime: &mut Runtime) -> crate::model::SidebarAgentSnapshot {
     let mut rows = vec![resting_row()];
     runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut rows);
     rows.remove(0)
+}
+
+/// The sender's row as the next published snapshot shows it.
+fn shown(runtime: &mut Runtime) -> crate::model::SidebarAgentSnapshot {
+    runtime.snapshot_delta_payload(0);
+    runtime.snapshot.navigator.agents[0].clone()
+}
+
+#[test]
+fn the_rows_already_shown_ask_and_stop_asking_as_the_review_moves_without_herdr_sending_them_again()
+{
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, sender, _worker) = start(root.path());
+    let mut runtime = runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![resting_row()];
+    let resting = shown(&mut runtime);
+
+    command(&mut runtime, &sender, plan(true)).unwrap();
+    let asking = shown(&mut runtime);
+    assert_eq!(
+        (asking.demand.as_str(), asking.detail.as_deref()),
+        ("question", Some("계획 검토 · 3단계"))
+    );
+
+    command(&mut runtime, &sender, json!({"verb": "approve"})).unwrap();
+    let approved = shown(&mut runtime);
+    assert_eq!(approved.user_turn, None);
+    assert_eq!(
+        (approved.demand.as_str(), approved.group.as_str()),
+        (resting.demand.as_str(), resting.group.as_str())
+    );
+
+    // A question the agent asked while its plan waited is its own, and
+    // stays when the plan stops waiting.
+    command(&mut runtime, &sender, plan(true)).unwrap();
+    shown(&mut runtime);
+    let own = hide_session::turns::UserTurnFact {
+        kind: hide_session::turns::UserTurnKind::Question,
+        content: Some(hide_session::turns::UserTurnContent::new("어느 쪽?", [])),
+    };
+    runtime.snapshot.navigator.agents[0].user_turn = Some(own.clone());
+    command(&mut runtime, &sender, json!({"verb": "approve"})).unwrap();
+    assert_eq!(shown(&mut runtime).user_turn, Some(own));
 }
 
 #[test]
@@ -108,7 +151,7 @@ fn a_plan_put_up_for_review_waits_on_the_operator_until_the_agent_approves_it() 
     );
 
     // B14: the row asks the operator, by the question's own path.
-    let row = reviewed(&runtime);
+    let row = reviewed(&mut runtime);
     assert_eq!(row.demand, "question");
     assert_eq!(row.detail.as_deref(), Some("계획 검토 · 3단계"));
     // A working agent asks nothing yet.
@@ -120,7 +163,7 @@ fn a_plan_put_up_for_review_waits_on_the_operator_until_the_agent_approves_it() 
     let (answer, changed) = command(&mut runtime, &sender, json!({"verb": "approve"})).unwrap();
     assert!(changed);
     assert_eq!(answer["context"]["plan"]["review"], "approved");
-    assert!(reviewed(&runtime).user_turn.is_none());
+    assert!(reviewed(&mut runtime).user_turn.is_none());
     // Approving again changes nothing.
     assert!(
         !command(&mut runtime, &sender, json!({"verb": "approve"}))
@@ -311,4 +354,68 @@ fn a_plan_is_drawn_for_the_pane_that_runs_its_session() {
         .map(|step| step.step.key.as_str())
         .collect();
     assert_eq!(waiting, ["pr"]);
+}
+
+#[test]
+fn another_agents_plan_is_read_but_never_changed_and_an_unknown_agent_is_named() {
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, sender, _worker) = start(root.path());
+    let mut runtime = runtime.lock().unwrap();
+    let recipient = Actor {
+        pane_id: "recipient".into(),
+        name: "recipient".into(),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: Some("recipient-session".into()),
+    };
+    command(&mut runtime, &recipient, plan(true)).unwrap();
+    // The recipient is a registered agent, named as `hide plan` names one.
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger.agents.push(crate::coordination::AgentRecord {
+        id: "agent-1".into(),
+        name: Some("recipient-agent".into()),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: "scope".into(),
+        native_machine: "fixture-machine".into(),
+        session: "recipient-session".into(),
+        instance: "terminal-recipient".into(),
+        pane: "recipient".into(),
+        parent: None,
+        origin: None,
+        project: None,
+        actor: runtime.delivery_observations["recipient"].actor.clone(),
+        ended: false,
+        terminal_id: None,
+        forked: false,
+    });
+    ledger.next_id = 2;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+
+    let (shown, _) = command(
+        &mut runtime,
+        &sender,
+        json!({"verb": "show", "agent": "recipient-agent"}),
+    )
+    .unwrap();
+    assert_eq!(shown["plan"]["review"], "proposed");
+    for verb in ["approve", "drop"] {
+        assert_eq!(
+            command(
+                &mut runtime,
+                &sender,
+                json!({"verb": verb, "agent": "recipient-agent"})
+            ),
+            Err("plan_not_yours".into())
+        );
+        assert_eq!(
+            command(
+                &mut runtime,
+                &sender,
+                json!({"verb": verb, "agent": "nobody"})
+            ),
+            Err("plan_agent_unknown".into())
+        );
+    }
+    let (after, _) = command(&mut runtime, &recipient, json!({"verb": "show"})).unwrap();
+    assert_eq!(after["plan"], shown["plan"]);
 }

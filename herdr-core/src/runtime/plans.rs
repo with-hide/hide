@@ -38,6 +38,19 @@ pub(crate) struct PlanRuntime {
     pub(crate) edit: u64,
     /// The book's edit and the panes' fingerprint the view was made at.
     made_at: Option<(u64, u64)>,
+    /// The review questions laid on the rows shown, by pane, so a review
+    /// that moved is lifted from those rows without waiting for Herdr to
+    /// send them again. Bounded by the rows shown.
+    laid: BTreeMap<String, Laid>,
+    /// The book's edit the rows shown were last laid at.
+    laid_at: u64,
+}
+
+/// What laying a review changed on a row: the question it put there and
+/// the demand the row had before.
+struct Laid {
+    turn: hide_session::turns::UserTurnFact,
+    demand: String,
 }
 
 /// The plans the shell draws, one per pane whose session has one (B7).
@@ -494,7 +507,83 @@ impl Runtime {
     /// say `계획 검토 · N단계`, and the bell and the phone follow the ask's
     /// own path. The agent's own question comes first, and a working agent
     /// asks nothing.
-    pub(super) fn lay_plan_reviews(&self, device: &str, agents: &mut [SidebarAgentSnapshot]) {
+    pub(super) fn lay_plan_reviews(&mut self, device: &str, agents: &mut [SidebarAgentSnapshot]) {
+        // Rows Herdr just sent carry nothing laid.
+        for agent in agents.iter() {
+            self.plans.laid.remove(&agent.pane_id);
+        }
+        self.lay_reviews_on(device, agents);
+    }
+
+    /// Lays the reviews again on the rows already shown once the book moved,
+    /// lifting first what an earlier pass laid, and rebuilds what reads the
+    /// rows: the lineage raises the question, the read axis compares it.
+    pub(super) fn refresh_plan_reviews(&mut self) -> bool {
+        if self.plans.laid_at == self.plans.edit {
+            return false;
+        }
+        self.plans.laid_at = self.plans.edit;
+        let node = self.node.as_str().to_owned();
+        let mut agents = std::mem::take(&mut self.snapshot.navigator.agents);
+        let mut moved = self.relay_reviews(&node, &mut agents);
+        self.snapshot.navigator.agents = agents;
+        for at in 0..self.snapshot.status.remote.len() {
+            let remote = &mut self.snapshot.status.remote[at];
+            let target = remote.target_id.clone();
+            let Some(mut agents) = remote
+                .session
+                .as_mut()
+                .map(|session| std::mem::take(&mut session.agents))
+            else {
+                continue;
+            };
+            moved |= self.relay_reviews(&target, &mut agents);
+            if let Some(session) = self.snapshot.status.remote[at].session.as_mut() {
+                session.agents = agents;
+            }
+        }
+        // A pane that closed since it was laid on is not shown to lift from.
+        let snapshot = &self.snapshot;
+        self.plans.laid.retain(|pane, _| {
+            snapshot
+                .navigator
+                .agents
+                .iter()
+                .any(|agent| agent.pane_id == *pane)
+                || snapshot.status.remote.iter().any(|remote| {
+                    remote.session.as_ref().is_some_and(|session| {
+                        session.agents.iter().any(|agent| agent.pane_id == *pane)
+                    })
+                })
+        });
+        if !moved {
+            return false;
+        }
+        self.refresh_agent_lineage();
+        self.refresh_pane_read_state();
+        true
+    }
+
+    /// Lifts what was laid on `agents` while it is still there, then lays
+    /// the reviews again. Whether any row changed.
+    fn relay_reviews(&mut self, device: &str, agents: &mut [SidebarAgentSnapshot]) -> bool {
+        let before = agents.to_vec();
+        for agent in agents.iter_mut() {
+            let Some(laid) = self.plans.laid.remove(&agent.pane_id) else {
+                continue;
+            };
+            // A question the agent asked since is its own, and stays.
+            if agent.user_turn.as_ref() == Some(&laid.turn) {
+                agent.user_turn = None;
+                agent.demand = laid.demand;
+                crate::agent_state::derive_from_axes(agent);
+            }
+        }
+        self.lay_reviews_on(device, agents);
+        before != agents
+    }
+
+    fn lay_reviews_on(&mut self, device: &str, agents: &mut [SidebarAgentSnapshot]) {
         if !self
             .plans
             .book
@@ -516,14 +605,21 @@ impl Runtime {
             else {
                 continue;
             };
-            agent.user_turn = Some(hide_session::turns::UserTurnFact {
+            let turn = hide_session::turns::UserTurnFact {
                 kind: hide_session::turns::UserTurnKind::Question,
                 content: Some(hide_session::turns::UserTurnContent::new(
                     &review_line(plan),
                     [],
                 )),
-            });
-            agent.demand = "question".to_owned();
+            };
+            self.plans.laid.insert(
+                agent.pane_id.clone(),
+                Laid {
+                    turn: turn.clone(),
+                    demand: std::mem::replace(&mut agent.demand, "question".to_owned()),
+                },
+            );
+            agent.user_turn = Some(turn);
             crate::agent_state::derive_from_axes(agent);
         }
     }

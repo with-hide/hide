@@ -62,6 +62,9 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     await expect(chip).toHaveText("Review");
     // The review is the agent's question: the pane's ask band says it (B14).
     await expect(page.locator('[data-pane-header-band="answer"]')).toContainText("계획 검토 · 4단계");
+    // The sidebar's second line asks the same.
+    const sidebar = page.locator("[data-sidebar-content]").first();
+    await expect(sidebar).toContainText("계획 검토 · 4단계");
     // Putting a plan up opens no 보기 slot by itself (D-29).
     await expect(page.locator('aside[data-detail="plan"]')).toHaveCount(0);
 
@@ -69,6 +72,7 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     await expect(chip).toHaveAttribute("data-plan-chip-state", "running");
     await expect(chip).toHaveText("1/4");
     await expect(page.locator('[data-pane-header-band="answer"]')).toHaveCount(0);
+    await expect(sidebar).not.toContainText("계획 검토");
 
     await plan(agent, ["node", "core", "--status", "working", "--line", "이벤트 쓰는 중"]);
     // The working step and its line take the pane's second line (B7).

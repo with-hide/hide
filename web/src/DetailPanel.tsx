@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ExternalLinkIcon, FileTextIcon, GitPullRequestIcon, ListChecksIcon, NetworkIcon, XIcon } from "lucide-react";
+import { ArrowLeftIcon, ExternalLinkIcon, FileTextIcon, GitPullRequestIcon, ListChecksIcon, WaypointsIcon, XIcon } from "lucide-react";
 import { cn } from "./lib/utils";
 import { PR_LOOK } from "./prMark";
 import type { Actions } from "./actions";
@@ -62,7 +62,7 @@ export function DetailIcon({ item, className }: { item: DetailItem; className?: 
   const state = useShellStore((s) => item.kind === "pull_request"
     ? catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id)?.pull_requests?.find((row) => row.number === item.number)?.state ?? null
     : null);
-  if (item.kind === "mission") return <NetworkIcon aria-hidden="true" className={className} data-detail-mark="mission" />;
+  if (item.kind === "mission") return <WaypointsIcon aria-hidden="true" className={className} data-detail-mark="mission" />;
   if (item.kind === "plan") return <ListChecksIcon aria-hidden="true" className={className} data-detail-mark="plan" />;
   if (item.kind !== "pull_request") return <FileTextIcon aria-hidden="true" className={className} />;
   const look = state ? PR_LOOK[state] : null;

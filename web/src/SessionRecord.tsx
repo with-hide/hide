@@ -26,7 +26,7 @@ import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
 import type { AgentRow, Checkout, MissedWork, PlanView, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
 import { PlanGraph } from "./PlanGraph";
-import { planCount } from "./plans";
+import { planCount, planOfSession, planWorkLine } from "./plans";
 import { statusText } from "./agentStatus";
 import { useShellStore } from "./store";
 import { summariesEnabled } from "./hideAi";
@@ -217,6 +217,9 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
   const kind = recorded ? (recorded.end === "question" ? "question" : recorded.end === "blocked" || recorded.end === "limited" ? "blocked" : recorded.end === "working" ? "working" : "ended") : live;
   const since = recorded ? recorded.at_unix_ms : kind === "ended" ? record.ended_at_unix_ms ?? agent?.changed_at_unix_ms ?? null : agent?.changed_at_unix_ms ?? null;
   const word = recorded ? t(`requests.end.${recorded.end}`) : kind === "working" ? t("agents.status.working") : kind === "question" ? t("agents.status.question") : kind === "blocked" ? t("agents.status.error") : agent && agent.status_code !== "done" ? statusText(t, agent.status_code) : t("sessionWork.done");
+  // While it works on a plan, the line is its step, as on the pane's second row (B7).
+  const livePlan = useShellStore((s) => planOfSession(s.rest, record.session)) ?? record.plan ?? null;
+  const step = kind === "working" && livePlan ? planWorkLine(livePlan) : null;
   const said = recorded ? recorded.line || null : kind === "question" ? question ?? agent?.state.ask?.what ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
   const pane = agent?.pane_id ?? null;
   const button = pane === null ? <RestoreSession record={record} checkout={checkout} actions={actions} /> : kind === "question" ? (
@@ -234,6 +237,7 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
       </p>
       {button}
     </div>
+    {step ? <p className="whitespace-normal text-caption text-agent-working [overflow-wrap:anywhere]" title={step} data-record-now-step="true">{step}</p> : null}
     {said && kind !== "working" ? <p className={cn("whitespace-normal text-caption [overflow-wrap:anywhere]", kind === "question" ? "text-warning" : kind === "blocked" ? "text-destructive" : "text-subtle-foreground")} title={said} data-record-now-words="true">{said}</p> : null}
   </div>;
 }

@@ -1272,7 +1272,7 @@ In the 보기 slot the head says `계획 n/m · <N분 전 갱신>` (`계획 N단
 While the plan waits for review a band says `검토 기다림 · 대화에서 답하세요` with one button, `대화로`, which goes to the pane; there is no button that approves, and the band goes once the agent runs `hide plan approve`.
 A finished plan's band says `끝남`; a plan whose session is gone draws one line saying so.
 While a plan runs, the pane's second row shows the current step and its line, `<단계> · <line>`, in the progress place; while it waits for review the row is the ask band, `계획 검토 · N단계`, and the sidebar's second line says the same ([status-model.md](status-model.md#a-plan-waiting-for-review-is-a-question)).
-The session record has a `계획` section with the count, `끝남` once finished, and the small map, kept after the session ends.
+The session record has a `계획` section with the count, `끝남` once finished, and the small map, kept after the session ends; while the session works its `지금` box says the current step and its line as the second row does.
 Settings › Agents lists the three skills Hide installs, `hide`, `hide-conductor` (waypoints) and `hide-plan` (list-checks), each with one line on what it is for and the help it points at; they come and go with each agent's switch.
 
 ### The session record

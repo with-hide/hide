@@ -139,8 +139,11 @@ pub struct Intake {
     pub ids: Vec<String>,
     /// The pane's plan summary a prompt's pull carries (PRD hide-plan
     /// D-30); absent from a tool event's pull and from an older daemon.
+    /// Read only once the letters are taken, so one this helper cannot read
+    /// costs the summary, never the letters beside it: a device's helper may
+    /// be older than the core it asks.
     #[serde(default)]
-    pub plan_context: Option<crate::plan_record::PlanContext>,
+    pub plan_context: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -179,7 +182,17 @@ pub fn pull(deadline: Instant, prompt: &Prompt) -> Result<Option<Intake>, Failur
 /// hook, and adds its line to what the agent reads (PRD hide-plan D-14,
 /// D-30). Outside a Herdr pane, or without the session, nothing is kept.
 fn keep_plan(mut intake: Intake, session: Option<&str>) -> Option<Intake> {
-    if let Some(plan) = intake.plan_context.take() {
+    let raw = intake.plan_context.take();
+    let plan = raw.and_then(|raw| {
+        serde_json::from_value::<crate::plan_record::PlanContext>(raw)
+            .inspect_err(|_| {
+                if let Ok(home) = hide_platform::host::home_dir() {
+                    diagnose(&home, "plan_context_format");
+                }
+            })
+            .ok()
+    });
+    if let Some(plan) = plan {
         let pane = std::env::var("HERDR_PANE_ID")
             .ok()
             .filter(|pane| !pane.is_empty());
@@ -368,7 +381,7 @@ struct Diagnostics {
 /// `guardrails_words`: a shell call named more words than are checked;
 /// `guardrails_failed`: the hook failed or ran out of time before it judged a
 /// call).
-const CAUSES: [&str; 25] = [
+const CAUSES: [&str; 26] = [
     "session_conflict",
     "cli",
     "deadline",
@@ -394,6 +407,7 @@ const CAUSES: [&str; 25] = [
     "guardrails_words",
     "guardrails_failed",
     "plan_record",
+    "plan_context_format",
 ];
 
 /// Fixed causes ([`CAUSES`]), private storage and a nonblocking cross-process lock.
@@ -500,6 +514,24 @@ fn diagnostic_path(home: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plan_summary_this_helper_cannot_read_leaves_the_letters_to_deliver() {
+        let answer = serde_json::json!({
+            "context": "letter body",
+            "ids": ["letter-1"],
+            "plan_context": {"plan": null, "mission": null, "conductor": null, "later": 1},
+        });
+        let intake = intake(answer).unwrap().unwrap();
+        assert_eq!(
+            (intake.context.as_str(), intake.ids.as_slice()),
+            ("letter body", &["letter-1".to_owned()][..])
+        );
+        assert!(
+            serde_json::from_value::<crate::plan_record::PlanContext>(intake.plan_context.unwrap())
+                .is_err()
+        );
+    }
 
     #[test]
     fn prompt_identity_ignores_only_non_bmp_characters_and_outer_whitespace() {

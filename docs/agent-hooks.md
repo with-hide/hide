@@ -473,7 +473,7 @@ The prompt hook adds the record's lines to the session context, at most three:
 The pre-tool hook reads only the record, after the project guardrails and before the spawn guard, and never asks the daemon; a tool call refused here is logged in the spawn guard's log as `plan.refused` with the rule, the runtime and the pane, never the command.
 It refuses three things and lets everything else run, reading and searching included:
 
-- a file write, `git commit` or `git push` while the plan waits for the operator's review (`plan_proposed`), with `hide plan approve` as the way on;
+- a file write, `git commit` or `git push` while the plan waits for the operator's review (`plan_proposed`), with `hide plan approve` as the way on and `hide plan set --json '<plan>' --ask` as the way to send a revised plan without writing a file;
 - `gh pr merge` by a worker of a mission that goes up to pull requests (`mission_merge`);
 - `git push` with `--force`, `--force-with-lease`, a short flag holding `f` or a `+` refspec, and `git rebase` other than `--abort` or `--quit`, in any pane with a record (`history_rewrite`).
 

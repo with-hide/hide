@@ -3083,7 +3083,8 @@ impl Runtime {
             self.apply_pane_launches(&agents, ReadRecordScope::Local, live_pane_ids.as_ref());
             // A plan waiting for review is a question the lineage raises
             // and the read axis compares, so it is laid before both.
-            self.lay_plan_reviews(self.node.as_str(), &mut agents);
+            let node = self.node.as_str().to_owned();
+            self.lay_plan_reviews(&node, &mut agents);
             // A pull request's checks are a wait the lineage decides and an
             // end the read axis compares, so they are laid before both.
             self.lay_checks(&mut agents);

@@ -181,7 +181,7 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
         lines.push(line);
         if context.proposed() {
             lines.push(
-                "계획 검토 기다림: 운영자가 대화에서 답하기 전에는 파일 쓰기, git commit, git push가 막힌다. 승인하면 hide plan approve, 고치라면 고쳐서 hide plan set --ask, 하지 말라면 hide plan drop.".to_owned(),
+                "계획 검토 기다림: 운영자가 대화에서 답하기 전에는 파일 쓰기, git commit, git push가 막힌다. 승인하면 hide plan approve, 고치라면 파일 대신 hide plan set --json '<계획>' --ask로 다시 올리고, 하지 말라면 hide plan drop.".to_owned(),
             );
         } else if now.saturating_sub(plan.updated_at_unix_ms) > STALE_AFTER_MS {
             let key = plan
@@ -246,7 +246,7 @@ impl Refused {
     pub fn reason(self) -> &'static str {
         match self {
             Self::ProposedPlan => {
-                "Not run: 계획 검토 기다림 · 운영자가 답한 뒤 hide plan approve. Reading and looking around still run; write, commit and push wait for the operator's answer."
+                "Not run: 계획 검토 기다림 · 운영자가 답한 뒤 hide plan approve. Reading and looking around still run; write, commit and push wait for the operator's answer. A revised plan goes up with hide plan set --json '<plan>' --ask."
             }
             Self::MissionMerge => {
                 "Not run: this mission goes up to pull requests, so its workers do not merge. Report the pull request to the Conductor; the operator merges."

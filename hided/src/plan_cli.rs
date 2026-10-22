@@ -25,9 +25,10 @@ const FILE_LIMIT: u64 = 96 * 1024;
 pub enum PlanCli {
     Help,
     Command(PlanCommand),
-    /// A plan still to be read from a file, at run time.
-    SetFile {
-        path: String,
+    /// A plan still to be read, at run time, so a plan that is not one
+    /// answers `plan_invalid` on the command's JSON line however it came.
+    Set {
+        source: PlanSource,
         ask: bool,
         why: Option<String>,
         reason: Option<String>,
@@ -109,6 +110,13 @@ fn plan_input(text: &str) -> Result<PlanInput, String> {
     serde_json::from_str(text).map_err(|error| format!("the plan is not a plan: {error}"))
 }
 
+/// Where `set` takes the plan from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlanSource {
+    File(String),
+    Json(String),
+}
+
 /// Parses the words after `hide plan`.
 pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PlanCli, String> {
     let args: Vec<String> = args.cloned().collect();
@@ -132,23 +140,23 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PlanCli, Stri
             }
             let why = ask.clone().flatten();
             let reason = values.get("--reason").cloned();
-            match (values.get("--file"), values.get("--json")) {
-                (Some(path), None) => {
-                    return Ok(PlanCli::SetFile {
-                        path: path.clone(),
-                        ask: ask.is_some(),
-                        why,
-                        reason,
-                    });
+            let source = match (values.get("--file"), values.get("--json")) {
+                (Some(path), None) => PlanSource::File(path.clone()),
+                // Text that is not JSON is a usage error, as every JSON
+                // option's is; JSON that is not a plan says where at run time.
+                (None, Some(text)) => {
+                    serde_json::from_str::<Value>(text)
+                        .map_err(|error| format!("--json is not JSON: {error}"))?;
+                    PlanSource::Json(text.clone())
                 }
-                (None, Some(text)) => PlanCommand::Set {
-                    plan: plan_input(text)?,
-                    ask: ask.is_some(),
-                    why,
-                    reason,
-                },
                 _ => return Err("give the plan once, with --file or --json".into()),
-            }
+            };
+            return Ok(PlanCli::Set {
+                source,
+                ask: ask.is_some(),
+                why,
+                reason,
+            });
         }
         "node" => {
             let Flags {
@@ -247,12 +255,15 @@ pub fn run(env: &Env, command: PlanCli) -> Result<(), String> {
             return Ok(());
         }
         PlanCli::Command(command) => command,
-        PlanCli::SetFile {
-            path,
+        PlanCli::Set {
+            source,
             ask,
             why,
             reason,
-        } => match read_file(&path).and_then(|text| plan_input(&text)) {
+        } => match match source {
+            PlanSource::File(path) => read_file(&path).and_then(|text| plan_input(&text)),
+            PlanSource::Json(text) => plan_input(&text),
+        } {
             Ok(plan) => PlanCommand::Set {
                 plan,
                 ask,
@@ -312,8 +323,8 @@ mod tests {
         let bare = words(&["set", "--file", "p.json", "--ask"]);
         assert_eq!(
             parse(bare.iter()).unwrap(),
-            PlanCli::SetFile {
-                path: "p.json".into(),
+            PlanCli::Set {
+                source: PlanSource::File("p.json".into()),
                 ask: true,
                 why: None,
                 reason: None
@@ -322,8 +333,8 @@ mod tests {
         let why = words(&["set", "--ask", "scope moved", "--file", "p.json"]);
         assert_eq!(
             parse(why.iter()).unwrap(),
-            PlanCli::SetFile {
-                path: "p.json".into(),
+            PlanCli::Set {
+                source: PlanSource::File("p.json".into()),
                 ask: true,
                 why: Some("scope moved".into()),
                 reason: None
@@ -336,7 +347,11 @@ mod tests {
         ]);
         assert!(matches!(
             parse(plain.iter()).unwrap(),
-            PlanCli::Command(PlanCommand::Set { ask: false, .. })
+            PlanCli::Set {
+                source: PlanSource::Json(_),
+                ask: false,
+                ..
+            }
         ));
         assert!(parse(words(&["set"]).iter()).is_err());
     }

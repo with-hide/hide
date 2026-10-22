@@ -191,12 +191,10 @@ impl PlanCommand {
             })
         };
         match self {
-            Self::Set {
-                plan, why, reason, ..
-            } => {
-                plan.nodes.len() <= NODE_LIMIT
-                    && valid_line(why.as_deref(), LINE_LIMIT)
-                    && valid_line(reason.as_deref(), LINE_LIMIT)
+            Self::Set { why, reason, .. } => {
+                // Too many steps is the core's `plan_too_large`, which says
+                // what to do about it.
+                valid_line(why.as_deref(), LINE_LIMIT) && valid_line(reason.as_deref(), LINE_LIMIT)
             }
             Self::Node { key, status, line } => {
                 dag::valid_key(key)
@@ -324,14 +322,26 @@ pub(crate) fn apply_set(
             if steps.len() >= NODE_LIMIT {
                 return Err(refused("plan_too_large", NODE_LIMIT));
             }
+            // Finished work stays finished, so the count never goes back;
+            // anything else left out is dropped.
+            let done = gone.status == StepStatus::Done;
             steps.push(Step {
-                status: StepStatus::Dropped,
-                // What it waited on may be gone too; a dropped step holds
-                // nothing up and keeps no edge to a step that is not there.
+                status: if done {
+                    StepStatus::Done
+                } else {
+                    StepStatus::Dropped
+                },
+                // What it waited on may be gone too; a left-out step holds
+                // nothing up and keeps no edge to a step that is not there,
+                // nor, when done, to one the new list has not finished.
                 depends_on: gone
                     .depends_on
                     .iter()
-                    .filter(|key| keys.contains(key.as_str()))
+                    .filter(|key| {
+                        input.nodes.iter().any(|node| {
+                            node.key == **key && (!done || node.status == StepStatus::Done)
+                        })
+                    })
                     .cloned()
                     .collect(),
                 changed: true,
@@ -621,6 +631,34 @@ mod tests {
             ]
         );
         assert_eq!(next.review, Review::Approved);
+    }
+
+    #[test]
+    fn a_replan_that_leaves_out_finished_steps_keeps_them_done_and_the_count() {
+        use StepStatus::*;
+        let first = set(
+            None,
+            vec![
+                step("a", &[], Done),
+                step("b", &["a"], Done),
+                step("c", &["b"], Planned),
+            ],
+            false,
+        )
+        .unwrap();
+        // The agent sends only what is left, with its first step not done.
+        let next = set(Some(&first), vec![step("c", &[], Working)], false).unwrap();
+        let kept: Vec<(&str, StepStatus, bool)> = next
+            .steps
+            .iter()
+            .map(|step| (step.key.as_str(), step.status, step.changed))
+            .collect();
+        assert_eq!(
+            kept,
+            [("c", Working, false), ("a", Done, true), ("b", Done, true)]
+        );
+        let count = progress(&next);
+        assert_eq!((count.done, count.total), (2, 3));
     }
 
     #[test]

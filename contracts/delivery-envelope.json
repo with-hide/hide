@@ -84,7 +84,7 @@
           "mission": null,
           "conductor": null
         },
-        "hint": "계획: 지금 Core events (1/4) · 다음 Web map · 5분 전 갱신\n계획 검토 기다림: 운영자가 대화에서 답하기 전에는 파일 쓰기, git commit, git push가 막힌다. 승인하면 hide plan approve, 고치라면 고쳐서 hide plan set --ask, 하지 말라면 hide plan drop.",
+        "hint": "계획: 지금 Core events (1/4) · 다음 Web map · 5분 전 갱신\n계획 검토 기다림: 운영자가 대화에서 답하기 전에는 파일 쓰기, git commit, git push가 막힌다. 승인하면 hide plan approve, 고치라면 파일 대신 hide plan set --json '<계획>' --ask로 다시 올리고, 하지 말라면 hide plan drop.",
         "commands": [
           {
             "tool": "shell",

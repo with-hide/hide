@@ -435,3 +435,15 @@ it("does not restore a removed nested checkout in its still registered parent fo
     expect(text(view.container.querySelector('[data-record-checkout="removed"]'))).toContain("Removed");
   } finally { await view.unmount(); }
 });
+
+it("says the plan's current step and its line in the 지금 box while the session works, and no step otherwise (B7)", async () => {
+  const step = (key: string, status: "done" | "working" | "planned", line: string | null = null) => ({ key, title: `${key} title`, depends_on: [], status, line, output: null, changed: false, change: null, waiting: false });
+  const plan = { pane_id: "", session: SESSION, steps: [step("spec", "done"), step("core", "working", "events land")], review: "approved" as const, ask: null, progress: { current: "core", next: null, done: 1, total: 2, finished: false }, created_at_unix_ms: AT, updated_at_unix_ms: AT };
+  const working = await mount({ ...BASE, status: status("working", "Writing events"), plan });
+  try {
+    expect(working.container.querySelector("[data-record-now]")!.getAttribute("data-record-now")).toBe("working");
+    expect(text(working.container.querySelector("[data-record-now-step]"))).toBe("core title · events land");
+  } finally { await working.unmount(); }
+  const done = await mount({ ...BASE, plan });
+  try { expect(done.container.querySelector("[data-record-now-step]")).toBeNull(); } finally { await done.unmount(); }
+});
