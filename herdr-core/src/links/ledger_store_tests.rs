@@ -3144,6 +3144,42 @@ fn a_past_flow_shows_its_closing_line_or_reads_as_moved_on() {
     ));
 }
 
+/// D-01, B2: a turn still running when the next request opened a flow
+/// belongs to the flow it began in, for the top state as for the flow list.
+#[test]
+fn the_top_state_places_its_turn_by_when_it_began() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "PR 올려줘");
+    closing(&mut store, "기록 화면 구현", 1_000, None);
+    pull_request(&mut store, 41, 1_200, Some(9_000), None);
+    request(&mut store, 2, "다음은 설정 화면");
+    closing(&mut store, "설정 화면 구현", 2_000, None);
+    store
+        .apply_ledger_update(&LedgerUpdate::TurnEnd {
+            session: session(),
+            offset: 1,
+            started_at_unix_ms: 1_100,
+            at_unix_ms: 2_500,
+            end: LabelEnd::Waiting,
+            work_author: true,
+            asks_answered: false,
+            line: "CI 기다림".into(),
+            turn_witness: None,
+            judgment: TurnJudgment::default(),
+        })
+        .unwrap();
+    let record = store.ledger_record(&session()).unwrap();
+    assert_eq!(
+        record
+            .status
+            .unwrap()
+            .settled
+            .map(|settled| settled.numbers),
+        Some(vec![41])
+    );
+}
+
 /// D-03, B6: moving to the next flow closes the questions before it, and
 /// asking one again in the new flow opens it again; a question the operator
 /// put away stays put away.

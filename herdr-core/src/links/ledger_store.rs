@@ -2278,6 +2278,7 @@ fn status_of(turns: &[TurnRow]) -> Option<RecordStatus> {
             at_unix_ms: turn.end_at,
             limited,
             settled: None,
+            started_at_unix_ms: turn.start_at,
         }),
         None => Some(RecordStatus {
             end: LabelEnd::Blocked,
@@ -2285,6 +2286,7 @@ fn status_of(turns: &[TurnRow]) -> Option<RecordStatus> {
             at_unix_ms: newest.end_at,
             limited,
             settled: None,
+            started_at_unix_ms: newest.start_at,
         }),
     }
 }
@@ -2335,7 +2337,7 @@ fn settle(record: &mut SessionRecord) {
     {
         let flow = starts
             .iter()
-            .rposition(|start| *start <= status.at_unix_ms)
+            .rposition(|start| *start <= status.started_at_unix_ms)
             .unwrap_or(0);
         let pending: Vec<&WorkOutput> = made[flow]
             .iter()

@@ -385,6 +385,10 @@ pub struct RecordStatus {
     /// that turn (PRD session-record-fact-status D-01, B2): shown in place
     /// of its line.
     pub settled: Option<PrSettlement>,
+    /// When that turn began, which places it in its flow as the flow list
+    /// does; the record reads it and the wire does not.
+    #[serde(skip)]
+    pub started_at_unix_ms: u64,
 }
 
 /// Every pull request a flow made, merged or closed, from the stored PR
