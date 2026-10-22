@@ -395,10 +395,20 @@ fn dir_state(
             ComponentState::Absent,
             Some(format!(
                 "skills named {} that Hide did not write are already there; Hide left them alone",
-                crate::agents::SKILLS.map(|skill| skill.name).join(" and ")
+                skill_names()
             )),
         ),
         SkillObserved::Unreadable(reason) => (ComponentState::Failed, Some(reason.clone())),
+    }
+}
+
+/// Hide's skill names as a sentence lists them: `a, b and c`.
+fn skill_names() -> String {
+    let names = crate::agents::SKILLS.map(|skill| skill.name);
+    match names.split_last() {
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => String::new(),
     }
 }
 

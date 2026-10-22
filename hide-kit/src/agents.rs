@@ -10,7 +10,7 @@
 //!
 //! Three things a row can turn on for an agent the operator switched on:
 //!
-//! - Hide's skill stubs ([`SKILLS`]: `hide-browser`, `hide-conductor`), in
+//! - Hide's skill stubs ([`SKILLS`]: `hide`, `hide-browser`, `hide-conductor`), in
 //!   the folder the agent reads ([`SkillDir`]); the folder is shared by every
 //!   agent that reads it, so the stubs stay while any of them is on;
 //! - a hook: Claude Code and Codex keep their kit parts
@@ -206,11 +206,19 @@ pub struct Skill {
     pub version: u32,
 }
 
+/// The guide to Hide as a whole; the other stubs are its topics.
+pub const GUIDE_SKILL: Skill = Skill {
+    name: "hide",
+    description: "Work inside Hide, the operator's workspace for coding agents: send and answer letters to other agents, start agents and follow them, show the operator a file or a diff, and read or add Project Memory. Use when a task involves another agent, the operator's screen in Hide, or Project Memory, or when you need to know what Hide offers here.",
+    body: "Run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory, and which skill to read for a browser or a mission.",
+    version: 2,
+};
+
 pub const BROWSER_SKILL: Skill = Skill {
     name: "hide-browser",
     description: "Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.",
     body: "Run `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.",
-    version: 1,
+    version: 2,
 };
 
 /// Turns the session it runs in into a mission's Conductor (PRD
@@ -219,11 +227,11 @@ pub const CONDUCTOR_SKILL: Skill = Skill {
     name: "hide-conductor",
     description: "Run a mission in Hide as its Conductor: plan the work with the operator, start the agents that do it, follow their pull requests, and report. Use when the operator gives you a goal to carry out with several agents, or asks you to take over a mission.",
     body: "Run `hide mission help` and follow what it prints. It explains how to plan a mission with the operator, start and follow its workers, change the plan when told, merge, report, and take over a mission whose Conductor is gone.",
-    version: 1,
+    version: 2,
 };
 
 /// Every stub Hide writes; each skill folder holds all of them.
-pub const SKILLS: [Skill; 2] = [BROWSER_SKILL, CONDUCTOR_SKILL];
+pub const SKILLS: [Skill; 3] = [GUIDE_SKILL, BROWSER_SKILL, CONDUCTOR_SKILL];
 
 /// The marker line of a stub, which proves Hide wrote it and says which
 /// text it was. A file without it is the operator's and is never touched.
@@ -351,11 +359,15 @@ pub(crate) fn login_shell() -> Option<PathBuf> {
 // --- The skill stub ------------------------------------------------------------
 
 impl Skill {
-    /// The text of the stub.
+    /// The text of the stub. The description is a quoted YAML string: a
+    /// plain one ends at its first `: `, and a strict reader such as Pi's
+    /// then drops the whole skill (version 1's `hide-conductor`).
     pub(crate) fn text(self) -> String {
+        // A JSON string is a YAML double-quoted scalar.
+        let description = serde_json::Value::from(self.description).to_string();
         format!(
-            "---\nname: {}\ndescription: {}\n---\n\n<!-- {SKILL_MARKER_NAME}@{}: written by Hide; remove it from Settings, Agents -->\n\n{}\n",
-            self.name, self.description, self.version, self.body
+            "---\nname: {}\ndescription: {description}\n---\n\n<!-- {SKILL_MARKER_NAME}@{}: written by Hide; remove it from Settings, Agents -->\n\n{}\n",
+            self.name, self.version, self.body
         )
     }
 

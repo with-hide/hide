@@ -55,6 +55,8 @@ pub enum CommandKind {
     BrowserPage(crate::browser_page::Command),
     /// `hide browser help`: the agent guide for the page commands.
     BrowserHelp,
+    /// `hide guide`: the agent's guide to Hide (`crate::guide`).
+    Guide,
     WorkspaceBootstrap,
     /// `hide workspace memory`: a hook's Project Memory from the core, with
     /// the prompt on stdin (PRD core-host-node-move B14).
@@ -126,6 +128,10 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             (None, _) => Ok(CommandKind::Version { json: false }),
             (Some("--json"), None) => Ok(CommandKind::Version { json: true }),
             _ => Err("usage: hide version [--json]".to_owned()),
+        },
+        Some("guide") => match iter.next() {
+            None => Ok(CommandKind::Guide),
+            Some(_) => Err("usage: hide guide".to_owned()),
         },
         Some("contract") => match (iter.next().map(String::as_str), iter.next()) {
             (Some("--json"), None) => Ok(CommandKind::Contract),
@@ -513,7 +519,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         return Ok(());
     }
     if kind == CommandKind::Help {
-        println!("hide version [--json]\nhide contract --json");
+        println!("hide guide\nhide version [--json]\nhide contract --json");
         println!("{}", crate::delivery_cli::USAGE);
         println!("{}", crate::agent_cli::USAGE);
         println!("{}", crate::mission_cli::USAGE);
@@ -529,6 +535,10 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
     }
     if kind == CommandKind::BrowserHelp {
         print!("{}", crate::browser_page::HELP);
+        return Ok(());
+    }
+    if kind == CommandKind::Guide {
+        print!("{}", crate::guide::text());
         return Ok(());
     }
     let env = match needed_keys(&kind).map_or_else(env::load, env::load_for) {
@@ -580,6 +590,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Help
         | CommandKind::AgentSpawnHelp
         | CommandKind::BrowserHelp
+        | CommandKind::Guide
         | CommandKind::Version { .. }
         | CommandKind::Contract => unreachable!("handled above"),
         CommandKind::Open => open(&env),
