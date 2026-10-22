@@ -34,7 +34,7 @@ const children: RecordValue[] = CHILDREN.map(([title, agent, end, prs], i) => {
   const outputs = prs.map(([number, state]) => pr(number, `${title} 결과`, state, session, title));
   return {
     ...empty, session, title, fallback_title: agent, native_title: title, manual_title: null, state: end === "working" ? "working" : "idle", cwd: "/work/hide", path: null, started_at_unix_ms: AT + 200 * MIN, ended_at_unix_ms: null,
-    status: { end, line: end === "done" ? "조사 결과를 편지로 보냄" : "기록 화면 구현 중", at_unix_ms: AT + 240 * MIN, limited: null },
+    status: { end, line: end === "done" ? "조사 결과를 편지로 보냄" : "기록 화면 구현 중", at_unix_ms: AT + 240 * MIN, limited: null, settled: null },
     flows: [flow(`child-flow-${i}`, title, 200, [request(1, 200, `${title}을 맡아 결과를 편지로 보내줘.`, { author: "parent", summary: `${title} 맡김` })], null)],
     outputs, pr_groups: outputs.length ? [{ child: null, name: title, outputs }] : [],
   };
@@ -42,11 +42,11 @@ const children: RecordValue[] = CHILDREN.map(([title, agent, end, prs], i) => {
 const BASE: RecordValue = {
   ...empty,
   session: SESSION, title: "세션 기록 재설계 PRD", fallback_title: "Claude Code", native_title: "세션 기록 재설계", manual_title: null, state: "idle", cwd: "/work/hide", path: null, started_at_unix_ms: AT, ended_at_unix_ms: null,
-  status: { end: "question", line: "PRD 승인할지 골라주세요", at_unix_ms: AT + 240 * MIN, limited: null },
+  status: { end: "question", line: "PRD 승인할지 골라주세요", at_unix_ms: AT + 240 * MIN, limited: null, settled: null },
   asks: [ask("ask-1", "PRD 승인 여부"), ask("ask-2", "\"설치 안 됨\" 표시를 넣을지")],
   flows: [
-    flow("flow-1", "pane 카드 정리", 0, [request(1, 0, "pane 맨 위 이름에 마우스를 올리면 계속 팝오버가 나와서 불편해", { summary: "pane 이름 hover 팝오버 없애기" }), request(2, 8, "두 번째 줄은 지금 상태만 보이게 해줘", { summary: "두 번째 줄은 지금 상태만" }), request(3, 21, "1번 ㅇㅇ 2번은 그럼 어떻게 바뀌는 거야?", { summary: "1번 안 채택, 2번 안이 어떻게 바뀌는지 질문", answers: "두 안 중 고르기" }), request(4, 30, "머지해~", { summary: "PR 머지" })], { end: "done", line: "PR 1533 머지, 제목 hover 카드 제거", at_unix_ms: AT + 40 * MIN }),
-    flow("flow-2", "요청한 작업 체크리스트 분석", 46, [request(5, 46, "요청한 작업이 너무 믿음이 안 가. 세션 10개쯤 보고 뭐가 문제인지 봐줘", { summary: "체크리스트 신뢰 문제를 세션 10개로 분석" }), request(6, 80, "케이스별로 정리해줘", { summary: "케이스별 정리" })], { end: "done", line: "세션 11개 검증, 수정안 정리", at_unix_ms: AT + 160 * MIN }),
+    flow("flow-1", "pane 카드 정리", 0, [request(1, 0, "pane 맨 위 이름에 마우스를 올리면 계속 팝오버가 나와서 불편해", { summary: "pane 이름 hover 팝오버 없애기" }), request(2, 8, "두 번째 줄은 지금 상태만 보이게 해줘", { summary: "두 번째 줄은 지금 상태만" }), request(3, 21, "1번 ㅇㅇ 2번은 그럼 어떻게 바뀌는 거야?", { summary: "1번 안 채택, 2번 안이 어떻게 바뀌는지 질문", answers: "두 안 중 고르기" }), request(4, 30, "머지해~", { summary: "PR 머지" })], { kind: "turn", end: "done", line: "PR 1533 머지, 제목 hover 카드 제거", at_unix_ms: AT + 40 * MIN }),
+    flow("flow-2", "요청한 작업 체크리스트 분석", 46, [request(5, 46, "요청한 작업이 너무 믿음이 안 가. 세션 10개쯤 보고 뭐가 문제인지 봐줘", { summary: "체크리스트 신뢰 문제를 세션 10개로 분석" }), request(6, 80, "케이스별로 정리해줘", { summary: "케이스별 정리" })], { kind: "turn", end: "done", line: "세션 11개 검증, 수정안 정리", at_unix_ms: AT + 160 * MIN }),
     flow("flow-3", "세션 기록 재설계 PRD", 230, [
       request(7, 217, "케이스별로 시각화해서 보여줘", { summary: "케이스별로 시각화해 보여달라" }),
       request(8, 227, "수정안이 뭔지 설명해줘", { summary: "수정안이 무엇인지 설명해 달라" }),
@@ -65,10 +65,18 @@ BASE.children = children;
 /** The scene's record for a `case`: the default, or one that shows a state the record draws. */
 function recordFor(base: RecordValue, kind: string | null): RecordValue {
   const record = structuredClone(base);
-  if (kind === "limited") record.status = { end: "question", line: "릴리스 리허설만 남음", at_unix_ms: AT + 240 * MIN, limited: "한도 소진 · 10-22 13:00 풀림" };
-  if (kind === "all-limited") record.status = { end: "blocked", line: "사용 한도 도달", at_unix_ms: AT + 240 * MIN, limited: "사용 한도 도달" };
+  if (kind === "limited") record.status = { end: "question", line: "릴리스 리허설만 남음", at_unix_ms: AT + 240 * MIN, limited: "한도 소진 · 10-22 13:00 풀림", settled: null };
+  if (kind === "all-limited") record.status = { end: "blocked", line: "사용 한도 도달", at_unix_ms: AT + 240 * MIN, limited: "사용 한도 도달", settled: null };
   if (kind === "goal") record.flows.at(-1)!.requests.unshift(request(13, 229, "출시 전 검수 리포트 정리", { goal_command: true, summary: "출시 전 검수 리포트 정리" }));
   if (kind === "legacy") record.flows = record.flows.map((one) => ({ ...one, requests: one.requests.map((row) => ({ ...row, summary: null, answers: null })), result: one.result ? { ...one.result, line: "" } : null }));
+  if (kind === "facts") {
+    // Hide's facts over the labels' lines (fact-status B1-B5): a merged PR, a wait moved on from, a closing line.
+    record.flows[0]!.result = { kind: "settled", state: "merged", numbers: [1533], at_unix_ms: AT + 44 * MIN };
+    record.flows.splice(1, 0, flow("flow-1b", "체크리스트 개선 인터뷰", 42, [request(14, 42, "체크리스트를 어떻게 고칠지 인터뷰해줘", { summary: "체크리스트 개선 인터뷰" })], { kind: "moved_on", line: "Q2 범위를 정해 주세요", at_unix_ms: AT + 45 * MIN }));
+    record.flows[2]!.result = { kind: "closing", line: "세션 11개 검증, 흐름 묶기 안으로 결정", at_unix_ms: AT + 230 * MIN };
+    record.status = { end: "waiting", line: "PR CI 기다리는 중", at_unix_ms: AT + 240 * MIN, limited: null, settled: { state: "merged", numbers: [1541], at_unix_ms: AT + 262 * MIN } };
+    record.asks = [];
+  }
   if (kind === "omitted") record.omitted_requests = 37;
   if (kind === "delegated") record.flows = record.flows.map((one) => ({ ...one, requests: one.requests.map((row) => ({ ...row, author: "parent" as const })) }));
   if (kind === "empty") Object.assign(record, { ...empty, status: null });
@@ -92,7 +100,7 @@ export function SessionWorkScene({ params }: { params: URLSearchParams }) {
     base.rest.navigator!.focused_checkout_id = project.checkouts[0]!.id;
     base.agents = [legacyAgentRow({ ...base.agents.find((row) => row.pane_id === "a1")!, pane_id: "a1", agent_kind: "claude", session_id: SESSION.session_id, identity_label: record.title!, group: "working", mark: "going", activity: "working", status_code: "working", detail: "Mac 로컬 검증 결과와 남은 항목을 정리하고 있어요.", message: "Mac 로컬 검증 결과와 남은 항목을 정리하고 있어요.", changed_at_unix_ms: Date.now() - 60_000 })];
     // A stopped pane, so the record's last real turn is the state on top (B10).
-    if (params.get("case")?.endsWith("limited")) base.agents = base.agents.map((row) => legacyAgentRow({ ...row, status_code: "done", mark: "done", group: "idle", activity: "stopped" }));
+    if (params.get("case")?.endsWith("limited") || params.get("case") === "facts") base.agents = base.agents.map((row) => legacyAgentRow({ ...row, status_code: "done", mark: "done", group: "idle", activity: "stopped" }));
     if (state === "off") {
       // Summaries off: the record keeps no flow names, results or summaries (B28).
       record.asks = [];

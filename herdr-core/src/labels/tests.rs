@@ -144,6 +144,7 @@ impl AiBackend for Scripted {
                 Some(goal) => format!("{goal} 요청"),
                 None => "요청 요약".to_owned(),
             };
+            answer.entry("closed_result").or_insert_with(|| json!(""));
             answer.entry("requests").or_insert_with(|| {
                 Value::Array(
                     owed_ids(&request.input)
@@ -2493,7 +2494,7 @@ fn a_null_goal_is_valid_but_an_absent_or_invalid_goal_is_not() {
     use super::analysis::{AnalysisPhase, LabelEnd};
     use super::context_label::{parse, request};
     for phase in [AnalysisPhase::TurnStart, AnalysisPhase::TurnEnd] {
-        let mut answer = json!({"goal": null, "goal_update": "keep", "requests": [], "line": ""});
+        let mut answer = json!({"goal": null, "goal_update": "keep", "closed_result": "", "requests": [], "line": ""});
         if phase == AnalysisPhase::TurnEnd {
             answer["end"] = json!("done");
             answer["work"] = json!({"missed":[],"resolved":[],"artifacts":[]});
@@ -2698,7 +2699,7 @@ fn a_long_line_is_cut_between_words_and_a_question_stays_a_question() {
             AnalysisPhase::TurnEnd,
             language,
             json!({
-                "goal": null, "goal_update": "keep", "requests": [], "line": line, "end": end,
+                "goal": null, "goal_update": "keep", "closed_result": "", "requests": [], "line": line, "end": end,
                 "work": {"missed": [], "resolved": [], "artifacts": []},
             }),
         )
@@ -2864,6 +2865,7 @@ fn a_label_request_carries_its_language_and_that_languages_lengths() {
         let mut answer = json!({
             "goal": "w".repeat(goal + 5),
             "goal_update": "replace",
+            "closed_result": "",
             "requests": [{"id": "r1", "summary": "r".repeat(line + 5), "answers": null}],
             "line": "l".repeat(line + 5),
         });
@@ -5750,6 +5752,88 @@ fn a_flow_opened_by_a_turn_with_a_late_letter_starts_at_the_operators_request() 
         })
         .collect();
     assert_eq!(starts.last(), Some(&(LATER + 2_000)));
+}
+
+/// D-02, B4: the turn that opens a new flow hands the ledger how the one
+/// before it ended; a turn that keeps the flow hands it nothing, whatever
+/// its answer says.
+#[test]
+fn only_a_turn_that_opens_a_flow_hands_the_ledger_the_closed_flows_line() {
+    use crate::links::ledger::{LedgerContext, LedgerUpdate, SessionIdentity};
+    const LATER: u64 = 4_094_496_000_000;
+    let harness = Harness::new();
+    let store = harness.store();
+    let client = crate::links::worker::LinkClient::open_mailbox_for_test();
+    let node: Arc<dyn crate::node_access::NodeLink> = Arc::new(hide_node::Local::new(Some(
+        harness.home.path().to_path_buf(),
+    )));
+    let (mut worker, woken) = harness.spawn_with_ledger(
+        Arc::clone(&store),
+        LOCAL_TARGET,
+        "local.sock",
+        Arc::new(NodeTranscripts::new(Box::new(move || {
+            Ok(Arc::clone(&node))
+        }))),
+        Arc::new(Mutex::new(Some(client.clone()))),
+    );
+    client.prime_context_for_test(
+        SessionIdentity {
+            device_id: LOCAL_TARGET.into(),
+            agent: "claude".into(),
+            session_id: "native-a".into(),
+        },
+        LedgerContext::default(),
+    );
+    let mut lines = vec![
+        ("user", "요청 보기 목업 그려줘"),
+        ("assistant", "목업을 그렸어요"),
+    ];
+    let path = later_session(&harness, &lines);
+    let closing = |goal: &str, update: &str, closed: &str| {
+        json!({
+            "goal": goal, "goal_update": update, "closed_result": closed,
+            "line": "진행", "end": "done", "work": {"missed": [], "resolved": [], "artifacts": []},
+        })
+    };
+    harness.input.record("w1:p1", LATER - 300, false);
+    harness.backend.answers.lock().unwrap().push_back(closing(
+        "요청 보기 목업 그리기",
+        "replace",
+        "아무것도",
+    ));
+    observe(&mut worker, &agent(&path, "idle", 1));
+    settle(&mut worker, &woken);
+    lines.extend([("user", "목업 색만 바꿔줘"), ("assistant", "바꿨어요")]);
+    later_session(&harness, &lines);
+    harness.input.record("w1:p1", LATER + 1_000 - 300, false);
+    harness.backend.answers.lock().unwrap().push_back(closing(
+        "요청 보기 목업 그리기",
+        "keep",
+        "무시될 줄",
+    ));
+    observe(&mut worker, &agent(&path, "idle", 2));
+    settle(&mut worker, &woken);
+    lines.extend([("user", "이제 구현해줘"), ("assistant", "구현했어요")]);
+    later_session(&harness, &lines);
+    harness.input.record("w1:p1", LATER + 2_000 - 300, false);
+    harness.backend.answers.lock().unwrap().push_back(closing(
+        "요청 보기 구현",
+        "replace",
+        "목업 두 장 확정",
+    ));
+    observe(&mut worker, &agent(&path, "idle", 3));
+    settle(&mut worker, &woken);
+    let closed: Vec<Option<String>> = client
+        .ledger_updates_for_test()
+        .into_iter()
+        .filter_map(|update| match update {
+            LedgerUpdate::Chapter { closed_result, .. } => Some(closed_result),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(closed.first(), Some(&None), "a first goal closes nothing");
+    assert_eq!(closed.last(), Some(&Some("목업 두 장 확정".to_owned())));
+    assert!(!closed.contains(&Some("무시될 줄".to_owned())));
 }
 
 /// `Harness::session` with turns dated after the worker switched summaries

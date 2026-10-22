@@ -91,6 +91,16 @@ static int fit_schema(char *label, int argc, char **argv) {
     memmove(legacy + new_length, legacy + old_length, strlen(legacy + old_length) + 1);
     memcpy(legacy, replacement, new_length);
   }
+  /* A v21 answer says how the flow it closes ended; a recorded marker from
+     before it closes none. */
+  if (strstr(schema, "\"closed_result\"") && !strstr(label, "\"closed_result\":")) {
+    const char *field = "\"closed_result\":\"\",";
+    size_t length = strlen(label);
+    size_t capacity = sizeof prompt - (size_t)(label - prompt);
+    if (label[0] != '{' || length + strlen(field) >= capacity) return 0;
+    memmove(label + 1 + strlen(field), label + 1, length);
+    memcpy(label + 1, field, strlen(field));
+  }
   /* The marker's `request` is the summary of the turn's own request, the
      newest id the input lists as owed (context_label.v20); with none, or an
      empty summary, the answer summarizes nothing and the request shows its

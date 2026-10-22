@@ -1179,6 +1179,7 @@ pub(super) fn seed_missed_turn(
             goal: "Ship".into(),
             at_unix_ms: now - 2_000,
             change: crate::links::ledger::FlowChange::New,
+            closed_result: None,
         },
         LedgerUpdate::TurnEnd {
             session: session.clone(),
