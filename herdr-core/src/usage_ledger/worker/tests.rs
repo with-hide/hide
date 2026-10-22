@@ -61,7 +61,7 @@ fn finish(engine: &mut Engine, node: &OwnNode) -> Report {
             },
         );
         if engine.agents.iter().all(|work| !work.progress.reading) {
-            return engine.report(true);
+            return engine.report(true, &Default::default());
         }
     }
     panic!("fixture backfill did not complete");
@@ -179,7 +179,13 @@ fn usage_worker_keeps_totals_after_restart_copy_and_source_deletion() {
         );
     }
     assert_eq!(
-        &restarted.report(true).projection.unwrap().year.all.amount,
+        &restarted
+            .report(true, &Default::default())
+            .projection
+            .unwrap()
+            .year
+            .all
+            .amount,
         amount
     );
     assert!(
@@ -195,7 +201,7 @@ fn usage_worker_keeps_totals_after_restart_copy_and_source_deletion() {
     assert_eq!(
         Engine::open(&path, "physical-device".into(), AiUsageQueue::new())
             .unwrap()
-            .report(true)
+            .report(true, &Default::default())
             .projection
             .unwrap()
             .year
@@ -222,7 +228,7 @@ fn usage_worker_refusal_keeps_backfill_open_and_recovers_from_durable_progress()
             },
         );
     }
-    let failed = first.report(true);
+    let failed = first.report(true, &Default::default());
     let claude = failed
         .progress
         .iter()
@@ -297,14 +303,14 @@ fn hide_ai_calls_are_stored_while_hidden_and_make_no_new_report_until_a_window_s
     let path = dir.path().join("ledger.sqlite3");
     let queue = queue_with("context_label", &[answered()]);
     let mut engine = Engine::open(&path, "physical-device".into(), Arc::clone(&queue)).unwrap();
-    let before = engine.report(false);
+    let before = engine.report(false, &Default::default());
     // The batch is written, but nothing a hidden window shows has moved.
     queue.attempt("context_label", hide_ai::ProviderId::CLAUDE, &[answered()]);
     engine.flush_ai(true);
     assert!(engine.ai_dirty);
-    assert_eq!(engine.report(false), before);
+    assert_eq!(engine.report(false, &Default::default()), before);
     // The newest is read the moment a window shows.
-    let shown = engine.report(true);
+    let shown = engine.report(true, &Default::default());
     assert_ne!(shown, before);
     let day = shown
         .projection
@@ -333,7 +339,7 @@ fn hide_ai_is_read_back_after_a_restart_and_a_second_batch_adds_to_the_day() {
     drop(engine);
     let mut restarted = Engine::open(&path, "physical-device".into(), AiUsageQueue::new()).unwrap();
     let day = restarted
-        .report(true)
+        .report(true, &Default::default())
         .projection
         .unwrap()
         .year
@@ -367,4 +373,52 @@ fn a_flush_writes_at_most_once_a_second_unless_it_is_the_last() {
     );
     engine.flush_ai(true);
     assert!(engine.ai_dirty);
+}
+
+/// PRD lane-two-columns B31: a project the core names gets its seven days
+/// from the calls the ledger holds, whose session ran in its checkouts; a
+/// project no call ran in gets none, and the same names build nothing new.
+#[test]
+fn the_report_carries_the_named_projects_costs() {
+    let home = tempfile::tempdir().unwrap();
+    let source = fixture(home.path(), "cwd");
+    let mut line: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&source).unwrap()).unwrap();
+    line["cwd"] = "/work/hide/src".into();
+    std::fs::write(&source, format!("{line}\n")).unwrap();
+    let node = OwnNode::new(home.path());
+    let mut engine = Engine::open(
+        &home.path().join("ledger.sqlite3"),
+        "physical-device".into(),
+        AiUsageQueue::new(),
+    )
+    .unwrap();
+    finish(&mut engine, &node);
+    let projects = Arc::new(vec![
+        ProjectRoots {
+            workspace_id: "hide".into(),
+            roots: vec!["/work/hide".into()],
+        },
+        ProjectRoots {
+            workspace_id: "quiet".into(),
+            roots: vec!["/work/quiet".into()],
+        },
+    ]);
+    let report = engine.report(true, &projects);
+    assert_eq!(
+        report
+            .projects
+            .iter()
+            .map(|cost| cost.workspace_id.as_str())
+            .collect::<Vec<_>>(),
+        ["hide"]
+    );
+    let hide = &report.projects[0];
+    assert_eq!(hide.days.len(), 7);
+    assert!(hide.waiting, "no price table read yet, so no amount");
+    let again = engine.report(true, &Arc::new((*projects).clone()));
+    assert!(
+        Arc::ptr_eq(&report.projects, &again.projects),
+        "nothing moved, nothing built"
+    );
 }

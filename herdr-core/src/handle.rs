@@ -450,6 +450,7 @@ impl Core {
                     let value = crate::usage::consumption::Publication::prepare(
                         crate::usage_ledger::worker::Report {
                             projection: None,
+                            projects: Default::default(),
                             progress: Vec::new(),
                             failure: Some(code),
                             price_failure: None,

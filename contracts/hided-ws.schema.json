@@ -250,7 +250,67 @@
               "type": "null"
             }
           ]
+        },
+        "projects": {
+          "description": "Each of the node's projects' last seven days of cost (PRD lane-two-columns B31), absent while none ran a priced call; amounts are millionths of a dollar.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/projectCost"
+          }
         }
+      }
+    },
+    "projectCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspace_id", "micro_usd", "days", "models", "sessions", "agents", "unpriced_agents", "partial", "waiting", "stale", "limited"],
+      "properties": {
+        "workspace_id": { "type": "string" },
+        "micro_usd": { "type": "integer", "minimum": 0 },
+        "days": {
+          "type": "array",
+          "maxItems": 7,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date", "micro_usd"],
+            "properties": { "date": { "type": "string" }, "micro_usd": { "type": "integer", "minimum": 0 } }
+          }
+        },
+        "models": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["agent", "model", "micro_usd"],
+            "properties": { "agent": { "type": "string" }, "model": { "type": ["string", "null"] }, "micro_usd": { "type": "integer", "minimum": 0 } }
+          }
+        },
+        "sessions": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["agent", "session_id", "micro_usd"],
+            "properties": { "agent": { "type": "string" }, "session_id": { "type": "string" }, "micro_usd": { "type": "integer", "minimum": 0 } }
+          }
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["agent", "micro_usd"],
+            "properties": { "agent": { "type": "string" }, "micro_usd": { "type": "integer", "minimum": 0 } }
+          }
+        },
+        "unpriced_agents": { "type": "array", "items": { "type": "string" } },
+        "partial": { "type": "boolean" },
+        "waiting": { "type": "boolean" },
+        "stale": { "type": "boolean" },
+        "limited": { "type": "boolean" }
       }
     },
     "agentUsage": {

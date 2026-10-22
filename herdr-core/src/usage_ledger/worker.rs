@@ -15,6 +15,7 @@ use hide_session::{
 
 use super::ai_usage::AiUsageQueue;
 use super::prices::{Cache, Fetch};
+use super::project_cost::{self, ProjectCost, ProjectRoots};
 use super::query::{self, Projection};
 use super::store::{AiRow, Daily, Store};
 
@@ -23,6 +24,8 @@ const REST: Duration = Duration::from_millis(20);
 const AI_BATCH: Duration = Duration::from_secs(1);
 const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 const RETRY: Duration = Duration::from_secs(30);
+/// New calls make the projects' costs again at most this often.
+const COST_REBUILD: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Progress {
@@ -38,6 +41,8 @@ pub struct Progress {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Report {
     pub projection: Option<Arc<Projection>>,
+    /// Each project's last seven days, for the projects the core named.
+    pub projects: Arc<Vec<ProjectCost>>,
     pub progress: Vec<Progress>,
     pub failure: Option<&'static str>,
     pub price_failure: Option<&'static str>,
@@ -53,6 +58,8 @@ pub struct Activity {
 struct Mailbox {
     stop: bool,
     activity: Activity,
+    /// The checkouts of each of this machine's projects, replaced whole.
+    projects: Arc<Vec<ProjectRoots>>,
 }
 
 #[derive(Clone)]
@@ -69,6 +76,25 @@ impl Client {
             mailbox.activity = activity;
             wake.notify_one();
         }
+    }
+
+    /// The projects whose costs the report carries, replacing the last
+    /// ones; an unchanged list wakes nothing.
+    pub fn projects(&self, projects: Vec<ProjectRoots>) {
+        let (lock, wake) = &*self.0;
+        if let Ok(mut mailbox) = lock.lock()
+            && *mailbox.projects != projects
+        {
+            mailbox.projects = Arc::new(projects);
+            wake.notify_one();
+        }
+    }
+
+    fn named_projects(&self) -> Arc<Vec<ProjectRoots>> {
+        let (lock, _) = &*self.0;
+        lock.lock()
+            .map(|mailbox| Arc::clone(&mailbox.projects))
+            .unwrap_or_default()
     }
 
     fn wait(&self, duration: Duration) -> Option<Activity> {
@@ -119,7 +145,8 @@ impl Worker {
                                 if published.is_none_or(|at: Instant| at.elapsed() >= interval)
                                     || (activity.visible && engine.ai_dirty)
                                 {
-                                    let report = engine.report(activity.visible);
+                                    let report = engine
+                                        .report(activity.visible, &worker_client.named_projects());
                                     if previous.as_ref() != Some(&report) {
                                         publish(report.clone());
                                         previous = Some(report);
@@ -140,6 +167,7 @@ impl Worker {
                         Err(code) => {
                             let report = Report {
                                 projection: None,
+                                projects: Arc::default(),
                                 progress: Vec::new(),
                                 failure: Some(code),
                                 price_failure: None,
@@ -211,6 +239,19 @@ struct Engine {
     price_fetch: Option<Fetch>,
     price_failure: Option<&'static str>,
     price_retry: Option<Instant>,
+    costs: Costs,
+}
+
+/// The projects' costs as last built, and what they were built from.
+#[derive(Default)]
+struct Costs {
+    value: Arc<Vec<ProjectCost>>,
+    projects: Arc<Vec<ProjectRoots>>,
+    today: String,
+    built: Option<Instant>,
+    /// New calls, a prune or a new price table since the last build.
+    dirty: bool,
+    failure: Option<&'static str>,
 }
 
 impl Engine {
@@ -278,6 +319,10 @@ impl Engine {
             price_fetch: None,
             price_failure,
             price_retry: None,
+            costs: Costs {
+                dirty: true,
+                ..Costs::default()
+            },
         })
     }
 
@@ -289,6 +334,7 @@ impl Engine {
                 cache.table = Some(table);
                 self.store.save_prices(&cache)?;
                 self.prices = cache;
+                self.costs.dirty = true;
                 Ok(())
             });
             self.price_failure = outcome.err();
@@ -341,6 +387,7 @@ impl Engine {
                     self.pruning = more;
                     self.pruned = Instant::now();
                     self.dirty = true;
+                    self.costs.dirty = true;
                     // Pruning also ages Hide AI rows out.
                     self.ai_dirty = true;
                     self.prune_retry = None;
@@ -465,6 +512,7 @@ impl Engine {
             {
                 Ok(ingested) => {
                     self.dirty |= ingested.added > 0 || ingested.updated > 0;
+                    self.costs.dirty |= ingested.added > 0 || ingested.updated > 0;
                     work.progress.limited |= ingested.limited > 0;
                     let skipped = step
                         .skipped
@@ -580,7 +628,79 @@ impl Engine {
     /// report keeps the Hide AI rows it last read, so a call alone makes no
     /// new report and nothing is published for it (B17); the next visible
     /// report reads the newest.
-    fn report(&mut self, visible: bool) -> Report {
+    /// The projects' costs, built again when the projects or the day
+    /// changed, or new calls came at most every `COST_REBUILD`. A failed
+    /// build is a diagnostic and keeps the last costs: the operator cannot
+    /// act on it.
+    fn project_costs(&mut self, projects: &Arc<Vec<ProjectRoots>>) -> Arc<Vec<ProjectCost>> {
+        let now = crate::links::now_ms();
+        let zone = jiff::tz::TimeZone::system();
+        let Ok(today) = super::local_day(now, &zone) else {
+            return Arc::clone(&self.costs.value);
+        };
+        let moved = *self.costs.projects != **projects || self.costs.today != today;
+        let due = self.costs.dirty
+            && self
+                .costs
+                .built
+                .is_none_or(|at| at.elapsed() >= COST_REBUILD);
+        if !moved && !due {
+            return Arc::clone(&self.costs.value);
+        }
+        self.costs.projects = Arc::clone(projects);
+        self.costs.today = today.clone();
+        self.costs.built = Some(Instant::now());
+        self.costs.dirty = false;
+        if projects.is_empty() {
+            self.costs.value = Arc::default();
+            return Arc::default();
+        }
+        let built = today
+            .parse::<jiff::civil::Date>()
+            .map_err(|_| "usage_date_invalid")
+            .and_then(|date| {
+                // A day past the seven reaches back eight, so a time zone
+                // change cannot drop the first day's earliest calls.
+                let since = now.saturating_sub((project_cost::DAYS as u64 + 1) * super::DAY_MS);
+                let (calls, limited) =
+                    self.store
+                        .recent_calls(&self.device, since, project_cost::EVENT_LIMIT)?;
+                project_cost::prepare(
+                    &calls,
+                    limited,
+                    projects,
+                    self.prices.table.as_ref(),
+                    date,
+                    now,
+                )
+            });
+        match built {
+            Ok(value) => {
+                if value.iter().any(|cost| cost.limited)
+                    && self.costs.failure != Some("usage_project_cost_capacity")
+                {
+                    diagnostic(
+                        "usage_project_cost_capacity",
+                        None,
+                        project_cost::EVENT_LIMIT as u64,
+                    );
+                    self.costs.failure = Some("usage_project_cost_capacity");
+                } else if !value.iter().any(|cost| cost.limited) {
+                    self.costs.failure = None;
+                }
+                self.costs.value = Arc::new(value);
+            }
+            Err(code) => {
+                if self.costs.failure != Some(code) {
+                    diagnostic(code, None, 0);
+                }
+                self.costs.failure = Some(code);
+            }
+        }
+        Arc::clone(&self.costs.value)
+    }
+
+    fn report(&mut self, visible: bool, projects: &Arc<Vec<ProjectRoots>>) -> Report {
         if self.ai_dirty && visible {
             match (self.store.ai_rows(), self.store.ai_limited()) {
                 (Ok(rows), Ok(limited)) => {
@@ -630,6 +750,7 @@ impl Engine {
         };
         Report {
             projection,
+            projects: self.project_costs(projects),
             progress,
             failure: self.failure,
             price_failure: self.price_failure,

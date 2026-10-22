@@ -14,6 +14,26 @@ pub struct NodeUsage {
     pub node: String,
     pub agents: Vec<AgentUsage>,
     pub history: Option<History>,
+    /// Each of the node's projects' last seven days (PRD lane-two-columns
+    /// B31); left off the wire while there are none.
+    #[serde(
+        skip_serializing_if = "projects_empty",
+        serialize_with = "shared_projects"
+    )]
+    pub projects: std::sync::Arc<Vec<crate::usage_ledger::project_cost::ProjectCost>>,
+}
+
+fn projects_empty(
+    value: &std::sync::Arc<Vec<crate::usage_ledger::project_cost::ProjectCost>>,
+) -> bool {
+    value.is_empty()
+}
+
+fn shared_projects<S: serde::Serializer>(
+    value: &std::sync::Arc<Vec<crate::usage_ledger::project_cost::ProjectCost>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    value.as_slice().serialize(serializer)
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AgentUsage {
@@ -113,6 +133,7 @@ impl UsageSnapshot {
                 node: node.into(),
                 agents: AgentUsage::initial_rows(),
                 history: None,
+                projects: Default::default(),
             }],
         }
     }

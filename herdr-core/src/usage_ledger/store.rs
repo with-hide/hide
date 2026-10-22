@@ -558,6 +558,45 @@ impl Store {
         Ok(out)
     }
 
+    /// The own node's calls made at `since_ms` or later, newest first, for
+    /// the projects' costs (PRD lane-two-columns B31), and whether more than
+    /// `limit` were there. It reads only the 45-day `events` table by its
+    /// time index, with a longer budget than a step's because it decodes
+    /// every call; the caller keeps the days it wants.
+    pub fn recent_calls(
+        &self,
+        device: &str,
+        since_ms: u64,
+        limit: usize,
+    ) -> Result<(Vec<super::project_cost::Call>, bool), &'static str> {
+        let start = Instant::now();
+        self.connection.progress_handler(
+            1000,
+            Some(move || start.elapsed() >= Duration::from_secs(2)),
+        );
+        let mut query = self
+            .connection
+            .prepare("SELECT agent,day,event FROM events WHERE device=?1 AND at>=?2 ORDER BY at DESC LIMIT ?3")
+            .map_err(failed)?;
+        let since = i64::try_from(since_ms).map_err(|_| "usage_timestamp_invalid")?;
+        let mut rows = query
+            .query(params![device, since, limit + 1])
+            .map_err(failed)?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().map_err(failed)? {
+            if out.len() == limit {
+                return Ok((out, true));
+            }
+            let text: String = row.get(2).map_err(failed)?;
+            out.push(super::project_cost::Call {
+                agent: row.get(0).map_err(failed)?,
+                day: row.get(1).map_err(failed)?,
+                event: decode(&text)?,
+            });
+        }
+        Ok((out, false))
+    }
+
     /// Completion is durable even when no events were found. Once completed,
     /// an old day is immutable even if every source checkpoint is lost.
     pub fn complete_backfill(

@@ -779,6 +779,7 @@ impl Runtime {
             &self.snapshot.ui_state,
         );
         self.refresh_device_snapshots();
+        self.feed_usage_projects();
         // An agent belongs to the device whose project holds its pane. The
         // project label is no longer Herdr's workspace label once a
         // registration covers the repository, so labels cannot be the key.
@@ -5697,6 +5698,7 @@ impl Runtime {
             &self.snapshot.ui_state,
         );
         self.refresh_device_snapshots();
+        self.feed_usage_projects();
         self.resync_navigator_focus();
     }
     pub(super) fn apply_workspace_expansion(
