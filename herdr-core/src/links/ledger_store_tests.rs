@@ -2400,7 +2400,7 @@ fn the_request_list_merges_repeats_counts_images_marks_goals_and_keeps_letters_d
             operator(2, 10_000, "다시 돌려줘"),
             operator(3, 17_000, "다시 돌려줘"),
             operator(4, 200_000, "다시 돌려줘"),
-            operator(5, 210_000, "'/Users/someone/Desktop/shot.png' 이 화면 봐줘"),
+            operator(5, 210_000, "'/tmp/shot.png' 이 화면 봐줘"),
             RecordedRequest {
                 letter_from: Some("ci-lead".into()),
                 ..operator(6, 220_000, "🦉 letter from ci-lead")
