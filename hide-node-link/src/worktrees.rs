@@ -40,6 +40,11 @@ pub struct CheckoutGit {
     /// pushed anywhere this clone knows of.
     #[serde(default)]
     pub unpushed_commits: Vec<String>,
+    /// Why the incoming and unpushed commits could not be read; both lists
+    /// are then empty and every other fact stands, and no commit has a page,
+    /// since whether a remote holds it is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commits_unread: Option<String>,
 }
 
 /// The most a node gives one background fetch (`Call::FetchRemote`).

@@ -594,6 +594,15 @@ impl Runtime {
         if wanted.is_empty() {
             return false;
         }
+        // A repository read only because its Git watch saw a change keeps the
+        // measurement of every worktree whose inputs did not move; a new
+        // connection, a created or removed worktree and a first read measure
+        // every worktree.
+        let reuse: BTreeSet<String> = wanted
+            .iter()
+            .filter(|root| !all && entry.projects.contains_key(*root))
+            .cloned()
+            .collect();
         // The chosen base and GitHub's default branch, by repository.
         let bases: BTreeMap<_, _> = wanted
             .iter()
@@ -631,14 +640,15 @@ impl Runtime {
         entry.reread = false;
         entry.stale.retain(|root| !wanted.contains(root));
         let Some(context) = self.worker_context.clone() else {
-            let answer = ask_worktrees(channel.as_ref(), target, &wanted, &bases, notes);
+            let answer = ask_worktrees(channel.as_ref(), target, &wanted, &reuse, &bases, notes);
             return self.ingest_device_worktrees(target, generation, answer);
         };
         let device = target.to_owned();
         let spawned = thread::Builder::new()
             .name("herdr-core-device-worktrees".to_owned())
             .spawn(move || {
-                let answer = ask_worktrees(channel.as_ref(), &device, &wanted, &bases, notes);
+                let answer =
+                    ask_worktrees(channel.as_ref(), &device, &wanted, &reuse, &bases, notes);
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;
                 };
@@ -717,6 +727,12 @@ impl Runtime {
                 "message": reason,
             }));
         }
+        // A failed read may have carried a change the Git watch reported;
+        // every repository is read again after a pause, not in a loop.
+        entry.retry_at = failure
+            .is_some()
+            .then(|| std::time::Instant::now() + DEVICE_READ_RETRY);
+        entry.reread |= failure.is_some();
         entry.unavailable = failure;
         let again = std::mem::take(&mut entry.again);
         let stale = !entry.stale.is_empty();
@@ -756,6 +772,29 @@ impl Runtime {
             .collect();
         sets.sort_by(|left, right| left.0.cmp(&right.0));
         Some(sets)
+    }
+
+    /// Reads again each device whose last read failed and whose pause is
+    /// over, while a window is attached; one read per device, never more
+    /// often than `DEVICE_READ_RETRY`.
+    pub(crate) fn retry_device_reads(&mut self, now: std::time::Instant) -> bool {
+        if !self.ui_attached {
+            return false;
+        }
+        let due: Vec<String> = self
+            .device_worktrees
+            .iter_mut()
+            .filter(|(_, entry)| {
+                entry.in_flight.is_none() && entry.retry_at.is_some_and(|at| at <= now)
+            })
+            .map(|(device, entry)| {
+                entry.retry_at = None;
+                device.clone()
+            })
+            .collect();
+        due.into_iter().fold(false, |changed, device| {
+            changed | self.request_device_worktrees(&device, true)
+        })
     }
 
     /// The device's Git watch saw `roots` change: they are read again.
@@ -820,6 +859,10 @@ impl Runtime {
 
 use hide_node_link::worktrees::WORKTREES_TIMEOUT;
 
+/// How long a device whose repository read failed waits before every
+/// repository is read again.
+const DEVICE_READ_RETRY: Duration = Duration::from_secs(30);
+
 /// What one read of a device's repositories answered.
 pub(super) struct WorktreesAnswer {
     pub answers: Vec<(String, Option<crate::model::ProjectWorktreesSnapshot>)>,
@@ -840,10 +883,11 @@ fn ask_worktrees(
     channel: &dyn crate::node_access::NodeLink,
     target: &str,
     roots: &[String],
+    reuse: &BTreeSet<String>,
     bases: &BTreeMap<String, (Option<String>, Option<String>)>,
     notes: bool,
 ) -> WorktreesAnswer {
-    let (answers, failure) = ask_repositories(channel, roots, bases);
+    let (answers, failure) = ask_repositories(channel, roots, reuse, bases);
     if !notes || failure.is_some() {
         return WorktreesAnswer {
             answers,
@@ -879,6 +923,7 @@ fn ask_worktrees(
 fn ask_repositories(
     channel: &dyn crate::node_access::NodeLink,
     roots: &[String],
+    reuse: &BTreeSet<String>,
     bases: &BTreeMap<String, (Option<String>, Option<String>)>,
 ) -> (
     Vec<(String, Option<crate::model::ProjectWorktreesSnapshot>)>,
@@ -893,7 +938,7 @@ fn ask_repositories(
                 bases: Default::default(),
                 base_override: bases.get(root).and_then(|base| base.0.clone()),
                 remote_default: bases.get(root).and_then(|base| base.1.clone()),
-                reuse_unchanged: false,
+                reuse_unchanged: reuse.contains(root),
             },
             WORKTREES_TIMEOUT,
         ) {

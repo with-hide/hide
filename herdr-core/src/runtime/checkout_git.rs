@@ -18,6 +18,9 @@ pub(super) struct State {
     /// or ages, so an unchanged read every two seconds publishes nothing.
     last_git_unix_ms: Option<u64>,
     last_ci: Option<Instant>,
+    /// The last read could not say which commits a remote holds, so none
+    /// has a page; the reason goes to the log, never to the renderer.
+    commits_unread: bool,
 }
 
 impl Runtime {
@@ -70,6 +73,7 @@ impl Runtime {
             self.checkout_header.last_git_unix_ms = None;
             self.checkout_header.last_ci = None;
             self.checkout_header.repository = None;
+            self.checkout_header.commits_unread = false;
         }
         self.checkout_header.target.clone()
     }
@@ -133,6 +137,7 @@ impl Runtime {
             .header
             .as_mut()
             .expect("an active target has a header");
+        let mut unread_moved = false;
         match answer {
             Ok(mut facts) => {
                 // The node needs the configured URL; the renderer must never receive
@@ -175,6 +180,19 @@ impl Runtime {
                     self.checkout_header.last_ci = None;
                 }
                 self.checkout_header.repository = repository;
+                let unread = facts.commits_unread.take();
+                if let Some(reason) = unread
+                    .as_ref()
+                    .filter(|_| !self.checkout_header.commits_unread)
+                {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "checkout_git",
+                        "kind": "checkout_git.commits_unread",
+                        "message": reason,
+                    }));
+                }
+                unread_moved = self.checkout_header.commits_unread != unread.is_some();
+                self.checkout_header.commits_unread = unread.is_some();
                 header.facts = Some(facts);
                 header.state = GitState::Fresh;
                 let read_at = now_unix_ms();
@@ -206,7 +224,7 @@ impl Runtime {
                 }
             }
         }
-        before != self.checkout_header.header
+        unread_moved || before != self.checkout_header.header
     }
 
     pub(crate) fn ingest_checkout_ci(&mut self, (request, answer): CiAnswer, now: Instant) -> bool {
@@ -304,7 +322,11 @@ impl Runtime {
         }
         let mut header = self.checkout_header.header.clone()?;
         header.remote = self.remote_check(&key.0, &key.1);
-        header.commit_links = commit_links(self.checkout_header.repository.as_deref(), &header);
+        header.commit_links = if self.checkout_header.commits_unread {
+            Vec::new()
+        } else {
+            commit_links(self.checkout_header.repository.as_deref(), &header)
+        };
         header.commit_pages = self.checkout_header.repository.is_some();
         Some(header)
     }

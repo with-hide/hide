@@ -14,7 +14,9 @@
 //! (`worktrees::DeviceGitWatch`, D-08): a fetch there moves that device's
 //! refs, and so does a branch an agent switches or a worktree it adds, and
 //! the watch hands the repositories that changed to the device catalog to
-//! read again. With no window attached the watches rest, as the fetch does.
+//! read again, and a device whose last read failed is read again after a
+//! pause (`Runtime::retry_device_reads`). With no window attached the
+//! watches rest, as the fetch does.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -83,6 +85,7 @@ impl FetchPump {
                             let before = runtime.published_checkout_header();
                             changed = runtime.refresh_checkout_header() != before;
                         }
+                        changed |= runtime.retry_device_reads(Instant::now());
                         (
                             runtime.due_fetches(Instant::now()),
                             changed,

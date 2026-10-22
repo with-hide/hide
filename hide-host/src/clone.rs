@@ -73,7 +73,7 @@ pub fn clone_repository(
     // killed mid-clone) has this process's id only by reuse; it is ours to
     // replace.
     staging.remove();
-    let mut command = crate::git_run::command();
+    let mut command = crate::git_run::remote(parent);
     command
         .args(["clone", "--progress", "--"])
         .arg(source.url())

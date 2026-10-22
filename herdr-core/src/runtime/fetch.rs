@@ -25,6 +25,10 @@ const BACKOFF: [Duration; 4] = [
     Duration::from_secs(5 * 60),
     Duration::from_secs(15 * 60),
 ];
+/// A ref lock still held after this many fetches in a row is no longer the
+/// operator's fetch running beside Hide's: a lock file a crashed Git left, or
+/// refs that cannot both exist. It then counts as a failure.
+const BUSY_LIMIT: u32 = 3;
 /// The most repositories the fetch follows: the worktree reader's cap. One
 /// past it is not fetched and is logged once (`fetch.over_limit`).
 pub(crate) const FETCH_REPOSITORY_LIMIT: usize = hide_node_link::worktrees::GIT_WATCH_LIMIT;
@@ -72,6 +76,8 @@ struct Repository {
     paused: bool,
     /// The window came forward: due regardless of its interval.
     looked: bool,
+    /// Fetches in a row that found a ref locked.
+    busy: u32,
 }
 
 impl Repository {
@@ -202,6 +208,7 @@ impl Runtime {
             repository.fetched_at_unix_ms,
             repository.failures > 0 || repository.paused,
         );
+        let busy = std::mem::take(&mut repository.busy);
         let failure = match outcome {
             Ok(FetchOutcome::Fetched) => {
                 repository.fetched_at_unix_ms = Some(now_unix_ms);
@@ -210,7 +217,22 @@ impl Runtime {
             // The operator's own fetch is running: theirs brings the refs.
             Ok(FetchOutcome::Skipped {
                 reason: FetchSkip::Busy,
-            }) => return false,
+            }) if busy + 1 < BUSY_LIMIT => {
+                repository.busy = busy + 1;
+                return false;
+            }
+            Ok(FetchOutcome::Skipped {
+                reason: FetchSkip::Busy,
+            }) => {
+                repository.busy = busy + 1;
+                Some((
+                    FetchFailure::Other,
+                    format!(
+                        "A ref lock stayed held through {} fetches in a row",
+                        busy + 1
+                    ),
+                ))
+            }
             Ok(FetchOutcome::Skipped {
                 reason: FetchSkip::NoOrigin,
             }) => None,

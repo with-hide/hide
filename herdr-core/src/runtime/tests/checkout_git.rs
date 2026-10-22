@@ -269,3 +269,56 @@ fn history_ci_is_fenced_by_every_ordered_sha_and_all_links_expire() {
         5
     );
 }
+
+#[test]
+fn commits_whose_remote_is_unknown_get_no_page_and_the_reason_stays_off_the_wire() {
+    let mut runtime = runtime();
+    let request = target(&runtime, 1);
+    runtime.checkout_header.target = Some(request.clone());
+    runtime.checkout_header.header = Some(Header {
+        state: GitState::Loading,
+        facts: None,
+        reason: None,
+        ci: None,
+        recent_ci: Vec::new(),
+        remote: None,
+        commit_links: Vec::new(),
+        commit_pages: false,
+        observed: None,
+    });
+    let commit = hide_node_link::worktrees::CheckoutCommit {
+        sha: "a".repeat(40),
+        subject: "Pushed".into(),
+        commit_unix_seconds: 1,
+    };
+    let read = CheckoutGit {
+        head_sha: Some(commit.sha.clone()),
+        recent_commits: vec![commit],
+        origin_url: Some("https://github.com/example/fixture.git".into()),
+        upstream_state: "tracked".into(),
+        behind: Some(1),
+        changed_files: 2,
+        ..Default::default()
+    };
+    let key = (request.root.device_id.clone(), request.root.path.clone());
+    assert!(runtime.ingest_checkout_git((request.clone(), Ok(read.clone())), Instant::now()));
+    assert_eq!(
+        runtime
+            .checkout_header_snapshot(&key)
+            .unwrap()
+            .commit_links
+            .len(),
+        1
+    );
+
+    let unread = CheckoutGit {
+        commits_unread: Some("rev-list timed out under /private/fixture".into()),
+        ..read
+    };
+    assert!(runtime.ingest_checkout_git((request, Ok(unread)), Instant::now()));
+    let header = runtime.checkout_header_snapshot(&key).unwrap();
+    assert_eq!(header.state, GitState::Fresh);
+    assert_eq!(header.facts.as_ref().unwrap().changed_files, 2);
+    assert!(header.commit_links.is_empty());
+    assert!(!serde_json::to_string(&header).unwrap().contains("rev-list"));
+}

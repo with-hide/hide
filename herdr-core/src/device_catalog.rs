@@ -639,6 +639,9 @@ pub(crate) struct DeviceWorktrees {
     pub reread: bool,
     /// Repositories the device's Git watch saw change, read on the next read.
     pub stale: BTreeSet<String>,
+    /// A read that failed is tried again, every repository, at this time
+    /// (`Runtime::retry_device_reads`), so a change it carried is not lost.
+    pub retry_at: Option<std::time::Instant>,
 }
 
 /// The Git repositories a device's grouped session shows, by main worktree.

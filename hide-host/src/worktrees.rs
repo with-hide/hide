@@ -63,33 +63,13 @@ pub fn checkout_git(path: &Path) -> HostResult<hide_node_link::worktrees::Checko
         }
         facts.commit_unix_seconds = Some(latest.commit_unix_seconds);
         facts.subject = Some(latest.subject.clone());
-        // The newest commits no remote-tracking ref holds; the walk is the
-        // log's own order, so the five newest unpushed are among its first.
-        let unpushed = git_within_limit(
-            path,
-            &[
-                "rev-list",
-                &format!(
-                    "--max-count={}",
-                    hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT
-                ),
-                &head,
-                "--not",
-                "--remotes",
-                "--",
-            ],
-            until.saturating_duration_since(Instant::now()),
-            Some(4 * 1024),
-        )
-        .map_err(fail)?;
-        facts.unpushed_commits = unpushed
-            .lines()
-            .filter(|sha| facts.recent_commits.iter().any(|commit| commit.sha == *sha))
-            .map(str::to_owned)
-            .collect();
-        if facts.upstream_state == "tracked" && facts.behind.is_some_and(|behind| behind > 0) {
-            facts.incoming_commits =
-                commit_records(path, &format!("{head}..@{{upstream}}"), until).map_err(fail)?;
+        // The incoming and unpushed lists add to the header; one that cannot
+        // be read in time, or whose upstream a fetch just pruned, leaves the
+        // other facts standing.
+        if let Err(reason) = commit_relations(path, &head, until, &mut facts) {
+            facts.unpushed_commits.clear();
+            facts.incoming_commits.clear();
+            facts.commits_unread = Some(reason);
         }
     }
     let repository = hide_project::git::discover(path)
@@ -105,6 +85,43 @@ pub fn checkout_git(path: &Path) -> HostResult<hide_node_link::worktrees::Checko
         .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
         .and_then(|time| u64::try_from(time.as_millis()).ok());
     Ok(facts)
+}
+
+/// Which of the header's recent commits no remote-tracking ref holds, and
+/// the upstream's commits HEAD does not have yet.
+fn commit_relations(
+    path: &Path,
+    head: &str,
+    until: Instant,
+    facts: &mut hide_node_link::worktrees::CheckoutGit,
+) -> Result<(), String> {
+    // The newest commits no remote-tracking ref holds; the walk is the
+    // log's own order, so the five newest unpushed are among its first.
+    let unpushed = git_within_limit(
+        path,
+        &[
+            "rev-list",
+            &format!(
+                "--max-count={}",
+                hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT
+            ),
+            head,
+            "--not",
+            "--remotes",
+            "--",
+        ],
+        until.saturating_duration_since(Instant::now()),
+        Some(4 * 1024),
+    )?;
+    facts.unpushed_commits = unpushed
+        .lines()
+        .filter(|sha| facts.recent_commits.iter().any(|commit| commit.sha == *sha))
+        .map(str::to_owned)
+        .collect();
+    if facts.upstream_state == "tracked" && facts.behind.is_some_and(|behind| behind > 0) {
+        facts.incoming_commits = commit_records(path, &format!("{head}..@{{upstream}}"), until)?;
+    }
+    Ok(())
 }
 
 /// The newest commits `revision` names, at most
@@ -184,18 +201,26 @@ pub fn fetch_remote(path: &Path) -> FetchOutcome {
             };
         }
     }
-    let output = crate::git_run::output(
-        crate::git_run::at(path).env("LC_ALL", "C").args([
-            "fetch",
-            "--quiet",
-            "--prune",
-            "--no-tags",
-            "--no-write-fetch-head",
-            "origin",
-        ]),
-        FETCH_TIME,
-        Some(64 * 1024),
-    );
+    let mut command = crate::git_run::remote(path);
+    // Nothing the fetch starts outlives it or reaches past origin: no
+    // automatic gc or maintenance left running, no submodule fetched.
+    command.env("LC_ALL", "C").args([
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "maintenance.auto=false",
+        "fetch",
+        "--quiet",
+        "--prune",
+        "--no-tags",
+        "--no-recurse-submodules",
+    ]);
+    // `FETCH_HEAD` stays the operator's own fetch's; Git before 2.29 has no
+    // such option and writes it.
+    if crate::git_run::version().is_none_or(|version| version >= (2, 29)) {
+        command.arg("--no-write-fetch-head");
+    }
+    let output = crate::git_run::output(command.arg("origin"), FETCH_TIME, Some(64 * 1024));
     match output {
         Ok(Some(output)) if output.status.success() => FetchOutcome::Fetched,
         Ok(Some(output)) => fetch_failure(
@@ -222,9 +247,12 @@ pub fn fetch_remote(path: &Path) -> FetchOutcome {
 fn fetch_failure(stderr: &str, code: Option<i32>) -> FetchOutcome {
     use hide_node_link::worktrees::{FetchFailure, FetchSkip};
     let said = |needle: &str| stderr.contains(needle);
-    if said("cannot lock ref")
+    // Two refs that cannot both exist (`a` and `a/b`) also cannot be locked,
+    // and no other Git will ever release that.
+    if (said("cannot lock ref")
         || (said("Unable to create") && said(".lock"))
-        || said("but expected")
+        || said("but expected"))
+        && !said("exists; cannot create")
     {
         return FetchOutcome::Skipped {
             reason: FetchSkip::Busy,
@@ -3213,6 +3241,20 @@ mod fetch_tests {
                 "{stderr}"
             );
         }
+    }
+
+    #[test]
+    fn refs_that_cannot_both_exist_are_a_failure_not_a_lock() {
+        assert!(matches!(
+            fetch_failure(
+                "error: cannot lock ref 'refs/remotes/origin/a/b': 'refs/remotes/origin/a' exists; cannot create 'refs/remotes/origin/a/b'",
+                Some(1)
+            ),
+            FetchOutcome::Failed {
+                failure: FetchFailure::Other,
+                ..
+            }
+        ));
     }
 
     #[test]

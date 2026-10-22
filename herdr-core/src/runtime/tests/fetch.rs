@@ -172,3 +172,41 @@ fn a_repository_whose_fetch_is_turned_off_is_not_fetched_and_shows_the_operators
     runtime.ingest_fetch(&jobs[0], Ok(FetchOutcome::Fetched), 1_000);
     assert_eq!(paths(&runtime.due_fetches(start)), ["/front"]);
 }
+
+#[test]
+fn a_ref_lock_that_never_clears_becomes_a_failure_and_a_passing_one_does_not() {
+    let mut runtime = fixture();
+    let start = Instant::now();
+    let busy = || {
+        Ok(FetchOutcome::Skipped {
+            reason: FetchSkip::Busy,
+        })
+    };
+    let failing = |runtime: &Runtime| {
+        runtime
+            .remote_check(crate::node::TEST_NODE, "/front")
+            .unwrap()
+            .observed
+            .is_some_and(|observed| observed.freshness == Freshness::Failed)
+    };
+    let fetch_front = |runtime: &mut Runtime, outcome, at: u64| {
+        runtime.look_for_fetch(start + Duration::from_secs(at));
+        let (job, _) = runtime
+            .due_fetches(start + Duration::from_secs(at))
+            .into_iter()
+            .find(|(job, _)| job.key.1 == "/front")
+            .expect("the front repository is due");
+        runtime.ingest_fetch(&job, outcome, at * 1_000)
+    };
+    runtime.snapshot.navigator.workspaces.truncate(1);
+    // Two locked fetches, then one that passes: never a failure.
+    assert!(!fetch_front(&mut runtime, busy(), 0));
+    assert!(!fetch_front(&mut runtime, busy(), 60));
+    fetch_front(&mut runtime, Ok(FetchOutcome::Fetched), 120);
+    assert!(!failing(&runtime));
+    // Three in a row: the lock is not the operator's fetch.
+    assert!(!fetch_front(&mut runtime, busy(), 180));
+    assert!(!fetch_front(&mut runtime, busy(), 240));
+    assert!(fetch_front(&mut runtime, busy(), 300));
+    assert!(failing(&runtime));
+}
