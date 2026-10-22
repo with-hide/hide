@@ -989,6 +989,7 @@ The ring colour and shape of each circle encode its mark (working, waiting, my t
 Lines carry no words.
 Parent-to-child lines are always drawn faint; choosing a session brightens its team's lines and draws one dashed outline around the team's circles and words, which goes away when the choice is cleared (D-03).
 Letters and Herdr direct input between the same two sessions are one line with direction arrows: solid when any letter exists, short dots when only direct input does.
+A communication line touching the chosen session, or the session under the pointer or keyboard focus, carries one small badge at its middle: an envelope with its letter count and a prompt with its direct-input count, each only when nonzero, summed over both directions; its hint says the counts per direction with both sessions' names, and every other line stays bare.
 A pair in different teams is always drawn; a pair inside one team is drawn only while that team is chosen.
 Every drawn root is joined to `나` by a faint line; a root whose mark is `turn` draws an amber arrow to `나` instead, and a descendant's ask reaches the operator through its root, which the core marks as the operator's turn.
 A folded team that holds the operator's turn draws the amber ring on its root and the amber arrow to `나`; a folded project keeps its colour border and wears the turn's `!` badge at the top of its circle, with the same amber arrow (B26).
