@@ -44,7 +44,8 @@ pub struct TreeRow {
 }
 
 /// The sidebar lists operator sessions as roots (`rows`, which the digit
-/// shortcuts number) and, under a root the operator opened, its children and
+/// shortcuts number; a resolved root with a live pane stays one, and rests in
+/// `shown`, `more`, `needs_you` and `turn_kind`) and, under a root the operator opened, its children and
 /// grandchildren wherever they work (`visible_rows`, PRD D-12, D-38): two
 /// levels only, siblings most urgent first. A grandchild's own children open
 /// in its popover instead (D-28).
@@ -62,7 +63,7 @@ pub(super) fn sidebar_tree(
     let roots: Vec<_> = agents
         .iter()
         .copied()
-        .filter(|row| !row.delegated && row.resolved.is_none())
+        .filter(|row| !row.delegated)
         .collect();
     let rows: Vec<_> = roots
         .iter()
@@ -104,17 +105,23 @@ pub(super) fn sidebar_tree(
         visible_rows.push(row.clone());
         open(root, 1, &by_pane, &all_references, &mut visible_rows);
     }
-    let needs_you = roots
+    // A resolved root rests: it is listed and numbered, but it asks for nothing
+    // and takes no place in the folded checkout's two shown rows.
+    let mut priority: Vec<_> = roots
+        .iter()
+        .copied()
+        .filter(|row| row.resolved.is_none())
+        .collect();
+    let needs_you = priority
         .iter()
         .any(|row| row.state.needs_you || row.group == "done");
     let turn_kind = needs_you.then(|| {
-        if roots.iter().any(|row| row.state.needs_you) {
+        if priority.iter().any(|row| row.state.needs_you) {
             "question"
         } else {
             "review"
         }
     });
-    let mut priority = roots;
     priority.sort_by_key(|row| row.state.attention_rank);
     Tree {
         visible_rows,
@@ -424,5 +431,57 @@ mod tests {
             drawn(&sidebar_tree(&all, &all).visible_rows),
             [("root".into(), 0)]
         );
+    }
+    fn resolved_at(row: &mut SidebarAgentSnapshot) {
+        row.resolved = Some(crate::agent_state::sessions::Resolution {
+            at_unix_ms: 1,
+            source: crate::agent_state::sessions::ResolveSource::Automatic,
+            session: None,
+            activity: "stopped".into(),
+        });
+    }
+
+    #[test]
+    fn a_resolved_root_is_listed_and_numbered_but_asks_for_nothing() {
+        let mut rows = lineage();
+        for row in &mut rows {
+            // Every row is its own root, so the one that rests is not a lineage's child.
+            row.delegated = false;
+            row.lineage_parent_pane_id = None;
+            row.lineage_child_pane_ids.clear();
+            row.state.attention_rank = 9;
+            if row.pane_id == "root" {
+                resolved_at(row);
+                row.state.needs_you = true;
+                row.group = "done".into();
+                row.state.attention_rank = 0;
+            }
+        }
+        let all: Vec<_> = rows.iter().collect();
+        let tree = sidebar_tree(&all, &all);
+        assert!(
+            drawn(&tree.rows).contains(&("root".into(), 0)),
+            "a resolved root with a live pane keeps its row and its number"
+        );
+        assert_eq!(drawn(&tree.rows).len(), rows.len());
+        assert!(!tree.needs_you, "a resting root asks for nothing");
+        assert_eq!(tree.turn_kind, None);
+        assert!(!tree.shown.contains(&"root".to_owned()));
+        assert_eq!(tree.shown.len(), 2);
+        assert_eq!(tree.more, rows.len() - 1 - 2, "it takes no place in more");
+    }
+
+    #[test]
+    fn only_resolved_roots_leave_a_checkout_with_nothing_to_show() {
+        let mut rows = lineage();
+        rows.retain(|row| row.pane_id == "root");
+        resolved_at(&mut rows[0]);
+        rows[0].state.needs_you = true;
+        let all: Vec<_> = rows.iter().collect();
+        let tree = sidebar_tree(&all, &all);
+        assert_eq!(drawn(&tree.visible_rows), [("root".into(), 0)]);
+        assert!(!tree.needs_you);
+        assert!(tree.shown.is_empty());
+        assert_eq!(tree.more, 0);
     }
 }

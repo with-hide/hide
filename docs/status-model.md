@@ -294,6 +294,7 @@ Done is deliberately separate from Needs You: a stop to read is "look when you h
 
 An archived session (PRD session-archive) is in no group and draws no mark: nothing of it runs, so it has no turn, no progress and nothing to read, and it is counted on no badge.
 A resolved row rests in every list, so its mark is counted on no checkout badge either (`sync_checkout_agent_summaries`), as the 태스크 list's Needs You, the raised lists and the phone's list already leave it out.
+The one list that still draws it is the sidebar's 프로젝트 tree: a resolved root with a live pane stays under its tab, dimmed whole with `해결됨 · ` leading its hover, and numbered by the digit shortcuts, while `shown`, `more`, `needs_you` and `turn_kind` of the tree are computed from the unresolved roots alone (`sidebar_tree` in `herdr-core/src/agent_state/tally/lineage.rs`; PRD sidebar-every-tab-line).
 It stands only in the 태스크 list's `보관됨` fold and its record, with its archive state (archiving, resuming, could not resume, deleting, unknown) as words; a member that came back is an ordinary row again, and a member still archived while its root is live is listed in that root's record, not as a row.
 While a member is archived, its delivery registration and the watches on it are held as a sleeping session's are (`docs/delivery.md`), so its pane's absence does not end its work's ownership; resuming continues them.
 

@@ -148,7 +148,10 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   const offline = unreachable ? t("agents.line.disconnected", { device: remote.label }) : null;
   const titleTone = agent.state.title_emphasized || (selected && agent.state.selection_emphasizes_title) ? "text-foreground" : "text-subtle-foreground";
   // The mark's state and word ride the row's hint, which the mark sits inside (B3).
-  const hint = [device ? `${agent.identity_label} · ${device}` : agent.identity_label, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
+  const title = device ? `${agent.identity_label} · ${device}` : agent.identity_label;
+  // Only the project tree draws a resolved row (it carries `tree`); the raised lists leave it out.
+  const resting = tree && agent.resolved;
+  const hint = [resting ? t("sidebar.resolvedHint", { label: title }) : title, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
   const staleness = ask ? undefined : agentPrStaleness;
   const folded = tree ? tree.open !== true : true;
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -182,7 +185,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
       data-agent-device={device ?? undefined}
       data-depth={depth}
       data-unreachable={unreachable ? "true" : undefined}
-      className={cn("group/row relative flex rounded-sm text-body", tree ? "items-stretch pr-xs" : "items-start gap-xs py-xs pr-xs", selected ? tree ? "bg-secondary" : "bg-selected" : "hover:bg-accent", (unreachable || rowDimmed(agent)) && "opacity-(--opacity-dimmed)")}
+      className={cn("group/row relative flex rounded-sm text-body", tree ? "items-stretch pr-xs" : "items-start gap-xs py-xs pr-xs", selected ? tree ? "bg-secondary" : "bg-selected" : "hover:bg-accent", (unreachable || rowDimmed(agent) || resting) && "opacity-(--opacity-dimmed)")}
       style={{ paddingLeft: inset }}
     >
       <Hint label={hint} reveals>
