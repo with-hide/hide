@@ -698,3 +698,304 @@ impl Runtime {
         changed
     }
 }
+
+/// Why a device was not registered or removed: `code` is the refusal the
+/// shell's status line and the `hide device` answer both carry.
+#[derive(Debug)]
+pub(super) struct DeviceRefusal {
+    pub(super) code: &'static str,
+    pub(super) message: String,
+}
+
+impl DeviceRefusal {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl Runtime {
+    /// Registers an SSH device and starts its connection; the id it was
+    /// registered under on success. Settings' Add and `hide device add` both
+    /// come here.
+    pub(super) fn register_device(
+        &mut self,
+        payload: super::events::RegisterDevicePayload,
+    ) -> Result<String, DeviceRefusal> {
+        let id = payload.id.trim().to_owned();
+        let label = payload.label.trim().to_owned();
+        let ssh_alias = payload.ssh_alias.trim().to_owned();
+        if id.is_empty() || label.is_empty() || ssh_alias.is_empty() {
+            return Err(DeviceRefusal::new(
+                "device.invalid",
+                "Device id, label, and SSH alias are required",
+            ));
+        }
+        if !hide_node_link::device::ssh_alias_is_one_token(&ssh_alias) {
+            return Err(DeviceRefusal::new(
+                "device.invalid",
+                "The SSH alias must be one Host name from ~/.ssh/config",
+            ));
+        }
+        if !hide_node_link::terminal::device_id_is_unambiguous(&id) {
+            return Err(DeviceRefusal::new(
+                "device.invalid",
+                "A device id cannot contain \":\"",
+            ));
+        }
+        let herdr_socket_path = payload
+            .herdr_socket_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_owned);
+        if payload
+            .herdr_session
+            .as_deref()
+            .is_some_and(|session| !hide_node_link::device::valid_herdr_session(session))
+            || (payload.herdr_session.is_some() && herdr_socket_path.is_some())
+        {
+            return Err(DeviceRefusal::new(
+                "device.invalid",
+                "Choose one valid Herdr session or an explicit socket",
+            ));
+        }
+        if herdr_socket_path
+            .as_deref()
+            .is_some_and(|path| !crate::remote::valid_remote_socket_path(path))
+        {
+            return Err(DeviceRefusal::new(
+                "device.invalid",
+                "The device's Herdr socket must be an absolute path on the device",
+            ));
+        }
+        // `local` named this machine before node ids; a device under
+        // that name would read as this machine in an unconverted key.
+        if id == self.node.as_str()
+            || id == crate::node::LEGACY_LOCAL_DEVICE_ID
+            || self
+                .snapshot
+                .ui_state
+                .device_registrations
+                .iter()
+                .any(|device| device.id == id)
+        {
+            return Err(DeviceRefusal::new(
+                "device.duplicate",
+                format!("Device {id} is already registered"),
+            ));
+        }
+        let registration = crate::model::DeviceRegistration {
+            id: id.clone(),
+            label,
+            origin: crate::model::LinkOrigin::Dialed {
+                ssh_alias: ssh_alias.clone(),
+            },
+            herdr_socket_path,
+            herdr_session: payload.herdr_session,
+            host_consent: payload.host_consent.then(|| self.new_host_consent()),
+        };
+        self.snapshot
+            .ui_state
+            .device_registrations
+            .push(registration.clone());
+        self.rebuild_device_rows();
+        self.persist_current_ui_state();
+        self.push_diagnostic(
+            "device.registered",
+            format!("Registered SSH device {id} ({ssh_alias})"),
+        );
+        self.connect_remote_device(&registration);
+        Ok(id)
+    }
+
+    /// Forgets a device and everything Hide recorded for it, takes Hide's
+    /// kit off it when its helper is connected, and closes its connection.
+    pub(super) fn remove_device(&mut self, device_id: &str) -> Result<(), DeviceRefusal> {
+        if device_id == self.node.as_str() {
+            return Err(DeviceRefusal::new(
+                "device.local_remove_denied",
+                "The core's own machine cannot be removed".to_owned(),
+            ));
+        }
+        let Some(registration) = self
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .find(|device| device.id == device_id)
+            .cloned()
+        else {
+            return Err(DeviceRefusal::new(
+                "device.unknown",
+                format!("Device {} is not registered", device_id),
+            ));
+        };
+        self.snapshot
+            .ui_state
+            .device_registrations
+            .retain(|device| device.id != device_id);
+        self.delivery_panes.remove(device_id);
+        // Hide's kit comes off the device on its own helper
+        // connection, which the disconnect below leaves open for it.
+        let kit_removal = self.queue_device_kit_removal(&registration);
+        self.disconnect_remote_device(device_id, Retiring::Removed);
+        self.forget_device_directories(device_id);
+        // Removing a device removes Hide's own record of it: its
+        // project registrations, expanded folders and file tabs. Its
+        // panes, agents and folders are not touched.
+        let scope = format!("remote:{}:", device_id);
+        let device_folds = [
+            format!("cleanup/{}", device_id),
+            crate::project_context::no_agents_fold_key(device_id),
+        ];
+        self.snapshot.ui_state.session_open_folds.retain(|key| {
+            let project = key.strip_prefix("asleep/").unwrap_or(key);
+            !project.starts_with(&scope) && !device_folds.contains(key)
+        });
+        let registrations = self.snapshot.ui_state.workspace_registrations.len();
+        self.snapshot
+            .ui_state
+            .workspace_registrations
+            .retain(|registration| registration.device_id != device_id);
+        let registrations = registrations - self.snapshot.ui_state.workspace_registrations.len();
+        let ui = &mut self.snapshot.ui_state;
+        ui.device_expanded_paths.remove(device_id);
+        let tabs = self
+            .snapshot
+            .editor
+            .tabs
+            .iter()
+            .filter(|tab| tab.checkout_id.starts_with(&scope))
+            .count();
+        self.retire_device_editor_tabs(device_id);
+        self.forget_device_views(device_id);
+        self.forget_device_sleep(device_id);
+        self.forget_device_launches(device_id);
+        self.forget_recent_checkouts(|held| held.device_id == device_id);
+        self.rebuild_device_rows();
+        self.rebuild_tab_strips();
+        self.persist_current_ui_state();
+        self.push_diagnostic(
+                "device.unregistered",
+                format!(
+                    "Unregistered device {}; forgot {registrations} project registrations and closed {tabs} file tabs; {}",
+                    device_id,
+                    match kit_removal {
+                        Ok(()) => "Hide's kit is coming off the device".to_owned(),
+                        Err(reason) => format!("Hide's kit stays on the device because {reason}"),
+                    }
+                ),
+            );
+        Ok(())
+    }
+}
+
+impl Runtime {
+    /// `hide device` from a caller on `caller_device`: the answer, and
+    /// whether the snapshot changed. Only the core's own machine may ask,
+    /// as only it may start agents on another machine.
+    pub(crate) fn device_command(
+        &mut self,
+        caller_device: &str,
+        command: crate::device_command::DeviceCommand,
+    ) -> Result<(serde_json::Value, bool), String> {
+        use crate::device_command::DeviceCommand;
+        if caller_device != self.node.as_str() {
+            return Err("machine_not_permitted".into());
+        }
+        let refused = |refusal: DeviceRefusal| refusal.code.replace('.', "_");
+        match command {
+            DeviceCommand::List => {
+                let devices = self
+                    .snapshot
+                    .navigator
+                    .devices
+                    .iter()
+                    .filter(|device| device.kind == "remote")
+                    .map(device_answer)
+                    .collect::<Vec<_>>();
+                Ok((serde_json::json!({ "devices": devices }), false))
+            }
+            DeviceCommand::Add {
+                ssh_alias,
+                name,
+                herdr_socket_path,
+            } => {
+                let ssh_alias = ssh_alias.trim().to_owned();
+                let id = crate::device_command::device_id_for(
+                    &ssh_alias,
+                    self.snapshot
+                        .ui_state
+                        .device_registrations
+                        .iter()
+                        .map(|device| device.id.as_str())
+                        .chain(std::iter::once(self.node.as_str())),
+                );
+                // The helper waits for the operator's Allow on the device's
+                // row: its kit writes that account's hook files.
+                let payload = super::events::RegisterDevicePayload {
+                    id,
+                    label: name.unwrap_or_else(|| ssh_alias.clone()),
+                    ssh_alias,
+                    herdr_socket_path,
+                    herdr_session: None,
+                    host_consent: false,
+                };
+                let id = self.register_device(payload).map_err(refused)?;
+                let device = self
+                    .snapshot
+                    .navigator
+                    .devices
+                    .iter()
+                    .find(|device| device.id == id)
+                    .map(device_answer)
+                    .ok_or("device_unavailable")?;
+                let name = device["label"].as_str().unwrap_or(&id).to_owned();
+                Ok((
+                    serde_json::json!({
+                        "device": device,
+                        "next_action": format!(
+                            "Ask the operator to open Settings › Devices in Hide and choose Allow and install on {name}'s row. Until then Hide installs nothing there, and the device's files, Git and terminal input wait for it."
+                        ),
+                    }),
+                    true,
+                ))
+            }
+            DeviceCommand::Remove { device_id } => {
+                // A file tab's unsaved draft lives in the shell, which
+                // Settings' Remove asks to store first; this command cannot.
+                let scope = format!("remote:{device_id}:");
+                if self
+                    .snapshot
+                    .editor
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.checkout_id.starts_with(&scope))
+                {
+                    return Err("device_files_open".into());
+                }
+                self.remove_device(&device_id).map_err(refused)?;
+                Ok((serde_json::json!({ "device_id": device_id }), true))
+            }
+        }
+    }
+}
+
+/// One device as `hide device` answers it.
+fn device_answer(device: &crate::model::DeviceSnapshot) -> serde_json::Value {
+    serde_json::json!({
+        "id": device.id,
+        "label": device.label,
+        "ssh_alias": device.ssh_alias,
+        "state": device.state,
+        "message": device.message,
+        "helper": {
+            "consent": device.host.consent,
+            "state": device.host.state,
+            "message": device.host.message,
+        },
+    })
+}

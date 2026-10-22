@@ -27,6 +27,7 @@ pub enum CommandKind {
     },
     /// `hide ps [--all] [--here] [--json]`.
     Ps(crate::ps_cli::Options),
+    Device(crate::device_cli::DeviceCli),
     Help,
     AgentSpawnHelp,
     /// `hide version [--json]`: this build's version, commit and contract.
@@ -192,6 +193,11 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::cli_contract::admit(&args[1..])
                 .map_err(|refusal| format!("{refusal}\n{}", crate::ps_cli::USAGE))?;
             crate::ps_cli::parse(iter).map(CommandKind::Ps)
+        }
+        Some("device") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", crate::device_cli::USAGE))?;
+            crate::device_cli::parse(iter).map(CommandKind::Device)
         }
         Some(topic @ ("request" | "inbox" | "watch")) => {
             crate::cli_contract::admit(&args[1..])
@@ -542,6 +548,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         println!("{}", crate::delivery_cli::USAGE);
         println!("{}", crate::agent_cli::USAGE);
         println!("{}", crate::ps_cli::USAGE);
+        println!("{}", crate::device_cli::USAGE);
         println!("{}", crate::mission_cli::USAGE);
         println!(
             "hide workspace info\nhide file open <path> [--beside] [--request-id <id>]\nhide diff open <path> [--beside] [--request-id <id>]\nhide browser open <url-or-path> [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help\nhide view list\nhide view status <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]\nhide links pr <number> | issue <number> | branch <name> | session <id> [--all-projects]\nhide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card>\nEach Workspace command requires a live Hide renderer and a caller Hide can bind to a checkout, an attested Herdr pane or a shell inside a registered checkout; it never starts Hide. hide links needs only the caller and a running Hide, and reads the caller's Project unless --all-projects is given. hide memory reads, adds to and forgets from the caller's Project Memory, which the core keeps in one store for the Projects of its own machine and every registered linked device with a Memory reader. hide memory release ends a hold an agent's stale report put on a card; run in a Hide shell pane with no agent, it also lets that card's text be reported stale once more."
@@ -573,6 +580,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Mission(_)
                     | CommandKind::AgentCatalog { .. }
                     | CommandKind::Ps(_)
+                    | CommandKind::Device(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
                     | CommandKind::ObservationHook { .. }
@@ -603,6 +611,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Mission(command) => crate::mission_cli::run(&env, command),
         CommandKind::AgentCatalog { machine } => crate::mission_cli::run_catalog(&env, machine),
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
+        CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
         CommandKind::Delivery(command) => {
             if matches!(&command, herdr_core::delivery::Command::Agents { .. }) {
                 crate::agent_cli::run(&env, command)
