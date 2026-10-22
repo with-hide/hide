@@ -202,8 +202,9 @@ use crate::error::HostError;
 /// 52: the core fetches a node's repositories in the background
 /// (`Call::FetchRemote`), reads a header's incoming and unpushed commits, and
 /// names GitHub's default branch to the worktree read; the core also keeps a
-/// `Call::GitWatch` open on each connected device. An older helper cannot
-/// fetch without prompting and is upgraded at Hello.
+/// `Call::GitWatch` open on each connected device, and both run on a lane of
+/// their own (`Call::is_background`). An older helper cannot fetch without
+/// prompting and is upgraded at Hello.
 pub const PROTOCOL_VERSION: u32 = 52;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
@@ -935,6 +936,13 @@ impl Call {
                 | Self::LinkWrite { .. }
                 | Self::LinkClose { .. }
         )
+    }
+
+    /// Background Git work a core keeps out on a link for long: a device's
+    /// Git watch and a background fetch. It runs on a lane of its own at
+    /// both ends, so it never takes a worker an ordinary call needs.
+    pub fn is_background(&self) -> bool {
+        matches!(self, Self::GitWatch { .. } | Self::FetchRemote { .. })
     }
 
     /// Whether a device's node answers this request. A device answers the

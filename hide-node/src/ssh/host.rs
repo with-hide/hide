@@ -106,6 +106,9 @@ pub const MAX_RUNNING: usize = hide_host::serve::CONCURRENCY;
 /// Link control requests ([`Call::is_control`]) running at once, beside
 /// the machine calls: the node answers them on workers of their own.
 pub const MAX_CONTROL_RUNNING: usize = hide_host::serve::CONTROL_CONCURRENCY;
+/// Background Git work ([`Call::is_background`]) running at once, on a lane
+/// of its own at both ends.
+pub const MAX_BACKGROUND_RUNNING: usize = hide_host::serve::BACKGROUND_CONCURRENCY;
 pub const MAX_QUEUED: usize = 32;
 
 /// This program, which a device runs in its node role (`hided node serve`,
@@ -394,8 +397,9 @@ impl fmt::Debug for RemoteHost {
 /// Admission to one helper connection: four running and thirty-two waiting
 /// requests (PRD S5.5 D-15). Once the connection is draining or closed it
 /// admits nothing new, and a request still waiting is refused rather than
-/// sent, because nothing went out for it (B52). A link has two: one for
-/// machine calls and one for link control (`Call::is_control`).
+/// sent, because nothing went out for it (B52). A link has three: one for
+/// machine calls, one for link control (`Call::is_control`) and one for
+/// background Git work (`Call::is_background`).
 struct Gate {
     state: Mutex<Admission>,
     changed: Condvar,
@@ -518,6 +522,9 @@ struct Inner {
     gate: Gate,
     /// Admission for link control, which never waits behind machine calls.
     control_gate: Gate,
+    /// Admission for background Git work, which never takes a machine
+    /// call's place.
+    background_gate: Gate,
     next_id: AtomicU64,
     /// Checkout roots this connection has opened, pinned to the directory
     /// they named then.
@@ -546,15 +553,18 @@ impl Inner {
     fn gate_for(&self, call: &Call) -> &Gate {
         if call.is_control() {
             &self.control_gate
+        } else if call.is_background() {
+            &self.background_gate
         } else {
             &self.gate
         }
     }
 
-    /// Admits nothing more on either lane; the first reason given is kept.
+    /// Admits nothing more on any lane; the first reason given is kept.
     fn stop_gates(&self, reason: &str) {
         self.gate.stop(reason);
         self.control_gate.stop(reason);
+        self.background_gate.stop(reason);
     }
 }
 
@@ -597,6 +607,7 @@ impl RemoteHost {
                 closed: tokio::sync::watch::Sender::new(None),
                 gate: Gate::new(MAX_RUNNING),
                 control_gate: Gate::new(MAX_CONTROL_RUNNING),
+                background_gate: Gate::new(MAX_BACKGROUND_RUNNING),
                 next_id: AtomicU64::new(1),
                 roots: Mutex::new(HashMap::new()),
                 terminals: std::sync::OnceLock::new(),
@@ -953,6 +964,7 @@ impl NodeLink for RemoteHost {
                 let deadline = Instant::now() + DRAIN_BOUND;
                 host.inner.gate.wait_idle(deadline);
                 host.inner.control_gate.wait_idle(deadline);
+                host.inner.background_gate.wait_idle(deadline);
                 host.close(&drained);
             });
         if let Err(error) = spawned {
@@ -2415,6 +2427,7 @@ fn start_reader(
         closed: tokio::sync::watch::Sender::new(None),
         gate: Gate::new(MAX_RUNNING),
         control_gate: Gate::new(MAX_CONTROL_RUNNING),
+        background_gate: Gate::new(MAX_BACKGROUND_RUNNING),
         next_id: AtomicU64::new(1),
         roots: Mutex::new(HashMap::new()),
         terminals: std::sync::OnceLock::new(),
