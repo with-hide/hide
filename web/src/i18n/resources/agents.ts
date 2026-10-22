@@ -39,7 +39,7 @@ export const agentsEnglish = {
   "agents.group.collaboration": "Multi-agent collaboration",
   "agents.feature.supported": "Works",
   "agents.feature.unsupported": "Not available",
-  "agents.feature.skill": "Hide skill for browser and workspace commands",
+  "agents.feature.skill": "The hide skill, a guide to Hide's commands",
   "agents.feature.guidance": "Setup guidance when a session starts",
   "agents.feature.letters": "Letters and Observer warnings",
   "agents.letterWaiting": "Letter waiting",
