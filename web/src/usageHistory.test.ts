@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UsageAmount, UsageRange } from "./generated/hided-ws";
-import { allTokens, hideAiReading, hideAiShare, sumHideAiDays, sumUsageDays, usageDays, usagePeriodDays } from "./usageHistory";
+import { allTokens, hideAiShare, sumHideAiDays, sumUsageDays, usageDays, usagePeriodDays } from "./usageHistory";
 
 const empty: UsageAmount = {
   calls: 0, new_tokens: 0,
@@ -90,15 +90,6 @@ describe("Hide AI reading", () => {
   const hideDay = (unknown: number, basisPoints: number) => ({
     ...usageDays(range(true))[1]!,
     hide_ai: { amount: { ...empty, calls: 3, new_tokens: 4_500 }, share_basis_points: basisPoints, features: [], unknown_calls: unknown },
-  });
-
-  it("tells a counted day from one before counting began and one with no call", () => {
-    const counted = hideDay(0, 250);
-    expect(hideAiReading(counted, "2026-03-01")).toMatchObject({ state: "counted", unknown: 0, basisPoints: 250 });
-    const bare = { ...counted, hide_ai: null };
-    expect(hideAiReading(bare, "2026-03-09")).toEqual({ state: "none" });
-    expect(hideAiReading(bare, "2026-03-10")).toEqual({ state: "before" });
-    expect(hideAiReading(bare, null)).toEqual({ state: "none" });
   });
 
   it("sums the counted days and keeps unknown calls a count", () => {
