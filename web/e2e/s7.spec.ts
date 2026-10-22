@@ -1056,7 +1056,11 @@ test("a window too narrow to halve two side by side areas again refuses the spli
   try {
     // Room is a reason too (B9, D-06).
     await pinNineAndSplit(page, stack);
-    await page.setViewportSize({ width: 1280, height: 1080 });
+    // Too narrow for both columns beside the agents, the docked lane stacks
+    // them and the documents come to the front at what the agents spare
+    // (PRD lane-two-columns B19): room for two areas, not for four.
+    await page.setViewportSize({ width: 1400, height: 1080 });
+    await showDocuments(page);
     await expect.poll(async () => (await boxOf(area(page, 0))).width).toBeLessThan(450);
     const cramped = await tabMenuRows(page, area(page, 0), "f02.txt");
     expect(cramped.find((row) => row.id === "split_right")).toMatchObject({ disabled: true, reason: "This view area is too narrow to split." });
@@ -1105,8 +1109,8 @@ test("a checkout holds at most thirty-two views: opening one more closes its vie
   const stack = await startStack(page, "s7-caps-views", files);
   try {
     // B19, contract 2. Seeded as a schema 2 file, the File Views column
-    // on with the Explorer: the core reads it through the lane migration,
-    // so the cap holds across that path too.
+    // on with the Explorer: the core reads its views and starts the lane
+    // closed (PRD lane-two-columns B23), so the cap holds across that path too.
     const seeded = {
       schema_version: 2,
       workspaces: [
@@ -1142,6 +1146,8 @@ test("a checkout holds at most thirty-two views: opening one more closes its vie
     stack.daemon = await stack.daemon.restart((dir) => fs.writeFileSync(path.join(dir, "workspace-views.json"), JSON.stringify(seeded)));
     await page.goto("about:blank");
     await open(page, stack.daemon);
+    await expect(page.locator('[data-lane-tool="documents"] [data-lane-badge]')).toHaveText("32", { timeout: 30_000 });
+    await showDocuments(page);
     await expect(page.locator('[data-view-area-id] [role="tab"][data-view-state="open"]')).toHaveCount(32, { timeout: 30_000 });
     await showExplorer(page);
     // Explorer virtualizes this long list: reveal its last rows before clicking one.
@@ -1418,7 +1424,7 @@ test("a broken or unknown Views file is kept aside for Main and a fresh layout, 
       const stored = JSON.parse(fs.readFileSync(viewsFile(stack.daemon), "utf8")) as { schema_version: number; workspaces: { path: string; view_layout?: { root?: { area?: { displays?: { path: string; preview: boolean }[] } } } }[] };
       const entry = stored.workspaces.find((candidate) => candidate.path === stack.root);
       return { version: stored.schema_version, displays: entry?.view_layout?.root?.area?.displays?.map((display) => `${path.basename(display.path)}${display.preview ? "*" : ""}`) };
-    }).toEqual({ version: 3, displays: ["a.txt", "b.txt", "c.txt*"] });
+    }).toEqual({ version: 4, displays: ["a.txt", "b.txt", "c.txt*"] });
     expectFrontWorkspaceOnEveryViewEvent(stack);
   } finally {
     stopStack(stack);
