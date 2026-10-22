@@ -32,7 +32,7 @@ When the shell disconnects, retained upstream claims disappear until the connect
 Home and ordinary folders carry no Git header.
 Web owners: `WorkspaceTitleBar` in `web/src/WorkspaceScreen.tsx` and `web/src/CheckoutGitHeader.tsx`; core owner: `herdr-core/src/runtime/checkout_git.rs`, read by `herdr-core/src/checkout_git.rs` on the existing Changes pump.
 Its right end holds two tool icons, in this order: Overview and `Open server`; the lane's tools are on the rail (see The right lane).
-`Open server` (a globe): one known listener opens directly as a page in the files tool, and multiple listeners open a compact keyboard picker.
+`Open server` (a globe): one known listener opens directly as a page among the lane's documents, and multiple listeners open a compact keyboard picker.
 Its accessible name carries how many listeners are known (`Open server, 2 running`), so a screen reader tells a globe that opens a page at once from one that opens the picker; while the count is unknown (a remote Workspace, no connection, a discovery that is still reading or failed) the name is `Open server`, and the tooltip always says `Open server`.
 A Workspace of the machine the window runs on counts as local when that machine's core runs on another machine: the core reads that machine's listeners through its link, and its server opens in that window.
 The picker shows each real bind address and port, preserves IPv4/IPv6 scope, and supports arrows, Home, End, Enter and Escape.
@@ -70,81 +70,79 @@ Only when the window's frame itself cannot draw does the line take the whole win
 ### The right lane
 
 The Workspace body, under the top row, is Agent Views (the Agent area), one right lane, and the tool rail, 48px wide, at the window's right edge.
-The rail lists Memory, PRs, Files and Changes from the top, the Project's tools before the checkout's, each an icon alone (a brain, a pull request, files, a file diff) whose name and scope are its hint on hover and its accessible name, and the lane shows one of them at a time: Memory, PRs (see The PRs tool), Files (the View areas and the file tree) and Changes (History).
-There is no Work tool; its Sessions list is the sidebar's 태스크 list and its PRs lens is the PRs tool (PRD sidebar-task-lens D-16, D-17).
-A rail icon is drawn pressed, with a primary bar at the rail's edge, while the lane shows its tool; pressing it opens the lane on that tool, and pressing the pressed one closes the lane.
-Each icon's hint names the tool and its scope and ends with its chord (`Memory · herdr-ide  ⇧⌘L`, `PRs · all of hide  ⇧⌘R`, `Files · settings-ui  ⇧⌘E`, `Changes · settings-ui  ⇧⌘G`).
-A short rule between PRs and Files marks where the Project's tools end and the checkout's begin (PRD work-tab-pr-lens D-37); it is derived from each tool's scope, so a tool of the other scope moves it.
-Memory, PRs and Changes headers name the tool, then its scope behind one small icon, a folder for the Project (Memory, PRs) and a branch for the checkout (Changes), in the scope text's colour; the icon is decoration.
-Files omits the title, branch icon and branch name from its header; its rail hint still names the tool and checkout scope.
-While the lane does not show Files, its icon carries a badge counting the views open, also given as its accessible description; Memory's carries a dot while its Project has questions waiting, and PRs' a warning-coloured number counting the PRs tool's Needs You rows (folded rows not counted, a session's Needs You never).
-While the 보기 slot holds something, a fifth button stands above Memory with the mark of what it holds, a pull request as its PR mark in its state's icon and colour or a record as a page, and one short rule under it sets it apart from the tools (see The 보기 slot).
-The rail's `…` menu holds Toggle File Tree with its chord, Pin or Unpin, and Expand.
+The lane has two columns (PRD lane-two-columns B1): the viewing column on the agents' side, which holds the checkout's documents (the View areas) or the 보기 slot, and the tool column beside the rail, which holds one tool; both, or one alone, are drawn, and with neither the lane is closed.
+The rail's top is the viewing column's: the 보기 button, while the slot holds something, with the mark of what it holds (a pull request as its PR mark in its state's icon and colour, a record or a mission as a page), then the documents button (a file icon) with a badge counting the open views while they are out of sight, also given as its accessible description; with no document the button is off and its hint says `No open document` (B2).
+Below a short rule the rail lists the tools, Memory, PRs, Explorer and Changes from the top, the Project's tools before the checkout's, each an icon alone (a brain, a pull request, a folder tree, a file diff) whose name, scope and chord are its hint on hover (`Memory · herdr-ide  ⇧⌘L`, `PRs · all of hide  ⇧⌘R`, `Explorer · settings-ui  ⇧⌘E`, `Changes · settings-ui  ⇧⌘G`) and whose name is its accessible name (B3).
+There is no Work tool and no Files tool; the Sessions list is the sidebar's 태스크 list, the PRs lens is the PRs tool (PRD sidebar-task-lens D-16, D-17), and what Files held is split between the documents and the Explorer (PRD lane-two-columns D-03).
+A second short rule between PRs and Explorer marks where the Project's tools end and the checkout's begin (PRD work-tab-pr-lens D-37); it is derived from each tool's scope, so a tool of the other scope moves it.
+A rail button is drawn pressed, with a primary bar at the rail's edge, while its column shows it: a tool icon while the tool column shows that tool, the documents or 보기 button while the viewing column draws it.
+Pressing a tool icon opens the tool column on that tool, or swaps the tool it shows; pressing the pressed one closes the tool column, and the viewing column stays (B14).
+Pressing the documents or 보기 button brings it to the front of the viewing column; pressed while it is in front, it folds the viewing column, and pressing it again brings the same content back (B11).
+Memory's icon carries a dot while its Project has questions waiting, and PRs' a warning-coloured number counting the PRs tool's Needs You rows (folded rows not counted, a session's Needs You never).
+The rail's `…` menu holds Pin or Unpin and Expand, which move both columns together (B15).
 A Workspace seen for the first time shows Agent Views alone, its lane closed.
-The lane's header has Pin, Expand and Close at its right.
-Memory, PRs and Changes name their tool and scope, `Memory · <project>`, `PRs · all of <project>` and `Changes · <checkout>`; a new checkout in front updates the checkout scopes in Changes and the Files rail hint and leaves Memory and PRs as they are.
+The tool column's header names its tool, then its scope behind one small icon, a folder for the Project (Memory, PRs) and a branch for the checkout (Explorer, Changes), in the scope text's colour, and ends with `✕`, which closes the tool column (B14); the icon is decoration.
+The scopes read `Memory · <project>`, `PRs · all of <project>`, `Explorer · <checkout>` and `Changes · <checkout>`; a new checkout in front updates the checkout scopes and leaves Memory and PRs as they are.
+The viewing column has no header of its own: the documents draw their View areas with their tabs, and the 보기 slot its head (see The 보기 slot).
 
-Unpinned, the lane opens over Agent Views at their right edge, set apart by a shadow and a left border in both themes; the terminals under it keep their grid and layout, are not dimmed, and keep their input and output.
+Unpinned, the lane opens over Agent Views at their right edge, set apart by a shadow and a left border in both themes; the terminals under it keep their grid and layout, are not dimmed, and keep their input and output (B20).
 An unpinned lane stays up until the operator takes it down: a click on a terminal pane, choosing an agent or a tab, another Workspace in front and a restart all leave it as it was.
-Close, ⌘E or its rail icon closes it, and Escape inside the lane or on its rail puts it away and hands the keyboard to the focused pane; Escape first closes a menu, popover or search open in the lane, and Escape in a terminal is the program's.
-A lane put away keeps its documents, tabs, scroll, previews and searches, and its rail icon, ⌘E, an open or a reveal brings it back as it was.
-Pinned (a filled pin; an empty one says `Pin · keep it beside the agents`), the lane docks beside Agent Views, which narrow by its width once; unpinned (`Unpin · back over the agents`), Agent Views take their width back and the lane is over them again.
-The pin is the lane's, whatever tool it shows, and a pinned lane closed and opened again comes back docked.
-A pinned lane docks in any window where its minimums (360px of documents, 180px of tree) fit beside 480px of Agent Views, giving up its own width first and taking its stored width back as the window widens; a window too narrow for even that opens the lane over them as if unpinned, with the pin still filled and its tooltip saying `Pin · too narrow, drawn over`.
-Expand gives the lane the whole body between the sidebar and the rail, with the file tree as a column beside the documents; Expand again or Escape returns to the pin, widths and terminal layout as they were, no terminal resizes meanwhile, and Agent Views under an expanded lane take no pointer or keyboard.
-While the keyboard is in the lane, a document, a page or the tool, the Zoom pane chord (⇧⌘↩, Alt+Shift+Enter on Windows and Linux) is Expand and Expand again, so one key fills the window with whatever the operator works in; anywhere else it zooms the focused pane, and the Expand tooltip shows the chord.
-Close (the header's ×, the pressed rail icon, or the tool's chord) closes the lane and leaves the file tree as it was; it closes no view, and the Files badge counts what stays open.
-A close keeps the tool the lane showed, so ⌘E and Show right lane bring it back on that tool.
+⌘E closes the lane whole, and Escape inside the lane or on its rail puts it away and hands the keyboard to the focused pane; Escape first closes a menu, popover or search open in the lane, and Escape in a terminal is the program's.
+A lane put away keeps its documents, tabs, scroll, previews and searches, and ⌘E, an open or a reveal brings it back as it was.
+Pinned (`Pin · keep it beside the agents`), the lane docks beside Agent Views, which narrow by its width once; unpinned (`Unpin · back over the agents`), Agent Views take their width back and the lane is over them again.
+The pin is the lane's, whatever its columns show, and a pinned lane closed and opened again comes back docked.
+A pinned lane docks in any window where its columns' minimums fit beside 480px of Agent Views, the viewing column giving up its width first and the tool column after, each taking its stored width back as the window widens; in a window too narrow for even that the two columns stack, the one brought to the front last drawn and the other behind it, and a body too narrow for even one column draws the lane over the agents as if unpinned, the menu's pin saying `Pin · too narrow, drawn over` (B19).
+Expand gives the lane the whole body between the sidebar and the rail, the tool column keeping its width and the viewing column taking the rest; Expand again or Escape returns to the pin, widths and terminal layout as they were, no terminal resizes meanwhile, and Agent Views under an expanded lane take no pointer or keyboard (B15).
+While the keyboard is in the lane, a document, a page, the 보기 slot or the tool, the Zoom pane chord (⇧⌘↩, Alt+Shift+Enter on Windows and Linux) is Expand and Expand again, so one key fills the window with whatever the operator works in; anywhere else it zooms the focused pane.
+The tool column's `✕`, the pressed tool icon and the tool's chord close the tool column alone, closing no view; the viewing column closes with its last document or the slot's `✕`; and a lane whose last column closes is closed, the keyboard going to the focused pane (B12, B13, B14).
+⌘E (`Toggle right lane`) closes the lane while it shows and otherwise brings it back with the columns it had, so a lane closed whole by ⌘E or the path menu's Hide right lane returns both columns; a lane whose columns were closed one by one has nothing to bring back and opens on the documents when the checkout has some, else on the Explorer (B15).
+The columns are kept with the Workspace, so ⌘E after an app restart brings back the same, and the path menu's Show right lane does the same as ⌘E.
+Documents coming back take the keyboard into their active View area, the editor of the document there or the page, as an open does, so typing, ⌘S and ⌘W act on what came back rather than on the terminal it was pressed from; a tool, or the 보기 slot, leaves the keyboard where it was (B16).
 
-The files tool shows the View areas below, with their tabs, splits, previews and browser displays, each page inside its area's bounds.
-The active document's header starts with the checkout's name, then the path in ` › ` steps, cutting a long path at its start so the file name stays.
-The Files top header starts at its left edge with one folder-and-Explorer toggle, with localized text, pressed background and accessible pressed state.
-It stays visible with no View and is disabled while the tree alone must remain.
-Document and page toolbars retain their path or address and controls, without another tree toggle.
-The tree button or ⌘⇧E (`Toggle File Tree`) turns the file tree, the Explorer, on and off, the button pressed while it is on; ⌘⇧E while the lane does not show Files opens it on Files with the tree.
-On, the tree is a column left of the documents and the lane widens by its width, so the documents keep theirs: over Agent Views it covers more of them, and docked, Agent Views give up the tree's width as well.
-The tree stays on when a file is picked, when the lane is put away or closed and comes back, and when another tool shows and Files comes back; only the tree button and ⌘⇧E turn it off.
-With no document open, the files tool shows the tree across the lane, its head saying `No open document · tree only`; a file picked there, or anything opened meanwhile (⌘P, a terminal link, a page, `hide` from the front tab), opens beside the tree, which goes back to its own width and stays on, and ⌘⇧E there changes nothing.
-Closing the last view leaves the lane on Files in that state when the operator turned the tree on; with the tree off, the lane closes with that view and the keyboard goes to the focused pane, so a tree nobody asked for never appears.
-⌘E on a Workspace with no view opens Files in that state; nothing opens a blank page in its place and the lane is never empty, while a View area's New tab still opens a browser display (see Browser displays).
-
-Opening a file, a diff or a page from the tree, Changes, ⌘P, a terminal link, Open in Browser or Open server opens the lane on Files, over the agents or docked as its pin says, with the opened tab in its active View area; another tool showing gives way to Files.
-Select in File Tree, a reveal, or a terminal link that names a folder opens Files with the tree on and the row unfolded and selected.
-⌘E (`Toggle right lane`) closes the lane while it shows and otherwise brings it back on the tool it last showed in that Workspace, whichever way the lane was closed (its × button, the pressed rail icon, ⌘E or a tool's chord), and on Files for a Workspace whose lane never showed a tool; the tool is kept with the Workspace, so it holds after an app restart, and the path menu's Show right lane brings back the same tool.
-Files coming back with a view takes the keyboard into its active View area, the editor of the document there or the page, as an open does, so typing, ⌘S and ⌘W act on what came back rather than on the terminal it was pressed from; another tool, or Files with no view, leaves the keyboard where it was.
-⇧⌘L (`Toggle Memory tool`), ⇧⌘R (`Toggle PRs tool`) and ⇧⌘G (`Toggle Changes tool`) press that tool's rail icon: the lane opens on it, or closes when it already shows it; ⇧⌘E opens Files with its tree as before, and `Toggle Files tool` has no chord until one is bound (PRD sidebar-task-lens D-19, D-29).
-On Windows and Linux they are Alt+Shift+L, R and G; in a browser tab Chrome keeps ⇧⌘R for reload, so PRs is ⌥⇧R there, and ⌥⌘1-4 do nothing anywhere.
-A chord the operator had bound to the retired `Toggle Work tool` is dropped without an error, and the rest of their set stays.
-The desktop app's View menu names the lane commands and `Toggle File Tree`, and a chord bound to any of them in Settings, Shortcuts keeps doing the same.
+The documents are the checkout's View areas, with their tabs, splits, previews and browser displays, each page inside its area's bounds (see View areas).
+The active document's header starts with the checkout's name, then the path in ` › ` steps, cutting a long path at its start so the file name stays; document and page toolbars keep their path or address and controls.
+The Explorer tool is the file tree as it was, its rows, menu, drags and file management (see The Explorer); it has nothing of its own to turn off, so an Explorer open with no document is the tool column alone, with no disabled button and no `tree only` notice (B4, B5).
+Opening a file, a diff or a page from the Explorer, Changes, ⌘P, a terminal link, Open in Browser or Open server shows the documents in the viewing column with the opened tab in front, over the agents or docked as the pin says, and leaves the tool column as it is (B6, B7); the preview, Keep open and Open to the side rules are unchanged.
+A diff opened from Changes, a commit or a changed file, opens in the viewing column while the Changes list stays in the tool column (B7).
+Select in File Tree, a reveal, or a terminal link that names a folder turns the tool column to the Explorer with the row unfolded and selected, and leaves the viewing column as it is (B8).
+A pull request's card, a session's record or a mission's map opens in the 보기 slot, in front of the documents in the viewing column, and leaves the tool column as it is; the documents stay on the rail's documents button, and `←` steps back through the items opened before (B9).
+A changed file pressed on a card opens its diff among the documents in the viewing column, the card staying on the rail's 보기 button, which brings it back (B10).
+Closing a document tab closes that view alone, the unsaved-draft protection as it was; closing the last one closes the viewing column, the lane staying while it has a tool column and closing otherwise, and the 보기 slot never comes forward on its own (B12).
+⇧⌘E (`Toggle Explorer tool`), ⇧⌘L (`Toggle Memory tool`), ⇧⌘R (`Toggle PRs tool`) and ⇧⌘G (`Toggle Changes tool`) press that tool's rail icon: the tool column opens on it, swaps to it, or closes when it already shows it (PRD lane-two-columns D-08; sidebar-task-lens D-19, D-29).
+`Toggle documents` presses the documents button and has no chord until one is bound.
+On Windows and Linux the tool chords are Alt+Shift+E, L, R and G; in a browser tab Chrome keeps ⇧⌘R for reload, so PRs is ⌥⇧R there, and ⌥⌘1-4 do nothing anywhere.
+A chord the operator had bound to the retired `Toggle Work tool`, `Toggle Files tool` or `Toggle File Tree` is dropped without an error, and the rest of their set stays.
+The desktop app's View menu names the lane commands, and a chord bound to any of them in Settings, Shortcuts keeps doing the same.
 Each sends the value the lane should end at, so the same command arriving twice lands where it did once.
-A right-click or the menu key on the Workspace's path offers Show or Hide right lane with the same effect.
-A file read opens the files tool when its document is ready, in the Agent tab that requested it.
+A right-click or the menu key on the Workspace's path offers Show or Hide right lane with the same effect as ⌘E.
+A file read opens the documents when its document is ready, in the Agent tab that requested it.
 Choosing another Agent tab while it reads leaves the checkout's Views and selection as they are, and closing a requesting tab drops only that tab's pending open.
 When several tabs request the same file during its read, they share the read and document buffer while each keeps its own display request.
 A buffer opened through another path before the read answers retains its draft and save state, and the pending GUI displays still open in their requesting tabs.
 Closing that buffer's last current display does not cancel another tab's pending GUI open.
-Choosing an agent or a tab from the sidebar, the palette, a tab cycle or the tab strip, or a terminal taking the keyboard, leaves the lane where it is, pinned or not; the lane keeps its tool, pin and tree, and the files tool keeps showing the checkout's Views (see File Views per checkout).
+Choosing an agent or a tab from the sidebar, the palette, a tab cycle or the tab strip, or a terminal taking the keyboard, leaves the lane where it is, pinned or not; the lane keeps its columns and pin, and the documents keep showing the checkout's Views (see File Views per checkout).
+A new checkout in front changes the documents and the Explorer to that checkout's; the 보기 slot, the window's, stays (B22).
 
 ⌘⇧P shows and focuses the sidebar.
 `Toggle device rail` has no default chord either and is bound the same way; it shows or hides the device rail.
 
-The lane has a divider at its left edge, docked or over the agents, and the tree a divider between it and the documents.
+The lane has a divider at its left edge, docked or over the agents, and one between its two columns (B17).
 A divider shows its grip on hover, keyboard focus and while dragging; a drag moves a guide with the pointer and lands once on release, and a focused divider moves one 32px step per arrow key, each a separator that reports its width.
 Fast arrow presses retain every step before the preceding width has been confirmed, and reloading restores the final width.
-The tree's divider trades width between the tree and the documents, so the lane and Agent Views keep theirs; the lane's divider changes the width of what the lane shows, against Agent Views when docked, and over them otherwise, where it may reach the body's left edge.
-The lane keeps two widths: Files draws its documents at one, and Memory, PRs, Changes and the 보기 slot share the other, so documents widened to read a page leave Memory as it was, and Files comes back at its own width after another tool.
-Each width is never narrower than 360px and starts at 520px, the tree never narrower than 180px and starts at 240px, and Agent Views keep 480px beside a docked lane; the widths are the Workspace's and the same over the agents and docked, so a width dragged over the agents is the width the pin docks at.
-A web page opened into the lane widens the Files width, when it is narrower than 900px, to 900px, so a site lays out its desktop screen: an open from the Explorer, a terminal link, `hide browser open` from the operator's pane, History, Recent Panels or a page's own new tab that puts a page in front of its area (PRD browser-width-zoom B1-B5).
-It widens over the agents and docked alike only as far as Agent Views keeps 480px beside the lane and its tree, so a narrow window gives the page less than 900px, and it never narrows a wider lane.
+The column divider trades width between the viewing column and the tool column, so the lane and Agent Views keep theirs; the lane's divider changes the width of the column at the lane's edge, against Agent Views when docked, and over them otherwise, where it may reach the body's left edge.
+The lane keeps four widths (D-09): the documents start at 520px and are never narrower than 360px, the 보기 slot the same, the Explorer starts at 240px and is never narrower than 180px, and Memory, PRs and Changes share one width that starts at 400px and is never narrower than 360px; Agent Views keep 480px beside a docked lane.
+The widths are the Workspace's and the same over the agents and docked, so a width dragged over the agents is the width the pin docks at, and documents widened to read a page leave the 보기 slot and the tools as they were.
+A web page opened into the lane widens the documents, when they are narrower than 900px, to 900px, so a site lays out its desktop screen: an open from the Explorer, a terminal link, `hide browser open` from the operator's pane, History, Recent Panels or a page's own new tab that puts a page in front of its area (PRD browser-width-zoom B1-B5; lane-two-columns B18).
+It widens over the agents and docked alike only as far as Agent Views keeps 480px beside both columns, so a narrow window gives the page less than 900px, and it never narrows wider documents.
 The widened width is stored as a divider landing is, so a narrower width the operator drags afterwards stays through a file tab and back; choosing a page tab already open, a restart, an agent's open behind the page in front and an expanded lane widen nothing, and a width the core refuses leaves the page at the width it opened at, with only the log saying so.
-The pin turning on or off, a docked lane opening or closing, a docked divider landing, the tree turning on or off beside a docked lane, and a docked lane turning between Files and another tool whose width differs resize the agents' terminals once.
+The pin turning on or off, a docked lane opening or closing, a column of a docked lane opening or closing, a docked divider landing, and a docked viewing column turning between the documents and the 보기 slot when their widths differ resize the agents' terminals once (B21).
 A lane over the agents opening, going away, coming back, expanding or closing, its divider landing, a drag in progress, and anything inside the lane, an open, a close, a tab change, a split or a drag of a view, resize nothing.
 Changing Workspace or lane geometry during a divider drag cancels its guide without saving a width, and releasing the old pointer cannot change the new Workspace.
-The lane's tool, pin, tree, its two widths and the tree's are stored per Workspace and survive a restart: a pinned lane comes back docked, an unpinned one over the agents, and neither expanded.
-A Workspace stored with the earlier File Views and Tools columns comes back once on Files where File Views was on, else on the tool Tools showed, unpinned (see View states).
+The lane's columns, pin and four widths are stored per Workspace and survive a restart: a pinned lane comes back docked, an unpinned one over the agents, and neither expanded (B17).
+A Workspace stored by a build with the one-tool lane comes back closed at the default widths, its open documents, splits and comments kept and counted on the documents button (B23, D-10).
 
 Agent Views is always live: clicking a pane or a tab focuses it and typing goes to it, and chords such as ⌘F, ⌘T and ⌥W act where the keyboard is, a View area, the lane's tool or a pane.
-A lane going out of sight with the keyboard inside it, or a files tool another tool replaces while the keyboard is in its documents, hands the keyboard to the focused pane.
+A lane going out of sight with the keyboard inside it, or a viewing column that folds or closes while the keyboard is in its documents, hands the keyboard to the focused pane.
 Tab never walks into a lane out of sight: a lane put away is inert and holds no Escape layer or focus return, and a native page in it is hidden before it goes inert.
 
 An Agent tab shows the focused pane's status mark, then title, using the sidebar row's title and mark rules; the agent's logo stands between them only while the agent logo view mode shows it ([Agent logo view mode](#agent-logo-view-mode)); a tab with no agent keeps the neutral `>_` in both modes.
@@ -163,17 +161,17 @@ Its title is cut at the tail to fit, and its tooltip and accessible name carry t
 A dirty view shows a warning-colored mark after its title.
 Closing a view is always called Close view, distinct from moving a file to the Trash and from closing a pane or tab.
 The close chord, ⌘W in the desktop app and ⌥W in a browser, closes the smallest unit that holds the keyboard: the focused View area's active display, or the focused terminal pane.
-The page records its last focused region as View area, pane, the lane's tool, or none from focus events, including native browser-page focus; the chord does not walk the active DOM element or choose a region from panel size.
+The page records its last focused region as View area, pane, the lane's tool, the 보기 slot, or none from focus events, including native browser-page focus; the chord does not walk the active DOM element or choose a region from panel size.
 When the desktop app hands the keyboard back from a native page to deliver a menu command, the focus the shell's last element regains is not a move while that command runs, so ⌘W and ⌘T pressed in a page act on that page's View area; once the command has run, the keyboard's owner is the shell element holding it, so after any other command from a page the next chord acts where the operator now types.
 While the lane draws the 보기 slot, the chord closes the slot as its `✕` does when the keyboard is in the lane or nowhere (the sidebar row or the rail button that opened it); a pane or a View that holds the keyboard keeps the chord.
-Otherwise, with the lane's tool or nothing focused, nothing closes and a diagnostic states why.
+Otherwise, with the lane's tool or nothing focused, nothing closes and a diagnostic states why (PRD lane-two-columns B16).
 Tabs close only from their own close control or menu; closing a tab's only pane still removes its tab through Herdr.
 An unavailable or retired keyboard target never falls through to closing a different pane or a whole tab.
 When a connected pane selects, splits, moves, or closes a View through `hide view`, the same View layout rules apply to that pane's Workspace even while another Workspace is in front.
 These commands do not move the keyboard target; a close that would lose the last View of an unsaved document reports the refusal and keeps the draft.
 `hide file open` and `hide diff open` put the calling pane's file or changed-file diff into its own Workspace and never select that Workspace or another tab.
-Only an agent in the pane the operator is in, the selected pane of the front Workspace, changes what the operator sees: its open or `hide view select` brings the View to the front and opens the lane on Files as a click does, the tree staying on when it showed alone.
-Another pane of that Workspace, of the same tab or another, adds its View to the checkout's list and leaves the selection, the active area, the keyboard, the lane and the tab on screen as they were, and the Files icon's badge counts the new view (see File Views per checkout).
+Only an agent in the pane the operator is in, the selected pane of the front Workspace, changes what the operator sees: its open or `hide view select` brings the View to the front and shows the documents as a click does, the tool column staying as it was.
+Another pane of that Workspace, of the same tab or another, adds its View to the checkout's list and leaves the selection, the active area, the keyboard, the lane and the tab on screen as they were, and the documents button's badge counts the new view (see File Views per checkout).
 A Workspace not on screen is not what the operator sees: there, an agent in its active tab brings its View to that Workspace's front, so a page it opens loads and can be driven, and an agent in another tab adds its View behind.
 A shell bound only to the checkout, which no pane vouches for (a pane Hide has not connected yet, or a command run with its pane reference removed), counts as another pane on the Workspace on screen and as the active tab on one that is not.
 The desktop window's browser gateway, creating a page for a CDP client, brings its page forward, since a page loads only in front.
@@ -226,7 +224,7 @@ External tabs beyond the cap remain in Herdr topology, with their waiting count 
 A waiting tab cannot take Hide's keyboard or active-tab selection.
 This boundary is an Observer-approved, user-vetoable implementation assumption from the Agent groups contract.
 
-Agent Views draws the selected group's area tree, separate from the files tool's View tree.
+Agent Views draws the selected group's area tree, separate from the documents' View tree.
 Each area keeps its own tab bar and New tab button, and draws its active draft or live pane canvas; dividers separate areas.
 Only the area holding the keyboard carries the user-accent selected-tab underline, across Agent Views and the lane.
 Clicking a tab or pane activates its area and sends the keyboard to that pane.
@@ -271,7 +269,7 @@ A disabled split explains its reason, and opening the menu changes no selection.
 Next and previous Agent area focus and Agent area grow and shrink are chordless commands of the shortcut registry (Settings › Shortcuts › Area commands, and the desktop Pane menu); they have no key until the operator binds one, and one that cannot run now does nothing.
 An area's New tab adds at its end.
 The new tab chord, ⌘T in the desktop app and ⌥T in a browser, opens where the keyboard is: with a View area focused it is that area's New tab, with an Agent pane focused it adds an agent tab at the end of the area showing that pane, and anywhere else (the sidebar, the Overview, the lane's tools, the Agent controls) it adds one to the Agent active area.
-Agent Views and the files tool keep separate active areas, so the chord follows the recorded keyboard owner, never whichever active area changed last.
+Agent Views and the documents keep separate active areas, so the chord follows the recorded keyboard owner, never whichever active area changed last.
 Externally created ordinary tabs append to the ungrouped active area without changing the selected group or shown tab; Herdr's own reorder never changes Hide's area order.
 Delegated-only tabs remain absent from every bar and occupy the active canvas when chosen from the sidebar.
 Choosing a normal tab or agent elsewhere, including the sidebar, search and recent history, selects its owning group and area before showing its tab and pane.
@@ -303,7 +301,7 @@ A provider whose sleep closes its pane (Pi, OpenCode and omp; [ARCHITECTURE.md](
 
 ### View areas
 
-The files tool holds one or more View areas, each with its own tab bar above its own view, split left/right or up/down as often as the limits allow.
+The lane's documents, in its viewing column, hold one or more View areas, each with its own tab bar above its own view, split left/right or up/down as often as the limits allow.
 A split divides one area in two along one axis, and either half can split again along either axis, so every arrangement of side-by-side and stacked areas is a tree of halves.
 Each layout keeps its own active area for opening and layout actions.
 The recorded keyboard owner alone gives one Agent or View area the user-accent selected-tab underline.
@@ -329,7 +327,7 @@ The divider between two areas turns accent-colored on hover and keyboard focus, 
 A focused divider moves with the arrow keys along its axis, one step and one change per press.
 No area gets narrower or shorter than its minimum, a divider stops where either neighbour would, and each side of a split keeps between 15 and 85 percent of it.
 An area whose last view leaves disappears, and its neighbour takes the space.
-When the last view closes, the lane stays on Files with the tree across it if the tree was on, and closes otherwise (see The right lane).
+When the last view closes, the viewing column closes; the lane stays while it has a tool column and closes otherwise (PRD lane-two-columns B12; see The right lane).
 
 ### File Views per checkout
 
@@ -426,8 +424,7 @@ A first run, or a last Workspace that no longer exists, starts on the Overview.
 Herdr connecting before the initial path catalog and saved View arrive does not mean the last Workspace is gone; the existing starting screen waits for that saved choice to settle.
 The unanswered-connection fallback does not settle a connected session's pending saved Workspace; a settled connection failure still opens the Overview.
 A layout file that cannot be read is kept aside and the app starts on the Overview, where the operator picks a Workspace and continues with a new layout.
-A Workspace stored with the File Views and Tools columns, or with the side panel or layout before them, restarts once on Files where File Views was on (a panel open or expanded, a layout that did not show the agents alone), else on the tool Tools showed, the Explorer becoming Files with its tree, unpinned, its views, tabs and areas as they were.
-File Views' stored width becomes Files' width; a Workspace stored before the columns, the tree, and the width the other tools share start at the default widths.
+A Workspace stored by an earlier build, with the one-tool lane, with the File Views and Tools columns, or with the side panel or layout before them, restarts once with its lane closed at the default widths and its views, tabs and areas as they were (PRD lane-two-columns B23, D-10).
 
 ### Browser displays
 
@@ -492,14 +489,14 @@ Web owners: `web/src/ViewComments.tsx`, `web/src/viewFeedback.ts`, `web/src/edit
 ### Narrow windows
 
 Whether a pinned lane docks depends on the Workspace body's width, not the window's, so hiding the sidebar with ⌘B can dock it again.
-A pinned lane docks while its minimums and Agent Views' 480px fit side by side with its divider, the lane narrowing first; in a body too narrow for even those it opens over Agent Views with its pin still filled, and widening the body docks it again.
-The lane opens at any width: in a body narrower than the lane it takes the whole body, giving up document width down to its 360px minimum first and tree width after.
+A pinned lane docks while its columns' minimums and Agent Views' 480px fit side by side with the dividers, the viewing column narrowing first and the tool column after; when both columns cannot stand side by side they stack, the one the rail last brought forward drawn and the other behind it, and in a body too narrow for even one column the lane opens over Agent Views with its pin still filled; widening the body docks it again (PRD lane-two-columns B19).
+The lane opens at any width: in a body narrower than the lane it takes the whole body, giving up the viewing column's width down to its minimum first and the tool column's after.
 When the View areas cannot all have their minimum, only the active area shows, with an area switcher to the others.
-Widening the window brings back what the Workspace stores, the lane's tool, pin, tree, widths and the area sizes, because none of these narrow arrangements is stored, and another Workspace's lane never changes while one is narrow.
+Widening the window brings back what the Workspace stores, the lane's columns, pin, widths and the area sizes, because none of these narrow arrangements is stored, and another Workspace's lane never changes while one is narrow.
 
 ### Library masters
 
-PRD right-lane B25 draws the lane, rail, pin and tree parts of its approved v3 boards in `Component / Workspace columns`, and the closed, over-the-agents, docked, tree-on, tree-only, expanded, Work and narrow states in `Screen / Workspace`.
+PRD right-lane B25 drew the lane, rail and pin parts of its approved v3 boards in `Component / Workspace columns`, and the lane states in `Screen / Workspace`; those boards are maintained outside the repository, so PRD lane-two-columns (D-12) draws its two-column states in the gallery's `RightLaneScene` instead: closed, over the agents, pinned, the Explorer beside the documents and alone, expanded, PRs, Memory, Changes and the narrow stacked lane.
 Delivery reviews actual captures in both themes through the public [design workflow](DESIGN_WORKFLOW.md).
 The production gallery and View components provide the public visual reference; original boards are maintained separately.
 Their sheets draw every state as refs: the View tab sheet draws preview, pinned, hover, active-in-the-active-area, active-in-another-area, dirty, unavailable, diff, a long title, and the floating drag copy; the placement sheet draws a reorder, a move into another area, a right and a down split, and an ineligible target; the tab menu sheet draws a preview's menu and a pinned view's menu with a disabled Split and its reason; the area states sheet draws each view's opening, waiting, and unavailable states.
@@ -799,7 +796,7 @@ Web owner: `web/src/terminalLinks.ts` (detection), `web/src/terminalLinkProvider
 ## Project Memory: the Memory tab
 
 Web owner: `web/src/MemoryTab.tsx`, `web/src/memoryList.ts`; core owner: `herdr-core/src/runtime/project_memory.rs`, `herdr-core/src/runtime/memory_promotion.rs`.
-Memory is the rail's second tool, after Work and before Files and Changes, and shows the Project of the checkout in front (PRD project-memory-v2 D-17, B19-B32).
+Memory is the rail's first tool, before PRs, the Explorer and Changes, and shows the Project of the checkout in front (PRD project-memory-v2 D-17, B19-B32).
 The core opens one Project's Memory per daemon; the rail, whatever the lane holds, names its Project when it shows, when the front Project changes and when its window comes forward after another window named another Project, so the Memory icon's dot is current, and the tool reads until the core answers for its own.
 Its head is the `Auto memory 사용` switch and the Hide AI chip, the agent Hide AI asks now with its logo (the listed agent standing in while Runs on is past the usage limit or cannot answer); with Memory off, one line says what is sent where and a `데이터 삭제` link sits under it while the Project has cards.
 Turning the switch on when this Mac's agent hooks do not carry Memory yet updates them first and turns it on once they land.
@@ -1230,13 +1227,13 @@ A hidden list draws no rows, the elapsed clock updates only its own text, and th
 ### The 보기 slot
 
 The lane has one 보기 slot per window, which holds a pull request's card, a session's record or a mission's map and belongs to no checkout and no Agent tab, so changing either leaves it as it was (PRD sidebar-task-lens D-50, B48).
-Whatever opens a card or a record opens it there, and the Workspace in front, its Agent tab and the keyboard stay (B14, B15, B50); no `PR #N` or record tab appears in Files.
+Whatever opens a card or a record opens it there, in front of the documents in the lane's viewing column, and the Workspace in front, its Agent tab, the tool column and the keyboard stay (B14, B15, B50; PRD lane-two-columns B9); no `PR #N` or record tab appears among the documents.
 Its head reads `←`, the item's mark and name (`PR #N · <project>`, `기록 · <title>` or `미션 · <title>`), `↗` (GitHub) on a card, and `✕` (B47); a card's mark is its PR mark, in its state's icon and colour, here and on the rail.
 The head keeps the lane's surface and what the slot holds sits on the page's background, a card and a record alike, as the 보기 screens draw it.
-Opening another item puts it in front, and `←` steps back through the ones opened before, at most 20, the oldest leaving first; `✕` empties the slot and the lane goes back to the tool it showed, or closes when it had none.
+Opening another item puts it in front, and `←` steps back through the ones opened before, at most 20, the oldest leaving first; `✕` empties the slot and the viewing column goes back to the documents, or closes when the checkout has none, the lane closing with it when there is no tool column (PRD lane-two-columns B13).
 The close chord (⌘W) is the slot's `✕` while the keyboard is in the lane or nowhere, as the close chord's rule says ([The right lane](#the-right-lane)).
-While the slot holds something, the rail carries a fifth button above Memory with its mark, pressed while the lane draws the slot; calling a tool turns the lane to that tool and the button stays, so pressing it comes back to the slot (B46).
-A changed file pressed on a card opens its diff in the checkout's Files and the lane turns to Files, the slot staying on the rail (B49).
+While the slot holds something, the rail carries a 보기 button at its top with its mark, pressed while the viewing column draws the slot; the documents brought in front, or the button pressed while the slot is in front, fold it and the button stays, so pressing it comes back to the slot (B46; PRD lane-two-columns B11).
+A changed file pressed on a card opens its diff among the checkout's documents, which come in front of the slot, the slot staying on the rail (B49; lane-two-columns B10).
 At Home, with no Workspace in front, a record opens in the Overview's panel beside the tabs and a PR mark opens the pull request's Workspace with its card in the slot (B17).
 A pane head's agent-tree button and a started backlog item (from ⌘K, a record or a missed line's `· 백로그 #N`) show the sidebar on 태스크 with the row unfolded and selected, and open the agent's record in the slot, or in the Overview's panel at Home (B40).
 
@@ -1349,7 +1346,7 @@ From the top the card reads (B32-B36):
 
 There is no AI summary, no four-step stage strip, no `만든 세션` line, no folded `연결` line and no body preview (B22).
 No part of the body is lifted out as the card's own judgment.
-A changed file opens as the Hide diff in the checkout's Files when the Workspace in front is a checkout of the pull request's branch and its committed changes already hold the file, and the lane turns to Files while the 보기 slot stays on the rail and brings the card back as it was (B49); otherwise it opens the pull request's files page on GitHub.
+A changed file opens as the Hide diff among the checkout's documents when the Workspace in front is a checkout of the pull request's branch and its committed changes already hold the file, and the documents come in front while the 보기 slot stays on the rail and brings the card back as it was (B49); otherwise it opens the pull request's files page on GitHub.
 A part that could not be read keeps the head, the decision box and the milestones from the list, and says `읽지 못함 · 다시 시도` on that part (the folded files line says `읽지 못함`), which reads again only that part; a check or review time that could not be read leaves its row timeless, and the reason goes to the diagnostic log (B21).
 
 The merge section's button is the case's: `Merge` when the pull request can merge, in a method the repository allows (a choice when it allows several) or `머지 큐에 넣기` in a repository with a merge queue; `브랜치 업데이트` when it is behind; `GitHub에서 리뷰` and `에이전트에게 리뷰 맡기기` for a review asked of the operator; `맡기기` for a blocked pull request with no agent; `리뷰어 지정` opens the pull request on GitHub; agent terminal actions belong to the timeline's session row, and GitHub stays visible in the card's header.
@@ -1784,7 +1781,7 @@ Search continues to index the complete project tree; choosing a folded result br
 
 ### Tools and Overview
 
-The rail's tools are Memory, PRs, Files (the View areas and the Explorer) and Changes (History), with the 보기 slot above them while it holds something; the device's task list is the sidebar's, described in [The sidebar's 태스크 list](#the-sidebars-태스크-list).
+The rail's tools are Memory, PRs, Explorer and Changes (History), with the documents button and, while it holds something, the 보기 slot's button above them (PRD lane-two-columns B2, B3); the device's task list is the sidebar's, described in [The sidebar's 태스크 list](#the-sidebars-태스크-list).
 The top row's Overview button opens [Overview](#overview), `Work · Projects · Backlog · History · Usage`, with device and optional project scope for the four device views and global core-machine scope for Usage.
 
 
@@ -2733,9 +2730,9 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Toggle right lane | `⌘E` | `Ctrl+Shift+E` | `⌘E` | `Ctrl+Shift+E` |
 | Toggle Memory tool | `⇧⌘L` | `Alt+Shift+L` | `⇧⌘L` | `Alt+Shift+L` |
 | Toggle PRs tool | `⇧⌘R` | `Alt+Shift+R` | `⌥⇧R` | `Alt+Shift+R` |
-| Toggle Files tool | none | none | none | none |
+| Toggle documents | none | none | none | none |
 | Toggle Changes tool | `⇧⌘G` | `Alt+Shift+G` | `⇧⌘G` | `Alt+Shift+G` |
-| Toggle File Tree | `⇧⌘E` | `Alt+Shift+E` | `⇧⌘E` | `Alt+Shift+E` |
+| Toggle Explorer tool | `⇧⌘E` | `Alt+Shift+E` | `⇧⌘E` | `Alt+Shift+E` |
 | Find in pane | `⌘F` | `Ctrl+Shift+F` | `⌘F` | `Ctrl+Shift+F` |
 | Save file | `⌘S` | `Ctrl+Shift+S` | `⌘S` | `Ctrl+Shift+S` |
 | Keep open | `⇧⌘K` | `Alt+Shift+K` | `⇧⌘K` | `Alt+Shift+K` |
