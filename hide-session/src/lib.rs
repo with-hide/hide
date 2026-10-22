@@ -1919,7 +1919,7 @@ fn parse_codex_line(item: &Value) -> LineResult {
                 role,
                 EventKind::Human,
                 timestamp,
-                objective.unwrap_or(text),
+                objective.map_or(text, |objective| format!("/{GOAL_COMMAND} {objective}")),
             ));
         }
         None => {}
@@ -2035,13 +2035,22 @@ fn slash_command_text(text: &str) -> Option<String> {
                 .map(|(args, _)| args.trim())
         })
         .unwrap_or("");
+    let name = name.trim_start_matches('/');
     Some(if args.is_empty() {
         // Claude Code's `<command-name>` already carries the slash.
-        format!("/{}", name.trim_start_matches('/'))
+        format!("/{name}")
+    } else if name == GOAL_COMMAND {
+        // `/goal` sets what the session is for, so its name stays with its
+        // words: the record opens a new flow on it (PRD
+        // session-record-goal-flow D-09).
+        format!("/{GOAL_COMMAND} {args}")
     } else {
         args.to_owned()
     })
 }
+
+/// The command both Claude Code and Codex take for setting a session's goal.
+const GOAL_COMMAND: &str = "goal";
 
 /// A Codex user message without what Codex wrapped around its attachments:
 /// each image sits between `<image name=[Image #N] path="...">` and

@@ -267,48 +267,42 @@ export function overviewWorld(now: number): OverviewWorld {
       workspace_registrations: workspaces.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: row.pinned })),
     },
     issue_work: issueWork,
-    // Summaries on, so a record draws its checklist and missed lines rather than the plain request list.
+    // Summaries on, so a record draws its flows and summaries rather than the plain request list.
     status: { background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: true, chosen: true, agent_summary: true } },
   } as SnapshotRest;
 
-  const task = (id: string, name: string, end: SessionRecord["tasks"][number]["end"], done: boolean, ago: number) => ({ id, chapter_id: "chapter-1", name, end, done, at_unix_ms: now - ago, last_at_unix_ms: now - ago + 1000, unjudged: false });
-  const request = (offset: number, text: string, taskIds: string[], ago: number) => ({ offset, text, at_unix_ms: now - ago, author: "operator" as const, task_ids: taskIds, chapter_id: "chapter-1", judged: true });
+  const request = (offset: number, text: string, ago: number, summary: string | null = null) => ({ offset, text, at_unix_ms: now - ago, author: "operator" as const, images: 0, summary, answers: null, letter_from: null, count: 1, goal_command: false });
+  const blank = { asks: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] };
   const child = (pane: string, title: string): SessionRecord => ({
-    session: { device_id: "local", agent: pane === "h-a1c1" ? "codex" : "claude", session_id: `session-${pane}` }, title, fallback_title: "Agent", native_title: title, manual_title: null, state: pane === "h-a1c1" ? "working" : "idle", last_end: pane === "h-a1c1" ? null : "done",
-    cwd: "/work/hide.worktrees/feat/sidebar-readable", path: null, started_at_unix_ms: now - 40 * MINUTE, ended_at_unix_ms: null, chapters: [{ id: "c", goal: title, at_unix_ms: now - 40 * MINUTE }], tasks: [], requests: [], missed: [], outputs: [], children: [],
+    ...blank,
+    session: { device_id: "local", agent: pane === "h-a1c1" ? "codex" : "claude", session_id: `session-${pane}` }, title, fallback_title: "Agent", native_title: title, manual_title: null, state: pane === "h-a1c1" ? "working" : "idle",
+    status: pane === "h-a1c1" ? null : { end: "done", line: `${title} 끝`, at_unix_ms: now - 10 * MINUTE, limited: null },
+    cwd: "/work/hide.worktrees/feat/sidebar-readable", path: null, started_at_unix_ms: now - 40 * MINUTE, ended_at_unix_ms: null,
+    flows: [{ id: "c", name: title, at_unix_ms: now - 40 * MINUTE, requests: [], request_count: 0, result: null }],
   });
+  const output = { kind: "pr" as const, repository: "example/hide", number: 140, title: "Sidebar readable at narrow widths", url: "https://example.invalid/example/hide/pull/140", state: "review", stale: false, last_read_at_unix_ms: now - MINUTE, created_at_unix_ms: now - 10 * MINUTE, source: recordSession, source_name: "사이드바 가독성 개선" };
   const record: SessionRecord = {
-    session: recordSession, title: "사이드바 가독성 개선", fallback_title: "Claude", native_title: "사이드바 가독성 개선", manual_title: null, state: "working", last_end: null,
+    ...blank,
+    session: recordSession, title: "사이드바 가독성 개선", fallback_title: "Claude", native_title: "사이드바 가독성 개선", manual_title: null, state: "working",
     cwd: "/work/hide.worktrees/feat/sidebar-readable", path: null, started_at_unix_ms: now - 70 * MINUTE, ended_at_unix_ms: null,
-    chapters: [{ id: "chapter-1", goal: "좁은 사이드바에서도 긴 제목이 읽히게", at_unix_ms: now - 70 * MINUTE }],
-    tasks: [
-      task("task-1", "긴 제목 말줄임과 툴팁 정리", "done", true, 50 * MINUTE),
-      task("task-2", "컴포넌트 구조 정리 (Codex 자식)", "working", false, 30 * MINUTE),
-      task("task-3", "한글 가독성 확인", "done", true, 6 * MINUTE),
-    ],
-    requests: [
-      request(1, `${hideRef(151)} 좁은 사이드바에서 긴 제목이 잘리는 문제부터 고쳐줘. 툴팁으로 전체 제목이 보이게`, ["task-1"], 70 * MINUTE),
-      request(2, "컴포넌트 구조 정리는 자식 에이전트 하나 띄워서 맡기고, 너는 한글 가독성 확인해줘", ["task-2", "task-3"], 35 * MINUTE),
-      request(3, "PR 열면 체크 통과하는지 보고 알려줘", [], 4 * MINUTE),
-      ...Array.from({ length: 6 }, (_, index) => request(4 + index, `후속 요청 ${index + 1}: 확인 항목을 기록해줘`, [], (3 - index / 3) * MINUTE)),
-    ],
-    missed: [
-      { id: "missed-1", kind: "follow_up", text: "큰 저장소에서 파일 트리 첫 표시가 느림", status: "backlog", at_unix_ms: now - 20 * MINUTE, turn_offset: 2, issue_repository: "example/hide", issue_number: 161, backlog_key: hideKey(161), creating: false },
-      { id: "missed-2", kind: "problem", text: "좁은 폭에서 시간 열이 두 줄로 밀림", status: "open", at_unix_ms: now - 6 * MINUTE, turn_offset: 2, issue_repository: null, issue_number: null, backlog_key: null, creating: false },
-    ],
-    outputs: [
-      { kind: "pr", repository: "example/hide", number: 140, title: "Sidebar readable at narrow widths", url: "https://example.invalid/example/hide/pull/140", state: "review", stale: false, last_read_at_unix_ms: now - MINUTE, created_at_unix_ms: now - 10 * MINUTE, task_id: "task-1", source: recordSession, source_name: "사이드바 가독성 개선" },
-    ],
+    status: { end: "working", line: "한글 가독성 확인 중", at_unix_ms: now - 4 * MINUTE, limited: null },
+    asks: [{ id: "ask-1", kind: "ask", text: "시간 열을 좁은 폭에서 숨길지", status: "open", at_unix_ms: now - 6 * MINUTE, turn_offset: 2, issue_repository: null, issue_number: null, backlog_key: null, creating: false }],
+    flows: [{
+      id: "chapter-1", name: "좁은 사이드바에서도 긴 제목이 읽히게", at_unix_ms: now - 70 * MINUTE, result: null,
+      requests: [
+        request(1, `${hideRef(151)} 좁은 사이드바에서 긴 제목이 잘리는 문제부터 고쳐줘. 툴팁으로 전체 제목이 보이게`, 70 * MINUTE, "긴 제목 말줄임과 툴팁으로 전체 제목 보이기"),
+        request(2, "컴포넌트 구조 정리는 자식 에이전트 하나 띄워서 맡기고, 너는 한글 가독성 확인해줘", 35 * MINUTE, "구조 정리는 자식에게 맡기고 한글 가독성 확인"),
+        request(3, "PR 열면 체크 통과하는지 보고 알려줘", 4 * MINUTE, "PR 체크 통과 여부 알려주기"),
+        ...Array.from({ length: 6 }, (_, index) => request(4 + index, `후속 요청 ${index + 1}: 확인 항목을 기록해줘`, (3 - index / 3) * MINUTE)),
+      ],
+      request_count: 9,
+    }],
+    outputs: [output],
+    pr_groups: [{ child: null, name: "사이드바 가독성 개선", outputs: [output] }],
+    artifacts: ["사이드바 가독성 점검표"],
     children: [child("h-a1c1", "컴포넌트 구조 정리"), child("h-a1c2", "한글 가독성 확인")],
   };
-  // Explicit invented task records exercise the graph's largest caption stack.
-  const linkSummaries: LinkSummaries = {
-    projects: {}, filling: false,
-    progress: ["h-a1c3", "h-e1"].map((pane) => ({
-      session: { device_id: "local", agent: "codex", session_id: `session-${pane}` },
-      done: 1, total: 2, tasks: [task(`${pane}-1`, "줄바꿈 확인", "done", true, 2 * MINUTE), task(`${pane}-2`, "키보드 이동 확인", "working", false, MINUTE)], outputs: [], children: null,
-    })),
-  };
+  const linkSummaries: LinkSummaries = { projects: {}, filling: false };
   return { rest, agents, record, recordSession, recordPane: "h-a1", linkSummaries };
 }
 

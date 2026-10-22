@@ -302,9 +302,7 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
                 at_unix_ms: CREATED,
                 text: "Check the remote record".into(),
                 author: WorkAuthor::Operator,
-                task_ids: vec![],
-                chapter_id: None,
-                judged: false,
+                ..RecordedRequest::default()
             }],
         })
         .unwrap();
@@ -316,7 +314,8 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
             at_unix_ms: CREATED + 1,
             end: crate::labels::analysis::LabelEnd::Done,
             work_author: true,
-            letter: None,
+            asks_answered: true,
+            line: String::new(),
             turn_witness: None,
             judgment: TurnJudgment {
                 missed: vec![NewMissedWork {
@@ -440,9 +439,7 @@ fn a_pi_or_omp_child_spawned_by_its_file_is_in_its_parents_record() {
                         at_unix_ms: CREATED,
                         text: "Split the work".into(),
                         author: WorkAuthor::Operator,
-                        task_ids: vec![],
-                        chapter_id: None,
-                        judged: false,
+                        ..RecordedRequest::default()
                     }],
                 })
                 .unwrap();
@@ -1758,93 +1755,4 @@ fn a_parents_request_stays_the_childs_work_when_the_parents_screen_title_changes
         header.contains("from agent-1 (claude) [request]"),
         "{header}"
     );
-    // The child's own name, its report and whether a pane runs it reach the
-    // ledger beside its parent (PRD task-continuation D-02, D-08, B23).
-    let worker_fact = |runtime: &Runtime| {
-        runtime
-            .link_parent_facts()
-            .into_iter()
-            .find(|fact| fact.session_id == "worker-native")
-            .expect("the worker's parent is known")
-    };
-    let fact = worker_fact(&runtime);
-    assert_eq!(
-        (fact.name.as_str(), fact.reported_at_unix_ms, fact.live),
-        ("worker", None, true)
-    );
-    let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
-    mailbox::send(
-        &mut ledger,
-        &worker,
-        &lead,
-        "done",
-        "Finished",
-        "report",
-        None,
-        7,
-    )
-    .unwrap();
-    runtime.delivery_ledger = Ok(Arc::new(ledger));
-    assert_eq!(worker_fact(&runtime).reported_at_unix_ms, Some(7));
-    runtime
-        .snapshot
-        .navigator
-        .agents
-        .retain(|agent| agent.pane_id != "worker");
-    assert!(!worker_fact(&runtime).live, "no pane runs the worker now");
-}
-
-#[test]
-fn a_panes_task_progress_reaches_the_wire_once_and_an_equal_answer_publishes_nothing() {
-    use crate::labels::analysis::LabelEnd;
-    use crate::links::ledger::{ChildProgress, ChildWork, SessionIdentity, WorkProgress, WorkTask};
-    let mut runtime = runtime();
-    let progress = vec![WorkProgress {
-        session: SessionIdentity {
-            device_id: "mac".into(),
-            agent: "claude".into(),
-            session_id: "s-1".into(),
-        },
-        done: 0,
-        total: 2,
-        tasks: ["task-3", "task-3.2"]
-            .map(|id| WorkTask {
-                id: id.into(),
-                chapter_id: "chapter-1".into(),
-                name: id.into(),
-                at_unix_ms: 1,
-                last_at_unix_ms: 2,
-                end: LabelEnd::Waiting,
-                done: false,
-                unjudged: false,
-            })
-            .to_vec(),
-        outputs: Vec::new(),
-        children: Some(ChildProgress {
-            children: vec![ChildWork::Done, ChildWork::Unjudged],
-            done: None,
-        }),
-    }];
-    assert!(runtime.ingest_work_progress(progress.clone()));
-    assert!(
-        !runtime.ingest_work_progress(progress),
-        "an equal answer redraws nothing"
-    );
-    let wire = serde_json::to_value(runtime.snapshot()).unwrap();
-    let row = &wire["link_summaries"]["progress"][0];
-    assert_eq!(
-        (row["done"].as_u64(), row["total"].as_u64()),
-        (Some(0), Some(2))
-    );
-    assert_eq!(
-        row["children"]["children"],
-        serde_json::json!(["done", "unjudged"])
-    );
-    assert!(
-        row["children"]["done"].is_null(),
-        "an unjudged child hides the fraction"
-    );
-    assert!(runtime.ingest_work_progress(Vec::new()));
-    let wire = serde_json::to_value(runtime.snapshot()).unwrap();
-    assert_eq!(wire["link_summaries"]["progress"], serde_json::json!([]));
 }

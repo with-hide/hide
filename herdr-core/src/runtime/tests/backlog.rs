@@ -1171,15 +1171,14 @@ pub(super) fn seed_missed_turn(
                 at_unix_ms: now - 2_000,
                 text: request.into(),
                 author: WorkAuthor::Operator,
-                task_ids: vec![],
-                chapter_id: None,
-                judged: false,
+                ..RecordedRequest::default()
             }],
         },
         LedgerUpdate::Chapter {
             session: session.clone(),
             goal: "Ship".into(),
             at_unix_ms: now - 2_000,
+            change: crate::links::ledger::FlowChange::New,
         },
         LedgerUpdate::TurnEnd {
             session: session.clone(),
@@ -1188,7 +1187,8 @@ pub(super) fn seed_missed_turn(
             at_unix_ms: now - 1_500,
             end: crate::labels::analysis::LabelEnd::Done,
             work_author: true,
-            letter: None,
+            asks_answered: true,
+            line: String::new(),
             turn_witness: witness,
             judgment: TurnJudgment {
                 missed: vec![NewMissedWork {
@@ -1334,7 +1334,7 @@ fn shown_origin(task_key: &str) -> crate::model::BacklogOriginSnapshot {
         session: None,
         session_title: None,
         missed_text: Some("Update the docs".into()),
-        task_name: None,
+        flow_name: None,
         request: Some("the operator's request".into()),
         answer: Some("the agent's answer".into()),
     }

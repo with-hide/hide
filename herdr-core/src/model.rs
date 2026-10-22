@@ -4237,9 +4237,9 @@ pub struct BacklogOriginSnapshot {
     /// Absent once read when no missed line made the item.
     pub session: Option<crate::links::ledger::SessionIdentity>,
     pub session_title: Option<String>,
-    /// The missed line's own words and the assigned task its turn belonged to.
+    /// The missed line's own words and the goal flow its turn belonged to.
     pub missed_text: Option<String>,
-    pub task_name: Option<String>,
+    pub flow_name: Option<String>,
     /// The turn's request and answer, for the Start prompt only; read on
     /// this device and never sent to GitHub (D-21).
     pub request: Option<String>,
@@ -6919,6 +6919,7 @@ mod wire_enum_tests {
             LabelEnd::Done,
             LabelEnd::Waiting,
             LabelEnd::Unfinished,
+            LabelEnd::Limited,
         ];
         for variant in ends {
             match variant {
@@ -6927,26 +6928,12 @@ mod wire_enum_tests {
                 | LabelEnd::Blocked
                 | LabelEnd::Done
                 | LabelEnd::Waiting
-                | LabelEnd::Unfinished => {}
+                | LabelEnd::Unfinished
+                | LabelEnd::Limited => {}
             }
         }
         assert_wire(&contract, "label_end", &ends);
         checked.insert("label_end");
-
-        use crate::links::ledger::ChildWork;
-        let children = [
-            ChildWork::Done,
-            ChildWork::Working,
-            ChildWork::Other,
-            ChildWork::Unjudged,
-        ];
-        for variant in children {
-            match variant {
-                ChildWork::Done | ChildWork::Working | ChildWork::Other | ChildWork::Unjudged => {}
-            }
-        }
-        assert_wire(&contract, "child_work", &children);
-        checked.insert("child_work");
 
         use hide_session::turns::UserTurnKind;
         let user_turns = [UserTurnKind::PlanApproval, UserTurnKind::Question];

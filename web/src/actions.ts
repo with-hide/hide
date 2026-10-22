@@ -38,7 +38,7 @@ import { allAgents, boardProjects, type OpenTarget } from "./navigation";
 import { cardOfItem } from "./overviewTasks";
 import { takeOverPrompt, takeOverProvider } from "./missions";
 import { backlogIntent } from "./overviewBacklog";
-import { paneProgress, sessionOfAgent, workKey } from "./sessionWork";
+import { sessionOfAgent, workKey } from "./sessionWork";
 import { expectSurface, type Surface } from "./recent";
 import { useStartPanel, useInlineStarts } from "./startDraft";
 import { contextAgents, remoteConnected, remoteContext, remoteControl, remoteRequestId, remoteTargetOfPane, remoteView, withDeviceForward, type RemoteAction, type RemoteView } from "./remote";
@@ -2547,18 +2547,6 @@ export function createActions(send: DispatchFn) {
     /** A child's record from the one shown (B16): it takes the slot, and ← comes back to the parent. */
     openChildRecord(session: import("./snapshot").WorkSession) {
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session } } });
-    },
-    /**
-     * ⇧⌘U: pins the focused pane's task checklist open, or closes it when it
-     * is pinned there. A pane without tasks draws no chip and pins nothing, so
-     * a list never opens by itself once that pane later has tasks.
-     */
-    toggleTaskList(target?: string) {
-      const state = useShellStore.getState();
-      const paneId = target ?? state.focusedPaneId;
-      if (!paneId) return;
-      if (ui().taskListPane === paneId) return ui().setTaskListPane(null);
-      if (paneProgress(state, paneId)) ui().setTaskListPane(paneId);
     },
     /**
      * A pane head's title (B15): the slot shows that session's record, or,

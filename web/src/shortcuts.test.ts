@@ -98,7 +98,6 @@ describe("shortcut registry", () => {
       split_right: "⌘D",
       split_down: "⇧⌘D",
       toggle_zoom: "⇧⌘↩",
-      toggle_task_list: "⇧⌘U",
       close_pane: "⇧⌘W",
       text_larger: "⌘=",
       text_smaller: "⌘-",
@@ -288,7 +287,7 @@ describe("browser pane chord overrides (S5 B9, B10)", () => {
     expect([...EDITABLE_PANE_COMMANDS].sort()).toEqual(
       [
         "recent_area_tab", "previous_recent_area_tab", "recent_panel", "previous_recent_panel",
-        "close_pane", "split_down", "split_right", "text_larger", "text_reset", "text_smaller", "toggle_device_rail", "overview", "sidebar_projects", "toggle_zoom", "toggle_task_list",
+        "close_pane", "split_down", "split_right", "text_larger", "text_reset", "text_smaller", "toggle_device_rail", "overview", "sidebar_projects", "toggle_zoom",
         "toggle_sidebar_lens", "toggle_lane_memory", "toggle_lane_prs", "toggle_lane_files", "toggle_lane_changes",
         "focus_next_agent_area", "focus_previous_agent_area", "grow_agent_area", "shrink_agent_area",
         "focus_next_view_area", "focus_previous_view_area", "grow_view_area", "shrink_view_area",
@@ -437,7 +436,6 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
       split_right: "Ctrl+Shift+D",
       split_down: "Alt+Shift+D",
       toggle_zoom: "Alt+Shift+Enter",
-      toggle_task_list: "Alt+Shift+U",
       close_pane: "Alt+Shift+W",
       text_larger: "Ctrl+=",
       text_smaller: "Ctrl+-",

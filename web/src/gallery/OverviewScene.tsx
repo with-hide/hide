@@ -54,7 +54,7 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
       return {
         project: index === 0 ? "/work/billing-api" : "/work/hide",
         status: "archived" as SessionSearchStatus,
-        record: { ...world.record, session: { device_id: "local", agent: index === 0 ? "codex" : "claude", session_id: `gallery-history-${index}` }, title, native_title: title, state: "idle", last_end: "done", cwd: index === 0 ? "/work/billing-api" : "/work/hide", started_at_unix_ms: world.record.started_at_unix_ms! - shift, ended_at_unix_ms: world.record.started_at_unix_ms! - shift + 30 * 60_000, chapters: [], children: [], outputs: [], missed: [], tasks: [], requests: world.record.requests.slice(0, 2).map((request, requestIndex) => ({ ...request, at_unix_ms: request.at_unix_ms - shift, text: requests[requestIndex]!, task_ids: [] })) } satisfies SessionRecord,
+        record: { ...world.record, session: { device_id: "local", agent: index === 0 ? "codex" : "claude", session_id: `gallery-history-${index}` }, title, native_title: title, state: "idle", status: { end: "done", line: `${title} 끝`, at_unix_ms: world.record.started_at_unix_ms! - shift + 30 * 60_000, limited: null }, cwd: index === 0 ? "/work/billing-api" : "/work/hide", started_at_unix_ms: world.record.started_at_unix_ms! - shift, ended_at_unix_ms: world.record.started_at_unix_ms! - shift + 30 * 60_000, asks: [], children: [], outputs: [], pr_groups: [], artifacts: [], flows: [{ ...world.record.flows[0]!, name: title, at_unix_ms: world.record.flows[0]!.at_unix_ms - shift, requests: world.record.flows[0]!.requests.slice(0, 2).map((request, requestIndex) => ({ ...request, at_unix_ms: request.at_unix_ms - shift, text: requests[requestIndex]!, summary: null })), request_count: 2 }] } satisfies SessionRecord,
       };
     }),
   ], [world]);
@@ -77,8 +77,9 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
       const options = payload.options;
       const results = history.flatMap(({ record, project, status }) => {
         if ((options?.project_root && options.project_root !== project) || (options?.agent && options.agent !== record.session.agent) || (options?.status && options.status !== status && !(options.status === "current" && status === "working"))) return [];
-        const matches = record.requests.filter((request) => (!options?.since_unix_ms || request.at_unix_ms >= options.since_unix_ms) && request.text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map((request) => ({ kind: "request" as const, text: request.text, at_unix_ms: request.at_unix_ms, request_offset: request.offset }));
-        return matches.length ? [{ session: record.session, title: record.title, matched: matches[0]!.text, at_unix_ms: matches[0]!.at_unix_ms, cwd: record.cwd, project_root: project, status, matches: matches.slice(0, 5), match_count: matches.length, request_count: record.requests.length }] : [];
+        const recorded = record.flows.flatMap((flow) => flow.requests);
+        const matches = recorded.filter((request) => (!options?.since_unix_ms || request.at_unix_ms >= options.since_unix_ms) && request.text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map((request) => ({ kind: "request" as const, text: request.text, at_unix_ms: request.at_unix_ms, request_offset: request.offset }));
+        return matches.length ? [{ session: record.session, title: record.title, matched: matches[0]!.text, at_unix_ms: matches[0]!.at_unix_ms, cwd: record.cwd, project_root: project, status, matches: matches.slice(0, 5), match_count: matches.length, request_count: recorded.length }] : [];
       });
       useShellStore.setState({ sessionWorkSearch: { query, options, loading: false, failure: null, next_cursor: null, results } });
     }

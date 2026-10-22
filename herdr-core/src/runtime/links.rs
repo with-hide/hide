@@ -110,9 +110,6 @@ impl Sink for RuntimeSink {
     fn summaries(&self, summaries: BTreeMap<String, ProjectLinkSummary>) {
         self.apply(move |runtime| runtime.ingest_link_summaries(summaries));
     }
-    fn progress(&self, progress: Vec<crate::links::ledger::WorkProgress>) {
-        self.apply(move |runtime| runtime.ingest_work_progress(progress));
-    }
 
     fn panel(&self, generation: u64, answer: Result<PanelAnswer, String>) {
         self.apply(move |runtime| runtime.ingest_link_panel(generation, answer));
@@ -769,9 +766,6 @@ impl Runtime {
                     parent_agent: session_agent(&parent.agent_kind)?.to_owned(),
                     parent_session_id: parent.session_id.clone()?,
                     parent_name: wire_name(parent, devices.get(parent.pane_id.as_str())?),
-                    name: wire_name(agent, devices.get(agent.pane_id.as_str())?),
-                    reported_at_unix_ms: None,
-                    live: true,
                 })
             })
             .map(|parent| {
@@ -793,37 +787,6 @@ impl Runtime {
             .iter()
             .map(|record| (record.id.as_str(), record))
             .collect::<HashMap<_, _>>();
-        // A child's report to its parent counts it finished while it rests
-        // (PRD task-continuation D-08); the ledger keeps a bounded tail of
-        // letters, so an older report is simply not known.
-        let identity = |actor: &crate::delivery::Actor| {
-            (
-                actor.pane_id.clone(),
-                actor.device_id.clone(),
-                actor.session.clone(),
-            )
-        };
-        let mut reports = HashMap::new();
-        for letter in ledger
-            .letters
-            .iter()
-            .filter(|letter| letter.kind == "report")
-        {
-            let at = reports
-                .entry((identity(&letter.sender), identity(&letter.recipient)))
-                .or_insert(letter.created_at_unix_ms);
-            *at = (*at).max(letter.created_at_unix_ms);
-        }
-        // A registered child is live while a pane runs its session.
-        let live = self
-            .link_lineage_agents()
-            .filter_map(|agent| {
-                Some((
-                    *devices.get(agent.pane_id.as_str())?,
-                    agent.session_id.as_deref()?,
-                ))
-            })
-            .collect::<std::collections::HashSet<_>>();
         let registered = ledger
             .agents
             .iter()
@@ -840,12 +803,6 @@ impl Runtime {
                     parent_agent: session_agent(&parent.actor.kind)?.to_owned(),
                     parent_session_id: parent.session.clone(),
                     parent_name: parent.wire_name().to_owned(),
-                    name: record.wire_name().to_owned(),
-                    reported_at_unix_ms: reports
-                        .get(&(identity(&record.actor), identity(&parent.actor)))
-                        .copied(),
-                    live: live
-                        .contains(&(record.actor.device_id.as_str(), record.session.as_str())),
                 })
             })
             .collect::<Vec<_>>();
@@ -1066,23 +1023,6 @@ impl Runtime {
         summaries.projects = projects;
         self.refresh_inactive_groups();
         self.refresh_agent_scopes();
-        true
-    }
-
-    /// The pane chips' tasks and children; the worker sends them only when
-    /// one changed, so an equal answer publishes nothing.
-    pub(super) fn ingest_work_progress(
-        &mut self,
-        progress: Vec<crate::links::ledger::WorkProgress>,
-    ) -> bool {
-        let summaries = self
-            .snapshot
-            .link_summaries
-            .get_or_insert_with(LinkSummariesSnapshot::default);
-        if summaries.progress == progress {
-            return false;
-        }
-        summaries.progress = progress;
         true
     }
 

@@ -287,7 +287,7 @@ export type FixtureLabel = {
   /** How long the provider takes to answer. */
   delayMs?: number;
   progress?: string;
-  /** The label's one-line summary of the turn's request (`context_label.v19`); none by default, when the header shows the request's own first line. */
+  /** The label's one-line summary of the turn's request (`context_label.v20`), which the provider shim answers for the newest request the input owes a summary; none by default, when the request shows its own words. */
   request?: string;
   /** The reply the agent asks for; the label's line when given, with `question` its end. */
   reply?: string;
@@ -295,8 +295,8 @@ export type FixtureLabel = {
   /** How the stopped turn ended (`context_label.v7`); a question by default when
    * `question`, else done. A turn start's answer carries none: the provider shim
    * leaves `end` out when the request's schema asks for none. */
-  end?: "question" | "blocked" | "done" | "waiting" | "unfinished";
-  work?: { task: {kind:"new";names:string[]} | {kind:"continue";ids:string[]} | {kind:"none"}; missed:{kind:"leftover"|"problem"|"follow_up";text:string}[]; resolved:{id:string;issue_number:number|null}[]; output_task_id:string|null };
+  end?: "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
+  work?: { missed:{kind:"problem"|"follow_up"|"ask";text:string}[]; resolved:{id:string;issue_number:number|null}[]; artifacts:string[] };
   at?: number;
   /** Native cwd witness, when repository provenance is part of the journey. */
   cwd?: string;
@@ -339,7 +339,7 @@ export function labelMarker(label: FixtureLabel): string {
     // One line: the reply asked for when there is one, else the progress.
     line: label.reply ?? label.progress ?? "",
     end: label.end ?? (label.question ? "question" : "done"),
-    work: label.work ?? {task:{kind:"none"},missed:[],resolved:[],output_task_id:null},
+    work: label.work ?? {missed:[],resolved:[],artifacts:[]},
   };
   const delay = label.delayMs ? `HIDE_E2E_DELAY_MS ${label.delayMs}\n` : "";
   return `${delay}HIDE_E2E_LABEL ${JSON.stringify(answer)}`;
