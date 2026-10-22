@@ -300,6 +300,7 @@ test("the lane chord brings the card back with its tool and alone, and the slot 
     fs.mkdirSync(other, { recursive: true });
     fs.writeFileSync(path.join(other, "README.md"), "# other\n");
     await registerFolder(page, daemon, other);
+    await page.locator('[data-sidebar-lens-option="projects"]').click();
     await expect(page.locator("[data-project]")).toHaveCount(2, { timeout: 20_000 });
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "other" }).locator("[data-checkout]").first())).click();
     await expect(screen).toHaveAttribute("data-lane-mode", "closed");

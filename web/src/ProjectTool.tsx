@@ -83,7 +83,7 @@ function Header({ project, actions }: { project: Workspace; actions: Actions }) 
         <span className="truncate text-micro text-subtle-foreground" title={where} data-project-where="true">{where}</span>
       </span>
       <Hint label={t("projectTool.settings")}>
-        <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("projectTool.settings")} data-project-settings={project.id} onClick={(event) => useUiStore.getState().openProjectSettings(settingsTarget(project), event.currentTarget)}>
+        <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("projectTool.settings")} data-project-tool-settings={project.id} onClick={(event) => useUiStore.getState().openProjectSettings(settingsTarget(project), event.currentTarget)}>
           <SettingsIcon />
         </Button>
       </Hint>

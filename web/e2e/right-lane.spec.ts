@@ -105,7 +105,7 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
   const lane = await startLane(page, "lane-overlay");
   try {
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
-    await expect(page.locator("[data-lane-tool]")).toHaveCount(5);
+    await expect(page.locator("[data-lane-tool]")).toHaveCount(4);
     await expect(railTool(page, "documents")).toBeDisabled();
     await expect(pane(page, lane.herdr.panes[0]!)).toBeVisible();
     await quietFor(page, 500, "the first fit has landed before the lane opens");
