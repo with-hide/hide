@@ -810,17 +810,19 @@ A tile's number is a quiet bar until the core has answered, and a 0 is drawn as 
 - PR: the open pull requests and a bar of 머지 가능, 실패, 리뷰 and 검사 중; pressing it turns the sidebar to the PR list, narrowed to the project (B29).
   A project with no GitHub remote reads `GitHub 원격 없음` alone, and after a failed read a ⚠ stands beside the number with the last read's age.
 - Git: the worktrees, how far main is behind origin, and one mark per worktree, changed, not pushed or removable; pressing it opens the worktree table in the viewing column (B30).
-  The table has the project's disk bar, a row per worktree with its mark, branch, pull request and size, and the removable ones folded under `정리할 것 N` with `정리…`, which opens the disk cleanup sheet and its confirmation; the table reads the worktrees again when it opens and measures the disk while it shows.
+  The table has the project's disk bar, a row for every worktree of the project, however many the tile's marks stop at, with its mark, branch, pull request and size, and the removable ones folded under `정리할 것 N` with `정리…`, which opens the disk cleanup sheet and its confirmation; the table reads the worktrees again when it opens and measures the disk while it shows.
 - 비용 · 7일: the last seven days' total at API prices, a small bar per day and each agent's share; pressing it opens the cost in the viewing column, with a bar per day, the amount per model and the three sessions that spent the most, each opening its record (B31).
-  Only calls whose session ran inside one of the project's checkouts on the core's own machine count; an agent Hide has no price for is named `가격 없음` apart and is in no amount, and a project on a connected device reads `이 기기에서 돈 것만 세요`.
+  Only calls whose session ran inside one of the project's checkouts on the core's own machine count, since reading another device's usage would be a new remote call, so a project on a connected device reads `이 기기에서 돈 것만 세요`.
+  An agent with a call Hide has no price for is named `가격 없음` apart, those calls in no amount, and when its other calls are priced the total reads `≥`.
+  Before the core's first reading the tile is the quiet bar and the page a placeholder; a reading that found no priced call is `$0.00`; when no reading has succeeded the tile reads `–` and the page says so, and after a later failure the page keeps the last amounts and says they are the last read.
 
 할 일 holds only what stops without the operator (D-16, B34-B37).
-Its first group, `에이전트가 나를 기다림`, lists the questions and decisions not read yet, then `다시 볼 것`, the read and unanswered questions and the ★ tasks, the same rows as the sidebar's 태스크 다시 볼 것; reading an ask moves its row down and keeps the count, answering it or lifting the ★ takes it out.
+Its first group, `에이전트가 나를 기다림`, lists the questions and decisions not read yet, then `다시 볼 것`, the read and unanswered questions and the ★ tasks, the rows of the sidebar's 태스크 Needs You and 다시 볼 것; a live session whose record still holds an open question joins them though its row asks nothing now, as a new ask while unread and under 다시 볼 것 once read, one line per pane; reading an ask moves its row down and keeps the count, answering it or lifting the ★ takes it out.
 Its second group, `내 PR · 내 리뷰`, lists the project's pull requests the PR list puts in Needs You, the team's review asks and bots' left out; one opened from a Memory card wears `◆ 기억에서`, and a review left on GitHub or a moved state takes it out on the next read.
 A row has no button: an agent's row says `pane` and brings that pane forward with the keyboard, a pull request's says `보기` and opens its card in the viewing column (B36).
-Past five rows the list shows five in that order and `+N 더`, which shows the rest; with nothing to do it reads a dim `할 일 없음`.
+Past five rows the list shows five in that order and `+N 더`, which shows the rest the core sent; past the core's 64 rows a last line, `나머지 N개는 사이드바 목록에서`, turns the sidebar to the project's 태스크; with nothing to do it reads a dim `할 일 없음`.
 
-The recent memory is the five newest cards, each title with its date, `처리할 것 N` at its head while Memory asks something, and `기억에서 자세히 ›`; a card or the chip opens 기억 at its place, and with no card the part is not drawn (B39).
+The recent memory is the five newest cards of all Memory holds, a search in 기억 narrowing only that tab, each title with its date, `처리할 것 N` at its head while Memory asks something, and `기억에서 자세히 ›`; a card or the chip opens 기억 at its place, and with no card the part is not drawn (B39).
 
 The core derives the counts and the 할 일 only on a publish whose inputs moved, and nothing on that path reads a file or runs a process (B42; [ARCHITECTURE.md](ARCHITECTURE.md#project-status-and-cost)).
 
