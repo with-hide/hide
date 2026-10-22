@@ -2,10 +2,9 @@ import { projectRows, projectListNumbers } from "../test/legacyAgentScope";
 import { emptyScope, legacyRest } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { describe, expect, it } from "vitest";
-import type { AgentLayout } from "./agentLayout";
 import type { TreeRow } from "./agentRow";
 import { numberedTarget } from "./keyboard";
-import { agentListOrder, numberedAgents, numberedTabs, numberOf, sidebarAgentNumbers, sidebarNumbers, taskListOrder } from "./numbering";
+import { agentListOrder, numberedAgents, numberedDevices, sidebarAgentNumbers, sidebarNumbers, taskListOrder } from "./numbering";
 import type { TaskCardScope } from "./agentScope";
 
 import type { AgentRow, Checkout, SnapshotRest, Workspace } from "./snapshot";
@@ -50,37 +49,18 @@ it("numbers grouped roots in physical tab order, skipping children and duplicate
 });
 
 describe("numbering (electron-digit-shortcuts-hints D-02)", () => {
-  it("numbers the strip's Herdr tabs left to right, nine at most, and only those", () => {
-    const tabs = Array.from({ length: 11 }, (_, index) => `t${index + 1}`);
-    const numbered = numberedTabs(checkoutWith(tabs, [{ id: "f1", kind: "file" }]));
-    expect([...numbered]).toEqual(tabs.slice(0, 9).map((id, index) => [index + 1, id]));
-    expect(numberOf(numbered, "t10")).toBeNull();
-    expect(numberOf(numbered, "f1")).toBeNull();
-    expect(numberOf(numbered, "t4")).toBe(4);
-  });
-
-  it("uses placed area order for both keycaps and numbered focus after a move", () => {
-    const checkout = { ...checkoutWith(["t1", "t2", "waiting"]), path: "/fixture" };
-    const layout: AgentLayout = {
-      root: { split: { id: "s1", axis: "row", ratio: .5,
-        first: { area: { id: "a1", active: "t2", displays: [{ id: "t2" }] } },
-        second: { area: { id: "a2", active: "t1", displays: [{ id: "t1" }] } },
-      } },
-      active_area: "a2", canvases: {}, limits: { areas: 6, depth: 3, displays: 64 }, display_count: 2,
-    };
-    const rest = {
-      navigator: { focused_checkout_id: "c1", focused_workspace_id: "w1", focused_device_id: "local", devices: [{ id: "local", kind: "local", label: "This Mac" }], workspaces: [{ id: "w1", checkouts: [checkout] }] },
-      workspace_view: { device_id: "local", path: checkout.path, agent_layout: layout },
-    } as unknown as SnapshotRest;
-    const numbers = numberedTabs(checkout, layout);
-    expect([...numbers]).toEqual([[1, "t2"], [2, "t1"]]);
-    expect(numberOf(numbers, "waiting")).toBeNull();
-    expect(numberedTarget("tabs", 1, { rest, agents: [] })).toBe("t2");
-    expect(numberedTarget("tabs", 2, { rest, agents: [] })).toBe("t1");
-    expect(numberedTarget("tabs", 3, { rest, agents: [] })).toBeNull();
-    // The layout from a different Workspace cannot number this checkout.
-    rest.workspace_view!.path = "/other";
-    expect(numberedTarget("tabs", 1, { rest, agents: [] })).toBe("t1");
+  it("numbers the device rail's tiles, the window's machine first, and ⌘n selects by them", () => {
+    const devices = [
+      { id: "mini", kind: "remote", label: "mini" },
+      { id: "local", kind: "local", label: "This Mac" },
+      { id: "box", kind: "remote", label: "build-box" },
+    ];
+    const rest = { navigator: { focused_device_id: "local", devices } } as unknown as SnapshotRest;
+    expect([...numberedDevices(rest.navigator!.devices)]).toEqual([[1, "local"], [2, "mini"], [3, "box"]]);
+    expect(numberedTarget("devices", 2, { rest, agents: [] })).toBe("mini");
+    expect(numberedTarget("devices", 4, { rest, agents: [] })).toBeNull();
+    // Before the core names its machine, no tile has an id to select.
+    expect([...numberedDevices(undefined)]).toEqual([]);
   });
 
   it("numbers the Agents list's drawn rows top to bottom, folded children left out", () => {
@@ -121,13 +101,11 @@ describe("numbering (electron-digit-shortcuts-hints D-02)", () => {
       status: { remote: [] },
     } as unknown as SnapshotRest;
     const state = { rest: legacyRest(rest, [parent, child, other]), agents: [parent, child, other] };
-    expect(numberedTarget("tabs", 2, state)).toBe("t2");
-    expect(numberedTarget("tabs", 3, state)).toBeNull();
     // Needs You draws first; the folded child is not a row, so p1 is second and 3 is empty.
     expect(numberedTarget("agents", 1, state)).toBe("p3");
     expect(numberedTarget("agents", 2, state)).toBe("p1");
     expect(numberedTarget("agents", 3, state)).toBeNull();
-    expect(numberedTarget("tabs", 1, { rest: null, agents: [] })).toBeNull();
+    expect(numberedTarget("agents", 1, { rest: null, agents: [] })).toBeNull();
   });
 
   it("shows each agent's Agents-list number once in Projects: its raised row, else its own checkout's row", () => {
