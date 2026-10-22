@@ -426,8 +426,6 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
     return actions.deleteArchived(row.id);
   };
   const label = t("taskLens.more", { name: root.title });
-  const shown = open ? "opacity-100" : "opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100 hoverless:opacity-100";
-  const hidden = open ? "opacity-0" : "group-hover/task:opacity-0 group-focus-within/task:opacity-0 hoverless:opacity-0";
   return (
     <EntryContextMenu asChild label={label} title={root.title} items={items} onSelect={select} data-archived-context={row.id}>
       <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs hover:bg-accent focus-within:bg-accent", (pending || away) && "opacity-(--opacity-dimmed)")}
@@ -446,9 +444,9 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
             </button>
             {parts ? <PartsMark parts={parts} /> : null}
             <MissionChip agent={{ session: root.session }} onOpen={(id) => actions.openMission(id)} />
-            <span className="grid shrink-0 items-center justify-items-end" onClick={(event) => event.stopPropagation()}>
-              <Elapsed since={row.archived_at_unix_ms} className={cn("pointer-events-none col-start-1 row-start-1 text-micro text-muted-foreground tabular-nums", hidden)} />
-              <span className={cn("col-start-1 row-start-1 flex items-center", shown)}>
+            <span className="relative flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
+              <Elapsed since={row.archived_at_unix_ms} className="pointer-events-none text-micro text-muted-foreground tabular-nums hoverless:hidden" />
+              <span className={cn(FLOATING_ACTIONS, revealed(open))}>
                 <EntryDropdown label={label} title={root.title} items={items} onSelect={select} onOpenChange={setOpen} data-archived-menu={row.id}
                   trigger={
                     <button type="button" aria-label={label} data-archived-more={row.id} className="rounded-xs p-xxs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary">
@@ -531,19 +529,28 @@ function RevisitButton({ agent, on, disabled, actions }: { agent: AgentRow; on: 
 }
 
 /**
- * The time, and in its place under the pointer or focus the record button
- * and `⋯` (B15, B18). Both share one cell, so the slot is as wide as the
- * wider and neither is drawn over the title.
+ * A row's buttons under the pointer or focus, floating over the end of its
+ * line on the row's own fill, so a row keeps only its time's width for them.
+ * They stand above a PR mark's raised hover target, and a selected row's
+ * translucent fill is laid on the sidebar's so nothing shows through. An
+ * input with no hover always shows them, in the line in place of the time.
+ */
+const FLOATING_ACTIONS =
+  "absolute top-1/2 right-0 z-20 flex -translate-y-1/2 items-center gap-xxs rounded-xs bg-accent pl-xs group-data-[selected=true]/task:bg-[linear-gradient(var(--color-selected),var(--color-selected)),linear-gradient(var(--color-sidebar),var(--color-sidebar))] hoverless:static hoverless:translate-y-0 hoverless:bg-none hoverless:bg-transparent hoverless:pl-0";
+
+const revealed = (open: boolean) => (open ? "opacity-100" : "opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100 hoverless:opacity-100");
+
+/**
+ * The time, and floating over the end of the line under the pointer or focus
+ * the record button and `⋯` (B15, B18).
  */
 function TimeSlot({ agent, record, menu, revisit }: { agent: AgentRow; record: (() => void) | null; menu: TaskMenu; revisit?: { on: boolean; disabled: boolean; actions: Actions } }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
-  const shown = open ? "opacity-100" : "opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100 hoverless:opacity-100";
-  const hidden = open ? "opacity-0" : "group-hover/task:opacity-0 group-focus-within/task:opacity-0 hoverless:opacity-0";
   return (
-    <span className="grid shrink-0 items-center justify-items-end" onClick={(event) => event.stopPropagation()}>
-      <Elapsed since={agent.last_prompt_at_unix_ms} data-agent-elapsed="true" className={cn("pointer-events-none col-start-1 row-start-1 text-micro text-muted-foreground tabular-nums", hidden)} />
-      <span className={cn("col-start-1 row-start-1 flex items-center gap-xxs", shown)}>
+    <span className="relative flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
+      <Elapsed since={agent.last_prompt_at_unix_ms} data-agent-elapsed="true" className="pointer-events-none text-micro text-muted-foreground tabular-nums hoverless:hidden" />
+      <span className={cn(FLOATING_ACTIONS, revealed(open))}>
         {revisit ? <RevisitButton agent={agent} {...revisit} /> : null}
         {record ? (
           <Hint label={t("taskLens.menu.record")} shortcut="Space">
