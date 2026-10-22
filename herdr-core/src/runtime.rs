@@ -56,6 +56,7 @@ mod pane_reopen;
 pub(crate) mod project_memory;
 mod project_settings;
 mod projects;
+mod ps;
 mod pull_requests;
 mod recent_checkouts;
 mod recent_panes;

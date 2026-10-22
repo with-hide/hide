@@ -6,13 +6,13 @@ the product's own spawn. The report prints each agent's route beside its spawn
 arguments, so what the journey added is visible.
 
 The candidate daemon's kit installs Hide's hooks and Herdr's integration into
-the private daemon home as on a new machine. Claude keeps the operator's HOME
-for its keychain login and reads only the candidate's settings. Every other
-agent keeps the operator's HOME too and is pointed at its own folder in the
-private daemon home by the variable it documents for that (CODEX_HOME,
-GROK_HOME, PI_CODING_AGENT_DIR, OpenCode's XDG folders), which holds the
-candidate's hooks or extension and a copy of the operator's login; agy has no
-such variable, so it is not measured here.
+the private daemon home as on a new machine. Every agent keeps the operator's
+HOME and is pointed at its own folder in the private daemon home by the
+variable it documents for that (CLAUDE_CONFIG_DIR, CODEX_HOME, GROK_HOME,
+PI_CODING_AGENT_DIR, OpenCode's XDG folders), which holds the candidate's
+hooks or extension and, but for Claude, whose login stays the operator's
+keychain entry, a copy of the operator's login; agy has no such variable, so
+it is not measured here.
 """
 
 import datetime
@@ -45,20 +45,23 @@ REFRESH_LEAD_SECONDS = 10 * 60
 
 ROUTES = {
     "claude": {
-        # Claude's own setting sources, with the user's left out, so the
-        # operator's installed hooks and plugins never run in the journey.
-        "args": lambda home: ["--settings", str(home / ".claude/settings.json"),
-                              "--setting-sources", "project,local"],
-        "env": lambda home: {},
-        # Keychain login: the operator's own HOME, which is also the folder
-        # trust the disposable repository under it inherits.
-        "unset": ["CLAUDE_CONFIG_DIR"],
-        # Where its sessions are written, for Hide's reader: the operator's HOME.
-        "sessions": lambda operator, home: operator,
+        "args": lambda home: [],
+        # Claude Code 2.1.307 reads its settings, plugins, sessions and global
+        # config, the folder trust Hide records included, from
+        # CLAUDE_CONFIG_DIR: the daemon home's `.claude`, where the
+        # candidate's kit and trust write as they write `~/.claude` on a
+        # machine. Its keychain entry is named after that folder too, unless
+        # CLAUDE_SECURESTORAGE_CONFIG_DIR names another, which empty names the
+        # default `~/.claude` (its secure-storage naming, read in the 2.1.307
+        # bundle; `claude auth status` reads loggedIn through it), so the
+        # login stays the operator's own entry and is never copied.
+        "env": lambda home: {"CLAUDE_CONFIG_DIR": str(home / ".claude"), "CLAUDE_SECURESTORAGE_CONFIG_DIR": ""},
+        "unset": [],
+        "sessions": lambda operator, home: home,
         "known": [".claude.json", ".claude/settings.json", ".claude/settings.local.json"],
         "shared": {".claude.json": "json"},
         "roots": [".claude.json", ".claude"],
-        "untrusted": "not measured: it would leave an entry in the operator's shared ~/.claude.json; the CI mode measures it",
+        "untrusted": None,
         "config": None,
         "copies": [],
         "login": lambda root, status, margin: claude_login_refusal(*status(["auth", "status"])),
@@ -161,22 +164,18 @@ def route(kind, home):
     return {"args": entry["args"](home), "env": entry["env"](home), "unset": list(entry["unset"])}
 
 
-def wrapper(directory, executable, operator, state, kind, home, sandbox, path, extra=None):
+def wrapper(directory, executable, operator, state, kind, home, sandbox, path, extra=None, keys=None):
     """The program a pane's `claude` or `codex` runs: the agent with the
     operator's HOME, the operator's PATH behind the candidate's `hide`, and
     its route, inside the write sandbox. A spawned pane has the private
-    Herdr's environment, whose PATH reaches neither node nor the account's tools."""
+    Herdr's environment, whose PATH reaches neither node nor the account's tools.
+    Each (variable, file) of `keys` is set to that file's content at each
+    start, so no key is written into the program or the report."""
     private_directory(directory)
     target = directory / Path(executable).name
-    # The route's arguments go on every start, the product's own restarts
-    # (Wake's `--resume`, Fork's `--fork-session`) included, not only the spawn.
+    # The route goes on every start, the product's own restarts (Wake's
+    # `--resume`, Fork's `--fork-session`) included, not only the spawn.
     command = [str(executable), *route(kind, home)["args"]]
-    settings = home / ".claude/settings.json"
-    if kind == "claude" and not settings.exists():
-        # Claude refuses a `--settings` file that is not there, and the kit
-        # writes its entries into this one only once hided runs.
-        private_directory(settings.parent)
-        write_private(settings, b"{}\n")
     if sandbox:
         command = sandbox.command(command)
     environment = {"HOME": str(operator), "HIDE_STATE_DIR": str(state), "PATH": os.pathsep.join((str(directory), path)),
@@ -184,6 +183,7 @@ def wrapper(directory, executable, operator, state, kind, home, sandbox, path, e
     lines = ["#!/bin/sh"]
     lines.extend("unset " + name for name in route(kind, home)["unset"])
     lines.append("export " + " ".join(f"{key}={shlex.quote(value)}" for key, value in environment.items()))
+    lines.extend(f"{name}=$(cat {shlex.quote(str(file))}) && export {name}" for name, file in (keys or {}).items())
     lines.append("exec " + " ".join(shlex.quote(value) for value in command) + ' "$@"')
     write_private(target, ("\n".join(lines) + "\n").encode())
     target.chmod(0o700)
@@ -292,7 +292,8 @@ def opencode_login_refusal(auth, margin, now=None):
 def opencode_model(operator, folder):
     """The private `opencode.json`: only the operator's model choice and
     provider settings, so their MCP servers and permissions stay theirs, and
-    no update check."""
+    no update check. Returns the environment variables the chosen providers
+    read their keys from (`opencode_key_names`)."""
     try:
         chosen = json.loads((operator / ".config/opencode/opencode.json").read_text())
     except (OSError, ValueError):
@@ -300,6 +301,26 @@ def opencode_model(operator, folder):
     keep = {key: chosen[key] for key in ("model", "small_model", "provider", "providers") if key in chosen}
     private_directory(folder)
     write_private(folder / "opencode.json", json.dumps({**keep, "update": "disable"}).encode())
+    return opencode_key_names(keep)
+
+
+# OpenCode's substitution of a variable into its configuration (`{env:NAME}`).
+OPENCODE_ENV = re.compile(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def opencode_key_names(config):
+    """The variables named as `{env:NAME}` in the provider blocks of the
+    providers `model` and `small_model` choose (`<provider>/<model>`), by
+    provider: the only variables of the operator's shell an OpenCode of the
+    journey receives, since the run's environment carries no `_API_KEY`
+    (agent_live_check.runtime.clean_env)."""
+    providers = {**(config.get("providers") or {}), **(config.get("provider") or {})}
+    found = {}
+    for choice in (config.get("model"), config.get("small_model")):
+        name = choice.partition("/")[0] if isinstance(choice, str) and "/" in choice else None
+        if name in providers:
+            found[name] = sorted(set(OPENCODE_ENV.findall(json.dumps(providers[name]))))
+    return found
 
 
 def codex_login_refusal(auth, now=None):
@@ -347,6 +368,20 @@ def trust_grok(trusted, repository):
     replacement.unlink(missing_ok=True)
     write_private(replacement, (text + entry).encode())
     replacement.replace(trusted)
+
+
+def claude_config(home, repository):
+    """Claude's global config in its private folder, written before its first
+    run: onboarding finished and the measured repository trusted, as the
+    operator's own Claude trusts a project they work in. It is `.config.json`,
+    the file Claude Code and Hide both take while it holds anything
+    (hide-agent-hooks runtime.rs, `trust_path`), so the trust Hide records for
+    each worktree it spawns into is the trust Claude reads."""
+    folder = home / ".claude"
+    private_directory(folder)
+    write_private(folder / ".config.json", json.dumps({
+        "hasCompletedOnboarding": True,
+        "projects": {str(repository.resolve()): {"hasTrustDialogAccepted": True}}}).encode())
 
 
 # The trust each agent's own file holds for the measured repository, written

@@ -89,6 +89,7 @@ pub(super) mod pane_move;
 mod project_settings;
 #[path = "tests/projects.rs"]
 mod projects;
+mod ps;
 #[path = "tests/pull_requests.rs"]
 mod pull_requests;
 #[path = "tests/recent_checkouts.rs"]

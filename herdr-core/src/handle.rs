@@ -541,6 +541,16 @@ impl Core {
         lock_recover(&self.runtime).agent_catalog(device, machine)
     }
 
+    /// `hide ps` for a caller on `device` in `pane`: the rows are taken under
+    /// the lock, and joined with the ledger and serialized after it.
+    pub fn ps(&self, device: &str, pane: &str, all: bool) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "agent.ps") {
+            return Err("ps_unavailable".into());
+        }
+        let rows = lock_recover(&self.runtime).ps_rows(device, pane)?;
+        serde_json::to_value(rows.answer(all)).map_err(|_| "ps_unavailable".into())
+    }
+
     /// Checks a `hide memory` caller and takes what its command needs; the
     /// command then runs on the daemon's blocking task, off this lock.
     pub fn prepare_memory(

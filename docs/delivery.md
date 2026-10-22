@@ -672,6 +672,35 @@ At most 64 waits are held at once: a spawn past that answers `identity_waits_ful
 The waits ride on the existing one-second agent refresh, with no timer, no Herdr read of their own and no work under `Mutex<Runtime>`; an unchanged list with unchanged waits plans nothing.
 A ledger with no wait writes no `identity_waits` field, and a build from before waits ignores the field.
 
+## What runs now: `hide ps`
+
+`hide ps` prints every live pane and the agent in it as one tree: project, checkout, tab, then pane, with each delegated agent under the agent that delegated it.
+
+```text
+herdr-ide  /Users/me/projects/herdr-ide
+└─ checkout main
+   └─ tab Agents
+      ├─ w9J:pHA  conductor-spec [agent-12829]  claude  going  "Conductor 관리"
+      │  └─ wVD:p2  hide-ps [agent-12894]  claude  going  "hide ps"  (watched by conductor-spec)  @ worktree feat/hide-ps · tab hide-ps
+      └─ w9J:p12  terminal  "zsh"  <- you
+```
+
+Every pane is printed once.
+A pane whose agent has a live parent (the lineage the sidebar draws, [status-model.md](status-model.md#where-a-parent-comes-from)) is printed under that parent, followed by `@` and where it lives when that is not the parent's tab, and is not printed again in its own tab; a tab or checkout that holds only such panes is not printed.
+An orphan, whose parent is gone, is a root again and prints in its own tab.
+A row reads: the pane id on its machine, the agent's name and registration id, its kind, its state, its title in quotes, the open mission it conducts or works a node of, and who watches it; a pane with no agent reads `terminal` and its own title.
+A Conductor is named as one only while its pane runs the Conductor's session (the map's `present`), and a worker by its registration; when the mission record could not be read, the answer's `missions_unreadable` is true and the tree ends with a line that says so, rather than drawing no mission as if there were none.
+The state is the row's mark as every surface draws it ([status-model.md: The mark](status-model.md#the-mark)): `turn`, `going`, `waiting`, `done`, `unread`, `quiet`, `unknown` or `asleep`, and `disconnected` for every agent on a device that does not answer.
+A device's projects carry `@ <device>` on their line; its panes are the last ones Hide had from it while it does not answer.
+After the tree, `not in a pane` lists the live registrations no pane on screen holds (a sleeping agent, an older registration of a pane that now runs another session), and `--all` adds `ended`, the ended registrations.
+`--here` keeps every pane of the project of the pane it runs in, with its agents' delegated agents wherever they live (a pane of the project whose parent lives in another project is drawn in its own tab), and is refused `here_unavailable` from a caller with no pane in a project Hide shows.
+`--json` prints the same answer as one line in the `agent` envelope, `{"ok":true,"value":{"panes":[…],"agents":[…],"missions_unreadable":false}}`, flat rather than nested: each pane carries its machine, project, checkout, tab, `you`, and its agent with `parent_machine` and `parent_pane` for the nesting; its schema is the contract's `ps` answer.
+The tree uses box-drawing characters on every system: Rust writes UTF-8 to a pipe and UTF-16 to a Windows console, so no console Hide supports needs a fallback.
+
+The answer is what the core already holds: the navigator's projects, tabs and agent rows, each device's last session, the mission map and the delivery ledger.
+It asks Herdr and the devices nothing; under the runtime's lock it copies one row per pane and per agent row, and the ledger join and serialization run after the lock (`herdr-core/src/runtime/ps.rs`).
+Like `hide agent catalog`, it needs the running daemon and a Hide credential but no open renderer, and a caller that is not an agent pane gets the same answer with no `you`.
+
 ## Missions
 
 A Conductor's mission (PRD software-factory-conductor) is a record the core keeps in `~/.hide/state/missions.json` and changes only on `hide mission` commands from the Conductor's own pane; `hide mission help` is the Conductor's guide, and an agent reaches it through `hide guide`, which the `hide` skill and the session guidance point at; there is no separate Conductor skill ([agent-hooks.md](agent-hooks.md#what-the-kit-puts-down)).
