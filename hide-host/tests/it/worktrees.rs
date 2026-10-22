@@ -868,12 +868,27 @@ fn a_background_fetch_brings_incoming_commits_and_prunes_without_touching_the_br
             r"^\+refs/heads/\*:refs/remotes/origin/\*$",
         ],
     );
+    // A value that would read as an option is neither passed nor run.
+    let ran = ours.path().join("upload-pack-ran");
+    git(
+        ours.path(),
+        &[
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            &format!(
+                "--upload-pack=touch {}:refs/remotes/origin/x",
+                ran.display()
+            ),
+        ],
+    );
     assert_eq!(
         hide_host::worktrees::fetch_remote(ours.path()),
         FetchOutcome::Skipped {
             reason: FetchSkip::NoTrackingRefs
         }
     );
+    assert!(!ran.exists());
     assert_eq!(branch("main"), local_head);
     assert_eq!(branch("local-only"), local_head);
 }

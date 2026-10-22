@@ -118,6 +118,9 @@ pub struct CleanupSnapshot {
     /// (PRD git-freshness B17); never sent to the shell.
     #[serde(skip)]
     pub merge_proofs: BTreeSet<String>,
+    /// The default branch `merge_proofs` were judged against.
+    #[serde(skip)]
+    pub merge_base: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -725,6 +728,7 @@ fn inspect(
         },
     )?;
     snapshot.merge_proofs = proved;
+    snapshot.merge_base = merge.base.clone();
     Ok(snapshot)
 }
 

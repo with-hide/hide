@@ -4247,7 +4247,8 @@ fn a_merge_the_cleanup_review_proved_by_branch_marks_the_sidebar_too() {
             workspace_id: "w".into(),
             repository_root: "/repo".into(),
             phase: "ready".into(),
-            merge_proofs: [head].into(),
+            merge_proofs: [head.clone()].into(),
+            merge_base: Some("main".into()),
             ..Default::default()
         })
     );
@@ -4262,4 +4263,17 @@ fn a_merge_the_cleanup_review_proved_by_branch_marks_the_sidebar_too() {
     });
     runtime.refresh_worktree_projection();
     assert_eq!(merged(&runtime), Some(true));
+    // A proof judged against another default branch marks nothing.
+    runtime.review_merge_proofs.clear();
+    runtime.ingest_cleanup(crate::live::cleanup::CleanupSnapshot {
+        id: 7,
+        workspace_id: "w".into(),
+        repository_root: "/repo".into(),
+        phase: "ready".into(),
+        merge_proofs: [head].into(),
+        merge_base: Some("develop".into()),
+        ..Default::default()
+    });
+    runtime.refresh_worktree_projection();
+    assert_ne!(merged(&runtime), Some(true));
 }

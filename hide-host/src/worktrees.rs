@@ -236,7 +236,9 @@ pub fn fetch_remote(path: &Path) -> FetchOutcome {
     if crate::git_run::version().is_none_or(|version| version >= (2, 29)) {
         command.arg("--no-write-fetch-head");
     }
-    command.args(["--refmap=", "origin"]).args(&refspecs);
+    // `--` so no refspec read from the repository's config is taken as an
+    // option.
+    command.args(["--refmap=", "--", "origin"]).args(&refspecs);
     let output = crate::git_run::output(&mut command, FETCH_TIME, Some(64 * 1024));
     match output {
         Ok(Some(output)) if output.status.success() => FetchOutcome::Fetched,
@@ -260,7 +262,8 @@ pub fn fetch_remote(path: &Path) -> FetchOutcome {
 
 /// `origin`'s configured fetch refspecs that only write remote-tracking refs
 /// (`refs/remotes/origin/...`), with its negative ones; a refspec that would
-/// write a local branch, a tag or anything else is left out.
+/// write a local branch, a tag or anything else is left out, and so is one
+/// that would read as an option.
 fn tracking_refspecs(path: &Path) -> Result<Vec<String>, String> {
     let output = crate::git_run::output(
         crate::git_run::at(path).args(["config", "--get-all", "remote.origin.fetch"]),
@@ -279,6 +282,7 @@ fn tracking_refspecs(path: &Path) -> Result<Vec<String>, String> {
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(str::trim)
+        .filter(|refspec| !refspec.trim_start_matches('+').starts_with('-'))
         .filter(|refspec| {
             refspec.starts_with('^')
                 || refspec

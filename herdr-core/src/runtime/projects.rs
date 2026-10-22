@@ -780,7 +780,21 @@ impl Runtime {
         if answer.merge_proofs.is_empty() {
             return false;
         }
-        let Some(base) = self.listed_base(node, &answer.repository_root) else {
+        // Proofs of a project that left the catalog or whose default branch
+        // changed are dropped; a review judged against a base that is no
+        // longer the project's keeps nothing.
+        let proofs = std::mem::take(&mut self.review_merge_proofs);
+        self.review_merge_proofs = proofs
+            .into_iter()
+            .filter(|((node, root, base), _)| {
+                self.listed_base(node.as_deref(), root).as_ref() == Some(base)
+            })
+            .collect();
+        let Some(base) = answer
+            .merge_base
+            .clone()
+            .filter(|base| self.listed_base(node, &answer.repository_root).as_ref() == Some(base))
+        else {
             return false;
         };
         let kept = self
