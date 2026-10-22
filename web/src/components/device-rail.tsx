@@ -3,11 +3,14 @@ import { memo, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "../actions";
 import { useInterfaceTranslation } from "../i18n/client";
-import { badgeText, deviceConnected, frontDeviceId, tileCounts, tileHint, tileMonogram, tileName, type TileCounts } from "../devices";
+import { badgeText, deviceConnected, frontDeviceId, railDeviceIds, tileCounts, tileHint, tileMonogram, tileName, type TileCounts } from "../devices";
 import { cn } from "../lib/utils";
-import { coreShared, isCoreMachine, machineName, windowDeviceId, windowFirst } from "../screenMachine";
+import { numberOf, numberedDevices } from "../numbering";
+import { coreShared, isCoreMachine, machineName, windowDeviceId } from "../screenMachine";
 import { useShellStore } from "../store";
+import { useUiStore } from "../ui";
 import { EntryContextMenu } from "./entry-menu";
+import { Keycap } from "./ui/keycap";
 import { Hint } from "./ui/tooltip";
 
 /** `core` marks the machine the core runs on, set only while the core works with another machine (Q11). */
@@ -38,16 +41,16 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   const tiles = useMemo<Tile[]>(() => {
     const own = windowDeviceId(devices);
     const shared = coreShared(devices);
-    const rows = windowFirst(devices);
-    // Before the snapshot names a device, the window's machine is the core's own, by the id it has then.
-    const listed = rows.length > 0 ? rows : [{ id: own }];
-    return listed.map((device): Tile => ({
-      id: device.id,
-      label: machineName(devices, device.id, t),
-      icon: device.id === own ? "local" : "remote",
-      core: shared && isCoreMachine(devices, device.id),
+    return railDeviceIds(devices).map((id): Tile => ({
+      id,
+      label: machineName(devices, id, t),
+      icon: id === own ? "local" : "remote",
+      core: shared && isCoreMachine(devices, id),
     }));
   }, [devices, t]);
+  // A ⌘ hold numbers the tiles ⌘n selects (`numbering.ts`).
+  const numbered = useUiStore((s) => s.hint === "devices");
+  const numbers = useMemo(() => (numbered ? numberedDevices(devices) : null), [numbered, devices]);
   return (
     <EntryContextMenu
       asChild
@@ -60,7 +63,7 @@ export function DeviceRail({ actions }: { actions: Actions }) {
         <ul className="flex flex-col items-center gap-md">
           {tiles.map((tile) => (
             <li key={tile.id} className="flex">
-              <RailTile tile={tile} selected={tile.id === front} actions={actions} />
+              <RailTile tile={tile} selected={tile.id === front} number={numbers ? numberOf(numbers, tile.id) : null} actions={actions} />
             </li>
           ))}
           <li className="flex">
@@ -81,10 +84,10 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   );
 }
 
-const RailTile = memo(function RailTile({ tile, selected, actions }: { tile: Tile; selected: boolean; actions: Actions }) {
+const RailTile = memo(function RailTile({ tile, selected, number, actions }: { tile: Tile; selected: boolean; number: number | null; actions: Actions }) {
   const counts = useShellStore(useShallow((s) => tileCounts(s.rest, s.agents, tile.id)));
   const connected = useShellStore((s) => deviceConnected(s.rest, tile.id));
-  return <RailTileView tile={tile} selected={selected} counts={counts} connected={connected} onSelect={() => actions.focusDevice(tile.id)} />;
+  return <RailTileView tile={tile} selected={selected} counts={counts} connected={connected} number={number} onSelect={() => actions.focusDevice(tile.id)} />;
 });
 
 /**
@@ -97,9 +100,10 @@ const RailTile = memo(function RailTile({ tile, selected, actions }: { tile: Til
  * the bottom-right instead, with no mark, since what it last reported is not
  * current (B3, B8, B41). The core's machine wears a crown notched into the
  * bottom-left corner, the one corner the other marks leave free (PRD
- * core-host-node-move N1).
+ * core-host-node-move N1). While a ⌘ hold reveals the numbers, the tile's
+ * keycap floats at its top left, the corner the marks leave free.
  */
-export function RailTileView({ tile, selected, counts, connected, onSelect }: { tile: Tile; selected: boolean; counts: TileCounts; connected: boolean; onSelect: () => void }) {
+export function RailTileView({ tile, selected, counts, connected, number = null, onSelect }: { tile: Tile; selected: boolean; counts: TileCounts; connected: boolean; number?: number | null; onSelect: () => void }) {
   const { t } = useInterfaceTranslation();
   return (
     <Hint label={tileHint(tile.label, connected, counts, t, tile.core)} side="right">
@@ -140,6 +144,7 @@ export function RailTileView({ tile, selected, counts, connected, onSelect }: { 
             <CrownIcon className="size-(--size-rail-crown)" />
           </span>
         ) : null}
+        {number !== null ? <Keycap number={number} className="right-auto left-xxs" /> : null}
         {connected ? null : (
           <span aria-hidden="true" data-rail-off="true" className={cn("absolute -right-xs -bottom-xs flex size-(--size-rail-badge) items-center justify-center rounded-full bg-card text-muted-foreground", CUTOUT)}>
             <XIcon className="size-(--size-rail-mark)" />

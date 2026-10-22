@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentLayout } from "./agentLayout";
 import type { TreeRow } from "./agentRow";
 import { numberedTarget } from "./keyboard";
-import { agentListOrder, numberedAgents, numberedTabs, numberOf, sidebarAgentNumbers, sidebarNumbers, taskListOrder } from "./numbering";
+import { agentListOrder, numberedAgents, numberedDevices, numberedTabs, numberOf, sidebarAgentNumbers, sidebarNumbers, taskListOrder } from "./numbering";
 import type { TaskCardScope } from "./agentScope";
 
 import type { AgentRow, Checkout, SnapshotRest, Workspace } from "./snapshot";
@@ -81,6 +81,20 @@ describe("numbering (electron-digit-shortcuts-hints D-02)", () => {
     // The layout from a different Workspace cannot number this checkout.
     rest.workspace_view!.path = "/other";
     expect(numberedTarget("tabs", 1, { rest, agents: [] })).toBe("t1");
+  });
+
+  it("numbers the device rail's tiles, the window's machine first, and ⌘n selects by them", () => {
+    const devices = [
+      { id: "mini", kind: "remote", label: "mini" },
+      { id: "local", kind: "local", label: "This Mac" },
+      { id: "box", kind: "remote", label: "build-box" },
+    ];
+    const rest = { navigator: { focused_device_id: "local", devices } } as unknown as SnapshotRest;
+    expect([...numberedDevices(rest.navigator!.devices)]).toEqual([[1, "local"], [2, "mini"], [3, "box"]]);
+    expect(numberedTarget("devices", 2, { rest, agents: [] })).toBe("mini");
+    expect(numberedTarget("devices", 4, { rest, agents: [] })).toBeNull();
+    // Before the core names its machine, no tile has an id to select.
+    expect([...numberedDevices(undefined)]).toEqual([]);
   });
 
   it("numbers the Agents list's drawn rows top to bottom, folded children left out", () => {

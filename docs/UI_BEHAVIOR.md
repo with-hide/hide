@@ -2015,6 +2015,7 @@ The counts come from the device's published `agent_scope` values; the browser do
 A device that is not connected dims its glyph and wears a `×` at the bottom-right, with no mark, since its last counts are not current; selected, its sidebar shows only its name, `연결 안 됨` and `다시 연결`, which retries the connection in place, and never the tree it last reported.
 A delayed or failed agent-state query alone leaves the connected device, its tree and terminals available; retained agent activity uses the existing Unknown state until a successful query confirms it, without a disconnected message or a new alert.
 Selecting a device tile sends `focus_device`, and the sidebar becomes that device's single project and session list; no row there names the device.
+In the desktop app ⌘1-9 (Ctrl+Shift+1-9 on Windows and Linux) selects the tile at that number, top to bottom with This Mac first, whether or not the rail shows, and holding ⌘ alone floats each tile's number at its top left (see Keycaps, tooltips, and icon buttons); a number with no tile does nothing.
 Every tile is a button reached with Tab and chosen with Enter or Space, named for assistive technology by the device, its connection and each count it marks (`mini, 연결 안 됨`, `This Mac, Needs You 2, Done 1`).
 `기기 추가` opens Settings › Devices with the Add device dialog in front, as the hidden rail's `기기 추가…` and the Add a project dialog's host list do.
 Removing the device in front moves the front to This Mac; that device's agents and its `~/hide` stay on it, and the rail stays.
@@ -2638,7 +2639,7 @@ Which system applies is the one the operator types on: the desktop app's, or the
 
 ### The rule
 
-On Windows and Linux every ⌘ is Ctrl+Shift, as in Windows Terminal, GNOME Terminal, WezTerm and kitty, so a plain Ctrl key reaches the shell and the agent CLIs (Ctrl+C, Ctrl+R, Ctrl+W, Ctrl+K, Ctrl+D and the rest); the only plain Ctrl keys the app takes are text size and, in a browser tab, the ones Chrome keeps for itself.
+On Windows and Linux every ⌘ is Ctrl+Shift, as in Windows Terminal, GNOME Terminal, WezTerm and kitty, so a plain Ctrl key reaches the shell and the agent CLIs (Ctrl+C, Ctrl+R, Ctrl+W, Ctrl+K, Ctrl+D and the rest); the only plain Ctrl keys the app takes are text size, the tab digits Ctrl+1 to Ctrl+9 (below) and, in a browser tab, the ones Chrome keeps for itself.
 A ⇧ or ⌥ that a macOS chord adds to ⌘ makes it Alt+Shift there, the layer Windows Terminal puts its panes on (Alt+Shift+D splits a pane there too): ⌘T is Ctrl+Shift+T and ⇧⌘T is Alt+Shift+T, so no chord needs more than three keys.
 The chords the rule puts on that layer take no key a shell or an agent CLI documents: readline reads Alt+Shift+B as Alt+B (`do-lowercase-version`), so Alt+B, Alt+D and Alt+T still reach the shell and Claude Code.
 None of them is a key Windows, GNOME or Chrome lists as its own, except Chrome's Alt+Shift+T (below).
@@ -2665,7 +2666,8 @@ Each exception has a dominant convention on Windows and Linux, or a chord the sy
   The tree answers them only while it holds the keyboard, so a terminal keeps ⌘C for its selection and Ctrl+C for the interrupt, and a text field keeps its own.
 - Inside a text field, a palette, a board or a document, no terminal holds the keyboard, so the system's own command key applies: ⌘↵ is Ctrl+Enter (send a form, open a ⌘P result to the side, open a pull request on GitHub), ⌘-click is Ctrl-click (a link, a pull request, an issue), and Ctrl+S saves the document in front as well as Ctrl+Shift+S.
   A file or diff View's comment chord ⇧⌘. is Ctrl+Shift+. there for the same reason ([View openers and comments](#view-openers-and-comments)).
-- Tab digits follow the rule (Ctrl+Shift+1-9, as in WezTerm): Windows Terminal, GNOME Terminal and the browsers each use a different modifier, so no convention outweighs the rule.
+- The digits follow the rule: a tab is ⌃1-9 on a Mac, beside ⌃⇥'s recent tab cycle, so it is Ctrl+1-9 there, the browsers' tab digits; a device is ⌘1-9, so it is Ctrl+Shift+1-9; an agent row stays ⌥1-9, Alt+1-9.
+  Ctrl+2 to Ctrl+8 are the control bytes a terminal sends for NUL, Escape and ^\ to ^_ (on a Mac ⌃2 to ⌃8 too), which no shell or agent CLI documents a use for, so the app takes them; ⌃1-9 is also the keys macOS offers for Switch to Desktop, off until the operator turns it on in System Settings, Keyboard Shortcuts, Mission Control, and a Mac that turned it on keeps those keys from the app.
 
 ### In a terminal
 
@@ -2703,7 +2705,7 @@ The sheet carries no row or explanation for a command the removed native app alo
 | New tab | `⌘T` | `Ctrl+Shift+T` | `⌥T` | `Alt+T` |
 | Close focused view or pane | `⌘W` | `Ctrl+Shift+W` | `⌥W` | `Alt+W` |
 | Reopen closed tab (exception) | `⇧⌘T` | `Alt+Shift+T` | `⌥⇧T` | `Ctrl+Alt+Shift+T` |
-| Select tab 1-9 | `⌘1 … ⌘9` | `Ctrl+Shift+1 … Ctrl+Shift+9` | none | none |
+| Select tab 1-9 | `⌃1 … ⌃9` | `Ctrl+1 … Ctrl+9` | none | none |
 | Add project | `⇧⌘N` | `Alt+Shift+N` | none | none |
 | Start agent | `⌘N` | `Ctrl+Shift+N` | none | none |
 | Next recent tab | `⌃⇥` | `Ctrl+Tab` | `` ⌥` `` | `` Alt+` `` |
@@ -2713,6 +2715,7 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Next recent project (exception) | `⌥⇥` | `` Ctrl+Shift+` `` | `⌥⇥` | `` Ctrl+Shift+` `` |
 | Previous recent project (exception) | `⌥⇧⇥` | `` Ctrl+Alt+Shift+` `` | `⌥⇧⇥` | `` Ctrl+Alt+Shift+` `` |
 | Select agent 1-9 | `⌥1 … ⌥9` | `Alt+1 … Alt+9` | none | none |
+| Select device 1-9 | `⌘1 … ⌘9` | `Ctrl+Shift+1 … Ctrl+Shift+9` | none | none |
 | Search | `⌘K` | `Ctrl+Shift+K` | `⌘K` | `Ctrl+Shift+K` |
 | Open file | `⌘P` | `Ctrl+Shift+P` | `⌘P` | `Ctrl+Shift+P` |
 | Overview | `⇧⌘O` | `Alt+Shift+O` | `⇧⌘O` | `Alt+Shift+O` |
@@ -2762,7 +2765,7 @@ A chorded tooltip reads the label followed by the shortcut chord; a chordless co
 The sidebar Settings tooltip and accessible name append the host's current shortcut in parentheses to the translated label.
 There is no native platform tooltip layered underneath the shared one; the shared tooltip is the only tooltip in the main shell.
 Tooltip hover has a short reveal delay, and an exact modifier hold reveals shortcut hints faster than a hover tooltip does.
-In the desktop app, holding ⌘ alone (Ctrl+Shift on Windows and Linux) floats each tab's number at its top right in the agent tab strip in front, and holding ⌥ alone floats each Agents-list row's number at its top right: a keycap in the popover colors with a border, a small shadow and one mono digit, positioned over the tab or row rather than in it, so a title, an inline Rename field, a row's time, and its fold slot never move.
+In the desktop app, holding ⌃ alone (Ctrl on Windows and Linux) floats each tab's number at its top right in the agent tab strip in front, holding ⌥ alone floats each Agents-list row's number at its top right, and holding ⌘ alone (Ctrl+Shift on Windows and Linux) floats each device tile's number at its top left, the corner a tile's marks leave free: a keycap in the popover colors with a border, a small shadow and one mono digit, positioned over the tab or row rather than in it, so a title, an inline Rename field, a row's time, and its fold slot never move.
 The number is the screen order at that moment, first to ninth, left to right for tabs and top to bottom for the rows the Agents list draws (a folded parent's descendants are not rows), and an item past the ninth carries none.
 While Projects is on screen the same hold shows those Agents-list numbers, since ⌥n still selects by them, each once: on the agent's raised row, else on its row under the checkout that owns its pane.
 The hint appears only after a short hold of the exact modifier; releasing it before then shows nothing, so a ⌘C never flashes numbers.

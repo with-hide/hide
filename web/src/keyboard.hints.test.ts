@@ -74,8 +74,8 @@ describe("modifier hint deadline scheduling", () => {
       expect(pending.size).toBe(1);
       expect([...pending.values()][0]!.delay).toBeGreaterThan(0);
       wake(1150.3);
-      expect(useUiStore.getState().hint).toBe("tabs");
-      expect(reveals).toEqual(["tabs"]);
+      expect(useUiStore.getState().hint).toBe("devices");
+      expect(reveals).toEqual(["devices"]);
       expect(pending.size).toBe(0);
     } finally { unsubscribe(); }
   });

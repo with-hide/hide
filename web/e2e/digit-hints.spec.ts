@@ -1,6 +1,6 @@
 // The browser host has no numbered chords (PRD electron-digit-shortcuts-hints
-// B3, D-09): holding ⌘ or ⌥ shows no keycap, ⌘2 with a second tab present
-// sends nothing, and the ⌘/ sheet lists both families as not on this host.
+// B3, D-09): holding ⌘ or ⌥ shows no keycap, ⌃2 with a second tab present
+// sends nothing, and the ⌘/ sheet lists every family as not on this host.
 
 import { expect, test } from "@playwright/test";
 import path from "node:path";
@@ -40,7 +40,7 @@ test("no keycap on a ⌘ or ⌥ hold, no tab on ⌘2, and the sheet says so", as
     await screenshot(page, "digit-hints-browser-alt-hold");
     await page.keyboard.up("Alt");
 
-    // B3: ⌘2 is not a chord of this host, so the second tab stays where it is.
+    // B3: ⌃2 is not a chord of this host, so the second tab stays where it is.
     const focused = sent.get("focus_tab") ?? 0;
     await page.keyboard.press(chord("select_tab_2", "electron"));
     await page.keyboard.press("Alt+Digit2");
@@ -49,7 +49,7 @@ test("no keycap on a ⌘ or ⌥ hold, no tab on ⌘2, and the sheet says so", as
     expect(sent.get("focus_pane") ?? 0).toBe(0);
     await expect(canvas).toHaveAttribute("data-canvas", herdr.tab);
 
-    // B3, B4: the sheet names both families, without a chord.
+    // B3, B4: the sheet names every family, without a chord.
     await page.keyboard.press(chord("shortcuts"));
     const sheet = page.locator("[data-shortcut-sheet]");
     await expect(sheet).toBeVisible();
@@ -58,6 +58,8 @@ test("no keycap on a ⌘ or ⌥ hold, no tab on ⌘2, and the sheet says so", as
     await expect(sheet.locator('[data-shortcut="select_tab_1"] kbd')).toHaveText("-");
     await expect(sheet.locator('[data-shortcut="select_agent_1"]')).toContainText("Select agent 1-9");
     await expect(sheet.locator('[data-shortcut-absent="select_agent_1"]')).toHaveText("not on this host");
+    await expect(sheet.locator('[data-shortcut="select_device_1"]')).toContainText("Select device 1-9");
+    await expect(sheet.locator('[data-shortcut-absent="select_device_1"]')).toHaveText("not on this host");
     await expect(sheet.locator('[data-shortcut="select_tab_2"]')).toHaveCount(0);
     await screenshot(page, "digit-hints-browser-sheet");
     await page.keyboard.press("Escape");

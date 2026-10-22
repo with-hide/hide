@@ -7,7 +7,7 @@
 
 import type { TFunction } from "i18next";
 import { deviceScope } from "./agentScope";
-import { machineName, windowDeviceId } from "./screenMachine";
+import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
 import { localDeviceId, type AgentRow, type Device, type SnapshotRest, type Workspace } from "./snapshot";
 
 export { thisMachineKey } from "./screenMachine";
@@ -18,6 +18,16 @@ export function railShown(rest: SnapshotRest | null): boolean {
 }
 
 export { localDeviceId } from "./snapshot";
+
+/**
+ * The rail's devices top to bottom: the window's own machine, then each
+ * other device in the core's order; before the snapshot names a device, the
+ * window's machine alone, by the id it has then.
+ */
+export function railDeviceIds(devices: readonly Device[] | undefined): string[] {
+  const rows = windowFirst(devices);
+  return rows.length > 0 ? rows.map((device) => device.id) : [windowDeviceId(devices)];
+}
 
 /** The device in front: the one the core focuses, this machine by default. */
 export function frontDeviceId(rest: SnapshotRest | null): string {
