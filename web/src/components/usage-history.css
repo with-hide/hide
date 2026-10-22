@@ -1,8 +1,6 @@
 .usage-history { --usage-cell: var(--size-usage-cell); }
 .usage-summary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--spacing-md); }
 .usage-summary-value { font-family: var(--font-mono); font-size: var(--text-headline); font-weight: 600; line-height: 1.4; min-height: 1.4em; overflow-wrap: anywhere; }
-.usage-hide-line { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-sm); min-height: var(--size-control-sm); font-size: var(--text-caption); color: var(--muted-foreground); }
-.usage-hide-numbers { display: inline-flex; align-items: baseline; gap: var(--spacing-sm); font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--foreground); }
 .usage-cost { outline: none; }
 .usage-cost:focus-visible { box-shadow: 0 0 0 var(--size-hairline) var(--ring); }
 .usage-summary-value [data-cost-unavailable="true"] { font-size: var(--text-subhead); }

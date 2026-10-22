@@ -2099,10 +2099,8 @@ Cost is an estimate at public API rates, not the account's bill; its tooltip sta
 An unpriced model or incomplete native usage makes a known subtotal a lower bound with its reason; a wholly unpriced amount says `Price unavailable`, a missing price table says `Pricing pending`, and a table older than sixty days is marked stale.
 No calls means No data, never a zero dollar amount; a known free price remains zero.
 
-Under the summary one quiet line reads `Of this, Hide AI` with its new tokens and its share of that day, with no money: Hide AI's own background calls (agent summaries, Memory, Factory, issues and worktrees) that no session file records.
-Hide AI is inside the headline totals, bars and grass, so the line explains part of the number above it.
-Unknown calls make the amount a lower bound, drawn `≥` with a mark and spoken as "at least"; a day with none says `No records`, a day before counting began says `Before counting`, and the line follows the inspected day.
-The same token mark appears in the inspected day's summary and the selected period's total, including the full-history summary, whenever that day or period contains unknown calls.
+Hide AI's own background calls (agent summaries, Memory, Factory, issues and worktrees), which no session file records, are inside the headline totals, bars and grass; the popover draws no separate Hide AI line, and the full history's table is where Hide AI is read apart from the agents.
+Unknown Hide AI calls make the inspected day's summary and the selected period's total a lower bound, drawn `≥` with a mark and spoken as "at least", including the full-history summary, whenever that day or period contains unknown calls.
 A missing model price alone does not make known tokens a lower bound.
 
 Below the summary, a `7 days` / `30 days` segmented choice switches between seven daily bars and thirty 12-pixel contribution squares; thirty days is the initial view.

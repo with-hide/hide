@@ -6,7 +6,7 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { compactTokens, sumUsageDays, usageDate, usagePeriodDays } from "../usageHistory";
 import { UsageCost, UsageStatus, UsageSummary } from "./usage-amount";
-import { BoundedTokens, HideAiLine } from "./usage-hide-ai";
+import { BoundedTokens } from "./usage-hide-ai";
 import { UsageHistoryTable } from "./usage-history-table";
 import { Button } from "./ui/button";
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
@@ -57,7 +57,6 @@ function CompactHistory({ node, outline, children, onHistory }: { node: NodeUsag
     <div data-usage-detail="true" className="flex flex-col gap-sm">
       <div className="flex items-center justify-between gap-xs text-caption text-muted-foreground"><span data-usage-date="true">{day.today ? t("usage.history.today") : usageDate(day.date, language, { month: "short", day: "numeric", weekday: "short" })}</span>{!selected.today ? <Button variant="ghost" size="sm" onClick={() => { setPinned(null); setPreview(null); }}>{t("usage.history.today")}</Button> : null}</div>
       <UsageSummary amount={day.amount} pending={day.pending} tokensLowerBound={(day.hide_ai?.unknown_calls ?? 0) > 0} announce />
-      <HideAiLine day={day} since={range.hide_ai_since} />
       <details className="text-micro text-muted-foreground" data-usage-breakdown="true"><summary className="cursor-pointer">{t("usage.history.details")}</summary><div className="usage-token-detail"><span>{t("usage.history.input", { value: fmt(day.amount.tokens.input) })}</span><span>{t("usage.history.output", { value: fmt(day.amount.tokens.output) })}</span><span>{t("usage.history.cacheWrite", { value: fmt(day.amount.tokens.cache_write) })}</span><span>{t("usage.history.cacheRead", { value: fmt(day.amount.tokens.cache_read) })}</span></div></details>
     </div>
     <div className="usage-grass-section">
