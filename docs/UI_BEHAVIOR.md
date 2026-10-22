@@ -508,8 +508,8 @@ The browser display's toolbar and its loading, load failed, and plain browser ta
 ### Agent panes and the Agents explorer
 
 A pane header is a quiet identity row: the ancestor path, the status mark, the agent's logo, title, the fork mark, the letters-waiting pill, the task chip, the PR mark, the limited-integration icon, and the retained overflow, zoom and close controls at the right end.
-An agent pane's header also holds `개요에서 보기`, a graph icon before zoom, drawn only while the header is pointed at or holds the keyboard, and keeping its place while hidden so the title and chips never move; a shell pane has none (PRD pane-open-in-overview B1-B3).
-It opens the Overview on Work as the session chosen there opens, and the pane menu offers the same item first among the agent's own actions, with no shortcut (B11).
+An agent pane's header also holds `개요에서 보기`, a graph icon before zoom whose tooltip and accessible name say the same, drawn only while the header is pointed at or holds the keyboard, and keeping its place while hidden so the title and chips never move; a shell pane has none (PRD pane-open-in-overview B1-B3).
+It opens the Overview on Work with the pane's session chosen, as a click on it there would, and the pane menu offers the same item first among the agent's own actions, with no shortcut (B11).
 Dragging the title or unused space in the first header row moves that pane after the pointer crosses the ordinary drag threshold; a short title click still opens its record.
 Header buttons, relationship rows and terminal text keep their existing actions.
 A pane drops on another pane's left, right, top or bottom edge in the selected group's Agent areas, on a tab title to join beside its selected pane, or on that area's New tab button to separate into a tab.
@@ -1019,8 +1019,8 @@ Project names share the 400-node budget with sessions; admission prioritises the
 An oversized project retains stable-ID representatives and a reserved access slot, where a chosen hidden member appears without moving another member; the paged list searches every matching session, and selecting one outside the graph budget opens its project scope with that session selected.
 One-project scope offers All projects to return.
 When the confirmed focused device, pane and native session have a graph proof at entry, that exact session is highlighted without opening details; pane reuse cannot inherit the initial selection.
-That is every opening but a pane's `개요에서 보기`, which chooses the pane's session as a click on it would: its panel opens, its team's outline is drawn, and the camera centres it at a readable zoom; Escape closes the panel back to the project list and Waiting on you, and the next Escape closes the Overview and gives the keyboard back to that pane (PRD pane-open-in-overview B5, B6, B12).
-To show it, the map shows its hidden project again and unfolds its folded project and the folded team it is in, as one change each the core keeps; the filter stays, and the chosen session is drawn even when the filter or `잠든 세션 포함` would leave it out (B7, B8).
+Every other opening only highlights; a pane's `개요에서 보기` chooses the pane's session as a click on it would: its panel opens, its team's outline is drawn, and the camera centres it at a readable zoom; Escape closes the panel back to the project list and Waiting on you, and the next Escape closes the Overview and gives the keyboard back to that pane (PRD pane-open-in-overview B5, B6, B12).
+To show it, the map shows its hidden project again and unfolds its folded project and the folded team it is in, as one change each the core keeps; the filter stays, and the chosen session is drawn even when the filter or `잠든 세션 포함` would leave it out, until its choice closes (B7, B8).
 A session outside the graph budget opens its project scope with the session chosen, and a session the map does not know yet opens Work with nothing chosen and a line in the diagnostic log only (B9, B10).
 The first camera, and Fit graph, put the operator at the centre of the view at the zoom that shows the whole map; when that zoom is too small to read, the first camera instead centres the current session (or the operator) at a readable zoom.
 Fit graph, Current pane and Reset layout remain explicit keyboard-accessible controls.

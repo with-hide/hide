@@ -156,45 +156,52 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
     }
     rememberOpener(target); setHighlightedSession(id); setSelection(id);
   }, [rememberOpener, model.allAgents, model.projects, revealProjectSession, hiddenProjects, actions]);
-  // A pane's 개요에서 보기 (PRD pane-open-in-overview D-02, D-05): the session is chosen
+  // A pane's 개요에서 보기 (PRD pane-open-in-overview D-02, D-05, D-06): the session is chosen
   // with no opener, so Escape closes its details and leaves the keyboard on the Overview,
-  // and what hides it - its project hidden or folded, its team folded - opens.
-  const showSession = useCallback((row: GraphAgent) => {
+  // and what hides it - its project hidden or folded, its team folded - opens. Each of those
+  // is read from the map as it is drawn with this session chosen, since a choice draws a
+  // session the filter leaves out and can make its team a quiet one.
+  const showSession = useCallback((row: GraphAgent, scoped: boolean) => {
+    const drawn = overviewGraphModel(projects, rest?.overview_graph, projectId, { focus, includeResting, pinned: entry ? [entry.id] : [], selected: row.id, chosen: row.id });
+    if (!scoped && !drawn.projects.some((group) => group.id === row.projectId)) { revealProjectSession(row, true); return; }
     if (hiddenProjects.has(row.projectId)) {
       revealing.current = row.projectId;
       actions.changeOverviewGraph({ kind: "project_hidden", project: graphProjectKey(row.project), hidden: false });
     }
     if (foldedProjects.has(row.projectId)) actions.changeOverviewGraph({ kind: "project_folded", project: graphProjectKey(row.project), folded: false });
-    const root = teamRootOf(row.id, model.layoutParents);
-    const session = root !== row.id && teamFolded(root) ? sessionKeyOf(root) : undefined;
-    if (session) actions.changeOverviewGraph({ kind: "team_folded", session, folded: false });
+    const root = teamRootOf(row.id, drawn.layoutParents);
+    const team = drawn.allAgents.find((one) => one.id === root);
+    if (root !== row.id && team && (teamFolds.get(root) ?? drawn.quietBranches.has(root))) actions.changeOverviewGraph({ kind: "team_folded", session: graphSessionKey(team), folded: false });
     opener.current = null;
     framing.current = row.id;
     setHighlightedSession(row.id);
     setSelection(row.id);
-  }, [hiddenProjects, foldedProjects, model.layoutParents, teamFolded, sessionKeyOf, actions]);
+  }, [projects, rest?.overview_graph, projectId, focus, includeResting, entry, revealProjectSession, hiddenProjects, foldedProjects, teamFolds, actions]);
   const reveal = useUiStore((state) => state.overviewReveal);
   useEffect(() => {
-    if (!reveal || reveal.deviceId !== deviceId) return;
+    // Read from the store, so a second run of the effect never takes the same press twice.
+    const pending = useUiStore.getState().overviewReveal;
+    if (!reveal || !pending || pending.deviceId !== deviceId) return;
     useUiStore.setState({ overviewReveal: null });
-    const row = model.allAgents.find((row) => row.deviceId === reveal.deviceId && row.agent.pane_id === reveal.paneId && row.agent.session_id === reveal.sessionId);
+    // The core's graph proof names the session, as the entry highlight's does, so the choice keeps its id.
+    const row = model.allAgents.find((row) => row.deviceId === pending.deviceId && row.agent.pane_id === pending.paneId && row.agent.session_id === pending.sessionId && row.digest !== null);
     // The map does not know the session yet: Work opens with nothing chosen (B10).
-    if (!row) { useShellStore.getState().noteDiagnostic(`overview: pane ${reveal.paneId} session is not on the map yet`); return; }
-    if (!model.projects.some((group) => group.id === row.projectId)) { revealProjectSession(row, true); return; }
-    showSession(row);
-  }, [reveal, deviceId, model.allAgents, model.projects, revealProjectSession, showSession]);
+    if (!row) { useShellStore.getState().noteDiagnostic(`overview: device ${pending.deviceId} pane ${pending.paneId} session ${pending.sessionId} is not on the map yet`); return; }
+    showSession(row, false);
+  }, [reveal, deviceId, model.allAgents, showSession]);
   const shownInitially = useRef(false);
   useEffect(() => {
     if (shownInitially.current || !initialShown || !initialSelection) return;
     shownInitially.current = true;
     const row = model.allAgents.find((row) => row.id === initialSelection);
-    if (row) showSession(row);
+    if (row) showSession(row, true);
   }, [initialShown, initialSelection, model.allAgents, showSession]);
   const returnFocus = useReturnFocus(selection !== null, { target: () => opener.current, within: () => host.current?.querySelector<HTMLElement>(".og-details") ?? null });
   const close = useCallback(() => {
     returnFocus(new Event("closeAutoFocus", { cancelable: true }));
     // A show-again the core never answered stops holding the choice open once it closes.
     revealing.current = null;
+    framing.current = null;
     setSelection(null);
   }, [returnFocus]);
   useEscapeLayer(selection !== null, close);

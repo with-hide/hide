@@ -365,11 +365,12 @@ export const useUiStore = create<UiStore>((set, get) => ({
   overviewReveal: null,
   quickAdd: null,
   searchReturnFocus: null,
-  setOverviewOpen: (overviewOpen) => set({ overviewOpen }),
+  // A pane's 개요에서 보기 belongs to the opening it was pressed for: closing the Overview or moving it to another device drops one the map never took.
+  setOverviewOpen: (overviewOpen) => set({ overviewOpen, ...(overviewOpen ? {} : { overviewReveal: null }) }),
   setOverview: (patch) => {
     const current = get().overview;
     const moved = patch.deviceId !== undefined && patch.deviceId !== current.deviceId;
-    set({ overview: { ...current, ...(moved ? { projectId: null, panel: null, open: [] } : {}), ...patch } });
+    set({ overview: { ...current, ...(moved ? { projectId: null, panel: null, open: [] } : {}), ...patch }, ...(moved ? { overviewReveal: null } : {}) });
   },
   mainView: "work",
   relation: null,
@@ -414,7 +415,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   tooltips: [],
   // Moving by hand drops an open still waiting for its Workspace, so a late
   // answer does not pull the screen away from where the operator went.
-  setScreen: (screen) => set({ screen, opening: null, overviewOpen: false }),
+  setScreen: (screen) => set({ screen, opening: null, overviewOpen: false, overviewReveal: null }),
   restoreScreen: (screen) => set({ screen, opening: null, overviewOpen: false }),
   setMainView: (mainView) => set({ mainView }),
   setRelation: (relation) => set({ relation }),
