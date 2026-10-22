@@ -6,6 +6,10 @@ import type { Catalog, Catalogs } from "../schema";
 export const agentsEnglish = {
   "agents.machine": "Machine",
   "agents.installedCount": "Installed {{count}}",
+  "agents.skills.title": "Hide skills",
+  "agents.skills.hide": "How to work inside Hide",
+  "agents.skills.conductor": "Cut a mission, start its agents and report",
+  "agents.skills.plan": "Put up a plan, get it reviewed and keep it current",
   "agents.notInstalledCount": "Not installed {{count}}",
   "agents.checkAgain": "Check again",
   "agents.codexUnread": "Hide hasn't read this machine's Codex yet. Check Codex in Settings > Agents, then try again.",
@@ -64,6 +68,10 @@ export const agentsEnglish = {
 const ko = {
   "agents.machine": "기기",
   "agents.installedCount": "설치됨 {{count}}",
+  "agents.skills.title": "Hide 스킬",
+  "agents.skills.hide": "Hide 안에서 일하는 법",
+  "agents.skills.conductor": "미션을 쪼개고 띄우고 보고하기",
+  "agents.skills.plan": "계획을 올리고 검토받고 갱신하기",
   "agents.notInstalledCount": "설치 안 됨 {{count}}",
   "agents.checkAgain": "다시 확인",
   "agents.codexUnread": "Hide가 이 기기의 Codex를 아직 확인하지 못했습니다. 설정 > 에이전트에서 Codex를 확인한 뒤 다시 시도하세요.",
@@ -122,6 +130,10 @@ const ko = {
 const zhCN = {
   "agents.machine": "设备",
   "agents.installedCount": "已安装 {{count}}",
+  "agents.skills.title": "Hide 技能",
+  "agents.skills.hide": "在 Hide 中工作的方法",
+  "agents.skills.conductor": "拆分任务、启动代理并汇报",
+  "agents.skills.plan": "提交计划、接受审核并保持更新",
   "agents.notInstalledCount": "未安装 {{count}}",
   "agents.checkAgain": "重新检查",
   "agents.codexUnread": "Hide 还没有读取这台设备上的 Codex。请在 设置 > 智能体 中检查 Codex，然后重试。",
@@ -180,6 +192,10 @@ const zhCN = {
 const ja = {
   "agents.machine": "デバイス",
   "agents.installedCount": "インストール済み {{count}}",
+  "agents.skills.title": "Hide スキル",
+  "agents.skills.hide": "Hide の中での働き方",
+  "agents.skills.conductor": "ミッションを分けてエージェントを起動し報告する",
+  "agents.skills.plan": "計画を出してレビューを受け、更新し続ける",
   "agents.notInstalledCount": "未インストール {{count}}",
   "agents.checkAgain": "再確認",
   "agents.codexUnread": "Hide はこのマシンの Codex をまだ確認していません。設定 > エージェントで Codex を確認してから、もう一度お試しください。",

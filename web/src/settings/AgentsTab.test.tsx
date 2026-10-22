@@ -326,3 +326,12 @@ it("opens the Partial popover from the chip and lists every feature with a mark 
   expect(popover.textContent).not.toContain("from the screen");
   await unmount();
 });
+
+it("lists the three skills Hide installs, each with its mark, what it is for and the help it points at (PRD hide-plan B20)", async () => {
+  const { all, q, unmount } = await mount(state([device("local")]));
+  expect(all("[data-agents-skill]").map((row) => row.getAttribute("data-agents-skill"))).toEqual(["hide", "hide-conductor", "hide-plan"]);
+  expect(q('[data-agents-skill="hide-plan"]')?.textContent).toBe("hide-planPut up a plan, get it reviewed and keep it current · hide plan help");
+  expect(q('[data-agents-skill="hide-conductor"] svg')?.getAttribute("class")).toContain("lucide-waypoints");
+  expect(q('[data-agents-skill="hide-plan"] svg')?.getAttribute("class")).toContain("lucide-list-checks");
+  await unmount();
+});

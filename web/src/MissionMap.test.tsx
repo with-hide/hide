@@ -146,3 +146,30 @@ it("draws a PR node with its band, its mark, the base of its stack, its steps an
     expect(detail.querySelector<HTMLButtonElement>("[data-node-pr-card]")?.disabled).toBe(true);
   } finally { await map.unmount(); }
 });
+
+it("puts the worker's own plan on the card's last line and folded in the node's detail, else the Conductor's line (PRD hide-plan B15, B16)", async () => {
+  const own = {
+    pane_id: "p2", session: { device_id: "mac", agent: "codex", session_id: "worker-session" },
+    steps: [
+      { key: "core", title: "Core events", depends_on: [], status: "working" as const, line: null, output: null, changed: false, change: null, waiting: false },
+      { key: "web", title: "Web map", depends_on: ["core"], status: "planned" as const, line: null, output: "pr" as const, changed: false, change: null, waiting: true },
+    ],
+    review: "approved" as const, ask: null, progress: { current: "core", next: "web", done: 0, total: 2, finished: false },
+    created_at_unix_ms: 1, updated_at_unix_ms: Date.now() - 12 * 60_000,
+  };
+  const map = await mount({ items: [mission({ nodes: [
+    node("a", { status: "working", branch: "gen-prd/a", stage: 1, line: "Conductor's line", plan: own }),
+    node("b", { status: "working", branch: "gen-prd/b", stage: 1, line: "Conductor's line" }),
+  ] })] });
+  try {
+    expect(map.q('[data-mission-node="a"] [data-node-now]')?.textContent).toBe("Now: Core events (0/2)");
+    expect(map.q('[data-mission-node="b"] [data-node-now]')?.textContent).toBe("Conductor's line");
+    await act(async () => map.q('[data-mission-node="a"]')!.click());
+    const detail = document.querySelector<HTMLElement>('[data-mission-detail="a"]')!;
+    expect(detail.querySelector("[data-node-step-names]")?.textContent).toBe("Code → PR → Review → Merge");
+    expect(detail.querySelector("[data-node-plan]")?.getAttribute("data-node-plan")).toBe("folded");
+    expect(detail.querySelector("[data-node-plan-toggle]")?.textContent).toBe("Own planupdated 12m ago");
+    await act(async () => detail.querySelector<HTMLButtonElement>("[data-node-plan-toggle]")!.click());
+    expect([...detail.querySelectorAll<HTMLElement>("[data-plan-step]")].map((step) => step.dataset.planStep)).toEqual(["core", "web"]);
+  } finally { await map.unmount(); }
+});

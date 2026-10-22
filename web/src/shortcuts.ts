@@ -137,6 +137,7 @@ export type CommandId =
   | "split_right"
   | "split_down"
   | "toggle_zoom"
+  | "toggle_plan"
   | "close_pane"
   | "text_larger"
   | "text_smaller"
@@ -281,6 +282,11 @@ export const REGISTRY: readonly Command[] = [
   { id: "split_right", title: "Split right", group: "Panes", browser: { code: "KeyD", meta: true }, electron: { code: "KeyD", meta: true }, moved: false },
   { id: "split_down", title: "Split down", group: "Panes", browser: { code: "KeyD", meta: true, shift: true }, electron: { code: "KeyD", meta: true, shift: true }, moved: false },
   { id: "toggle_zoom", title: "Zoom pane", group: "Panes", browser: { code: "Enter", meta: true, shift: true }, electron: { code: "Enter", meta: true, shift: true }, moved: false },
+  // The focused pane's plan (PRD hide-plan B7), in the place the task list's
+  // chord had: ⇧⌘U on macOS in both hosts, Alt+Shift+U on Windows and Linux
+  // by the rule (⇧⌘L is the Memory tool, and Chrome keeps Alt+Shift+I); no
+  // shell, agent CLI, Chrome or system keeps either.
+  { id: "toggle_plan", title: "Show plan", group: "Panes", browser: { code: "KeyU", meta: true, shift: true }, electron: { code: "KeyU", meta: true, shift: true }, moved: false },
   { id: "close_pane", title: "Close pane", group: "Panes", browser: { code: "KeyW", alt: true, shift: true }, electron: { code: "KeyW", meta: true, shift: true }, moved: true },
   { id: "text_larger", title: "Larger text", group: "Panes", browser: { code: "Equal", meta: true }, electron: { code: "Equal", meta: true }, moved: false },
   { id: "text_smaller", title: "Smaller text", group: "Panes", browser: { code: "Minus", meta: true }, electron: { code: "Minus", meta: true }, moved: false },
@@ -473,6 +479,7 @@ export const EDITABLE_PANE_COMMANDS: readonly CommandId[] = [
   "split_right",
   "split_down",
   "toggle_zoom",
+  "toggle_plan",
   "close_pane",
   "text_larger",
   "text_smaller",

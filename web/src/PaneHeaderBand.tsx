@@ -24,6 +24,7 @@ import { sessionOfAgentOn } from "./sessionWork";
 import { statusText } from "./agentStatus";
 import { StatusMark } from "./components/status-mark";
 import { PaneTurnCard, requestWords, type TurnCardTrigger } from "./PaneTurnCard";
+import { planOfPane, planWorkLine } from "./plans";
 
 /**
  * Marks the pane Fork agent made (PRD fork-operator-root B8, B9): a quiet icon after
@@ -87,7 +88,12 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const { children, devices } = usePaneChildren(paneId, agents);
   const childConnection = children?.unavailableDevice ? devices?.status?.remote?.find((row) => row.target_id === children.unavailableDevice)?.message ?? t("devices.rail.notConnected") : null;
   const band = header?.band ?? null;
-  const ownProgress = band ? null : header?.progress ?? null;
+  // A running plan's current step and its line take the progress place (PRD hide-plan B7).
+  const planLine = useShellStore((state) => {
+    const plan = planOfPane(state.rest, paneId);
+    return plan ? planWorkLine(plan) : null;
+  });
+  const ownProgress = band ? null : planLine ?? header?.progress ?? null;
   const request = header?.request ?? null;
   const finished = !band && (header?.finished ?? false);
   const waitingOnChildren = band ? null : header?.waiting_on_children ?? null;

@@ -1168,7 +1168,8 @@ export type TaskView = "status" | "project";
 export type DetailItem =
   | { kind: "pull_request"; workspace_id: string; number: number }
   | { kind: "record"; session: WorkSession }
-  | { kind: "mission"; mission: string };
+  | { kind: "mission"; mission: string }
+  | { kind: "plan"; session: WorkSession };
 
 /** A mission's state (`contracts/snapshot-wire-enums.json`: `mission_status`). */
 export type MissionStatus = "planning" | "running" | "merge_wait" | "done" | "cancelled";
@@ -1214,6 +1215,8 @@ export type MissionNode = {
   criteria: string | null;
   started_at_unix_ms: number | null;
   finished_at_unix_ms: number | null;
+  /** The worker's own plan (PRD hide-plan D-17, D-18). */
+  plan?: PlanView | null;
 };
 
 /** One mission as the map draws it (`MissionView`). */
@@ -1248,6 +1251,46 @@ export type Mission = {
 
 /** The missions the core keeps; `failed` when the record could not be read (B21). */
 export type MissionsSnapshot = { items: Mission[]; failed?: string };
+
+/** A plan step's state (`contracts/snapshot-wire-enums.json`: `plan_step_status`, PRD hide-plan D-03). */
+export type PlanStepStatus = "planned" | "working" | "done" | "dropped";
+/** Whether the plan waits for the operator's review (`plan_review`, D-04). */
+export type PlanReview = "approved" | "proposed";
+/** What a step leaves behind, the tail of its card (`plan_output`, D-02). */
+export type PlanOutput = "pr" | "file" | "none";
+
+/** One step as the map draws it (`StepView`). */
+export type PlanStep = {
+  key: string;
+  title: string;
+  depends_on: string[];
+  status: PlanStepStatus;
+  line: string | null;
+  output: PlanOutput | null;
+  /** The last `set` changed this step (B6), with `change` saying why when the agent did. */
+  changed: boolean;
+  change: string | null;
+  /** A step it waits on is neither done nor dropped: the card is dashed (B7). */
+  waiting: boolean;
+};
+
+/** The current and next step and the count, as the core reads them (D-03, D-25). */
+export type PlanProgress = { current: string | null; next: string | null; done: number; total: number; finished: boolean };
+
+/** A session's own plan, on the pane that runs it (`PlanView`, PRD hide-plan). */
+export type PlanView = {
+  pane_id: string;
+  session: WorkSession;
+  steps: PlanStep[];
+  review: PlanReview;
+  ask: string | null;
+  progress: PlanProgress;
+  created_at_unix_ms: number;
+  updated_at_unix_ms: number;
+};
+
+/** The plans the core keeps for the panes on screen. */
+export type PlansSnapshot = { items: PlanView[] };
 
 /** Settings › Conductor (D-31): the cap, the default scope and the worker candidates. */
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
@@ -2069,6 +2112,8 @@ export type SessionRecord = {
   cwd: string | null; project?: string | null; repository?: string | null; path: string | null; started_at_unix_ms: number | null; ended_at_unix_ms: number | null;
   status: RecordStatus | null; asks: MissedWork[]; flows: WorkFlow[]; omitted_requests: number;
   outputs: WorkOutput[]; pr_groups: PrGroup[]; artifacts: string[]; children: SessionRecord[];
+  /** The session's own plan, kept after it ends (PRD hide-plan B9, B21); its `pane_id` is empty. */
+  plan?: PlanView;
 };
 export type SessionWorkSummary = { session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; cwd: string | null; ended_at_unix_ms: number | null; open_missed: number; subtree_open_missed: number; missed: MissedWork[] };
 export type SessionRecordSection = { session: WorkSession | null; loading: boolean; failure: string | null; record: SessionRecord | null };
@@ -2141,6 +2186,8 @@ export type SnapshotRest = {
   overview_graph?: OverviewGraphMetadata;
   /** Every mission and its map (PRD software-factory-conductor). */
   missions?: MissionsSnapshot;
+  /** Each pane's own plan (PRD hide-plan). */
+  plans?: PlansSnapshot;
   git_worktrees_loading?: boolean;
   navigator?: {
     agent_scope?: AgentScope;

@@ -19,6 +19,7 @@ import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { PaneForkMark, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
+import { PanePlanChip } from "./PanePlanChip";
 import { PaneViews } from "./ViewComments";
 import { PaneConnectionChip } from "./PaneConnection";
 import { AncestorPath, usePaneMenu, type TerminalMenuContext } from "./PaneRelations";
@@ -384,6 +385,7 @@ export const PaneView = memo(function PaneView({
         )}
         {agentKind ? <PaneForkMark pane={pane} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
+        {agentKind ? <PanePlanChip paneId={paneId} actions={actions} /> : null}
         {agentKind ? <PanePrChip paneId={paneId} actions={actions} /> : null}
         {agentKind ? <PaneViews paneId={paneId} name={title} actions={actions} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />

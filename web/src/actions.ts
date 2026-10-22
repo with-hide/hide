@@ -37,6 +37,7 @@ import { machineName } from "./screenMachine";
 import { allAgents, boardProjects, type OpenTarget } from "./navigation";
 import { cardOfItem } from "./overviewTasks";
 import { takeOverPrompt, takeOverProvider } from "./missions";
+import { planOfPane } from "./plans";
 import { backlogIntent } from "./overviewBacklog";
 import { sessionOfAgent, workKey } from "./sessionWork";
 import { expectSurface, type Surface } from "./recent";
@@ -2543,6 +2544,22 @@ export function createActions(send: DispatchFn) {
     openSessionRecord(session: import("./snapshot").WorkSession) {
       if (workspaceInFront() && !ui().overviewOpen) return openDetail({ kind: "record", session });
       this.openOverview(session.device_id, { panel: { kind: "record", session } });
+    },
+    /** A session's plan, large in the lane's 보기 slot (PRD hide-plan B11); the keyboard stays in the terminal. */
+    openPlan(session: import("./snapshot").WorkSession) {
+      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session } } });
+    },
+    /**
+     * ⇧⌘U: pins the focused pane's plan chip open, or closes it when it is
+     * pinned there (PRD hide-plan B7). A pane without a plan draws no chip
+     * and pins nothing, so the popover never opens by itself later.
+     */
+    togglePlanChip(target?: string) {
+      const state = useShellStore.getState();
+      const paneId = target ?? state.focusedPaneId;
+      if (!paneId) return;
+      if (ui().planPane === paneId) return ui().setPlanPane(null);
+      if (planOfPane(state.rest, paneId)) ui().setPlanPane(paneId);
     },
     /** A child's record from the one shown (B16): it takes the slot, and ← comes back to the parent. */
     openChildRecord(session: import("./snapshot").WorkSession) {

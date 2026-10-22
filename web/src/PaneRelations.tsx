@@ -1,4 +1,5 @@
 import { usePaneMove } from "./PaneMoveControls";
+import { planOfPane } from "./plans";
 import { useState } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -119,6 +120,7 @@ type PaneMenuId =
   | "archive_session"
   | "revisit"
   | "open_in_overview"
+  | "open_plan"
   | "fork_agent"
   | "fork_agent_side"
   | "copy_name"
@@ -145,8 +147,11 @@ type PaneMenuId =
 /** 다시 볼 것 on a root agent's pane (PRD revisit-group D-08, B10): `star` offers the ★, `done` offers 다 봤음. */
 export type RevisitOffer = "hidden" | "star" | "done";
 
-/** `overview`: the pane runs an agent, so `개요에서 보기` is offered (PRD pane-open-in-overview D-07). */
-export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden", overview = false): MenuEntry<PaneMenuId>[] {
+/**
+ * `overview`: the pane runs an agent, so `개요에서 보기` is offered (PRD pane-open-in-overview D-07).
+ * `plan`: the pane's session has a plan, so `계획` opens its map (PRD hide-plan B11).
+ */
+export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden", overview = false, plan = false): MenuEntry<PaneMenuId>[] {
   const relationLabel = { parent: "panes.relation.parent", sibling: "panes.relation.sibling" } as const;
   const items: MenuEntry<PaneMenuId>[] = relationEntries(pane).map((entry) => ({
     id: `open:${entry.paneId}` as const,
@@ -186,6 +191,7 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
   if (revisitEntry && !pane.sleep_action) agentActions.push(revisitEntry);
   if (archiveEntry && !pane.sleep_action) agentActions.push(archiveEntry);
   // 개요에서 보기 (PRD pane-open-in-overview D-07, B11): the header button's action, on an agent pane only.
+  if (plan) agentActions.unshift({ id: "open_plan", icon: "plan", label: translate("panes.menu.plan"), unavailable: null });
   if (overview) agentActions.unshift({ id: "open_in_overview", icon: "overview", label: translate("panes.menu.openInOverview"), unavailable: null });
   if (agentActions.length > 0) items.push(...agentActions.map((item, index) => (index === 0 ? { ...item, separated: items.length > 0 } : item)));
   items.push({ id: "copy_name", group: "copy", menuLabel: translate("menus.terminalName"), icon: "copy", label: translate("panes.menu.copyName"), unavailable: null, separated: items.length > 0 });
@@ -212,7 +218,7 @@ export type TerminalMenuContext = {
  * A right-click in the terminal: its link first, editing the text, then the tab's
  * layout around this pane, then everything the header menu offers.
  */
-export function terminalMenuItems(pane: PaneRow, title: string, context: TerminalMenuContext, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden", overview = false): MenuEntry<PaneMenuId>[] {
+export function terminalMenuItems(pane: PaneRow, title: string, context: TerminalMenuContext, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden", overview = false, plan = false): MenuEntry<PaneMenuId>[] {
   const { chords } = context;
   const items: MenuEntry<PaneMenuId>[] = [];
   const { target, found } = context.link ?? {};
@@ -247,7 +253,7 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
     },
   );
   if (editingStart > 0) items[editingStart] = { ...items[editingStart]!, separated: true };
-  const paneItems = paneMenuItems(pane, title, archive, revisit, overview).map((item, index) => (index === 0 ? { ...item, separated: true } : item));
+  const paneItems = paneMenuItems(pane, title, archive, revisit, overview, plan).map((item, index) => (index === 0 ? { ...item, separated: true } : item));
   return [...items, ...paneItems];
 }
 
@@ -288,6 +294,10 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
         return actions.archiveSession(pane.id);
       case "open_in_overview":
         return actions.openPaneInOverview(pane.id);
+      case "open_plan": {
+        const shown = planOfPane(useShellStore.getState().rest, pane.id);
+        return shown ? actions.openPlan(shown.session) : undefined;
+      }
       case "revisit":
         return revisit === "done" ? actions.finishRevisit(pane.id) : actions.starSession(pane.id);
       case "fork_agent":
@@ -321,7 +331,8 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
   const archive = useArchiveOffer(pane.id, open !== null);
   const revisit = useRevisitOffer(pane.id, open !== null);
   const overview = useShellStore((s) => open !== null && agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(pane.id));
-  const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive, revisit, overview) : paneMenuItems(pane, title, archive, revisit, overview);
+  const plan = useShellStore((s) => open !== null && planOfPane(s.rest, pane.id) !== null);
+  const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive, revisit, overview, plan) : paneMenuItems(pane, title, archive, revisit, overview, plan);
   if (move?.mutationBlocked(pane.id)) {
     for (const item of items) if (["close_pane", "split_right", "split_down", "toggle_zoom", "sleep_agent", "archive_session", "fork_agent", "fork_agent_side"].includes(item.id)) item.unavailable = t("menus.paneMove.busy");
   }

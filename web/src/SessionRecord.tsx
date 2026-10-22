@@ -24,7 +24,9 @@ import { useSessionResume } from "./useSessionResume";
 import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
-import type { AgentRow, Checkout, MissedWork, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
+import type { AgentRow, Checkout, MissedWork, PlanView, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
+import { PlanGraph } from "./PlanGraph";
+import { planCount } from "./plans";
 import { statusText } from "./agentStatus";
 import { useShellStore } from "./store";
 import { summariesEnabled } from "./hideAi";
@@ -323,6 +325,15 @@ function OutputMark({ output, actions }: { output: WorkOutput; actions: Actions 
   </button>;
 }
 
+/** The session's own plan (PRD hide-plan B9, B21): its count, `끝남` once every step is done or dropped, and the map. */
+function RecordPlan({ plan }: { plan: PlanView }) {
+  const { t } = useInterfaceTranslation();
+  return <section className="mt-lg min-w-0" data-record-plan={plan.progress.finished ? "finished" : plan.review}>
+    <SectionHead label={t("plan.title")} count={planCount(plan)} summary={plan.progress.finished ? t("plan.finishedWord") : null} />
+    <div className="min-w-0 overflow-x-auto"><PlanGraph plan={plan} size="compact" /></div>
+  </section>;
+}
+
 /**
  * The record below its head (PRD session-record-goal-flow B2): what waits on
  * the operator, the goal flows, the pull requests and other outputs, then the
@@ -334,6 +345,7 @@ function Work({ record, summaries, onOpen, actions, locator }: { record: RecordV
   return <>
     {summaries ? <Asks record={record} actions={actions} /> : null}
     {summaries ? <Flows record={record} locator={locator} /> : <RawRequests record={record} locator={locator} />}
+    {record.plan ? <RecordPlan plan={record.plan} /> : null}
     <Prs record={record} actions={actions} />
     {summaries && record.artifacts.length ? <section className="mt-lg min-w-0" data-record-artifacts={record.artifacts.length}>
       <SectionHead label={t("record.artifacts")} count={record.artifacts.length} />

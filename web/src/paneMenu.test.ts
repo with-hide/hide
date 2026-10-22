@@ -94,3 +94,15 @@ describe("the pane menu's Show in Overview item", () => {
     expect(terminalMenuItems(row, "reviewer", context({}), undefined, undefined, true).some((item) => item.id === "open_in_overview")).toBe(true);
   });
 });
+
+// PRD hide-plan B11: `계획` opens the session's plan, offered only while it has one.
+describe("the pane menu's Plan item", () => {
+  const row = { id: "w1:p1", children: null, lineage_path: [], sleep_action: { available: true } } as unknown as PaneRow;
+
+  it("follows Show in Overview on a pane whose session has a plan, and is absent otherwise", () => {
+    expect(paneMenuItems(row, "reviewer", undefined, undefined, true, true).map((item) => item.id)).toEqual(["open_in_overview", "open_plan", "sleep_agent", "copy_name", "copy_pane_id", "close_pane"]);
+    expect(paneMenuItems(row, "reviewer", undefined, undefined, true, true)[1]).toMatchObject({ label: "Plan", unavailable: null });
+    expect(paneMenuItems(row, "reviewer", undefined, undefined, true).some((item) => item.id === "open_plan")).toBe(false);
+    expect(terminalMenuItems(row, "reviewer", context({}), undefined, undefined, true, true).some((item) => item.id === "open_plan")).toBe(true);
+  });
+});

@@ -1,5 +1,7 @@
-import { GitBranchIcon, HistoryIcon, XIcon } from "lucide-react";
+import { ChevronRightIcon, GitBranchIcon, HistoryIcon, XIcon } from "lucide-react";
 import { useMemo, useRef, useState, type ReactNode } from "react";
+import { PlanGraph } from "./PlanGraph";
+import { planNowLine } from "./plans";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { DependencyGraphView, type EdgeLook } from "./DependencyGraph";
@@ -19,7 +21,7 @@ import { PR_LOOK, staleLabel } from "./prMark";
 import { layerDependencies } from "./projectBoard";
 import { machineName } from "./screenMachine";
 import { sessionOfAgent } from "./sessionWork";
-import type { Mission, MissionNode, PrState } from "./snapshot";
+import type { Mission, MissionNode, PlanView, PrState } from "./snapshot";
 import { useShellStore } from "./store";
 
 // A mission's map in the lane's 보기 slot (PRD software-factory-conductor
@@ -213,7 +215,9 @@ function NodeCard({ mission, node, open, onOpen, actions }: { mission: Mission; 
   const card = useRef<HTMLButtonElement>(null);
   const mark = nodeMark(node, row?.mark ?? null);
   const worker = workerWords(node, launchModel, t("mission.auto"));
-  const lineText = nodeLine(node, t);
+  // The worker's own plan says where it is, else the Conductor's `--line` (B16, D-18).
+  const nowText = (node.plan ? planNowLine(node.plan, t) : null) ?? node.line;
+  const lineText = node.blocked === null && node.plan ? (planNowLine(node.plan, t) ?? nodeLine(node, t)) : nodeLine(node, t);
   const staleTip = staleLabel({ stale: mission.github_stale, lastRead: mission.github_read_at_unix_ms }, t, requireInterfaceLanguage(i18n.language));
   const pending = node.status === "planned" || node.blocked !== null;
   const attention = node.status === "failed" || node.status === "waiting";
@@ -261,7 +265,7 @@ function NodeCard({ mission, node, open, onOpen, actions }: { mission: Mission; 
             <Delivery node={node} staleTip={staleTip} stale={mission.github_stale} fallback={lineText} attention={attention} />
             <Steps node={node} />
           </span>
-          {(node.pr_state || node.branch) && node.line ? <span className={cn("min-w-0 truncate text-caption", attention ? "text-destructive" : "text-muted-foreground")} title={node.line}>{node.line}</span> : null}
+          {(node.pr_state || node.branch) && nowText ? <span className={cn("min-w-0 truncate text-caption", attention ? "text-destructive" : "text-muted-foreground")} title={nowText} data-node-now={node.plan ? "plan" : "line"}>{nowText}</span> : null}
         </button>
       </PopoverAnchor>
       <PopoverContent
@@ -351,6 +355,7 @@ function NodeDetail({ mission, node, onClose, actions }: { mission: Mission; nod
   const session = useMemo(() => (row ? sessionOfAgent(row, rest) : null), [row, rest]);
   const depends = node.depends_on.map((key) => mission.nodes.find((other) => other.key === key)?.title ?? key);
   const worker = node.worker;
+  const nowLine = (node.plan ? planNowLine(node.plan, t) : null) ?? node.line;
   const rows: [string, ReactNode][] = [
     [t("mission.field.kind"), t(kindWord(node.kind))],
     ...(worker ? [[t("mission.field.agent"), (
@@ -360,12 +365,19 @@ function NodeDetail({ mission, node, onClose, actions }: { mission: Mission; nod
     ...(node.started_at_unix_ms != null ? [[t("mission.field.elapsed"), <Duration key="d" node={node} />] as [string, ReactNode]] : []),
     ...(node.attempts > 0 ? [[t("mission.field.attempts"), String(node.attempts)] as [string, ReactNode]] : []),
     ...(depends.length > 0 ? [[t("mission.field.depends"), depends.join(", ")] as [string, ReactNode]] : []),
-    ...(node.pr != null ? [[t("mission.field.pr"), node.pr_state ? (
+    // The PR row carries the four steps with their names; the steps are drawn, never counted (D-17).
+    ...(stepsOf(node) > 0 ? [[t("mission.field.pr"), (
+      <span className="flex min-w-0 flex-wrap items-center gap-xs">
+        {node.pr != null && node.pr_state ? <><PrMark state={node.pr_state} number={node.pr} stale={mission.github_stale} /><span className={PR_LOOK[node.pr_state].tone}>{t(PR_LOOK[node.pr_state].word)}</span></> : node.pr != null ? `#${node.pr}` : <span className="text-muted-foreground">{t("mission.prNotYet")}</span>}
+        <Steps node={node} />
+        <span className="text-caption text-muted-foreground" data-node-step-names="true">{t(node.delivery === "direct" ? "mission.steps.direct" : "mission.steps.pr")}</span>
+      </span>
+    )] as [string, ReactNode]] : node.pr != null ? [[t("mission.field.pr"), node.pr_state ? (
       <span className="flex items-center gap-xs"><PrMark state={node.pr_state} number={node.pr} stale={mission.github_stale} /><span className={PR_LOOK[node.pr_state].tone}>{t(PR_LOOK[node.pr_state].word)}</span></span>
     ) : `#${node.pr}`] as [string, ReactNode]] : []),
     ...(node.branch ? [[t("mission.field.branch"), <span key="b" className="font-mono">{node.branch}</span>] as [string, ReactNode]] : []),
     ...(node.review ? [[t("mission.field.review"), node.review] as [string, ReactNode]] : []),
-    ...(node.line ? [[t("mission.field.now"), node.line] as [string, ReactNode]] : []),
+    ...(nowLine ? [[t("mission.field.now"), nowLine] as [string, ReactNode]] : []),
     ...(node.change ? [[t("mission.field.change"), node.change] as [string, ReactNode]] : []),
     ...(node.criteria ? [[t("mission.field.criteria"), node.criteria] as [string, ReactNode]] : []),
   ];
@@ -384,11 +396,29 @@ function NodeDetail({ mission, node, onClose, actions }: { mission: Mission; nod
           </div>
         ))}
       </dl>
+      {node.plan ? <OwnPlan plan={node.plan} /> : null}
       <div className="flex flex-wrap gap-xs">
         <Button size="sm" disabled={!node.pane_id || !row} onClick={() => node.pane_id && actions.openAgent(node.pane_id)} data-node-terminal="true">{t("mission.goTerminal")}</Button>
         <Button size="sm" variant="secondary" disabled={!session} onClick={() => session && actions.openChildRecord(session)} data-node-record="true">{t("mission.record")}</Button>
         <Button size="sm" variant="secondary" disabled={node.pr == null || !node.pr_url} onClick={() => node.pr != null && node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr })} data-node-pr-card="true">{t("mission.prCard")}</Button>
       </div>
+    </div>
+  );
+}
+
+/** The worker's own plan in a node's detail, folded (B15, D-17): its head says only when it was updated, and opening it draws the same map. */
+function OwnPlan({ plan }: { plan: PlanView }) {
+  const { t } = useInterfaceTranslation();
+  const [open, setOpen] = useState(false);
+  const elapsed = useElapsed(plan.updated_at_unix_ms);
+  return (
+    <div className="flex min-w-0 flex-col gap-xs" data-node-plan={open ? "open" : "folded"}>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="flex min-w-0 items-center gap-xs rounded-xs text-left text-body outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" data-node-plan-toggle="true">
+        <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+        <span className="font-semibold">{t("plan.own")}</span>
+        {elapsed ? <span className="text-caption text-muted-foreground">{t("plan.updated", { elapsed })}</span> : null}
+      </button>
+      {open ? <div className="min-w-0 overflow-x-auto"><PlanGraph plan={plan} size="compact" /></div> : null}
     </div>
   );
 }
