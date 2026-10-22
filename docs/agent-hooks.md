@@ -458,6 +458,29 @@ A session outside a pane, or an agent started in another agent's shell, says so 
 A command hook pays one policy read per call and parses the payload only when some protection is on ([PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#the-guardrails-on-a-pre-tool-call)).
 `hide-agent-hooks/src/guardrails/tests.rs` holds each runtime's payload and each protection's table tests.
 
+## The pane's plan record
+
+The prompt hook and the pre-tool hook know a pane's plan and mission work from one small file, `~/.hide/agent-hooks/plans/<pane>.json` (`hide_agent_hooks::plan_record`), written whole and private to the account: `{"version":1,"session":<native session>,"context":<plan_context>}`, under 16 KiB (PRD hide-plan D-14, D-15, D-30).
+`plan_context` is the summary the core sends ([delivery.md: Plans](delivery.md#plans)), fixed in `contracts/delivery-envelope.json`; the prompt hook writes it from its letter pull's answer, which already asks the core, and every `hide plan` command writes it from its own answer, so an approval lets the next write through in the same turn.
+A pane with no record, and a record of another session than the call's, gives neither a line nor a refusal, so a new session in a reused pane starts clean.
+
+The prompt hook adds the record's lines to the session context, at most three:
+
+- the plan's, `계획: 지금 <step> (n/m) · 다음 <step> · <N분 전 갱신>`, with the review's rule after it while the plan waits for review, or, when it was not updated for 30 minutes, the `hide plan node <key> --status done` command; a finished plan has none;
+- a mission worker's, `미션 <id> · 노드 <key> · 범위 <criteria or title> · 머지 금지 · 에이전트 띄우기 금지`, without `머지 금지` for a mission that goes through the merge;
+- a Conductor's, `미션 <done>/<nodes> · 일하는 중 <n> · 편지 <n>통 · 결정 기다림 <있음/없음>`.
+
+The pre-tool hook reads only the record, after the project guardrails and before the spawn guard, and never asks the daemon; a tool call refused here is logged in the spawn guard's log as `plan.refused` with the rule, the runtime and the pane, never the command.
+It refuses three things and lets everything else run, reading and searching included:
+
+- a file write, `git commit` or `git push` while the plan waits for the operator's review (`plan_proposed`), with `hide plan approve` as the way on and `hide plan set --json '<plan>' --ask` as the way to send a revised plan without writing a file;
+- `gh pr merge` by a worker of a mission that goes up to pull requests (`mission_merge`);
+- `git push` with `--force`, `--force-with-lease`, a short flag holding `f` or a `+` refspec, and `git rebase` other than `--abort` or `--quit`, in any pane with a record (`history_rewrite`).
+
+The shell words are read the way the spawn guard reads them (`spawn_guard::shell_line`), each command of a line on its own, so `cd repo && git commit` is seen; a write a script or `bash -c` makes is not, as the guardrails say of theirs.
+OpenCode's plugin and the Pi and omp extension send a file tool to the helper only while a project guardrail is on, so on those agents the write refusal of a plan under review holds only then; their shell calls reach the helper and are refused the same way ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+`tests/it/plan_record.rs` runs the compiled hook beside a stand-in `hide` that records every call: the prompt hook's one letter pull writes the record, and the pre-tool hook then refuses a write and a commit and lets `git status` and a read run with no further call.
+
 ## OpenCode: Hide's plugin
 
 OpenCode has no command hook; its official extension point is a JavaScript plugin whose hooks the SDK types (`@opencode-ai/plugin`) declare ([plugins](https://opencode.ai/docs/plugins/)).
@@ -628,8 +651,8 @@ The leaf contract tests reject missing samples, links, logos, inconsistent capab
 
 Two pieces are written per agent into the agent's own files, and nothing else; a third, Herdr's integration, is put in through Herdr's own CLI (below):
 
-- The skill stubs Hide puts down (`hide_kit::agents::SKILLS`), each as `<name>/SKILL.md` in the folder the agent reads, plain copies written by every pass into every folder: `hide`, the guide to Hide, and `hide-conductor`, for a mission of agents; a further stub is one more entry of that array, and the observe, write and remove passes read the array.
-  Each is a few lines that point at the CLI's own guide, `hide guide` or `hide mission help`, so it stays right as that guide changes; the `hide` guide sends browser work to `hide browser help`, so there is no separate browser skill, and it names `hide mission help` too, so an agent that did not pick the Conductor's skill still finds it.
+- The skill stubs Hide puts down (`hide_kit::agents::SKILLS`), each as `<name>/SKILL.md` in the folder the agent reads, plain copies written by every pass into every folder: `hide`, the guide to Hide, `hide-conductor`, for a mission of agents, and `hide-plan`, for the session's own plan; a further stub is one more entry of that array, and the observe, write and remove passes read the array.
+  Each is a few lines that point at the CLI's own guide, `hide guide`, `hide mission help` or `hide plan help`, so it stays right as that guide changes; the `hide` guide sends browser work to `hide browser help`, so there is no separate browser skill, and it names `hide mission help` too, so an agent that did not pick the Conductor's skill still finds it.
   The folders are the agent's global ones, read in every terminal, so each description says the skill is only for a session in a pane Hide manages, and the body first has the agent check that (Hide's session guidance, or `hide workspace info` answering) and stop when it is not.
   The description is a quoted YAML string: Pi 1.0.4 parses front matter strictly and drops a skill whose plain description holds `: `, which is how the earlier `hide-conductor` stub never reached Pi's model (measured on 2026-10-22).
   The `hide-browser` stub an earlier build wrote is retired by ownership (`RETIRED_SKILLS`): a pass takes it out when its bytes are exactly what that build wrote, with its folder when nothing else is in it, and keeps one the operator edited; a folder holding a retired stub reads Outdated until that pass, so a folder an earlier build filled gets the current stubs even though the kit had recorded it as written. An edited one decides nothing: a recorded folder that holds only edited ones reads as the operator's removal of Hide's stubs, which Reinstall undoes, so a stub the operator deleted is not written back on every pass.

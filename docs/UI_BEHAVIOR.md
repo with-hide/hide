@@ -1299,10 +1299,28 @@ The worker line is the model and the effort (`<model>·<effort>`, `자동` while
 A change card's left band is its pull request's state colour and its bar has four numberless steps, work, PR or branch, review, merge or main; a research or verify card draws no steps, its status mark says where it is (D-42).
 A card that waits on a failed or dropped node says so, and a stacked edge is dashed in the merged colour; a card that waits on a node not done yet names nothing, the edge above it does.
 Pressing a card opens its detail beside it with `터미널로 이동`, `기록` and `PR 카드` where they apply.
+A change card's last line is `지금: <단계> (n/m)` from its worker's own plan, and the Conductor's `--line` when the worker put up none (PRD hide-plan B16).
+Its detail's PR row carries the same four steps with their names, `코드 → PR → 리뷰 → 머지`, and the worker's plan sits folded under `자기 계획 · <N분 전 갱신>`, opening to the plan's small map (B15).
 A decision the Conductor waits on is one banner with `대화로 가기`; a mission whose Conductor is gone shows `Conductor 없음` with `이어받기`, which starts a new agent in the mission's checkout told to take the mission, and the core refuses a second Conductor while the first is there (B44).
 More than twelve nodes fold the done ones under one line that unfolds them (B19).
 When the device that runs the mission disconnects, the map keeps its last values dimmed under a note and invents no number (B20).
 A build from before missions opens with an empty 보기 slot when the saved slot held a map; the rest of the saved screen loads as it was.
+
+### A plan's map
+
+A session's own plan (PRD hide-plan) shows in three places, all the same drawing (`PlanGraph`, the mission map's `DependencyGraphView` with a one-line card per step): the pane head's chip, the 보기 slot and a mission node's detail ([A mission's map](#a-missions-map)).
+The plan chip sits where the task chip was, between the title and the PR chip, only while the pane's session has a plan: the list-checks mark with `n/m`, `검토` in the warning colour while the plan waits for the operator's review, and a green `m/m` once every step is done or dropped.
+The pointer or the keyboard's focus on it opens a small map, a press or ⇧⌘U (Alt+Shift+U on Windows and Linux) pins it, and a second press, ⇧⌘U or Esc closes it; it never takes the keyboard from the terminal.
+The popover's head is `계획 n/m · <N분 전 갱신> · 크게 ›` (`계획 끝남 m/m` once finished), then the map, `맡긴 일 N · 끝남 k` for a pane with children and `기록 열기` with the chord.
+`크게 ›` and the pane ⋯ menu's `계획` open the map in the 보기 slot; the lane opens if closed and the keyboard stays in the terminal, and putting a plan up never opens it by itself.
+The steps run top down by what they wait on, parallel ones side by side: a done step is filled, the current one carries the working colour and `지금`, one that waits on a step not finished yet is dashed, a dropped one is struck through and dimmed, an `output` of `pr` or `file` is a small tail, and a step the last `set` changed carries the history mark with its reason.
+An edge from a finished step is faint and one still ahead is bright.
+In the 보기 slot the head says `계획 n/m · <N분 전 갱신>` (`계획 N단계` while it waits for review), and pressing a card opens its detail: its state, its line, what it waits on and why it changed.
+While the plan waits for review a band says `검토 기다림 · 대화에서 답하세요` with one button, `대화로`, which goes to the pane; there is no button that approves, and the band goes once the agent runs `hide plan approve`.
+A finished plan's band says `끝남`; a plan whose session is gone draws one line saying so.
+While a plan runs, the pane's second row shows the current step and its line, `<단계> · <line>`, in the progress place; while it waits for review the row is the ask band, `Plan review · N steps` (`계획 검토 · N단계` in Korean) worded by the shell from the subject the core sends, and the sidebar's second line says the same ([status-model.md](status-model.md#a-plan-waiting-for-review-is-a-question)).
+The session record has a `계획` section with the count, `끝남` once finished, and the small map, kept after the session ends; while the session works its `지금` box says the current step and its line as the second row does.
+Settings › Agents lists the three skills Hide installs, `hide`, `hide-conductor` (waypoints) and `hide-plan` (list-checks), each with one line on what it is for and the help it points at; they come and go with each agent's switch.
 
 ### The session record
 
@@ -2800,6 +2818,7 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Split right | `⌘D` | `Ctrl+Shift+D` | `⌘D` | `Ctrl+Shift+D` |
 | Split down | `⇧⌘D` | `Alt+Shift+D` | `⇧⌘D` | `Alt+Shift+D` |
 | Zoom pane | `⇧⌘↩` | `Alt+Shift+Enter` | `⇧⌘↩` | `Alt+Shift+Enter` |
+| Show plan | `⇧⌘U` | `Alt+Shift+U` | `⇧⌘U` | `Alt+Shift+U` |
 | Close pane | `⇧⌘W` | `Alt+Shift+W` | `⌥⇧W` | `Alt+Shift+W` |
 | Larger text (exception) | `⌘=` | `Ctrl+=` | `⌘=` | `Ctrl+=` |
 | Smaller text (exception) | `⌘-` | `Ctrl+-` | `⌘-` | `Ctrl+-` |

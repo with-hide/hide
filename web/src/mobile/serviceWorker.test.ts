@@ -49,6 +49,15 @@ it("shows the row's status and exact sentence, replaces by the same tag and with
   expect(phone.closed).toEqual(["old", "old", "old", "old", "old"]);
 });
 
+it("words a question the core asks for the agent from its subject, in the words the page posted (hide-plan B14)", async () => {
+  const phone = phoneWorker();
+  await phone.words({ needs_you: "Needs your attention", done: "Done", status_question: "Question", subject_plan_review: "Plan review · {{count}} steps" });
+  await phone.push({ title: "task", state: "needs_you", status_code: "question", detail: null, subject: { cause: "plan_review", steps: 5 }, place: "project" });
+  await phone.words({ needs_you: "내 차례", done: "읽을 것", status_question: "질문" });
+  await phone.push({ title: "task", state: "needs_you", status_code: "question", detail: null, subject: { cause: "plan_review", steps: 5 }, place: "project" });
+  expect(phone.shown.map(({ body }) => body)).toEqual(["Question · Plan review · 5 steps · project", "질문 · project"]);
+});
+
 it("leads with the status word with no detail too, and works with older payloads and cached page words", async () => {
   const phone = phoneWorker();
   await phone.words({ needs_you: "내 차례", done: "읽을 것", status_done: "끝남", status_question: "질문", status_stopped: "멈춤" });

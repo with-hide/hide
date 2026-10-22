@@ -199,6 +199,28 @@ impl Runtime {
         }
     }
 
+    /// Takes out of the slot the items whose subject is gone (a deleted
+    /// session's plan, a mission no longer kept); a slot this empties is
+    /// left as ✕ leaves it, the documents in the viewing column or the
+    /// column closed (lane-two-columns B13). Whether anything was taken.
+    pub(super) fn drop_detail_items(&mut self, keep: impl Fn(&DetailItem) -> bool) -> bool {
+        let slot = &mut self.snapshot.ui_state.detail;
+        let had = slot.items.len();
+        slot.items.retain(|item| keep(item));
+        if slot.items.len() == had {
+            return false;
+        }
+        let emptied = slot.items.is_empty();
+        if emptied {
+            slot.shown = false;
+        }
+        self.persist_ui_state();
+        if emptied {
+            self.show_front_documents_if_any();
+        }
+        true
+    }
+
     /// The slot emptied: the documents take the viewing column when the
     /// front Workspace has some, else the column closes (B13).
     fn show_front_documents_if_any(&mut self) {
@@ -320,11 +342,14 @@ impl Runtime {
             Some(DetailItem::Record { session }) => {
                 self.open_session_record(super::links::RecordOpenPayload { session });
             }
-            // A map draws the mission record the snapshot already carries,
-            // and a project's worktrees and cost what its row and the usage
-            // frame already carry.
+            // A map draws the mission or the plan the snapshot already
+            // carries, and a project's worktrees and cost what its row and
+            // the usage frame already carry.
             Some(
-                DetailItem::Mission { .. } | DetailItem::Worktrees { .. } | DetailItem::Cost { .. },
+                DetailItem::Mission { .. }
+                | DetailItem::Plan { .. }
+                | DetailItem::Worktrees { .. }
+                | DetailItem::Cost { .. },
             )
             | None => {
                 if matches!(before, Some(DetailItem::Record { .. })) {

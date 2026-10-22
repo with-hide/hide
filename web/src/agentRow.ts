@@ -9,7 +9,8 @@ import { hideAiWords } from "./hideAiOrigin";
 import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import { toneClass } from "./lineage";
-import type { AgentRow, AgentStatusCode, AgentWait, LineMode, MarkCounts, RowMark, TabAgent } from "./snapshot";
+import { askSubjectText } from "./askSubject";
+import type { AgentRow, AgentStatusCode, AskSubject, AgentWait, LineMode, MarkCounts, RowMark, TabAgent } from "./snapshot";
 
 /**
  * Why a row's second line is on screen at rest (the core's `RowLine::mode`).
@@ -27,12 +28,12 @@ import type { AgentRow, AgentStatusCode, AgentWait, LineMode, MarkCounts, RowMar
  */
 export type { LineMode };
 
-export type RowLine = { text: string; mode: LineMode; pull_request?: number };
+export type RowLine = { text: string; mode: LineMode; pull_request?: number; subject?: AskSubject };
 
 /** The row's second line and why it shows, or null when the core gave it none. */
 export function rowLine(agent: Pick<AgentRow, "state">): RowLine | null {
   const line = agent.state.line;
-  return line ? { text: line.text, mode: line.mode, pull_request: line.pull_request } : null;
+  return line ? { text: line.text, mode: line.mode, pull_request: line.pull_request, subject: line.subject } : null;
 }
 
 /**
@@ -128,6 +129,7 @@ export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: R
     case "kept":
       return parts(word ?? statusText(t, agent.status_code), line.text);
     case "request":
+      return parts(word, line.subject ? askSubjectText(t, line.subject) : line.text);
     case "news":
       return parts(word, line.text);
     case "quiet":
@@ -271,7 +273,8 @@ export function recordWords(t: TFunction<"translation">, agent: Pick<AgentRow, "
  */
 export function rowSentence(t: TFunction<"translation">, agent: AgentRow): string | null {
   const line = rowLine(agent);
-  return line?.mode === "waiting" ? lineText(t, agent, line) : agent.detail?.trim() || null;
+  if (line?.mode === "waiting" || line?.subject) return lineText(t, agent, line);
+  return agent.detail?.trim() || null;
 }
 
 /**

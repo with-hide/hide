@@ -41,7 +41,9 @@ async function registration(): Promise<ServiceWorkerRegistration | null> {
 export async function postWords(): Promise<void> {
   const worker = await registration();
   const statusWords = Object.fromEntries((["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished"] as const).map((code) => [`status_${code}`, translate(`agents.status.${code}`)]));
-  worker?.active?.postMessage({ type: "words", words: { needs_you: translate("mobile.group.needs_you"), done: translate("mobile.group.done"), observer_unconfirmed: translate("mobile.notice.observerUnconfirmed"), letter_undelivered: translate("mobile.notice.letterUndelivered"), ...statusWords } });
+  // A subject's words keep their `{{count}}` for the worker to fill: an interpolation marker no catalog uses leaves it as written.
+  const planReview = translate("plan.askReview", { count: 0, interpolation: { prefix: "\u0000", suffix: "\u0000" } });
+  worker?.active?.postMessage({ type: "words", words: { needs_you: translate("mobile.group.needs_you"), done: translate("mobile.group.done"), observer_unconfirmed: translate("mobile.notice.observerUnconfirmed"), letter_undelivered: translate("mobile.notice.letterUndelivered"), subject_plan_review: planReview, ...statusWords } });
 }
 
 async function subscribe(): Promise<boolean> {

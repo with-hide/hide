@@ -177,6 +177,14 @@ pub(super) const UNDO_CLOSED_FLOW_SCHEMA: &str = "
 ALTER TABLE ledger_chapters DROP COLUMN closed_result;
 ";
 
+/// Version 9 (PRD hide-plan D-30): each session's own plan, one row per
+/// native session, the plan as JSON. It is deleted with the session's other
+/// rows; a store a test rolled back to an earlier version may still hold it.
+pub(super) const PLAN_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS ledger_plans(device TEXT NOT NULL, agent TEXT NOT NULL, id TEXT NOT NULL,
+ plan TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(device,agent,id));
+";
+
 /// The inverse of [`FLOW_SCHEMA`], for tests that open a version 6 record.
 #[cfg(test)]
 pub(super) const UNDO_FLOW_SCHEMA: &str = "
@@ -598,6 +606,9 @@ impl LinkStore {
                 .map(Box::new)
                 .map(LedgerAnswer::Record);
         }
+        if let LedgerCall::Plans = &call {
+            return self.ledger_plans().map(LedgerAnswer::Plans);
+        }
         // Only explicit external-effect calls use FULL. Its WAL sync completes
         // before the RPC acknowledgement permits GitHub to run.
         self.connection
@@ -615,7 +626,10 @@ impl LinkStore {
     fn ledger_issue_call(&mut self, call: LedgerCall) -> Result<LedgerAnswer, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let answer = match call {
-            LedgerCall::Record(_) | LedgerCall::Metadata(_) | LedgerCall::SaveMetadata { .. } => {
+            LedgerCall::Record(_)
+            | LedgerCall::Metadata(_)
+            | LedgerCall::SaveMetadata { .. }
+            | LedgerCall::Plans => {
                 unreachable!()
             }
             LedgerCall::ReserveIssue {
@@ -870,6 +884,28 @@ impl LinkStore {
     pub fn apply_ledger_update(&mut self, update: &LedgerUpdate) -> Result<(), String> {
         let tx = self.connection.transaction().map_err(failed)?;
         match update {
+            LedgerUpdate::Plan { session, plan } => {
+                let args = params![session.device_id, session.agent, session.session_id];
+                match plan {
+                    Some(plan) => {
+                        let json =
+                            serde_json::to_string(plan).map_err(|error| error.to_string())?;
+                        tx.execute(
+                            "INSERT INTO ledger_plans(device,agent,id,plan,updated_at) VALUES(?1,?2,?3,?4,?5) \
+                             ON CONFLICT(device,agent,id) DO UPDATE SET plan=excluded.plan,updated_at=excluded.updated_at",
+                            params![session.device_id, session.agent, session.session_id, json, plan.updated_at_unix_ms],
+                        )
+                        .map_err(failed)?;
+                    }
+                    None => {
+                        tx.execute(
+                            "DELETE FROM ledger_plans WHERE device=?1 AND agent=?2 AND id=?3",
+                            args,
+                        )
+                        .map_err(failed)?;
+                    }
+                }
+            }
             LedgerUpdate::Metadata {
                 session,
                 native_title,
@@ -1324,6 +1360,61 @@ impl LinkStore {
         tx.commit().map_err(failed)
     }
 
+    /// Every saved plan, for the core to hold (PRD hide-plan D-30). A row
+    /// this build cannot read is left out with a diagnostic, never guessed.
+    pub fn ledger_plans(&self) -> Result<Vec<crate::plans::Plan>, String> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT device,agent,id,plan FROM ledger_plans ORDER BY updated_at")
+            .map_err(failed)?;
+        let rows = statement
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(failed)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(failed)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(device, agent, id, plan)| {
+                match serde_json::from_str::<crate::plans::Plan>(&plan) {
+                    Ok(plan)
+                        if plan.session.device_id == device
+                            && plan.session.agent == agent
+                            && plan.session.session_id == id =>
+                    {
+                        Some(plan)
+                    }
+                    _ => {
+                        crate::diagnostic!(serde_json::json!({"component":"plans","kind":"plans.row_unreadable","session_id":id}));
+                        None
+                    }
+                }
+            })
+            .collect())
+    }
+
+    fn session_plan(
+        &self,
+        session: &SessionIdentity,
+    ) -> Result<Option<crate::plans::Plan>, String> {
+        let plan: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT plan FROM ledger_plans WHERE device=?1 AND agent=?2 AND id=?3",
+                params![session.device_id, session.agent, session.session_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(failed)?;
+        Ok(plan.and_then(|plan| serde_json::from_str(&plan).ok()))
+    }
+
     pub fn ledger_record(&self, session: &SessionIdentity) -> Result<SessionRecord, String> {
         let mut visited = BTreeSet::new();
         let mut budget = REQUEST_LIMIT;
@@ -1364,6 +1455,9 @@ impl LinkStore {
             record.project = project;
             record.repository = repository;
         }
+        record.plan = self
+            .session_plan(session)?
+            .map(|plan| Box::new(crate::plans::view_of(&plan, "")));
         if let Some((native, manual, state, omitted)) = self
             .connection
             .query_row(

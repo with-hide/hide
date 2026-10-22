@@ -35,7 +35,11 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | crate::agent_start::SHELL_STARTING
             | "card_not_processed"
             | "mission_cap_reached"
-            | "mission_conducted"),
+            | "mission_conducted"
+            | "plan_invalid"
+            | "plan_order_refused"
+            | "plan_too_large"
+            | "plan_node_unknown"),
             detail,
         )) => (code, Some(detail)),
         _ => (refusal, None),

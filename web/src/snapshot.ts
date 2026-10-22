@@ -29,7 +29,7 @@ export type AgentState = {
   title_emphasized: boolean; selection_emphasizes_title: boolean;
   asking: boolean; working: boolean; waits_on_children: boolean;
   chip_tone: StatusTone; mark_tone: StatusTone;
-  line: { text: string; mode: LineMode; tone: StatusTone; pull_request?: number } | null;
+  line: { text: string; mode: LineMode; tone: StatusTone; pull_request?: number; subject?: AskSubject } | null;
   branch_badge: string | null;
   bucket: "turn" | "working" | "delegating" | "resting";
   attention_rank: number;
@@ -38,7 +38,7 @@ export type AgentState = {
   link: "working" | "question" | "idle"; link_rank: 0 | 1 | 2;
   verb: RequestVerb; request_todo: boolean; descendant_asking: number; request_since: number | null;
   /** A Needs You row's second line: a verb and what to do; `more` counts the other asks under the same root. */
-  ask: { verb: RaiseVerb; what: string | null; more: number } | null;
+  ask: { verb: RaiseVerb; what: string | null; more: number; subject?: AskSubject } | null;
   /** Where the row stands among its siblings in a tree: asking, working, finished unread, the rest. */
   tree_rank: number;
   /** The row's own PRs, worst first; never its descendants'. `index` points into `request.pull_requests`. */
@@ -54,6 +54,8 @@ export type PrState = "failed" | "pending" | "mergeable" | "draft" | "merged" | 
 export type RaisedAsk = {
   verb: RaiseVerb;
   what: string | null;
+  /** A question the core asks for the raised descendant (`AskSubject`), worded in place of `what`. */
+  subject?: AskSubject;
   /** The raised descendant itself, where a tree draws the ask. */
   raised_pane_id: string;
   /** The raised descendant's title; drafts may name its parent as the holder. */
@@ -127,6 +129,8 @@ export type AgentRow = {
   message?: string | null;
   /** Native unanswered question/plan, bounded and session/state-proven by the core. */
   user_turn?: UserTurnFact;
+  /** A question the core asks on this row for the agent (`AskSubject`); the row then has no sentence of its own. */
+  ask_subject?: AskSubject;
   /** When the core last saw this agent change state (epoch ms), retained for state ordering. */
   changed_at_unix_ms: number | null;
   /** Latest actual native request in the proven session (epoch ms). Absent when unknown; never fall back to state observation time. */
@@ -178,6 +182,10 @@ export type UserTurnFact = {
   kind: typeof USER_TURN_KINDS[number];
   content: { text: string; choices: string[]; truncated: boolean } | null;
 };
+
+export const ASK_SUBJECT_CAUSES = ["plan_review"] as const;
+/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language. */
+export type AskSubject = { cause: typeof ASK_SUBJECT_CAUSES[number]; steps: number };
 
 /** How the label read a turn's end (`LabelEnd`). */
 export type LabelEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
@@ -991,7 +999,7 @@ export type PaneHeader = {
 export type PaneTurnRequest = {text: string | null; images: number};
 export type PaneNotice = {kind: string; tone: "muted" | "warning" | "error"; reason: string | null; since_unix_ms: number | null; exit_code: number | null};
 /** The pane's own approval, answer, block or stop, or a raised descendant's ask; `read` once the operator has looked. */
-export type PaneBand = {kind: "approval" | "answer" | "blocked" | "stopped" | "raised"; reason: string | null; since_unix_ms: number | null; read: boolean; action: {pane_id: string; label: string} | null; more: number; raised?: RaisedAsk};
+export type PaneBand = {kind: "approval" | "answer" | "blocked" | "stopped" | "raised"; reason: string | null; since_unix_ms: number | null; read: boolean; action: {pane_id: string; label: string} | null; more: number; raised?: RaisedAsk; subject?: AskSubject};
 
 export type TerminalPane = {
   pane_id: string;
@@ -1180,7 +1188,8 @@ export type DetailItem =
   /** A project's worktrees and their disk use, from the Project tool's Git tile (PRD lane-two-columns B30). */
   | { kind: "worktrees"; workspace_id: string }
   /** A project's last seven days of cost, from the Project tool's cost tile (B31). */
-  | { kind: "cost"; workspace_id: string };
+  | { kind: "cost"; workspace_id: string }
+  | { kind: "plan"; session: WorkSession };
 
 /** Whether two 보기 items show the same thing: a record by its session, the rest by their fields. */
 export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem): boolean {
@@ -1191,6 +1200,7 @@ export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem):
     case "mission": return b.kind === "mission" && a.mission === b.mission;
     case "worktrees": return b.kind === "worktrees" && a.workspace_id === b.workspace_id;
     case "cost": return b.kind === "cost" && a.workspace_id === b.workspace_id;
+    case "plan": return b.kind === "plan" && a.session.device_id === b.session.device_id && a.session.agent === b.session.agent && a.session.session_id === b.session.session_id;
   }
 }
 
@@ -1238,6 +1248,8 @@ export type MissionNode = {
   criteria: string | null;
   started_at_unix_ms: number | null;
   finished_at_unix_ms: number | null;
+  /** The worker's own plan (PRD hide-plan D-17, D-18). */
+  plan?: PlanView | null;
 };
 
 /** One mission as the map draws it (`MissionView`). */
@@ -1272,6 +1284,46 @@ export type Mission = {
 
 /** The missions the core keeps; `failed` when the record could not be read (B21). */
 export type MissionsSnapshot = { items: Mission[]; failed?: string };
+
+/** A plan step's state (`contracts/snapshot-wire-enums.json`: `plan_step_status`, PRD hide-plan D-03). */
+export type PlanStepStatus = "planned" | "working" | "done" | "dropped";
+/** Whether the plan waits for the operator's review (`plan_review`, D-04). */
+export type PlanReview = "approved" | "proposed";
+/** What a step leaves behind, the tail of its card (`plan_output`, D-02). */
+export type PlanOutput = "pr" | "file" | "none";
+
+/** One step as the map draws it (`StepView`). */
+export type PlanStep = {
+  key: string;
+  title: string;
+  depends_on: string[];
+  status: PlanStepStatus;
+  line: string | null;
+  output: PlanOutput | null;
+  /** The last `set` changed this step (B6), with `change` saying why when the agent did. */
+  changed: boolean;
+  change: string | null;
+  /** A step it waits on is neither done nor dropped: the card is dashed (B7). */
+  waiting: boolean;
+};
+
+/** The current and next step and the count, as the core reads them (D-03, D-25). */
+export type PlanProgress = { current: string | null; next: string | null; done: number; total: number; finished: boolean };
+
+/** A session's own plan, on the pane that runs it (`PlanView`, PRD hide-plan). */
+export type PlanView = {
+  pane_id: string;
+  session: WorkSession;
+  steps: PlanStep[];
+  review: PlanReview;
+  ask: string | null;
+  progress: PlanProgress;
+  created_at_unix_ms: number;
+  updated_at_unix_ms: number;
+};
+
+/** The plans the core keeps for the panes on screen. */
+export type PlansSnapshot = { items: PlanView[] };
 
 /** Settings › Conductor (D-31): the cap, the default scope and the worker candidates. */
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
@@ -2107,6 +2159,8 @@ export type SessionRecord = {
   cwd: string | null; project?: string | null; repository?: string | null; path: string | null; started_at_unix_ms: number | null; ended_at_unix_ms: number | null;
   status: RecordStatus | null; asks: MissedWork[]; flows: WorkFlow[]; omitted_requests: number;
   outputs: WorkOutput[]; pr_groups: PrGroup[]; artifacts: string[]; children: SessionRecord[];
+  /** The session's own plan, kept after it ends (PRD hide-plan B9, B21); its `pane_id` is empty. */
+  plan?: PlanView;
 };
 export type SessionWorkSummary = { session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; cwd: string | null; ended_at_unix_ms: number | null; open_missed: number; subtree_open_missed: number; missed: MissedWork[] };
 export type SessionRecordSection = { session: WorkSession | null; loading: boolean; failure: string | null; record: SessionRecord | null };
@@ -2179,6 +2233,8 @@ export type SnapshotRest = {
   overview_graph?: OverviewGraphMetadata;
   /** Every mission and its map (PRD software-factory-conductor). */
   missions?: MissionsSnapshot;
+  /** Each pane's own plan (PRD hide-plan). */
+  plans?: PlansSnapshot;
   git_worktrees_loading?: boolean;
   navigator?: {
     agent_scope?: AgentScope;

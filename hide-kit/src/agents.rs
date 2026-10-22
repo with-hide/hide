@@ -10,7 +10,7 @@
 //!
 //! Three things a row can turn on for an agent the operator switched on:
 //!
-//! - Hide's skill stubs ([`SKILLS`]: `hide` and `hide-conductor`;
+//! - Hide's skill stubs ([`SKILLS`]: `hide`, `hide-conductor` and `hide-plan`;
 //!   [`RETIRED_SKILLS`] are taken out), in the folder the agent reads
 //!   ([`SkillDir`]); the folder is shared by every agent that reads it, so
 //!   the stubs stay while any of them is on;
@@ -227,10 +227,18 @@ pub const CONDUCTOR_SKILL: Skill = Skill {
     version: 2,
 };
 
+/// An agent's own plan (PRD hide-plan D-16), which `hide plan help` owns.
+pub const PLAN_SKILL: Skill = Skill {
+    name: "hide-plan",
+    description: "Keep your own plan of the task in Hide: its steps, what each waits on, which one you are on, and the operator's review when they ask for one. Use when a task in a Hide pane takes more than a few steps, or the operator asks you to plan first or have the plan reviewed.",
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide plan help` and follow what it prints: it is the plan's contract, with the commands, the steps' shape, when to put the plan up for review with `--ask`, how to approve or drop it on the operator's words, and how to keep its steps current.",
+    version: 1,
+};
+
 /// Every stub Hide writes; each skill folder holds all of them. A new stub
 /// is one more entry here and nothing else: the observe, write and remove
 /// passes read the array.
-pub const SKILLS: [Skill; 2] = [GUIDE_SKILL, CONDUCTOR_SKILL];
+pub const SKILLS: [Skill; 3] = [GUIDE_SKILL, CONDUCTOR_SKILL, PLAN_SKILL];
 
 /// A stub an earlier build wrote and this one takes out, by its exact text:
 /// a file that differs in any byte was edited by the operator and stays.

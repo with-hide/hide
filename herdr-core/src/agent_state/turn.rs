@@ -58,6 +58,10 @@ pub struct RowLine {
     /// The pull request a `checks` wait or a checks end names.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<u32>,
+    /// A request the core asks for the agent, which the shell words in
+    /// place of `text` (`AskSubject`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<crate::model::AskSubject>,
 }
 
 impl RowLine {
@@ -67,6 +71,7 @@ impl RowLine {
             mode,
             tone,
             pull_request: None,
+            subject: None,
         }
     }
 }
@@ -118,6 +123,10 @@ pub struct Ask {
     pub verb: super::escalation::Verb,
     pub what: Option<String>,
     pub more: usize,
+    /// A question the core asks for the agent, which the shell words in
+    /// place of `what`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<crate::model::AskSubject>,
 }
 
 /// The verb of the row's own demand. A native unanswered question also holds
@@ -154,12 +163,14 @@ fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
             verb,
             what: agent.detail.clone(),
             more: agent.raised.len(),
+            subject: agent.ask_subject,
         });
     }
     agent.raised.first().map(|lead| Ask {
         verb: lead.verb,
         what: lead.what.clone(),
         more: agent.raised.len() - 1,
+        subject: lead.subject,
     })
 }
 
@@ -229,6 +240,13 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
                 RowLine::new(text, "quiet", subtle)
             }
         });
+    if let Some(subject) = agent.ask_subject.filter(|_| asking) {
+        // The core's own question: the shell words it (hide-plan B14).
+        line = Some(RowLine {
+            subject: Some(subject),
+            ..RowLine::new("", "request", chip_tone)
+        });
+    }
     if line.is_none() && waiting {
         // No sentence: the shell words the proven cause (B10).
         line = Some(RowLine::new("", "waiting", subtle));
@@ -750,14 +768,20 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         }
     };
     let question = native_question_line(agent.user_turn.as_ref());
-    let (status_word_visible, detail) = agent_second_line(
-        group,
-        demand,
-        stopped_unfinished(agent),
-        agent.expected_reply.as_deref(),
-        question.as_deref(),
-        agent.progress.as_deref(),
-    );
+    // A question the core asks for the agent is said by its subject, never
+    // by the label's sentence about the work around it.
+    let (status_word_visible, detail) = if agent.ask_subject.is_some() {
+        (true, None)
+    } else {
+        agent_second_line(
+            group,
+            demand,
+            stopped_unfinished(agent),
+            agent.expected_reply.as_deref(),
+            question.as_deref(),
+            agent.progress.as_deref(),
+        )
+    };
     agent.status_word_visible = status_word_visible;
     agent.detail = detail;
     // A finished turn's leftover tasks are said on its line (status-marks D-19).
@@ -944,6 +968,9 @@ pub mod push {
         /// Delivery notices carry neither; no transport generates a sentence.
         pub status_code: Option<String>,
         pub detail: Option<String>,
+        /// What the core asks on the row for the agent, which the receiver
+        /// words in its own language.
+        pub subject: Option<crate::model::AskSubject>,
         /// The project (`project`, or the part of `project · branch` before the
         /// branch separator); empty when the agent has no place.
         pub place: String,
@@ -1031,6 +1058,7 @@ pub mod push {
                         state: announced,
                         status_code: Some(agent.status_code.clone()),
                         detail: agent.detail.clone(),
+                        subject: agent.subject,
                         place: agent
                             .place
                             .as_deref()
@@ -1139,6 +1167,7 @@ mod row_tests {
                     read: true
                 },
                 pull_request: None,
+                subject: None,
             })
         );
         assert_eq!(

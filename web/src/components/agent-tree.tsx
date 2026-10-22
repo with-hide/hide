@@ -2,8 +2,9 @@ import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import type { AgentRow, RaiseVerb } from "../snapshot";
+import type { AgentRow, AskSubject, RaiseVerb } from "../snapshot";
 import type { LineParts } from "../agentRow";
+import { askSubjectText } from "../askSubject";
 
 // The parts every agent tree draws the same way (PRD agent-hierarchy-screens
 // D-37 to D-43): the verb a Needs You row starts with, the one descendant
@@ -22,19 +23,20 @@ export function VerbText({ verb }: { verb: RaiseVerb }) {
 }
 
 /** What to do, or the verb's own words when no label line or letter says it (B3). */
-export function askWhat(t: TFunction<"translation">, verb: RaiseVerb, what: string | null | undefined): string {
+export function askWhat(t: TFunction<"translation">, verb: RaiseVerb, what: string | null | undefined, subject?: AskSubject | null): string {
+  if (subject) return askSubjectText(t, subject);
   return what ?? t(`agentSessions.ask.${verb}`);
 }
 
 /** An ask as a line's parts, the verb leading, so a list cuts only what to do (status-marks B5, B33). */
 export function askParts(t: TFunction<"translation">, ask: NonNullable<AgentRow["state"]["ask"]>): LineParts {
-  return { lead: t(`agentSessions.verb.${ask.verb}`), text: askWhat(t, ask.verb, ask.what), tail: null };
+  return { lead: t(`agentSessions.verb.${ask.verb}`), text: askWhat(t, ask.verb, ask.what, ask.subject), tail: null };
 }
 
 /** A Needs You row's second line: the verb and what to do, nothing else (B2). */
 export function AskLine({ ask, className }: { ask: NonNullable<AgentRow["state"]["ask"]>; className?: string }) {
   const { t } = useInterfaceTranslation();
-  const what = askWhat(t, ask.verb, ask.what);
+  const what = askWhat(t, ask.verb, ask.what, ask.subject);
   return (
     <span className={cn("flex min-w-0 items-baseline gap-xs text-caption", className)} data-ask-line={ask.verb}>
       <VerbText verb={ask.verb} />

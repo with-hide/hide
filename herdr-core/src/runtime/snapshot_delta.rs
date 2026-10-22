@@ -90,9 +90,14 @@ impl Runtime {
         // What a screen is about to be shown as the keyboard's pane is what
         // the nodes compare its next key with.
         self.sync_terminal_focus();
+        // A plan's review moved by a command, the restore or a deleted
+        // session is laid on the rows shown, before anything reads them.
+        self.refresh_plan_reviews();
         // A mission's map follows its workers, its Conductor's pane and its
         // pull requests; the section is sent again only when it moved.
         self.refresh_missions();
+        // A pane's plan follows its session and the plan book.
+        self.refresh_plans();
         self.note_snapshot_sent();
         if self.delta.usage_edit != self.usage_edit {
             self.delta.revision += 1;

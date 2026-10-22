@@ -10,6 +10,7 @@ import { useShellStore } from "../store";
 import { agentMachines, checkFailedReason, type AgentMachine } from "./agentRows";
 import { AgentRow, NotInstalledRow } from "./AgentRow";
 import { IdleAgentsGroup } from "./IdleAgentsGroup";
+import { HideSkillsGroup } from "./HideSkillsGroup";
 import { StartingWorkGroup } from "./StartingWorkGroup";
 import { useAgentsDemand } from "./useAgentsDemand";
 import { useErrorSince } from "./useErrorSince";
@@ -51,6 +52,7 @@ export function AgentsTab({ actions }: { actions: Actions }) {
         </ToggleGroup>
       ) : null}
       {machine ? <MachineAgents key={machine.device.id} machine={machine} actions={actions} /> : <Note>{t("agents.reading")}</Note>}
+      <HideSkillsGroup />
       <IdleAgentsGroup actions={actions} />
       <StartingWorkGroup actions={actions} />
     </>

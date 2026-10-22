@@ -1003,6 +1003,7 @@ impl Mobile {
                 title: notice.recipient.clone(),
                 status_code: None,
                 detail: None,
+                subject: None,
                 state: match notice.kind {
                     HumanNoticeKind::ObserverUnconfirmed => push::NoticeState::ObserverUnconfirmed,
                     HumanNoticeKind::LetterUndelivered => push::NoticeState::LetterUndelivered,

@@ -11,7 +11,7 @@ The `herdr` commands in the session rules below are Herdr's own and change only 
 
 - Your session's start note from Hide, when there is one, names your checkout, the commands this pane may run and the exact prefix to run them with; use that prefix, and when the note and this guide differ, the note is right for this pane.
 - `hide workspace info` answers the same for this checkout now: the Workspace, the checkout, the device id and the commands available.
-- `hide --help` lists every command's syntax, `hide agent spawn --help` explains spawning, `hide browser help` and `hide mission help` are the guides to their topics.
+- `hide --help` lists every command's syntax, `hide agent spawn --help` explains spawning, `hide browser help`, `hide mission help` and `hide plan help` are the guides to their topics.
 - The agent, letter and Workspace commands print one JSON line, `{"ok":true,...}` or `{"ok":false,"reason":...,"next_action":...}`; follow `next_action`, and after a timeout read the state before you run the command again.
 
 ## Letters
@@ -90,3 +90,4 @@ hide memory search <words> | show <card> | add <text> | stale <card> <reason>
 
 - A web page, a local app in a browser, or what a page shows: run `hide browser help` and follow it.
 - A goal to carry out with several agents, or a mission to start or take over as its Conductor: run `hide mission help` and follow it. This guide is the way in for a mission; there is no separate Conductor skill.
+- A task of more than a few steps, or an operator who asks you to plan first or have the plan reviewed: run `hide plan help` and follow it.

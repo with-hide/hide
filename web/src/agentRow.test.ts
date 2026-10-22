@@ -225,6 +225,13 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     expect(waiting("reply")).toBe("대기 · 답장");
   });
 
+  it("words a question the core asks for the agent from its subject, in the interface language (hide-plan B14)", async () => {
+    const review = row("r", { status_code: "question", demand: "question", group: "needs_you", mark: "turn", detail: null });
+    review.state = { ...review.state, line: { text: "", mode: "request", tone: { kind: "warning", read: false }, subject: { cause: "plan_review", steps: 4 } } };
+    expect(lineText((await createInterfaceI18n("en")).t, review, sidebarLine(review)!)).toBe("Question · Plan review · 4 steps");
+    expect(lineText((await createInterfaceI18n("ko")).t, review, sidebarLine(review)!)).toBe("질문 · 계획 검토 · 4단계");
+  });
+
   it("ends a finished turn's line with the tasks it left, kept apart from the sentence a narrow row cuts (D-19, B27)", async () => {
     const { t } = await createInterfaceI18n("ko");
     const left = row("d", { activity: "stopped", mark: "done", status_code: "done", group: "done", unread: true, detail: "배포 시작함", background_left: 2 });

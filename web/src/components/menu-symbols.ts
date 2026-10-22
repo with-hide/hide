@@ -1,7 +1,7 @@
 import {
   ArchiveIcon, ArrowDownIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon,
   CheckIcon, ClipboardPasteIcon, CopyIcon, ExternalLinkIcon, FileCodeIcon,
-  FileTextIcon, FolderOpenIcon, GitForkIcon, HashIcon, MaximizeIcon,
+  FileTextIcon, FolderOpenIcon, GitForkIcon, HashIcon, ListChecksIcon, MaximizeIcon,
   MinimizeIcon, MoonIcon, NetworkIcon, PanelBottomIcon, PanelLeftIcon,
   PanelRightIcon, PanelTopIcon, PencilIcon, PinIcon, PlayIcon, PlusIcon,
   RefreshCwIcon, SearchIcon, SquareDashedIcon, SquareTerminalIcon, StarIcon, StarOffIcon, Trash2Icon,
@@ -17,7 +17,7 @@ export const menuSymbols = {
   split_down: PanelBottomIcon, split_left: PanelLeftIcon, split_right: PanelRightIcon, split_up: PanelTopIcon,
   rename: PencilIcon, pin: PinIcon, resume: PlayIcon, add: PlusIcon, refresh: RefreshCwIcon,
   find: SearchIcon, select: SquareDashedIcon, star: StarIcon, unstar: StarOffIcon, terminal: SquareTerminalIcon, delete: Trash2Icon, close: XIcon,
-  overview: WaypointsIcon,
+  overview: WaypointsIcon, plan: ListChecksIcon,
 } as const;
 
 export type MenuSymbol = keyof typeof menuSymbols;

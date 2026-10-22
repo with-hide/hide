@@ -54,6 +54,7 @@ pub(crate) mod pane_move;
 mod pane_move_preview;
 mod pane_prediction;
 mod pane_reopen;
+pub(crate) mod plans;
 pub(crate) mod project_memory;
 mod project_settings;
 mod projects;
@@ -1144,6 +1145,7 @@ pub struct Runtime {
     /// Each Conductor's mission and the store that keeps them
     /// (`missions.rs`, PRD software-factory-conductor D-22).
     missions: missions::MissionRuntime,
+    plans: plans::PlanRuntime,
     /// The agent versions whose composer was checked against its
     /// declaration (`composer_checks.rs`), and the store that keeps them.
     composer_checks: Vec<crate::composer_checks::Check>,
@@ -2122,6 +2124,7 @@ impl Runtime {
             delivery_input_traced: HashMap::new(),
             composer_store: None,
             missions: missions::MissionRuntime::default(),
+            plans: plans::PlanRuntime::default(),
             composer_checks: Vec::new(),
             composer_checks_store: None,
             delivery_overflow: HashSet::new(),

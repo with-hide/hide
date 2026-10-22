@@ -78,6 +78,10 @@ pub struct Band {
     /// who and path the band draws; `more` counts the others.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raised: Option<super::escalation::RaisedAsk>,
+    /// An Answer the core asks for the agent, which the shell words in
+    /// place of `reason` (`AskSubject`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<crate::model::AskSubject>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -206,6 +210,7 @@ pub(crate) fn of(
                 }),
                 more: agent.raised.len() - 1,
                 raised: Some(lead.clone()),
+                subject: None,
             }),
             ..Header::default()
         };
@@ -272,6 +277,7 @@ pub(crate) fn of(
                 agent.raised.len()
             },
             raised: None,
+            subject: agent.ask_subject.filter(|_| kind == "answer"),
         }),
         ..Header::default()
     }

@@ -347,6 +347,7 @@ pub fn payload(notice: &Notice, clear: &BTreeSet<AgentKey>) -> Value {
         "state": notice.state.as_str(),
         "status_code": notice.status_code,
         "detail": notice.detail,
+        "subject": notice.subject,
         "place": notice.place,
         "tag": notice.key.tag(),
         "device_id": notice.key.device_id,
@@ -564,6 +565,7 @@ mod tests {
             state: NoticeState::Done,
             status_code: Some("done".into()),
             detail: Some("빌드 수정 완료".into()),
+            subject: None,
             place: "contong".into(),
         };
         let clear = BTreeSet::from([AgentKey {
@@ -577,12 +579,24 @@ mod tests {
                 "state": "done",
                 "status_code": "done",
                 "detail": "빌드 수정 완료",
+                "subject": null,
                 "place": "contong",
                 "tag": "mini|w2:p1",
                 "device_id": "mini",
                 "pane_id": "w2:p1",
                 "clear": ["local|w1:p1"],
             })
+        );
+        // A question the core asks for the agent goes as what it is; the
+        // phone words it (hide-plan B14).
+        let review = Notice {
+            detail: None,
+            subject: serde_json::from_value(json!({"cause": "plan_review", "steps": 5})).unwrap(),
+            ..notice.clone()
+        };
+        assert_eq!(
+            payload(&review, &clear)["subject"],
+            json!({"cause": "plan_review", "steps": 5})
         );
         let asking = Notice {
             state: NoticeState::NeedsYou,
@@ -631,6 +645,7 @@ mod tests {
             state: NoticeState::Done,
             status_code: Some("done".into()),
             detail: Some("🦀".repeat(80)),
+            subject: None,
             place: String::new(),
         };
         let mut data = payload(&notice, &BTreeSet::new());

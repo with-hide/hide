@@ -35,6 +35,7 @@ pub mod memory;
 pub mod observation;
 pub mod opencode;
 pub mod pi_extension;
+pub mod plan_record;
 pub mod plugin;
 pub mod report;
 pub mod route;

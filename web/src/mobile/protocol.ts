@@ -8,7 +8,7 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
-import type { AgentSleep, AgentStatusCode, AgentWait, LineMode, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, LineMode, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -30,7 +30,7 @@ export type PhoneAgent = {
   /** When the Mac's core last saw this agent change state (epoch ms); the phone counts the elapsed time from it. */
   changed_at_unix_ms: number | null;
   /** The desktop row's second line (`RowLine`), worded the same way. */
-  line: { text: string; mode: LineMode; tone: "warning" | "news" | "subtle"; pull_request?: number } | null;
+  line: { text: string; mode: LineMode; tone: "warning" | "news" | "subtle"; pull_request?: number; subject?: AskSubject } | null;
   status_code: AgentStatusCode;
   demand: string;
   /** Present while the agent's process is ended and its pane holds a bare shell: nothing may be sent to it, and the detail says so (`AgentSleepSnapshot`). */

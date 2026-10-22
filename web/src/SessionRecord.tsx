@@ -24,8 +24,11 @@ import { useSessionResume } from "./useSessionResume";
 import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
-import type { AgentRow, Checkout, FlowResult, MissedWork, PrSettlement, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
+import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
+import { PlanGraph } from "./PlanGraph";
+import { planCount, planOfSession, planWorkLine } from "./plans";
 import { statusText } from "./agentStatus";
+import { askSubjectText } from "./askSubject";
 import { useShellStore } from "./store";
 import { summariesEnabled } from "./hideAi";
 import { PR_LOOK } from "./prMark";
@@ -217,7 +220,10 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
   const settled = recorded?.settled ?? null;
   const since = settled ? settled.at_unix_ms : recorded ? recorded.at_unix_ms : kind === "ended" ? record.ended_at_unix_ms ?? agent?.changed_at_unix_ms ?? null : agent?.changed_at_unix_ms ?? null;
   const word = settled ? t(settled.state === "merged" ? "record.merged" : "record.closed") : recorded ? t(`requests.end.${recorded.end}`) : kind === "working" ? t("agents.status.working") : kind === "question" ? t("agents.status.question") : kind === "blocked" ? t("agents.status.error") : agent && agent.status_code !== "done" ? statusText(t, agent.status_code) : t("sessionWork.done");
-  const said = settled ? settledPrs(t, settled) : recorded ? recorded.line || null : kind === "question" ? question ?? agent?.state.ask?.what ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
+  // While it works on a plan, the line is its step, as on the pane's second row (B7).
+  const livePlan = useShellStore((s) => planOfSession(s.rest, record.session)) ?? record.plan ?? null;
+  const step = kind === "working" && !settled && livePlan ? planWorkLine(livePlan) : null;
+  const said = settled ? settledPrs(t, settled) : recorded ? recorded.line || null : kind === "question" ? question ?? (agent?.state.ask?.subject ? askSubjectText(t, agent.state.ask.subject) : agent?.state.ask?.what) ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
   const pane = agent?.pane_id ?? null;
   const button = pane === null ? <RestoreSession record={record} checkout={checkout} actions={actions} /> : kind === "question" ? (
     <Button size="sm" onClick={() => actions.openAgent(pane)} data-record-now-button="answer"><CircleHelpIcon aria-hidden="true" />{t("links.answer")}</Button>
@@ -234,6 +240,7 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
       </p>
       {button}
     </div>
+    {step ? <p className="whitespace-normal text-caption text-agent-working [overflow-wrap:anywhere]" title={step} data-record-now-step="true">{step}</p> : null}
     {said && kind !== "working" ? <p className={cn("whitespace-normal text-caption [overflow-wrap:anywhere]", kind === "question" ? "text-warning" : kind === "blocked" ? "text-destructive" : "text-subtle-foreground")} title={said} data-record-now-words="true">{said}</p> : null}
   </div>;
 }
@@ -325,6 +332,15 @@ function OutputMark({ output, actions }: { output: WorkOutput; actions: Actions 
   </button>;
 }
 
+/** The session's own plan (PRD hide-plan B9, B21): its count, `끝남` once every step is done or dropped, and the map. */
+function RecordPlan({ plan }: { plan: PlanView }) {
+  const { t } = useInterfaceTranslation();
+  return <section className="mt-lg min-w-0" data-record-plan={plan.progress.finished ? "finished" : plan.review}>
+    <SectionHead label={t("plan.title")} count={planCount(plan)} summary={plan.progress.finished ? t("plan.finishedWord") : null} />
+    <div className="min-w-0 overflow-x-auto"><PlanGraph plan={plan} size="compact" /></div>
+  </section>;
+}
+
 /**
  * The record below its head (PRD session-record-goal-flow B2): what waits on
  * the operator, the goal flows, the pull requests and other outputs, then the
@@ -336,6 +352,7 @@ function Work({ record, summaries, onOpen, actions, locator }: { record: RecordV
   return <>
     {summaries ? <Asks record={record} actions={actions} /> : null}
     {summaries ? <Flows record={record} locator={locator} /> : <RawRequests record={record} locator={locator} />}
+    {record.plan ? <RecordPlan plan={record.plan} /> : null}
     <Prs record={record} actions={actions} />
     {summaries && record.artifacts.length ? <section className="mt-lg min-w-0" data-record-artifacts={record.artifacts.length}>
       <SectionHead label={t("record.artifacts")} count={record.artifacts.length} />

@@ -81,6 +81,8 @@ pub struct Snapshot {
     /// Each Conductor's mission as its map draws it (PRD
     /// software-factory-conductor D-14).
     pub missions: crate::runtime::missions::MissionsSnapshot,
+    /// Each pane's session's own plan (PRD hide-plan D-10).
+    pub plans: crate::runtime::plans::PlansSnapshot,
     pub navigator: NavigatorSnapshot,
     pub overlay: OverlaySnapshot,
     pub tab: TabSnapshot,
@@ -1225,6 +1227,17 @@ fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 
+/// A question the core asks on an agent's row for it, sent as what it is
+/// rather than as words, so each shell, the bell and the phone say it in
+/// their own language (hide-plan B14).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "cause", rename_all = "snake_case")]
+pub enum AskSubject {
+    /// The agent's proposed plan of `steps` steps waits for the operator's
+    /// review.
+    PlanReview { steps: u32 },
+}
+
 /// An agent's state on four independent lifecycle axes, plus the values the shell draws
 /// from them.
 ///
@@ -1358,6 +1371,11 @@ pub struct SidebarAgentSnapshot {
     /// state. Missing source content remains absent rather than inferred.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_turn: Option<hide_session::turns::UserTurnFact>,
+    /// What the core asks on this row for the agent, when the question is
+    /// the core's and not the agent's own; the row then draws no sentence
+    /// of its own and every surface words the subject.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ask_subject: Option<AskSubject>,
     /// Derived: whether the row draws its status word. It leaves working and
     /// read rows, where the mark already says it, and stays on rows that
     /// still concern the operator.
@@ -3605,6 +3623,10 @@ pub enum DetailItem {
     },
     /// A Conductor's mission map (PRD software-factory-conductor D-14).
     Mission { mission: String },
+    /// A session's own plan, drawn large (PRD hide-plan B11).
+    Plan {
+        session: crate::links::ledger::SessionIdentity,
+    },
     /// A project's Git worktrees, from its Project tool (PRD lane-two-columns
     /// B30).
     Worktrees { workspace_id: String },
@@ -6279,6 +6301,7 @@ impl Snapshot {
             delivery_watches: Vec::new(),
             overview_graph: OverviewGraphSnapshot::default(),
             missions: Default::default(),
+            plans: Default::default(),
             navigator: NavigatorSnapshot {
                 agent_scope: Default::default(),
                 root_path: None,
@@ -6977,6 +7000,19 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "user_turn_kind", &user_turns);
         checked.insert("user_turn_kind");
+
+        let subjects = [AskSubject::PlanReview { steps: 1 }];
+        for variant in subjects {
+            match variant {
+                AskSubject::PlanReview { .. } => {}
+            }
+        }
+        let causes = subjects
+            .iter()
+            .map(|subject| serde_json::to_value(subject).unwrap()["cause"].clone())
+            .collect::<Vec<_>>();
+        assert_wire(&contract, "ask_subject_cause", &causes);
+        checked.insert("ask_subject_cause");
 
         let statuses = [
             ChangedFileStatus::Modified,
@@ -7744,6 +7780,88 @@ mod wire_enum_tests {
             assert_wire(&contract, "mission_blocked", &blocked);
             checked.insert("mission_blocked");
         }
+
+        {
+            use crate::plans::{Output, Review, StepStatus};
+            let statuses = [
+                StepStatus::Planned,
+                StepStatus::Working,
+                StepStatus::Done,
+                StepStatus::Dropped,
+            ];
+            for variant in statuses {
+                match variant {
+                    StepStatus::Planned
+                    | StepStatus::Working
+                    | StepStatus::Done
+                    | StepStatus::Dropped => {}
+                }
+            }
+            assert_wire(&contract, "plan_step_status", &statuses);
+            checked.insert("plan_step_status");
+            let reviews = [Review::Approved, Review::Proposed];
+            for variant in reviews {
+                match variant {
+                    Review::Approved | Review::Proposed => {}
+                }
+            }
+            assert_wire(&contract, "plan_review", &reviews);
+            checked.insert("plan_review");
+            let outputs = [Output::Pr, Output::File, Output::None];
+            for variant in outputs {
+                match variant {
+                    Output::Pr | Output::File | Output::None => {}
+                }
+            }
+            assert_wire(&contract, "plan_output", &outputs);
+            checked.insert("plan_output");
+        }
+
+        let session = crate::links::ledger::SessionIdentity {
+            device_id: "mac".into(),
+            agent: "codex".into(),
+            session_id: "s".into(),
+        };
+        let items = [
+            DetailItem::PullRequest {
+                workspace_id: "w".into(),
+                number: 1,
+            },
+            DetailItem::Record {
+                session: session.clone(),
+            },
+            DetailItem::Mission {
+                mission: "mission-1".into(),
+            },
+            DetailItem::Worktrees {
+                workspace_id: "w".into(),
+            },
+            DetailItem::Cost {
+                workspace_id: "w".into(),
+            },
+            DetailItem::Plan { session },
+        ];
+        for item in &items {
+            match item {
+                DetailItem::PullRequest { .. }
+                | DetailItem::Record { .. }
+                | DetailItem::Mission { .. }
+                | DetailItem::Worktrees { .. }
+                | DetailItem::Cost { .. }
+                | DetailItem::Plan { .. } => {}
+            }
+        }
+        let kinds: Vec<String> = items
+            .iter()
+            .map(|item| {
+                serde_json::to_value(item).unwrap()["kind"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert_wire(&contract, "detail_item_kind", &kinds);
+        checked.insert("detail_item_kind");
 
         let freshness = [
             crate::observed::Freshness::Fresh,

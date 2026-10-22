@@ -740,6 +740,29 @@ A mission keeps at most 32 unsent wakes, dropping the oldest as `mission.wake_dr
 A change that would make the saved record larger than a start reads back is refused `mission_full`, as a full book is.
 Deleting a Conductor's session from the archive deletes its missions with it.
 
+## Plans
+
+A plan (PRD hide-plan) is one native session's own list of steps, which the agent puts up and keeps current with `hide plan`; `hide plan help` is its guide, which the `hide-plan` skill the kit installs points at ([agent-hooks.md](agent-hooks.md#what-the-kit-puts-down)).
+Only a pane-bound credential can ask (`agent_pane_required`), on this machine or from a connected device's pane through its helper, as a letter does, and the plan is keyed by the pane's native session (device, agent, session id): a resumed session goes on with it, a fork starts with none, and only that session changes it.
+The commands are `set` (`--file <plan.json>` or `--json <plan>`, with `--ask [why]` and `--reason <text>`), `node <key>` (`--status planned|working|done|dropped`, `--line <text>`), `approve`, `drop`, `show [<agent>]` and `help`; each answers one JSON line, `{"ok":true,"result":{"session","plan","context"}}`, and the same command again changes nothing more.
+A step has a `key`, a `title`, the keys it `depends_on` and a `status`, and may carry a one-line `line` and an `output` of `pr`, `file` or `none`.
+The graph is checked by the same module the missions use (`herdr-core/src/dag.rs`): a key or title that is malformed, a dependency that names no step and a cycle are refused `plan_invalid` with where; more than 64 steps is `plan_too_large`, and a step waits on at most 8.
+A step set `done` while a step it waits on is neither done nor dropped is refused `plan_order_refused` with the step it waits on; a dropped step holds nothing below it.
+The current step is the topmost working one, else the topmost planned one; `n/m` counts done over done, working and planned, and a dropped step is in neither.
+A `set` over a plan whose steps are not all finished keeps the steps it left out as dropped and marks every new, renamed or dropped step changed, with `--reason` (or `--ask`'s why) as the change; a `set` over a finished plan replaces it whole.
+A plan put up with `--ask` waits for the operator's review (`proposed`); a plan without it is `approved`, and a later `set` without `--ask` keeps the review it had.
+The operator answers in the conversation: the agent runs `approve` when the operator agrees, `set --ask` again with the change asked for, or `drop` when told not to; there is no button that approves.
+`approve` and `drop` naming another agent are refused `plan_not_yours`, while `show` of another agent reads its plan; a name or id that matches no running registration is `plan_agent_unknown`.
+While the saved plans have not been read back yet the answer is `plan_unavailable` and the read starts again; a session Hide cannot name yet is `plan_session_unknown`.
+
+The core keeps the plans beside each session's record in the link store (`ledger_plans` in `links.sqlite3`, schema 9), written by the link worker off the lock and read back once when the worker starts; a plan goes with its session when the session is deleted or pruned.
+The book holds at most 128 plans: a new session's plan takes the place of the one updated longest ago whose session runs in no pane (`plans.evicted`), and with every one of them on screen it is refused `plan_full`.
+A finished plan stays in the session's record, and the record's view carries it as the map draws it.
+
+A proposed plan is the agent's question: while the agent rests with no question of its own and is not working, its row carries a question with no words of its own, only its subject (`ask_subject`, `{cause: "plan_review", steps}`), which each surface words in its own language, so the pane's ask band, the sidebar's second line, the bell and the phone follow the ask's own path, and the agent's own question comes first ([status-model.md](status-model.md#a-plan-waiting-for-review-is-a-question)).
+Every `hide plan` answer and the prompt hook's letter pull carry a small summary of the pane's plan and mission work (`plan_context`): the plan's review, its current and next step by key and title, its count, whether it is finished and when it was updated; the mission node, its scope and range when the session is a mission's worker; and a Conductor's counts.
+Its shape is fixed in `contracts/delivery-envelope.json` (`plan_context`), which the core's summary and the hook's reading are both tested against; the hook keeps it in the pane's record and refuses from that record alone ([agent-hooks.md](agent-hooks.md#the-panes-plan-record)).
+
 ## Verification
 
 Use the worktree-owned entrypoints described in [BUILD.md](BUILD.md#two-entrypoints).

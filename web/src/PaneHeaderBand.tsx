@@ -24,6 +24,7 @@ import { sessionOfAgentOn } from "./sessionWork";
 import { statusText } from "./agentStatus";
 import { StatusMark } from "./components/status-mark";
 import { PaneTurnCard, requestWords, type TurnCardTrigger } from "./PaneTurnCard";
+import { planOfPane, planWorkLine } from "./plans";
 
 /**
  * Marks the pane Fork agent made (PRD fork-operator-root B8, B9): a quiet icon after
@@ -87,7 +88,12 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const { children, devices } = usePaneChildren(paneId, agents);
   const childConnection = children?.unavailableDevice ? devices?.status?.remote?.find((row) => row.target_id === children.unavailableDevice)?.message ?? t("devices.rail.notConnected") : null;
   const band = header?.band ?? null;
-  const ownProgress = band ? null : header?.progress ?? null;
+  // A running plan's current step and its line take the progress place (PRD hide-plan B7).
+  const planLine = useShellStore((state) => {
+    const plan = planOfPane(state.rest, paneId);
+    return plan ? planWorkLine(plan) : null;
+  });
+  const ownProgress = band ? null : planLine ?? header?.progress ?? null;
   const request = header?.request ?? null;
   const finished = !band && (header?.finished ?? false);
   const waitingOnChildren = band ? null : header?.waiting_on_children ?? null;
@@ -179,7 +185,7 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
   const origin = raised?.verb === "draft" ? agentsByPane(agents).get(raised.raised_pane_id) : null;
   const originTitle = raised?.origin_title ?? (raised?.verb === "draft" ? origin?.identity_label : raised?.title);
   const originDepth = raised ? raised.path.length + (raised.verb === "draft" ? 1 : 0) : 0;
-  const what = raised ? askWhat(t, raised.verb, raised.what) : band.kind === "approval" || band.kind === "answer" ? askWhat(t, band.kind, band.reason) : band.reason;
+  const what = raised ? askWhat(t, raised.verb, raised.what, raised.subject) : band.kind === "approval" || band.kind === "answer" ? askWhat(t, band.kind, band.reason, band.subject) : band.reason;
   const minutes = band.since_unix_ms == null ? null : Math.max(0, Math.floor((Date.now() - band.since_unix_ms) / 60_000));
   // The path from the root already ends with the agent named; the wait is its verb's (B5).
   const who = raised ? [

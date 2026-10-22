@@ -301,6 +301,7 @@ fn mission(
             criteria: None,
             started_at_unix_ms: None,
             finished_at_unix_ms: None,
+            plan: None,
         }],
         merge_order: Vec::new(),
         check: None,

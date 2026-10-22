@@ -71,6 +71,18 @@ enum Command {
         command: herdr_core::missions::MissionCommand,
         reply: Sender<Result<serde_json::Value, String>>,
     },
+    Plan {
+        device_id: String,
+        pane_id: String,
+        expected: Context,
+        command: herdr_core::plans::PlanCommand,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
+    PlanContext {
+        device_id: String,
+        pane_id: String,
+        reply: Sender<Option<hide_agent_hooks::plan_record::PlanContext>>,
+    },
     AgentCatalog {
         device_id: String,
         machine: Option<String>,
@@ -329,6 +341,45 @@ impl CoreHandle {
         result
             .recv()
             .map_err(|_| "mission_unavailable".to_owned())?
+    }
+
+    /// Runs a `hide plan` command on the owner thread.
+    pub fn plan(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+        command: herdr_core::plans::PlanCommand,
+    ) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::Plan {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                command,
+                reply,
+            })
+            .map_err(|_| "plan_unavailable".to_owned())?;
+        result.recv().map_err(|_| "plan_unavailable".to_owned())?
+    }
+
+    /// The pane's plan summary for its prompt hook, on the owner thread;
+    /// none when the core cannot say.
+    pub fn plan_context(
+        &self,
+        device: &str,
+        pane: &str,
+    ) -> Option<hide_agent_hooks::plan_record::PlanContext> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::PlanContext {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                reply,
+            })
+            .ok()?;
+        result.recv().ok()?
     }
 
     /// `hide agent catalog`, read on the owner thread. While the core says a
@@ -959,6 +1010,22 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.mission_command(&device_id, &pane_id, &expected, command));
+            }
+            Command::Plan {
+                device_id,
+                pane_id,
+                expected,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.plan_command(&device_id, &pane_id, &expected, command));
+            }
+            Command::PlanContext {
+                device_id,
+                pane_id,
+                reply,
+            } => {
+                let _ = reply.send(core.plan_context(&device_id, &pane_id));
             }
             Command::AgentCatalog {
                 device_id,

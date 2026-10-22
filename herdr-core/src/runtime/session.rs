@@ -1961,6 +1961,7 @@ impl Runtime {
             // A node that dials this core sleeps as the core's own machine
             // does (PRD core-host-node-remote-core B13).
             self.stamp_node_agent_sleep(target_id, &mut session.agents);
+            self.lay_plan_reviews(target_id, &mut session.agents);
             read_changed = self.apply_remote_read_state(target_id, session);
             for workspace in &mut session.workspaces {
                 for checkout in &mut workspace.checkouts {
@@ -3081,6 +3082,10 @@ impl Runtime {
                 live_pane_ids.as_ref(),
             );
             self.apply_pane_launches(&agents, ReadRecordScope::Local, live_pane_ids.as_ref());
+            // A plan waiting for review is a question the lineage raises
+            // and the read axis compares, so it is laid before both.
+            let node = self.node.as_str().to_owned();
+            self.lay_plan_reviews(&node, &mut agents);
             // A pull request's checks are a wait the lineage decides and an
             // end the read axis compares, so they are laid before both.
             self.lay_checks(&mut agents);

@@ -178,6 +178,10 @@ impl Cause {
 pub struct RaisedAsk {
     pub verb: Verb,
     pub what: Option<String>,
+    /// A question the core asks for the raised descendant (`AskSubject`),
+    /// which the shell words in place of `what`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<crate::model::AskSubject>,
     /// The raised descendant itself, where a tree draws the ask.
     pub raised_pane_id: String,
     /// The raised descendant's title, even when a draft names its parent as the holder.
@@ -283,6 +287,13 @@ pub(crate) fn lift(
         };
         let what = match verb {
             Verb::Approval | Verb::Confirm => label_line(row),
+            // A question the core asks for the child is said by its
+            // subject, never by the label's line about the work around it.
+            Verb::Answer
+                if escalation.cause == Cause::ChildBlocked && row.ask_subject.is_some() =>
+            {
+                None
+            }
             Verb::Answer if escalation.cause == Cause::ChildBlocked => {
                 row.detail.clone().or_else(|| label_line(row))
             }
@@ -299,6 +310,9 @@ pub(crate) fn lift(
         asks.entry(root).or_default().push(RaisedAsk {
             verb,
             what,
+            subject: row
+                .ask_subject
+                .filter(|_| verb == Verb::Answer && escalation.cause == Cause::ChildBlocked),
             raised_pane_id: row.pane_id.clone(),
             origin_title: row.identity_label.clone(),
             pane_id: named.pane_id.clone(),
@@ -471,6 +485,32 @@ mod tests {
         assert_eq!(ask.what.as_deref(), Some("Keep the old stdin path?"));
         assert_eq!(ask.path, ["Root", "Middle", "Raised"]);
         assert_eq!(ask.unreceived_by, None);
+    }
+
+    // hide-plan B14: a raised question the core asks for the descendant
+    // reaches its root as its subject, never as the label's line about the
+    // work around it.
+    #[test]
+    fn a_raised_question_the_core_asks_for_a_descendant_keeps_its_subject() {
+        let mut rows = raised_lineage(Cause::ChildBlocked);
+        rows[2].blocked = true;
+        rows[2].demand = "question".into();
+        rows[2].progress = Some("Writing the core events".into());
+        rows[2].user_turn = Some(hide_session::turns::UserTurnFact {
+            kind: hide_session::turns::UserTurnKind::Question,
+            content: None,
+        });
+        let subject = crate::model::AskSubject::PlanReview { steps: 4 };
+        rows[2].ask_subject = Some(subject);
+        lift(&mut rows, |_| None);
+        let ask = &rows[0].raised[0];
+        assert_eq!(
+            (ask.verb, ask.what.as_deref(), ask.subject),
+            (Verb::Answer, None, Some(subject))
+        );
+        rows[0].group = "needs_you".into();
+        let state = super::super::turn::row_state(&rows[0]);
+        assert_eq!(state.ask.and_then(|ask| ask.subject), Some(subject));
     }
 
     // B1 with agent-blocked-state B2: once its own block is read, a root that

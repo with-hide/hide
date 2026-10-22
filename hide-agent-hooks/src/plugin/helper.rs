@@ -278,7 +278,10 @@ fn prompt(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value 
     });
     let mut context = memory.unwrap_or_default();
     let mut letters = Vec::new();
-    if let Some(Intake { context: text, ids }) = intake {
+    if let Some(Intake {
+        context: text, ids, ..
+    }) = intake
+    {
         context.push_str(&text);
         letters = ids;
     }
@@ -355,7 +358,7 @@ fn letters(home: &Path, input: Input, deadline: Instant) -> Value {
         return json!({});
     };
     match delivery::pull_at_tool(deadline, &session) {
-        Ok(Some(Intake { context, ids })) => json!({ "context": context, "letters": ids }),
+        Ok(Some(Intake { context, ids, .. })) => json!({ "context": context, "letters": ids }),
         Ok(None) => json!({ "context": "", "letters": [] }),
         Err(failure) => {
             delivery::diagnose_failure(home, &failure);
@@ -371,6 +374,7 @@ fn confirm(home: &Path, input: Input, deadline: Instant) -> Value {
     let intake = Intake {
         context: String::new(),
         ids: input.letters,
+        plan_context: None,
     };
     match delivery::confirm(&intake, deadline) {
         Ok(()) => json!({ "confirmed": intake.ids }),
@@ -405,6 +409,18 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
     // or not (PRD agent-guardrails B22); the guards after them only in one.
     if let Some(reason) = guardrails::refusal_for(home, runtime, pane.as_deref(), call) {
         return json!({ "deny": reason });
+    }
+    // The pane's plan record: a plan waiting for review, a mission's scope
+    // and Hide's own history rule (PRD hide-plan D-15), read from the file
+    // the prompt's pull wrote for the same session.
+    if let Some(pane) = pane.as_deref().filter(|_| !input.guard_only)
+        && let Some(context) =
+            hide_agent_hooks::plan_record::read(home, pane, session(&input).as_deref())
+        && let Some(refused) =
+            call().and_then(|call| hide_agent_hooks::plan_record::refusal(&context, &call.action))
+    {
+        hide_agent_hooks::plan_record::record_refusal(home, runtime, pane, refused);
+        return json!({ "deny": refused.reason() });
     }
     let Some(pane) = pane.filter(|_| !input.guard_only) else {
         return json!({});

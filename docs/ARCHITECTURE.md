@@ -1144,6 +1144,17 @@ Pull request wakes are decided on the GitHub ingest, compared with each node's l
 A command whose change would take the saved book past a 7 MiB write budget, under the 8 MiB read cap, is undone and answered `mission_full`.
 Deleting a Conductor's archived session deletes its missions in the same transition.
 
+## Session plans
+
+A session's own plan (PRD hide-plan) is a core-owned record keyed by the native session, `herdr-core/src/plans.rs` for the model and its rules and `runtime/plans.rs` for the commands, the published view, the review question and the hook's summary ([delivery.md: Plans](delivery.md#plans)).
+Missions and plans check their graphs with one module, `herdr-core/src/dag.rs`: the key rule, unknown dependencies, cycles, the 64-node cap, the walk upstream and the topmost node by depth; a mission's checks moved there unchanged, and a plan adds only its session key, its review, its change reasons and its update time.
+Each `hide plan` command is one typed event applied under `Mutex<Runtime>`; the plan is saved through the link worker (`LedgerUpdate::Plan`) into `ledger_plans` beside the session's record in `links.sqlite3`, schema 9, and read back once with `LedgerCall::Plans` when the worker starts, so no file of its own exists; the table is deleted with the session's other rows (`remove_sessions`), and the runtime drops a deleted or pruned session's plan and its 보기 slot item in the same transition.
+The book holds at most 128 plans, evicting the one updated longest ago whose session runs in no pane.
+It is published as its own revisioned rest section, `plans`, one `PlanView` per pane whose session has a plan, made again on the snapshot read only when the book's change count or the panes' sessions moved (`refresh_plans`); a mission node's view carries its worker's `PlanView` (`worker_plan`), and the session record carries the same view, so the map, the chip and the node read one value.
+A proposed plan is laid on its agent's row as a question in the local and device pipelines before the read axis and the lineage run (`lay_plan_reviews`), so it rides the ask's band, second line and notification paths with no new state ([status-model.md](status-model.md#a-plan-waiting-for-review-is-a-question)).
+The hook's summary (`PlanContext`, `hide_agent_hooks::plan_record`) is made under the lock from the book, the ledger's registrations and the missions, and rides the answer of the prompt hook's letter pull (`hook_request.rs`) and of every `hide plan` command; the pre-tool hook reads only the record those wrote, so no tool call reaches the daemon ([agent-hooks.md](agent-hooks.md#the-panes-plan-record)).
+The map is a 보기 slot item, `DetailItem::Plan { session }`, which draws the published section and starts no read; a build that does not know the item reads a saved slot holding one as unrecognized and starts with an empty slot.
+
 ## The link record
 
 The link record (PRD link-graph) keeps which sessions made or worked on which pull request, which issues each pull request is linked to and from where, and which worktrees each branch had, after the panes, the branches and the provider files that said so are gone.
@@ -1151,7 +1162,7 @@ Owners: `herdr-core/src/links/` (`store.rs` the SQLite store, `worker.rs` the on
 
 It lives in its own file, `links.sqlite3` beside `session-search.sqlite3` (`hide_kit::layout::links_store`), so the two have separate failure, write-lock and size boundaries; it reads each project's retention from the old search file's `policy` table through a read-only `ATTACH` (`LinkStore::policies`), and nothing writes that file any more (see [Project sessions and Memory](#project-sessions-and-memory)).
 One worker thread, `hide-links`, spawned in `Core::create` and joined in `Drop for Core`, owns the only write connection; the core hands it owned facts (each GitHub project's pull requests with their issue links and sources, the navigator's worktrees, live panes' session ids and branches, and the core's resolved parent relationships) when they change, and it applies them as idempotent upserts.
-The schema moves by `PRAGMA user_version`; a newer version than this build knows is refused (`links_store_newer`), and a file that fails `quick_check` is set aside once as `links.sqlite3.corrupt` and rebuilt from the session files still there, with a diagnostic for what could not be rebuilt.
+The schema moves by `PRAGMA user_version` (8 since session plans, [Session plans](#session-plans)); a newer version than this build knows is refused (`links_store_newer`), and a file that fails `quick_check` is set aside once as `links.sqlite3.corrupt` and rebuilt from the session files still there, with a diagnostic for what could not be rebuilt.
 The file is private, `secure_delete` is on and `max_page_count` caps it at 64 MiB; crossing the cap refuses the write (`links_store_full`) and the panel says so.
 
 Session files are read only through the worker's own cursor, one bounded read per turn (20 ms of work, then a 30 ms rest), `hide-session`'s shared line parser, and never under `Mutex<Runtime>`; the core's own node lists and reads them (`link_files`, `link_read` with one file), so the worker opens no session file itself, and a call that fails ends the listing as failed, to be listed again from its start; the first start backfills the last 90 days once (meta `backfill_done`), then lists files changed since the last list every 15 s, every 3 s while a panel is open (B29), with a 60 s overlap.
@@ -1217,6 +1228,7 @@ Every external create remains pinned to the original reserved repository, and a 
 The helper's version 32 supplies canonical request senders and letter kinds from every supported native reader; an older helper keeps its existing raw requests and PR facts until updated.
 
 Version 8 adds each goal chapter's `closed_result`, the line the label gave as the flow closed ([status-model.md](status-model.md#the-session-work-record)); it adds a column and changes no stored row.
+Version 9 adds `ledger_plans`, each session's own plan ([Session plans](#session-plans)); it adds a table and changes no stored row.
 The record retains requests of at most 500 characters with their summaries, goal chapters (the flows) with their closing lines, END judgments with their lines and artifacts, created outputs and missed work, including asks.
 A Claude Code command record (`<command-name>`) is a request only when what Claude Code wrote after it shows the command went to the model: a command it answers itself, such as `/model` with its `<local-command-stdout>` or a `local_command` system record, is neither a request nor a Sessions last request, a search hit or label context.
 The incremental reader holds a command record that has no reply in the bytes it read, rereads it with the next poll and so neither loses nor repeats it; a reader of a whole page or file with no reply after the command counts it as a request.
