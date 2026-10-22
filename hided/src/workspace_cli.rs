@@ -29,6 +29,9 @@ const REMOTE_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(25);
 /// A spawn on another device: its checks, worktree, tab and agent start are
 /// each a round trip over SSH.
 const REMOTE_SPAWN_TIMEOUT: Duration = Duration::from_secs(60);
+/// The catalog's own wait for a model-list read is 10 seconds; the exchange
+/// outlives it.
+const CATALOG_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// An auto-bootstrapped direct CLI owns its reference even if transport fails.
 struct OneShotReference(PathBuf);
@@ -437,7 +440,9 @@ pub fn request_mission(
     })
 }
 
-/// `hide agent catalog`: read from what the core holds.
+/// `hide agent catalog`: read from what the core holds, after the daemon's
+/// wait of up to 10 seconds for one read of the model lists, so the
+/// exchange is given longer than an ordinary read.
 pub fn request_agent_catalog(
     credential: &mut Credential,
     machine: Option<&str>,
@@ -445,12 +450,13 @@ pub fn request_agent_catalog(
     credential.run(|path, after| {
         let reference = read_reference(path)?;
         let request_id = fresh_request_id()?;
-        run_exchange(
+        run_exchange_within(
             path,
             &reference,
             json!({"type":"agent_catalog","request_id":request_id,"machine":machine}),
             &request_id,
             false,
+            CATALOG_TIMEOUT,
             after,
         )
     })

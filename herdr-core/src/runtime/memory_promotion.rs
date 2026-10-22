@@ -2175,6 +2175,7 @@ fn spawn_agent(
             path: None,
             args,
             launch: start.launch.clone(),
+            brief: None,
             task: Some(crate::coordination::SpawnTask {
                 kind: crate::coordination::TaskKind::MemoryPromote,
                 target: Some(format!("m{number}")),

@@ -23,6 +23,8 @@ function node(key: string, title: string, extra: Partial<MissionNode>): MissionN
 const opus = (effort: string | null) => ({ agent: "claude", model: "Opus", effort, effort_auto: true });
 const astra = (effort: string | null) => ({ agent: "codex", model: "Astra", effort, effort_auto: true });
 const sonnet = { agent: "claude", model: "Sonnet", effort: "low", effort_auto: false };
+/** The screen node's pane, whose recorded launch runs another model than the plan named (the card shows the pane's). */
+const SCREEN_PANE = "w1:p7";
 
 /** The eight nodes of the boards (cmm1-cmm7): four starts, two that wait, one check together. */
 function plan(state: string, now: number): MissionNode[] {
@@ -50,7 +52,7 @@ function plan(state: string, now: number): MissionNode[] {
     node("fix-1487", `${no(1487)} 수정`, { depends_on: ["cause"], worker: astra("medium"), ...(stack ? done(30, 12) : working(5)), pr: 1506, pr_state: stack ? "mergeable" : "pending", stage: stack ? 3 : 3 }),
     state === "decision"
       ? node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), status: "failed", started_at_unix_ms: ago(21), pr: 1504, base_pr: 1503, pr_state: "failed", stage: 3, attempts: 2, line: "CI 실패 · 시도 2/2", review: "리뷰 전 · CI 통과 뒤 시작" })
-      : node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), ...(stack ? done(33, 33) : working(12)), status: stack ? "waiting" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : "mergeable", stage: state === "no-conductor" ? 2 : 3, line: state === "no-conductor" ? "옮기기 필요" : stack ? `아래 ${no(1503)} 머지 대기` : null }),
+      : node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), pane_id: stack ? null : SCREEN_PANE, ...(stack ? done(33, 33) : working(12)), status: stack ? "waiting" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : "mergeable", stage: state === "no-conductor" ? 2 : 3, line: state === "no-conductor" ? "옮기기 필요" : stack ? `아래 ${no(1503)} 머지 대기` : null }),
     node("together", "함께 확인", { kind: "verify", delivery: null, depends_on: ["screen", "api"], worker: sonnet, ...(stack ? done(8, 4) : {}), line: stack ? "합친 변경 ✓" : null }),
   ];
 }
@@ -78,6 +80,7 @@ function scene(state: string, now: number): { mission: Mission; rest: SnapshotRe
       { id: "pi", label: "Pi", availability: "available", enabled: true },
       { id: "grok", label: "Grok", availability: "not_installed", enabled: false },
     ] } }], workspaces: [] },
+    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [{ device_id: "local", pane_id: SCREEN_PANE, session_digest: "scene-screen", launch_model: "Sol" }] },
     status: { remote: [], background_ai: { enabled: true, providers: [
       { agent: "claude-code", state: "ready", models: ["Opus 5.5", "Sonnet 5.5", "Haiku 5.5"] },
       { agent: "codex", state: "ready", models: ["GPT-6-Astra", "GPT-5.6-Sol"] },

@@ -534,11 +534,12 @@ impl Core {
         &self,
         device: &str,
         machine: Option<&str>,
+        timed_out: bool,
     ) -> Result<serde_json::Value, String> {
         if !check_owner_thread(self, "agent.catalog") {
             return Err("catalog_unavailable".into());
         }
-        lock_recover(&self.runtime).agent_catalog(device, machine)
+        lock_recover(&self.runtime).agent_catalog(device, machine, timed_out)
     }
 
     /// `hide ps` for a caller on `device` in `pane`: the rows are taken under

@@ -1964,6 +1964,28 @@
                     }
                 },
                 {
+                    "conflicts": [
+                        "--brief-file"
+                    ],
+                    "name": "--brief",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--brief"
+                    ],
+                    "name": "--brief-file",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
                     "name": "--help",
                     "required": false,
                     "requires": [],
@@ -1992,7 +2014,10 @@
                 "native_identity_unavailable",
                 "identity_waits_full",
                 "session_too_long",
-                "codex_capability_unknown"
+                "codex_capability_unknown",
+                "invalid_brief",
+                "brief_not_submitted",
+                "mission_brief_missing"
             ],
             "repeats_at_most": null,
             "rest": "the agent's own arguments"
@@ -2917,7 +2942,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:a69ebf327cd0db9be2c892e0b03e7a82703b9428394e42fadabd7fca9d10e993",
+    "digest": "sha256:e24be4e805b7bc1903522a5114329c808667e0bce8b25bed5df8cfa5218ca833",
     "envelopes": {
         "agent": {
             "answer": "value",

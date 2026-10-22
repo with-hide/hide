@@ -3,12 +3,19 @@
 use crate::env::{self, Env};
 use herdr_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [-- <native args>]";
-pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [-- <native args>]
+pub const USAGE: &str = "hide agent register [--check] [--machine <device>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
+pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
   Hide starts the agent with them and starts it with them again whenever it wakes, forks or reopens the agent.
   Native arguments after -- reach this start only; a restart resumes the conversation without them.
+
+Give the agent its brief with --brief <text> or --brief-file <path> (at most 16 KiB):
+  Hide starts the agent and submits the brief as its first prompt once the agent takes input,
+  and records the same text as a delivered letter under the spawn's intent, so the agent starts on it
+  without anyone typing and a later wake finds it. A mission node's worker (an intent of the form
+  <mission-id>:<node-key>) needs one; without it the spawn is refused with mission_brief_missing.
+  Running the same command again never submits the brief twice.
 
 Choose responsibility when spawning:
   With --parent here (or your own id): delegate work you will supervise.
@@ -28,7 +35,16 @@ Start the agent on a connected device with --machine <device id>, from the machi
   A device id that is unknown or not connected, a repository missing on the device or an agent not installed there is refused before anything is created.
   Reusing an intent with another machine is refused; running the same command again returns the same agent.";
 
-pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery, String> {
+/// A parsed `hide agent` command, and the file its brief is read from when
+/// it runs: the file is the caller's and is read in its account, after the
+/// arguments were admitted and before the daemon is asked.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Parsed {
+    pub command: Delivery,
+    pub brief_file: Option<String>,
+}
+
+pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, String> {
     let verb = args.next().ok_or(USAGE)?.as_str();
     let mut flags = BTreeMap::new();
     let mut check = false;
@@ -66,6 +82,8 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
                         "--path",
                         "--model",
                         "--effort",
+                        "--brief",
+                        "--brief-file",
                     ]
                     .as_slice(),
                     "end" => ["--actor"].as_slice(),
@@ -79,7 +97,9 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
                     .filter(|value| {
                         !value.is_empty()
                             && !value.starts_with("--")
-                            && !value.chars().any(char::is_control)
+                            // A brief is prose with line breaks; every other
+                            // value is one line.
+                            && (flag == "--brief" || !value.chars().any(char::is_control))
                     })
                     .ok_or(USAGE)?
                     .clone();
@@ -125,24 +145,36 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
             let kind = take("--kind")?;
             let repo = take("--repo")?;
             let branch = take("--branch")?;
-            Command::Spawn {
-                mission: None,
-                parent: flags.remove("--parent"),
-                machine: flags.remove("--machine"),
-                name,
-                intent,
-                kind,
-                repo,
-                branch,
-                path: flags.remove("--path"),
-                args: native,
-                launch: hide_agent_adapter::LaunchChoice {
-                    model: flags.remove("--model"),
-                    effort: flags.remove("--effort"),
-                },
-                // Only Hide's own identity gives a task; no flag names one.
-                task: None,
+            let brief = flags.remove("--brief");
+            let brief_file = flags.remove("--brief-file");
+            if brief.is_some() && brief_file.is_some() {
+                return Err("Give --brief or --brief-file, not both".into());
             }
+            let brief = brief.map(checked_brief).transpose()?;
+            return Ok(Parsed {
+                brief_file,
+                command: Delivery::Agents {
+                    command: Command::Spawn {
+                        mission: None,
+                        brief,
+                        parent: flags.remove("--parent"),
+                        machine: flags.remove("--machine"),
+                        name,
+                        intent,
+                        kind,
+                        repo,
+                        branch,
+                        path: flags.remove("--path"),
+                        args: native,
+                        launch: hide_agent_adapter::LaunchChoice {
+                            model: flags.remove("--model"),
+                            effort: flags.remove("--effort"),
+                        },
+                        // Only Hide's own identity gives a task; no flag names one.
+                        task: None,
+                    },
+                },
+            });
         }
         "list" => Command::List,
         "show" => Command::Show {
@@ -154,8 +186,47 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
         },
         _ => return Err(USAGE.into()),
     };
-    Ok(Delivery::Agents { command })
+    Ok(Parsed {
+        command: Delivery::Agents { command },
+        brief_file: None,
+    })
 }
+
+/// Reads the brief `--brief-file` names, in the caller's own account, and
+/// refuses it before the daemon is asked when it cannot be read, is blank or
+/// is past a letter's body limit.
+pub fn read_brief_file(path: &str) -> Result<String, String> {
+    let brief = std::fs::read_to_string(path)
+        .map_err(|error| format!("--brief-file {path} could not be read: {error}"))?;
+    checked_brief(brief)
+}
+
+/// A brief that is not blank and fits a letter's body.
+fn checked_brief(brief: String) -> Result<String, String> {
+    if brief.trim().is_empty() {
+        return Err("The brief is blank".into());
+    }
+    if brief.len() > herdr_core::delivery::BODY_LIMIT {
+        return Err(format!(
+            "The brief is {} bytes; a brief holds at most {} bytes",
+            brief.len(),
+            herdr_core::delivery::BODY_LIMIT
+        ));
+    }
+    Ok(brief)
+}
+
+/// Puts the brief read from its file into the spawn it was parsed for.
+pub fn with_brief(mut command: Delivery, brief: String) -> Delivery {
+    if let Delivery::Agents {
+        command: Command::Spawn { brief: slot, .. },
+    } = &mut command
+    {
+        *slot = Some(brief);
+    }
+    command
+}
+
 pub fn run(env: &Env, command: Delivery) -> Result<(), String> {
     let result = (|| {
         let mut credential = crate::workspace_cli::Credential::acquire(env)?;
@@ -203,6 +274,9 @@ pub fn run(env: &Env, command: Delivery) -> Result<(), String> {
 mod tests {
     use super::*;
     fn line(args: &[&str]) -> Result<Delivery, String> {
+        parsed(args).map(|parsed| parsed.command)
+    }
+    fn parsed(args: &[&str]) -> Result<Parsed, String> {
         let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
         parse(args.iter())
     }
@@ -321,6 +395,70 @@ mod tests {
         assert!(launch.is_default());
         assert!(spawn(&["--effort", "high", "--effort", "low"]).is_err());
         assert!(SPAWN_HELP.contains("[--model <model>] [--effort <effort>]"));
+    }
+
+    /// The brief rides the spawn: from the flag, or from a file read when
+    /// the command runs, never both, with line breaks kept, and refused
+    /// before the daemon is asked when it is blank or past a letter's body
+    /// (PRD mission fixes (a)).
+    #[test]
+    fn spawn_takes_its_brief_from_text_or_a_file_and_explains_it_in_its_help() {
+        let spawn = |extra: &[&str]| {
+            let mut args = vec![
+                "spawn",
+                "--name",
+                "worker",
+                "--intent",
+                "mission-1:api",
+                "--kind",
+                "claude",
+                "--repo",
+                "/fixture",
+                "--branch",
+                "topic",
+            ];
+            args.extend_from_slice(extra);
+            parsed(&args)
+        };
+        let brief_of = |command: Delivery| {
+            let Delivery::Agents {
+                command: Command::Spawn { brief, .. },
+            } = command
+            else {
+                panic!("spawn")
+            };
+            brief
+        };
+        let plain = spawn(&[]).unwrap();
+        assert_eq!(brief_of(plain.command), None);
+        assert_eq!(plain.brief_file, None);
+        let text = spawn(&["--brief", "Node api: add the call.\nReport by letter."]).unwrap();
+        assert_eq!(
+            brief_of(text.command),
+            Some("Node api: add the call.\nReport by letter.".into())
+        );
+        // The file is named at parse time and read when the command runs.
+        let named = spawn(&["--brief-file", "briefs/api.md"]).unwrap();
+        assert_eq!(named.brief_file.as_deref(), Some("briefs/api.md"));
+        assert_eq!(brief_of(named.command.clone()), None);
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("brief-api.md");
+        std::fs::write(&file, "# api\n\nAdd the call.\n").unwrap();
+        let read = read_brief_file(file.to_str().unwrap()).unwrap();
+        assert_eq!(
+            brief_of(with_brief(named.command, read)),
+            Some("# api\n\nAdd the call.\n".into())
+        );
+        assert!(read_brief_file(dir.path().join("missing.md").to_str().unwrap()).is_err());
+        std::fs::write(&file, " \n").unwrap();
+        assert!(read_brief_file(file.to_str().unwrap()).is_err());
+        assert!(spawn(&["--brief", "x", "--brief-file", "briefs/api.md"]).is_err());
+        assert!(spawn(&["--brief", " \n "]).is_err());
+        let long = "x".repeat(herdr_core::delivery::BODY_LIMIT + 1);
+        assert!(spawn(&["--brief", &long]).is_err());
+        assert!(USAGE.contains("[--brief <text> | --brief-file <path>]"));
+        assert!(SPAWN_HELP.contains("--brief-file <path>"));
+        assert!(SPAWN_HELP.contains("mission_brief_missing"));
     }
 
     #[test]

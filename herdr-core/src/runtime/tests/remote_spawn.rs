@@ -404,6 +404,7 @@ impl Spawner {
                 args,
                 launch,
                 task: None,
+                brief: None,
             },
         )
     }
@@ -979,6 +980,7 @@ fn a_spawn_by_a_device_caller_is_refused_before_anything_is_made() {
                 args: Vec::new(),
                 launch: Default::default(),
                 task: None,
+                brief: None,
             },
         )
         .expect_err("refused");

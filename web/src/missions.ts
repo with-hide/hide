@@ -57,32 +57,52 @@ export function kindWord(kind: MissionNode["kind"]): MessageKey {
 }
 
 /**
- * The card's last line (B15, B51, B53): why it waits on an earlier node,
- * else what its worker last said, else its kind. A node that waits for a
- * node not done yet names that node.
+ * The card's last line (B15, B51, B53): why it waits on a failed or dropped
+ * node, else what its worker last said, else its kind. A node that waits
+ * on a node not done yet says nothing of it: the edge above it does.
  */
-export function nodeLine(mission: Mission, node: MissionNode, t: TFunction<"translation">): string {
+export function nodeLine(node: MissionNode, t: TFunction<"translation">): string {
   if (node.blocked === "upstream_failed") return t("mission.blocked.failed");
   if (node.blocked === "upstream_dropped") return t("mission.blocked.dropped");
   if (node.line) return node.line;
-  if (node.status === "planned" && mission.status !== "planning") {
-    const waiting = node.depends_on.map((key) => mission.nodes.find((row) => row.key === key)).find((row) => row && row.status !== "done");
-    if (waiting) return t("mission.waitingFor", { title: waiting.title });
-  }
   return t(kindWord(node.kind));
 }
 
-/** A worker as the card names it: its model (or agent) and its effort, `자동` while the Conductor will choose it. */
-export function workerWords(node: MissionNode, auto: string): string | null {
+/**
+ * The model a worker's pane runs with: the launch Hide recorded for the
+ * node's pane on its machine (`overview_graph.sessions`), null when it has
+ * no pane, the pane was not started by Hide or the launch named no model.
+ */
+export function launchModelOf(rest: SnapshotRest | null | undefined, mission: Mission, node: MissionNode): string | null {
+  if (!node.pane_id) return null;
+  const device = node.machine ?? mission.device_id;
+  return rest?.overview_graph?.sessions.find((session) => session.device_id === device && session.pane_id === node.pane_id)?.launch_model ?? null;
+}
+
+/**
+ * A worker as the card names it: the model and the effort, never the agent's
+ * name (its logo stands beside the words). A working or review node shows
+ * the model its pane runs (`launchModel`) and falls back to the plan's; a
+ * planned node shows the plan's. With no model (an agent that takes none)
+ * the effort stands alone, `자동` while the Conductor will choose it.
+ */
+export function workerWords(node: MissionNode, launchModel: string | null, auto: string): string | null {
   const worker = node.worker;
   if (!worker) return null;
-  const who = worker.model ?? worker.agent;
+  const live = node.status === "working" || node.status === "review";
+  const model = (live ? launchModel : null) ?? worker.model ?? null;
   const effort = worker.effort ?? (worker.effort_auto ? auto : null);
-  return effort ? `${who}·${effort}` : who;
+  if (model && effort) return `${model}·${effort}`;
+  return model ?? effort;
 }
 
 /** A change node's steps: work, PR or branch, review, merge or main (D-42 B, D-48). */
 export const STAGE_STEPS = 4;
+
+/** How many step cells a card draws: the four of a change node, none for a research or verify node, whose status mark already says where it is. */
+export function stepsOf(node: MissionNode): number {
+  return node.kind === "change" ? STAGE_STEPS : 0;
+}
 
 /**
  * The card's status mark (B15): its worker's own mark while its row is

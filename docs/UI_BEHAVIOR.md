@@ -1247,9 +1247,10 @@ The Conductor's first plan opens the map once, widening the lane for it as a pag
 Before the first plan the map is one `계획 중` line (B19).
 A summary row counts the elapsed time, the agents running over the cap, the nodes done over those in the plan, the decisions waiting and, while it is gone, `Conductor 없음` (B21).
 The nodes are drawn top down by what they wait on: every node that waits on nothing starts on the top row, and the edges meet one `보고·인계` card at the bottom.
-A card carries its status mark, title, worker (`<model>·<effort>`, `자동` while the Conductor chooses the effort), elapsed time and one line: its PR mark and number, `↰ #N 위` when it is stacked on another, its branch for a direct change, or its last line (B15, B52).
-A change card's left band is its pull request's state colour and its bar has four steps, work, PR or branch, review, merge or main; a research or verify card has one step (D-42).
-A card that waits on a failed or dropped node says so, and a stacked edge is dashed in the merged colour.
+A card carries its status mark, title, worker line, elapsed time and one line: its PR mark and number, `↰ #N 위` when it is stacked on another, its branch for a direct change, or its last line (B15, B52).
+The worker line is the model and the effort (`<model>·<effort>`, `자동` while the Conductor chooses the effort), never the agent's name, which its logo beside the words already says: a working or review card shows the model its pane runs (the launch Hide recorded for that pane, `overview_graph.sessions`) and falls back to the plan's model, a planned card shows the plan's, and a worker with no model (an agent that takes none) shows the effort alone.
+A change card's left band is its pull request's state colour and its bar has four numberless steps, work, PR or branch, review, merge or main; a research or verify card draws no steps, its status mark says where it is (D-42).
+A card that waits on a failed or dropped node says so, and a stacked edge is dashed in the merged colour; a card that waits on a node not done yet names nothing, the edge above it does.
 Pressing a card opens its detail beside it with `터미널로 이동`, `기록` and `PR 카드` where they apply.
 A decision the Conductor waits on is one banner with `대화로 가기`; a mission whose Conductor is gone shows `Conductor 없음` with `이어받기`, which starts a new agent in the mission's checkout told to take the mission, and the core refuses a second Conductor while the first is there (B44).
 More than twelve nodes fold the done ones under one line that unfolds them (B19).

@@ -2,7 +2,7 @@
 //! the skill stub and the guidance hooks, against a private HOME.
 
 use super::*;
-use crate::agents::{ADAPTERS, GUIDE_SKILL, RETIRED_SKILLS, SKILLS};
+use crate::agents::{ADAPTERS, CONDUCTOR_SKILL, GUIDE_SKILL, RETIRED_SKILLS, SKILLS};
 
 fn agent<'a>(report: &'a KitReport, id: &str) -> &'a AgentReport {
     report
@@ -211,8 +211,11 @@ fn earlier_build_folder(fixture: &Fixture) -> PathBuf {
     root
 }
 
+/// The earlier build's `hide-browser` goes, and its `hide-conductor` version
+/// 1 is an older version of the current Conductor stub, replaced by the
+/// marker rule; `hide` is written beside it.
 #[test]
-fn an_earlier_builds_two_stubs_give_way_to_the_guide() {
+fn an_earlier_builds_two_stubs_give_way_to_the_current_ones() {
     let fixture = Fixture::new();
     let root = earlier_build_folder(&fixture);
     assert_eq!(
@@ -231,21 +234,33 @@ fn an_earlier_builds_two_stubs_give_way_to_the_guide() {
         GUIDE_SKILL.text()
     );
     assert!(!root.join("hide-browser").exists());
-    assert!(!root.join("hide-conductor").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("hide-conductor/SKILL.md")).unwrap(),
+        CONDUCTOR_SKILL.text()
+    );
     assert!(
         GUIDE_SKILL
             .text()
             .contains("description: \"Only for a session in a pane Hide manages")
     );
+    // The Conductor's stub names missions and the Conductor for the agent
+    // choosing it, and sends it to the help that owns the commands.
+    assert!(
+        CONDUCTOR_SKILL
+            .text()
+            .contains("description: \"Conduct a mission of agents in Hide")
+    );
+    assert!(CONDUCTOR_SKILL.text().contains("run `hide mission help`"));
+    assert!(CONDUCTOR_SKILL.text().contains("<!-- hide-skill@2:"));
 }
 
 #[test]
 fn an_old_stub_the_operator_edited_stays_and_the_rest_go() {
     let fixture = Fixture::new();
     let root = earlier_build_folder(&fixture);
-    let conductor = root.join("hide-conductor/SKILL.md");
-    let edited = std::fs::read_to_string(&conductor).unwrap() + "Always ask me first.\n";
-    std::fs::write(&conductor, &edited).unwrap();
+    let browser = root.join("hide-browser/SKILL.md");
+    let edited = std::fs::read_to_string(&browser).unwrap() + "Always ask me first.\n";
+    std::fs::write(&browser, &edited).unwrap();
 
     let report = apply(&fixture.target, &Scope::automatic());
 
@@ -253,44 +268,60 @@ fn an_old_stub_the_operator_edited_stays_and_the_rest_go() {
         agent(&report, "grok").skill.state,
         ComponentState::Installed
     );
-    assert!(!root.join("hide-browser").exists());
-    assert_eq!(std::fs::read_to_string(&conductor).unwrap(), edited);
-    assert!(root.join("hide/SKILL.md").is_file());
+    assert_eq!(std::fs::read_to_string(&browser).unwrap(), edited);
+    for skill in SKILLS {
+        assert_eq!(
+            std::fs::read_to_string(skill.file_in(&root)).unwrap(),
+            skill.text(),
+            "{}",
+            skill.name
+        );
+    }
     // The kept file settles the folder: a second pass finds it current.
     assert_eq!(
         agent(&status(&fixture.target), "grok").skill.state,
         ComponentState::Installed
     );
 
-    // Switching every reader off takes Hide's stub out and keeps the edit.
+    // Switching every reader off takes Hide's stubs out and keeps the edit.
     apply(&fixture.target, &Scope::agents([], ["grok", "codex"]));
-    assert!(!root.join("hide").exists());
-    assert_eq!(std::fs::read_to_string(&conductor).unwrap(), edited);
+    for skill in SKILLS {
+        assert!(!root.join(skill.name).exists(), "{}", skill.name);
+    }
+    assert_eq!(std::fs::read_to_string(&browser).unwrap(), edited);
 }
 
 #[test]
 fn a_recorded_folder_with_only_edited_old_stubs_waits_for_reinstall() {
     let fixture = Fixture::new();
     let root = earlier_build_folder(&fixture);
+    // The folder holds only what the operator edited: the retired stub with
+    // their words, and none of Hide's current stubs (the earlier build's
+    // `hide-conductor` is an older version of one, so it is taken out here).
     for name in RETIRED_SKILLS.map(|skill| skill.name) {
         let path = root.join(name).join("SKILL.md");
         let edited = std::fs::read_to_string(&path).unwrap() + "Mine now.\n";
         std::fs::write(&path, edited).unwrap();
     }
+    std::fs::remove_dir_all(root.join(CONDUCTOR_SKILL.name)).unwrap();
 
     // The operator's edits decide nothing, and a recorded folder without
-    // `hide` reads as their removal: no pass writes it back.
+    // Hide's stubs reads as their removal: no pass writes them back.
     let report = apply(&fixture.target, &Scope::automatic());
     assert_eq!(agent(&report, "grok").skill.state, ComponentState::Removed);
-    assert!(!root.join("hide").exists());
+    for skill in SKILLS {
+        assert!(!root.join(skill.name).exists(), "{}", skill.name);
+    }
 
-    // Reinstall does, and the edited files stay.
+    // Reinstall does, and the edited file stays.
     let report = apply(&fixture.target, &Scope::agents(["grok"], []));
     assert_eq!(
         agent(&report, "grok").skill.state,
         ComponentState::Installed
     );
-    assert!(root.join("hide/SKILL.md").is_file());
+    for skill in SKILLS {
+        assert!(skill.file_in(&root).is_file(), "{}", skill.name);
+    }
     for name in RETIRED_SKILLS.map(|skill| skill.name) {
         assert!(root.join(name).join("SKILL.md").is_file(), "{name}");
     }

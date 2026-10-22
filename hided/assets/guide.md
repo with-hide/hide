@@ -33,7 +33,7 @@ hide inbox
 ## Agents
 
 ```
-hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>]
+hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>]
 hide ps [--all] [--here] [--json]
 hide agent list
 hide agent show <id|here>

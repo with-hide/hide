@@ -13,6 +13,12 @@ use crate::state_file::{self, DaemonState};
 #[derive(Debug, Eq, PartialEq)]
 pub enum CommandKind {
     Delivery(herdr_core::delivery::Command),
+    /// `hide agent spawn … --brief-file <path>`: the spawn, whose brief is
+    /// read from `path` in the caller's account when it runs.
+    AgentSpawnBriefFile {
+        command: herdr_core::delivery::Command,
+        path: String,
+    },
     /// `hide mission …`: a Conductor's mission (PRD software-factory-conductor).
     Mission(crate::mission_cli::MissionCli),
     /// `hide agent catalog [--machine <id>]`.
@@ -174,7 +180,13 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("agent") => {
             crate::cli_contract::admit(&args[1..])
                 .map_err(|refusal| format!("{refusal}\n{}", crate::agent_cli::USAGE))?;
-            crate::agent_cli::parse(iter).map(CommandKind::Delivery)
+            crate::agent_cli::parse(iter).map(|parsed| match parsed.brief_file {
+                Some(path) => CommandKind::AgentSpawnBriefFile {
+                    command: parsed.command,
+                    path,
+                },
+                None => CommandKind::Delivery(parsed.command),
+            })
         }
         Some("ps") => {
             crate::cli_contract::admit(&args[1..])
@@ -557,6 +569,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                 CommandKind::WorkspaceBootstrap
                     | CommandKind::WorkspaceMemory { .. }
                     | CommandKind::Delivery(_)
+                    | CommandKind::AgentSpawnBriefFile { .. }
                     | CommandKind::Mission(_)
                     | CommandKind::AgentCatalog { .. }
                     | CommandKind::Ps(_)
@@ -596,6 +609,10 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
             } else {
                 crate::delivery_cli::run(&env, command)
             }
+        }
+        CommandKind::AgentSpawnBriefFile { command, path } => {
+            let brief = crate::agent_cli::read_brief_file(&path)?;
+            crate::agent_cli::run(&env, crate::agent_cli::with_brief(command, brief))
         }
         CommandKind::Help
         | CommandKind::AgentSpawnHelp
