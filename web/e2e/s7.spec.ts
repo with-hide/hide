@@ -1418,12 +1418,12 @@ test("a broken or unknown Views file is kept aside for Main and a fresh layout, 
       await showExplorer(page);
       await explorerRow(page, stack, "b.txt").click();
       await expect.poll(() => shape(page)).toBe("@(>b.txt*)");
-      await expect.poll(() => JSON.parse(fs.readFileSync(viewsFile(stack.daemon), "utf8")).schema_version as number).toBe(4);
+      await expect.poll(() => JSON.parse(fs.readFileSync(viewsFile(stack.daemon), "utf8")).schema_version as number).toBe(5);
     }
 
     // An S6 (schema 1) file: its tabs become one area in their order, with
     // its active tab and preview, and its lane starts closed until the
-    // documents are asked for; the next save writes schema 4 (B17, contract
+    // documents are asked for; the next save writes schema 5 (B17, contract
     // 1, PRD lane-two-columns B23). It names this machine `local`, as a
     // build of that time did, and the start converts that to the node id
     // (core-host-node D-21).
@@ -1459,7 +1459,7 @@ test("a broken or unknown Views file is kept aside for Main and a fresh layout, 
       const stored = JSON.parse(fs.readFileSync(viewsFile(stack.daemon), "utf8")) as { schema_version: number; workspaces: { path: string; view_layout?: { root?: { area?: { displays?: { path: string; preview: boolean }[] } } } }[] };
       const entry = stored.workspaces.find((candidate) => candidate.path === stack.root);
       return { version: stored.schema_version, displays: entry?.view_layout?.root?.area?.displays?.map((display) => `${path.basename(display.path)}${display.preview ? "*" : ""}`) };
-    }).toEqual({ version: 4, displays: ["a.txt", "b.txt", "c.txt*"] });
+    }).toEqual({ version: 5, displays: ["a.txt", "b.txt", "c.txt*"] });
     expectFrontWorkspaceOnEveryViewEvent(stack);
   } finally {
     stopStack(stack);
