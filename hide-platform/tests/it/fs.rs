@@ -117,12 +117,17 @@ fn an_ancestor_is_passed_over_only_when_the_account_neither_owns_nor_may_add_to_
     let established = private::establish_dir_durability(&anchor);
     if cfg!(windows) {
         assert_eq!(synced.unwrap_err().kind(), ErrorKind::PermissionDenied);
-        let closed = fs::canonicalize(&closed).unwrap();
-        assert!(matches!(
-            established,
-            Err(private::DirectoryDurabilityError::Uncertain { path, source, .. })
-                if path == closed && source.kind() == ErrorKind::PermissionDenied
-        ));
+        // `closed` is flushed to keep `anchor` in it, so `anchor`'s entry is
+        // the one left uncertain.
+        let anchor = fs::canonicalize(&anchor).unwrap();
+        assert!(
+            matches!(
+                &established,
+                Err(private::DirectoryDurabilityError::Uncertain { path, source, .. })
+                    if *path == anchor && source.kind() == ErrorKind::PermissionDenied
+            ),
+            "{established:?}"
+        );
     } else {
         synced.unwrap();
         assert_eq!(
@@ -130,6 +135,57 @@ fn an_ancestor_is_passed_over_only_when_the_account_neither_owns_nor_may_add_to_
             identity::file_id(&anchor).unwrap()
         );
     }
+    assert!(names(&anchor).is_empty());
+}
+
+/// Windows flushes an ancestor only to keep the chain's next folder in it,
+/// and only when the account made that folder: one the system made, as
+/// `Users` in a drive's root, is not flushed for, since a drive root's flush
+/// writes out all the drive holds unwritten. The account owns `closed` but
+/// may not flush it: with the system's folder next on the chain, the chain
+/// stands; with the account's own folder there, the refused flush is the
+/// answer.
+#[cfg(windows)]
+#[test]
+fn an_ancestor_is_flushed_only_to_keep_a_folder_the_account_made() {
+    let outer = folder();
+    let closed = outer.path().join("closed");
+    fs::create_dir(&closed).unwrap();
+    let system = closed.join("system");
+    fs::create_dir(&system).unwrap();
+    let anchor = system.join("anchor");
+    private::create_dir(&anchor).unwrap();
+    // Every signed-in account may change it, and it stays that way when its
+    // owner is the system and `closed` above it is closed.
+    set_access(&system, "D:P(A;OICI;FA;;;AU)");
+    icacls(&system, &["/setowner", "*S-1-5-18"]);
+    assert!(!private::owned_by_current_user(&system).unwrap());
+    let _closed = Closed::own(&closed);
+    assert!(!may_add_to(&closed), "{}", access_list(&closed));
+
+    let canonical = private::establish_dir_durability(&anchor).unwrap();
+
+    assert_eq!(
+        identity::file_id(&canonical).unwrap(),
+        identity::file_id(&anchor).unwrap()
+    );
+
+    // The same folder made the account's own: `closed` is flushed to keep
+    // it, the account may not flush `closed`, and `system`'s entry is the
+    // one left uncertain.
+    let user = std::env::var("USERNAME").unwrap();
+    icacls(&system, &["/setowner", &user]);
+    assert!(private::owned_by_current_user(&system).unwrap());
+    let system = fs::canonicalize(&system).unwrap();
+    let established = private::establish_dir_durability(&anchor);
+    assert!(
+        matches!(
+            &established,
+            Err(private::DirectoryDurabilityError::Uncertain { path, source, .. })
+                if *path == system && source.kind() == ErrorKind::PermissionDenied
+        ),
+        "{established:?}"
+    );
     assert!(names(&anchor).is_empty());
 }
 

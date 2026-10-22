@@ -67,6 +67,21 @@ function appsEntries() {
   return output("pwsh", ["-NoProfile", "-Command", script], process.env).split(/\r?\n/).filter(Boolean);
 }
 
+/** The records hided wrote to its Logs file in `stateDir`, oldest first. */
+function daemonRecords(stateDir) {
+  const file = path.join(stateDir, "Logs", "core.jsonl");
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean).map((line) => {
+    try { return JSON.parse(line); } catch { return { line }; }
+  });
+}
+
+/** How long each step of the daemon's start took, as it logged them. */
+const startSteps = (stateDir) => daemonRecords(stateDir)
+  .filter((record) => record.kind === "start.step")
+  .map((record) => `${record.stage} ${record.took_ms} ms`)
+  .join(", ");
+
 const scratch = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hide-installer-")));
 const home = path.join(scratch, "home");
 fs.mkdirSync(home);
@@ -111,10 +126,12 @@ try {
   await until("the Herdr server answering", () => {
     try { return JSON.parse(output(herdr, ["status", "server", "--json"], isolated)).running === true; } catch { return false; }
   });
+  const connectBegan = Date.now();
   const connected = JSON.parse(output(path.join(runtime, "hide.exe"), ["connect"], { ...isolated, HERDR_BIN_PATH: herdr }));
+  const connectMs = Date.now() - connectBegan;
   check("the daemon starts from the copy", () => {
     if (connected.ok !== true) throw new Error(JSON.stringify(connected));
-    return `daemon ${connected.pid}, Herdr server ${herdrPid}`;
+    return `daemon ${connected.pid}, Herdr server ${herdrPid}; connect ${connectMs} ms; start steps: ${startSteps(isolated.HIDE_STATE_DIR)}`;
   });
 
   check("installing again keeps the Herdr server and the daemon running", () => {
@@ -141,6 +158,8 @@ try {
   });
 } catch (error) {
   console.error(error);
+  // A detached daemon's stderr goes nowhere; what it logged says where its start stood.
+  for (const record of daemonRecords(isolated.HIDE_STATE_DIR).slice(-60)) console.error(JSON.stringify(record));
   process.exitCode = 1;
 } finally {
   // The private Herdr server, then the folder it ran from.

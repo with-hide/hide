@@ -292,6 +292,7 @@ async fn herdr_program(env: &Env) -> Result<Option<std::path::PathBuf>, String> 
 
 /// The core role on `seat`, which already holds the instance lock.
 pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningDaemon, String> {
+    seat.starting("core.state");
     // This machine's name in every key that names it. A machine Hide cannot
     // name refuses to start rather than guess one (PRD core-host-node D-28).
     let node = herdr_core::node::NodeId::of_this_machine()?;
@@ -347,6 +348,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         .map_err(|error| format!("the daemon host id could not be read or written: {error}"))?;
     let token = seat.token.clone();
     let port = seat.port;
+    seat.starting("core.herdr_program");
     let herdr_bin = herdr_program(&env).await?;
     match herdr_bin.as_ref() {
         Some(path) => eprintln!(
@@ -418,7 +420,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let node_panes = Arc::new(node_panes::NodePanes::new(tokio::runtime::Handle::current()));
     let pane_events: hide_node::ssh::PaneEventsSlot = Default::default();
     let _ = pane_events.set(Arc::new(node_panes::Events(Arc::clone(&node_panes))));
+    seat.starting("core.owner");
     let core = Arc::new(CoreHandle::spawn(options, Arc::clone(&pane_events))?);
+    seat.starting("core.services");
     if effects_held {
         let mut open = move_gate.subscribe();
         let core = Arc::clone(&core);
@@ -468,6 +472,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let renderers = Arc::new(AtomicUsize::new(0));
     let start_demand = Arc::new(demand::ObservationDemand::default());
     let desktop_notices = Arc::new(desktop_notices::DesktopNotices::default());
+    seat.starting("core.mobile");
     let mobile = mobile::Mobile::start(mobile::Config {
         state_dir: env.state_dir.clone(),
         home: env.home.clone(),
@@ -551,6 +556,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         own_screens: Arc::new(Mutex::new(0)),
         pane_sizes: core.outputs.pane_sizes(),
     };
+    seat.starting("core.roots");
     node_panes.serve(app.clone());
     // Seeded before the server accepts a client with the registrations the
     // core loaded in `CoreHandle::spawn`. A checkout the core learns later,
@@ -635,6 +641,7 @@ pub async fn start_node_daemon(env: Env) -> Result<RunningNode, String> {
 
 /// The node role on `seat`, which already holds the instance lock.
 pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningNode, String> {
+    seat.starting("node");
     let node = herdr_core::node::NodeId::of_this_machine()?;
     let placement = placement::read(&env.state_dir, node.as_str())?
         .ok_or("no core placement record: this state folder starts a core")?;

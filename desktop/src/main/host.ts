@@ -60,6 +60,11 @@ import { AppUpdates, fetchReleases, macosLocation, readPackageType, readPrerelea
 declare const __HIDE_BACKGROUND__: string;
 declare const __HIDE_WARNING__: string;
 
+/**
+ * `hide connect` refuses on its own a start that stands still for 10 s, naming the step; this bound is for a CLI that
+ * never answers. A first start right after a Windows install measured 1.4 to 1.9 s once it stopped flushing the drive's
+ * root (#1515), and 4.3 to 6.7 s, past 10 s on a busy runner, before.
+ */
 const CONNECT_TIMEOUT_MS = 25_000;
 /** The first launch of a Windows build copies its runtime (about 150 MB); later ones find the copy. */
 const RUNTIME_PREPARE_TIMEOUT_MS = 120_000;

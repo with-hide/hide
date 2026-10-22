@@ -2121,8 +2121,11 @@ fn spawn_daemon(env: &Env, keep_alive: bool) -> Result<std::process::Child, Stri
     spawn_owned(&mut command).map_err(|error| error.to_string())
 }
 
-/// How long `hide connect` waits for the daemon it started to answer, on
-/// the wall clock; the error names this same bound.
+/// How long `hide connect` waits, on the wall clock, for the daemon it
+/// started to show progress: to answer `/health`, or to report on
+/// `/starting` a step of its start past the last one seen. A start that
+/// moves is waited for step by step, and one that stands still this long is
+/// refused; the error names this same bound and the step it stood in.
 const HEALTHY_WITHIN: Duration = Duration::from_secs(10);
 
 /// The longest one `/health` request may take.
@@ -2131,9 +2134,10 @@ const HEALTH_REQUEST: Duration = Duration::from_secs(1);
 /// The pause between two looks at a daemon that has not answered yet.
 const HEALTH_PAUSE: Duration = Duration::from_millis(100);
 
-/// Waits for the daemon `hide connect` started. One that exits first ends
-/// the wait at once, with the reason it logged when it refused its state
-/// folder (PRD core-host-node B2), since its stderr goes nowhere.
+/// Waits for the daemon `hide connect` started while it makes progress. One
+/// that exits first ends the wait at once, with the reason it logged when it
+/// refused its state folder (PRD core-host-node B2), since its stderr goes
+/// nowhere.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
 fn wait_healthy(
     env: &Env,
@@ -2146,7 +2150,7 @@ fn wait_healthy(
         std::time::Instant::now,
         std::thread::sleep,
         || daemon.try_wait().ok().flatten(),
-        |timeout| probe_daemon(&env.state_dir, timeout),
+        |timeout| look(&env.state_dir, pid, timeout),
     );
     match waited {
         Ok(healthy) => Ok(healthy),
@@ -2192,14 +2196,53 @@ enum Waited {
     Exited(std::process::ExitStatus),
 }
 
+/// What one look at a started daemon that is not healthy yet saw: what
+/// stood in the way, and the step of its start it reported, if it did.
+struct Unready {
+    detail: String,
+    start: Option<StartStep>,
+}
+
+/// A step of a daemon's start, as its seat's `/starting` reports it; the
+/// last is the role mounted, after which `/health` answers.
+#[derive(Clone, Debug, PartialEq)]
+struct StartStep {
+    step: u64,
+    stage: String,
+    mounted: bool,
+}
+
+/// One look, within `timeout`, at the daemon `pid` this connect started.
+/// Its seat answers `/starting` at once, while `/health` waits for the
+/// role to mount, so a start still under way is read from `/starting`
+/// alone, and `/health` is asked once a role is mounted, or of a seat that
+/// does not answer for `pid` (no state written yet).
+fn look(state_dir: &Path, pid: u32, timeout: Duration) -> Result<Healthy, Unready> {
+    let asked = std::time::Instant::now();
+    let start = start_of(state_dir, pid, timeout);
+    if let Some(unmounted) = start.as_ref().filter(|start| !start.mounted) {
+        return Err(Unready {
+            detail: format!("step {} ({}) of its start", unmounted.step, unmounted.stage),
+            start,
+        });
+    }
+    probe_daemon(state_dir, timeout.saturating_sub(asked.elapsed()))
+        .map_err(|detail| Unready { detail, start })
+}
+
+/// Waits until `probe` answers, while the daemon makes progress: each look
+/// that reports a later step of its start gives it `within` again, and
+/// `within` with no new step ends the wait. A start passes a fixed number of
+/// steps, so the wait stays bounded however slowly each one runs.
 fn wait_started<T>(
     within: Duration,
     now: impl Fn() -> std::time::Instant,
     mut pause: impl FnMut(Duration),
     mut exited: impl FnMut() -> Option<std::process::ExitStatus>,
-    mut probe: impl FnMut(Duration) -> Result<T, String>,
+    mut probe: impl FnMut(Duration) -> Result<T, Unready>,
 ) -> Result<T, Waited> {
-    let deadline = now() + within;
+    let mut deadline = now() + within;
+    let mut reached: Option<u64> = None;
     loop {
         let left = deadline.saturating_duration_since(now());
         let seen = match probe(left.min(HEALTH_REQUEST)) {
@@ -2209,14 +2252,42 @@ fn wait_started<T>(
         if let Some(status) = exited() {
             return Err(Waited::Exited(status));
         }
+        if let Some(step) = seen.start.map(|start| start.step)
+            && reached.is_none_or(|reached| step > reached)
+        {
+            reached = Some(step);
+            deadline = now() + within;
+        }
         let left = deadline.saturating_duration_since(now());
         if left.is_zero() {
-            return Err(Waited::Timeout(format!(
-                "hided did not become healthy within {within:?}; last waited on {seen}"
-            )));
+            let detail = &seen.detail;
+            return Err(Waited::Timeout(if reached.is_some() {
+                format!("hided made no progress for {within:?}; last waited on {detail}")
+            } else {
+                format!("hided did not become healthy within {within:?}; last waited on {detail}")
+            }));
         }
         pause(left.min(HEALTH_PAUSE));
     }
+}
+
+/// The step the start of daemon `pid` has reached, as its seat answers
+/// `/starting` within `timeout`; none when the state names another daemon or
+/// the seat does not answer for `pid`.
+fn start_of(state_dir: &Path, pid: u32, timeout: Duration) -> Option<StartStep> {
+    let state = state_file::read_state(state_dir).ok()??;
+    if state.pid != pid {
+        return None;
+    }
+    let answer = loopback_json(state.port, "/starting", timeout).ok()?;
+    if answer["pid"].as_u64() != Some(u64::from(pid)) {
+        return None;
+    }
+    Some(StartStep {
+        step: answer["step"].as_u64()?,
+        stage: answer["stage"].as_str()?.to_owned(),
+        mounted: answer["mounted"].as_bool()?,
+    })
 }
 
 /// Looks at the started daemon until it answers or `within` has passed on
@@ -2224,12 +2295,12 @@ fn wait_started<T>(
 /// the bound it names, and the error says what was last seen, so a slow
 /// start names its stage.
 #[cfg(test)]
-fn wait_healthy_within(
+fn wait_healthy_within<T>(
     within: Duration,
     now: impl Fn() -> std::time::Instant,
     pause: impl FnMut(Duration),
-    probe: impl FnMut(Duration) -> Result<DaemonState, String>,
-) -> Result<DaemonState, String> {
+    probe: impl FnMut(Duration) -> Result<T, Unready>,
+) -> Result<T, String> {
     wait_started(within, now, pause, || None, probe).map_err(|waited| match waited {
         Waited::Timeout(detail) => detail,
         Waited::Exited(status) => format!("exited with {status}"),
@@ -2288,13 +2359,18 @@ fn health_of(state: &DaemonState, timeout: Duration) -> Result<serde_json::Value
 /// request goes to this machine's loopback, so no proxy from the
 /// environment may carry it, and a status other than 2xx is a failure.
 fn health_json(port: u16, timeout: Duration) -> Result<serde_json::Value, String> {
+    loopback_json(port, "/health", timeout)
+}
+
+/// The JSON a daemon on this machine's `port` answers at `path`.
+fn loopback_json(port: u16, path: &str, timeout: Duration) -> Result<serde_json::Value, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .proxy(None)
         .build()
         .into();
     let body = agent
-        .get(&format!("http://127.0.0.1:{port}/health"))
+        .get(&format!("http://127.0.0.1:{port}{path}"))
         .call()
         .map_err(|error| error.to_string())?
         .body_mut()
@@ -2430,7 +2506,7 @@ mod tests {
         let start = std::time::Instant::now();
         let clock = std::cell::Cell::new(start);
         let asked = std::cell::RefCell::new(Vec::new());
-        let error = wait_healthy_within(
+        let error = wait_healthy_within::<()>(
             HEALTHY_WITHIN,
             || clock.get(),
             |pause| clock.set(clock.get() + pause),
@@ -2439,7 +2515,10 @@ mod tests {
                 let left = (start + HEALTHY_WITHIN).saturating_duration_since(clock.get());
                 asked.borrow_mut().push((timeout, left));
                 clock.set(clock.get() + timeout);
-                Err("/health on port 7001: timed out".to_owned())
+                Err(Unready {
+                    detail: "/health on port 7001: timed out".to_owned(),
+                    start: None,
+                })
             },
         )
         .unwrap_err();
@@ -2459,6 +2538,80 @@ mod tests {
         assert_eq!(
             error,
             "hided did not become healthy within 10s; last waited on /health on port 7001: timed out"
+        );
+    }
+
+    /// A start that reports a later step every few seconds, as a first
+    /// start on a cold machine does, slower in all than the bound: it is
+    /// waited for, since each step it reports is progress.
+    #[test]
+    fn a_start_that_moves_is_waited_for_past_the_bound() {
+        let start = std::time::Instant::now();
+        let clock = std::cell::Cell::new(start);
+        let step_every = Duration::from_secs(6);
+        let answered = wait_healthy_within(
+            HEALTHY_WITHIN,
+            || clock.get(),
+            |pause| clock.set(clock.get() + pause),
+            |timeout| {
+                clock.set(clock.get() + timeout);
+                let step = (clock.get() - start).as_secs() / step_every.as_secs();
+                if step >= 5 {
+                    return Ok(step);
+                }
+                Err(Unready {
+                    detail: format!("step {step} of its start"),
+                    start: Some(StartStep {
+                        step,
+                        stage: format!("stage {step}"),
+                        mounted: false,
+                    }),
+                })
+            },
+        )
+        .expect("a start that moves is waited for");
+        assert_eq!(answered, 5);
+        assert!(clock.get() - start > HEALTHY_WITHIN * 2);
+    }
+
+    /// A start that stands in one step is refused once it has stood there
+    /// for the bound, and the error names the step.
+    #[test]
+    fn a_start_that_stands_still_is_refused_at_the_bound_naming_its_step() {
+        let start = std::time::Instant::now();
+        let clock = std::cell::Cell::new(start);
+        let stuck_from = Duration::from_secs(4);
+        let error = wait_healthy_within(
+            HEALTHY_WITHIN,
+            || clock.get(),
+            |pause| clock.set(clock.get() + pause),
+            |timeout| -> Result<(), Unready> {
+                clock.set(clock.get() + timeout);
+                let step = if clock.get() - start < stuck_from {
+                    1
+                } else {
+                    3
+                };
+                Err(Unready {
+                    detail: format!("step {step} (core.owner) of its start"),
+                    start: Some(StartStep {
+                        step,
+                        stage: "core.owner".to_owned(),
+                        mounted: false,
+                    }),
+                })
+            },
+        )
+        .unwrap_err();
+        let stood = clock.get() - start;
+        assert!(
+            stood >= stuck_from + HEALTHY_WITHIN
+                && stood <= stuck_from + HEALTHY_WITHIN + HEALTH_REQUEST,
+            "refused after {stood:?}"
+        );
+        assert_eq!(
+            error,
+            "hided made no progress for 10s; last waited on step 3 (core.owner) of its start"
         );
     }
 
