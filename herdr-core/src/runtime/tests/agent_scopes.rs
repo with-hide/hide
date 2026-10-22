@@ -378,12 +378,14 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
         .iter()
         .find(|c| c.root == "merged")
         .unwrap();
-    assert_ne!(
+    // Only the provisional history PR is left, and history has no stage.
+    assert_eq!(
         card.stage,
-        Some(4),
+        Some(1),
         "an earlier merge is not this request's"
     );
-    assert_ne!(card.state, TaskState::Cleanup);
+    assert_eq!(card.state, TaskState::Resting);
+    // Back to the merged-this-request fixture the next step starts from.
     set_live(&mut runtime, true);
     runtime.refresh_agent_scopes();
     runtime.snapshot.navigator.workspaces[0].checkouts[1].exists = false;

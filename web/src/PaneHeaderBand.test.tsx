@@ -168,6 +168,16 @@ it("never counts a core unknown child as resting or a result when the wire omits
   } finally { await unmount(); }
 });
 
+it("skips a child of unknown state and marks the next known one", async () => {
+  const agents = childrenFixture().map((row) => row.pane_id === "unknown" ? { ...row, state: { ...row.state, tree_rank: 1 } } : row.pane_id === "working" ? { ...row, state: { ...row.state, tree_rank: 2 } } : row);
+  const { container, unmount } = await mount({ working: false, notice: null, band: null }, agents);
+  try {
+    const trigger = container.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
+    expect([...trigger.querySelectorAll("[data-pane-tree-mark]")].map((mark) => mark.getAttribute("data-pane-tree-mark"))).toEqual(["question", "working", "result"]);
+    expect(trigger.textContent).toBe("+2");
+  } finally { await unmount(); }
+});
+
 it("says the parent waits on its working children after the request, in the sidebar's words", async () => {
   const { container, unmount } = await mount({ working: false, notice: null, band: null, request: { text: "Find the missing requests", images: 0 }, waiting_on_children: 2 }, childrenFixture());
   try {
