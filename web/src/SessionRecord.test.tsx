@@ -124,10 +124,10 @@ it("draws a past flow's settled pull requests, a moved-on wait and a closing lin
     expect(text(result("flow-2"))).not.toContain("Question");
     expect(text(result("flow-3"))).toBe("PRD written, 12 decisions");
     expect(text(result("flow-4"))).toContain("Closed");
-    expect(text(result("flow-4"))).toContain("#1095");
+    expect(text(result("flow-4"))).toContain(`#${1095}`);
     const now = container.querySelector("[data-record-now]")!;
     expect(text(now)).toContain("Merged");
-    expect(text(now.querySelector("[data-record-now-words]"))).toBe("#1100");
+    expect(text(now.querySelector("[data-record-now-words]"))).toBe(`#${1100}`);
     expect(text(now)).not.toContain("Waiting for CI");
   } finally { await unmount(); }
 });
