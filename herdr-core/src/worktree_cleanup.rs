@@ -633,7 +633,7 @@ fn verified_merge(
     (base, bases): (&str, &[String]),
     branch: &str,
     head: &str,
-    merged_heads: &mut impl FnMut(&str) -> Result<BTreeSet<String>, String>,
+    merged_heads: &mut impl FnMut(&str, &str) -> Result<BTreeSet<String>, String>,
 ) -> Result<(), Exclusion> {
     let mut in_base = false;
     for commit in bases {
@@ -659,7 +659,7 @@ fn verified_merge(
     let heads = if in_base {
         None
     } else {
-        Some(merged_heads(branch)?)
+        Some(merged_heads(branch, head)?)
     };
     if crate::worktrees::merged(Some(in_base), Some(head), heads.as_ref()) == Some(true) {
         return Ok(());
@@ -686,20 +686,59 @@ fn inspect(
 ) -> Result<CleanupSnapshot, String> {
     let node = context.node.as_ref();
     let base = merge.base.as_deref();
-    inspect_with_merge_proofs(node, root, current, panes, usage, only, base, |branch| {
-        if let Some(heads) = &merge.heads {
-            return Ok(heads.clone());
-        }
-        let github = context
-            .github
-            .as_ref()
-            .map_err(|why| format!("GitHub merge proof is unavailable: {why}"))?;
-        let base = base.ok_or("No default branch is known to judge a merge against")?;
-        Ok(heads_into(
-            github::merged_pull_request_proofs(github.node.as_ref(), &github.place, branch)?,
-            base,
-        ))
-    })
+    inspect_with_merge_proofs(
+        node,
+        root,
+        current,
+        panes,
+        usage,
+        only,
+        base,
+        |branch, head| {
+            merge_proof(merge.heads.as_ref(), head, || {
+                let github = context
+                    .github
+                    .as_ref()
+                    .map_err(|why| format!("GitHub merge proof is unavailable: {why}"))?;
+                let base = base.ok_or("No default branch is known to judge a merge against")?;
+                Ok(heads_into(
+                    github::merged_pull_request_proofs(
+                        github.node.as_ref(),
+                        &github.place,
+                        branch,
+                    )?,
+                    base,
+                ))
+            })
+        },
+    )
+}
+
+/// GitHub's merged heads for one worktree. The pull request list the sidebar
+/// reads (`window`) answers when it holds this HEAD; it holds only the newest
+/// pull requests, so a HEAD it does not hold is asked of GitHub by its branch,
+/// and an older squash merge is still found. With no list the branch is asked
+/// alone; a list and a lookup that failed leave the list's answer.
+fn merge_proof(
+    window: Option<&BTreeSet<String>>,
+    head: &str,
+    by_branch: impl FnOnce() -> Result<BTreeSet<String>, String>,
+) -> Result<BTreeSet<String>, String> {
+    match window {
+        Some(heads) if heads.contains(head) => Ok(heads.clone()),
+        None => by_branch(),
+        Some(heads) => match by_branch() {
+            Ok(found) => Ok(heads.iter().cloned().chain(found).collect()),
+            Err(why) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "worktree_cleanup",
+                    "kind": "cleanup.merge_lookup_failed",
+                    "message": why,
+                }));
+                Ok(heads.clone())
+            }
+        },
+    }
 }
 
 /// The heads of the pull requests that merged into `base`; one merged into
@@ -722,7 +761,7 @@ fn inspect_with_merge_proofs(
     usage: &Usage,
     only: Option<&[String]>,
     base: Option<&str>,
-    mut merged_heads: impl FnMut(&str) -> Result<BTreeSet<String>, String>,
+    mut merged_heads: impl FnMut(&str, &str) -> Result<BTreeSet<String>, String>,
 ) -> Result<CleanupSnapshot, String> {
     let mut rows = listed(node, root)?;
     // Review never fetches, and a local base that nothing keeps current is
@@ -1831,7 +1870,7 @@ mod tests {
                 &Usage::default(),
                 None,
                 Some("main"),
-                |_| Ok(BTreeSet::new()),
+                |_, _| Ok(BTreeSet::new()),
             )
             .unwrap()
         }
@@ -1850,7 +1889,7 @@ mod tests {
                 &Usage::default(),
                 None,
                 base,
-                |_| Ok(heads_into(proofs.clone(), base.unwrap())),
+                |_, _| Ok(heads_into(proofs.clone(), base.unwrap())),
             )
             .unwrap()
         }
@@ -1867,7 +1906,7 @@ mod tests {
                 &Usage::default(),
                 None,
                 Some("main"),
-                |_| Ok(heads_into(proofs.clone(), "main")),
+                |_, _| Ok(heads_into(proofs.clone(), "main")),
             )
             .unwrap()
         }
@@ -2220,6 +2259,42 @@ mod tests {
     }
 
     #[test]
+    fn a_head_past_the_pull_request_list_is_asked_of_github_by_its_branch() {
+        let window: BTreeSet<String> = ["recent".to_owned()].into();
+        let asked = std::cell::Cell::new(0);
+        let lookup = |answer: Result<BTreeSet<String>, String>| {
+            let asked = &asked;
+            move || {
+                asked.set(asked.get() + 1);
+                answer
+            }
+        };
+        // In the list: no lookup.
+        assert!(
+            merge_proof(Some(&window), "recent", lookup(Ok(BTreeSet::new())))
+                .unwrap()
+                .contains("recent")
+        );
+        assert_eq!(asked.get(), 0);
+        // Older than the list: the branch's own pull requests prove it.
+        let old: BTreeSet<String> = ["old".to_owned()].into();
+        assert!(
+            merge_proof(Some(&window), "old", lookup(Ok(old)))
+                .unwrap()
+                .contains("old")
+        );
+        // A lookup that fails proves nothing beyond the list.
+        assert!(
+            !merge_proof(Some(&window), "old", lookup(Err("offline".into())))
+                .unwrap()
+                .contains("old")
+        );
+        // No list: the branch alone, and its failure stays a failure.
+        assert!(merge_proof(None, "old", lookup(Err("offline".into()))).is_err());
+        assert_eq!(asked.get(), 3);
+    }
+
+    #[test]
     fn a_repository_whose_default_branch_is_not_main_is_judged_against_that_branch() {
         let f = Fixture::new();
         let landed = f.add("landed");
@@ -2252,7 +2327,7 @@ mod tests {
             &Usage::default(),
             None,
             None,
-            |_| Ok(heads_into(proofs.clone(), "trunk")),
+            |_, _| Ok(heads_into(proofs.clone(), "trunk")),
         )
         .unwrap();
         assert_eq!(code_of(&unknown, &landed), Some("main_unavailable"));
@@ -2284,7 +2359,7 @@ mod tests {
             &Usage::default(),
             None,
             Some("main"),
-            |_| Err("GitHub merge proof is unavailable".into()),
+            |_, _| Err("GitHub merge proof is unavailable".into()),
         )
         .unwrap();
         assert_eq!(code_of(&unavailable, &squashed), Some("unverified"));
@@ -2663,7 +2738,7 @@ mod tests {
             &usage,
             None,
             Some("main"),
-            |_| Ok(BTreeSet::new()),
+            |_, _| Ok(BTreeSet::new()),
         )
         .unwrap();
         let row = |path: &Path| {
@@ -2833,7 +2908,7 @@ mod tests {
             &Usage::of(in_use, &[]),
             None,
             Some("main"),
-            |_| Ok(BTreeSet::new()),
+            |_, _| Ok(BTreeSet::new()),
         )
         .unwrap();
         let row = |path: &Path| {
