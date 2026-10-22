@@ -84,7 +84,7 @@ const REQUESTS: &str = concat!(
 /// The closed flow's line (D-02); `{max}` is its length.
 const CLOSED: &str = concat!(
     "closed_result: when goal_update is replace and previous-goal names a flow, one line of at most {max} characters saying how that previous flow ended, as its result: what it made or decided by its latest events before this turn's new request, and work it left undone. ",
-    "The operator moved on, so it never says the flow waits for an answer, an approval, a decision or a check: 'PRD draft written, approval pending' is 'PRD draft written, 9 decisions'; and a state the later events changed (a blocked PR later merged) is told as it ended. ",
+    "The operator moved on, so it never says the flow waits for an answer, an approval, a decision or a check: 'PRD draft written, approval pending' is 'PRD draft written'; and a state the later events changed (a blocked PR later merged) is told as it ended. ",
     "Not the new work, not a question already answered by moving on; an empty string for keep, refine, a first goal, or when the events do not show it. ",
 );
 
