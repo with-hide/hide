@@ -62,7 +62,7 @@ function StepFace({ plan, step, compact, open }: { plan: PlanView; step: PlanSte
       className={cn(
         "flex min-w-0 items-center gap-xs rounded-md border border-border bg-card text-left",
         compact ? "w-(--size-plan-node-compact) px-xs py-xxs" : "w-(--size-mission-node) px-sm py-xs",
-        step.waiting && "border-dashed bg-transparent",
+        step.waiting && "border-dashed border-muted-foreground bg-transparent",
         current && "border-agent-working",
         step.status === "dropped" && "opacity-(--opacity-dimmed)",
         open && "ring-1 ring-primary",
