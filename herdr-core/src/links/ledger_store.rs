@@ -1032,7 +1032,7 @@ impl LinkStore {
                 match (change, previous) {
                     (_, Some((_, held))) if held == *goal => {}
                     // A clearer name for the same work renames the flow it
-                    // is in, within the turn (B15, B16).
+                    // is in, within the turn (B14, B16).
                     (FlowChange::Rename, Some((chapter, _))) => {
                         tx.execute(
                             "UPDATE ledger_chapters SET goal=?5 WHERE device=?1 AND agent=?2 AND id=?3 AND chapter=?4",
@@ -2140,7 +2140,7 @@ fn status_of(turns: &[TurnRow]) -> Option<RecordStatus> {
     }
 }
 
-/// A request's words as the record shows them (D-18, B14, B25): attachment
+/// A request's words as the record shows them (D-18, B15, B25): attachment
 /// paths become a count, and a `/goal` command keeps its words and a mark.
 fn shown_request(mut request: RecordedRequest) -> RecordedRequest {
     let (text, found) = without_attachments(&request.text);

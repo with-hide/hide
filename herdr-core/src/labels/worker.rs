@@ -234,7 +234,7 @@ struct AnalysisMeta {
     /// offsets they stand for (PRD session-record-goal-flow D-06).
     owed: Vec<(String, u64)>,
     /// The turn began with the operator's `/goal`, which opens a flow
-    /// whatever the answer says (D-09, B14).
+    /// whatever the answer says (D-09, B15).
     goal_command: bool,
     offset: Option<u64>,
     at_unix_ms: u64,
@@ -2287,7 +2287,7 @@ impl LabelWorker {
                 // boundary. A clearer name for that same assignment may
                 // arrive at its end; another agent's letter cannot rename it.
                 // The operator's `/goal` opens a flow whatever the answer
-                // says (D-09, B14); a goal the parser refused keeps the flow.
+                // says (D-09, B15); a goal the parser refused keeps the flow.
                 let goal_update = if outcome.goal_command && analysis.goal.is_some() {
                     GoalUpdate::Replace
                 } else {
