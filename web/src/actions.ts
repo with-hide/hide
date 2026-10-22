@@ -38,7 +38,7 @@ import { allAgents, boardProjects, type OpenTarget } from "./navigation";
 import { cardOfItem } from "./overviewTasks";
 import { takeOverPrompt, takeOverProvider } from "./missions";
 import { backlogIntent } from "./overviewBacklog";
-import { sessionOfAgent, workKey } from "./sessionWork";
+import { MISSED_FOLD, sessionOfAgent, workKey } from "./sessionWork";
 import { expectSurface, type Surface } from "./recent";
 import { useStartPanel, useInlineStarts } from "./startDraft";
 import { contextAgents, remoteConnected, remoteContext, remoteControl, remoteRequestId, remoteTargetOfPane, remoteView, withDeviceForward, type RemoteAction, type RemoteView } from "./remote";
@@ -51,6 +51,8 @@ import {
   explorerContext,
   focusedCheckout,
   frontCheckout,
+  nextSidebarLens,
+  sameDetailItem,
   visibleTab,
   type AgentRow,
   type Checkout,
@@ -383,7 +385,7 @@ export function createActions(send: DispatchFn) {
    * did once. The core keeps the lane per Workspace, so another Workspace is
    * never touched.
    */
-  const setWorkspaceView = (patch: { open?: boolean; documents?: boolean; tool?: Tool | null; pinned?: boolean; prs_only_checkout?: boolean; document_width?: number; detail_width?: number; explorer_width?: number; panel_width?: number; width_request_id?: string; reveal?: string }) => {
+  const setWorkspaceView = (patch: { open?: boolean; documents?: boolean; tool?: Tool | null; pinned?: boolean; document_width?: number; detail_width?: number; explorer_width?: number; panel_width?: number; width_request_id?: string; reveal?: string }) => {
     if (!workspaceViewOf(rest())) return diagnostic("workspace_view: no Workspace in front");
     return dispatch({ schema_version: 2, kind: "workspace_view", payload: patch });
   };
@@ -1725,16 +1727,50 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "conductor_settings_set", payload: patch });
     },
 
-    /** The PRs tool, for a list that is not tied to one pull request (`이슈 없는 PR N`). */
-    openWorkPrs() {
-      const state = ui();
-      if (state.overviewOpen || state.screen?.kind !== "workspace") state.setScreen({ kind: "workspace" });
-      showTool("prs");
+    /**
+     * The sidebar's PR list (PRD lane-two-columns B25, B41): ⇧⌘R, a bound
+     * chord of the PRs tool before it, or a list not tied to one pull
+     * request (`이슈 없는 PR N`). The whole device's list, the sidebar shown.
+     */
+    openSidebarPrs() {
+      ui().setSidebarProject(null);
+      this.setSidebarLens("prs", !rest()?.ui_state?.left_sidebar_visible);
     },
 
-    /** The PRs tool's scope chip: this checkout only, or all checkouts (PRD sidebar-task-lens D-31). */
-    setPrsScope(onlyCheckout: boolean) {
-      return setWorkspaceView({ prs_only_checkout: onlyCheckout });
+    /**
+     * A 현황 tile's sessions or pull requests (B27, B29): the sidebar's 태스크
+     * or PR list, narrowed to the project until the chip's ✕.
+     */
+    showProjectInSidebar(lens: "tasks" | "prs", deviceId: string, projectId: string) {
+      ui().setSidebarProject({ deviceId, projectId });
+      this.setSidebarLens(lens, !rest()?.ui_state?.left_sidebar_visible);
+    },
+
+    /**
+     * The 세션 tile's 놓친 일 N (B28): the Overview's backlog for the project,
+     * its 놓친 일 group unfolded.
+     */
+    openProjectMissed(deviceId: string, projectId: string) {
+      this.openOverview(deviceId, { view: "backlog", projectId, open: [MISSED_FOLD] });
+    },
+
+    /**
+     * A 현황 tile or 할 일 row whose list is not in the sidebar (B30-B32, B35):
+     * its item opens in the viewing column, and pressed again while the
+     * column shows it, the column folds.
+     */
+    toggleDetailItem(item: import("./snapshot").DetailItem) {
+      if (detailShown() && viewUp("detail") && sameDetailItem(rest()?.ui_state?.detail?.items.at(-1), item)) {
+        return dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: false } });
+      }
+      openDetail(item);
+    },
+
+    /** ⇧⌘L (B25): the Project tool's 기억 tab for the Project in front. */
+    openFrontProjectMemory() {
+      if (!workspaceInFront()) return diagnostic("project_memory: no Workspace in front");
+      ui().setProjectTab("memory");
+      showTool("project");
     },
 
     /** ← in the 보기 head (B47): the item opened before, or the slot closes. */
@@ -1762,11 +1798,11 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "sidebar_lens_set", payload: { lens, ...(show ? { show } : {}) } });
     },
 
-    /** ⇧⌘B (B2): the other list, and the sidebar shown when it was hidden. */
+    /** ⇧⌘B (B2): the next list, and the sidebar shown when it was hidden. */
     toggleSidebarLens() {
       const state = rest()?.ui_state;
       if (!state) return;
-      this.setSidebarLens(state.sidebar_lens === "tasks" ? "projects" : "tasks", !state.left_sidebar_visible);
+      this.setSidebarLens(nextSidebarLens(state.sidebar_lens), !state.left_sidebar_visible);
     },
 
     /** 상태별 | 프로젝트별 (B4, B6). */
@@ -1916,7 +1952,8 @@ export function createActions(send: DispatchFn) {
       const workspace = catalogWorkspaces(rest()).find((row) => row.id === workspaceId && row.device_id === deviceId);
       const checkout = workspace && deviceConnected(rest(), deviceId) ? projectCheckout(workspace, rest()?.ui_state?.recent_checkouts) : null;
       if (!checkout) return false;
-      beginOpening({ checkoutId: checkout.id, deviceId, path: checkout.path, workspaceId, tool: "memory" });
+      ui().setProjectTab("memory");
+      beginOpening({ checkoutId: checkout.id, deviceId, path: checkout.path, workspaceId, tool: "project" });
       return dispatch({ schema_version: 2, kind: "project_memory_navigate", payload: { device_id: deviceId, workspace_id: workspaceId, checkout_id: checkout.id, request_id: crypto.randomUUID() } });
     },
 
@@ -1948,7 +1985,8 @@ export function createActions(send: DispatchFn) {
       this.memoryOpen(workspaceId);
       this.memoryExpand(workspaceId, number);
       this.openProjectById(deviceId, workspaceId);
-      showTool("memory");
+      ui().setProjectTab("memory");
+      showTool("project");
     },
 
     /**

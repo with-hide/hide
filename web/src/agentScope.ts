@@ -4,6 +4,25 @@ import type { AgentRow, DescendantCounts, MarkCounts, RequestVerb, SnapshotRest 
 export type AgentRef = { pane_id: string; occurrence: number };
 
 
+/** One row of a project's 할 일 (B34, B35): an agent by its pane, or a pull request by its number. */
+export type ProjectTodo = { kind: "ask" | "revisit"; pane_id: string } | { kind: "pr"; number: number };
+
+/** A project's 현황 tiles' counts and its 할 일 as the core derived them (`agent_state/tally/project_status.rs`). */
+export type ProjectStatus = {
+  todo: ProjectTodo[];
+  /** Every 할 일 row, the ones the core left off past its cap included: the rail's number (B38). */
+  todo_total: number;
+  prs: { open: number; mergeable: number; failed: number; review: number; checking: number };
+  git: {
+    worktrees: number;
+    behind?: number;
+    changed: number;
+    unpushed: number;
+    removable: number;
+    dots: { checkout_id: string; state: "changed" | "unpushed" | "removable" | "clean" }[];
+  };
+};
+
 export type AgentScope = {
   overview_needs_you: number;
   has_working: boolean;
@@ -18,6 +37,8 @@ export type AgentScope = {
   owners: Record<string, string>;
   badge_total: number;
   prs: PrBoard;
+  /** A project's 현황 (PRD lane-two-columns D-15, D-16), derived by the core with its tasks and PRs; absent from a checkout's or a device's scope. */
+  status?: ProjectStatus;
   rows: AgentRef[];
   total: number;
   overview_total: number;

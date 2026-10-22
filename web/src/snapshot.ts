@@ -1161,14 +1161,38 @@ export type DocumentsSection = {
   changed: { tab_id: string; document: EditorDocumentSnapshot }[];
 };
 
-export type SidebarLens = "projects" | "tasks";
+export type SidebarLens = "projects" | "tasks" | "prs";
+
+/** The sidebar's lists in ⇧⌘B's order (PRD lane-two-columns B41). */
+export const SIDEBAR_LENSES: readonly SidebarLens[] = ["projects", "tasks", "prs"];
+
+/** The list ⇧⌘B turns to after `lens`. */
+export function nextSidebarLens(lens: SidebarLens | undefined): SidebarLens {
+  return SIDEBAR_LENSES[(SIDEBAR_LENSES.indexOf(lens ?? "projects") + 1) % SIDEBAR_LENSES.length]!;
+}
 export type TaskView = "status" | "project";
 
 /** One thing the lane's 보기 slot shows (`DetailItem`, PRD sidebar-task-lens D-50). */
 export type DetailItem =
   | { kind: "pull_request"; workspace_id: string; number: number }
   | { kind: "record"; session: WorkSession }
-  | { kind: "mission"; mission: string };
+  | { kind: "mission"; mission: string }
+  /** A project's worktrees and their disk use, from the Project tool's Git tile (PRD lane-two-columns B30). */
+  | { kind: "worktrees"; workspace_id: string }
+  /** A project's last seven days of cost, from the Project tool's cost tile (B31). */
+  | { kind: "cost"; workspace_id: string };
+
+/** Whether two 보기 items show the same thing: a record by its session, the rest by their fields. */
+export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem): boolean {
+  if (!a || a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "pull_request": return b.kind === "pull_request" && a.workspace_id === b.workspace_id && a.number === b.number;
+    case "record": return b.kind === "record" && a.session.device_id === b.session.device_id && a.session.agent === b.session.agent && a.session.session_id === b.session.session_id;
+    case "mission": return b.kind === "mission" && a.mission === b.mission;
+    case "worktrees": return b.kind === "worktrees" && a.workspace_id === b.workspace_id;
+    case "cost": return b.kind === "cost" && a.workspace_id === b.workspace_id;
+  }
+}
 
 /** A mission's state (`contracts/snapshot-wire-enums.json`: `mission_status`). */
 export type MissionStatus = "planning" | "running" | "merge_wait" | "done" | "cancelled";

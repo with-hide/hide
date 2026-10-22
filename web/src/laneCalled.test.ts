@@ -23,7 +23,7 @@ describe("laneCalled", () => {
   it("puts the lane up for a linked folder or a tool, and nothing for a linked file", () => {
     expect(laneCalled(reveal(true))).toBe(true);
     expect(laneCalled(reveal(false))).toBe(false);
-    expect(laneCalled({ schema_version: 2, kind: "workspace_view", payload: { tool: "memory" } })).toBe(true);
+    expect(laneCalled({ schema_version: 2, kind: "workspace_view", payload: { tool: "project" } })).toBe(true);
     expect(laneCalled({ schema_version: 2, kind: "workspace_view", payload: { tool: null } })).toBe(false);
     expect(laneCalled({ schema_version: 2, kind: "workspace_view", payload: { pinned: true } })).toBe(false);
   });

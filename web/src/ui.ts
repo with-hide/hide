@@ -53,6 +53,16 @@ export type PendingClose = {
  */
 export type Screen = { kind: "main"; deviceId?: string } | { kind: "workspace" };
 
+/** The Project tool's two tabs (PRD lane-two-columns D-14, B26). */
+export type ProjectTab = "status" | "memory";
+
+/**
+ * The project the sidebar's 태스크 and PR lists are narrowed to (B27, B29,
+ * B41): a 현황 tile sets it, the chip's ✕ clears it. This page's alone, like
+ * the lists' folds.
+ */
+export type SidebarProject = { deviceId: string; projectId: string };
+
 /**
  * The Overview's five tabs share the selected device and project, except
  * account usage. Work is the first visit; reopening remembers the last tab.
@@ -205,6 +215,11 @@ type UiStore = {
   sidebarFocus: number;
   /** The raised Projects sections the operator unfolded past their cap; this page's alone, so a fresh list starts short. */
   raisedOpen: readonly string[];
+  /** The Project tool's tab; the page keeps it between openings. */
+  projectTab: ProjectTab;
+  setProjectTab: (tab: ProjectTab) => void;
+  sidebarProject: SidebarProject | null;
+  setSidebarProject: (project: SidebarProject | null) => void;
   /** The 태스크 list's open folds (`rest:<group>`, `cleanup:<group>`, `archived:<group>`); page-local, opened by the operator or by entering a resting task (sidebar-task-lens B5). */
   taskFoldsOpen: readonly string[];
   /** The Explorer row the operator last touched; the core owns the opened
@@ -383,6 +398,10 @@ export const useUiStore = create<UiStore>((set, get) => ({
   sidebarFocus: 0,
   raisedOpen: [],
   taskFoldsOpen: [],
+  projectTab: "status",
+  setProjectTab: (projectTab) => set({ projectTab }),
+  sidebarProject: null,
+  setSidebarProject: (sidebarProject) => set({ sidebarProject }),
   explorerSelection: null,
   editorFindRequest: 0,
   editorFindDisplay: null,

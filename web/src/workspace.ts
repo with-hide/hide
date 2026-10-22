@@ -12,12 +12,9 @@ import type { Checkout, DetailSlot, SnapshotRest, StripTab, ViewLayoutSnapshot }
 export { TOOLS, type Tool } from "./laneTools";
 import type { Tool } from "./laneTools";
 
-/** What a tool is about: the Project (Memory, PRs) or the front checkout (Explorer, Changes). The rail and the tool column's header draw it (PRD work-tab-pr-lens D-37). */
+/** What a tool is about: the Project (the Project tool) or the front checkout (Explorer, Changes). The rail and the tool column's header draw it (PRD work-tab-pr-lens D-37). */
 export type ToolScope = "project" | "checkout";
-export const TOOL_SCOPES: Record<Tool, ToolScope> = { memory: "project", prs: "project", explorer: "checkout", changes: "checkout" };
-
-/** The PRs tool's scope chip, kept per Workspace (PRD sidebar-task-lens D-31). `only_checkout` is the front checkout only. */
-export type PrsView = { only_checkout: boolean };
+export const TOOL_SCOPES: Record<Tool, ToolScope> = { project: "project", explorer: "checkout", changes: "checkout" };
 
 /**
  * What the viewing column shows (PRD lane-two-columns D-01, D-04): the 보기
@@ -43,8 +40,6 @@ export type WorkspaceView = {
   documents: boolean;
   /** The tool column's tool, or null while there is none. */
   tool: Tool | null;
-  /** The PRs tool's scope chip. */
-  prs: PrsView;
   /** Whether the lane is pinned beside Agent Views rather than drawn over it (PRD right-lane D-03). */
   pinned: boolean;
   /** The documents' width in CSS pixels, or null for the default until it is resized (D-09). */
@@ -53,7 +48,7 @@ export type WorkspaceView = {
   detail_width: number | null;
   /** The Explorer column's width, the same way. */
   explorer_width: number | null;
-  /** The width Memory, PRs and Changes share, the same way. */
+  /** The width the Project tool and Changes share, the same way. */
   panel_width: number | null;
   /** The core's latest width acknowledgement, absent before any named request. Never saved. */
   width_request_id?: string | null;
@@ -112,7 +107,7 @@ export type LaneSizes = {
   lanePage: number;
   explorerMin: number;
   explorerIdeal: number;
-  /** Memory, PRs and Changes. */
+  /** The Project tool and Changes. */
   panelMin: number;
   panelIdeal: number;
   /** A divider: between Agent Views and a pinned lane, and between the two columns. */

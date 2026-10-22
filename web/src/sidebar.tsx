@@ -68,6 +68,7 @@ import { useOverviewCount } from "./Overview";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
 import { observeStuckHeaders } from "./sidebarSticky";
 import { SidebarLensSwitch, TaskLens } from "./TaskLens";
+import { SidebarPrs } from "./SidebarPrs";
 
 function herdrRowLabel(state: string | null, t: TFunction<"translation">): string | null {
   if (state === "unconfigured" || state === "socket_missing") return t("sidebar.herdrSocketMissing");
@@ -119,9 +120,9 @@ export function Sidebar({ actions }: { actions: Actions }) {
   };
   // Every device's sidebar lists its Needs You, its Done and its projects (PRD sidebar-titlebar-refresh D-06: no Home row);
   // a device that is not connected shows its name and the way to reconnect, and no stale tree (quick device-rail-badges B3).
-  // Under the head, the 프로젝트 | 태스크 switch picks the list (PRD sidebar-task-lens B1, D-10). The 태스크
-  // list keeps an unresponsive device's last rows, dimmed, under its reason (B20).
-  const list = lens === "tasks" ? <TaskLens actions={actions} /> : body === "disconnected" ? <DisconnectedDevice actions={actions} /> : <ProjectList actions={actions} />;
+  // Under the head, the 프로젝트 | 태스크 | PR switch picks the list (PRD sidebar-task-lens B1, D-10;
+  // lane-two-columns B41). The 태스크 list keeps an unresponsive device's last rows, dimmed, under its reason (B20).
+  const list = lens === "tasks" ? <TaskLens actions={actions} /> : lens === "prs" ? <SidebarPrs actions={actions} /> : body === "disconnected" ? <DisconnectedDevice actions={actions} /> : <ProjectList actions={actions} />;
 
   return (
     // The width is a CSS variable, set here and on the shell for the top row

@@ -148,7 +148,7 @@ function deviceViews(views: boolean): WorkspaceView {
     open: views,
     documents: views,
     tool: null,
-    prs: { only_checkout: false },
+    
     pinned: true,
     document_width: null,
     detail_width: null,

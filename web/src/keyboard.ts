@@ -241,14 +241,16 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.toggleLane();
       case "toggle_sidebar_lens":
         return actions.toggleSidebarLens();
-      case "toggle_lane_prs":
-        return actions.toggleTool("prs");
+      case "toggle_lane_project":
+        return actions.toggleTool("project");
       case "toggle_lane_explorer":
         return actions.toggleTool("explorer");
       case "toggle_lane_changes":
         return actions.toggleTool("changes");
-      case "toggle_lane_memory":
-        return actions.toggleTool("memory");
+      case "open_project_memory":
+        return actions.openFrontProjectMemory();
+      case "open_sidebar_prs":
+        return actions.openSidebarPrs();
       case "toggle_lane_documents":
         return actions.toggleDocuments();
       case "find_in_pane": {
