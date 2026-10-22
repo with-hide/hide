@@ -665,6 +665,7 @@ impl Runtime {
             let entry = self.device_worktrees.entry(target.to_owned()).or_default();
             entry.in_flight = None;
             entry.reread |= all;
+            entry.retry_at = Some(std::time::Instant::now() + DEVICE_READ_RETRY);
             entry.unavailable = Some(format!("The worktree reader could not start: {error}"));
         }
         false

@@ -124,13 +124,21 @@ fn ssh_command(
             None => return Some(SSH_COMMAND.to_owned()),
         },
     };
-    Some(
-        if is_ssh(command.split_whitespace().next().unwrap_or_default()) {
-            format!("{command} {SSH_OPTIONS}")
-        } else {
-            command
-        },
-    )
+    Some(if is_ssh(program_of(&command)) {
+        format!("{command} {SSH_OPTIONS}")
+    } else {
+        command
+    })
+}
+
+/// The program a shell command line starts: its first word, read whole when
+/// it is quoted, as `"C:/Program Files/OpenSSH/ssh.exe" -i key` is.
+fn program_of(command: &str) -> &str {
+    let command = command.trim_start();
+    match command.chars().next() {
+        Some(quote @ ('"' | '\'')) => command[1..].split(quote).next().unwrap_or_default(),
+        _ => command.split_whitespace().next().unwrap_or_default(),
+    }
 }
 
 /// Whether a program, by its file name, is OpenSSH's client.
@@ -258,6 +266,16 @@ mod tests {
         assert_eq!(
             ssh_command(None, none, Some("C:\\PuTTY\\plink.exe".into())),
             None
+        );
+        // Windows spells a program under Program Files in quotes.
+        let quoted = "\"C:/Program Files/OpenSSH/ssh.exe\" -i C:/keys/work";
+        assert_eq!(
+            ssh_command(None, || Some(quoted.into()), None).as_deref(),
+            Some(format!("{quoted} {SSH_OPTIONS}").as_str())
+        );
+        assert_eq!(
+            ssh_command(None, || Some("'/opt/my tools/wrap' --vault".into()), None).as_deref(),
+            Some("'/opt/my tools/wrap' --vault")
         );
     }
 

@@ -718,7 +718,8 @@ fn inspect(
 /// reads (`window`) answers when it holds this HEAD; it holds only the newest
 /// pull requests, so a HEAD it does not hold is asked of GitHub by its branch,
 /// and an older squash merge is still found. With no list the branch is asked
-/// alone; a list and a lookup that failed leave the list's answer.
+/// alone. A lookup that failed leaves the worktree unverified, never not
+/// merged: GitHub did not say.
 fn merge_proof(
     window: Option<&BTreeSet<String>>,
     head: &str,
@@ -727,17 +728,7 @@ fn merge_proof(
     match window {
         Some(heads) if heads.contains(head) => Ok(heads.clone()),
         None => by_branch(),
-        Some(heads) => match by_branch() {
-            Ok(found) => Ok(heads.iter().cloned().chain(found).collect()),
-            Err(why) => {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "worktree_cleanup",
-                    "kind": "cleanup.merge_lookup_failed",
-                    "message": why,
-                }));
-                Ok(heads.clone())
-            }
-        },
+        Some(heads) => Ok(heads.iter().cloned().chain(by_branch()?).collect()),
     }
 }
 
@@ -2283,12 +2274,9 @@ mod tests {
                 .unwrap()
                 .contains("old")
         );
-        // A lookup that fails proves nothing beyond the list.
-        assert!(
-            !merge_proof(Some(&window), "old", lookup(Err("offline".into())))
-                .unwrap()
-                .contains("old")
-        );
+        // A lookup that fails is no answer, so the worktree is unverified
+        // rather than judged not merged.
+        assert!(merge_proof(Some(&window), "old", lookup(Err("offline".into()))).is_err());
         // No list: the branch alone, and its failure stays a failure.
         assert!(merge_proof(None, "old", lookup(Err("offline".into()))).is_err());
         assert_eq!(asked.get(), 3);
