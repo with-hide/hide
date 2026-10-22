@@ -40,6 +40,7 @@ pub struct RowFacts {
     pub(crate) native_custom_title: Option<String>,
     pub(crate) operator_request: Option<Request>,
     pub(crate) other_request: Option<Request>,
+    pub(crate) last_reply_at_unix_ms: Option<u64>,
     /// `(lowercase owner/name, number, when its tool printed it)`.
     pub(crate) created_prs: Vec<(String, u64, u64)>,
     /// Every pull request address the session printed, newest twenty, as

@@ -121,6 +121,11 @@ pub(crate) struct SessionFacts {
     /// The last request someone else sent.
     #[serde(default)]
     pub(crate) other_request: Option<Request>,
+    /// When the agent last said something, without its words: idle-agent
+    /// sleep counts from the conversation's last line, and a row keeps no
+    /// reply text, because nothing clears it when a new request starts.
+    #[serde(default)]
+    pub(crate) last_reply_at_unix_ms: Option<u64>,
     #[serde(default)]
     pub(crate) sightings: Vec<PrSighting>,
     /// The pull requests the session made, judged once against GitHub's
@@ -141,6 +146,7 @@ type Shown = (
     Option<String>,
     Option<Request>,
     Option<Request>,
+    Option<u64>,
     usize,
 );
 
@@ -193,8 +199,12 @@ impl SessionFacts {
                 .map(|event| event.offset);
         }
         for event in read.events {
-            if event.kind == LabelEventKind::Human {
-                self.request(event, &mut input, log);
+            match event.kind {
+                LabelEventKind::Human => self.request(event, &mut input, log),
+                LabelEventKind::Assistant if !event.text.trim().is_empty() => {
+                    self.last_reply_at_unix_ms = Some(event.at_unix_ms);
+                }
+                _ => {}
             }
         }
         self.sight(read.sightings, log);
@@ -286,6 +296,7 @@ impl SessionFacts {
             self.custom_title.clone(),
             self.operator_request.clone(),
             self.other_request.clone(),
+            self.last_reply_at_unix_ms,
             self.sightings.len(),
         )
     }

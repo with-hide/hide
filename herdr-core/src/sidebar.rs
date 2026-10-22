@@ -727,7 +727,7 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
                 .iter()
                 .chain(facts.other_request.iter())
                 .map(|request| request.at_unix_ms)
-                .chain(facts.reply.iter().map(|reply| reply.at_unix_ms))
+                .chain(facts.last_reply_at_unix_ms)
                 .filter(|at| *at > 0)
                 .max()
         }),
@@ -989,9 +989,15 @@ mod tests {
                 other_request: other.map(|at| request(at, Requester::Agent)),
                 ..Default::default()
             });
-            let row = project_agent(agent).unwrap();
+            let row = project_agent(agent.clone()).unwrap();
             assert_eq!(row.last_prompt_at_unix_ms, expected);
+            assert_eq!(row.last_conversation_at_unix_ms, expected);
             assert_eq!(row.changed_at_unix_ms, Some(999));
+            // A later reply moves the conversation's clock, not the prompt's.
+            agent.facts.as_mut().unwrap().last_reply_at_unix_ms = Some(500);
+            let replied = project_agent(agent.clone()).unwrap();
+            assert_eq!(replied.last_prompt_at_unix_ms, expected);
+            assert_eq!(replied.last_conversation_at_unix_ms, Some(500));
             assert_eq!(row.last_activity, baseline.last_activity);
             assert_eq!(row.state_change_seq, baseline.state_change_seq);
         }
