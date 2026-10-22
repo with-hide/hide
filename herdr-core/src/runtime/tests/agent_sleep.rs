@@ -1903,6 +1903,21 @@ fn a_failed_wake_says_why_and_can_be_retried_fresh() {
     assert_eq!(row(&runtime)["sleep"]["state"], "waking");
 }
 
+#[test]
+fn a_wake_counts_as_a_look_so_its_old_conversation_does_not_sleep_it_again() {
+    let (mut runtime, _) = asleep();
+    let seen =
+        |runtime: &Runtime| runtime.snapshot().ui_state.agent_sleep.stamps[SLEEPER].seen_at_unix_ms;
+    let before = unix_milliseconds();
+    assert!(seen(&runtime) < before);
+    assert!(runtime.dispatch_json(&event(
+        "agent_wake",
+        serde_json::json!({"pane_id": SLEEPER})
+    )));
+    assert_eq!(row(&runtime)["sleep"]["state"], "waking");
+    assert!(seen(&runtime) >= before);
+}
+
 /// Herdr answers a wake's start once it has typed the start line; a line the
 /// pane's shell never ran (a Windows prompt reading a leftover bracketed
 /// paste as keys) brings no agent, and the wake fails with a reason once the

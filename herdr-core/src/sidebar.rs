@@ -721,6 +721,16 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
                 .filter(|at| *at > 0)
                 .max()
         }),
+        last_conversation_at_unix_ms: agent.facts.as_ref().and_then(|facts| {
+            facts
+                .operator_request
+                .iter()
+                .chain(facts.other_request.iter())
+                .map(|request| request.at_unix_ms)
+                .chain(facts.reply.iter().map(|reply| reply.at_unix_ms))
+                .filter(|at| *at > 0)
+                .max()
+        }),
         last_activity,
         state_change_seq: agent.state_change_seq,
         session_id: agent

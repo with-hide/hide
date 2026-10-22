@@ -107,6 +107,20 @@ pub struct PaneStamps {
     pub state: StampedState,
 }
 
+impl PaneStamps {
+    /// When the agent was last talked to or looked at. The conversation's
+    /// own time is the clock once a session read proves it: a relaunch or a
+    /// Herdr handoff can report a state for a moment and move the change
+    /// stamp, but adds no line to the conversation. The change stamp counts
+    /// only until that read lands.
+    fn idle_since(&self, agent: &SidebarAgentSnapshot) -> u64 {
+        agent
+            .last_conversation_at_unix_ms
+            .unwrap_or(self.changed_at_unix_ms)
+            .max(self.seen_at_unix_ms)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StampedState {
     pub demand: String,
@@ -584,11 +598,7 @@ impl AgentSleepStore {
             })
             .filter(|agent| {
                 self.stamps.get(&agent.pane_id).is_some_and(|stamps| {
-                    stamps
-                        .changed_at_unix_ms
-                        .max(stamps.seen_at_unix_ms)
-                        .saturating_add(after_ms)
-                        <= now_unix_ms
+                    stamps.idle_since(agent).saturating_add(after_ms) <= now_unix_ms
                 })
             })
             .map(|agent| agent.pane_id.clone())
@@ -709,6 +719,7 @@ mod tests {
             status_word_visible: true,
             changed_at_unix_ms: Some(1_788_871_000_000),
             last_prompt_at_unix_ms: None,
+            last_conversation_at_unix_ms: None,
             last_activity: "1788871000000".to_owned(),
             state_change_seq: Some(4),
             session_id: Some("session-a".to_owned()),
@@ -810,7 +821,28 @@ mod tests {
     }
 
     #[test]
-    fn a_state_change_restarts_the_clock() {
+    fn the_last_conversation_line_is_the_clock_once_a_session_read_proves_one() {
+        let mut agents = [agent("w1:p1")];
+        agents[0].last_conversation_at_unix_ms = Some(HOUR);
+        let mut store = stamped(&agents);
+        // A relaunch or a Herdr handoff reports a state for a moment.
+        agents[0].activity = "unknown".to_owned();
+        assert!(store.stamp(&agents, SleepScope::Core, 20 * HOUR));
+        agents[0].activity = "stopped".to_owned();
+        assert!(store.stamp(&agents, SleepScope::Core, 20 * HOUR));
+        assert!(due_at(&store, &agents, 25 * HOUR - 1).is_empty());
+        assert_eq!(due_at(&store, &agents, 25 * HOUR), ["w1:p1"]);
+
+        agents[0].last_conversation_at_unix_ms = Some(30 * HOUR);
+        assert!(due_at(&store, &agents, 53 * HOUR).is_empty());
+        assert_eq!(due_at(&store, &agents, 54 * HOUR), ["w1:p1"]);
+        store.mark_seen(["w1:p1"], 40 * HOUR);
+        assert!(due_at(&store, &agents, 54 * HOUR).is_empty());
+        assert_eq!(due_at(&store, &agents, 64 * HOUR), ["w1:p1"]);
+    }
+
+    #[test]
+    fn without_a_conversation_read_a_state_change_restarts_the_clock() {
         let mut agents = [agent("w1:p1")];
         let mut store = stamped(&agents);
         agents[0].completed = true;
