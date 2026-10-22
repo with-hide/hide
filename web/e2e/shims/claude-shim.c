@@ -109,7 +109,7 @@ static int fit_schema(char *label, int argc, char **argv) {
     const char *owed_end = owed ? strstr(owed, "</unsummarized-requests>") : NULL;
     for (const char *at = owed; owed_end && (at = strstr(at, "[r")) != NULL && at < owed_end; at++) {
       size_t digits = strspn(at + 2, "0123456789");
-      if (digits && digits < sizeof id - 2 && at[2 + digits] == ']' && (at[-1] == '\n' || at[-1] == 'n')) {
+      if (digits && digits < sizeof id - 2 && at[2 + digits] == ']' && (at[-1] == '\n' || (at[-1] == 'n' && at - owed >= 2 && at[-2] == '\\'))) {
         memcpy(id, at + 1, digits + 1);
         id[digits + 1] = 0;
       }
