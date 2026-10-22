@@ -76,6 +76,38 @@ export function communicationLines(pairs: readonly Communication[], drawn: (id: 
   });
 }
 
+/** One drawn communication line: the pairs folded onto its two ends, their counts summed per drawn direction. */
+export type ExchangeLine = { id: string; from: string; to: string; active: boolean; muted: boolean; badged: boolean; letters: number; direct: number; directions: { from: string; to: string; letters: number; direct: number }[] };
+
+/**
+ * Communication lines between what their sessions are drawn as: pairs folded onto the same two ends are one
+ * line that is emphasised, lettered or two-way when any of them is; two ends folded into one draw nothing.
+ * A line carries its counts as a badge only while it touches what is chosen or pointed at.
+ */
+export function exchangeLines(lines: ReturnType<typeof communicationLines>, drawnAs: (id: string) => string | undefined, state: Pick<LineState, "selection" | "pointed">): ExchangeLine[] {
+  const touched = new Set([state.selection, state.pointed].flatMap((id) => (id === null ? [] : [drawnAs(id) ?? id])));
+  const merged = new Map<string, ExchangeLine>();
+  for (const { pair, active, muted } of lines) {
+    const from = drawnAs(pair.source)!;
+    const to = drawnAs(pair.target)!;
+    if (from === to) continue;
+    const key = JSON.stringify([from, to].sort());
+    const line = merged.get(key) ?? { id: pair.id, from, to, active: false, muted: true, badged: touched.has(from) || touched.has(to), letters: 0, direct: 0, directions: [] };
+    line.active ||= active;
+    line.muted &&= muted;
+    line.letters += pair.letters;
+    line.direct += pair.direct;
+    for (const sent of pair.directions) {
+      const [start, end] = [drawnAs(sent.from)!, drawnAs(sent.to)!];
+      const direction = line.directions.find((row) => row.from === start && row.to === end) ?? line.directions[line.directions.push({ from: start, to: end, letters: 0, direct: 0 }) - 1]!;
+      direction.letters += sent.letters;
+      direction.direct += sent.direct;
+    }
+    merged.set(key, line);
+  }
+  return [...merged.values()];
+}
+
 /** Turn arrows: only a root whose turn it is points at the operator; outside the chosen team it is muted. */
 export function turnLines(rows: readonly { id: string; turn: boolean }[], roots: ReadonlySet<string>, state: Pick<LineState, "selection" | "lineageTeam" | "teams">) {
   return rows.flatMap((row) => (roots.has(row.id) && row.turn ? [{ id: row.id, muted: state.selection !== null && state.teams.get(row.id) !== state.lineageTeam }] : []));
