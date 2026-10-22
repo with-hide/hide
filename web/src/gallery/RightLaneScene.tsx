@@ -1,6 +1,7 @@
-// The right lane (PRD right-lane B25) in the production Workspace over invented
-// local data: each `state` the approved boards draw, from the closed rail to a
-// narrow window whose pinned lane opens over the agents. No daemon is used.
+// The right lane (PRD right-lane B25; PRD lane-two-columns D-12) in the
+// production Workspace over invented local data: each `state` the design
+// boards drew, from the closed rail to a narrow window whose pinned lane
+// stacks its two columns. No daemon is used.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -14,21 +15,22 @@ import { WorkspaceScreen } from "../WorkspaceScreen";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["closed", "overlay", "pinned", "tree-overlay", "tree-only", "expanded", "prs", "memory", "changes", "narrow"] as const;
+const STATES = ["closed", "overlay", "pinned", "explorer-overlay", "explorer-only", "expanded", "prs", "memory", "changes", "narrow"] as const;
 type LaneState = (typeof STATES)[number];
-type Lane = { tool: Tool | null; pinned: boolean; tree: boolean; documents: boolean; expanded: boolean };
+/** `documents`: the checkout has views and the viewing column shows them; `tool`: the tool column. */
+type Lane = { tool: Tool | null; pinned: boolean; documents: boolean; expanded: boolean };
 
 const LANES: Record<LaneState, Lane> = {
-  closed: { tool: null, pinned: false, tree: false, documents: true, expanded: false },
-  overlay: { tool: "files", pinned: false, tree: false, documents: true, expanded: false },
-  pinned: { tool: "files", pinned: true, tree: false, documents: true, expanded: false },
-  "tree-overlay": { tool: "files", pinned: false, tree: true, documents: true, expanded: false },
-  "tree-only": { tool: "files", pinned: true, tree: false, documents: false, expanded: false },
-  expanded: { tool: "files", pinned: false, tree: true, documents: true, expanded: true },
-  prs: { tool: "prs", pinned: true, tree: false, documents: true, expanded: false },
-  memory: { tool: "memory", pinned: true, tree: false, documents: true, expanded: false },
-  changes: { tool: "changes", pinned: true, tree: false, documents: true, expanded: false },
-  narrow: { tool: "files", pinned: true, tree: false, documents: true, expanded: false },
+  closed: { tool: null, pinned: false, documents: true, expanded: false },
+  overlay: { tool: null, pinned: false, documents: true, expanded: false },
+  pinned: { tool: null, pinned: true, documents: true, expanded: false },
+  "explorer-overlay": { tool: "explorer", pinned: false, documents: true, expanded: false },
+  "explorer-only": { tool: "explorer", pinned: true, documents: false, expanded: false },
+  expanded: { tool: "explorer", pinned: false, documents: true, expanded: true },
+  prs: { tool: "prs", pinned: true, documents: true, expanded: false },
+  memory: { tool: "memory", pinned: true, documents: true, expanded: false },
+  changes: { tool: "changes", pinned: true, documents: true, expanded: false },
+  narrow: { tool: "explorer", pinned: true, documents: true, expanded: false },
 };
 
 const REVIEW = `# 설정 화면 검토
@@ -39,7 +41,7 @@ View를 열어도 왼쪽 터미널의 폭과 pane 배치는 그대로다. 핀을
 
 ## 2. 찾기
 
-파일은 헤더 왼쪽 탐색기 버튼을 눌러 트리를 켜고 찾는다. 트리는 끌 때까지 남고, View가 그만큼 넓어져 문서는 작아지지 않는다.
+파일은 레일의 탐색기 도구를 눌러 찾는다. 탐색기는 문서 옆 도구 칸에 남고, 문서는 제 폭을 지킨다.
 
 ## 3. 읽기
 
@@ -80,18 +82,18 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
     scene.rest.navigator!.focused_checkout_id = checkout.id;
     scene.rest.ui_state = { ...scene.rest.ui_state!, expanded_paths: Object.keys(listings), selected_path: lane.documents ? tabs[0]!.path : null };
     scene.rest.workspace_view = {
-      device_id: "local", path: root, tool: lane.tool, last_tool: lane.tool, prs: { only_checkout: false }, pinned: lane.pinned, tree: lane.tree, lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0,
+      device_id: "local", path: root, open: state !== "closed", documents: lane.documents, tool: lane.tool, prs: { only_checkout: false }, pinned: lane.pinned, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0,
       layout: { root: { area: { id: "a1", active: displays[0]?.id ?? null, displays } }, active_area: "a1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
     };
     return { scene, editor: { tabs: lane.documents ? tabs : [], active_tab_id: lane.documents ? "t1" : null }, documents, listings };
-  }, [content, lane]);
+  }, [content, lane, state]);
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.scene.rest, agents: fixture.scene.agents, connection: "live", editor: fixture.editor, documents: fixture.documents, listings: fixture.listings });
-    useUiStore.setState({ screen: { kind: "workspace" }, laneShown: lane.tool !== null, laneExpanded: lane.expanded });
+    useUiStore.setState({ screen: { kind: "workspace" }, laneShown: state !== "closed", laneExpanded: lane.expanded, stackFront: "view" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
-  }, [fixture, lane, theme, scale]);
+  }, [fixture, lane, state, theme, scale]);
   return <TooltipProvider><div className="flex h-full flex-col bg-background text-foreground" data-gallery-scene="right-lane" data-lane-state={state}><TitleRow actions={actions}/><div className="flex min-h-0 flex-1"><Sidebar actions={actions}/><WorkspaceScreen actions={actions}/></div></div></TooltipProvider>;
 }

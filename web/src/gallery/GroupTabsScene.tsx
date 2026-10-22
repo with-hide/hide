@@ -60,8 +60,8 @@ export function GroupTabsScene({ params }: { params: URLSearchParams }) {
     fixture.rest.ui_state = { ...fixture.rest.ui_state, sidebar_width: width ?? 264, device_rail_visible: false, left_sidebar_visible: true, agent_start: { kind: "claude", models: {} } };
     fixture.rest.pane_layouts = checkout.tabs.map(tab => ({ workspace_id: project.id, tab_id: tabId(tab), focused_pane_id: tab.panes[0]!.id, zoomed: false, root: tab.panes.length === 1 ? { type: "pane", pane_id: tab.panes[0]!.id } : { type: "split", direction: "right", ratio: 0.5, first: { type: "pane", pane_id: tab.panes[0]!.id }, second: { type: "pane", pane_id: tab.panes[1]!.id } } }));
     fixture.rest.workspace_view = {
-      device_id: "local", path: checkout.path, tool: null, last_tool: null, prs: { only_checkout: false }, pinned: false, tree: false,
-      lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0,
+      device_id: "local", path: checkout.path, open: false, documents: false, tool: null, prs: { only_checkout: false }, pinned: false,
+      document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0,
       layout: { root: { area: { id: "v1", active: null, displays: [] } }, active_area: "v1", display_count: 0, limits: { areas: 4, depth: 3, displays: 32 } },
       agent_layout: { root: { area: { id: "a1", active, displays: selectedGroup.tabs.map(id => ({ id })) } }, active_area: "a1", display_count: selectedGroup.tabs.length, limits: { areas: 6, depth: 3, displays: 64 }, canvases: {}, group_id: selected, groups, drafts, can_undo_group: false },
     };

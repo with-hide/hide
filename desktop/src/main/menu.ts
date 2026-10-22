@@ -74,7 +74,7 @@ export const MENU_LAYOUT: Readonly<Record<"app" | "File" | "Edit" | "View" | "Pa
     "toggle_device_rail",
     "toggle_lane",
     ...LANE_TOOL_COMMANDS,
-    "toggle_file_tree",
+    "toggle_lane_documents",
     null,
     "text_larger",
     "text_smaller",

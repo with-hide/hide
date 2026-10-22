@@ -97,9 +97,9 @@ export function memorySceneProject(state: MemorySceneState): ProjectMemory {
 }
 
 /** The lane pinned on its Memory tool, the scene's width wide. */
-const VIEW: WorkspaceView = { device_id: "local", path: "/projects/herdr-ide", tool: "memory", last_tool: "memory", prs: { only_checkout: false }, pinned: true, tree: false, lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0 };
-const FRAME: LaneFrame = { mode: "docked", field: "panel_width", agents: 0, width: 0, document: 0, tree: null, treeOnly: false, narrowPin: false };
-const SIZES: LaneSizes = { agentMin: 480, laneMin: 360, laneIdeal: 520, lanePage: 900, treeMin: 180, treeIdeal: 240, divider: 8 };
+const VIEW: WorkspaceView = { device_id: "local", path: "/projects/herdr-ide", open: true, documents: false, tool: "memory", prs: { only_checkout: false }, pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0 };
+const FRAME: LaneFrame = { mode: "docked", agents: 0, width: 0, view: null, tool: { field: "panel_width", width: 0, min: 360 }, stacked: false, narrowPin: false };
+const SIZES: LaneSizes = { agentMin: 480, viewMin: 360, viewIdeal: 520, lanePage: 900, explorerMin: 180, explorerIdeal: 240, panelMin: 360, panelIdeal: 400, divider: 8 };
 
 export function MemoryScene({ theme, state, width, language }: MemorySceneParams) {
   const actions = useMemo(() => createActions((event) => {
@@ -129,7 +129,7 @@ export function MemoryScene({ theme, state, width, language }: MemorySceneParams
     <TooltipProvider>
       <InterfaceLanguageBoundary />
       <div className="flex h-screen bg-background text-foreground" style={{ width }} data-gallery-scene="memory" data-memory-scene={state}>
-        <Lane view={{ ...VIEW, panel_width: width }} tool="memory" frame={{ ...FRAME, width, document: width }} files={{ ...FRAME, field: "lane_width", width, document: width }} sizes={SIZES} checkout={rest.navigator!.workspaces![0]!.checkouts[0] as Checkout} actions={actions} />
+        <Lane view={{ ...VIEW, panel_width: width }} frame={{ ...FRAME, width, tool: { field: "panel_width", width, min: 360 } }} documents={{ ...FRAME, width, tool: null, view: { field: "document_width", width, min: 360 } }} sizes={SIZES} checkout={rest.navigator!.workspaces![0]!.checkouts[0] as Checkout} actions={actions} />
       </div>
     </TooltipProvider>
   );

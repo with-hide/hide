@@ -74,7 +74,7 @@ describe("the Memory tab", () => {
   });
 
   /** The rail, which opens the front checkout's Project and wears Memory's dot, and the Memory tool, or the rail alone. */
-  async function render(project: ProjectMemory | null, tool: "memory" | "files" = "memory") {
+  async function render(project: ProjectMemory | null, tool: "memory" | "explorer" = "memory") {
     const actions = createActions((event) => { events.push(event); return accepted; });
     await act(async () => {
       useShellStore.setState({ connection: "live", rest, memory: { project } });
@@ -102,7 +102,7 @@ describe("the Memory tab", () => {
   });
 
   it("opens the Project and shows the rail's dot from any tool while its Project has a question", async () => {
-    await render(memory({ questions: [{ kind: "failed", number: 7, title: "card 7", start_failure: null }] }), "files");
+    await render(memory({ questions: [{ kind: "failed", number: 7, title: "card 7", start_failure: null }] }), "explorer");
     expect(sent("memory_open")).toEqual([{ workspace_id: "p" }]);
     expect(container.querySelector('[data-lane-tool-dot="memory"]')).not.toBeNull();
   });

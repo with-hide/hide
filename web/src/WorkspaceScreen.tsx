@@ -19,29 +19,32 @@ import { RunningServers } from "./RunningServers";
 import { useUiStore } from "./ui";
 import { noteShellLayer } from "./browserViews";
 import { workspaceKey } from "./viewLayout";
-import { laneFrame, laneToolOf, pageLaneWidth, workspaceViewOf, type LaneFrame, type LaneSizes, type LaneTool, type WorkspaceView } from "./workspace";
+import { laneFrame, laneViewOf, pageLaneWidth, workspaceViewOf, type LaneFrame, type LaneInput, type LaneSizes, type WorkspaceView } from "./workspace";
 import { keyboardOwner, noteKeyboardOwner } from "./viewFocus";
 import { cn } from "./lib/utils";
 import { useInterfaceTranslation } from "./i18n/client";
 import "./laneCalls";
 import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutGitHeader";
 
-// A Workspace (PRD S6 D-01..D-05; S7 B12, B13; PRD right-lane D-01..D-07):
-// one checkout's path in the window's top row (PRD sidebar-titlebar-refresh
-// D-15, `WorkspaceTitle`), and in the body Agent Views (its Herdr tabs and
-// their panes), the right lane (one tool: Memory, PRs, Files or Changes,
-// or the window's 보기 slot) and, at the right edge, the tool rail. The lane's tool, pin, tree
-// and widths are the core's, per Workspace; this draws them and sends one
-// event per operator choice.
+// A Workspace (PRD S6 D-01..D-05; S7 B12, B13; PRD right-lane D-01..D-07;
+// PRD lane-two-columns D-01, D-02, D-09): one checkout's path in the
+// window's top row (PRD sidebar-titlebar-refresh D-15, `WorkspaceTitle`),
+// and in the body Agent Views (its Herdr tabs and their panes), the right
+// lane's two columns (the documents or the window's 보기 slot at the agents'
+// side, and a tool, Memory, PRs, Explorer or Changes, beside the rail) and,
+// at the right edge, the tool rail. Which columns show, the tool, the pin
+// and the four widths are the core's, per Workspace; this draws them and
+// sends one event per operator choice.
 //
 // An unpinned lane is drawn over Agent Views, which keeps its width, so
-// opening and closing it resizes no terminal (B3, B24); a terminal click,
+// opening and closing it resizes no terminal (B20); a terminal click,
 // Escape or an agent chosen puts it away, mounted out of sight so its
-// documents, scroll and pages are as they were when it comes back (B4). A
-// pinned lane docks and Agent Views gives up its width, so the pin and a
-// divider landing resize the agents' terminals once (B5, B6); a drag moves
-// only a guide until it lands. The rail is always there, so nothing the lane
-// does changes Agent Views' width but the pin.
+// documents, scroll and pages are as they were when it comes back (PRD
+// right-lane B4). A pinned lane docks and Agent Views gives up its width,
+// so the pin, a column opening or closing and a divider landing resize the
+// agents' terminals once (B21); a drag moves only a guide until it lands.
+// The rail is always there, so nothing the lane does changes Agent Views'
+// width but the pin.
 
 /** Where every device keeps its Home (PRD home-device-rail D-03). */
 const HOME_FOLDER = "~/hide";
@@ -52,61 +55,72 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const view = useShellStore((s) => workspaceViewOf(s.rest));
   const shown = useUiStore((s) => s.laneShown);
   const expanded = useUiStore((s) => s.laneExpanded);
+  const stackFront = useUiStore((s) => s.stackFront);
   const [body, setBody] = useState<HTMLElement | null>(null);
   const width = useWidth(body);
   const sizes = useMemo<LaneSizes>(
     () => ({
       agentMin: tokenPx("--size-agent-views-min"),
-      laneMin: tokenPx("--size-lane-min"),
-      laneIdeal: tokenPx("--size-lane-ideal"),
+      viewMin: tokenPx("--size-lane-min"),
+      viewIdeal: tokenPx("--size-lane-ideal"),
       lanePage: tokenPx("--size-lane-page"),
-      treeMin: tokenPx("--size-tree-min"),
-      treeIdeal: tokenPx("--size-tree-ideal"),
+      explorerMin: tokenPx("--size-tree-min"),
+      explorerIdeal: tokenPx("--size-tree-ideal"),
+      panelMin: tokenPx("--size-lane-panel-min"),
+      panelIdeal: tokenPx("--size-lane-panel-ideal"),
       divider: tokenPx("--spacing-sm"),
     }),
     [],
   );
   const opening = useShellStore((s) => (s.editor?.opening ?? []).some((row) => row.checkout_id === checkout?.id));
   const hasViews = (view?.layout?.display_count ?? 0) > 0 || opening;
-  // The lane draws the window's 보기 slot while it is shown, else the Workspace's tool (PRD sidebar-task-lens D-50).
+  // The viewing column draws the window's 보기 slot while it is shown, else the Workspace's documents (PRD sidebar-task-lens D-50; lane-two-columns D-04).
   const detail = useShellStore((s) => s.rest?.ui_state?.detail);
-  const tool = laneToolOf(view, detail);
-  const input = {
-    tool,
+  const laneView = laneViewOf(view, detail, hasViews);
+  const input: LaneInput = {
+    open: view?.open === true,
+    view: laneView,
+    tool: view?.tool ?? null,
     pinned: view?.pinned === true,
-    tree: view?.tree === true,
-    laneWidth: view?.lane_width ?? null,
+    documentWidth: view?.document_width ?? null,
+    detailWidth: view?.detail_width ?? null,
+    explorerWidth: view?.explorer_width ?? null,
     panelWidth: view?.panel_width ?? null,
-    treeWidth: view?.tree_width ?? null,
-    hasViews,
     shown,
     expanded,
+    front: stackFront,
     body: width,
     sizes,
   };
   const frame = laneFrame(input);
-  // The files tool kept under another tool is laid out at its own width, so
-  // its View areas measure what Files will show (an Open to the side's room).
-  const files = tool === "files" ? frame : laneFrame({ ...input, tool: "files" });
+  // The documents kept under the 보기 slot or folded are laid out at their own
+  // width, so their View areas measure what they will show (an Open to the
+  // side's room).
+  const documents = laneView === "documents" ? frame : laneFrame({ ...input, open: true, view: "documents", front: "view" });
   const up = laneUp(frame.mode);
   const checkoutId = checkout?.id ?? null;
-  // A lane call that put a page in front widens the lane once, so the page
-  // lays out wide enough for a site's desktop layout (PRD browser-width-zoom
-  // B1-B5); an expanded lane, or a call into another Workspace, is left as
-  // it is. The width is stored like a divider landing, and a refusal leaves
-  // the page at the width it opened at, with only the log saying so.
+  // What the two columns draw now, each `none`/null while not drawn.
+  const drawnView = frame.view === null ? "none" : laneView;
+  const drawnTool = frame.tool === null ? null : (view?.tool ?? null);
+  // A lane call that put a page in front widens the documents once, so the
+  // page lays out wide enough for a site's desktop layout (PRD
+  // browser-width-zoom B1-B5; lane-two-columns B18); an expanded lane, or a
+  // call into another Workspace, is left as it is. The width is stored like
+  // a divider landing, and a refusal leaves the page at the width it opened
+  // at, with only the log saying so.
   const pageWiden = useUiStore((s) => s.pageWiden);
   const front = view ? workspaceKey(view) : null;
+  const beside = frame.view && frame.tool ? frame.tool.width : null;
   useLayoutEffect(() => {
     if (pageWiden === null || width <= 0) return;
     useUiStore.getState().setPageWiden(null);
-    if (pageWiden !== front || expanded || tool !== "files") return;
-    const laneWidth = pageLaneWidth({ laneWidth: view?.lane_width ?? null, tree: frame.tree, body: width, sizes });
-    if (laneWidth !== null && actions.setWorkspaceView({ lane_width: laneWidth }) === false) {
-      useShellStore.getState().noteDiagnostic(`lane_width: widening for a page refused (${laneWidth})`);
+    if (pageWiden !== front || expanded || drawnView !== "documents") return;
+    const documentWidth = pageLaneWidth({ width: view?.document_width ?? null, beside, body: width, sizes });
+    if (documentWidth !== null && actions.setWorkspaceView({ document_width: documentWidth }) === false) {
+      useShellStore.getState().noteDiagnostic(`document_width: widening for a page refused (${documentWidth})`);
     }
-  }, [pageWiden, front, width, expanded, tool, view?.lane_width, frame.tree, sizes, actions]);
-  // A mission's map opening in the 보기 slot widens the lane once, as a page
+  }, [pageWiden, front, width, expanded, drawnView, view?.document_width, beside, sizes, actions]);
+  // A mission's map opening in the 보기 slot widens the slot once, as a page
   // does, so its nodes have room (PRD software-factory-conductor B14); the
   // width is stored like a divider landing and the operator's narrower drag
   // afterwards stays.
@@ -120,24 +134,25 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     }
     if (width <= 0 || expanded || widened.current === missionKey) return;
     widened.current = missionKey;
-    const panelWidth = pageLaneWidth({ laneWidth: view?.panel_width ?? null, tree: null, body: width, sizes });
-    if (panelWidth !== null && actions.setWorkspaceView({ panel_width: panelWidth }) === false) {
-      useShellStore.getState().noteDiagnostic(`panel_width: widening for a mission map refused (${panelWidth})`);
+    const detailWidth = pageLaneWidth({ width: view?.detail_width ?? null, beside, body: width, sizes });
+    if (detailWidth !== null && actions.setWorkspaceView({ detail_width: detailWidth }) === false) {
+      useShellStore.getState().noteDiagnostic(`detail_width: widening for a mission map refused (${detailWidth})`);
     }
-  }, [missionKey, width, expanded, view?.panel_width, sizes, actions]);
+  }, [missionKey, width, expanded, view?.detail_width, beside, sizes, actions]);
   // The rail, the chords and the close shortcut read what is drawn.
   useLayoutEffect(() => {
-    useUiStore.getState().setDrawnLane({ mode: frame.mode, tool });
-  }, [frame.mode, tool]);
+    useUiStore.getState().setDrawnLane({ mode: frame.mode, view: drawnView, tool: drawnTool, stacked: frame.stacked });
+  }, [frame.mode, drawnView, drawnTool, frame.stacked]);
   // Off the Workspace screen nothing is drawn, so a chord there opens the lane.
-  useLayoutEffect(() => () => useUiStore.getState().setDrawnLane({ mode: "closed", tool: null }), []);
+  useLayoutEffect(() => () => useUiStore.getState().setDrawnLane({ mode: "closed", view: "none", tool: null, stacked: false }), []);
   // A closed lane is not expanded when it opens again.
+  const closed = frame.mode === "closed";
   useLayoutEffect(() => {
-    if (tool === null) useUiStore.getState().setLaneExpanded(false);
-  }, [tool]);
+    if (closed) useUiStore.getState().setLaneExpanded(false);
+  }, [closed]);
   // A lane put away or shown moves no element the page observes, so the
-  // native pages in it are placed again in the same frame (B21).
-  useLayoutEffect(() => noteShellLayer(), [frame.mode, tool]);
+  // native pages in it are placed again in the same frame (PRD right-lane B21).
+  useLayoutEffect(() => noteShellLayer(), [frame.mode, drawnView, drawnTool]);
   // Agent Views under an expanded lane keeps its size and takes no keyboard,
   // so its keyboard target is retired before a chord can act on a pane out
   // of sight.
@@ -146,21 +161,21 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     const owner = keyboardOwner();
     if (agentsCovered && (owner.kind === "pane" || owner.kind === "agent") && owner.workspace === checkoutId) noteKeyboardOwner({ kind: "none" });
   }, [agentsCovered, checkoutId]);
-  // A lane that goes out of sight with the keyboard inside it, or a files
-  // tool another tool replaces with the keyboard in its documents, hands the
+  // A lane that goes out of sight with the keyboard inside it, or documents
+  // the 보기 slot or a fold replaces with the keyboard in them, hands the
   // keyboard to the pane the core has focused, as after a closing sheet, so
-  // no focus is reported for it (B4, B23).
-  const filesUp = up && tool === "files";
-  const shownBefore = useRef({ up, filesUp });
+  // no focus is reported for it (PRD right-lane B4, B23; lane-two-columns B12).
+  const documentsUp = up && drawnView === "documents";
+  const shownBefore = useRef({ up, documentsUp });
   useEffect(() => {
     const before = shownBefore.current;
-    shownBefore.current = { up, filesUp };
+    shownBefore.current = { up, documentsUp };
     const owner = keyboardOwner();
-    const lost = (before.up && !up && (owner.kind === "view" || owner.kind === "tool")) || (before.filesUp && !filesUp && owner.kind === "view");
+    const lost = (before.up && !up && (owner.kind === "view" || owner.kind === "tool" || owner.kind === "detail")) || (before.documentsUp && !documentsUp && owner.kind === "view");
     if (!lost) return;
     const paneId = useShellStore.getState().focusedPaneId;
     if (paneId) focusTerminal(paneId);
-  }, [up, filesUp]);
+  }, [up, documentsUp]);
   if (!checkout || !view) return null;
   return (
     <section
@@ -168,9 +183,11 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       aria-label={t("panes.workspace.aria", { name: checkout.branch ?? checkout.label })}
       data-workspace-screen={checkout.id}
       data-lane-mode={frame.mode}
-      data-lane-shows={tool ?? "none"}
+      data-lane-view={drawnView}
+      data-lane-shows={drawnTool ?? "none"}
+      data-lane-stacked={frame.stacked ? "true" : undefined}
     >
-      <LaneRow view={view} tool={tool} frame={frame} files={files} width={width} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} />
+      <LaneRow view={view} frame={frame} documents={documents} width={width} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} />
       <div className="contents" onKeyDown={(event) => laneEscape(event, frame, view.pinned)}>
         <ToolRail actions={actions} />
       </div>
@@ -222,7 +239,7 @@ function useWidth(element: HTMLElement | null): number {
  * divider and an empty slot under the lane, so Agent Views keeps the width
  * it has (B8).
  */
-function LaneRow({ view, tool, frame, files, width, body, setBody, sizes, actions, checkout }: { view: WorkspaceView; tool: LaneTool | null; frame: LaneFrame; files: LaneFrame; width: number; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout }) {
+function LaneRow({ view, frame, documents, width, body, setBody, sizes, actions, checkout }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; width: number; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout }) {
   const { t } = useInterfaceTranslation();
   const [guide, setGuide] = useState<number | null>(null);
   // The width Agent Views gives up: a docked lane's, kept while it is expanded.
@@ -247,7 +264,7 @@ function LaneRow({ view, tool, frame, files, width, body, setBody, sizes, action
           <div className="shrink-0" style={{ width: slot }} aria-hidden="true" data-lane-slot="true" />
         </>
       ) : null}
-      {tool !== null ? (
+      {frame.mode !== "closed" ? (
         <div
           className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", placed, raised)}
           style={frame.mode === "expanded" ? undefined : { width: frame.width }}
@@ -260,7 +277,7 @@ function LaneRow({ view, tool, frame, files, width, body, setBody, sizes, action
           {frame.mode === "overlay" ? (
             <LaneDivider kind="lane" edge label={t("panes.workspace.resize", { name: t("panes.lane.aria") })} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
           ) : null}
-          <Lane view={view} tool={tool} frame={frame} files={files} sizes={sizes} checkout={checkout} actions={actions} />
+          <Lane view={view} frame={frame} documents={documents} sizes={sizes} checkout={checkout} actions={actions} />
         </div>
       ) : null}
       {guide !== null ? <DividerGuide left={guide} /> : null}

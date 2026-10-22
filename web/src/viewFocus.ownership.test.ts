@@ -26,7 +26,7 @@ it("consecutive commands use the page during handback and the terminal after del
   });
   useShellStore.setState({ rest: {
     navigator: { focused_device_id: "local", focused_checkout_id: "c", focused_workspace_id: "w", workspaces: [{ id: "w", checkouts: [{ id: "c", path: "/fixture" }] }] },
-    workspace_view: { device_id: "local", path: "/fixture", tool: "files", layout: { root: { area: { id: "a1", active: "b", displays: [{ id: "b" }] } } } },
+    workspace_view: { device_id: "local", path: "/fixture", open: true, documents: true, tool: null, layout: { root: { area: { id: "a1", active: "b", displays: [{ id: "b" }] } } } },
   } as unknown as SnapshotRest });
   const remove = installKeyboardOwner();
   try {

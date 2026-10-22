@@ -2,24 +2,25 @@ import { ArrowLeftRightIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { holdShellDrag } from "./shellDrag";
-import { laneLanding, treeLanding, type LaneFrame, type LaneLanding, type LaneSizes } from "./workspace";
+import { columnLanding, edgeColumn, laneLanding, type LaneFrame, type LaneLanding, type LaneSizes } from "./workspace";
 
 /** One arrow key on a focused divider moves it this many pixels. */
 const DIVIDER_STEP = 32;
 
 /**
- * A divider of the lane (PRD right-lane B6, B10; `Component / Side panel
- * grip`): `lane`, at the lane's left edge, sets the document's width, against
- * Agent Views when docked and over them otherwise (`edge`, hung outside the
- * lane's box); `tree`, between the tree and the document, trades width
- * between the two. Nothing at rest, and on hover, keyboard focus and while
- * dragging a hairline with a ⇆ pill at its middle. A drag moves a guide and
- * lands once on release, so no terminal or page resizes during it and every
- * page shows its still; a focused divider moves one step per arrow key, one
- * event per press, each step measured from the last one the core has not yet
+ * A divider of the lane (PRD right-lane B6, B10; lane-two-columns B17;
+ * `Component / Side panel grip`): `lane`, at the lane's left edge, sets the
+ * width of the column at that edge, against Agent Views when docked and
+ * over them otherwise (`edge`, hung outside the lane's box); `column`,
+ * between the viewing column and the tool column, trades width between the
+ * two. Nothing at rest, and on hover, keyboard focus and while dragging a
+ * hairline with a ⇆ pill at its middle. A drag moves a guide and lands once
+ * on release, so no terminal or page resizes during it and every page shows
+ * its still; a focused divider moves one step per arrow key, one event per
+ * press, each step measured from the last one the core has not yet
  * confirmed.
  */
-export function LaneDivider({ kind, label, workspace, acknowledged, frame, origin, sizes, setGuide, actions, edge = false }: { kind: "lane" | "tree"; label: string; workspace: string; acknowledged: string | null; frame: LaneFrame; origin: HTMLElement | null; sizes: LaneSizes; setGuide: (x: number | null) => void; actions: Actions; edge?: boolean }) {
+export function LaneDivider({ kind, label, workspace, acknowledged, frame, origin, sizes, setGuide, actions, edge = false }: { kind: "lane" | "column"; label: string; workspace: string; acknowledged: string | null; frame: LaneFrame; origin: HTMLElement | null; sizes: LaneSizes; setGuide: (x: number | null) => void; actions: Actions; edge?: boolean }) {
   const cancelDrag = useRef<(() => void) | null>(null);
   const [keySession] = useState(() => crypto.randomUUID());
   const keyIntent = useRef<{ frame: LaneFrame; published: LaneFrame; extent: number; request: string; observed: string | null } | null>(null);
@@ -29,29 +30,30 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
   useLayoutEffect(() => {
     const pending = keyIntent.current;
     if (pending && (acknowledged === pending.request ||
-      ((acknowledged !== pending.observed || frame.width !== pending.published.width || frame.tree !== pending.published.tree) && !acknowledged?.startsWith(`${keySession}:`)) ||
-      pending.extent !== origin?.clientWidth || pending.frame.mode !== frame.mode || pending.frame.field !== frame.field || (pending.frame.tree === null) !== (frame.tree === null))) {
+      ((acknowledged !== pending.observed || frame.width !== pending.published.width || frame.view?.width !== pending.published.view?.width || frame.tool?.width !== pending.published.tool?.width) && !acknowledged?.startsWith(`${keySession}:`)) ||
+      pending.extent !== origin?.clientWidth || pending.frame.mode !== frame.mode || pending.frame.view?.field !== frame.view?.field || pending.frame.tool?.field !== frame.tool?.field)) {
       keyIntent.current = null;
     }
   }, [acknowledged, keySession, origin, frame]);
   useLayoutEffect(() => () => { keyIntent.current = null; }, [workspace, origin]);
   // A captured pointer belongs to the Workspace and geometry it started on.
   // Switching either, or unmounting, retires the guide and its page still.
-  useLayoutEffect(() => () => cancelDrag.current?.(), [workspace, origin, frame.mode, frame.width, frame.tree]);
+  useLayoutEffect(() => () => cancelDrag.current?.(), [workspace, origin, frame.mode, frame.width, frame.view?.width, frame.tool?.width]);
   const landingAt = (x: number, basis: LaneFrame): LaneLanding =>
-    kind === "lane" ? laneLanding({ x, body: extent(), frame: basis, sizes }) : treeLanding({ x, frame: basis, sizes });
+    kind === "lane" ? laneLanding({ x, body: extent(), frame: basis, sizes }) : columnLanding({ x, frame: basis });
   // The frame a landing leaves, so the next arrow key steps from it.
   const landed = (basis: LaneFrame, patch: LaneLanding): LaneFrame => {
-    const document = patch[basis.field] ?? basis.document;
-    const tree = patch.tree_width ?? basis.tree;
-    return { ...basis, document, tree, width: kind === "lane" ? document + (tree === null ? 0 : tree + sizes.divider) : basis.width };
+    const view = basis.view ? { ...basis.view, width: patch[basis.view.field] ?? basis.view.width } : null;
+    const tool = basis.tool ? { ...basis.tool, width: patch[basis.tool.field] ?? basis.tool.width } : null;
+    const width = kind === "lane" ? (view?.width ?? 0) + (tool?.width ?? 0) + (view && tool ? sizes.divider : 0) : basis.width;
+    return { ...basis, view, tool, width };
   };
   // Where the divider's left edge stands, from its origin's left edge.
-  const position = (basis: LaneFrame) => (kind === "lane" ? extent() - basis.width - sizes.divider : basis.tree ?? 0);
+  const position = (basis: LaneFrame) => (kind === "lane" ? extent() - basis.width - sizes.divider : basis.view?.width ?? 0);
   const land = (x: number, basis = frame, request?: string) => {
     if (extent() <= 0) return;
     const patch = landingAt(x, basis);
-    const changed = (patch[basis.field] !== undefined && patch[basis.field] !== basis.document) || (patch.tree_width !== undefined && patch.tree_width !== basis.tree);
+    const changed = [basis.view, basis.tool].some((column) => column && patch[column.field] !== undefined && patch[column.field] !== column.width);
     if (!changed) return;
     if (request) keyIntent.current = { frame: landed(basis, patch), published: frame, extent: extent(), request, observed: acknowledged };
     if (actions.setWorkspaceView({ ...patch, ...(request ? { width_request_id: request } : {}) }) === false) keyIntent.current = null;
@@ -92,10 +94,12 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
     target.addEventListener("pointercancel", end);
     target.addEventListener("lostpointercapture", end);
   };
-  const value = kind === "lane" ? frame.document : frame.tree ?? 0;
-  const min = kind === "lane" ? sizes.laneMin : sizes.treeMin;
-  // Docked, the lane grows into what Agent Views can spare; over them, to the body's edge.
-  const spare = kind === "lane" ? (frame.mode === "overlay" ? frame.agents - frame.width - sizes.divider : frame.agents - sizes.agentMin) : frame.document - sizes.laneMin;
+  const moved = kind === "lane" ? edgeColumn(frame) : frame.view;
+  const value = moved?.width ?? 0;
+  const min = moved?.min ?? 0;
+  // Docked, the lane grows into what Agent Views can spare; over them, to
+  // the body's edge; between the columns, into what the tool column can spare.
+  const spare = kind === "lane" ? (frame.mode === "overlay" ? frame.agents - frame.width - sizes.divider : frame.agents - sizes.agentMin) : (frame.tool?.width ?? 0) - (frame.tool?.min ?? 0);
   return (
     <div
       role="separator"
@@ -113,7 +117,7 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
       onKeyDown={(event) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
-        // Left widens the lane and narrows the tree, as the divider moves left.
+        // Left widens the lane, or the tool column, as the divider moves left.
         const pending = keyIntent.current;
         const basis = pending && pending.extent === extent() ? pending.frame : frame;
         const request = `${keySession}:${crypto.randomUUID()}`;

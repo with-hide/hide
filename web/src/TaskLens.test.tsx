@@ -145,7 +145,7 @@ it("in 프로젝트별 puts a project whose only turn is a block first, as a blo
 it("opens a task's pane on a press, its record on Space, and resolves it from the ⋯ menu (B12, B15, B18)", async () => {
   const agents = [row("a", {}, { line: "일하는 중" })];
   const rest = snapshot(agents, [card("a", "working", "hide-main")]);
-  (rest as { workspace_view?: unknown }).workspace_view = { device_id: "local", path: "/hide", tool: null, last_tool: null, prs: { only_checkout: false }, pinned: false, tree: false, lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0 };
+  (rest as { workspace_view?: unknown }).workspace_view = { device_id: "local", path: "/hide", open: false, documents: false, tool: null, prs: { only_checkout: false }, pinned: false, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0 };
   const { container, sent } = await render(rest, agents);
   const button = container.querySelector<HTMLElement>('[data-task-row="a"] [data-task-focus="row"]')!;
   await act(async () => button.click());

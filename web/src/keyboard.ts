@@ -243,14 +243,14 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.toggleSidebarLens();
       case "toggle_lane_prs":
         return actions.toggleTool("prs");
-      case "toggle_lane_files":
-        return actions.toggleTool("files");
+      case "toggle_lane_explorer":
+        return actions.toggleTool("explorer");
       case "toggle_lane_changes":
         return actions.toggleTool("changes");
       case "toggle_lane_memory":
         return actions.toggleTool("memory");
-      case "toggle_file_tree":
-        return actions.toggleFileTree();
+      case "toggle_lane_documents":
+        return actions.toggleDocuments();
       case "find_in_pane": {
         // One chord, two surfaces, chosen by where the operator works: the
         // View area they are in finds in its document, anywhere else the
@@ -277,7 +277,7 @@ export function installKeyboard(actions: Actions): () => void {
         // else it zooms the focused terminal pane.
         const owner = keyboardCommandOwner();
         const lane = ui().drawnLane.mode;
-        if ((owner.kind === "view" || owner.kind === "tool") && lane !== "closed" && lane !== "hidden") return ui().setLaneExpanded(!ui().laneExpanded);
+        if ((owner.kind === "view" || owner.kind === "tool" || owner.kind === "detail") && lane !== "closed" && lane !== "hidden") return ui().setLaneExpanded(!ui().laneExpanded);
         return actions.toggleZoom();
       }
       case "toggle_task_list":

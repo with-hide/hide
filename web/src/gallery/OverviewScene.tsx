@@ -111,7 +111,7 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
       }];
       rest.terminal = { headers: Object.fromEntries(checkout.tabs[0]!.panes.map((pane) => [pane.id, { working: pane.id !== "h-a1c2", notice: null, band: null }])) } as never;
       rest.workspace_view = {
-        device_id: "local", path: checkout.path, tool: null, last_tool: "prs", prs: { only_checkout: false }, pinned: true, tree: false, lane_width: null, panel_width: null, tree_width: null, lane_called: 0, lane_calls: 0,
+        device_id: "local", path: checkout.path, open: false, documents: false, tool: "prs", prs: { only_checkout: false }, pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0,
         layout: { root: { area: { id: "a1", active: null, displays: [] } }, active_area: "a1", limits: { areas: 6, depth: 3, displays: 32 }, display_count: 0 },
         agent_layout: { root: { area: { id: "g1", active: tabId, displays: [{ id: tabId }] } }, active_area: "g1", canvases: {}, limits: { areas: 6, depth: 3, displays: 16 }, display_count: 1 },
       } as never;
