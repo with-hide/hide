@@ -320,33 +320,61 @@ test("the lane comes and goes over the terminals without a resize, the pin and a
         await expect(page.locator('[data-slot="tooltip-content"]')).toContainText(path.join(checkout, longName));
         await nativeCapture(app, page, `lane-${theme}-full-file-path-tooltip`);
         await rest(page);
-        // Too narrow for both columns' minimums beside 480, the pinned lane
-        // stacks them, the document in front; too narrow for even one, it
-        // opens over the agents (B19).
-        await bodyWidth(app, page, 1000);
-        await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
-        await expect(workspace).toHaveAttribute("data-lane-stacked", "true");
-        await expect(workspace).toHaveAttribute("data-lane-view", "documents");
-        await expect(workspace).toHaveAttribute("data-lane-shows", "none");
-        await page.locator('[data-lane-tool="explorer"]').click();
-        await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
-        await expect(workspace).toHaveAttribute("data-lane-view", "none");
-        await nativeCapture(app, page, `lane-${theme}-stacked-pinned`);
-        await bodyWidth(app, page, 800);
-        await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
-        expect(await pinState(page)).toBe("narrow");
-        await nativeCapture(app, page, `lane-${theme}-narrow-pinned`);
-        await bodyWidth(app, page, 1600);
-        await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
-        await expect(workspace).not.toHaveAttribute("data-lane-stacked", "true");
-        await expect(workspace).toHaveAttribute("data-lane-view", "documents");
-        await chooseExpand(page);
-        await expect(workspace).toHaveAttribute("data-lane-mode", "expanded");
-        await nativeCapture(app, page, `lane-${theme}-expanded`);
-        await chooseExpand(page);
-        await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
       }
     }
+  } finally {
+    await app?.close().catch(() => undefined);
+    run.cleanup();
+    herdr.stop();
+  }
+});
+
+// PRD lane-two-columns B15, B19: a pinned lane too narrow for both columns'
+// minimums beside Agent Views' 480 stacks them, the one the rail last brought
+// forward drawn; too narrow for even one, it opens over the agents; the
+// width coming back restores both, and Expand gives the viewing column the rest.
+test("a pinned lane stacks its columns in a narrow body, opens over the agents in a narrower one, and expands as one", async () => {
+  const herdr = await startHerdr({ agents: false });
+  const run = isolate(herdr, "right-lane-narrow");
+  let app: ElectronApplication | null = null;
+  try {
+    const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
+    fs.writeFileSync(path.join(checkout, "notes.md"), "# notes\n");
+    ({ app } = await launchShell(run.env));
+    const page = await app.firstWindow();
+    await enterWorkspace(page, "fixture");
+    const workspace = page.locator("[data-workspace-screen]");
+    await bodyWidth(app, page, 1600);
+    await showExplorer(page);
+    await page.locator('[data-explorer-row$="/notes.md"]').click();
+    await expect(workspace).toHaveAttribute("data-lane-view", "documents");
+    await setLanePinned(page, true);
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
+    await expect(workspace).not.toHaveAttribute("data-lane-stacked", "true");
+
+    await bodyWidth(app, page, 1000);
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
+    await expect(workspace).toHaveAttribute("data-lane-stacked", "true");
+    await expect(workspace).toHaveAttribute("data-lane-view", "documents");
+    await expect(workspace).toHaveAttribute("data-lane-shows", "none");
+    await page.locator('[data-lane-tool="explorer"]').click();
+    await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
+    await expect(workspace).toHaveAttribute("data-lane-view", "none");
+    await nativeCapture(app, page, "lane-stacked-pinned");
+    await bodyWidth(app, page, 800);
+    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
+    expect(await pinState(page)).toBe("narrow");
+    await nativeCapture(app, page, "lane-narrow-pinned");
+    await bodyWidth(app, page, 1600);
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
+    await expect(workspace).not.toHaveAttribute("data-lane-stacked", "true");
+    await expect(workspace).toHaveAttribute("data-lane-view", "documents");
+    await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
+    await chooseExpand(page);
+    await expect(workspace).toHaveAttribute("data-lane-mode", "expanded");
+    await nativeCapture(app, page, "lane-expanded");
+    await chooseExpand(page);
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
   } finally {
     await app?.close().catch(() => undefined);
     run.cleanup();
@@ -492,7 +520,6 @@ test("an SSH Workspace's lane keeps its chords, narrow fallback and saved widths
     await page.mouse.up();
     await expect(divider).toHaveAttribute("aria-valuenow", "424");
     await page.locator('[data-lane-divider="column"]').press("ArrowLeft");
-    await expect(page.locator('[data-lane-divider="column"]')).toHaveAttribute("aria-valuenow", "392");
     await expect(divider).toHaveAttribute("aria-valuenow", "392");
     await expect.poll(() => saved(run!.env.HIDE_STATE_DIR!).workspaces.find((entry) => entry.device_id === "lane-ssh" && entry.path === shared)).toMatchObject({ open: true, documents: true, tool: "explorer", pinned: true, document_width: 392, explorer_width: 272 });
     await nativeCapture(app, page, "remote-lane-saved");
