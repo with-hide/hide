@@ -47,7 +47,7 @@ describe("a tile's line (B8, B9)", () => {
 describe("What changes (B11)", () => {
   it("lists each place for the agents on, one row per place naming every agent that shares it, skips a piece the agent lacks, and ends with the hide link", () => {
     const kit = { components: [{ id: "cli", label: "hide", state: "off", reason: null, location: "/home/me/.local/bin/hide" }] } as unknown as Kit;
-    const shared = { state: "off" as const, reason: null, location: "/home/me/.agents/skills/hide-browser/SKILL.md" };
+    const shared = { state: "off" as const, reason: null, location: "/home/me/.agents/skills/hide/SKILL.md" };
     const agents = [
       agent("claude-code", { hook: { state: "off", reason: null, location: "/home/me/.claude/settings.json" }, herdr: { state: "absent", reason: "none", location: null } }),
       agent("codex", { skill: shared, hook: { state: "off", reason: null, location: "/home/me/.codex/hooks.json" } }),
@@ -59,7 +59,7 @@ describe("What changes (B11)", () => {
         { path: "/home/me/.claude/settings.json", labels: ["claude-code"], part: "hook" },
         { path: "/home/me/.claude-code/skills/hide", labels: ["claude-code"], part: "skill" },
         { path: "/home/me/.codex/hooks.json", labels: ["codex"], part: "hook" },
-        { path: "/home/me/.agents/skills/hide-browser/SKILL.md", labels: ["codex", "OpenCode"], part: "skill" },
+        { path: "/home/me/.agents/skills/hide/SKILL.md", labels: ["codex", "OpenCode"], part: "skill" },
         { path: "/home/me/.config/opencode/plugins/hide.js", labels: ["OpenCode"], part: "plugin" },
       ],
       cli: "/home/me/.local/bin/hide",

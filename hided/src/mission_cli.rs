@@ -10,7 +10,7 @@ use herdr_core::missions::{
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-/// The guide `hide mission help` prints, which the Conductor skill points
+/// The guide `hide mission help` prints, which the `hide` skill's guide points
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 

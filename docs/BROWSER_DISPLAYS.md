@@ -183,7 +183,7 @@ Native file displays and unrestricted browser-context administration are unsuppo
 ## Agent page commands
 
 `hide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...` read and drive one browser display of the caller's checkout, by its View id.
-`hide browser help` prints the agent guide for them, the commands, the ref format, checking with `--diff` and `changed`, and each failure reason with its recovery; it is the source of the `hide browser` agent skill, and the session guidance names the commands and points at it (`hide-agent-hooks/src/workspace_context.rs`).
+`hide browser help` prints the agent guide for them, the commands, the ref format, checking with `--diff` and `changed`, and each failure reason with its recovery; `hide guide`, which the `hide` agent skill points at, sends browser work to it, and the session guidance names the commands and points at it (`hide-agent-hooks/src/workspace_context.rs`).
 A snapshot of a device's loopback page names the address the core keeps for the display (`http://localhost:8765/...`) on its address line, not the loopback route that page loaded from on the core's machine; console and network lines still print the addresses the page used.
 A snapshot is text and exits zero; an action prints one JSON line with what it did, `changed` and `next`; every failure prints `{"ok":false,"reason","display","next_action"}` and exits non-zero.
 

@@ -88,6 +88,7 @@ An ordinary Claude Code or Codex session started in a connected Herdr pane recei
 A disconnected pane, a cwd outside every registered checkout, an unavailable renderer, or an unsupported Browser surface receives no Workspace capability claim.
 The guidance scopes every command to the caller's checkout Workspace and lists only capabilities returned by the daemon; `hide workspace info` remains the live check and `hide --help` gives the full syntax.
 With `browser.open` it also lists the `hide browser` page commands in one line and points at `hide browser help`, their agent guide ([BROWSER_DISPLAYS.md](BROWSER_DISPLAYS.md#agent-page-commands)).
+It ends with one line that points at `hide guide`, the agent's guide to Hide, and names `hide browser help` and `hide mission help`; since this text exists only when the daemon answered for the caller, the line reaches a session inside Hide and no other, in every agent with session guidance (Grok, which has none, gets the guide through the `hide` skill).
 The hook creates an owner-only, finite-lived credential reference and includes its path as a shell environment prefix for the listed commands.
 The path is a credential reference and should be handled as private session context, even though it contains no bearer bytes itself.
 The credential's bearer bytes and file contents never enter hook stdout, arguments, or the agent context, and each command rechecks the caller's checkout membership and renderer availability.
@@ -627,9 +628,14 @@ The leaf contract tests reject missing samples, links, logos, inconsistent capab
 
 Two pieces are written per agent into the agent's own files, and nothing else; a third, Herdr's integration, is put in through Herdr's own CLI (below):
 
-- The skill stubs `hide-browser/SKILL.md` and `hide-conductor/SKILL.md` in the folder the agent reads, both written by every pass into every folder.
-  Each is a few lines that point at the CLI's own guide, `hide browser help` and `hide mission help`, so it stays right as that guide changes; a folder written before the Conductor gets its stub on the next pass.
-  The row's skill state is the worst of the two: unreadable, then missing, then outdated, then edited by the operator, then another tool's file, then current.
+- The skill stub `hide/SKILL.md` in the folder the agent reads, a plain copy written by every pass into every folder.
+  It is a few lines that point at the CLI's own guide, `hide guide`, so it stays right as that guide changes; the guide sends browser work to `hide browser help` and a mission of agents, started or taken over, to `hide mission help`, so there is no separate browser or Conductor skill.
+  The folders are the agent's global ones, read in every terminal, so the description says the skill is only for a session in a pane Hide manages, and the body first has the agent check that (Hide's session guidance, or `hide workspace info` answering) and stop when it is not.
+  The description is a quoted YAML string: Pi 1.0.4 parses front matter strictly and drops a skill whose plain description holds `: `, which is how the earlier `hide-conductor` stub never reached Pi's model (measured on 2026-10-22).
+  The stubs earlier builds wrote, `hide-browser` and `hide-conductor` version 1, are retired by ownership (`RETIRED_SKILLS`): a pass takes out each one whose bytes are exactly what that build wrote, with its folder when nothing else is in it, and keeps one the operator edited; a folder holding a retired stub reads Outdated until that pass, so a folder an earlier build filled gets `hide` even though the kit had recorded it as written. An edited one decides nothing: a recorded folder that holds only edited ones reads as the operator's removal of `hide`, which Reinstall undoes, so a `hide` the operator deleted is not written back on every pass.
+  The row's skill state: unreadable, then missing, then outdated, then edited by the operator, then another tool's file, then current.
+  Grok and omp read `~/.claude/skills` as well as `~/.agents/skills`; with Hide's stub in both, each listed it once in its model's request (Grok 1.0.62, omp 18.7.0, 2026-10-22), as did Claude Code 2.1.307, Codex 0.163.0, Pi 1.0.4 and agy from their one folder, each in an isolated HOME.
+  OpenCode 2.0.29 also listed it once, but it read the account's own skill folders whatever `HOME` and `OPENCODE_TEST_HOME` said, so whether it lists a stub found in both folders twice is unmeasured.
   Its folder is `~/.agents/skills` for the agents that read it, `~/.claude/skills` for Claude Code (which documents that it does not read the shared folder), and `~/.gemini/config/skills` for agy, whose model is given neither of the others: agy 1.4.0 lists skills in its documented `~/.gemini/antigravity-cli/skills` under `/skills` but does not give them to the model, while those in `~/.gemini/config/skills` reach it (measured on 2026-10-16), so Hide writes there and never in `~/.gemini/antigravity-cli/skills`, where the operator's own links stay; agy's desktop app shares `~/.gemini/config`, so it sees the skill too.
   A shared folder is written while any agent that reads it is on and installed, and it is removed only when none is.
   A file is Hide's only when its marker line, `<!-- hide-skill@<version>: ... -->`, is the first line after the front matter; a file that merely mentions `hide-skill@` is never replaced or removed, and the agent's row says a skill that Hide did not write is already there.
@@ -650,7 +656,7 @@ Cursor is retired from support, onboarding, new installation and provider select
 The kit removes only its recorded, Hide-marked hook entries, including older event layouts; operator and other tools' entries stay.
 A recorded `herdr:cursor` integration is uninstalled through the existing Herdr owner boundary before ownership is forgotten.
 An uninstall failure retains that record for the next pass, including full kit removal.
-The shared `hide-browser` and `hide-conductor` stubs stay while any live enabled agent reads them, and stored Cursor conversations remain readable.
+The shared `hide` stub stays while any live enabled agent reads it, and stored Cursor conversations remain readable.
 
 Cursor also loads Claude Code's hooks from `~/.claude/settings.json` (and the project's `.claude/settings*.json`) when "Include Third-Party Plugins, Skills, and Other Configs" is on, which is its default, and merges them with its own at the lowest priority without removing a duplicate ([third-party hooks](https://cursor.com/docs/reference/third-party-hooks)).
 So on a machine where Claude Code is on in Hide a Cursor session would also run Hide's instrumented Claude Code hook (the pane counters and reports as `claude-code`, Memory), which is not what a Cursor session is.

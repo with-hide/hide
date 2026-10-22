@@ -40,7 +40,9 @@ async function openAgents(page: Page, daemon: Daemon) {
 }
 
 const RECORD = ".hide/kit/installed.json";
-const SHARED_SKILL = ".agents/skills/hide-browser/SKILL.md";
+const SHARED_SKILL = ".agents/skills/hide/SKILL.md";
+// The stub an earlier build wrote there, which the kit now takes out.
+const OLD_SHARED_SKILL = ".agents/skills/hide-browser/SKILL.md";
 
 /** Every active program plus retired Cursor: only seven rows may appear, even when Cursor is installed. */
 const PROGRAMS = ["claude", "codex", "grok", "opencode", "pi", "omp", "cursor-agent", "agy"];
@@ -114,7 +116,7 @@ test("a Mac an earlier build put Gemini CLI on loses only Hide's Gemini pieces a
     ".gemini/settings.json": GEMINI_SETTINGS,
     ".gemini/oauth_creds.json": '{"token":"synthetic"}',
     [sessions]: '{"messages":[]}',
-    [SHARED_SKILL]: OLD_STUB,
+    [OLD_SHARED_SKILL]: OLD_STUB,
     [RECORD]: JSON.stringify({ format: 1, installed: ["hook:gemini-cli", "skill:agents"], agents: { "gemini-cli": true } }),
   });
   try {
@@ -127,7 +129,7 @@ test("a Mac an earlier build put Gemini CLI on loses only Hide's Gemini pieces a
     expect(read(path.join(home, ".gemini", "oauth_creds.json"))).toBe('{"token":"synthetic"}');
     expect(read(path.join(home, sessions))).toBe('{"messages":[]}');
     // B3: no agent that is on reads the shared folder, so Hide's stub goes; the record no longer names Gemini.
-    await expect.poll(() => fs.existsSync(path.join(home, SHARED_SKILL)), { timeout: 60_000 }).toBe(false);
+    await expect.poll(() => fs.existsSync(path.join(home, OLD_SHARED_SKILL)), { timeout: 60_000 }).toBe(false);
     await expect.poll(() => read(path.join(home, RECORD)), { timeout: 60_000 }).not.toContain("gemini");
 
     // B1, B8, B31: seven active agents, with neither retired Gemini CLI nor Cursor in the list.
