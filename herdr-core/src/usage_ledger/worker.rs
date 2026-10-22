@@ -167,7 +167,12 @@ impl Worker {
                         Err(code) => {
                             let report = Report {
                                 projection: None,
-                                projects: ProjectCosts::default(),
+                                // No store, no cost: the tile says it failed
+                                // rather than waiting forever (B33).
+                                projects: ProjectCosts {
+                                    built: None,
+                                    failed: true,
+                                },
                                 progress: Vec::new(),
                                 failure: Some(code),
                                 price_failure: None,

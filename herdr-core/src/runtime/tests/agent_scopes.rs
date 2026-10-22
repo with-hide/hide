@@ -1330,6 +1330,10 @@ fn the_project_to_do_list_follows_the_task_rows_and_the_operator_s_pull_requests
         let asks = rows.iter().filter(|row| row.0 != "pr").count();
         assert_eq!(asks, asking, "the asks are the 태스크 list's own rows");
         assert_eq!(scope.status.todo_total, rows.len());
+        assert_eq!(
+            scope.status.todo_agents, asks,
+            "the agents' rows, apart from the PRs"
+        );
         rows
     };
     assert_eq!(

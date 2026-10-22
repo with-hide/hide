@@ -11,10 +11,11 @@
 // HIDE_E2E_SCREENSHOT_DIR.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { initGithubRepository } from "./github-remote";
-import { startHerdr } from "./herdr-fixture";
+import { setFixtureLifecycle, startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided } from "./hided-fixture";
 import { fakeGh, git, head, moveHead, skewCardHead, writes, type ExtraQuery } from "./work-prs-fixture";
 import { chord } from "./chords";
@@ -22,8 +23,22 @@ import { chooseTheme, countSent, registerFolder, screenshot, showProjectRow, sho
 
 test.describe.configure({ timeout: 180_000 });
 
-/** A project on a private Herdr and hided with the fake `gh`, the sidebar on its PR list. */
-async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>>; daemon: { origin: string; token: string; home: string } }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean } = {}): Promise<void> {
+/** Waits for the fixture shell's prompt in `pane`. */
+async function prompt(herdr: HerdrFixture, pane: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const read = spawnSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
+    if (read.status === 0 && read.stdout.includes("fixture %")) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`no prompt in pane ${pane}`);
+}
+
+/**
+ * A project on a private Herdr and hided with the fake `gh`, the sidebar on
+ * its PR list; `agentOn` starts a working agent in a worktree of that branch.
+ */
+async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>>; daemon: { origin: string; token: string; home: string } }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean; agentOn?: string } = {}): Promise<void> {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const herdr = await startHerdr();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
@@ -40,6 +55,15 @@ async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: stri
     git(repo, ["push", "-q", "origin", "main"]);
     git(repo, ["remote", "set-head", "origin", "main"]);
     herdr.run(["workspace", "create", "--cwd", repo, "--label", "repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
+    if (options.agentOn) {
+      const worktree = path.join(herdr.root, "repo-agent");
+      git(repo, ["worktree", "add", "-q", "-b", options.agentOn, worktree]);
+      const created = herdr.run(["workspace", "create", "--cwd", worktree, "--label", "repo-agent", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as { result: { root_pane: { pane_id: string } } };
+      const pane = created.result.root_pane.pane_id;
+      await prompt(herdr, pane);
+      herdr.run(["agent", "start", "agent-on-branch", "--kind", "claude", "--pane", pane]);
+      await setFixtureLifecycle(herdr, pane, "working");
+    }
 
     const gh = fakeGh(herdr.root, options);
     daemon = await startHided(herdr, "work-prs", undefined, { PATH: `${gh.bin}${path.delimiter}${herdr.fixturePath}` });
@@ -356,6 +380,21 @@ test("in a stacked lane with the Project tool in front, every way of opening the
     await page.locator('[data-lane-tool="detail"]').click();
     await expect(screen).toHaveAttribute("data-lane-view", "detail");
   });
+});
+
+test("an agent's mark on a pull request row takes the press while the row's buttons show (lane-two-columns B41)", async ({ page }) => {
+  await openWork(page, async ({ work, sent }) => {
+    const row = work.locator('[data-pr="31"]');
+    const mark = row.locator("[data-pr-agent]").first();
+    await expect(mark).toBeVisible({ timeout: 30_000 });
+    // The row's buttons show under the pointer and by the keyboard, beside the mark rather than over it.
+    await row.locator('[data-pr-title="31"]').hover();
+    await expect(row.locator('[data-pr-github="31"]')).toBeVisible();
+    const before = sent.get("focus_pane") ?? 0;
+    // No force: a click Playwright finds covered fails here.
+    await mark.click({ timeout: 5_000 });
+    await expect.poll(() => sent.get("focus_pane") ?? 0).toBeGreaterThan(before);
+  }, { agentOn: "feat/clean" });
 });
 
 test("a branch update on a pull request that moved is refused, looked at again, then goes out on the new head", async ({ page }) => {

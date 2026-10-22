@@ -42,8 +42,8 @@ export type TodoView = {
   prs: ProjectTodo[];
   /** Rows the core sent past the cut, `+N 더`; 0 when every sent row shows. */
   more: number;
-  /** Rows past the core's cap that it did not send: no `+N 더` opens them, the sidebar's lists hold them. */
-  beyond: number;
+  /** Rows past the core's cap that it did not send, by where they are: agents' rows in the sidebar's 태스크, pull requests in its PR list. */
+  beyond: { agents: number; prs: number };
 };
 
 /**
@@ -58,7 +58,10 @@ export function todoView(status: ProjectStatus, open: boolean): TodoView {
     revisit: shown.filter((row) => row.kind === "revisit"),
     prs: shown.filter((row) => row.kind === "pr"),
     more: open ? 0 : status.todo.length - shown.length,
-    beyond: Math.max(0, status.todo_total - status.todo.length),
+    beyond: {
+      agents: Math.max(0, status.todo_agents - status.todo.filter((row) => row.kind !== "pr").length),
+      prs: Math.max(0, status.todo_total - status.todo_agents - status.todo.filter((row) => row.kind === "pr").length),
+    },
   };
 }
 

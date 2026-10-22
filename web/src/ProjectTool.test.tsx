@@ -20,7 +20,7 @@ import { recentCards } from "./projectStatus";
 // belongs to project `p`, whose scope carries the core's 현황.
 
 const status = (overrides: Partial<ProjectStatus> = {}): ProjectStatus => ({
-  todo: [], todo_total: 0,
+  todo: [], todo_total: 0, todo_agents: 0,
   prs: { open: 0, mergeable: 0, failed: 0, review: 0, checking: 0 },
   git: { worktrees: 1, changed: 0, unpushed: 0, removable: 0, dots: [{ checkout_id: "c", state: "clean" }] },
   ...overrides,
@@ -111,6 +111,17 @@ describe("the Project tool", () => {
     expect(container.querySelector("[data-tile-cost-failed]")).not.toBeNull();
   });
 
+  it("sends the rows past the core's cap to the sidebar list that holds each kind, narrowed to the project (B37)", async () => {
+    await render(snapshot(status({ todo: [{ kind: "pr", number: 7 }], todo_total: 70, todo_agents: 10 })));
+    expect(container.querySelector('[data-project-todo-beyond-to="tasks"]')?.textContent).toContain("10");
+    expect(container.querySelector('[data-project-todo-beyond-to="prs"]')?.textContent).toContain("59");
+    await press('[data-project-todo-beyond-to="prs"]');
+    expect(sent("sidebar_lens_set").at(-1)).toEqual({ lens: "prs" });
+    await press('[data-project-todo-beyond-to="tasks"]');
+    expect(sent("sidebar_lens_set").at(-1)).toEqual({ lens: "tasks" });
+    expect(useUiStore.getState().sidebarProject).toEqual({ deviceId: "local", projectId: "p" });
+  });
+
   it("sends the sessions and PRs tiles to the sidebar narrowed to the project (B27, B29)", async () => {
     await render(snapshot(status()));
     await press('[data-project-tile-press="sessions"]');
@@ -141,17 +152,19 @@ describe("the 할 일 cut (B37)", () => {
   const rows = (count: number): ProjectStatus["todo"] => Array.from({ length: count }, (_, index) => (index < 2 ? { kind: "ask", pane_id: `a${index}` } : index < 4 ? { kind: "revisit", pane_id: `r${index}` } : { kind: "pr", number: index }));
 
   it("shows five in the core's order with the rest counted, every row once opened", () => {
-    const status: ProjectStatus = { todo: rows(8), todo_total: 8, prs: { open: 0, mergeable: 0, failed: 0, review: 0, checking: 0 }, git: { worktrees: 0, changed: 0, unpushed: 0, removable: 0, dots: [] } };
+    const status: ProjectStatus = { todo: rows(8), todo_total: 8, todo_agents: 4, prs: { open: 0, mergeable: 0, failed: 0, review: 0, checking: 0 }, git: { worktrees: 0, changed: 0, unpushed: 0, removable: 0, dots: [] } };
     const cut = todoView(status, false);
     expect([cut.asks.length, cut.revisit.length, cut.prs.length, cut.more]).toEqual([2, 2, 1, 3]);
     const all = todoView(status, true);
     expect([all.prs.length, all.more]).toEqual([4, 0]);
   });
 
-  it("counts only sent rows under +N 더, and the rows past the core's cap apart", () => {
-    const status: ProjectStatus = { todo: rows(8), todo_total: 70, prs: { open: 0, mergeable: 0, failed: 0, review: 0, checking: 0 }, git: { worktrees: 0, changed: 0, unpushed: 0, removable: 0, dots: [] } };
-    expect([todoView(status, false).more, todoView(status, false).beyond]).toEqual([3, 62]);
-    expect([todoView(status, true).more, todoView(status, true).beyond]).toEqual([0, 62]);
+  it("counts only sent rows under +N 더, and the rows past the core's cap apart by the list that holds them", () => {
+    // 8 sent: 4 agents' rows and 4 pull requests; 70 in all, 10 of them agents'.
+    const status: ProjectStatus = { todo: rows(8), todo_total: 70, todo_agents: 10, prs: { open: 0, mergeable: 0, failed: 0, review: 0, checking: 0 }, git: { worktrees: 0, changed: 0, unpushed: 0, removable: 0, dots: [] } };
+    expect(todoView(status, false).more).toBe(3);
+    expect(todoView(status, true).more).toBe(0);
+    expect(todoView(status, true).beyond).toEqual({ agents: 6, prs: 56 });
   });
 });
 

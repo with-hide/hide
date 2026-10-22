@@ -13,6 +13,8 @@ export type ProjectStatus = {
   todo: ProjectTodo[];
   /** Every 할 일 row, the ones the core left off past its cap included: the rail's number (B38). */
   todo_total: number;
+  /** How many of `todo_total` are agents' rows, the rest pull requests: where the rows past the core's cap are (B37). */
+  todo_agents: number;
   prs: { open: number; mergeable: number; failed: number; review: number; checking: number };
   git: {
     worktrees: number;

@@ -32,6 +32,10 @@ pub struct ProjectStatus {
     /// Every to-do row, the ones past `TODO_LIMIT` included: the rail's
     /// number (B38).
     pub todo_total: usize,
+    /// How many of `todo_total` are agents' rows (asks and 다시 볼 것), the
+    /// rest being pull requests: where the rows past the cap are found,
+    /// the sidebar's 태스크 or PR list (B37).
+    pub todo_agents: usize,
     pub prs: PrCounts,
     pub git: GitCounts,
 }
@@ -208,11 +212,13 @@ pub(super) fn project(
         }
     }
     let todo_total = todo.len();
+    let todo_agents = todo.iter().filter(|row| row.kind != "pr").count();
     todo.truncate(TODO_LIMIT);
     ProjectStatus {
         projected: true,
         todo,
         todo_total,
+        todo_agents,
         prs: pr_counts(project, board),
         git: git_counts(project),
     }

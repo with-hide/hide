@@ -309,10 +309,15 @@ function TodoList({ project, status, actions }: { project: Workspace; status: Pr
         <button type="button" className="self-start rounded-xs px-xs text-caption text-subtle-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={() => setOpen(true)} data-project-todo-more={view.more}>
           {t("projectTool.todo.more", { count: view.more })}
         </button>
-      ) : view.beyond > 0 ? (
-        <button type="button" className="self-start rounded-xs px-xs text-caption text-subtle-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.showProjectInSidebar("tasks", project.device_id, project.id)} data-project-todo-beyond={view.beyond}>
-          {t("projectTool.todo.beyond", { count: view.beyond })}
-        </button>
+      ) : view.beyond.agents + view.beyond.prs > 0 ? (
+        // The rows past the core's cap, each kind to the sidebar list that holds it, narrowed to the project.
+        <div className="flex flex-wrap gap-xs" data-project-todo-beyond={view.beyond.agents + view.beyond.prs}>
+          {([["agents", "tasks"], ["prs", "prs"]] as const).map(([kind, lens]) => view.beyond[kind] > 0 ? (
+            <button key={kind} type="button" className="rounded-xs px-xs text-caption text-subtle-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.showProjectInSidebar(lens, project.device_id, project.id)} data-project-todo-beyond-to={lens}>
+              {t(`projectTool.todo.beyond.${kind}`, { count: view.beyond[kind] })}
+            </button>
+          ) : null)}
+        </div>
       ) : null}
     </section>
   );

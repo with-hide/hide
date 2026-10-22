@@ -278,6 +278,37 @@ fn usage_worker_sleeps_without_windows_and_joins_when_its_owner_ends() {
     assert_eq!(node.calls.load(Ordering::SeqCst), 0);
 }
 
+/// PRD lane-two-columns B31, B33: a usage store that cannot open reports the
+/// projects' costs as failed, so the tile says so instead of waiting.
+#[test]
+fn a_usage_store_that_cannot_open_reports_the_costs_failed() {
+    let home = tempfile::tempdir().unwrap();
+    let file = home.path().join("not-a-folder");
+    std::fs::write(&file, "").unwrap();
+    let node = Arc::new(OwnNode::new(home.path()));
+    let (sent, received) = std::sync::mpsc::channel();
+    let worker = Worker::spawn(
+        file.join("ledger.sqlite3"),
+        "physical-device".into(),
+        node,
+        AiUsageQueue::new(),
+        move |report| {
+            let _ = sent.send(report);
+        },
+    )
+    .unwrap();
+    let report = received.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(report.failure.is_some());
+    assert_eq!(
+        report.projects,
+        ProjectCosts {
+            built: None,
+            failed: true,
+        }
+    );
+    drop(worker);
+}
+
 fn queue_with(feature: &str, models: &[ModelTokens]) -> Arc<AiUsageQueue> {
     let queue = AiUsageQueue::new();
     queue.attempt(feature, hide_ai::ProviderId::CLAUDE, models);
