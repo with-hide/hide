@@ -805,10 +805,10 @@ No latest-session, cwd or reverse owner-hash guess is made.
 
 The core publishes `record_connection` as `checking`, `confirmed` or `unconfirmed` when a row has display history.
 Checking and unconfirmed history keeps its last title and valid PRs dimmed, with the localized connection words only in the hint and accessible name; confirmed history removes that treatment.
-A provisional PR participates in the display summary without gaining current work duty or a session-created relation; the normal merged/closed display filter still applies.
+A provisional PR participates in the display summary without gaining current work duty or a session-created relation; the normal closed display filter still applies.
 It cannot change a task's stage, and a tab's title provenance follows the core's focused pane even when several panes share a title.
 Failure keeps display history and retries through the existing single reader, at most once per pane per fifteen seconds after an unsuccessful confirmation.
-The row's branch may differ from a saved PR's branch; existing closed/merged filters remain, and a provisional relation never grants current PR duty or a confirmed-created mark.
+The row's branch may differ from a saved PR's branch; the closed filter remains, and a provisional relation never grants current PR duty or a confirmed-created mark.
 This connection state is separate from hook installation diagnosis and GitHub read staleness.
 A different provider or reference clears the old display, and generation fencing rejects old reads and analyses even on an A-to-B-to-A return.
 
@@ -969,7 +969,7 @@ A current native `user_turn.kind = question` instead takes Answer while its sess
 Native plan approval keeps Approval; the typed native wait, rather than a provider name or an AI question label, distinguishes these cases.
 Reading an AI question skips its demand rung and leaves a dimmed question; menu and plan approval stay in Needs You until answered.
 `row.state.pr` is the row's own PR summary (PRD D-18, D-39): the live PRs it holds the duty of and every merged one however long ago it merged, never a descendant's, with the count, the worst state and each PR worst first, each state the one rule of Pull request visual states decides; a closed PR is not counted.
-A merged pull request keeps its mark after the operator's next request, because the mark says what the row made; only the verb's `result` and the `live` flag follow D-43.
+A merged pull request keeps its mark after the operator's next request, because the mark says what the row made; the verb's `result`, the `live` flag and a task's stage still follow D-43, so an earlier merge never reads as the current request's progress.
 Without a label line the row keeps its outline but carries no invented line.
 Delegated children are never tasks of their own: they are drawn under their root through every row the operator expands, at any depth (`sessions_expanded_agent_pane_ids` in core UI state holds each expanded pane).
 A Hide AI row for a home is a task only while it is in Needs You, where it draws the home's turn under the agent's own ask or block cause and opens the home when chosen.
@@ -1061,7 +1061,7 @@ An Approval band carries no reason: the core reads no approval command and a gen
 What Hide could not read, such as an approval command, is not written on the band, since the operator cannot act on its absence (design principle #13).
 The band and progress row overlay the terminal so state changes never resize its PTY grid.
 The identity row reads the ancestor path, the status mark, the agent's logo, title, the letters-waiting pill from `row.letters_waiting`, the pane's own PR mark from `row.state.pr`, the Not connected chip and the existing controls; the ancestors' names drop first when narrow, leaving `›` and the accessible name.
-A parent's second row keeps the tree icon, direct-child count and chevron at its left; without a band the rest of the row shows its own valid Working progress, or no text when it has none.
+A parent's second row keeps the children button at its left, the first three marked direct children's status marks with `+N` for the rest and the chevron (the count alone with a device away or no child to mark); without a band the rest of the row shows its own valid Working progress, its wait on working children, or no text when it has neither.
 Child names and states remain in the tree popover, while the button's accessible name and tooltip describe the live count and state counts.
 An unavailable device anywhere in that known subtree preserves the last topology count and connection reason in the button's name and tooltip; without a band, it also shows that reason beside any progress.
 Pending or failed relationship navigation stays visible at its popover, ancestor step or band's Open with retry where available, and in the retained Agent-area status when the source pane is no longer on screen.

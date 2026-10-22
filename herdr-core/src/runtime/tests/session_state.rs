@@ -424,7 +424,11 @@ fn pane_header_leads_with_the_request_only_while_its_row_shows_the_turn() {
     agent.descendant_counts.working = 2;
     let waiting = header::of(&pane, Some(&agent), None, None);
     assert_eq!(
-        (waiting.waiting_on_children, waiting.request, waiting.progress),
+        (
+            waiting.waiting_on_children,
+            waiting.request,
+            waiting.progress
+        ),
         (Some(2), summary.clone(), None)
     );
     agent.descendant_counts.working = 0;
@@ -435,7 +439,10 @@ fn pane_header_leads_with_the_request_only_while_its_row_shows_the_turn() {
     agent.descendant_counts.working = 2;
     agent.wait = Some(crate::model::AgentWait::Background);
     let background = header::of(&pane, Some(&agent), None, None);
-    assert_eq!((background.waiting_on_children, background.request), (None, None));
+    assert_eq!(
+        (background.waiting_on_children, background.request),
+        (None, None)
+    );
     agent.wait = None;
     // A pane whose terminal is not live shows no turn.
     agent.state.verb = RequestVerb::Working;

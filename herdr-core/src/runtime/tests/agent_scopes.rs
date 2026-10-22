@@ -353,6 +353,39 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
         "history cannot change current task progress"
     );
     assert_eq!(card.state, TaskState::Cleanup);
+    // A PR merged before the operator's next request keeps its mark, but the
+    // task's progress reads only the PRs of the current request.
+    let set_live = |runtime: &mut crate::runtime::Runtime, live: bool| {
+        let row = &mut runtime.snapshot.navigator.agents[1];
+        row.request.as_mut().unwrap().pull_requests[0].live = live;
+        row.state.pr = crate::agent_state::sessions::own_prs(row);
+    };
+    set_live(&mut runtime, false);
+    assert_eq!(
+        runtime.snapshot.navigator.agents[1]
+            .state
+            .pr
+            .as_ref()
+            .unwrap()
+            .count,
+        2
+    );
+    runtime.refresh_agent_scopes();
+    let card = runtime.snapshot.navigator.workspaces[0]
+        .agent_scope
+        .tasks
+        .cards
+        .iter()
+        .find(|c| c.root == "merged")
+        .unwrap();
+    assert_ne!(
+        card.stage,
+        Some(4),
+        "an earlier merge is not this request's"
+    );
+    assert_ne!(card.state, TaskState::Cleanup);
+    set_live(&mut runtime, true);
+    runtime.refresh_agent_scopes();
     runtime.snapshot.navigator.workspaces[0].checkouts[1].exists = false;
     assert!(
         runtime.refresh_agent_scopes(),
