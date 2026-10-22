@@ -2527,3 +2527,54 @@ fn a_pull_request_the_label_judged_made_here_is_an_output_outside_the_reader_win
     assert_eq!(record.pr_groups[0].outputs[0].number, 41);
     assert_eq!(record.pr_groups[0].outputs[0].state, "open");
 }
+
+/// D-12, D-13: an ask waits on the operator in its session's record, and
+/// stays out of the Overview backlog's missed work, which keeps problems.
+#[test]
+fn an_ask_waits_in_the_record_and_never_reaches_the_backlogs_missed_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    let project = origin_project("device-a", "acme/app", 0);
+    store.apply_project(&project, 500).unwrap();
+    request(&mut store, 1, "인터뷰 계속해줘");
+    chapter(&mut store);
+    end(
+        &mut store,
+        1,
+        TurnJudgment {
+            missed: vec![
+                NewMissedWork {
+                    kind: MissedKind::Ask,
+                    text: "Q4 범위를 정해 주세요".into(),
+                },
+                NewMissedWork {
+                    kind: MissedKind::Problem,
+                    text: "e2e가 로컬에서 깨짐".into(),
+                },
+            ],
+            ..Default::default()
+        },
+    );
+    let record = store.ledger_record(&session()).unwrap();
+    assert_eq!(
+        record
+            .asks
+            .iter()
+            .map(|ask| ask.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Q4 범위를 정해 주세요"]
+    );
+    let summaries = store.ledger_summaries(&project.key).unwrap();
+    let mine = summaries
+        .iter()
+        .find(|summary| summary.session == session())
+        .unwrap();
+    assert_eq!(mine.open_missed, 1);
+    assert_eq!(
+        mine.missed
+            .iter()
+            .map(|missed| missed.kind.clone())
+            .collect::<Vec<_>>(),
+        [MissedKind::Problem]
+    );
+}

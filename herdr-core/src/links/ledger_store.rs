@@ -1692,18 +1692,21 @@ impl LinkStore {
         let paths = self.project_paths(&project)?;
         // A summary never loads request bodies or record trees. It reads
         // bounded counts once, then rolls each count along stored lineage.
+        // An ask waits on the operator in its session's record and is no
+        // missed work of the backlog's (D-12, D-13).
         let mut statement = self
             .connection
             .prepare(
                 "SELECT device,agent,id,count(*) FROM ledger_missed \
-            WHERE status=?1 GROUP BY device,agent,id LIMIT ?2",
+            WHERE status=?1 AND kind!=?3 GROUP BY device,agent,id LIMIT ?2",
             )
             .map_err(failed)?;
         let counts = statement
             .query_map(
                 params![
                     encoded(&MissedStatus::Open)?,
-                    SUMMARY_SESSION_LIMIT as i64 + 1
+                    SUMMARY_SESSION_LIMIT as i64 + 1,
+                    encoded(&MissedKind::Ask)?
                 ],
                 |r| {
                     Ok((
@@ -1792,7 +1795,9 @@ impl LinkStore {
             let missed = if counts.get(&identity).copied().unwrap_or(0) > 0 {
                 self.ledger_missed(&identity)?
                     .into_iter()
-                    .filter(|missed| missed.status == MissedStatus::Open)
+                    .filter(|missed| {
+                        missed.status == MissedStatus::Open && missed.kind != MissedKind::Ask
+                    })
                     .collect()
             } else {
                 Vec::new()
