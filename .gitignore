@@ -36,3 +36,6 @@ __pycache__/
 
 # Isolated agent worktrees, each a checkout of its own; never source.
 /.claude/worktrees/
+
+# The isolated home scripts/web-dev.sh makes; state, never source.
+.hide-web-dev/

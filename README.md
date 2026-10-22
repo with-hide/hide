@@ -136,6 +136,8 @@ open /Applications/hide.app
 `0.0.0-local` marks a local build; set the version you mean when packaging any other.
 Windows and Linux source builds are in [Build and install from source](docs/INSTALL.md#build-and-install-from-source).
 
+To look at hide in a browser without installing the app, `bash scripts/web-dev.sh` builds the daemon, starts it with the pinned Herdr and opens the address ([Try hide in a browser](docs/INSTALL.md#try-hide-in-a-browser)).
+
 </details>
 
 ## Your machines, your sign-ins
