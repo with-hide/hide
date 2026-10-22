@@ -1254,6 +1254,38 @@ export type ConductorSettings = { concurrency: number; default_scope: MissionSco
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };
 
+/** Which sessions the Overview map lights (`contracts/snapshot-wire-enums.json`: `overview_graph_focus`). */
+export type OverviewGraphFocus = "all" | "turn" | "working" | "results";
+export type GraphProjectKey = { device_id: string; workspace_id: string };
+/** A session by machine, Herdr pane and session digest (or native id), so a reused pane is never taken for it. */
+export type GraphSessionKey = { device_id: string; pane_id: string; session: string | null };
+/** One device's map of every project, or one project's own map (PRD overview-graph-remembered D-07). */
+export type GraphScope = { kind: "all"; device_id: string } | { kind: "project"; device_id: string; workspace_id: string };
+/** A dropped place in map units at interface scale one (D-08). */
+export type GraphPlace<K> = { scope: GraphScope; key: K; x: number; y: number };
+/** The Overview Work map's remembered choices (`ui_state.overview_graph`, D-05); each list keeps the most recently changed last. */
+export type OverviewGraphChoices = {
+  focus: OverviewGraphFocus;
+  include_resting: boolean;
+  hidden_projects: GraphProjectKey[];
+  folded_projects: GraphProjectKey[];
+  /** Only the teams the operator folded or opened by hand. */
+  team_folds: { session: GraphSessionKey; folded: boolean }[];
+  project_places: GraphPlace<GraphProjectKey>[];
+  session_places: GraphPlace<GraphSessionKey>[];
+};
+/** One operator action on the map, sent as one `overview_graph_change` event (D-10). */
+export type OverviewGraphChange =
+  /** A field left out keeps its value. */
+  | { kind: "focus"; focus?: OverviewGraphFocus; include_resting?: boolean }
+  | { kind: "project_hidden"; project: GraphProjectKey; hidden: boolean }
+  | { kind: "project_folded"; project: GraphProjectKey; folded: boolean }
+  | { kind: "fold_all"; projects: GraphProjectKey[] }
+  | { kind: "unfold_all"; projects: GraphProjectKey[]; teams: GraphSessionKey[] }
+  | { kind: "team_folded"; session: GraphSessionKey; folded: boolean }
+  | { kind: "place"; scope: GraphScope; projects: { key: GraphProjectKey; x: number; y: number }[]; sessions: { key: GraphSessionKey; x: number; y: number }[] }
+  | { kind: "reset_places"; scope: GraphScope };
+
 /** What a display shows now (S7 contract 3): its document, a read in flight, a root not readable yet, or a read that failed. */
 export type ViewDisplayState = "open" | "opening" | "waiting" | "unavailable";
 
@@ -2169,6 +2201,8 @@ export type SnapshotRest = {
     task_view?: TaskView;
     /** The lane's 보기 slot (D-50), one per window. */
     detail?: DetailSlot;
+    /** The Overview Work map's remembered choices; absent reads as the defaults. */
+    overview_graph?: OverviewGraphChoices;
     selected_path?: string | null;
     selected_pane_id?: string | null;
     accent_hex?: string;

@@ -10,7 +10,8 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { OverviewGraph } from "./OverviewGraph";
 import type { BoardProject } from "./projectBoard";
-import type { Checkout, SnapshotRest, Workspace } from "./snapshot";
+import { GRAPH_CHOICES_DEFAULTS } from "./overviewGraphModel";
+import type { Checkout, OverviewGraphChoices, SnapshotRest, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
@@ -166,20 +167,47 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
     expect(preview()).toBeNull();
     const listed = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("[data-graph-session-list] > button")].find((row) => row.textContent?.includes(name))!;
     expect(listed("검증 자식").getAttribute("aria-pressed")).toBe("true");
-    // B25: a project folds into one circle from its row, and unfolds from the same place.
-    await act(async () => button("Fold 알파 into one circle")!.click());
-    await act(async () => button("Unfold 알파, 2 sessions")!.click());
-    expect(button("Fold 알파 into one circle")).toBeDefined();
+    // PRD overview-graph-remembered B7, B8: the row holds its name, states and count, with no Fold or Hide words; an eye hides it.
+    expect(button("Fold 알파 into one circle")).toBeUndefined();
+    expect([...alpha.querySelectorAll("button")].map((one) => one.textContent?.trim())).not.toContain("Hide");
+    const eye = () => column().querySelector<HTMLButtonElement>('[data-graph-project-row="alpha"] .og-eye')!;
+    expect(eye().getAttribute("aria-label")).toBe("Hide 알파 on the map");
+    expect(eye().getAttribute("aria-pressed")).toBe("false");
+    await act(async () => eye().click());
+    expect(events.at(-1)).toEqual({ schema_version: 2, kind: "overview_graph_change", payload: { change: { kind: "project_hidden", project: { device_id: "local", workspace_id: "alpha" }, hidden: true } } });
+    // The core's answer is what the map draws (D-05).
+    const answer = (overview_graph: Partial<OverviewGraphChoices>) => act(async () => useShellStore.setState({ rest: { ...rest, ui_state: { overview_graph: { ...GRAPH_CHOICES_DEFAULTS, ...overview_graph } } } as unknown as SnapshotRest }));
+    await answer({ hidden_projects: [{ device_id: "local", workspace_id: "alpha" }] });
     // B14: hiding the highlighted session's project clears it; the row stays, dimmed, with its counts.
-    await act(async () => button("Hide 알파 on the map")!.click());
     expect(listed("검증 자식").getAttribute("aria-pressed")).toBe("false");
     const hidden = column().querySelector('[data-graph-project-row="alpha"]')!;
     expect(hidden.getAttribute("data-hidden")).toBe("true");
     expect(hidden.querySelector('[data-state="turn"]')?.textContent).toContain("1");
+    // B9: the hidden row's eye says how to bring it back, and its name does not move the camera.
+    expect(eye().getAttribute("aria-label")).toBe("Show 알파 on the map again");
+    expect(eye().getAttribute("aria-pressed")).toBe("true");
+    expect(button("Locate 알파")!.disabled).toBe(true);
     // D-21/B27: a hidden project's question still waits for the operator, marked hidden.
     expect(column().querySelector('[data-graph-ask="r"] .og-hidden-mark')?.textContent).toBe("Hidden on the map");
-    expect(button("Fold 알파 into one circle")!.disabled).toBe(true);
-    await act(async () => button("Show 알파 on the map again")!.click());
-    expect(column().querySelector('[data-graph-project-row="alpha"]')?.getAttribute("data-hidden")).toBe("false");
+    // B1: closing and opening Overview again keeps it hidden, because the core holds it.
+    await act(async () => reactRoot.render(<TooltipProvider><div /></TooltipProvider>));
+    await act(async () => reactRoot.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));
+    expect(column().querySelector('[data-graph-project-row="alpha"]')?.getAttribute("data-hidden")).toBe("true");
+    await act(async () => eye().click());
+    expect(events.at(-1)).toMatchObject({ kind: "overview_graph_change", payload: { change: { kind: "project_hidden", hidden: false } } });
+    // Choosing a hidden project's waiting root shows the project again and keeps the choice open across the core's answer.
+    const sent = events.length;
+    await act(async () => column().querySelector<HTMLButtonElement>('[data-graph-ask="r"] .og-ask-who')!.click());
+    expect(events.slice(sent).filter((event) => event.kind === "overview_graph_change")).toEqual([{ schema_version: 2, kind: "overview_graph_change", payload: { change: { kind: "project_hidden", project: { device_id: "local", workspace_id: "alpha" }, hidden: false } } }]);
+    expect(preview()?.querySelector(".og-details-head")?.textContent).toContain("배포 확인");
+    await answer({});
+    expect(preview()?.querySelector(".og-details-head")?.textContent).toContain("배포 확인");
+    await act(async () => useUiStore.getState().escapeLayers.at(-1)!());
+    // B6: a filter is one event, and the one the core holds is the one shown after reopening.
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-focus="turn"]')!.click());
+    expect(events.at(-1)).toMatchObject({ payload: { change: { kind: "focus", focus: "turn" } } });
+    expect(events.at(-1)?.payload).not.toHaveProperty("change.include_resting");
+    await answer({ focus: "turn" });
+    expect(container.querySelector('[data-focus="turn"]')?.getAttribute("aria-pressed")).toBe("true");
   } finally { await act(async () => reactRoot.unmount()); }
 });

@@ -1737,6 +1737,11 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "task_view_set", payload: { view } });
     },
 
+    /** One action on the Overview map: a filter, a hide, a fold, a drop or Reset layout (PRD overview-graph-remembered D-10). */
+    changeOverviewGraph(change: import("./snapshot").OverviewGraphChange) {
+      dispatch({ schema_version: 2, kind: "overview_graph_change", payload: { change } });
+    },
+
     /**
      * A task's row asked for from outside the list (B40): a pane head's agent
      * tree button or a started backlog item. The sidebar shows the 태스크 list

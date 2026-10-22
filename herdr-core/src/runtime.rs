@@ -1995,6 +1995,10 @@ impl Runtime {
                         "ui_state.detail_unknown",
                         "The stored 보기 slot was not recognized; it loaded empty",
                     ),
+                    persistence::UnrecognizedField::OverviewGraph => (
+                        "ui_state.overview_graph_unknown",
+                        "Some of the Overview map's stored choices were not recognized; the rest loaded",
+                    ),
                     persistence::UnrecognizedField::ConductorSettings => (
                         "ui_state.conductor_settings_unknown",
                         "The stored Settings › Conductor was not recognized; the defaults were used",

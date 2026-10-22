@@ -83,6 +83,7 @@ mod node_issues;
 mod observed_start;
 #[path = "tests/operator_focus.rs"]
 mod operator_focus;
+mod overview_graph;
 mod pane_geometry;
 pub(super) mod pane_move;
 #[path = "tests/project_settings.rs"]

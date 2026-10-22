@@ -1,6 +1,6 @@
 // PRD overview-main-map B1, B13, B14, B17, B21, B22, B23, B25, B26: the private
-// runtime supplies identity and topology; camera, drags, folding and hiding stay
-// local to the mounted force map.
+// runtime supplies identity and topology; the camera stays local to the mounted
+// force map, while hiding, folding and dropped places are the core's.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
@@ -112,5 +112,43 @@ test("@platform Overview restores its exact current session and keeps map moveme
     await graph.getByRole("button", { name: "Unfold all", exact: true }).click();
     await expect(graph.locator("[data-graph-cluster]")).toHaveCount(0);
     await expect.poll(positions).toEqual(before);
+  } finally { daemon?.stop(); herdr.stop(); }
+});
+
+// PRD overview-graph-remembered B1, B3, B5, B9: the core keeps the map's arrangement, so a
+// reloaded shell opens it as it was left, and Reset layout's fresh map is what reopens.
+test("Overview's work map keeps a hidden project and a dropped session across a reload until Reset layout", async ({ page }) => {
+  const herdr = await startHerdr();
+  let daemon: Daemon | undefined;
+  try {
+    daemon = await startHided(herdr, "overview-map-remembered");
+    const graph = page.locator("[data-overview-graph]");
+    const open = async (reload: boolean) => {
+      if (reload) await page.reload();
+      else await page.goto(`${daemon!.origin}/#token=${daemon!.token}`);
+      await enterWorkspace(page, "fixture");
+      await openOverview(page, "work");
+      await expect(graph).toHaveAttribute("data-graph-phase", "ready", { timeout: 30_000 });
+    };
+    await open(false);
+    const current = graph.locator('.og-session[data-current="true"]');
+    const place = () => current.evaluate((node) => (node.closest(".react-flow__node") as HTMLElement).style.transform);
+    const fresh = await place();
+    await drag(page, current.locator(".og-orb"), 80, 48);
+    await expect.poll(place).not.toBe(fresh);
+    const dropped = await place();
+    const row = graph.locator("[data-graph-project-row]").first();
+    await row.getByRole("button", { name: /^Hide .* on the map$/ }).click();
+    await expect(row).toHaveAttribute("data-hidden", "true");
+    await open(true);
+    await expect(row).toHaveAttribute("data-hidden", "true");
+    await expect(graph.locator("[data-graph-session]")).toHaveCount(0);
+    await row.getByRole("button", { name: /^Show .* on the map again$/ }).click();
+    await expect(current).toHaveCount(1);
+    await expect.poll(place).toBe(dropped);
+    await graph.getByRole("button", { name: "Reset layout", exact: true }).click();
+    await expect.poll(place).toBe(fresh);
+    await open(true);
+    await expect.poll(place).toBe(fresh);
   } finally { daemon?.stop(); herdr.stop(); }
 });

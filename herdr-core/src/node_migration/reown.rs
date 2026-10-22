@@ -1420,6 +1420,20 @@ mod tests {
                     json!({"kind": "pull_request", "workspace_id": registrations[index], "number": 7}),
                     json!({"kind": "record", "session": {"device_id": devices[index], "agent": "claude", "session_id": "s"}}),
                 ]).collect::<Vec<_>>(), "shown": true},
+                "overview_graph": {
+                    "focus": "working", "include_resting": false,
+                    "hidden_projects": (0..3).map(|index| json!({"device_id": devices[index], "workspace_id": registrations[index]})).collect::<Vec<_>>(),
+                    "folded_projects": (0..3).map(|index| json!({"device_id": devices[index], "workspace_id": registrations[index]})).collect::<Vec<_>>(),
+                    "team_folds": (0..3).map(|index| json!({"session": {"device_id": devices[index], "pane_id": panes[index], "session": "d"}, "folded": true})).collect::<Vec<_>>(),
+                    "project_places": (0..3).map(|index| json!({
+                        "scope": {"kind": "project", "device_id": devices[index], "workspace_id": registrations[index]},
+                        "key": {"device_id": devices[index], "workspace_id": registrations[index]}, "x": 1.0, "y": 2.0,
+                    })).collect::<Vec<_>>(),
+                    "session_places": (0..3).map(|index| json!({
+                        "scope": {"kind": "project", "device_id": devices[index], "workspace_id": registrations[index]},
+                        "key": {"device_id": devices[index], "pane_id": panes[index], "session": "d"}, "x": 1.0, "y": 2.0,
+                    })).collect::<Vec<_>>(),
+                },
                 "recent_pane_ids": panes,
                 "pane_text_scales": keyed("pane", json!(1.2)),
                 "pane_read_records": Value::Object(panes.iter().enumerate().map(|(index, pane)| (

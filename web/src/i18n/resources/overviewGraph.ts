@@ -2,8 +2,6 @@ import type { Catalogs } from "../schema";
 
 const words = {
   "overviewGraph.operator": ["You", "나", "自分", "我"],
-  "overviewGraph.hide": ["Hide", "숨기기", "隠す", "隐藏"],
-  "overviewGraph.reveal": ["Show again", "다시 보이기", "再表示", "重新显示"],
   "overviewGraph.hideProject": ["Hide {{project}} on the map", "{{project}} 그래프에서 숨기기", "{{project}} をマップから隠す", "在图中隐藏 {{project}}"],
   "overviewGraph.revealProject": ["Show {{project}} on the map again", "{{project}} 그래프에 다시 보이기", "{{project}} をマップに再表示", "在图中重新显示 {{project}}"],
   "overviewGraph.waiting": ["Waiting on you", "나를 기다리는 것", "あなたを待っているもの", "等待你的事项"],
@@ -37,8 +35,6 @@ const words = {
   "overviewGraph.unfoldTeam": ["Unfold this team's {{count}} sessions", "이 팀의 세션 {{count}}개 펼치기", "このチームのセッション {{count}} 件を展開", "展开此团队的 {{count}} 个会话"],
   "overviewGraph.foldProject": ["Fold {{project}} into one circle", "{{project}} 한 원으로 접기", "{{project}} を一つの円に折りたたむ", "将 {{project}} 折叠为一个圆"],
   "overviewGraph.unfoldProject": ["Unfold {{project}}, {{count}} sessions", "{{project}} 펼치기, 세션 {{count}}개", "{{project}} を展開、セッション {{count}} 件", "展开 {{project}}，{{count}} 个会话"],
-  "overviewGraph.fold": ["Fold", "접기", "折りたたむ", "折叠"],
-  "overviewGraph.unfold": ["Unfold", "펼치기", "展開", "展开"],
   "overviewGraph.foldAll": ["Fold all", "모두 접기", "すべて折りたたむ", "全部折叠"],
   "overviewGraph.unfoldAll": ["Unfold all", "모두 펼치기", "すべて展開", "全部展开"],
   "overviewGraph.hiddenProject": ["Hidden on the map", "그래프에서 숨김", "マップで非表示", "已在图中隐藏"],

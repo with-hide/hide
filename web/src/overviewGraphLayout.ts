@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import type { OverviewGraphModel } from "./overviewGraphModel";
-import { ForceMap, type MapPoint } from "./overviewMapLayout";
+import { ForceMap, type MapPoint, type Point } from "./overviewMapLayout";
 import { useShellStore } from "./store";
 
 /** A box with its orb at the top center: `orb` is the orb's diameter. */
@@ -15,7 +15,26 @@ export type GraphLayout = {
   map: ForceMap | null;
   /** Places every session afresh, dropping every drag. */
   reset: () => void;
+  /** The interface scale the map was placed at; remembered places are kept divided by it. */
+  scale: number;
 };
+/** Where the operator dropped projects and sessions in this scope, in map units at interface scale one, by graph id. */
+export type RememberedPlaces = { anchors: ReadonlyMap<string, Point>; pins: ReadonlyMap<string, Point> };
+const NOTHING_REMEMBERED: RememberedPlaces = { anchors: new Map(), pins: new Map() };
+const isEmpty = (places: RememberedPlaces) => places.anchors.size === 0 && places.pins.size === 0;
+const scaled = (places: ReadonlyMap<string, Point>, scale: number) => new Map([...places].map(([id, point]) => [id, { x: point.x * scale, y: point.y * scale }]));
+
+/**
+ * One project drop as the core keeps it, at interface scale one: the project's
+ * anchor, and the pinned sessions it carried that the core still remembers. A
+ * pin the core forgot (another window's Reset layout) stays forgotten.
+ */
+export function projectDropPlaces(map: ForceMap, project: string, remembered: RememberedPlaces, scale: number): { anchor: Point; pins: { id: string; at: Point }[] } | null {
+  const anchor = map.anchorOf(project);
+  if (!anchor) return null;
+  const unscaled = (point: Point) => ({ x: point.x / scale, y: point.y / scale });
+  return { anchor: unscaled(anchor), pins: map.pinsIn(project).filter(({ id }) => remembered.pins.has(id)).map(({ id, at }) => ({ id, at: unscaled(at) })) };
+}
 
 /** Geometry comes from the same numeric authority as the rest of Overview. */
 function dimensions(element: HTMLElement, scale: number): Dimensions {
@@ -67,11 +86,18 @@ function useReducedMotion(): boolean {
  * Topology and text geometry own placement. Status, filters, hiding, folding and
  * correspondence only redraw existing places. A changed set of sessions keeps
  * every placed session where it is and places only the new ones; a changed
- * interface scale, Retry and Reset layout place everything afresh.
+ * interface scale, Retry and Reset layout place everything afresh. What the
+ * map does not hold yet starts where the operator last dropped it.
  */
-export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObject<HTMLDivElement | null>, retry: number): GraphLayout {
+export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObject<HTMLDivElement | null>, retry: number, remembered: RememberedPlaces = NOTHING_REMEMBERED): GraphLayout {
   const latest = useRef(model);
   latest.current = model;
+  const latestPlaces = useRef(remembered);
+  latestPlaces.current = remembered;
+  // Reset layout asks the core to forget this scope's places; until the
+  // snapshot shows them gone, the old ones are never placed again.
+  const forgetting = useRef(false);
+  useLayoutEffect(() => { if (isEmpty(remembered)) forgetting.current = false; }, [remembered]);
   const scale = useGraphScale();
   const reduced = useReducedMotion();
   const key = `${model.structure}:${scale}`;
@@ -99,6 +125,7 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
           ...(group.revealSlot ? [{ id: group.revealSlot, projectId: group.id, parent: null, radius: room(size.root, size.gap) }] : []),
         ]),
         operator: size.operator + size.gap * 2,
+        remembered: forgetting.current ? undefined : { anchors: scaled(latestPlaces.current.anchors, scale), pins: scaled(latestPlaces.current.pins, scale) },
       }, keep);
       current.current?.map.stop();
       current.current = { map, scale };
@@ -115,10 +142,13 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
   // A change of the motion setting reaches the live map; it never places the map again.
   useEffect(() => { state.map?.reduceMotion(reduced); }, [state.map, reduced]);
   useEffect(() => () => { current.current?.map.stop(); current.current = null; }, []);
-  const reset = useCallback(() => setResets((value) => value + 1), []);
+  const reset = useCallback(() => {
+    if (!isEmpty(latestPlaces.current)) forgetting.current = true;
+    setResets((value) => value + 1);
+  }, []);
   // Until a new structure is placed, the placed map stays on screen, so React Flow keeps its nodes.
-  if (state.key !== key && state.phase !== "ready") return { phase: "loading", size: state.size, points: state.points, map: null, reset };
-  return { phase: state.phase, size: state.size, points: state.points, map: state.map, reset };
+  if (state.key !== key && state.phase !== "ready") return { phase: "loading", size: state.size, points: state.points, map: null, reset, scale };
+  return { phase: state.phase, size: state.size, points: state.points, map: state.map, reset, scale };
 }
 
 /** React Flow's theme class must follow the shell rather than reset inherited tokens. */

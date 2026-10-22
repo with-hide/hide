@@ -237,6 +237,93 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Device,
     ),
+    // The Overview map's choices name each project and session by its
+    // machine, project and pane; a session's digest names no machine.
+    // Written only by builds that have node ids.
+    (
+        CORE_STATE,
+        "/overview_graph/hidden_projects/*/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/hidden_projects/*/workspace_id",
+        Mechanism::Owned,
+        Moves::Registration,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/folded_projects/*/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/folded_projects/*/workspace_id",
+        Mechanism::Owned,
+        Moves::Registration,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/team_folds/*/session/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/team_folds/*/session/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/project_places/*/scope/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/project_places/*/scope/workspace_id",
+        Mechanism::Owned,
+        Moves::Registration,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/project_places/*/key/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/project_places/*/key/workspace_id",
+        Mechanism::Owned,
+        Moves::Registration,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/session_places/*/scope/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/session_places/*/scope/workspace_id",
+        Mechanism::Owned,
+        Moves::Registration,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/session_places/*/key/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/overview_graph/session_places/*/key/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
     (
         CORE_STATE,
         "/recent_pane_ids/*",
@@ -1566,6 +1653,14 @@ mod tests {
                     {"kind": "pull_request", "workspace_id": "workspace:a", "number": 7},
                     {"kind": "record", "session": {"device_id": "local", "agent": "claude", "session_id": "s"}},
                 ], "shown": true},
+                "overview_graph": {
+                    "focus": "turn", "include_resting": true,
+                    "hidden_projects": [{"device_id": NODE, "workspace_id": "workspace:a"}],
+                    "folded_projects": [{"device_id": "mini", "workspace_id": "remote:mini:project:p"}],
+                    "team_folds": [{"session": {"device_id": NODE, "pane_id": "w1:p1", "session": "d"}, "folded": true}],
+                    "project_places": [{"scope": {"kind": "project", "device_id": NODE, "workspace_id": "workspace:a"}, "key": {"device_id": NODE, "workspace_id": "workspace:a"}, "x": 1.0, "y": 2.0}],
+                    "session_places": [{"scope": {"kind": "project", "device_id": NODE, "workspace_id": "workspace:a"}, "key": {"device_id": NODE, "pane_id": "w1:p1", "session": "d"}, "x": 1.0, "y": 2.0}],
+                },
                 "recent_pane_ids": ["w1:p1", "remote:mini:pane:w2:p1"],
                 "pane_text_scales": {"w1:p1": 1.2},
                 "pane_read_records": {"w1:p1": {"seen_at_unix_ms": 1, "descendant_signals": [{"pane_id": "w1:p4"}]}},

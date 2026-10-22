@@ -8,10 +8,10 @@ use hide_platform::fs::identity::{self, FileId};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    AgentLogoMode, ColorTheme, DetailSlot, DeviceRegistration, PaneCompletion, PaneReadRecord,
-    PetOriginSnapshot, RightPanelSection, SidebarLens, TaskView, ThemePreference, UiStateSnapshot,
-    WorkspaceRegistration, default_accent_hex, default_font_size, default_pane_text_scale,
-    default_panel_visible, default_sidebar_width,
+    AgentLogoMode, ColorTheme, DetailSlot, DeviceRegistration, OverviewGraphChoices,
+    PaneCompletion, PaneReadRecord, PetOriginSnapshot, RightPanelSection, SidebarLens, TaskView,
+    ThemePreference, UiStateSnapshot, WorkspaceRegistration, default_accent_hex, default_font_size,
+    default_pane_text_scale, default_panel_visible, default_sidebar_width,
 };
 
 const UI_STATE_SCHEMA_VERSION: u32 = 1;
@@ -80,6 +80,11 @@ struct StoredUiState {
     /// making the whole store unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     detail: Option<serde_json::Value>,
+    /// Kept as JSON and read record by record
+    /// (`OverviewGraphChoices::read_stored`), so a record this build cannot
+    /// read is left out and the rest of the store still loads.
+    #[serde(default)]
+    overview_graph: Option<serde_json::Value>,
     selected_path: Option<String>,
     selected_pane_id: Option<String>,
     /// Written only by a core move's rekey and left out once taken, so an
@@ -270,6 +275,8 @@ pub enum UnrecognizedField {
     SidebarLens,
     /// The lane's 보기 slot; it loaded empty.
     Detail,
+    /// Records of the Overview map's choices; the ones that read loaded.
+    OverviewGraph,
     /// Settings › Conductor; the defaults were used.
     ConductorSettings,
 }
@@ -441,6 +448,20 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 DetailSlot::default()
             }),
     };
+    let overview_graph = match stored.overview_graph {
+        None => OverviewGraphChoices::default(),
+        Some(value) => match OverviewGraphChoices::read_stored(value) {
+            Ok((choices, 0)) => choices,
+            Ok((choices, _)) => {
+                unrecognized.push(UnrecognizedField::OverviewGraph);
+                choices
+            }
+            Err(_) => {
+                unrecognized.push(UnrecognizedField::OverviewGraph);
+                OverviewGraphChoices::default()
+            }
+        },
+    };
     let conductor_settings = match stored.conductor_settings {
         None => crate::missions::ConductorSettings::default(),
         Some(value) => serde_json::from_value::<crate::missions::ConductorSettings>(value)
@@ -483,6 +504,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             sidebar_lens,
             task_view,
             detail,
+            overview_graph,
             selected_path: stored.selected_path,
             selected_pane_id: stored.selected_pane_id,
             focus_from_herdr: stored.focus_from_herdr,
@@ -656,6 +678,10 @@ pub fn save(
         task_view: Some(state.task_view.as_str().to_owned()),
         detail: (state.detail != DetailSlot::default())
             .then(|| serde_json::to_value(&state.detail).expect("the 보기 slot serializes")),
+        overview_graph: Some(
+            serde_json::to_value(&state.overview_graph)
+                .expect("the Overview map's choices serialize"),
+        ),
         selected_path: state.selected_path.clone(),
         selected_pane_id: state.selected_pane_id.clone(),
         focus_from_herdr: state.focus_from_herdr,
@@ -1388,6 +1414,62 @@ mod tests {
 
         let _ = fs::remove_file(path);
         let _ = fs::remove_dir(root);
+    }
+
+    /// PRD overview-graph-remembered B1-B6, B15: the Overview map's choices
+    /// survive a relaunch; a stored record this build cannot read is left
+    /// out, the rest of the map's choices and of the UI state load, and the
+    /// load says so; an unreadable value loads the defaults.
+    #[test]
+    fn the_overview_map_s_choices_survive_a_relaunch_and_an_unreadable_record_alone_is_dropped() {
+        use crate::model::OverviewGraphChange;
+        use crate::model::overview_graph_choices::OverviewGraphFocus;
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("state.json");
+        let mut state = UiStateSnapshot {
+            task_view: TaskView::Project,
+            ..UiStateSnapshot::default()
+        };
+        for change in [
+            serde_json::json!({"kind": "focus", "focus": "results", "include_resting": true}),
+            serde_json::json!({"kind": "project_hidden", "project": {"device_id": "n", "workspace_id": "workspace:a"}, "hidden": true}),
+            serde_json::json!({"kind": "project_folded", "project": {"device_id": "n", "workspace_id": "workspace:b"}, "folded": true}),
+            serde_json::json!({"kind": "team_folded", "session": {"device_id": "n", "pane_id": "w1:p1", "session": "d"}, "folded": false}),
+            serde_json::json!({"kind": "place", "scope": {"kind": "all", "device_id": "n"},
+                "projects": [{"key": {"device_id": "n", "workspace_id": "workspace:b"}, "x": 120.5, "y": -40.0}],
+                "sessions": [{"key": {"device_id": "n", "pane_id": "w1:p1", "session": "d"}, "x": 10.0, "y": 20.0}]}),
+        ] {
+            let change: OverviewGraphChange = serde_json::from_value(change).unwrap();
+            state.overview_graph.apply(change).unwrap();
+        }
+        save(&path, &state, &PaneTerminalSizes::new()).expect("persist the map's choices");
+        let (restored, _sizes, disposition) = load(&path);
+        assert_eq!(disposition, LoadDisposition::Loaded);
+        assert_eq!(restored.overview_graph, state.overview_graph);
+        assert_eq!(restored.overview_graph.focus, OverviewGraphFocus::Results);
+
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        stored["overview_graph"]["hidden_projects"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"device_id": "n"}));
+        let (partial, _sizes, disposition) = decode(&serde_json::to_vec(&stored).unwrap());
+        assert_eq!(
+            disposition,
+            LoadDisposition::Unrecognized(vec![UnrecognizedField::OverviewGraph])
+        );
+        assert_eq!(partial.overview_graph, state.overview_graph);
+        assert_eq!(partial.task_view, TaskView::Project);
+
+        stored["overview_graph"] = serde_json::json!("not a map");
+        let (unreadable, _sizes, disposition) = decode(&serde_json::to_vec(&stored).unwrap());
+        assert_eq!(
+            disposition,
+            LoadDisposition::Unrecognized(vec![UnrecognizedField::OverviewGraph])
+        );
+        assert_eq!(unreadable.overview_graph, Default::default());
+        assert_eq!(unreadable.task_view, TaskView::Project);
     }
 
     /// PRD sidebar-task-lens B3, D-25, D-48, D-50: the sidebar's lens, the
