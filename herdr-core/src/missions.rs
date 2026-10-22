@@ -26,8 +26,8 @@ const SCHEMA_VERSION: u32 = 1;
 /// Missions kept at once, closed ones included. A mission is deleted with
 /// its Conductor's session (D-22), so a full book is refused, never evicted.
 pub const MISSION_LIMIT: usize = 128;
-/// Nodes in one mission's plan.
-pub const NODE_LIMIT: usize = 64;
+/// Nodes in one mission's plan, the cap every dependency graph shares.
+pub use crate::dag::NODE_LIMIT;
 /// The highest concurrency cap a mission or the settings may name.
 pub const CAP_LIMIT: u8 = 16;
 /// The concurrency cap a fresh install starts with (D-08).
@@ -41,7 +41,6 @@ const TOUCH_LIMIT: usize = 32;
 const TITLE_LIMIT: usize = 200;
 const LINE_LIMIT: usize = 600;
 const REPORT_LIMIT: usize = 16 * 1024;
-const KEY_LIMIT: usize = 40;
 const READ_CAP: u64 = 8 * 1024 * 1024;
 /// The size a change may bring the saved book to: under the read cap with
 /// room for the file's own framing, so what is written is always read back.
@@ -325,40 +324,46 @@ impl Mission {
     /// Why each node cannot start, from a failed or dropped node anywhere
     /// upstream of it.
     pub(crate) fn blocked(&self) -> BTreeMap<String, Blocked> {
-        let by_key: BTreeMap<&str, &MissionNode> = self
-            .nodes
-            .iter()
-            .map(|node| (node.key.as_str(), node))
-            .collect();
         let mut out = BTreeMap::new();
         for node in &self.nodes {
             if node.status.finished() {
                 continue;
             }
-            let mut seen = BTreeSet::new();
-            let mut stack: Vec<&str> = node.depends_on.iter().map(String::as_str).collect();
             let mut found = None;
-            while let Some(key) = stack.pop() {
-                if !seen.insert(key) {
-                    continue;
+            crate::dag::walk_upstream(&self.nodes, node, |upstream| match upstream.status {
+                NodeStatus::Failed => {
+                    found = Some(Blocked::UpstreamFailed);
+                    crate::dag::Step::Stop
                 }
-                let Some(upstream) = by_key.get(key) else {
-                    continue;
-                };
-                match upstream.status {
-                    NodeStatus::Failed => {
-                        found = Some(Blocked::UpstreamFailed);
-                        break;
-                    }
-                    NodeStatus::Dropped => found = found.or(Some(Blocked::UpstreamDropped)),
-                    _ => stack.extend(upstream.depends_on.iter().map(String::as_str)),
+                NodeStatus::Dropped => {
+                    found = found.or(Some(Blocked::UpstreamDropped));
+                    crate::dag::Step::Skip
                 }
-            }
+                _ => crate::dag::Step::Continue,
+            });
             if let Some(found) = found {
                 out.insert(node.key.clone(), found);
             }
         }
         out
+    }
+}
+
+impl crate::dag::Node for MissionNode {
+    fn key(&self) -> &str {
+        &self.key
+    }
+    fn depends_on(&self) -> &[String] {
+        &self.depends_on
+    }
+}
+
+impl crate::dag::Node for NodeInput {
+    fn key(&self) -> &str {
+        &self.key
+    }
+    fn depends_on(&self) -> &[String] {
+        &self.depends_on
     }
 }
 
@@ -755,13 +760,7 @@ fn double<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     Option::<T>::deserialize(deserializer).map(Some)
 }
 
-pub fn valid_key(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= KEY_LIMIT
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
-}
+pub use crate::dag::valid_key;
 
 fn valid_text(value: &str, limit: usize) -> bool {
     !value.trim().is_empty()
@@ -797,7 +796,7 @@ pub(crate) fn apply_plan(
     }
     let mut keys = BTreeSet::new();
     for node in &input.nodes {
-        if !valid_key(&node.key) || !keys.insert(node.key.as_str()) {
+        if crate::dag::admit_key(&mut keys, &node.key).is_err() {
             return Err("mission_node_key_invalid".into());
         }
         if !valid_text(&node.title, TITLE_LIMIT)
@@ -831,14 +830,9 @@ pub(crate) fn apply_plan(
             }
         }
     }
-    for node in &input.nodes {
-        if node
-            .depends_on
-            .iter()
-            .any(|key| key == &node.key || !keys.contains(key.as_str()))
-        {
-            return Err("mission_dependency_unknown".into());
-        }
+    let edges = crate::dag::check_edges(&input.nodes);
+    if matches!(edges, Err(crate::dag::Refusal::Unknown { .. })) {
+        return Err("mission_dependency_unknown".into());
     }
     // Each node at most once, so the order is never longer than the plan.
     let mut ordered = BTreeSet::new();
@@ -849,7 +843,7 @@ pub(crate) fn apply_plan(
     {
         return Err("mission_dependency_unknown".into());
     }
-    if cyclic(&input.nodes) {
+    if edges.is_err() {
         return Err("mission_dependency_cycle".into());
     }
     // A node that ran keeps its record; one that is gone from the plan must
@@ -925,37 +919,6 @@ pub(crate) fn apply_plan(
     }
     next.updated_at_unix_ms = now;
     Ok(next)
-}
-
-fn cyclic(nodes: &[NodeInput]) -> bool {
-    let index: BTreeMap<&str, &NodeInput> =
-        nodes.iter().map(|node| (node.key.as_str(), node)).collect();
-    // 0 unvisited, 1 on the path, 2 done.
-    let mut marks: BTreeMap<&str, u8> = BTreeMap::new();
-    fn visit<'a>(
-        key: &'a str,
-        index: &BTreeMap<&'a str, &'a NodeInput>,
-        marks: &mut BTreeMap<&'a str, u8>,
-    ) -> bool {
-        match marks.get(key) {
-            Some(1) => return true,
-            Some(2) => return false,
-            _ => {}
-        }
-        marks.insert(key, 1);
-        if let Some(node) = index.get(key) {
-            for dependency in &node.depends_on {
-                if visit(dependency, index, marks) {
-                    return true;
-                }
-            }
-        }
-        marks.insert(key, 2);
-        false
-    }
-    nodes
-        .iter()
-        .any(|node| visit(&node.key, &index, &mut marks))
 }
 
 /// `patch` applied to `node`, or why it is refused.

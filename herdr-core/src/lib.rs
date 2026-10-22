@@ -14,6 +14,7 @@ mod codex_launch;
 mod composer_checks;
 mod composer_store;
 pub mod coordination;
+pub mod dag;
 pub mod delivery;
 mod device_catalog;
 pub mod diagnostics;
