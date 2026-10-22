@@ -452,7 +452,7 @@ impl Doorbell {
                 connector.as_ref(),
                 &letter.id,
                 &observed,
-                (&line, &sender),
+                (&line, &sender, &letter.kind),
                 stop,
             ) {
                 Ok(Outcome::Rung) => {
@@ -665,7 +665,7 @@ fn deliver(
     connector: &dyn ApiConnector,
     id: &str,
     observed: &Observation,
-    (line, sender): (&str, &str),
+    (line, sender, kind): (&str, &str, &str),
     stop: &AtomicBool,
 ) -> Result<Outcome, &'static str> {
     if stop.load(Ordering::Acquire) {
@@ -719,7 +719,7 @@ fn deliver(
     owner
         .lock()
         .map_err(|_| "runtime_unavailable")?
-        .record_bell(&observed.actor.pane_id, line, sender);
+        .record_bell(&observed.actor.pane_id, line, (sender, kind));
     let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
         .map_err(|_| "herdr_call_failed")?;
     wire::delivery_prompted(submitted).map_err(|_| "herdr_format")?;

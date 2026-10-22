@@ -376,6 +376,15 @@ pub(crate) struct LogTarget<'a> {
     pub(crate) pane_id: &'a str,
 }
 
+/// The bell Hide typed that wrote `event`, by the record it kept (D-19).
+pub(crate) fn rang<'a>(bells: &'a [Bell], event: &LabelEvent) -> Option<&'a Bell> {
+    bells.iter().rev().find(|bell| {
+        bell.line == event.text.trim()
+            && bell.at_unix_ms <= event.at_unix_ms.saturating_add(CLOCK_SLACK_MS)
+            && event.at_unix_ms.saturating_sub(bell.at_unix_ms) <= QUEUED_SUBMIT_WINDOW_MS
+    })
+}
+
 fn judge(event: &LabelEvent, input: &mut InputView<'_>, log: &LogTarget<'_>) -> Requester {
     // A letter the operator's Send made reads as the operator's request
     // (PRD view-opener-feedback D-11).
@@ -387,11 +396,7 @@ fn judge(event: &LabelEvent, input: &mut InputView<'_>, log: &LogTarget<'_>) -> 
     }
     // A bell line Hide typed is the letter's, by the record Hide kept when
     // it typed it, not by how the words look (D-19).
-    if let Some(bell) = input.bells.iter().rev().find(|bell| {
-        bell.line == event.text.trim()
-            && bell.at_unix_ms <= event.at_unix_ms.saturating_add(CLOCK_SLACK_MS)
-            && event.at_unix_ms.saturating_sub(bell.at_unix_ms) <= QUEUED_SUBMIT_WINDOW_MS
-    }) {
+    if let Some(bell) = rang(input.bells, event) {
         return Requester::Named(bell.sender.clone());
     }
     if event.at_unix_ms < input.observed_since_unix_ms {
@@ -541,6 +546,7 @@ mod tests {
             at_unix_ms: 10_100,
             line: "🦉 letter from ci-lead".into(),
             sender: "ci-lead".into(),
+            kind: "request".into(),
         }];
         fold_with_bells(
             &mut facts,

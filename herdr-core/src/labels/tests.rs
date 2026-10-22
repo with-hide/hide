@@ -5767,12 +5767,60 @@ fn later_session(harness: &Harness, turns: &[(&str, &str)]) -> PathBuf {
 /// its progress and report letters do not, and a doorbell line names no kind.
 #[test]
 fn only_a_parents_reply_or_request_answers_what_its_child_asked() {
-    let letter = |kind: &str| format!("Hide letter letter-1 from lead (claude) [{kind}]\nbody");
-    assert!(super::worker::letter_answers(&letter("reply")));
-    assert!(super::worker::letter_answers(&letter("request")));
-    assert!(!super::worker::letter_answers(&letter("progress")));
-    assert!(!super::worker::letter_answers(&letter("report")));
-    assert!(super::worker::letter_answers(
-        "🦉 lead 답장: 이렇게 해 주세요"
+    use super::input::Bell;
+    use hide_session::label_transcript::{LabelEvent, LabelEventKind};
+    let message = |text: &str| LabelEvent {
+        kind: LabelEventKind::Human,
+        at_unix_ms: 10_000,
+        text: text.to_owned(),
+        offset: 0,
+        images: 0,
+        sender: None,
+    };
+    let letter = |kind: &str| {
+        message(&format!(
+            "Hide letter letter-1 from lead (claude) [{kind}]\nbody"
+        ))
+    };
+    for (kind, answers) in [
+        ("reply", true),
+        ("request", true),
+        ("progress", false),
+        ("report", false),
+        ("block", false),
+    ] {
+        assert_eq!(
+            super::worker::letter_answers(&letter(kind), &[]),
+            answers,
+            "{kind}"
+        );
+    }
+    // A bell line is judged by the kind Hide recorded when it typed it,
+    // whatever its words say.
+    let bell = |line: &str, kind: &str| Bell {
+        at_unix_ms: 10_000,
+        line: line.to_owned(),
+        sender: "lead".to_owned(),
+        kind: kind.to_owned(),
+    };
+    for (word, kind, answers) in [
+        ("답장", "reply", true),
+        ("요청", "request", true),
+        ("진행", "progress", false),
+        ("보고", "report", false),
+        ("막힘", "block", false),
+        ("감시", "watch", false),
+    ] {
+        let line = format!("🦉 lead {word}: 이렇게 해 주세요");
+        assert_eq!(
+            super::worker::letter_answers(&message(&line), &[bell(&line, kind)]),
+            answers,
+            "{kind}"
+        );
+    }
+    // Words that only look like a bell, with no bell Hide typed, answer nothing.
+    assert!(!super::worker::letter_answers(
+        &message("🦉 lead 답장: 이렇게 해 주세요"),
+        &[]
     ));
 }

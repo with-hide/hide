@@ -31,14 +31,15 @@ pub(crate) struct Submit {
     pub(crate) while_working: bool,
 }
 
-/// A bell line Hide typed into a pane: when, its exact words and the name of
-/// the letter's writer (PRD session-record-goal-flow D-19). The words are
-/// Hide's own line, never the operator's.
+/// A bell line Hide typed into a pane: when, its exact words, the name of
+/// the letter's writer and the letter's kind (PRD session-record-goal-flow
+/// D-19). The words are Hide's own line, never the operator's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Bell {
     pub(crate) at_unix_ms: u64,
     pub(crate) line: String,
     pub(crate) sender: String,
+    pub(crate) kind: String,
 }
 
 /// Bells kept per pane, newest last.
@@ -99,7 +100,13 @@ impl OperatorInput {
     }
 
     /// Records a bell line typed into `pane_id`, named as `record` names it.
-    pub(crate) fn record_bell(&self, pane_id: &str, at_unix_ms: u64, line: &str, sender: &str) {
+    pub(crate) fn record_bell(
+        &self,
+        pane_id: &str,
+        at_unix_ms: u64,
+        line: &str,
+        (sender, kind): (&str, &str),
+    ) {
         let key = label_key(&self.node, pane_id);
         let Ok(mut record) = self.record.lock() else {
             return;
@@ -120,6 +127,7 @@ impl OperatorInput {
             at_unix_ms,
             line: line.to_owned(),
             sender: sender.to_owned(),
+            kind: kind.to_owned(),
         });
     }
 

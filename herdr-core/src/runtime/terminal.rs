@@ -723,11 +723,11 @@ impl Runtime {
         );
     }
     /// Hide typed a letter's bell line into `pane_id` (D-19).
-    pub(crate) fn record_bell(&self, pane_id: &str, line: &str, sender: &str) {
+    pub(crate) fn record_bell(&self, pane_id: &str, line: &str, letter: (&str, &str)) {
         if let Some(services) = self.label_services.as_ref() {
             services
                 .input
-                .record_bell(pane_id, unix_milliseconds(), line, sender);
+                .record_bell(pane_id, unix_milliseconds(), line, letter);
         }
     }
 

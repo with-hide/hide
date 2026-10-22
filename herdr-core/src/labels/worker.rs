@@ -2148,13 +2148,14 @@ impl LabelWorker {
         // the operator typing into its pane (B12); an ask still waiting after
         // a mere progress letter is the one the label lists again.
         let parent = ledger.parent_name.as_deref();
+        let bells = self.input.bells(&self.target, pane_id);
         let asks_answered = turn_events.iter().any(|event| {
             event.kind == LabelEventKind::Human
                 && (facts.feeds_work(event, parent)
                     || matches!(facts.requester_at(event.offset), Some(super::facts::Requester::Operator))
                     || parent.is_some_and(|parent| {
                         matches!(facts.requester_at(event.offset), Some(super::facts::Requester::Named(name)) if name == parent)
-                            && letter_answers(&event.text)
+                            && letter_answers(event, &bells)
                     }))
         });
         let turn_witness = events
@@ -2625,15 +2626,22 @@ impl LabelWorker {
     }
 }
 
-/// Whether the agent has a `/goal` command: Claude Code and Codex.
 /// Whether a parent's letter can answer what its delegated session asked: a
 /// reply or a request does, a progress, report, block or watch letter does
-/// not. A doorbell line names no kind, and counts (B12).
-pub(super) fn letter_answers(text: &str) -> bool {
-    hide_session::envelope_header(text)
-        .is_none_or(|(_, kind)| matches!(kind.as_str(), "request" | "reply"))
+/// not (B12). An envelope names its kind; a bell line is judged by the kind
+/// Hide recorded when it typed it, never by its words.
+pub(super) fn letter_answers(event: &LabelEvent, bells: &[super::input::Bell]) -> bool {
+    let kind = match hide_session::envelope_header(&event.text) {
+        Some((_, kind)) => kind,
+        None => match super::facts::rang(bells, event) {
+            Some(bell) => bell.kind.clone(),
+            None => return false,
+        },
+    };
+    matches!(kind.as_str(), "request" | "reply")
 }
 
+/// Whether the agent has a `/goal` command: Claude Code and Codex.
 fn goal_command_agent(agent: &str) -> bool {
     matches!(agent, "claude" | "codex")
 }
