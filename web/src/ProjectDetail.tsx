@@ -121,7 +121,7 @@ function WorktreeRow({ checkout, state }: { checkout: Checkout; state: DotState 
       <span className="min-w-0 flex-1 truncate text-foreground" title={checkout.path}>{checkout.branch ?? checkout.label}</span>
       {checkout.pull_request ? <PrMark state={checkout.pull_request.state} number={checkout.pull_request.number} compact /> : null}
       <span className="shrink-0 text-micro text-muted-foreground">{t(`projectTool.worktrees.state.${state}`)}</span>
-      {bytes !== null ? <span className="w-(--size-control-lg) shrink-0 text-right font-mono text-micro text-muted-foreground">{formatBytes(language, bytes)}</span> : null}
+      {bytes !== null ? <span className="min-w-(--size-control-lg) shrink-0 whitespace-nowrap text-right font-mono text-micro text-muted-foreground">{formatBytes(language, bytes)}</span> : null}
     </li>
   );
 }

@@ -140,16 +140,17 @@ function Tile({ name, kind, target, open, value, disabled, onPress, children }: 
 }) {
   const { t } = useInterfaceTranslation();
   return (
+    // The press layer covers the tile; the text sits above it (`relative`, later in order) so a hover tints behind it.
     <div className="relative flex min-w-0 flex-col gap-xs rounded-md border border-border p-sm" data-project-tile={kind} data-tile-open={open ? "true" : undefined}>
       <button type="button" disabled={disabled} aria-pressed={target === "view" ? Boolean(open) : undefined} aria-label={name} className="absolute inset-0 rounded-md outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none" onClick={onPress} data-project-tile-press={kind} />
-      <span className="pointer-events-none flex min-w-0 items-center gap-xs text-micro text-muted-foreground">
+      <span className="pointer-events-none relative flex min-w-0 items-center gap-xs text-micro text-muted-foreground">
         <span className="min-w-0 flex-1 truncate">{name}</span>
         {disabled ? null : <span className={cn("shrink-0", open && "text-foreground")} data-tile-target={open ? "close" : target}>{open ? t("projectTool.close") : t(target === "sidebar" ? "projectTool.tile.toSidebar" : "projectTool.tile.toView")}</span>}
       </span>
-      <span className="pointer-events-none min-h-(--size-control-sm) text-subhead font-semibold tabular-nums text-foreground" data-tile-value={value === null ? "pending" : "ready"}>
+      <span className="pointer-events-none relative min-h-(--size-control-sm) text-subhead font-semibold tabular-nums text-foreground" data-tile-value={value === null ? "pending" : "ready"}>
         {value === null ? <span className="block h-(--size-control-sm) w-1/2 rounded-sm bg-muted" /> : value}
       </span>
-      <div className="pointer-events-none flex min-w-0 flex-col gap-xxs text-micro text-muted-foreground">{children}</div>
+      <div className="pointer-events-none relative flex min-w-0 flex-col gap-xxs text-micro text-muted-foreground">{children}</div>
     </div>
   );
 }
