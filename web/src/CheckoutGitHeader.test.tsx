@@ -68,7 +68,7 @@ async function render(node: React.ReactNode) {
 it("opens the upstream detail at 0/0 and says when the remote was checked, dimming a failing fetch", async () => {
   useShellStore.setState({ connection: "live" });
   const now = Date.now();
-  const header: CheckoutGitHeader = { state: "fresh", reason: null, ci: null, facts: facts({}), remote: { auto: true, checked_at_unix_ms: null, failing: false } };
+  const header: CheckoutGitHeader = { state: "fresh", reason: null, ci: null, facts: facts({}), remote: { auto: true, observed: null } };
   const { container, root } = await render(<CheckoutUpstream header={header} />);
   try {
     const detail = container.querySelector<HTMLButtonElement>("[data-checkout-upstream]")!;
@@ -77,7 +77,7 @@ it("opens the upstream detail at 0/0 and says when the remote was checked, dimmi
     await act(async () => detail.click());
     expect(document.querySelector("[data-checkout-remote-checked]")?.textContent).toBe("Remote not checked yet");
 
-    const failing: CheckoutGitHeader = { ...header, facts: facts({ behind: 2 }), remote: { auto: true, checked_at_unix_ms: now - 3 * 60_000, failing: true } };
+    const failing: CheckoutGitHeader = { ...header, facts: facts({ behind: 2 }), remote: { auto: true, observed: { freshness: "failed", read_at_unix_ms: now - 3 * 60_000 } } };
     await act(async () => root.render(<TooltipProvider><CheckoutUpstream header={failing} /></TooltipProvider>));
     const dimmed = container.querySelector<HTMLButtonElement>("[data-checkout-upstream]")!;
     expect(dimmed.getAttribute("data-checkout-remote")).toBe("failing");
@@ -85,7 +85,7 @@ it("opens the upstream detail at 0/0 and says when the remote was checked, dimmi
     expect(dimmed.getAttribute("aria-label")).toBe("origin/main: 0 to send, 2 to receive · Couldn't reach the remote · as of 3m ago");
 
     // With the fetch turned off, the time is the operator's own fetch.
-    const off: CheckoutGitHeader = { ...header, remote: { auto: false, checked_at_unix_ms: null, failing: false } };
+    const off: CheckoutGitHeader = { ...header, remote: { auto: false, observed: null } };
     await act(async () => root.render(<TooltipProvider><CheckoutUpstream header={off} /></TooltipProvider>));
     expect(container.querySelector("[data-checkout-upstream]")?.getAttribute("data-checkout-remote")).toBe("ok");
     expect(document.querySelector("[data-checkout-remote-checked]")?.textContent).toContain("Last remote fetch:");
@@ -104,7 +104,7 @@ it("lists commits not pulled above local ones and opens a pushed commit's GitHub
       unpushed_commits: [sha("a")],
       incoming_commits: ["c", "d", "e", "f", "1"].map((character) => ({ sha: sha(character), subject: `Theirs ${character}`, commit_unix_seconds: 1 })),
     }),
-    remote: { auto: true, checked_at_unix_ms: Date.now(), failing: false },
+    remote: { auto: true, observed: { freshness: "fresh", read_at_unix_ms: Date.now() } },
     commit_links: [sha("b"), sha("c")].map((commit) => ({ sha: commit, url: `https://github.com/example/fixture/commit/${commit}` })),
     commit_pages: true,
   };
@@ -128,5 +128,35 @@ it("lists commits not pulled above local ones and opens a pushed commit's GitHub
     expect(openBrowser).toHaveBeenLastCalledWith(`https://github.com/example/fixture/commit/${sha("c")}`, { device_id: "device", path: "/repo" });
   } finally {
     await act(async () => root.unmount());
+  }
+});
+
+it("keeps the last CI answer and ↑↓ counts dimmed with their age when a read fails (B22, D-09)", async () => {
+  const view = { device_id: "device", path: "/repo" } as WorkspaceView;
+  const failed = { freshness: "failed" as const, read_at_unix_ms: Date.now() - 6 * 60_000 };
+  const ci = { sha: sha("a"), state: "passing" as const, observed: failed, url: `https://github.com/example/fixture/commit/${sha("a")}` };
+  const header: CheckoutGitHeader = { state: "fresh", reason: null, ci, recent_ci: [ci], facts: facts({ behind: 2 }), observed: { freshness: "fresh", read_at_unix_ms: Date.now() } };
+  useShellStore.setState({ connection: "live", rest: { workspace_view: { ...view, git: header } } as never });
+  const { container, root } = await render(<CheckoutCommit header={header} view={view} actions={{} as Actions} title time={false} />);
+  try {
+    const mark = container.querySelector<HTMLElement>("[data-checkout-ci]")!;
+    expect(mark.dataset.checkoutCi).toBe("passing");
+    expect(mark.dataset.checkoutCiCurrent).toBe("false");
+    expect(mark.getAttribute("aria-label")).toBe("Commit checks passed · GitHub read failed · value from 6m ago");
+    await act(async () => mark.click());
+    const row = document.querySelector<HTMLButtonElement>("[data-commit-ci]")!;
+    expect(row.dataset.commitCi).toBe("passing");
+    expect(row.disabled).toBe(true);
+  } finally {
+    await act(async () => root.unmount());
+  }
+  const stale: CheckoutGitHeader = { ...header, state: "stale", observed: { freshness: "failed", read_at_unix_ms: Date.now() - 2 * 60_000 } };
+  const upstream = await render(<CheckoutUpstream header={stale} />);
+  try {
+    const counts = upstream.container.querySelector<HTMLElement>("[data-checkout-upstream]")!;
+    expect(counts.className).toContain("opacity-50");
+    expect(counts.getAttribute("aria-label")).toContain("Git read failed · value from 2m ago");
+  } finally {
+    await act(async () => upstream.root.unmount());
   }
 });

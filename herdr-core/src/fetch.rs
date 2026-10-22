@@ -73,7 +73,11 @@ impl FetchPump {
                     let Ok((jobs, mut changed, watch_sets)) = runtime.lock().map(|mut runtime| {
                         let mut changed = false;
                         for (job, answer) in &ended {
-                            changed |= runtime.ingest_fetch(job, answer.clone(), unix_ms());
+                            changed |= runtime.ingest_fetch(
+                                job,
+                                answer.clone(),
+                                crate::observed::now_unix_ms(),
+                            );
                         }
                         if changed {
                             let before = runtime.published_checkout_header();
@@ -181,12 +185,4 @@ impl Drop for FetchPump {
             let _ = worker.join();
         }
     }
-}
-
-fn unix_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
-        .unwrap_or(0)
 }

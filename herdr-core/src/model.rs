@@ -7731,6 +7731,21 @@ mod wire_enum_tests {
             checked.insert("mission_blocked");
         }
 
+        let freshness = [
+            crate::observed::Freshness::Fresh,
+            crate::observed::Freshness::Stale,
+            crate::observed::Freshness::Failed,
+        ];
+        for variant in freshness {
+            match variant {
+                crate::observed::Freshness::Fresh
+                | crate::observed::Freshness::Stale
+                | crate::observed::Freshness::Failed => {}
+            }
+        }
+        assert_wire(&contract, "observed_freshness", &freshness);
+        checked.insert("observed_freshness");
+
         let unchecked = contract
             .keys()
             .filter(|key| !checked.contains(key.as_str()))

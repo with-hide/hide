@@ -13,8 +13,10 @@ use crate::github_poll::{POLL_PENDING_LIMIT, POLL_PROJECT_LIMIT, PollProject, Po
 
 impl Runtime {
     /// The projects to poll now: those whose last read worked and holds open
-    /// pull requests, the project in front first, at most `POLL_PROJECT_LIMIT`
-    /// (a count past it is logged as `poll.over_limit` when it changes).
+    /// pull requests, and the project in front even with none, so a pull
+    /// request opened elsewhere shows within the minute (PRD git-freshness
+    /// D-10); the one in front first, at most `POLL_PROJECT_LIMIT` (a count
+    /// past it is logged as `poll.over_limit` when it changes).
     /// Plain data in hand, with no I/O, so it is built under the lock.
     pub(crate) fn github_poll_request(&mut self) -> PollRequest {
         let in_front = self
@@ -34,7 +36,9 @@ impl Runtime {
                     })
                 )
             })
-            .filter_map(|workspace| self.poll_project(&workspace.path))
+            .filter_map(|workspace| {
+                self.poll_project(&workspace.path, in_front.as_ref() == Some(&workspace.path))
+            })
             .collect();
         projects.sort_by(|left, right| {
             let rank = |project: &PollProject| Some(&project.path) != in_front.as_ref();
@@ -58,18 +62,29 @@ impl Runtime {
     }
 
     /// What the poll watches in one project: the repository of its open pull
-    /// requests, and the head commits of those whose checks were pending.
-    fn poll_project(&self, path: &str) -> Option<PollProject> {
+    /// requests, and the head commits of those whose checks were pending. The
+    /// project in front with none open is watched by the repository its read
+    /// named, so the list's first pull request is seen.
+    fn poll_project(&self, path: &str, in_front: bool) -> Option<PollProject> {
         let project = self.github.project(path)?;
         let open: Vec<&crate::model::PullRequestSnapshot> = project
             .pull_requests
             .iter()
             .filter(|pull_request| !pull_request.badge.is_settled())
             .collect();
-        let repository = open
+        let repository = match open
             .iter()
-            .find_map(|pull_request| pull_request_address(&pull_request.url))?
-            .0;
+            .find_map(|pull_request| pull_request_address(&pull_request.url))
+        {
+            Some((repository, _)) => repository,
+            None if in_front => project
+                .issues
+                .repository
+                .as_deref()
+                .filter(|repository| hide_node_link::gh::is_repository(repository))?
+                .to_ascii_lowercase(),
+            None => return None,
+        };
         let heads: BTreeSet<String> = open
             .iter()
             .filter(|pull_request| {
@@ -96,6 +111,31 @@ impl Runtime {
                 self.github_polled.insert(path);
             }
         }
+    }
+
+    /// The poll is not watching these projects now: it paused one after a
+    /// failure, or every one at the rate limit's floor. Their pull request
+    /// marks read as stale, as after a failed read, until the next read of
+    /// the project answers (PRD git-freshness B23); the reason is in the log.
+    pub(crate) fn note_poll_held(&mut self, held: Vec<String>) -> bool {
+        let mut changed = false;
+        for path in held {
+            if let Some(project) = self
+                .github
+                .projects
+                .iter_mut()
+                .find(|project| project.root_path == path)
+                && !project.status.stale
+            {
+                project.status.stale = true;
+                changed = true;
+            }
+        }
+        if changed {
+            self.apply_pull_requests();
+            self.refresh_worktree_projection();
+        }
+        changed
     }
 
     /// Asks the existing read again for each project the poll saw change, by

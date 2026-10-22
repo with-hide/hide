@@ -2050,6 +2050,12 @@ fn ingest_github_poll(context: &SessionSyncContext, poll: crate::github_poll::Po
         return false;
     };
     guard.note_polled_changes(poll.changed);
+    let held = guard.note_poll_held(poll.held);
+    drop(guard);
+    drop(runtime);
+    if held {
+        context.notifier.notify();
+    }
     true
 }
 

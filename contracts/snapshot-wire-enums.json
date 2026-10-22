@@ -59,5 +59,6 @@
   "memory_start_failure_code": ["shell_starting", "agent_not_started", "card_not_processed", "other"],
   "memory_action": ["enable", "disable", "delete", "forget", "undo", "promote", "dismiss", "card_right", "doc_right"],
   "view_feedback_send_state": ["sending", "sent", "waiting", "reopening", "failed"],
-  "view_feedback_send_reason": ["attachments_full", "letter_unsaved", "letters_full", "shot_copy", "reopen_failed", "closed"]
+  "view_feedback_send_reason": ["attachments_full", "letter_unsaved", "letters_full", "shot_copy", "reopen_failed", "closed"],
+  "observed_freshness": ["fresh", "stale", "failed"]
 }

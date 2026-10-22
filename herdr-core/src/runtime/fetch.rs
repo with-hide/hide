@@ -11,6 +11,7 @@ use hide_node_link::worktrees::{FetchFailure, FetchOutcome, FetchSkip};
 use serde::Serialize;
 
 use super::Runtime;
+use crate::observed::{Freshness, Observation};
 
 /// The repository in front is fetched at most this often, and again when the
 /// operator's window comes forward after this long.
@@ -45,10 +46,9 @@ pub(crate) struct RemoteCheck {
     /// Hide fetches this repository in the background. Off, the time the
     /// remote was last seen is the operator's own fetch (`FETCH_HEAD`).
     pub(crate) auto: bool,
-    /// When Hide's fetch last succeeded; absent before the first success.
-    pub(crate) checked_at_unix_ms: Option<u64>,
-    /// The last fetch failed, so the counts are as of `checked_at_unix_ms`.
-    pub(crate) failing: bool,
+    /// Hide's fetch: fresh after a success, failed while it fails, with
+    /// when it last succeeded; absent before its first answer (D-09).
+    pub(crate) observed: Option<Observation>,
 }
 
 #[derive(Default)]
@@ -288,15 +288,20 @@ impl Runtime {
             &key.0,
             &key.1,
         );
-        let repository = self.fetch.repositories.get(&key);
+        let repository = self.fetch.repositories.get(&key).filter(|_| auto);
         Some(RemoteCheck {
             auto,
-            checked_at_unix_ms: auto
-                .then(|| repository.and_then(|repository| repository.fetched_at_unix_ms))
-                .flatten(),
-            failing: auto
-                && repository
-                    .is_some_and(|repository| repository.failures > 0 || repository.paused),
+            observed: repository.and_then(|repository| {
+                let failing = repository.failures > 0 || repository.paused;
+                (failing || repository.fetched_at_unix_ms.is_some()).then_some(Observation {
+                    freshness: if failing {
+                        Freshness::Failed
+                    } else {
+                        Freshness::Fresh
+                    },
+                    read_at_unix_ms: repository.fetched_at_unix_ms,
+                })
+            }),
         })
     }
 }

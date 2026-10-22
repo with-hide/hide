@@ -30,16 +30,18 @@ export function ServerSessionScene({ scene: kind, theme, scale, content, state =
       checkout.branch = content === "long" ? "feature/매우-긴-한글과-English-checkout-name" : "main";
       workspace.is_git = state !== "folder";
       workspace.is_home = state === "home";
+      // A stale header keeps its last CI answers, dimmed by a failed read (PRD git-freshness B22).
+      const ciObserved = state === "stale" ? { freshness: "failed" as const, read_at_unix_ms: Date.now() - 6 * 60_000 } : { freshness: "fresh" as const, read_at_unix_ms: Date.now() };
       scene.rest.workspace_view.git = {
         state: state === "loading" ? "loading" : state === "unavailable" ? "unavailable" : state === "stale" ? "stale" : "fresh", reason: null,
         facts: ["loading","unavailable"].includes(state) ? null : {head_sha: state === "unborn" ? null : head,subject:content === "long" ? "매우 긴 커밋 제목과 English commit subject that needs truncation without hiding the path and file count" : "탭 전환 시 포커스 유지",commit_unix_seconds:Math.floor(Date.now()/1000)-720,changed_files:state === "clean" ? 0 : 5,conflicts:state === "conflict" ? 2 : 0,upstream:"origin/main",upstream_state:state === "no-upstream" ? "none" : state === "gone" ? "gone" : "tracked",ahead:state === "ahead" || state === "diverged" ? 2 : 0,behind:state === "clean" || state === "ahead" ? 0 : 3,last_fetch_unix_ms:Date.now()-3600000},
-        ci:{sha:head,state:state === "pending" || state === "failed" || state === "none" || state === "unknown" ? state : "passing",checked_at_unix_ms:Date.now(),url:null},
+        ci:{sha:head,state:state === "pending" || state === "failed" || state === "none" || state === "unknown" ? state : "passing",observed:ciObserved,url:null},
       };
-      const header = scene.rest.workspace_view.git;
+      const header = scene.rest.workspace_view.git!;
       if (header.facts?.head_sha) {
         const subjects = [header.facts.subject!, "한글과 English 줄바꿈 개선", "에이전트 상태 표시 정리", "CI 결과 연결", "프로젝트 목록 간격 조정"];
         header.facts.recent_commits = subjects.map((subject, index) => ({ sha: index === 0 ? head : String(index).repeat(40), subject, commit_unix_seconds: Math.floor(Date.now() / 1000) - (index + 1) * 720 }));
-        header.recent_ci = header.facts.recent_commits.map((commit, index) => ({ sha: commit.sha, state: index === 0 ? header.ci!.state : index === 1 ? "pending" : index === 4 ? "none" : "passing", checked_at_unix_ms: Date.now(), url: null }));
+        header.recent_ci = header.facts.recent_commits.map((commit, index) => ({ sha: commit.sha, state: index === 0 ? header.ci!.state : index === 1 ? "pending" : index === 4 ? "none" : "passing", observed: ciObserved, url: null }));
       }
     }
     scene.rest.status = {...scene.rest.status,server_discovery:{loading:false,failure:null}};

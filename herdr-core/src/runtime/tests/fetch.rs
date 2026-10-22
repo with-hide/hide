@@ -2,6 +2,7 @@
 //! fetched when, one per node, and what the header then says.
 
 use super::*;
+use crate::observed::{Freshness, Observation};
 use hide_node_link::worktrees::{FetchFailure, FetchOutcome, FetchSkip};
 use std::time::{Duration, Instant};
 
@@ -80,8 +81,8 @@ fn a_credential_or_network_failure_waits_for_the_window_and_a_busy_ref_is_no_fai
         .remote_check(crate::node::TEST_NODE, "/front")
         .unwrap();
     assert_eq!(
-        (check.auto, check.checked_at_unix_ms, check.failing),
-        (true, Some(1_000), false)
+        (check.auto, check.observed),
+        (true, Some(Observation::fresh(1_000)))
     );
 
     let (back, _) = runtime.due_fetches(start).remove(0);
@@ -101,8 +102,11 @@ fn a_credential_or_network_failure_waits_for_the_window_and_a_busy_ref_is_no_fai
         .remote_check(crate::node::TEST_NODE, "/front")
         .unwrap();
     assert_eq!(
-        (check.checked_at_unix_ms, check.failing),
-        (Some(1_000), true)
+        check.observed,
+        Some(Observation {
+            freshness: Freshness::Failed,
+            read_at_unix_ms: Some(1_000)
+        })
     );
     // Paused: an hour on, only the other repository is fetched.
     let (back, _) = runtime
@@ -133,7 +137,8 @@ fn a_credential_or_network_failure_waits_for_the_window_and_a_busy_ref_is_no_fai
         runtime
             .remote_check(crate::node::TEST_NODE, "/front")
             .unwrap()
-            .failing
+            .observed
+            .is_some_and(|observed| observed.freshness == Freshness::Failed)
     );
 }
 
@@ -152,7 +157,7 @@ fn a_repository_whose_fetch_is_turned_off_is_not_fetched_and_shows_the_operators
     let check = runtime
         .remote_check(crate::node::TEST_NODE, "/front")
         .unwrap();
-    assert_eq!((check.auto, check.checked_at_unix_ms), (false, None));
+    assert_eq!((check.auto, check.observed), (false, None));
 
     // Turned on again, it is fetched on the next pass.
     runtime

@@ -1743,3 +1743,52 @@ fn a_polled_change_leaves_the_five_minute_clock_where_it_was() {
     );
     assert_eq!(generation_of(&runtime, "/tmp/a"), 0);
 }
+
+#[test]
+fn the_project_in_front_is_polled_with_no_pull_request_open_and_others_are_not() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![
+        git_project("a", "/tmp/a", "main"),
+        git_project("b", "/tmp/b", "main"),
+    ];
+    let mut front = read_ok("/tmp/a", Vec::new(), 10);
+    front.issues.repository = Some("Acme/App".to_owned());
+    let mut other = read_ok("/tmp/b", Vec::new(), 10);
+    other.issues.repository = Some("acme/other".to_owned());
+    first_read(&mut runtime, vec![front, other], Instant::now());
+    runtime.snapshot.navigator.focused_checkout_id = Some("a-checkout".to_owned());
+    let request = runtime.github_poll_request();
+    assert_eq!(
+        request
+            .projects
+            .iter()
+            .map(|project| (project.path.as_str(), project.repository.as_str()))
+            .collect::<Vec<_>>(),
+        [("/tmp/a", "acme/app")],
+        "a pull request opened elsewhere on the project in front is seen within the minute (B24)"
+    );
+}
+
+#[test]
+fn a_project_the_poll_is_not_watching_reads_as_stale_until_its_next_read() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![git_project("a", "/tmp/a", "main")];
+    let now = Instant::now();
+    first_read(
+        &mut runtime,
+        vec![read_ok(
+            "/tmp/a",
+            vec![open_pull_request(1, PullRequestChecks::Passing)],
+            10,
+        )],
+        now,
+    );
+    assert!(runtime.note_poll_held(vec!["/tmp/a".to_owned(), "/tmp/unknown".to_owned()]));
+    let status = &runtime.github.project("/tmp/a").unwrap().status;
+    assert!(status.stale, "B23: the marks dim, not only the log");
+    assert_eq!(status.last_success_at_unix_ms, Some(10));
+    assert!(
+        !runtime.note_poll_held(vec!["/tmp/a".to_owned()]),
+        "an already stale project publishes nothing"
+    );
+}

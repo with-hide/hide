@@ -30,6 +30,7 @@ fn header_fences_late_git_ci_and_reconnect_results_and_ages_without_false_clean(
         remote: None,
         commit_links: Vec::new(),
         commit_pages: false,
+        observed: None,
     });
     let facts = CheckoutGit {
         head_sha: Some("a".repeat(40)),
@@ -43,10 +44,10 @@ fn header_fences_late_git_ci_and_reconnect_results_and_ages_without_false_clean(
     let ci = Ci {
         sha: "a".repeat(40),
         state: CiState::Passing,
-        checked_at_unix_ms: Some(100),
+        observed: Some(crate::observed::Observation::fresh(100)),
         url: Some("https://example.invalid/check".into()),
     };
-    assert!(runtime.ingest_checkout_ci((ci_target.clone(), vec![ci.clone()]), now));
+    assert!(runtime.ingest_checkout_ci((ci_target.clone(), Ok(vec![ci.clone()])), now));
     assert!(
         !runtime.ingest_checkout_git((first.clone(), Ok(facts.clone())), now),
         "identical status publishes no frame"
@@ -55,7 +56,7 @@ fn header_fences_late_git_ci_and_reconnect_results_and_ages_without_false_clean(
     next.head_sha = Some("b".repeat(40));
     assert!(runtime.ingest_checkout_git((first.clone(), Ok(next.clone())), now));
     assert!(
-        !runtime.ingest_checkout_ci((ci_target, vec![ci]), now),
+        !runtime.ingest_checkout_ci((ci_target, Ok(vec![ci])), now),
         "old SHA success cannot overwrite a new HEAD"
     );
     let header = runtime.checkout_header.header.as_ref().unwrap();
@@ -111,6 +112,7 @@ fn header_keeps_provider_identity_without_exposing_origin_credentials_to_the_ren
         remote: None,
         commit_links: Vec::new(),
         commit_pages: false,
+        observed: None,
     });
     let facts = CheckoutGit {
         head_sha: Some("a".repeat(40)),
@@ -158,6 +160,7 @@ fn history_ci_is_fenced_by_every_ordered_sha_and_all_links_expire() {
         remote: None,
         commit_links: Vec::new(),
         commit_pages: false,
+        observed: None,
     });
     let mut facts = CheckoutGit {
         head_sha: Some("a".repeat(40)),
@@ -181,18 +184,18 @@ fn history_ci_is_fenced_by_every_ordered_sha_and_all_links_expire() {
         .map(|sha| Ci {
             sha: sha.clone(),
             state: CiState::Failed,
-            checked_at_unix_ms: Some(1),
+            observed: Some(crate::observed::Observation::fresh(1)),
             url: Some(format!("https://github.com/example/fixture/commit/{sha}")),
         })
         .collect();
     let mut wrong_order = checks.clone();
     wrong_order.swap(1, 2);
-    assert!(!runtime.ingest_checkout_ci((ci_request.clone(), wrong_order), now));
-    assert!(runtime.ingest_checkout_ci((ci_request.clone(), checks.clone()), now));
+    assert!(!runtime.ingest_checkout_ci((ci_request.clone(), Ok(wrong_order)), now));
+    assert!(runtime.ingest_checkout_ci((ci_request.clone(), Ok(checks.clone())), now));
     facts.recent_commits[4].sha = "f".repeat(40);
     assert!(runtime.ingest_checkout_git((request.clone(), Ok(facts.clone())), now));
     assert!(
-        !runtime.ingest_checkout_ci((ci_request, checks), now),
+        !runtime.ingest_checkout_ci((ci_request, Ok(checks)), now),
         "same HEAD with changed ancestors rejects old history checks"
     );
     let next_request = runtime.checkout_ci_request().unwrap();
@@ -202,12 +205,14 @@ fn history_ci_is_fenced_by_every_ordered_sha_and_all_links_expire() {
         .map(|sha| Ci {
             sha: sha.clone(),
             state: CiState::Passing,
-            checked_at_unix_ms: Some(1),
+            observed: Some(crate::observed::Observation::fresh(1)),
             url: Some(format!("https://github.com/example/fixture/commit/{sha}")),
         })
         .collect();
-    assert!(runtime.ingest_checkout_ci((next_request, next), now));
-    assert!(runtime.age_checkout_header(now + std::time::Duration::from_secs(91)));
+    assert!(runtime.ingest_checkout_ci((next_request.clone(), Ok(next)), now));
+    // GitHub could not be read: every result stays, marked as a failed read
+    // of the value from when it was read (B22).
+    assert!(runtime.ingest_checkout_ci((next_request, Err("offline".into())), now));
     assert!(
         runtime
             .checkout_header
@@ -216,7 +221,27 @@ fn history_ci_is_fenced_by_every_ordered_sha_and_all_links_expire() {
             .unwrap()
             .recent_ci
             .iter()
-            .all(|ci| ci.state == CiState::Stale && ci.url.is_none())
+            .all(|ci| ci.state == CiState::Passing
+                && ci.url.is_some()
+                && ci.observed
+                    == Some(crate::observed::Observation {
+                        freshness: crate::observed::Freshness::Failed,
+                        read_at_unix_ms: Some(1),
+                    }))
+    );
+    // Aging keeps a failure a failure.
+    runtime.age_checkout_header(now + std::time::Duration::from_secs(91));
+    assert!(
+        runtime
+            .checkout_header
+            .header
+            .as_ref()
+            .unwrap()
+            .recent_ci
+            .iter()
+            .all(|ci| ci
+                .observed
+                .is_some_and(|observed| observed.freshness == crate::observed::Freshness::Failed))
     );
     facts
         .recent_commits

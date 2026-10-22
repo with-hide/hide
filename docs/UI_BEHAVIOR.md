@@ -29,7 +29,10 @@ A local commit no remote has is marked `푸시 안 됨` when `origin` is on GitH
 A commit GitHub can show, one some remote already has or an incoming one, opens its GitHub commit page in the Browser View from its subject; a commit only this checkout has does not.
 Each compact item has its subject on the first line and short SHA and relative time on the second, with the exact local time available on the timestamp.
 Its associated CI result sits at the right of that second line; commits with no CI omit the result.
-The adjacent CI mark describes only that exact SHA, using GitHub's aggregate statusCheckRollup even on main without a PR, and distinguishes passing, pending, failed, none, unknown, unavailable and stale.
+The adjacent CI mark describes only that exact SHA, using GitHub's aggregate statusCheckRollup even on main without a PR, and distinguishes passing, pending, failed, none, unknown and unavailable.
+The header's Git read, each CI result and the remote check share one observed shape (PRD git-freshness D-09, `herdr-core/src/observed.rs`): the last value read stays, with when it was read and whether it is fresh, stale or behind a failed read.
+A CI read that fails, or ages past 90 seconds, keeps each commit's last result dimmed, not openable, with `GitHub 읽기 실패 · N분 전 값` or `N분 전 값` in its hint (B22); a commit GitHub never answered for reads unavailable.
+A Git read that fails keeps the ↑/↓ counts dimmed with `Git 읽기 실패 · N분 전 값` instead of hiding them.
 Its trigger opens the same history below itself, with initial focus on the content so no CI hint covers the first item; Tab reaches the CI links and their read-time hints.
 Each CI result opens only the provider-returned URL validated against that repository and exact commit in the existing Browser View.
 An outside click closes the history and keeps the clicked destination's focus; Escape closes it and returns focus to its trigger.

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::changes::ChannelRef;
 use crate::files::DocumentRoot;
 use crate::node_access::call_as;
+use crate::observed::{Observation, now_unix_ms};
 use crate::reader::BackgroundRead;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -32,6 +33,9 @@ pub(crate) struct CiRequest {
 pub(crate) struct Header {
     pub state: GitState,
     pub facts: Option<CheckoutGit>,
+    /// The Git read behind `facts`: when it last succeeded and whether the
+    /// last read did (PRD git-freshness D-09); absent before the first.
+    pub observed: Option<Observation>,
     pub reason: Option<String>,
     pub ci: Option<Ci>,
     pub recent_ci: Vec<Ci>,
@@ -65,8 +69,10 @@ pub(crate) enum GitState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Ci {
     pub sha: String,
+    /// The commit's result as GitHub last answered it; a failed or aged read
+    /// keeps it and says so in `observed` (D-09, B22).
     pub state: CiState,
-    pub checked_at_unix_ms: Option<u64>,
+    pub observed: Option<Observation>,
     pub url: Option<String>,
 }
 
@@ -79,12 +85,13 @@ pub(crate) enum CiState {
     Failed,
     None,
     Unknown,
+    /// GitHub never answered for this commit.
     Unavailable,
-    Stale,
 }
 
 pub(crate) type GitAnswer = (GitRequest, Result<CheckoutGit, String>);
-pub(crate) type CiAnswer = (CiRequest, Vec<Ci>);
+/// The commits' results, or why GitHub could not be read.
+pub(crate) type CiAnswer = (CiRequest, Result<Vec<Ci>, String>);
 
 pub(crate) fn git_reader() -> BackgroundRead<Option<GitRequest>, Option<GitAnswer>> {
     BackgroundRead::new(
@@ -190,14 +197,14 @@ fn parse_checks(
             Ok(Ci {
                 sha: sha.clone(),
                 state,
-                checked_at_unix_ms: unix_ms(),
+                observed: Some(Observation::fresh(now_unix_ms())),
                 url,
             })
         })
         .collect()
 }
 
-fn read_ci(request: &CiRequest) -> Vec<Ci> {
+fn read_ci(request: &CiRequest) -> Result<Vec<Ci>, String> {
     let read = || -> Result<Vec<Ci>, String> {
         let query = checkout_checks_query(&request.repository, &request.commits)
             .ok_or("Invalid exact-SHA check targets")?;
@@ -218,31 +225,11 @@ fn read_ci(request: &CiRequest) -> Vec<Ci> {
             GhAnswer::Failed { category, .. } => Err(category.english().to_owned()),
         }
     };
-    match read() {
-        Ok(checks) => checks,
-        Err(reason) => {
-            crate::diagnostic!(
-                serde_json::json!({"component":"checkout_git", "kind":"ci.read_failed", "sha":request.sha, "reason":reason})
-            );
-            request
-                .commits
-                .iter()
-                .map(|sha| Ci {
-                    sha: sha.clone(),
-                    state: CiState::Unavailable,
-                    checked_at_unix_ms: unix_ms(),
-                    url: None,
-                })
-                .collect()
-        }
-    }
-}
-
-fn unix_ms() -> Option<u64> {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+    read().inspect_err(|reason| {
+        crate::diagnostic!(
+            serde_json::json!({"component":"checkout_git", "kind":"ci.read_failed", "sha":request.sha, "reason":reason})
+        );
+    })
 }
 
 #[cfg(test)]

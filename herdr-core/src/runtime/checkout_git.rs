@@ -5,6 +5,7 @@ use crate::changes::ChannelRef;
 use crate::checkout_git::{
     Ci, CiAnswer, CiRequest, CiState, CommitLink, GitAnswer, GitRequest, GitState, Header,
 };
+use crate::observed::{Freshness, Observation, now_unix_ms};
 
 #[derive(Default)]
 pub(super) struct State {
@@ -13,6 +14,9 @@ pub(super) struct State {
     pub(super) header: Option<Header>,
     repository: Option<String>,
     last_git: Option<Instant>,
+    /// When the Git read last succeeded, published only once the read fails
+    /// or ages, so an unchanged read every two seconds publishes nothing.
+    last_git_unix_ms: Option<u64>,
     last_ci: Option<Instant>,
 }
 
@@ -54,6 +58,7 @@ impl Runtime {
             self.checkout_header.header = self.checkout_header.target.as_ref().map(|_| Header {
                 state: GitState::Loading,
                 facts: None,
+                observed: None,
                 reason: None,
                 ci: None,
                 recent_ci: Vec::new(),
@@ -62,6 +67,7 @@ impl Runtime {
                 commit_pages: false,
             });
             self.checkout_header.last_git = None;
+            self.checkout_header.last_git_unix_ms = None;
             self.checkout_header.last_ci = None;
             self.checkout_header.repository = None;
         }
@@ -161,7 +167,7 @@ impl Runtime {
                             } else {
                                 CiState::Unavailable
                             },
-                            checked_at_unix_ms: None,
+                            observed: None,
                             url: None,
                         })
                         .collect();
@@ -171,6 +177,14 @@ impl Runtime {
                 self.checkout_header.repository = repository;
                 header.facts = Some(facts);
                 header.state = GitState::Fresh;
+                let read_at = now_unix_ms();
+                self.checkout_header.last_git_unix_ms = Some(read_at);
+                if header
+                    .observed
+                    .is_none_or(|observed| observed.freshness != Freshness::Fresh)
+                {
+                    header.observed = Some(Observation::fresh(read_at));
+                }
                 header.reason = None;
                 self.checkout_header.last_git = Some(now);
             }
@@ -180,10 +194,15 @@ impl Runtime {
                 } else {
                     GitState::Unavailable
                 };
+                header.observed = Some(Observation {
+                    freshness: Freshness::Failed,
+                    read_at_unix_ms: self.checkout_header.last_git_unix_ms,
+                });
                 header.reason = Some(reason);
+                // The results stay, for a commit the header no longer knows
+                // is still HEAD (D-09).
                 for ci in header.ci.iter_mut().chain(header.recent_ci.iter_mut()) {
-                    ci.state = CiState::Stale;
-                    ci.url = None;
+                    ci.observed = ci.observed.map(Observation::aged);
                 }
             }
         }
@@ -199,6 +218,31 @@ impl Runtime {
             .header
             .as_mut()
             .expect("the CI request has a header");
+        let answer = match answer {
+            Ok(answer) => answer,
+            // GitHub could not be read: each commit keeps the result it last
+            // had, marked as a failed read, and one never answered says so
+            // (B22).
+            Err(_) => request
+                .commits
+                .iter()
+                .map(|sha| {
+                    let before = header.recent_ci.iter().find(|ci| &ci.sha == sha);
+                    match before.filter(|ci| ci.observed.is_some()) {
+                        Some(before) => Ci {
+                            observed: Some(Observation::failed(before.observed)),
+                            ..before.clone()
+                        },
+                        None => Ci {
+                            sha: sha.clone(),
+                            state: CiState::Unavailable,
+                            observed: Some(Observation::failed(None)),
+                            url: None,
+                        },
+                    }
+                })
+                .collect(),
+        };
         if answer.iter().map(|ci| &ci.sha).ne(request.commits.iter()) {
             return false;
         }
@@ -218,11 +262,12 @@ impl Runtime {
         let states = |header: &Header| {
             (
                 header.state,
-                header.ci.as_ref().map(|ci| ci.state),
+                header.observed,
+                header.ci.as_ref().map(|ci| ci.observed),
                 header
                     .recent_ci
                     .iter()
-                    .map(|ci| ci.state)
+                    .map(|ci| ci.observed)
                     .collect::<Vec<_>>(),
             )
         };
@@ -233,6 +278,11 @@ impl Runtime {
             .is_some_and(|read| now.saturating_duration_since(read) > Duration::from_secs(5))
         {
             header.state = GitState::Stale;
+            let read_at_unix_ms = self.checkout_header.last_git_unix_ms;
+            header.observed = header.observed.map(|observed| Observation {
+                read_at_unix_ms,
+                ..observed.aged()
+            });
         }
         if header.state != GitState::Fresh
             || self
@@ -241,8 +291,7 @@ impl Runtime {
                 .is_some_and(|read| now.saturating_duration_since(read) > Duration::from_secs(90))
         {
             for ci in header.ci.iter_mut().chain(header.recent_ci.iter_mut()) {
-                ci.state = CiState::Stale;
-                ci.url = None;
+                ci.observed = ci.observed.map(Observation::aged);
             }
         }
         states(header) != before
