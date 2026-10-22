@@ -3,6 +3,7 @@
 This guide owns changes to the public interface, tokens and component library.
 [UI_BEHAVIOR.md](UI_BEHAVIOR.md) owns shipped behavior.
 Original design boards, proposals, authoring tools and maintainer skills are maintained separately.
+When using a Pen canvas, keep distinct areas for the design system, components, screens, review proposals and temporary feature designs.
 A public checkout requires no private repository or design-tool login to build, test or contribute.
 
 ## Authorities
@@ -23,6 +24,7 @@ Original boards are not an input to the public build or CI.
 2. Use the existing tokens, component structure and interaction patterns.
    A new token or visual pattern needs a stated reason and human approval of the proposal before implementation.
 3. Keep proposals and run evidence under ignored `agents/runs/<slug>/`.
+   For a feature PRD with a visual change, prepare a temporary design alongside the PRD and use the approved proposal as the implementation reference.
    Do not commit scratch boards, captures, browser profiles or review transcripts.
 4. Update the owning behavior guide and relevant gallery scene with the implementation.
    Gallery names, counts, paths and content are invented fixtures, never operator data.
