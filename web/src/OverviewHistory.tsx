@@ -56,7 +56,7 @@ export function OverviewHistory({ projects, deviceId, actions }: { projects: Boa
       actions.searchSessionWork(state.query, {
         request_id: requestId, device_id: deviceId, project_root: project?.path,
         agent: state.agent || undefined, status: state.status === "all" ? undefined : state.status,
-        since_unix_ms: state.since, include_titles: state.extra, include_tasks: state.extra,
+        since_unix_ms: state.since, include_titles: state.extra, include_flows: state.extra,
         cursor: state.cursors[state.page],
       });
     }, 180);

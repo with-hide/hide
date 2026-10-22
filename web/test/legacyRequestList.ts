@@ -187,6 +187,7 @@ const END_LABEL: Record<LabelEnd, MessageKey> = {
   done: "requests.end.done",
   waiting: "requests.end.waiting",
   unfinished: "requests.end.unfinished",
+  limited: "requests.end.limited",
 };
 
 /**

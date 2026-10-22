@@ -689,7 +689,7 @@
         "until_unix_ms": { "type": ["integer", "null"], "minimum": 0, "maximum": 9223372036854775807 },
         "status": { "enum": [null, "current", "working", "done", "needs_you", "archived", "retained"] },
         "include_titles": { "type": "boolean" },
-        "include_tasks": { "type": "boolean" },
+        "include_flows": { "type": "boolean" },
         "cursor": { "oneOf": [{ "$ref": "#/$defs/sessionSearchCursor" }, { "type": "null" }] }
       }
     },
