@@ -247,7 +247,7 @@ That Herdr server's socket is `/tmp/hide-web-dev-<uid>-<hash>/herdr.sock`, outsi
 `--into-home` installs into your own home instead, the way adding a device does ([Connect another Mac](#connect-another-mac-over-ssh)): the build goes under `~/.hide/host-helper`, the `hide` command is linked at `~/.local/bin/hide`, and each agent you choose on the first-run step gets its hook, so agents you start there are hide's.
 It is refused where the app is installed, since the app and this build would each rewrite the same hooks; open the app instead.
 
-A browser tab is the shell without the desktop host, so what the host does is missing: there is no Add project, because the folder picker is the app's, and no notifications or Finder.
+A browser tab is the shell without the desktop host, so what the host does is missing: a project is added by typing its path, since the folder picker is the app's (#1551), and there are no notifications and no Finder.
 The address carries the daemon's token and answers only on this machine.
 The daemon stays up while a tab is open and exits ten minutes after the last tab closes; run the script again to come back, and after a rebuild the script stops the daemon of the earlier build before it starts the new one.
 
