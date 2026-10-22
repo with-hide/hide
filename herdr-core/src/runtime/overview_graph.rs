@@ -1,5 +1,14 @@
-//! Session proof and launch provenance from the already-held canonical rows.
+//! Session proof and launch provenance from the already-held canonical rows,
+//! and the operator's remembered choices on the map (PRD
+//! overview-graph-remembered), changed one action per event.
 use super::*;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct OverviewGraphChangePayload {
+    pub(super) change: crate::model::OverviewGraphChange,
+}
 
 impl Runtime {
     pub(super) fn refresh_overview_graph_sessions(&mut self) -> bool {
@@ -51,5 +60,32 @@ impl Runtime {
         }
         self.snapshot.overview_graph.sessions = after;
         true
+    }
+}
+
+impl Runtime {
+    /// One operator action on the map: a filter, a hide, a fold, a drop or
+    /// Reset layout (D-10). Whether anything changed.
+    pub(super) fn change_overview_graph(&mut self, payload: OverviewGraphChangePayload) -> bool {
+        match self.snapshot.ui_state.overview_graph.apply(payload.change) {
+            Err(message) => {
+                self.set_error("overview_graph.invalid", message, false);
+                true
+            }
+            Ok(applied) => {
+                if applied.forgotten > 0 {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "overview_graph",
+                        "kind": "overview_graph.forgotten",
+                        "records": applied.forgotten,
+                        "limit": crate::model::OVERVIEW_GRAPH_LIST_LIMIT,
+                    }));
+                }
+                if applied.changed {
+                    self.persist_ui_state();
+                }
+                applied.changed
+            }
+        }
     }
 }

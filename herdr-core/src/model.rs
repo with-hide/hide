@@ -3712,6 +3712,10 @@ pub struct UiStateSnapshot {
     /// when either changes.
     #[serde(default)]
     pub detail: DetailSlot,
+    /// The Overview Work map's filter, hidden and folded projects, hand
+    /// team folds and dragged places (PRD overview-graph-remembered D-05).
+    #[serde(default)]
+    pub overview_graph: OverviewGraphChoices,
     pub selected_path: Option<String>,
     pub selected_pane_id: Option<String>,
     /// Set by a core move's rekey (`node_migration::reown`): the machine the
@@ -4577,6 +4581,7 @@ impl Default for UiStateSnapshot {
             sidebar_lens: SidebarLens::default(),
             task_view: TaskView::default(),
             detail: DetailSlot::default(),
+            overview_graph: OverviewGraphChoices::default(),
             selected_path: None,
             selected_pane_id: None,
             focus_from_herdr: false,
@@ -6383,6 +6388,7 @@ impl PetSnapshot {
 }
 
 mod overview_graph;
+mod overview_graph_choices;
 /// The sections of [`Snapshot`] that ride the revisioned `rest` channel of
 /// the delta wire: everything except the editor and the changes view (each
 /// with its own revision), the terminal chunk ring (sequence cursor), and the
@@ -6391,6 +6397,9 @@ mod overview_graph;
 /// no mutation site needs dirty-tracking discipline.
 mod rest;
 pub use overview_graph::{GraphDirectInput, GraphParty, GraphSession, OverviewGraphSnapshot};
+pub use overview_graph_choices::{
+    OVERVIEW_GRAPH_LIST_LIMIT, OverviewGraphChange, OverviewGraphChoices, OverviewGraphFocus,
+};
 pub use rest::{RestSections, RestWire};
 
 /// One delta response taken from the runtime, holding everything the wire
@@ -7044,6 +7053,22 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "task_view", &views);
         checked.insert("task_view");
+        let focuses = [
+            OverviewGraphFocus::All,
+            OverviewGraphFocus::Turn,
+            OverviewGraphFocus::Working,
+            OverviewGraphFocus::Results,
+        ];
+        for variant in focuses {
+            match variant {
+                OverviewGraphFocus::All
+                | OverviewGraphFocus::Turn
+                | OverviewGraphFocus::Working
+                | OverviewGraphFocus::Results => {}
+            }
+        }
+        assert_wire(&contract, "overview_graph_focus", &focuses);
+        checked.insert("overview_graph_focus");
         let verbs = [Verb::Approval, Verb::Answer, Verb::Confirm, Verb::Draft];
         for verb in verbs {
             match verb {

@@ -1,5 +1,5 @@
 import { MarkerType, ReactFlow, ReactFlowProvider, useReactFlow, useNodesInitialized, type Edge, type Node, type NodeTypes, type EdgeTypes } from "@xyflow/react";
-import { MaximizeIcon, MinusIcon, PlusIcon, XIcon, LocateFixedIcon, RotateCcwIcon } from "lucide-react";
+import { EyeIcon, EyeOffIcon, MaximizeIcon, MinusIcon, PlusIcon, XIcon, LocateFixedIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -17,12 +17,12 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { frontDeviceId } from "./devices";
 import { Input } from "./components/ui/input";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
-import { graphActivity, graphSessionId, overviewGraphModel, overviewGraphTeam, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
-import { useGraphTheme, useOverviewGraphLayout } from "./overviewGraphLayout";
+import { GRAPH_CHOICES_DEFAULTS, graphActivity, graphProjectIdOf, graphProjectKey, graphSessionId, graphSessionIdOf, graphSessionKey, overviewGraphModel, overviewGraphTeam, sameGraphScope, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
+import { useGraphTheme, useOverviewGraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
 import { ClusterGraphNode, GlowGraphNode, GraphLine, GraphStateCounts, hasGraphLine, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, TeamGraphNode, type ClusterNode, type GlowNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type TeamNode } from "./overviewGraphNodes";
 import type { BoardProject } from "./projectBoard";
 import { sessionOfAgentOn } from "./sessionWork";
-import type { WorkSession } from "./snapshot";
+import type { GraphScope, OverviewGraphChoices, WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import "@xyflow/react/dist/base.css";
@@ -39,9 +39,6 @@ const READABLE_ZOOM = 0.5;
 /** Production Overview owns the graph; the Factory continues to own its separate worker. */
 export function OverviewGraph(props: Props) {
   const projectId = useUiStore((state) => state.overview.projectId);
-  const [focus, setFocus] = useState<GraphFocus>("all");
-  const [includeResting, setIncludeResting] = useState(false);
-  const [hiddenProjects, setHiddenProjects] = useState<ReadonlySet<string>>(() => new Set());
   const [scopedSelection, setScopedSelection] = useState<{ deviceId: string; projectId: string; sessionId: string } | null>(null);
   const revealProjectSession = (row: GraphAgent) => {
     setScopedSelection({ deviceId: props.deviceId, projectId: row.project.id, sessionId: row.id });
@@ -49,15 +46,30 @@ export function OverviewGraph(props: Props) {
   };
   const initialSelection = scopedSelection?.deviceId === props.deviceId && scopedSelection.projectId === projectId ? scopedSelection.sessionId : null;
   useEffect(() => { if (initialSelection) setScopedSelection(null); }, [initialSelection]);
-  return <ReactFlowProvider key={`${props.deviceId}:${projectId ?? "all"}`}><WorkGraph {...props} projectId={projectId} focus={focus} setFocus={setFocus} includeResting={includeResting} setIncludeResting={setIncludeResting} hiddenProjects={hiddenProjects} setHiddenProjects={setHiddenProjects} initialSelection={initialSelection} revealProjectSession={revealProjectSession} /></ReactFlowProvider>;
+  return <ReactFlowProvider key={`${props.deviceId}:${projectId ?? "all"}`}><WorkGraph {...props} projectId={projectId} initialSelection={initialSelection} revealProjectSession={revealProjectSession} /></ReactFlowProvider>;
 }
 
-type GraphProps = Props & { projectId: string | null; focus: GraphFocus; setFocus: (focus: GraphFocus) => void; includeResting: boolean; setIncludeResting: (value: boolean) => void; hiddenProjects: ReadonlySet<string>; setHiddenProjects: (update: (previous: ReadonlySet<string>) => ReadonlySet<string>) => void; initialSelection: string | null; revealProjectSession: (row: GraphAgent) => void };
+type GraphProps = Props & { projectId: string | null; initialSelection: string | null; revealProjectSession: (row: GraphAgent) => void };
 
-
-function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus, setFocus, includeResting, setIncludeResting, hiddenProjects, setHiddenProjects, initialSelection, revealProjectSession }: GraphProps) {
+/** The filter, the hidden and folded projects, the hand team folds and the dropped places are the core's (PRD overview-graph-remembered D-05): every change is one event and the view draws what the snapshot says. */
+function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initialSelection, revealProjectSession }: GraphProps) {
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((state) => state.rest);
+  const choices: OverviewGraphChoices = rest?.ui_state?.overview_graph ?? GRAPH_CHOICES_DEFAULTS;
+  const focus: GraphFocus = choices.focus;
+  const includeResting = choices.include_resting;
+  const hiddenProjects = useMemo<ReadonlySet<string>>(() => new Set(choices.hidden_projects.map(graphProjectIdOf)), [choices.hidden_projects]);
+  const foldedProjects = useMemo<ReadonlySet<string>>(() => new Set(choices.folded_projects.map(graphProjectIdOf)), [choices.folded_projects]);
+  // A team's fold the operator chose; a team nobody chose for opens folded when every descendant sleeps.
+  const teamFolds = useMemo<ReadonlyMap<string, boolean>>(() => new Map(choices.team_folds.map((fold) => [graphSessionIdOf(fold.session), fold.folded])), [choices.team_folds]);
+  const scopedDevice = projectId ? projects.find((project) => project.workspace.id === projectId)?.workspace.device_id ?? deviceId : deviceId;
+  const scope = useMemo<GraphScope>(() => projectId ? { kind: "project", device_id: scopedDevice, workspace_id: projectId } : { kind: "all", device_id: deviceId }, [projectId, scopedDevice, deviceId]);
+  const remembered = useMemo<RememberedPlaces>(() => ({
+    anchors: new Map(choices.project_places.filter((place) => sameGraphScope(place.scope, scope)).map((place) => [graphProjectIdOf(place.key), { x: place.x, y: place.y }])),
+    pins: new Map(choices.session_places.filter((place) => sameGraphScope(place.scope, scope)).map((place) => [graphSessionIdOf(place.key), { x: place.x, y: place.y }])),
+  }), [choices.project_places, choices.session_places, scope]);
+  const setFocus = (value: GraphFocus) => actions.changeOverviewGraph({ kind: "focus", focus: value, include_resting: includeResting });
+  const setIncludeResting = (value: boolean) => actions.changeOverviewGraph({ kind: "focus", focus, include_resting: value });
   // Freeze the core-confirmed entry identity, including native session and graph digest.
   // A later pane reuse cannot become the entry selection.
   const [entry] = useState(() => {
@@ -74,9 +86,6 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const [selection, setSelection] = useState<string | null>(initialSelection);
   const [hovered, setHovered] = useState<string | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
-  // A team's fold the operator chose; a team nobody chose for opens folded when every descendant sleeps.
-  const [teamFolds, setTeamFolds] = useState<ReadonlyMap<string, boolean>>(() => new Map());
-  const [foldedProjects, setFoldedProjects] = useState<ReadonlySet<string>>(() => new Set());
   // Each drag step redraws from the live map.
   const [, setMoved] = useState(0);
   const [pointedProject, setPointedProject] = useState<string | null>(null);
@@ -86,7 +95,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   const opener = useRef<HTMLElement | null>(null);
   const theme = useGraphTheme();
   const model = useMemo(() => overviewGraphModel(projects, rest?.overview_graph, projectId, { focus, includeResting, pinned: entry ? [entry.id] : [], selected: highlightedSession }), [projects, rest?.overview_graph, projectId, focus, includeResting, entry, highlightedSession]);
-  const layout = useOverviewGraphLayout(model, host, retry);
+  const layout = useOverviewGraphLayout(model, host, retry, remembered);
   const flow = useReactFlow();
   const { fitView, zoomIn, zoomOut } = flow;
   const nodesInitialized = useNodesInitialized();
@@ -124,18 +133,19 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
   }, []);
   const highlight = useCallback((id: string | null, keyboard: boolean) => { if (keyboard) setFocused(id); else setHovered(id); }, []);
   const teamFolded = useCallback((root: string) => teamFolds.get(root) ?? model.quietBranches.has(root), [teamFolds, model.quietBranches]);
-  const toggleTeam = useCallback((root: string) => setTeamFolds((previous) => new Map(previous).set(root, !(previous.get(root) ?? model.quietBranches.has(root)))), [model.quietBranches]);
-  const toggleFoldProject = useCallback((id: string) => setFoldedProjects((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }), []);
-  const foldAll = () => setFoldedProjects(new Set(model.projects.map((group) => group.id)));
-  const unfoldAll = () => { setFoldedProjects(new Set()); setTeamFolds(new Map(model.allAgents.map((row) => [row.id, false]))); };
+  const sessionKeyOf = useCallback((id: string) => { const row = model.allAgents.find((row) => row.id === id); return row ? graphSessionKey(row) : undefined; }, [model.allAgents]);
+  const projectKeyOf = useCallback((id: string) => { const summary = model.summaries.find((summary) => summary.id === id); return summary ? graphProjectKey(summary.project.workspace) : undefined; }, [model.summaries]);
+  const toggleTeam = useCallback((root: string) => { const session = sessionKeyOf(root); if (session) actions.changeOverviewGraph({ kind: "team_folded", session, folded: !teamFolded(root) }); }, [actions, sessionKeyOf, teamFolded]);
+  const toggleFoldProject = useCallback((id: string) => { const project = projectKeyOf(id); if (project) actions.changeOverviewGraph({ kind: "project_folded", project, folded: !foldedProjects.has(id) }); }, [actions, projectKeyOf, foldedProjects]);
+  const foldAll = () => actions.changeOverviewGraph({ kind: "fold_all", projects: model.projects.map((group) => graphProjectKey(group.project.workspace)) });
   const chooseSession = useCallback((id: string, target?: HTMLElement) => {
     const row = model.allAgents.find((row) => row.id === id);
     // A session outside the graph budget has a deterministic route back to a graph.
     // Scope navigation is explicit user selection and does not move the existing map.
     if (row && !model.projects.some((group) => group.id === row.projectId)) { revealProjectSession(row); return; }
-    if (row && hiddenProjects.has(row.projectId)) setHiddenProjects((previous) => new Set([...previous].filter((project) => project !== row.projectId)));
+    if (row && hiddenProjects.has(row.projectId)) actions.changeOverviewGraph({ kind: "project_hidden", project: graphProjectKey(row.project), hidden: false });
     rememberOpener(target); setHighlightedSession(id); setSelection(id);
-  }, [rememberOpener, model.allAgents, model.projects, revealProjectSession, hiddenProjects, setHiddenProjects]);
+  }, [rememberOpener, model.allAgents, model.projects, revealProjectSession, hiddenProjects, actions]);
   const returnFocus = useReturnFocus(selection !== null, { target: () => opener.current, within: () => host.current?.querySelector<HTMLElement>(".og-details") ?? null });
   const close = useCallback(() => {
     returnFocus(new Event("closeAutoFocus", { cancelable: true }));
@@ -149,7 +159,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     const row = model.allAgents.find((row) => row.id === highlightedSession);
     if (highlightedSession && (!row || highlightedSession === entry?.id && !current || row && hiddenProjects.has(row.projectId))) setHighlightedSession(null);
   }, [highlightedSession, model.agents, model.allAgents, entry?.id, current, hiddenProjects]);
-  const toggleProject = useCallback((id: string) => setHiddenProjects((previous) => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }), [setHiddenProjects]);
+  const toggleProject = useCallback((id: string) => { const project = projectKeyOf(id); if (project) actions.changeOverviewGraph({ kind: "project_hidden", project, hidden: !hiddenProjects.has(id) }); }, [actions, projectKeyOf, hiddenProjects]);
   const openRecord = onOpenRecord ?? actions.openSessionRecord;
   const activeSession = selection ?? highlightedSession;
   const size = layout.size;
@@ -307,12 +317,32 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     if (held && now) map.moveProject(held.project, { x: held.anchor.x + node.position.x - held.from.x - now.x, y: held.anchor.y + node.position.y - held.from.y - now.y });
     setMoved((value) => value + 1);
   };
+  // A drop is one event: the session where it was put, or the project with the pinned sessions it carried (D-10).
+  const unscaled = (point: { x: number; y: number }) => ({ x: point.x / layout.scale, y: point.y / layout.scale });
   const dragStop = (_: unknown, node: Node) => {
-    if (node.type === "session") map?.drop(node.id);
-    else if (projectDrag.current) map?.dropProject(projectDrag.current.project);
+    if (node.type === "session") {
+      map?.drop(node.id);
+      const pin = map?.pinOf(node.id);
+      const session = sessionKeyOf(node.id);
+      if (pin && session) actions.changeOverviewGraph({ kind: "place", scope, projects: [], sessions: [{ key: session, ...unscaled(pin) }] });
+    } else if (projectDrag.current) {
+      const id = projectDrag.current.project;
+      map?.dropProject(id);
+      const anchor = map?.anchorOf(id);
+      const project = projectKeyOf(id);
+      const sessions = (map?.pinsIn(id) ?? []).flatMap(({ id: pinned, at }) => { const key = sessionKeyOf(pinned); return key ? [{ key, ...unscaled(at) }] : []; });
+      if (anchor && project) actions.changeOverviewGraph({ kind: "place", scope, projects: [{ key: project, ...unscaled(anchor) }], sessions });
+    }
     projectDrag.current = null;
     setMoved((value) => value + 1);
   };
+  // Unfold all opens the map's projects and every team drawn under a root.
+  const unfoldAll = () => actions.changeOverviewGraph({
+    kind: "unfold_all",
+    projects: model.projects.map((group) => graphProjectKey(group.project.workspace)),
+    teams: [...new Set([...points].flatMap(([id, point]) => point.team !== id ? [point.team] : []))].flatMap((root) => { const key = sessionKeyOf(root); return key ? [key] : []; }),
+  });
+  const resetLayout = () => { layout.reset(); cameraInitialized.current = false; actions.changeOverviewGraph({ kind: "reset_places", scope }); };
   const showList = mode === "list" || layout.phase === "failed" || !size;
   return <div className="overview-graph" ref={host} data-overview-graph="true" data-graph-phase={layout.phase}>
     <div className="og-toolbar">
@@ -326,12 +356,12 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, focus
     {model.limited ? <p className="og-notice" role="status">{t("overviewGraph.limit", { count: LAYOUT_NODE_LIMIT })}</p> : null}
     {model.agents.length > 0 && layout.phase === "loading" && mode === "graph" ? <p className="og-notice" role="status">{t("overviewGraph.loading")}</p> : null}
     {model.agents.length > 0 && layout.phase === "failed" && mode === "graph" ? <div className="og-notice" role="status"><span>{t("overviewGraph.failed")}</span><Button variant="outline" size="sm" onClick={() => setRetry((value) => value + 1)}>{t("overviewGraph.retry")}</Button></div> : null}
-    {model.agents.length === 0 ? <div className="og-empty"><p>{t(model.allAgents.length > 0 ? "overviewGraph.filteredEmpty" : "overviewGraph.empty")}</p>{model.allAgents.length > 0 ? <Button variant="outline" size="sm" onClick={() => { setFocus("all"); setIncludeResting(true); }}>{t("overviewGraph.resetFilters")}</Button> : null}<Button variant="outline" size="sm" onClick={() => actions.openStartPanel(projectId ?? undefined)}>{t("overviewGraph.newAgent")}</Button></div> : null}
+    {model.agents.length === 0 ? <div className="og-empty"><p>{t(model.allAgents.length > 0 ? "overviewGraph.filteredEmpty" : "overviewGraph.empty")}</p>{model.allAgents.length > 0 ? <Button variant="outline" size="sm" onClick={() => actions.changeOverviewGraph({ kind: "focus", focus: "all", include_resting: true })}>{t("overviewGraph.resetFilters")}</Button> : null}<Button variant="outline" size="sm" onClick={() => actions.openStartPanel(projectId ?? undefined)}>{t("overviewGraph.newAgent")}</Button></div> : null}
     {model.agents.length > 0 ? <div className="og-stage">
       <div className="og-canvas">{!showList ? <ReactFlow zIndexMode="manual" colorMode={theme} nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES} nodesDraggable onNodeDragStart={dragStart} onNodeDrag={dragging} onNodeDragStop={dragStop} nodesConnectable={false} nodesFocusable={false} edgesFocusable={false} elementsSelectable={false} deleteKeyCode={null} selectionKeyCode={null} multiSelectionKeyCode={null} panOnDrag panOnScroll zoomOnScroll defaultViewport={{ x: 24, y: 24, zoom: 1 }} minZoom={0.05} maxZoom={2} onPaneClick={() => { close(); setHighlightedSession(null); }} ariaLabelConfig={{ "node.a11yDescription.default": t("overviewGraph.nodeHelp"), "node.a11yDescription.keyboardDisabled": t("overviewGraph.nodeHelp") }}>
-        <div className="og-zoom nopan nodrag"><Hint label={t("overviewGraph.zoomOut")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomOut({ duration: 0 })}><MinusIcon /></Button></Hint><Hint label={t("overviewGraph.zoomIn")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomIn({ duration: 0 })}><PlusIcon /></Button></Hint><Hint label={t("overviewGraph.fit")}><Button variant="ghost" size="icon-sm" onClick={fitOperator}><MaximizeIcon /></Button></Hint><Hint label={t("overviewGraph.currentPane")}><Button variant="ghost" size="icon-sm" disabled={!current} onClick={() => { if (current) { setHighlightedSession(current.id); if (orbs.has(current.id)) { const point = positionOf(current.id); void flow.setCenter(point.x, point.y, { zoom: 1, duration: 0 }); } else centerProject(current.projectId); } }}><LocateFixedIcon /></Button></Hint><Hint label={t("overviewGraph.resetLayout")}><Button variant="ghost" size="icon-sm" onClick={() => { layout.reset(); cameraInitialized.current = false; }}><RotateCcwIcon /></Button></Hint></div>
+        <div className="og-zoom nopan nodrag"><Hint label={t("overviewGraph.zoomOut")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomOut({ duration: 0 })}><MinusIcon /></Button></Hint><Hint label={t("overviewGraph.zoomIn")}><Button variant="ghost" size="icon-sm" onClick={() => void zoomIn({ duration: 0 })}><PlusIcon /></Button></Hint><Hint label={t("overviewGraph.fit")}><Button variant="ghost" size="icon-sm" onClick={fitOperator}><MaximizeIcon /></Button></Hint><Hint label={t("overviewGraph.currentPane")}><Button variant="ghost" size="icon-sm" disabled={!current} onClick={() => { if (current) { setHighlightedSession(current.id); if (orbs.has(current.id)) { const point = positionOf(current.id); void flow.setCenter(point.x, point.y, { zoom: 1, duration: 0 }); } else centerProject(current.projectId); } }}><LocateFixedIcon /></Button></Hint><Hint label={t("overviewGraph.resetLayout")}><Button variant="ghost" size="icon-sm" onClick={resetLayout}><RotateCcwIcon /></Button></Hint></div>
       </ReactFlow> : <SessionList key={`${focus}:${includeResting}`} rows={model.agents} selected={activeSession} choose={chooseSession} />}</div>
-      {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn model={model} query={projectQuery} setQuery={setProjectQuery} hidden={hiddenProjects} toggle={toggleProject} folded={foldedProjects} toggleFold={toggleFoldProject} point={setPointedProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} actions={actions} />}
+      {agent ? <SessionPreview row={agent} model={model} actions={actions} openRecord={openRecord} close={close} choose={chooseSession} /> : <ProjectColumn model={model} query={projectQuery} setQuery={setProjectQuery} hidden={hiddenProjects} toggle={toggleProject} point={setPointedProject} locate={(summary) => summary.admitted ? centerProject(summary.id) : useUiStore.getState().setOverview({ projectId: summary.project.workspace.id })} choose={chooseSession} actions={actions} />}
     </div> : null}
   </div>;
 }
@@ -343,7 +373,7 @@ function askingPane(row: GraphAgent, model: OverviewGraphModel): string {
 }
 
 /** With nothing chosen, the side column lists the projects with their states, then what waits on the operator. */
-function ProjectColumn({ model, query, setQuery, hidden, toggle, folded, toggleFold, point, locate, choose, actions }: { model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; folded: ReadonlySet<string>; toggleFold: (id: string) => void; point: (id: string | null) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; actions: Actions }) {
+function ProjectColumn({ model, query, setQuery, hidden, toggle, point, locate, choose, actions }: { model: OverviewGraphModel; query: string; setQuery: (value: string) => void; hidden: ReadonlySet<string>; toggle: (id: string) => void; point: (id: string | null) => void; locate: (summary: ProjectSummary) => void; choose: (id: string, target: HTMLElement) => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const needle = query.trim().toLocaleLowerCase();
   // Every root whose turn it is, drawn, folded or hidden, so the list agrees with the projects' My turn counts.
@@ -353,10 +383,11 @@ function ProjectColumn({ model, query, setQuery, hidden, toggle, folded, toggleF
     <div className="og-project-list">{model.summaries.filter((summary) => summary.project.workspace.label.toLocaleLowerCase().includes(needle)).sort((a, b) => a.project.workspace.label.localeCompare(b.project.workspace.label, undefined, { numeric: true }) || a.id.localeCompare(b.id)).map((summary) => {
       const label = summary.project.workspace.label;
       const off = hidden.has(summary.id);
+      // Folding is the map's (its name's button, the folded circle, Fold all); the row only hides (PRD overview-graph-remembered D-02, D-03).
+      const eye = t(off ? "overviewGraph.revealProject" : "overviewGraph.hideProject", { project: label });
       return <div key={summary.id} data-graph-project-row={summary.project.workspace.id} data-hidden={off} onPointerEnter={() => point(summary.id)} onPointerLeave={() => point(null)} onFocus={() => point(summary.id)} onBlur={() => point(null)}>
         <button type="button" aria-label={t("overviewGraph.locateProject", { project: label })} disabled={off} onClick={() => locate(summary)}><strong>{label}</strong><GraphStateCounts summary={summary} /><span className="og-count">{summary.sessions}</span></button>
-        <Button variant="ghost" size="sm" aria-pressed={folded.has(summary.id)} aria-label={t(folded.has(summary.id) ? "overviewGraph.unfoldProject" : "overviewGraph.foldProject", { project: label, count: summary.sessions })} disabled={off || !summary.admitted} onClick={() => toggleFold(summary.id)}>{t(folded.has(summary.id) ? "overviewGraph.unfold" : "overviewGraph.fold")}</Button>
-        <Button variant="ghost" size="sm" aria-pressed={off} aria-label={t(off ? "overviewGraph.revealProject" : "overviewGraph.hideProject", { project: label })} disabled={!summary.admitted} onClick={() => toggle(summary.id)}>{t(off ? "overviewGraph.reveal" : "overviewGraph.hide")}</Button>
+        <Hint label={eye}><Button variant="ghost" size="icon-sm" className="og-eye" aria-pressed={off} aria-label={eye} disabled={!summary.admitted} onClick={() => toggle(summary.id)}>{off ? <EyeOffIcon /> : <EyeIcon />}</Button></Hint>
       </div>;
     })}</div>
     {waiting.length > 0 ? <section className="og-waiting" aria-label={t("overviewGraph.waiting")}>

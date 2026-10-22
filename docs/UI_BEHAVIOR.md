@@ -959,7 +959,15 @@ The list orders My turn, Working, Unread results, unknown, idle and sleeping, re
 A filter dims the sessions it does not match instead of removing them, so a filter never moves a circle; an excluded ancestor of a present session stays as dimmed context, and dimmed sessions never increase match counts.
 A filter with no match shows Show all sessions, distinct from no current sessions and layout failure.
 A team folds into its root, and a project folds into one circle (PRD overview-main-map D-19).
-A team whose every descendant sleeps opens folded; one the operator folded or unfolded keeps that choice while the view is mounted.
+A team whose every descendant sleeps opens folded; one the operator folded or unfolded keeps that choice.
+
+What the operator arranges on the map is remembered by the core in `ui_state.overview_graph` (PRD overview-graph-remembered D-05, D-06): the filter and Include sleeping, the hidden projects, the folded projects, the teams folded or unfolded by hand, and where projects and sessions were dropped.
+It comes back as it was left when Overview is closed and opened, when the tab or the project scope changes and comes back, and after the app restarts, and every window shows the same arrangement.
+Each action is one event to the core: a filter, a hide, a fold, Fold all, Unfold all, one drop, Reset layout; a drag sends nothing until it is released (B16).
+Places are kept for each map apart: a device's map of every project, and each project's own map (B4); they are kept divided by the interface scale, so a moved project or session keeps its place on the map when the scale changes (B13).
+A record whose project or session is gone draws nothing, and a new session finds its place beside its parent or in its project as before (B12).
+Each kind of record keeps at most 512, and past that the least recently changed is forgotten with a diagnostic; a stored record this build cannot read loads as nothing, the rest of the arrangement and of the UI state load, and the load leaves a diagnostic (B15).
+Selection, the project search, the graph/list choice and the camera are not remembered.
 
 The graph is a force map centred on the operator, the way Obsidian's graph view is drawn (PRD overview-main-map D-01, D-20): a `나` circle is fixed at the centre, and every session without a lineage parent (a root) is held loosely toward it by a faint line.
 Each project gathers around its own place on an ellipse around the operator, so a project's sessions settle as one cluster apart from the others.
@@ -986,16 +994,19 @@ An unresolved endpoint is never joined by a similar name or pane number; only in
 Direct input never creates inbox items, watches, lineage, read marks, letter notifications or phone pushes, and the bounded 30-day observation metadata carries no command or prompt content.
 Letters and direct inputs share one newest-2,000-record graph budget; no letter subject or body reaches the graph or its panel.
 
-With nothing chosen, the side column lists each project with a search box, its session count, its nonzero My turn, In progress and Unread counts in their colours, a Fold toggle and a Hide toggle.
+With nothing chosen, the side column lists each project with a search box, its session count, its nonzero My turn, In progress and Unread counts in their colours, and nothing else: no Fold or Hide words (PRD overview-graph-remembered D-02).
+Pointing at a row or moving the keyboard into it shows an eye at its end, whose tooltip and accessible name are `<project> 그래프에서 숨기기`; pressing it takes the project off the map.
 Choosing a project's name moves the camera to that project's sessions; a project outside the graph budget opens its project scope instead.
-Hide removes that project's sessions, name, glow, outlines and lines from the map without moving any other circle; its row stays, dimmed, keeps its counts, and offers Show again, which returns the sessions to the same places.
-Hiding lasts while the view is mounted, survives the graph/list switch and scope changes, and never affects the list view or the filter counts.
+Hiding removes that project's sessions, name, glow, outlines and lines from the map without moving any other circle; its row stays, dimmed, keeps its counts, and shows a crossed-out eye without pointing, named `<project> 그래프에 다시 보이기` and pressed, which returns the sessions to the same places (B9).
+A hidden row's name is not a button that moves the camera, because there is nothing on the map to move to; the eye of a project outside the graph budget is disabled (B11).
+Hiding never affects the list view or the filter counts.
 Hiding the project of the selected or highlighted session clears that selection.
 Below the project list, Waiting on you lists each root whose turn it is, drawn on the map or not, with its project, title and question, and Go answer focuses the asking pane: the root when it asks, else its first asking descendant.
 A root in a hidden project stays in the list with a `그래프에서 숨김` mark, because hiding a project from the map does not make its question wait less (D-21).
 Folding a team leaves its root circle with a chip that counts its descendants and shows their My turn, Working and Unread marks; choosing the chip unfolds it, and the descendants come back to their places (B24).
-Folding a project, from the faint fold button beside its name in the map (clear while the name is pointed at) or from its row's Fold, turns its cluster into one circle in the project's place, filled faintly and bordered in the project's colour, keeping the project's glow and its emphasis, with its name at the expanded name's size and colour, its session count and nonzero counts; a line between that project and another ends on the circle, and choosing the circle unfolds the cluster to its old shape; both places share one fold state, and the button never starts a project drag (B25).
+Folding a project, from the faint fold button beside its name in the map (clear while the name is pointed at), turns its cluster into one circle in the project's place, filled faintly and bordered in the project's colour, keeping the project's glow and its emphasis, with its name at the expanded name's size and colour, its session count and nonzero counts; a line between that project and another ends on the circle, and choosing the circle unfolds the cluster to its old shape; both places share one fold state, and the button never starts a project drag (B25).
 Fold all folds every project into its circle and leaves each team's own fold as it was; Unfold all opens every project and every team; both sit in the toolbar of the graph view (B26).
+A project folds and unfolds only on the map: its name's fold button, its folded circle, and Fold all or Unfold all; the side column does not fold (PRD overview-graph-remembered D-03).
 Choosing a session by click, Enter or Space replaces the column with its panel: title, state, project and branch, provider and proved launch model, what it does now, what it asks the operator when it asks, its team (every descendant with its state; choosing one selects it), its counterparts with sent and received counts only, and `세션 열기 · 기록 보기`.
 Below the Overview breakpoint the panel overlays the graph; Escape closes the panel first, and changing filter or scope clears a selection that no longer matches.
 Hover and keyboard focus outline the pointed session and its counterparts and never open details.
@@ -1011,8 +1022,10 @@ A project's name, or its folded circle, moves every session of the project and n
 A session's circle follows the hand and its team is pulled along by the physics; on release it stays where it was put and the rest settles around it.
 With reduced motion, nothing is pulled while a circle is held, and the map settles at once on release.
 Clicking a circle opens details, and the text below it remains a selection target without becoming a drag handle; outlines, glows and lines follow the moved circles.
-Moves live only in this mounted view, and Reset layout places the map again from the start and restores the initial camera without dispatching pane moves.
-Graph filters, hiding, selection, pan, zoom, moves and folding stay local to the mounted view; filters and hiding survive graph/list and scope changes while Work remains mounted, and closing the view stops the map's physics and ends its listeners.
+A released project or session is remembered where it was put, and opens there again; a project's drop carries the dropped sessions it moved with it (B3).
+A map that is open never jumps to a remembered place: what it already placed stays where it is.
+Reset layout forgets this map's places, places the map again from the start and restores the initial camera without dispatching pane moves; the forgotten places are never drawn again, neither before the core's answer arrives nor after reopening, and the other maps' places, hiding, folds and filter stay (B5).
+Selection, pan and zoom stay local to the mounted view, and closing the view stops the map's physics and ends its listeners.
 
 ### A record beside the tabs
 

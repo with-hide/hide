@@ -7,7 +7,11 @@
 // from the session's id, so the same sessions open in the same shape. When
 // sessions come or go, the ones already placed hold still while only the new
 // ones find a place. Drags move bodies and, unless motion is reduced, let the
-// physics pull a team along and settle on release.
+// physics pull a team along and settle on release. Where the operator dropped
+// a project or a session is remembered by the core (PRD
+// overview-graph-remembered) and comes back as `remembered`: it places what
+// the previous map does not already hold, so a map that is still open never
+// jumps to a stale record.
 
 import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type ForceLink, type ForceX, type ForceY, type Simulation, type SimulationLinkDatum, type SimulationNodeDatum } from "d3-force";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
@@ -20,8 +24,10 @@ export type MapInput = {
   sessions: readonly MapSession[];
   /** Room the operator's circle needs. */
   operator: number;
+  /** Where the operator dropped projects (their anchors) and sessions (pinned there). */
+  remembered?: { anchors: ReadonlyMap<string, Point>; pins: ReadonlyMap<string, Point> };
 };
-type Point = { x: number; y: number };
+export type Point = { x: number; y: number };
 /** An orb center, and the session whose team it belongs to (a root names its own). */
 export type MapPoint = Point & { team: string };
 
@@ -90,6 +96,17 @@ export class ForceMap {
   /** The session stays where it was put; the rest settles around it. */
   drop(id: string) {
     if (this.bodies.has(id)) this.settle();
+  }
+
+  /** Where the operator pinned a session, or undefined while the physics places it. */
+  pinOf(id: string): Point | undefined {
+    const body = this.bodies.get(id);
+    return body && body.fx != null && body.fy != null ? { x: body.fx, y: body.fy } : undefined;
+  }
+
+  /** Every pinned session of a project; a project drop carries them with it. */
+  pinsIn(projectId: string): { id: string; at: Point }[] {
+    return [...this.bodies.values()].flatMap((body) => body.projectId === projectId && body.fx != null && body.fy != null ? [{ id: body.id, at: { x: body.fx, y: body.fy } }] : []);
   }
 
   /** Where a project gathers; a project drag reads it at the start and moves it by the hand's travel. */
@@ -174,7 +191,7 @@ export class ForceMap {
     // Projects gather on an ellipse around the operator, wider than tall like the screen and wide enough for how many sessions there are.
     const reach = Math.max(380, 72 * Math.sqrt(input.sessions.length + 1));
     input.projects.forEach((id, index) => {
-      const kept = previous?.anchors.get(id);
+      const kept = previous?.anchors.get(id) ?? input.remembered?.anchors.get(id);
       const angle = -Math.PI / 2 + (index / Math.max(input.projects.length, 1)) * Math.PI * 2;
       this.anchors.set(id, kept ? { ...kept } : input.projects.length === 1 ? { x: 0, y: -reach * 0.6 } : { x: Math.cos(angle) * reach, y: Math.sin(angle) * reach * 0.7 });
     });
@@ -198,6 +215,11 @@ export class ForceMap {
         body.x = old.x; body.y = old.y;
         body.fx = old.x; body.fy = old.y;
         if (old.fx == null) held.push(body);
+      } else if (input.remembered?.pins.has(session.id)) {
+        // Dropped there before: pinned where the operator left it.
+        const pin = input.remembered.pins.get(session.id)!;
+        body.x = pin.x; body.y = pin.y;
+        body.fx = pin.x; body.fy = pin.y;
       } else {
         const near: Point = session.parent !== null && this.bodies.has(session.parent) ? { x: this.bodies.get(session.parent)!.x!, y: this.bodies.get(session.parent)!.y! } : this.anchors.get(session.projectId)!;
         const angle = angleOf(session.id);
@@ -211,7 +233,11 @@ export class ForceMap {
     this.ties = ties;
     for (const body of this.bodies.values()) {
       if (body.parent !== null && body.parent !== body.id) ties.push({ source: body.parent, target: body.id, kind: "team", length: this.bodies.get(body.parent)!.radius + body.radius });
-      else if (body.parent === null) ties.push({ source: OPERATOR, target: body.id, kind: "operator", length: previous?.operatorTie(body.id) ?? reach * 0.63 });
+      else if (body.parent === null) {
+        // A project dropped before keeps its distance, as `dropProject` left it.
+        const moved = previous?.anchors.has(body.projectId) ? undefined : input.remembered?.anchors.get(body.projectId);
+        ties.push({ source: OPERATOR, target: body.id, kind: "operator", length: previous?.operatorTie(body.id) ?? (moved ? Math.hypot(moved.x, moved.y) : reach * 0.63) });
+      }
     }
     this.simulation
       .nodes([this.operator, ...this.bodies.values()])

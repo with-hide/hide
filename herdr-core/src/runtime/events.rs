@@ -1532,6 +1532,7 @@ pub(super) enum Event {
     SessionTreeToggle(PaneTargetPayload),
     SidebarLensSet(super::detail::SidebarLensPayload),
     TaskViewSet(super::detail::TaskViewPayload),
+    OverviewGraphChange(super::overview_graph::OverviewGraphChangePayload),
     TaskReveal(super::detail::TaskRevealPayload),
     DetailOpen(super::detail::DetailOpenPayload),
     DetailBack,
@@ -1795,6 +1796,10 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "session_tree_toggle" => decode!(PaneTargetPayload, SessionTreeToggle),
         "sidebar_lens_set" => decode!(super::detail::SidebarLensPayload, SidebarLensSet),
         "task_view_set" => decode!(super::detail::TaskViewPayload, TaskViewSet),
+        "overview_graph_change" => decode!(
+            super::overview_graph::OverviewGraphChangePayload,
+            OverviewGraphChange
+        ),
         "task_reveal" => decode!(super::detail::TaskRevealPayload, TaskReveal),
         "detail_open" => decode!(super::detail::DetailOpenPayload, DetailOpen),
         "detail_back" => Ok(Event::DetailBack),
@@ -4199,6 +4204,7 @@ impl Runtime {
             Event::SessionTreeToggle(payload) => self.toggle_agent_tree(payload.pane_id, true),
             Event::SidebarLensSet(payload) => self.set_sidebar_lens(payload),
             Event::TaskViewSet(payload) => self.set_task_view(payload),
+            Event::OverviewGraphChange(payload) => self.change_overview_graph(payload),
             Event::TaskReveal(payload) => self.reveal_task(payload),
             Event::DetailOpen(payload) => self.open_detail(payload.item),
             Event::DetailBack => self.detail_back(),
@@ -4270,10 +4276,11 @@ impl Runtime {
                     expanded_agent_pane_ids: current.expanded_agent_pane_ids,
                     sessions_expanded_agent_pane_ids: current.sessions_expanded_agent_pane_ids,
                     // Each has its own event (`sidebar_lens_set`,
-                    // `task_view_set`, `detail_*`).
+                    // `task_view_set`, `detail_*`, `overview_graph_change`).
                     sidebar_lens: current.sidebar_lens,
                     task_view: current.task_view,
                     detail: current.detail,
+                    overview_graph: current.overview_graph,
                     selected_path: payload.selected_path,
                     // The keyboard's pane, checkout and device are the
                     // core's: it moves them on the event that asks for the

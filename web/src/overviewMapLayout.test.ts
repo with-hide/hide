@@ -102,4 +102,28 @@ describe("force map", () => {
     expect(() => new ForceMap({ projects: [], sessions: [session("x", "p")], operator: 40 })).toThrow(/unlisted project/);
     expect(new ForceMap(input([])).positions().size).toBe(0);
   });
+
+  // PRD overview-graph-remembered B3, B12: where the operator dropped things opens there again.
+  it("opens a remembered project and pinned session where they were dropped, and the rest around them", () => {
+    const remembered = { anchors: new Map([["billing", { x: 600, y: 420 }]]), pins: new Map([["a1", { x: -500, y: 300 }], ["gone", { x: 1, y: 1 }]]) };
+    const map = new ForceMap({ ...input(scene), remembered });
+    expect(map.anchorOf("billing")).toEqual({ x: 600, y: 420 });
+    expect(map.positions().get("a1")).toMatchObject({ x: -500, y: 300 });
+    expect(map.pinOf("a1")).toEqual({ x: -500, y: 300 });
+    expect(map.pinOf("a")).toBeUndefined();
+    expect(map.pinsIn("hide")).toEqual([{ id: "a1", at: { x: -500, y: 300 } }]);
+    // A record of a session that is gone draws nothing.
+    expect(map.positions().has("gone")).toBe(false);
+    // Billing's sessions gather around its remembered anchor.
+    const billing = mean(["c", "c1"].map((id) => map.positions().get(id)!));
+    expect(near(billing, { x: 600, y: 420 })).toBeLessThan(near(billing, map.anchorOf("site")!));
+  });
+
+  it("never moves what an open map already placed to a remembered place", () => {
+    const open = new ForceMap(input(scene));
+    const stale = { anchors: new Map([["billing", { x: 900, y: 900 }]]), pins: new Map([["a1", { x: -900, y: 900 }]]) };
+    const again = new ForceMap({ ...input([...scene, session("a3", "hide", "a")]), remembered: stale }, open);
+    for (const [id, point] of open.positions()) expect(again.positions().get(id)).toEqual(point);
+    expect(again.anchorOf("billing")).toEqual(open.anchorOf("billing"));
+  });
 });

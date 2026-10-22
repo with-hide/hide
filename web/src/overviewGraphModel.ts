@@ -1,7 +1,7 @@
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
 import { scopeAgents, type LensAgent } from "./overviewLens";
 import type { BoardProject } from "./projectBoard";
-import type { AgentRow, OverviewGraphMetadata, OverviewGraphParty } from "./snapshot";
+import type { AgentRow, GraphProjectKey, GraphScope, GraphSessionKey, OverviewGraphChoices, OverviewGraphMetadata, OverviewGraphParty } from "./snapshot";
 
 export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null };
 export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; roots: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null };
@@ -42,6 +42,14 @@ export type OverviewGraphModel = {
 
 export const graphProjectId = (project: BoardProject) => `project:${JSON.stringify([project.workspace.device_id, project.workspace.id])}`;
 export const graphSessionId = (deviceId: string, paneId: string, session: string | null) => `session:${JSON.stringify([deviceId, paneId, session])}`;
+/** The core's record of a project or session names the same three things the graph id does (PRD overview-graph-remembered D-09). */
+export const graphProjectKey = (workspace: Pick<BoardProject["workspace"], "device_id" | "id">): GraphProjectKey => ({ device_id: workspace.device_id, workspace_id: workspace.id });
+export const graphProjectIdOf = (key: GraphProjectKey) => `project:${JSON.stringify([key.device_id, key.workspace_id])}`;
+export const graphSessionKey = (row: GraphAgent): GraphSessionKey => ({ device_id: row.deviceId, pane_id: row.agent.pane_id, session: row.digest ?? row.agent.session_id ?? null });
+export const graphSessionIdOf = (key: GraphSessionKey) => graphSessionId(key.device_id, key.pane_id, key.session);
+export const sameGraphScope = (a: GraphScope, b: GraphScope) => a.kind === b.kind && a.device_id === b.device_id && (a.kind === "all" || b.kind === "all" || a.workspace_id === b.workspace_id);
+/** What the core holds before the operator chose anything. */
+export const GRAPH_CHOICES_DEFAULTS: OverviewGraphChoices = { focus: "all", include_resting: false, hidden_projects: [], folded_projects: [], team_folds: [], project_places: [], session_places: [] };
 
 const partyKey = (party: OverviewGraphParty) => JSON.stringify([party.device_id, party.pane_id, party.session]);
 
