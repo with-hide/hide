@@ -1,7 +1,7 @@
 # hide
 
 Hide is the operator's workspace for coding agents, and this guide is for an agent running in one of its panes.
-Outside a Hide pane the commands below are refused, and the refusal's `reason` says so; then this guide does not apply to the session.
+Outside Hide, or in a pane Hide does not know, the commands below are refused with a `reason` and a `next_action`; if you cannot get past that, this guide does not apply to the session.
 Herdr runs the terminals: it owns each pane, its split, its working folder, the agent in it and its terminal.
 Hide draws them and keeps the rest: which tab and pane the operator sees, the letters and watches between agents, who started whom, Project Memory, the right lane with its 보기 slot, the browser displays, and a Conductor's missions.
 You change Hide only through the `hide` commands below; what you print in your own pane is read by the operator, not by Hide.
