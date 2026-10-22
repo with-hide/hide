@@ -13,7 +13,7 @@ import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { missionCounts, missionOf, missionOpen, nodeLine, nodeMark, shownNodes, stackWaiting, workerWords, kindWord, STAGE_STEPS } from "./missions";
+import { launchModelOf, missionCounts, missionOf, missionOpen, nodeLine, nodeMark, shownNodes, stackWaiting, stepsOf, workerWords, kindWord } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { PR_LOOK, staleLabel } from "./prMark";
 import { layerDependencies } from "./projectBoard";
@@ -209,10 +209,11 @@ function useWorkerRow(node: MissionNode) {
 function NodeCard({ mission, node, open, onOpen, actions }: { mission: Mission; node: MissionNode; open: boolean; onOpen: (open: boolean) => void; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const row = useWorkerRow(node);
+  const launchModel = useShellStore((s) => launchModelOf(s.rest, mission, node));
   const card = useRef<HTMLButtonElement>(null);
   const mark = nodeMark(node, row?.mark ?? null);
-  const worker = workerWords(node, t("mission.auto"));
-  const lineText = nodeLine(mission, node, t);
+  const worker = workerWords(node, launchModel, t("mission.auto"));
+  const lineText = nodeLine(node, t);
   const staleTip = staleLabel({ stale: mission.github_stale, lastRead: mission.github_read_at_unix_ms }, t, requireInterfaceLanguage(i18n.language));
   const pending = node.status === "planned" || node.blocked !== null;
   const attention = node.status === "failed" || node.status === "waiting";
@@ -306,14 +307,15 @@ function Delivery({ node, stale, staleTip, fallback, attention }: { node: Missio
   return <span className={cn("min-w-0 flex-1 truncate text-caption", attention ? "text-destructive" : "text-muted-foreground")} title={fallback} data-node-line="true">{fallback}</span>;
 }
 
-/** The four steps (D-42 B): work, PR or branch, review, merge or main; a node that changes no code shows one step for its own work. */
+/** The four steps of a change node (D-42 B): work, PR or branch, review, merge or main; a research or verify node draws none, its status mark says where it is. */
 function Steps({ node }: { node: MissionNode }) {
   const { t } = useInterfaceTranslation();
-  const steps = node.kind === "change" ? STAGE_STEPS : 1;
-  const reached = node.kind === "change" ? (node.stage ?? 0) : node.status === "done" ? 1 : node.status === "working" || node.status === "review" ? 1 : 0;
+  const steps = stepsOf(node);
+  if (steps === 0) return null;
+  const reached = node.stage ?? 0;
   const failing = node.status === "failed" || node.pr_state === "failed";
   const moving = node.status === "working" || node.status === "review";
-  const label = node.kind === "change" ? t("mission.step", { step: reached, steps: t(node.delivery === "direct" ? "mission.steps.direct" : "mission.steps.pr") }) : t(kindWord(node.kind));
+  const label = t("mission.step", { step: reached, steps: t(node.delivery === "direct" ? "mission.steps.direct" : "mission.steps.pr") });
   return (
     <span role="img" aria-label={label} className="flex shrink-0 items-center gap-xxs" data-node-steps={reached}>
       {Array.from({ length: steps }, (_, index) => {

@@ -86,8 +86,11 @@ test("the Conductor's commands draw the mission map once, the map follows the re
     const node = map.locator('[data-mission-node="api"]');
     await expect(node).toHaveAttribute("data-node-status", "working");
     await expect(node.locator("[data-node-line]")).toHaveText("엔드포인트 작성 중");
-    // Its worker row names the agent the plan chose, with the time it has worked.
-    await expect(node.locator("[data-node-worker]")).toHaveAttribute("data-node-worker", "claude");
+    // Its worker row names the model the plan chose (the Conductor's own pane runs no Hide launch, so the plan's stands), with the time it has worked.
+    await expect(node.locator("[data-node-worker]")).toHaveAttribute("data-node-worker", "opus");
+    // A research node draws no step cells; the change node draws its four.
+    await expect(map.locator('[data-mission-node="cause"] [data-node-steps]')).toHaveCount(0);
+    await expect(node.locator("[data-node-steps]")).toHaveCount(1);
     await expect(node.locator("[data-mission-duration]")).toBeVisible();
     await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
     await expect(map.locator('[data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
