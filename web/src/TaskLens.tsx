@@ -446,7 +446,7 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
             <MissionChip agent={{ session: root.session }} onOpen={(id) => actions.openMission(id)} />
             <span className="relative flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
               <Elapsed since={row.archived_at_unix_ms} className="pointer-events-none text-micro text-muted-foreground tabular-nums hoverless:hidden" />
-              <span className={cn(FLOATING_ACTIONS, revealed(open))}>
+              <span data-row-actions="" className={cn(FLOATING_ACTIONS, revealed(open))}>
                 <EntryDropdown label={label} title={root.title} items={items} onSelect={select} onOpenChange={setOpen} data-archived-menu={row.id}
                   trigger={
                     <button type="button" aria-label={label} data-archived-more={row.id} className="rounded-xs p-xxs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary">
@@ -550,7 +550,7 @@ function TimeSlot({ agent, record, menu, revisit }: { agent: AgentRow; record: (
   return (
     <span className="relative flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
       <Elapsed since={agent.last_prompt_at_unix_ms} data-agent-elapsed="true" className="pointer-events-none text-micro text-muted-foreground tabular-nums hoverless:hidden" />
-      <span className={cn(FLOATING_ACTIONS, revealed(open))}>
+      <span data-row-actions="" className={cn(FLOATING_ACTIONS, revealed(open))}>
         {revisit ? <RevisitButton agent={agent} {...revisit} /> : null}
         {record ? (
           <Hint label={t("taskLens.menu.record")} shortcut="Space">
