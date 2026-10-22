@@ -170,7 +170,7 @@ fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
         verb: lead.verb,
         what: lead.what.clone(),
         more: agent.raised.len() - 1,
-        subject: None,
+        subject: lead.subject,
     })
 }
 

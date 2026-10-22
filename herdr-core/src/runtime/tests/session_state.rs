@@ -188,6 +188,7 @@ fn pane_bands_prioritize_connection_then_own_demand_then_raised_descendants() {
         .map(|id| RaisedAsk {
             verb: Verb::Approval,
             what: Some("e2e 테스트 돌리던 중".into()),
+            subject: None,
             raised_pane_id: id.into(),
             origin_title: format!("Task {id}"),
             pane_id: id.into(),

@@ -54,6 +54,8 @@ export type PrState = "failed" | "pending" | "mergeable" | "draft" | "merged" | 
 export type RaisedAsk = {
   verb: RaiseVerb;
   what: string | null;
+  /** A question the core asks for the raised descendant (`AskSubject`), worded in place of `what`. */
+  subject?: AskSubject;
   /** The raised descendant itself, where a tree draws the ask. */
   raised_pane_id: string;
   /** The raised descendant's title; drafts may name its parent as the holder. */
