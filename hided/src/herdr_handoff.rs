@@ -258,6 +258,22 @@ impl LocalTakeover {
         self
     }
 
+    /// The moves that failed before. A record that cannot be read counts as
+    /// none and is replaced by the next failure: it only decides whether the
+    /// step opens on its failure, since the core never moves on its own
+    /// (D-14), so a damaged file must not hide the offer.
+    fn attempts(&self) -> Attempts {
+        Attempts::read(&self.record).unwrap_or_else(|detail| {
+            herdr_core::diagnostic!(serde_json::json!({
+                "component": "herdr",
+                "kind": "herdr.handoff",
+                "outcome": "record_unreadable",
+                "detail": detail,
+            }));
+            Attempts::default()
+        })
+    }
+
     fn version(&self) -> Result<String, String> {
         if let Some(version) = self.version.get() {
             return Ok(version.clone());
@@ -312,8 +328,7 @@ impl LocalTakeover {
             (OfferKind::Move, Some(pid)) => {
                 let attempt = Attempt::of(&self.socket, pid, &self.ours)
                     .map_err(|error| ("program", error.to_string()))?;
-                Attempts::read(&self.record)
-                    .map_err(|detail| ("record", detail))?
+                self.attempts()
                     .current(&version)
                     .failed_attempt(&attempt)
                     .map(|failed| failed.cause.unwrap_or(FailureCause::Refused))
@@ -356,6 +371,25 @@ impl LocalTakeover {
         (protocol < hide_herdr_client::HERDR_PROTOCOL_REVISION)
             .then(|| answer["version"].as_str().map(str::to_owned))
             .flatten()
+    }
+}
+
+/// The takeover of a daemon that cannot move a server, one not run from a
+/// desktop package with that package's own Herdr: its look finds nothing,
+/// so a Herdr step an earlier daemon saved goes on to the agents.
+pub struct NoTakeover;
+
+impl HerdrTakeover for NoTakeover {
+    fn look(&self) -> Look {
+        Look::Nothing
+    }
+
+    fn hand_over(&self) -> Moved {
+        Moved::Failed {
+            cause: FailureCause::Unreadable,
+            stage: "unavailable".into(),
+            detail: "this daemon does not run from a desktop package with its own Herdr".into(),
+        }
     }
 }
 
@@ -406,7 +440,7 @@ impl HerdrTakeover for LocalTakeover {
                 let kept = Attempt::of(&self.socket, pid, &self.ours)
                     .map_err(|error| error.to_string())
                     .and_then(|attempt| {
-                        Attempts::read(&self.record)?
+                        self.attempts()
                             .current(&offer.version)
                             .add_with_cause(
                                 attempt,
@@ -933,6 +967,40 @@ mod tests {
             Some(FailureCause::Refused)
         );
         assert!(current.current("0.9.6").failed.is_empty());
+    }
+
+    /// This machine's move record only says whether the step opens on its
+    /// failure, so a damaged one hides nothing and the next failure
+    /// replaces it; a device's record, which gates its updater, refuses.
+    #[test]
+    fn a_damaged_move_record_counts_as_no_failure_and_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join("herdr-handoff.json");
+        std::fs::write(&record, b"{not json").unwrap();
+        let takeover = LocalTakeover::new(
+            dir.path().join("herdr"),
+            dir.path().join("herdr.sock"),
+            record.clone(),
+        );
+        assert!(takeover.attempts().failed.is_empty());
+        let me = std::process::id();
+        let attempt = Attempt {
+            socket: dir.path().join("herdr.sock"),
+            pid: me,
+            started: hide_platform::process::start_time(me).unwrap(),
+            pinned: dir.path().join("herdr"),
+        };
+        takeover
+            .attempts()
+            .add_with_cause(
+                attempt.clone(),
+                "handoff: refused".into(),
+                Some(FailureCause::Refused),
+                Some("0.9.5".into()),
+            )
+            .write(&record)
+            .unwrap();
+        assert!(takeover.attempts().failed_attempt(&attempt).is_some());
     }
 
     #[test]

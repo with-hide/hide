@@ -26,6 +26,9 @@ pub(super) struct Takeover {
     /// A look has answered since the takeover was installed.
     answered: bool,
     moving: bool,
+    /// Bumped by each move press, so a look that started before it, and so
+    /// read the server the move replaces, is dropped when it answers.
+    epoch: u64,
     /// The connection state the last look was asked for.
     seen_state: Option<String>,
     /// The wizard was closed with the move unanswered (B9): it does not open
@@ -93,11 +96,14 @@ impl Runtime {
             return;
         }
         takeover.looking = true;
+        let epoch = takeover.epoch;
         let spawned = thread::Builder::new()
             .name("herdr-core-herdr-takeover-look".into())
             .spawn(move || {
                 let look = bounded_look(&worker.takeover, LOOK_WITHIN);
-                answer(&worker, |runtime| runtime.ingest_herdr_look(look));
+                answer(&worker, |runtime| {
+                    runtime.ingest_herdr_look_from(epoch, look)
+                });
             });
         if let Err(error) = spawned {
             self.ingest_herdr_look(Look::Unreadable {
@@ -108,8 +114,21 @@ impl Runtime {
     }
 
     pub(super) fn ingest_herdr_look(&mut self, look: Look) -> bool {
+        self.ingest_herdr_look_from(self.herdr_takeover.epoch, look)
+    }
+
+    /// A look's answer, dropped when a move was pressed after it started:
+    /// it read the server the move replaces, and would unlock the button or
+    /// take the step away while the move runs.
+    pub(super) fn ingest_herdr_look_from(&mut self, epoch: u64, look: Look) -> bool {
         let takeover = &mut self.herdr_takeover;
         takeover.looking = false;
+        if epoch != takeover.epoch {
+            if !takeover.moving && std::mem::take(&mut takeover.look_again) {
+                self.look_at_herdr_server();
+            }
+            return false;
+        }
         takeover.answered = true;
         let current = self.snapshot.status.herdr_takeover.clone();
         let next = match &look {
@@ -161,10 +180,20 @@ impl Runtime {
                     return refused(action, "this app cannot move Herdr");
                 };
                 self.herdr_takeover.moving = true;
+                self.herdr_takeover.epoch += 1;
                 let spawned = thread::Builder::new()
                     .name("herdr-core-herdr-takeover-move".into())
                     .spawn(move || {
-                        let moved = worker.takeover.hand_over();
+                        // A move that panics still ends, so the step is not
+                        // held on "Moving…" and looks resume.
+                        let moved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            worker.takeover.hand_over()
+                        }))
+                        .unwrap_or_else(|_| Moved::Failed {
+                            cause: crate::herdr_takeover::FailureCause::Unreadable,
+                            stage: "panic".into(),
+                            detail: "the move stopped unexpectedly".into(),
+                        });
                         answer(&worker, |runtime| runtime.ingest_herdr_move(moved));
                     });
                 if let Err(error) = spawned {
@@ -186,6 +215,7 @@ impl Runtime {
                     .contains(&shown.kind.as_str());
                 if !movable
                     || self.herdr_takeover.moving
+                    || shown.stage == "moved"
                     || !(shown.same_protocol || shown.stage == "failed")
                 {
                     return refused(action, "this server cannot be left for later");

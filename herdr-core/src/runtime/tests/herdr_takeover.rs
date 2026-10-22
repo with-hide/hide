@@ -265,3 +265,70 @@ fn a_browser_tabs_continue_leaves_the_herdr_step() {
     assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
     assert_eq!(takeover(&runtime)["stage"], "offered");
 }
+
+/// B3: a look that started before the press read the server the move
+/// replaces; its answer neither unlocks the button nor takes the step away,
+/// and a failure after it still shows.
+#[test]
+fn a_look_that_started_before_the_move_does_not_undo_it() {
+    let mut runtime = installed();
+    runtime.ingest_herdr_look(offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL));
+    report_here(&mut runtime, &first_run_pass());
+    assert!(act(&mut runtime, "move"));
+    let before_the_press = 0;
+    runtime.ingest_herdr_look_from(
+        before_the_press,
+        offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL),
+    );
+    assert_eq!(takeover(&runtime)["stage"], "moving");
+    runtime.ingest_herdr_look_from(before_the_press, Look::Nothing);
+    assert_eq!(takeover(&runtime)["stage"], "moving");
+    assert_eq!(step(&runtime), Some(FirstRunStep::Herdr));
+    runtime.ingest_herdr_move(Moved::Failed {
+        cause: FailureCause::Refused,
+        stage: "handoff".into(),
+        detail: "refused".into(),
+    });
+    assert_eq!(takeover(&runtime)["stage"], "failed");
+    assert_eq!(takeover(&runtime)["failure"], "refused");
+}
+
+/// D-17: a Herdr step a daemon saved before its look answered leaves for
+/// the agents once a later daemon's look finds nothing, so the wizard never
+/// sits on a step with nothing to draw.
+#[test]
+fn a_saved_herdr_step_goes_on_once_a_look_finds_nothing() {
+    let mut runtime = runtime();
+    report_here(&mut runtime, &first_run_pass());
+    runtime.snapshot.ui_state.first_run = Some(crate::model::FirstRun {
+        version: 1,
+        step: FirstRunStep::Herdr,
+    });
+    runtime.install_herdr_takeover(
+        Arc::new(StandIn {
+            look: Look::Nothing,
+            held: None,
+        }),
+        Weak::new(),
+        crate::handle::ChangeNotifier::noop(),
+    );
+    runtime.ingest_herdr_look(Look::Nothing);
+    assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
+}
+
+/// A moved step is left only by Continue, whatever the protocol.
+#[test]
+fn a_moved_step_cannot_be_left_for_later() {
+    let mut runtime = installed();
+    runtime.ingest_herdr_look(offer(OfferKind::Move, "0.9.1", PROTOCOL));
+    report_here(&mut runtime, &first_run_pass());
+    act(&mut runtime, "move");
+    runtime.ingest_herdr_move(Moved::Done {
+        from_pid: 41,
+        to_pid: 42,
+        elapsed_ms: 900,
+        path_herdr_behind: Some("0.8.2".into()),
+    });
+    assert!(!act(&mut runtime, "later"));
+    assert_eq!(takeover(&runtime)["stage"], "moved");
+}

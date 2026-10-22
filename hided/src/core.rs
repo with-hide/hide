@@ -870,7 +870,8 @@ fn owner_loop(
     });
     // Only a daemon running from a desktop package with that package's own
     // Herdr offers to move the operator's older server onto it (PRD
-    // herdr-takeover).
+    // herdr-takeover); any other installs one that finds nothing, so a
+    // Herdr step a packaged daemon saved still goes on.
     let takeover = crate::herdr_handoff::LocalTakeover::for_daemon(
         options.herdr_bin_path.as_deref().map(std::path::Path::new),
         options
@@ -901,9 +902,10 @@ fn owner_loop(
     core.on_change(move || {
         let _ = notify.send(());
     });
-    if let Some(takeover) = takeover {
-        core.set_herdr_takeover(Arc::new(takeover));
-    }
+    core.set_herdr_takeover(match takeover {
+        Some(takeover) => Arc::new(takeover),
+        None => Arc::new(crate::herdr_handoff::NoTakeover),
+    });
     let _ = ready.send(Ok(()));
     let mut _held_roots = hide_node::HeldRoots::default();
     while let Ok(command) = commands.recv() {
