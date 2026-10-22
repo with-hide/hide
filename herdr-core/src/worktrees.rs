@@ -283,6 +283,48 @@ impl GitWatch {
             .iter()
             .map(|project| project.root_path.clone())
             .collect();
+        let node = std::sync::Arc::clone(&self.node);
+        self.reconcile_with(requested_roots, || {
+            projects
+                .iter()
+                .take(GIT_WATCH_LIMIT)
+                .filter_map(|project| {
+                    crate::node_access::call_as::<Option<RepositoryDirs>>(
+                        node.as_ref(),
+                        Call::Repository {
+                            path: project.root_path.to_string_lossy().into_owned(),
+                        },
+                        REPOSITORY_TIMEOUT,
+                    )
+                    .ok()
+                    .flatten()
+                    .map(|repository| {
+                        (
+                            project.root_path.clone(),
+                            PathBuf::from(repository.common_dir),
+                        )
+                    })
+                })
+                .collect()
+        });
+    }
+
+    /// Watches `projects`, each with the common directory its own read
+    /// already named, so nothing is asked of the node to find them.
+    fn reconcile_known(&mut self, projects: BTreeMap<PathBuf, PathBuf>) {
+        let requested_roots: Vec<_> = projects.keys().cloned().collect();
+        self.reconcile_with(requested_roots, || {
+            projects.into_iter().take(GIT_WATCH_LIMIT).collect()
+        });
+    }
+
+    /// Follows the requested projects; `desired` names each one's common
+    /// directory, and is asked only when the requested set changed.
+    fn reconcile_with(
+        &mut self,
+        requested_roots: Vec<PathBuf>,
+        desired: impl FnOnce() -> BTreeMap<PathBuf, PathBuf>,
+    ) {
         let restart_due = self.subscription.is_none()
             && !self.registered.is_empty()
             && self.retry_at.is_some_and(|at| at <= Instant::now());
@@ -293,32 +335,13 @@ impl GitWatch {
             }
             return;
         }
+        let requested = requested_roots.len();
         self.requested_roots = requested_roots;
-        let desired: BTreeMap<PathBuf, PathBuf> = projects
-            .iter()
-            .take(GIT_WATCH_LIMIT)
-            .filter_map(|project| {
-                crate::node_access::call_as::<Option<RepositoryDirs>>(
-                    self.node.as_ref(),
-                    Call::Repository {
-                        path: project.root_path.to_string_lossy().into_owned(),
-                    },
-                    REPOSITORY_TIMEOUT,
-                )
-                .ok()
-                .flatten()
-                .map(|repository| {
-                    (
-                        project.root_path.clone(),
-                        PathBuf::from(repository.common_dir),
-                    )
-                })
-            })
-            .collect();
-        if projects.len() > GIT_WATCH_LIMIT {
+        let desired = desired();
+        if requested > GIT_WATCH_LIMIT {
             crate::diagnostic!(serde_json::json!({
                 "component": "worktrees", "kind": "git_watch.over_budget",
-                "projects": projects.len(), "cap": GIT_WATCH_LIMIT
+                "projects": requested, "cap": GIT_WATCH_LIMIT
             }));
         }
         let desired_common: BTreeSet<_> = desired.values().cloned().collect();
@@ -584,6 +607,65 @@ impl Drop for GitWatch {
                 return;
             }
         }
+    }
+}
+
+/// The Git watch on a connected device (PRD git-freshness D-08): the same
+/// `Call::GitWatch` over that device's link, following the repositories its
+/// worktree read found there, so a branch, worktree or fetched ref that moves
+/// on the device is read again by the device catalog without a reconnect.
+/// `crate::fetch::FetchPump` drives it off every lock; nothing here blocks.
+/// A device, its link, and the repositories its watch follows: each root
+/// with the common directory the device named for it.
+pub(crate) type DeviceWatchSet = (
+    String,
+    std::sync::Arc<dyn crate::node_access::NodeLink>,
+    BTreeMap<PathBuf, PathBuf>,
+);
+
+pub(crate) struct DeviceGitWatch {
+    link: std::sync::Arc<dyn crate::node_access::NodeLink>,
+    watch: GitWatch,
+}
+
+impl DeviceGitWatch {
+    pub(crate) fn new(link: std::sync::Arc<dyn crate::node_access::NodeLink>) -> Self {
+        Self {
+            watch: GitWatch::new(std::sync::Arc::clone(&link)),
+            link,
+        }
+    }
+
+    /// Whether this watch runs over `link`; a new connection needs a new one.
+    pub(crate) fn watches_over(
+        &self,
+        link: &std::sync::Arc<dyn crate::node_access::NodeLink>,
+    ) -> bool {
+        std::sync::Arc::ptr_eq(&self.link, link)
+    }
+
+    /// Follows `projects` (each root with the common directory the device
+    /// named for it) and answers the roots whose Git facts changed and have
+    /// been quiet for the debounce; every root after a lapse in cover.
+    pub(crate) fn changed(&mut self, projects: BTreeMap<PathBuf, PathBuf>) -> Vec<PathBuf> {
+        self.watch.reconcile_known(projects);
+        self.watch.settled()
+    }
+
+    /// Ends the watch while no renderer is attached (`GitWatch::rest`).
+    pub(crate) fn rest(&mut self) {
+        self.watch.rest();
+    }
+}
+
+#[cfg(test)]
+impl DeviceGitWatch {
+    /// The device has said it is watching, so no later change is missed.
+    pub(crate) fn watching(&self) -> bool {
+        self.watch
+            .subscription
+            .as_ref()
+            .is_some_and(|subscription| subscription.watching)
     }
 }
 

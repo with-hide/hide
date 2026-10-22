@@ -582,13 +582,14 @@ impl Runtime {
             }
         }
         let all = all || entry.reread;
+        entry.stale.retain(|root| roots.contains(root));
         if entry.in_flight.is_some() {
             entry.again |= all || roots.iter().any(|root| !entry.projects.contains_key(root));
             return false;
         }
         let wanted = roots
             .into_iter()
-            .filter(|root| all || !entry.projects.contains_key(root))
+            .filter(|root| all || !entry.projects.contains_key(root) || entry.stale.contains(root))
             .collect::<Vec<_>>();
         if wanted.is_empty() {
             return false;
@@ -628,6 +629,7 @@ impl Runtime {
         entry.in_flight = Some(generation);
         entry.again = false;
         entry.reread = false;
+        entry.stale.retain(|root| !wanted.contains(root));
         let Some(context) = self.worker_context.clone() else {
             let answer = ask_worktrees(channel.as_ref(), target, &wanted, &bases, notes);
             return self.ingest_device_worktrees(target, generation, answer);
@@ -717,12 +719,56 @@ impl Runtime {
         }
         entry.unavailable = failure;
         let again = std::mem::take(&mut entry.again);
+        let stale = !entry.stale.is_empty();
         self.advance_disk_sweep(Some(target));
         let mut changed = self.refresh_device_catalog(target);
-        if again {
-            changed |= self.request_device_worktrees(target, true);
+        // A change the device's Git watch saw during this read is read now.
+        if again || stale {
+            changed |= self.request_device_worktrees(target, again);
         }
         changed
+    }
+
+    /// Each connected device's repositories its Git watch follows, by the
+    /// common directory the device's own read named, with the device's
+    /// link; `None` while no window is attached, when the watches rest.
+    pub(crate) fn device_git_watch_sets(&self) -> Option<Vec<crate::worktrees::DeviceWatchSet>> {
+        if !self.ui_attached {
+            return None;
+        }
+        let mut sets: Vec<_> = self
+            .device_worktrees
+            .iter()
+            .filter_map(|(device, entry)| {
+                let (_, link) = self.linked_node(device).ok()?;
+                let projects: BTreeMap<PathBuf, PathBuf> = entry
+                    .projects
+                    .iter()
+                    .filter_map(|(root, project)| {
+                        Some((
+                            PathBuf::from(root),
+                            PathBuf::from(project.shared_git_path.as_ref()?),
+                        ))
+                    })
+                    .collect();
+                (!projects.is_empty()).then(|| (device.clone(), link, projects))
+            })
+            .collect();
+        sets.sort_by(|left, right| left.0.cmp(&right.0));
+        Some(sets)
+    }
+
+    /// The device's Git watch saw `roots` change: they are read again.
+    pub(crate) fn device_git_changed(&mut self, device: &str, roots: Vec<PathBuf>) -> bool {
+        let Some(entry) = self.device_worktrees.get_mut(device) else {
+            return false;
+        };
+        entry.stale.extend(
+            roots
+                .into_iter()
+                .map(|root| root.to_string_lossy().into_owned()),
+        );
+        self.request_device_worktrees(device, false)
     }
 
     /// A new helper connection answers afresh: a branch or a checkout may

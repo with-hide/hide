@@ -9,8 +9,15 @@
 //! ends when its node answers or the call's own bound
 //! (`worktrees::FETCH_TIMEOUT`) passes; the node stops Git at
 //! `worktrees::FETCH_TIME`.
+//!
+//! The same tick drives each connected device's Git watch
+//! (`worktrees::DeviceGitWatch`, D-08): a fetch there moves that device's
+//! refs, and so does a branch an agent switches or a worktree it adds, and
+//! the watch hands the repositories that changed to the device catalog to
+//! read again. With no window attached the watches rest, as the fetch does.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Mutex, Weak};
 use std::thread;
@@ -21,6 +28,7 @@ use hide_node_link::worktrees::{FETCH_TIMEOUT, FetchOutcome};
 
 use crate::handle::ChangeNotifier;
 use crate::runtime::{FetchJob, Runtime};
+use crate::worktrees::{DeviceGitWatch, DeviceWatchSet};
 
 const PUMP_TICK: Duration = Duration::from_secs(1);
 
@@ -39,6 +47,7 @@ impl FetchPump {
             .spawn(move || {
                 // The fetch out on each node, by device.
                 let mut running: BTreeMap<String, (FetchJob, Receiver<Answer>)> = BTreeMap::new();
+                let mut watches: BTreeMap<String, DeviceGitWatch> = BTreeMap::new();
                 while matches!(
                     receiver.recv_timeout(PUMP_TICK),
                     Err(mpsc::RecvTimeoutError::Timeout)
@@ -61,7 +70,7 @@ impl FetchPump {
                             false
                         }
                     });
-                    let Ok((jobs, changed)) = runtime.lock().map(|mut runtime| {
+                    let Ok((jobs, mut changed, watch_sets)) = runtime.lock().map(|mut runtime| {
                         let mut changed = false;
                         for (job, answer) in &ended {
                             changed |= runtime.ingest_fetch(job, answer.clone(), unix_ms());
@@ -70,10 +79,27 @@ impl FetchPump {
                             let before = runtime.published_checkout_header();
                             changed = runtime.refresh_checkout_header() != before;
                         }
-                        (runtime.due_fetches(Instant::now()), changed)
+                        (
+                            runtime.due_fetches(Instant::now()),
+                            changed,
+                            runtime.device_git_watch_sets(),
+                        )
                     }) else {
                         break;
                     };
+                    // Off the lock: a watch replaced or ended here waits a
+                    // bounded time for its thread.
+                    let moved = watch_devices(&mut watches, watch_sets);
+                    if !moved.is_empty() {
+                        let Ok(read) = runtime.lock().map(|mut runtime| {
+                            moved.into_iter().fold(false, |read, (device, roots)| {
+                                read | runtime.device_git_changed(&device, roots)
+                            })
+                        }) else {
+                            break;
+                        };
+                        changed |= read;
+                    }
                     drop(runtime);
                     if changed {
                         notifier.notify();
@@ -116,6 +142,34 @@ impl FetchPump {
             worker: Some(worker),
         })
     }
+}
+
+/// Brings the device Git watches to `sets` and answers each device's
+/// repositories that changed. A device no longer listed, or listed over a
+/// new link, loses its watch; `None` rests every watch.
+fn watch_devices(
+    watches: &mut BTreeMap<String, DeviceGitWatch>,
+    sets: Option<Vec<DeviceWatchSet>>,
+) -> Vec<(String, Vec<PathBuf>)> {
+    let Some(sets) = sets else {
+        watches.values_mut().for_each(DeviceGitWatch::rest);
+        return Vec::new();
+    };
+    watches.retain(|device, watch| {
+        sets.iter()
+            .any(|(listed, link, _)| listed == device && watch.watches_over(link))
+    });
+    let mut moved = Vec::new();
+    for (device, link, projects) in sets {
+        let roots = watches
+            .entry(device.clone())
+            .or_insert_with(|| DeviceGitWatch::new(link))
+            .changed(projects);
+        if !roots.is_empty() {
+            moved.push((device, roots));
+        }
+    }
+    moved
 }
 
 impl Drop for FetchPump {

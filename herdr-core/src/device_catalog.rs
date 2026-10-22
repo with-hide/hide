@@ -637,6 +637,8 @@ pub(crate) struct DeviceWorktrees {
     /// The next read covers every repository, because a new connection has
     /// not confirmed what the last one listed.
     pub reread: bool,
+    /// Repositories the device's Git watch saw change, read on the next read.
+    pub stale: BTreeSet<String>,
 }
 
 /// The Git repositories a device's grouped session shows, by main worktree.

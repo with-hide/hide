@@ -201,7 +201,8 @@ use crate::error::HostError;
 /// Older helpers could replace the selected server or reject its observation.
 /// 52: the core fetches a node's repositories in the background
 /// (`Call::FetchRemote`), reads a header's incoming and unpushed commits, and
-/// names GitHub's default branch to the worktree read. An older helper cannot
+/// names GitHub's default branch to the worktree read; the core also keeps a
+/// `Call::GitWatch` open on each connected device. An older helper cannot
 /// fetch without prompting and is upgraded at Hello.
 pub const PROTOCOL_VERSION: u32 = 52;
 

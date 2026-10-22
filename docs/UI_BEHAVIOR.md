@@ -959,6 +959,7 @@ An agent Hide AI started for a home (PRD hide-ai-work-home) is a task only while
 The core derives the tasks from facts it already holds, stores none of them, and rebuilds them only when their inputs change, so a new agent, an ended one or a new pull request changes the task in place.
 A fork is a root of its own and so a task of its own.
 A task belongs to the device its root agent runs on.
+A connected device's branches, worktrees and fetched refs follow within seconds of changing there, through that device's own Git watch, without a reconnect (PRD git-freshness B19); while the device is not connected its rows keep their last values dimmed, and a reconnect reads them afresh (B21).
 The Overview reads the same tasks for the Projects tab's `지금` counts and the order of Backlog's sections.
 
 ### Work

@@ -595,3 +595,99 @@ fn scoped_remote_base_reaches_real_git_facts_and_obsolete_read_is_discarded() {
     });
     assert_eq!(host.bases.lock().unwrap().last(), Some(&None));
 }
+
+/// The fixture device, whose Git watch streams its reports as a helper's
+/// does; the documents double answers every other call.
+struct Watching(Arc<FakeDevice>);
+
+impl crate::node_access::NodeLink for Watching {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: Duration,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        crate::node_access::NodeLink::call(self.0.as_ref(), call, timeout)
+    }
+
+    fn call_with_progress(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: Duration,
+        progress: &mut dyn FnMut(serde_json::Value) -> bool,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        hide_node::Local::of_process().call_with_progress(call, timeout, progress)
+    }
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // polls the watch between observations, bounded by a deadline
+fn a_branch_made_on_a_device_is_read_again_without_a_reconnect() {
+    let repo = repo();
+    let shared = device_runtime_with_host(&repo, Arc::new(Watching(FakeDevice::new())));
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .push(crate::model::DeviceRegistration {
+                id: DEVICE.into(),
+                label: "Fixture".into(),
+                origin: crate::model::LinkOrigin::Inbound,
+                herdr_socket_path: None,
+                herdr_session: None,
+                host_consent: None,
+            });
+    }
+    wait(&shared, "the device's first worktree read", |runtime| {
+        runtime.device_worktrees[DEVICE]
+            .projects
+            .contains_key(&repo.root)
+    });
+    // No window, no watch.
+    shared.lock().unwrap().ui_attached = false;
+    assert!(shared.lock().unwrap().device_git_watch_sets().is_none());
+    shared.lock().unwrap().ui_attached = true;
+    let mut sets = shared.lock().unwrap().device_git_watch_sets().unwrap();
+    assert_eq!(sets.len(), 1);
+    let (device, link, projects) = sets.remove(0);
+    assert_eq!(device, DEVICE);
+    assert_eq!(
+        projects.keys().collect::<Vec<_>>(),
+        [&std::path::PathBuf::from(&repo.root)]
+    );
+    let mut watch = crate::worktrees::DeviceGitWatch::new(link);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !watch.watching() {
+        assert!(watch.changed(projects.clone()).is_empty());
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the device never watched"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    git(&repo.root, &["branch", "made-there"]);
+    let roots = loop {
+        let roots = watch.changed(projects.clone());
+        if !roots.is_empty() {
+            break roots;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the change never arrived"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(roots, [std::path::PathBuf::from(&repo.root)]);
+    shared.lock().unwrap().device_git_changed(DEVICE, roots);
+    wait(
+        &shared,
+        "the device's catalog to read the new branch",
+        |runtime| {
+            runtime.device_worktrees[DEVICE].projects[&repo.root]
+                .branches
+                .iter()
+                .any(|branch| branch == "made-there")
+        },
+    );
+}
