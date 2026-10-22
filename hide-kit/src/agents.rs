@@ -456,9 +456,12 @@ pub(crate) fn observe_skill(dir: SkillDir, home: &Path) -> SkillObserved {
 /// folder that lacks a stub another of Hide's is beside (one written before
 /// that stub existed) is stale, and one where the operator's file holds a
 /// stub's name is foreign once Hide's others are current. A retired stub
-/// Hide wrote makes the folder stale too, so the next pass takes it out and,
-/// in a folder an earlier build filled with only those, writes the current
-/// stub, which an unrecorded absence alone would not.
+/// Hide wrote and nobody edited makes the folder stale too, so the next pass
+/// takes it out and, in a folder an earlier build filled with only those,
+/// writes the current stub, which a recorded absence alone would not. An
+/// edited one is the operator's and decides nothing: a recorded folder that
+/// holds only edited ones reads as the operator's removal, which Reinstall
+/// undoes, so a `hide` they deleted is not written back on every pass.
 pub(crate) fn observe_skill_in(root: &Path) -> SkillObserved {
     let observed = combine(SKILLS.map(|skill| skill.observe_in(root)));
     if matches!(observed, SkillObserved::Unreadable(_)) {
@@ -471,9 +474,7 @@ pub(crate) fn observe_skill_in(root: &Path) -> SkillObserved {
             Err(reason) => return SkillObserved::Unreadable(reason),
         }
     }
-    if retired.contains(&RetiredObserved::Unedited)
-        || (observed == SkillObserved::Missing && retired.contains(&RetiredObserved::Edited))
-    {
+    if retired.contains(&RetiredObserved::Unedited) {
         SkillObserved::Stale
     } else {
         observed

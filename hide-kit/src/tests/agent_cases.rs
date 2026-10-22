@@ -269,6 +269,34 @@ fn an_old_stub_the_operator_edited_stays_and_the_rest_go() {
 }
 
 #[test]
+fn a_recorded_folder_with_only_edited_old_stubs_waits_for_reinstall() {
+    let fixture = Fixture::new();
+    let root = earlier_build_folder(&fixture);
+    for name in RETIRED_SKILLS.map(|skill| skill.name) {
+        let path = root.join(name).join("SKILL.md");
+        let edited = std::fs::read_to_string(&path).unwrap() + "Mine now.\n";
+        std::fs::write(&path, edited).unwrap();
+    }
+
+    // The operator's edits decide nothing, and a recorded folder without
+    // `hide` reads as their removal: no pass writes it back.
+    let report = apply(&fixture.target, &Scope::automatic());
+    assert_eq!(agent(&report, "grok").skill.state, ComponentState::Removed);
+    assert!(!root.join("hide").exists());
+
+    // Reinstall does, and the edited files stay.
+    let report = apply(&fixture.target, &Scope::agents(["grok"], []));
+    assert_eq!(
+        agent(&report, "grok").skill.state,
+        ComponentState::Installed
+    );
+    assert!(root.join("hide/SKILL.md").is_file());
+    for name in RETIRED_SKILLS.map(|skill| skill.name) {
+        assert!(root.join(name).join("SKILL.md").is_file(), "{name}");
+    }
+}
+
+#[test]
 fn switching_every_reader_off_takes_an_old_stub_out_too() {
     let fixture = Fixture::new();
     let root = earlier_build_folder(&fixture);
