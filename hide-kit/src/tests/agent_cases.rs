@@ -2,7 +2,7 @@
 //! the skill stub and the guidance hooks, against a private HOME.
 
 use super::*;
-use crate::agents::{ADAPTERS, CONDUCTOR_SKILL, GUIDE_SKILL, RETIRED_SKILLS, SKILLS};
+use crate::agents::{ADAPTERS, CONDUCTOR_SKILL, GUIDE_SKILL, PLAN_SKILL, RETIRED_SKILLS, SKILLS};
 
 fn agent<'a>(report: &'a KitReport, id: &str) -> &'a AgentReport {
     report
@@ -202,7 +202,9 @@ fn earlier_build_folder(fixture: &Fixture) -> PathBuf {
     install(fixture, "grok", ".grok");
     apply(&fixture.target, &Scope::agents(["grok"], []));
     let root = fixture.home().join(".agents/skills");
+    // That build wrote neither the guide nor the plan's stub.
     std::fs::remove_dir_all(root.join(GUIDE_SKILL.name)).unwrap();
+    std::fs::remove_dir_all(root.join(PLAN_SKILL.name)).unwrap();
     // The files exactly as that build wrote them.
     std::fs::create_dir_all(root.join("hide-browser")).unwrap();
     std::fs::write(root.join("hide-browser/SKILL.md"), "---\nname: hide-browser\ndescription: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nRun `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n").unwrap();
@@ -252,6 +254,13 @@ fn an_earlier_builds_two_stubs_give_way_to_the_current_ones() {
     );
     assert!(CONDUCTOR_SKILL.text().contains("run `hide mission help`"));
     assert!(CONDUCTOR_SKILL.text().contains("<!-- hide-skill@2:"));
+    // The plan's stub is written beside them and sends the agent to the
+    // help that owns the plan's commands.
+    assert_eq!(
+        std::fs::read_to_string(root.join("hide-plan/SKILL.md")).unwrap(),
+        PLAN_SKILL.text()
+    );
+    assert!(PLAN_SKILL.text().contains("run `hide plan help`"));
 }
 
 #[test]
