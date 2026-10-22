@@ -2,11 +2,11 @@ import type { ComponentProps } from "react";
 import { cn } from "../../lib/utils";
 
 /**
- * The number a tab or an agent row carries while a modifier hold reveals it
+ * The number an agent row or a device tile carries while a modifier hold reveals it
  * (PRD electron-digit-shortcuts-hints D-03, B5, B7): a popover-colored cap
  * with a border, a small shadow and one mono digit, floating at the top
  * right of the item it numbers. It is absolutely positioned, so it never
- * moves the tab's title, a Rename field, a row's time or its chevron, and
+ * moves a row's title, its time or its chevron, or a tile's marks, and
  * it takes no pointer, so a click lands on what it covers. The digit is
  * decoration for the chord the sheet already names, so it is hidden from
  * assistive technology.

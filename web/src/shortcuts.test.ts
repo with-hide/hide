@@ -113,8 +113,7 @@ describe("shortcut registry", () => {
       shortcuts: "⌘/",
       // The area commands have no chord until the operator binds one (PRD cmdk-navigation D-05).
       ...Object.fromEntries(AREA_COMMANDS.map((id) => [id, ""])),
-      // ⌃n selects the nth tab, ⌥n the nth Agents row and ⌘n the nth device (electron-digit-shortcuts-hints D-02).
-      ...Object.fromEntries(DIGITS.map((digit) => [`select_tab_${digit}`, `⌃${digit}`])),
+      // ⌥n selects the nth Agents row and ⌘n the nth device (electron-digit-shortcuts-hints D-02).
       ...Object.fromEntries(DIGITS.map((digit) => [`select_agent_${digit}`, `⌥${digit}`])),
       ...Object.fromEntries(DIGITS.map((digit) => [`select_device_${digit}`, `⌘${digit}`])),
     };
@@ -124,18 +123,17 @@ describe("shortcut registry", () => {
   describe("numbered commands (electron-digit-shortcuts-hints D-02, B3, B4)", () => {
     it("holds nine of each family, on the desktop host only", () => {
       const numbered = REGISTRY.filter((command) => numberedCommand(command.id));
-      expect(numbered).toHaveLength(27);
+      expect(numbered).toHaveLength(18);
       for (const command of numbered) expect(command.browser, command.id).toBeNull();
-      expect(numberedCommand("select_tab_3")).toEqual({ family: "tabs", number: 3 });
       expect(numberedCommand("select_agent_9")).toEqual({ family: "agents", number: 9 });
       expect(numberedCommand("select_device_1")).toEqual({ family: "devices", number: 1 });
       expect(numberedCommand("new_tab")).toBeNull();
-      expect(isNumberedCommand("select_tab_1")).toBe(true);
+      expect(isNumberedCommand("select_device_1")).toBe(true);
       expect(isNumberedCommand("text_reset")).toBe(false);
     });
 
-    it("answers ⌃n, ⌥n and ⌘n in the desktop app and nothing in a browser", () => {
-      expect(matchHost(press("Digit2", { ctrl: true }), REGISTRY, "electron")?.id).toBe("select_tab_2");
+    it("answers ⌥n and ⌘n in the desktop app, leaves ⌃n to the terminal, and answers nothing in a browser", () => {
+      expect(matchHost(press("Digit2", { ctrl: true }), REGISTRY, "electron")).toBeNull();
       expect(matchHost(press("Digit7", { alt: true }), REGISTRY, "electron")?.id).toBe("select_agent_7");
       expect(matchHost(press("Digit2", { meta: true }), REGISTRY, "electron")?.id).toBe("select_device_2");
       expect(matchHost(press("Digit2", { meta: true, shift: true }), REGISTRY, "electron")).toBeNull();
@@ -145,22 +143,17 @@ describe("shortcut registry", () => {
     });
 
     it("names each family's shared modifiers per host, for the hold hint", () => {
-      expect(familyModifiers("tabs", REGISTRY, "electron")).toEqual({ meta: false, alt: false, shift: false, ctrl: true });
       expect(familyModifiers("agents", REGISTRY, "electron")).toEqual({ meta: false, alt: true, shift: false, ctrl: false });
       expect(familyModifiers("devices", REGISTRY, "electron")).toEqual({ meta: true, alt: false, shift: false, ctrl: false });
-      expect(familyModifiers("tabs", REGISTRY, "browser")).toBeNull();
       expect(familyModifiers("devices", REGISTRY, "browser")).toBeNull();
       expect(familyModifiers("agents", REGISTRY, "browser")).toBeNull();
     });
 
     it("writes the held modifiers as each system presses them", () => {
-      const tabs = familyModifiers("tabs", REGISTRY, "electron")!;
       const agents = familyModifiers("agents", REGISTRY, "electron")!;
-      expect(modifierLabel(tabs, "mac")).toBe("⌃");
       expect(modifierLabel(agents, "mac")).toBe("⌥");
       expect(modifierLabel(familyModifiers("devices", REGISTRY, "electron")!, "mac")).toBe("⌘");
       const pcRegistry = systemRegistry("pc");
-      expect(modifierLabel(familyModifiers("tabs", pcRegistry, "electron")!, "pc")).toBe("Ctrl");
       expect(modifierLabel(familyModifiers("devices", pcRegistry, "electron")!, "pc")).toBe("Ctrl+Shift");
       expect(modifierLabel(familyModifiers("agents", pcRegistry, "electron")!, "pc")).toBe("Alt");
     });
@@ -174,12 +167,10 @@ describe("shortcut registry", () => {
     });
 
     it("folds each family into one sheet row with its range, absent in a browser", () => {
-      const tabs = sheetRows("Tabs", REGISTRY, "electron", "mac");
-      expect(tabs.map((row) => row.id)).toEqual(["new_tab", "close_tab", "reopen_closed_tab", "select_tab_1"]);
-      expect(tabs.at(-1)).toMatchObject({ title: "Select tab 1-9", chord: "⌃1 … ⌃9" });
+      expect(sheetRows("Tabs", REGISTRY, "electron", "mac").map((row) => row.id)).toEqual(["new_tab", "close_tab", "reopen_closed_tab"]);
       expect(sheetRows("Navigate", REGISTRY, "electron", "mac").find((row) => row.id === "select_agent_1")).toMatchObject({ title: "Select agent 1-9", chord: "⌥1 … ⌥9" });
       expect(sheetRows("Navigate", REGISTRY, "electron", "mac").find((row) => row.id === "select_device_1")).toMatchObject({ title: "Select device 1-9", chord: "⌘1 … ⌘9" });
-      expect(sheetRows("Tabs", REGISTRY, "browser", "mac").at(-1)).toMatchObject({ id: "select_tab_1", chord: null });
+      expect(sheetRows("Navigate", REGISTRY, "browser", "mac").find((row) => row.id === "select_device_1")).toMatchObject({ chord: null });
       expect(sheetRows("Panes", REGISTRY, "browser", "mac").find((row) => row.id === "close_pane")).toMatchObject({ chord: "⌥⇧W", moved: true, movedFrom: "⇧⌘W" });
     });
   });
@@ -460,14 +451,13 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
       settings: "Ctrl+Shift+,",
       shortcuts: "Ctrl+Shift+/",
       ...Object.fromEntries(AREA_COMMANDS.map((id) => [id, ""])),
-      ...Object.fromEntries(DIGITS.map((digit) => [`select_tab_${digit}`, `Ctrl+${digit}`])),
       ...Object.fromEntries(DIGITS.map((digit) => [`select_agent_${digit}`, `Alt+${digit}`])),
       ...Object.fromEntries(DIGITS.map((digit) => [`select_device_${digit}`, `Ctrl+Shift+${digit}`])),
     };
     expect(Object.fromEntries(pc.map((command) => [command.id, displayCommand(command.id, "electron", pc, "pc")]))).toEqual(pcSet);
   });
 
-  it("leaves every plain Ctrl key to the terminal but text size, Ctrl+Tab, the tab digits and the tree's own clipboard", () => {
+  it("leaves every plain Ctrl key to the terminal but text size, Ctrl+Tab and the tree's own clipboard", () => {
     for (const host of ["browser", "electron"] as const) {
       // A command with a passthrough is answered by the Explorer alone while it holds the keyboard, so a terminal still gets its Ctrl+C, X and V.
       const plainCtrl = pc
@@ -475,7 +465,7 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
         .map((command) => (host === "electron" ? command.electron : command.browser))
         .filter((chord) => chord && chord.ctrl && !chord.shift && !chord.alt && !chord.meta)
         .map((chord) => chord!.code);
-      expect(new Set(plainCtrl), host).toEqual(new Set(host === "electron" ? ["Equal", "Minus", "Digit0", "Tab", ...DIGITS.map((digit) => `Digit${digit}`)] : ["Equal", "Minus", "Digit0"]));
+      expect(new Set(plainCtrl), host).toEqual(new Set(host === "electron" ? ["Equal", "Minus", "Digit0", "Tab"] : ["Equal", "Minus", "Digit0"]));
     }
     expect(pc.some((command) => command.electron?.meta || command.browser?.meta)).toBe(false);
   });
@@ -513,7 +503,6 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     // Every other browser chord is the desktop chord.
     const differs = pc.filter((command) => command.browser && command.electron && !command.moved && displayChord(command.browser, "pc") !== displayChord(command.electron, "pc"));
     expect(differs.map((command) => command.id)).toEqual([]);
-    expect(sheetRows("Tabs", pc, "electron", "pc").at(-1)).toMatchObject({ title: "Select tab 1-9", chord: "Ctrl+1 … Ctrl+9" });
     expect(sheetRows("Navigate", pc, "electron", "pc").find((row) => row.id === "select_device_1")).toMatchObject({ chord: "Ctrl+Shift+1 … Ctrl+Shift+9" });
   });
 
@@ -524,7 +513,7 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     expect(matchHost(pcPress("KeyT", { ctrl: true, shift: true, alt: true }), pc, "browser")?.id).toBe("reopen_closed_tab");
     expect(matchHost(pcPress("Backquote", { ctrl: true, shift: true, alt: true }), pc, "electron")?.id).toBe("previous_recent_project");
     expect(matchHost(pcPress("Digit3", { ctrl: true, shift: true }), pc, "electron")?.id).toBe("select_device_3");
-    expect(matchHost(pcPress("Digit3", { ctrl: true }), pc, "electron")?.id).toBe("select_tab_3");
+    expect(matchHost(pcPress("Digit3", { ctrl: true }), pc, "electron")).toBeNull();
     expect(matchHost(pcPress("Backquote", { ctrl: true, shift: true }), pc, "electron")?.id).toBe("recent_project");
     expect(matchHost(pcPress("KeyK", { ctrl: true, shift: true }), pc, "browser")?.id).toBe("search");
     for (const code of ["KeyC", "KeyR", "KeyW", "KeyK", "KeyT", "KeyD"]) expect(matchHost(pcPress(code, { ctrl: true }), pc, "electron"), code).toBeNull();
@@ -548,9 +537,8 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     for (const host of ["electron", "browser"] as const) {
       for (const index of [1, 2, 3, 4]) expect(matchHost({ code: `Digit${index}`, metaKey: true, altKey: true, shiftKey: false, ctrlKey: false }, REGISTRY, host), `${host} ⌥⌘${index}`).toBeNull();
     }
-    // Alt+n still selects the nth agent, Ctrl+n the nth tab and Ctrl+Shift+n the nth device.
+    // Alt+n still selects the nth agent, and Ctrl+Shift+n the nth device.
     expect(matchHost(pcPress("Digit1", { alt: true }), pc, "electron")?.id).toBe("select_agent_1");
-    expect(matchHost(pcPress("Digit1", { ctrl: true }), pc, "electron")?.id).toBe("select_tab_1");
     expect(matchHost(pcPress("Digit1", { ctrl: true, shift: true }), pc, "electron")?.id).toBe("select_device_1");
   });
 

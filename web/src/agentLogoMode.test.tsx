@@ -19,7 +19,7 @@ afterEach(() => {
 it.each([
   [undefined, null, false],
   ["hidden", null, false],
-  ["hidden", "tabs", false],
+  ["hidden", "devices", false],
   ["hidden", "agents", true],
   ["shown", null, true],
   ["shown", "agents", true],
@@ -50,9 +50,9 @@ it("draws the provider logo when shown, with the owl as its badge on a row that 
   expect(mark("sidebar")).toContain("data-hide-ai-badge");
 });
 
-it("draws the logo while the Agents hold is revealed and not for the tabs hold", () => {
+it("draws the logo while the Agents hold is revealed and not for the devices hold", () => {
   withMode("hidden");
-  useUiStore.getState().setHint("tabs");
+  useUiStore.getState().setHint("devices");
   expect(mark()).toBe("");
   useUiStore.getState().setHint("agents");
   expect(mark()).toContain('data-agent-mark="claude"');

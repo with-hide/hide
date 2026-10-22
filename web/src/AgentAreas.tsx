@@ -13,8 +13,6 @@ import { RelationStatus } from "./PaneRelations";
 import { commandLabel } from "./shortcutLabels";
 import { localDeviceId, type Checkout } from "./snapshot";
 import { useShellStore } from "./store";
-import { numberOf, numberedTabs } from "./numbering";
-import { useUiStore } from "./ui";
 import { AgentDraftTab, AgentTab } from "./TabBar";
 import { AgentGroupSelector } from "./AgentGroupControls";
 import { AgentTabStart } from "./AgentTabStart";
@@ -34,7 +32,6 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
   const [renaming, setRenaming] = useState<string | null>(null);
   const startDrafts = useInlineStarts((state) => state.drafts);
   const saved = useShellStore((s) => workspaceViewOf(s.rest)?.agent_layout);
-  const numbered = useUiStore((s) => s.hint === "tabs");
   const owner = useKeyboardOwner();
   const entries = agentEntries(checkout);
   const paneLayouts = useShellStore((s) => s.rest?.pane_layouts);
@@ -62,7 +59,6 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
     if (geometry.zoomed) return [geometry.focused_pane_id];
     return checkout.tabs.find(tab => tab.id === tabId)?.panes.map(pane => pane.id) ?? [];
   });
-  const numbers = numbered ? numberedTabs(checkout, layout) : null;
   const workspace = { device_id: device, path: checkout.path };
   const isDraft = (id: string) => layout.drafts?.includes(id) ?? false;
   const groupName = layout.groups?.find((group) => group.id === (layout.group_id ?? null))?.name ?? t("groups.ungrouped");
@@ -87,9 +83,9 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
       return id ? { id } : null;
     },
     tab: (item, interaction) => {
-      if (isDraft(item.id)) return <AgentDraftTab id={item.id} number={numbers ? numberOf(numbers, item.id) : null} interaction={interaction} actions={actions} />;
+      if (isDraft(item.id)) return <AgentDraftTab id={item.id} interaction={interaction} actions={actions} />;
       const entry = entries.find((row) => row.source_id === item.id);
-      return entry ? <AgentTab number={numbers ? numberOf(numbers, item.id) : null} entry={entry} checkout={checkout} renaming={renaming === item.id} onCancelRename={() => setRenaming(null)} interaction={interaction} actions={actions} /> : null;
+      return entry ? <AgentTab entry={entry} checkout={checkout} renaming={renaming === item.id} onCancelRename={() => setRenaming(null)} interaction={interaction} actions={actions} /> : null;
     },
     body: (item, area) => isDraft(item.id) ? startForm(item.id, area.id) : <div className="relative flex min-h-0 flex-1 flex-col">
       {(() => {

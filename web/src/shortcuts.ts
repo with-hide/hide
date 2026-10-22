@@ -17,9 +17,8 @@
 // operator's fingers know.
 //
 // The numbered commands (PRD electron-digit-shortcuts-hints D-02) are the
-// desktop app's ⌃1-9 (the nth tab of the strip in front), ⌥1-9 (the nth
-// row the sidebar's Agents list draws) and ⌘1-9 (the nth tile of the device
-// rail). Chrome keeps ⌘1-9 for its own tabs
+// desktop app's ⌥1-9 (the nth row the sidebar's Agents list draws) and ⌘1-9
+// (the nth tile of the device rail). Chrome keeps ⌘1-9 for its own tabs
 // and a page cannot claim ⌥-digits reliably either, so the browser column has
 // none: the sheet says so and nothing is intercepted there. The number itself
 // is the screen order at the moment of the press, assigned by the web shell
@@ -191,23 +190,22 @@ const LANE_TOOL_CHORDS: Record<LaneToolCommandId, { browser: Chord | null; elect
 export type Digit = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 export const DIGITS: readonly Digit[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-/** What a numbered chord selects: a tab of the strip in front, a row of the Agents list, or a tile of the device rail. */
-export type NumberedFamily = "tabs" | "agents" | "devices";
-export type NumberedCommandId = `select_tab_${Digit}` | `select_agent_${Digit}` | `select_device_${Digit}`;
+/** What a numbered chord selects: a row of the Agents list, or a tile of the device rail. */
+export type NumberedFamily = "agents" | "devices";
+export type NumberedCommandId = `select_agent_${Digit}` | `select_device_${Digit}`;
 
 type NumberedFamilySpec = {
   family: NumberedFamily;
-  prefix: "select_tab" | "select_agent" | "select_device";
+  prefix: "select_agent" | "select_device";
   title: string;
   group: Command["group"];
   /** The modifiers every chord of the family shares on the desktop host; the hold hint reveals the family on exactly these. */
   modifiers: Omit<Chord, "code">;
 };
 
-// ⌘ is the device's, the widest move, and ⌃ the tab's, beside ⌃⇥'s recent
-// tab cycle; ⌥ stays the Agents list's.
+// ⌘ is the device's and ⌥ the Agents list's. A tab has no number: ⌃ would
+// take control bytes from the terminal, and ⌃⇥ already steps through tabs.
 export const NUMBERED_FAMILIES: readonly NumberedFamilySpec[] = [
-  { family: "tabs", prefix: "select_tab", title: "Select tab", group: "Tabs", modifiers: { ctrl: true } },
   { family: "agents", prefix: "select_agent", title: "Select agent", group: "Navigate", modifiers: { alt: true } },
   { family: "devices", prefix: "select_device", title: "Select device", group: "Navigate", modifiers: { meta: true } },
 ];
@@ -225,7 +223,7 @@ function numberedEntries(spec: NumberedFamilySpec): Command[] {
 
 /** The family and number a command id names, or null for every other command. */
 export function numberedCommand(id: CommandId): { family: NumberedFamily; number: Digit } | null {
-  const match = /^(select_tab|select_agent|select_device)_([1-9])$/.exec(id);
+  const match = /^(select_agent|select_device)_([1-9])$/.exec(id);
   if (!match) return null;
   const spec = NUMBERED_FAMILIES.find((row) => row.prefix === match[1]);
   return spec ? { family: spec.family, number: Number(match[2]) as Digit } : null;
@@ -255,7 +253,6 @@ export const REGISTRY: readonly Command[] = [
   { id: "new_tab", title: "New tab", group: "Tabs", browser: { code: "KeyT", alt: true }, electron: { code: "KeyT", meta: true }, moved: true },
   { id: "close_tab", title: "Close focused view or pane", group: "Tabs", browser: { code: "KeyW", alt: true }, electron: { code: "KeyW", meta: true }, moved: true },
   { id: "reopen_closed_tab", title: "Reopen closed tab", group: "Tabs", browser: { code: "KeyT", alt: true, shift: true }, electron: { code: "KeyT", meta: true, shift: true }, moved: true },
-  ...numberedEntries(NUMBERED_FAMILIES[0]!),
   { id: "new_workspace", title: "Add project", group: "Navigate", browser: null, electron: { code: "KeyN", meta: true, shift: true }, moved: false },
   { id: "start_agent", title: "Start agent", group: "Navigate", browser: null, electron: { code: "KeyN", meta: true }, moved: false },
   { id: "recent_area_tab", title: "Next recent tab", group: "Navigate", browser: { code: "Backquote", alt: true }, electron: { code: "Tab", ctrl: true }, moved: true },
@@ -264,8 +261,8 @@ export const REGISTRY: readonly Command[] = [
   { id: "previous_recent_panel", title: "Previous panel (all projects)", group: "Navigate", browser: null, electron: null, moved: false },
   { id: "recent_project", title: "Next recent project", group: "Navigate", browser: { code: "Tab", alt: true }, electron: { code: "Tab", alt: true }, moved: false },
   { id: "previous_recent_project", title: "Previous recent project", group: "Navigate", browser: { code: "Tab", alt: true, shift: true }, electron: { code: "Tab", alt: true, shift: true }, moved: false },
+  ...numberedEntries(NUMBERED_FAMILIES[0]!),
   ...numberedEntries(NUMBERED_FAMILIES[1]!),
-  ...numberedEntries(NUMBERED_FAMILIES[2]!),
   { id: "search", title: "Search", group: "Navigate", browser: { code: "KeyK", meta: true }, electron: { code: "KeyK", meta: true }, moved: false },
   { id: "open_file", title: "Open file", group: "Navigate", browser: { code: "KeyP", meta: true }, electron: { code: "KeyP", meta: true }, moved: false },
   { id: "toggle_left_sidebar", title: "Toggle left sidebar", group: "Panels", browser: { code: "KeyB", meta: true }, electron: { code: "KeyB", meta: true }, moved: false },
@@ -592,7 +589,7 @@ export function serializeMacosChord(chord: Chord): string | null {
 }
 
 /**
- * Chords macOS or the app keeps on the desktop host. ⌘1-9 and ⌃1-9 are not here: the
+ * Chords macOS or the app keeps on the desktop host. ⌘1-9 are not here: the
  * registry's own numbered commands hold them, so a pane chord bound onto one
  * is refused as that command's, by name.
  */
@@ -842,7 +839,7 @@ export type SheetRow = { id: CommandId; title: string; chord: string | null; mov
 
 /**
  * The sheet's rows for `group` on `host`, in registry order, with each
- * numbered family folded into one row ("Select tab 1-9", "⌘1 … ⌘9"), or a
+ * numbered family folded into one row ("Select device 1-9", "⌘1 … ⌘9"), or a
  * null chord where the host has none (B3, B4). A moved browser row names the
  * desktop chord Chrome keeps.
  */

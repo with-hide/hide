@@ -46,24 +46,23 @@ describe("the hold hint state (electron-digit-shortcuts-hints D-03, D-04)", () =
   });
 
   it("names the family the held modifiers select, on the host that has it", () => {
-    const tabs = advanceHint(holdModifiers(idleHint(), { ...NO_MODIFIERS, ctrl: true }, 0), HINT_DELAY_MS);
+    const ctrl = advanceHint(holdModifiers(idleHint(), { ...NO_MODIFIERS, ctrl: true }, 0), HINT_DELAY_MS);
     const agents = advanceHint(holdModifiers(idleHint(), alt, 0), HINT_DELAY_MS);
     const devices = advanceHint(holdModifiers(idleHint(), meta, 0), HINT_DELAY_MS);
-    expect(revealedFamily(tabs, REGISTRY, "electron")).toBe("tabs");
+    expect(revealedFamily(ctrl, REGISTRY, "electron")).toBeNull();
     expect(revealedFamily(agents, REGISTRY, "electron")).toBe("agents");
     expect(revealedFamily(devices, REGISTRY, "electron")).toBe("devices");
-    expect(revealedFamily(tabs, REGISTRY, "browser")).toBeNull();
     expect(revealedFamily(devices, REGISTRY, "browser")).toBeNull();
     expect(revealedFamily(agents, REGISTRY, "browser")).toBeNull();
     expect(revealedFamily(holdModifiers(idleHint(), meta, 0), REGISTRY, "electron")).toBeNull();
   });
 
-  it("reveals the tab numbers on a held Ctrl and the device numbers on a held Ctrl+Shift on Windows and Linux", () => {
+  it("reveals the device numbers on a held Ctrl+Shift on Windows and Linux, and nothing on Ctrl alone", () => {
     const pc = systemRegistry("pc");
     const held = (modifiers: Modifiers) => advanceHint(holdModifiers(idleHint(), modifiers, 0), HINT_DELAY_MS);
     expect(revealedFamily(held({ ...NO_MODIFIERS, ctrl: true, shift: true }), pc, "electron")).toBe("devices");
     expect(revealedFamily(held(alt), pc, "electron")).toBe("agents");
-    expect(revealedFamily(held({ ...NO_MODIFIERS, ctrl: true }), pc, "electron")).toBe("tabs");
+    expect(revealedFamily(held({ ...NO_MODIFIERS, ctrl: true }), pc, "electron")).toBeNull();
     expect(revealedFamily(held(meta), pc, "electron")).toBeNull();
   });
 

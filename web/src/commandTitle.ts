@@ -6,8 +6,7 @@ import type { TFunction } from "i18next";
 import { isNumberedCommand, numberedCommand, type CommandId, type NumberedFamily } from "./shortcuts";
 
 /** The title key of each numbered family, read with its number or its range. */
-export const FAMILY_TITLE: Readonly<Record<NumberedFamily, "commands.select_tab" | "commands.select_agent" | "commands.select_device">> = {
-  tabs: "commands.select_tab",
+export const FAMILY_TITLE: Readonly<Record<NumberedFamily, "commands.select_agent" | "commands.select_device">> = {
   agents: "commands.select_agent",
   devices: "commands.select_device",
 };

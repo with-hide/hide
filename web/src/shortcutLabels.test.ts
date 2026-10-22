@@ -13,8 +13,8 @@ describe("command labels", () => {
   it("reads a numbered command and a folded numbered row in Korean", async () => {
     const { t } = await createInterfaceI18n("ko");
     expect(commandTitle("select_agent_3", t)).toBe("3번 에이전트 선택");
-    const row = sheetRows("Tabs", REGISTRY, "electron", "mac").at(-1)!;
-    expect(sheetRowTitle(row, t)).toBe("1-9번 탭 선택");
+    const row = sheetRows("Navigate", REGISTRY, "electron", "mac").find((entry) => entry.id === "select_device_1")!;
+    expect(sheetRowTitle(row, t)).toBe("1-9번 기기 선택");
     expect(passthroughText("explorer", t)).toBe("파일 탐색기에서만 사용");
   });
 });
@@ -23,9 +23,9 @@ describe("binding problems", () => {
   it("name the conflicting command in the operator's language", async () => {
     const ko = (await createInterfaceI18n("ko")).t;
     const ja = (await createInterfaceI18n("ja")).t;
-    const problem = { code: "conflict", chord: "⌘3", commandId: "select_tab_3" } as const;
-    expect(bindingProblemText(problem, ko)).toBe("⌘3는 이미 3번 탭 선택에 사용 중입니다.");
-    expect(bindingProblemText(problem, ja)).toBe("⌘3はすでに「タブ3を選択」に割り当てられています。");
+    const problem = { code: "conflict", chord: "⌘3", commandId: "select_device_3" } as const;
+    expect(bindingProblemText(problem, ko)).toBe("⌘3는 이미 3번 기기 선택에 사용 중입니다.");
+    expect(bindingProblemText(problem, ja)).toBe("⌘3はすでに「デバイス3を選択」に割り当てられています。");
   });
 
   it("keeps the English wording of every code", async () => {

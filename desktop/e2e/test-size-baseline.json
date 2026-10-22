@@ -24,9 +24,9 @@
       "lines": 126,
       "expect": 35
     },
-    "digit-shortcuts.spec.ts::⌘n selects a tab, ⌥n an agent, and holding ⌘ or ⌥ shows the numbers without moving anything": {
-      "lines": 184,
-      "expect": 44
+    "digit-shortcuts.spec.ts::⌘n selects a device, ⌥n an agent, ⌃n nothing, and holding ⌘ or ⌥ shows the numbers without moving anything": {
+      "lines": 173,
+      "expect": 39
     },
     "remote-workspace.spec.ts::remote pane CLI reaches its own Workspace over SSH and leaves the local Workspace in front": {
       "lines": 661,

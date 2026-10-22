@@ -11,7 +11,7 @@ import { commandGroupTitle, passthroughText, sheetRowTitle } from "./shortcutLab
 // The sheet is generated from the registry (PRD S2 B11): every mapping of the
 // running host by group, a "moved for Chrome" note on the chords Chrome
 // reserves (browser only), and a passthrough note on the one chord the
-// terminal keeps. The numbered ⌃1-9, ⌥1-9 and ⌘1-9 selections fold into one row
+// terminal keeps. The numbered ⌥1-9 and ⌘1-9 selections fold into one row
 // each with their range, and read "not on this host" in a browser, which
 // has no such chords (PRD electron-digit-shortcuts-hints B3, B4).
 

@@ -45,7 +45,7 @@ describe("tab composition", () => {
         strip: [{ id: "herdr:t1", kind: "herdr", source_id: "t1", label: "Same title", preview: false }],
         tabs: [{ id: "t1", agent: null, sidebar: { focused_pane_id: focused }, panes: agents.map(({ pane_id, identity_label }) => ({ id: pane_id, identity_label })) }],
       } as unknown as import("./snapshot").Checkout;
-      await act(async () => root.render(createElement(TooltipProvider, { children: createElement(AgentTab, { number: 2, checkout, entry: checkout.strip[0]!, interaction: { selected: true, fit: "titled", areaActive: true, dragging: false, press: () => {}, select: () => {} }, renaming: false, onCancelRename: () => {}, actions: {} as import("./actions").Actions }) })));
+      await act(async () => root.render(createElement(TooltipProvider, { children: createElement(AgentTab, { checkout, entry: checkout.strip[0]!, interaction: { selected: true, fit: "titled", areaActive: true, dragging: false, press: () => {}, select: () => {} }, renaming: false, onCancelRename: () => {}, actions: {} as import("./actions").Actions }) })));
     };
     try {
       await render("p2");
@@ -70,7 +70,7 @@ describe("tab composition", () => {
       strip: [{ id: "herdr:t1", kind: "herdr", source_id: "t1", label: "작업 제목", preview: false }],
       tabs: [{ id: "t1", panes: [], agent: { state: { mark_tone: { kind: "warning", read: false } }, agent_kind: "claude", mark: "turn", demand: "approval", activity: "stopped", emphasized: true, status_code: "approval" } }],
     } as unknown as import("./snapshot").Checkout;
-    const markup = renderToStaticMarkup(createElement(TooltipProvider, { children: createElement(AgentTab, { number: 2, checkout, entry: checkout.strip[0]!, interaction: { selected: true, fit: "titled", areaActive: true, dragging: false, press: () => {}, select: () => {} }, renaming: false, onCancelRename: () => {}, actions: {} as import("./actions").Actions }) }));
+    const markup = renderToStaticMarkup(createElement(TooltipProvider, { children: createElement(AgentTab, { checkout, entry: checkout.strip[0]!, interaction: { selected: true, fit: "titled", areaActive: true, dragging: false, press: () => {}, select: () => {} }, renaming: false, onCancelRename: () => {}, actions: {} as import("./actions").Actions }) }));
     const mark = markup.indexOf('data-tab-status="approval"');
     const title = markup.indexOf('작업 제목', mark);
     expect(mark).toBeGreaterThan(0);
@@ -78,7 +78,6 @@ describe("tab composition", () => {
     expect(markup).not.toContain('<img');
     expect(markup).not.toContain('data-agent-mark');
     expect(markup).toContain('Claude Code');
-    expect(markup).toContain('data-keycap="2"');
   });
 });
 
@@ -99,7 +98,7 @@ async function renderCount(identities: (string | null)[], fit: TabFit = "titled"
       { id: "other-tab", agent: null, panes: [{ identity_label: "Other tab's agent" }] },
     ],
   } as unknown as import("./snapshot").Checkout;
-  return renderToStaticMarkup(createElement(TooltipProvider, { children: createElement(AgentTab, { number: 2, checkout, entry: checkout.strip[0]!, interaction: { selected: true, fit, areaActive: true, dragging: false, press: () => {}, select: () => {} }, renaming, onCancelRename: () => {}, actions: {} as import("./actions").Actions }) }));
+  return renderToStaticMarkup(createElement(TooltipProvider, { children: createElement(AgentTab, { checkout, entry: checkout.strip[0]!, interaction: { selected: true, fit, areaActive: true, dragging: false, press: () => {}, select: () => {} }, renaming, onCancelRename: () => {}, actions: {} as import("./actions").Actions }) }));
 }
 
 describe("agent pane count", () => {
@@ -114,7 +113,6 @@ describe("agent pane count", () => {
     else expect(markup).not.toContain("data-agent-pane-count");
     if (count > 0) expect(markup).toContain(`${count} agent pane`);
     else expect(markup).not.toContain("agent pane");
-    expect(markup).toContain('data-keycap="2"');
   });
 
   it.each(["compact", "marks"] as const)("retains the accessible count at %s density", async (fit) => {

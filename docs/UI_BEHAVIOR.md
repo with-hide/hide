@@ -215,8 +215,7 @@ After restart the saved intent can still be checked without recovering or resend
 If the original terminal's identity cannot be proven, the check keeps the result uncertain and never starts a replacement process.
 A disconnected device disables the start controls and sends no start; Enter during IME composition does not submit.
 
-Electron's numbered tab shortcuts and hold keycaps share the selected group's saved Agent area tree order, then each bar's left-to-right tab order.
-Moving or reordering a tab updates both numbers together; waiting overflow tabs have no number.
+Tabs have no numbered shortcut or hold keycap; ⌃⇥ steps through the recent tabs (see Keyboard shortcuts per system).
 
 At most 64 normal Agent tabs are placed across all the checkout's groups together, counting drafts, live tabs and pending admissions; each group has up to six areas and three split levels.
 New tab, Reopen that needs a tab, and protected replacement close count pending admissions and refuse before any external effect when full; the existing one-line notice asks the operator to close a tab.
@@ -2639,7 +2638,7 @@ Which system applies is the one the operator types on: the desktop app's, or the
 
 ### The rule
 
-On Windows and Linux every ⌘ is Ctrl+Shift, as in Windows Terminal, GNOME Terminal, WezTerm and kitty, so a plain Ctrl key reaches the shell and the agent CLIs (Ctrl+C, Ctrl+R, Ctrl+W, Ctrl+K, Ctrl+D and the rest); the only plain Ctrl keys the app takes are text size, the tab digits Ctrl+1 to Ctrl+9 (below) and, in a browser tab, the ones Chrome keeps for itself.
+On Windows and Linux every ⌘ is Ctrl+Shift, as in Windows Terminal, GNOME Terminal, WezTerm and kitty, so a plain Ctrl key reaches the shell and the agent CLIs (Ctrl+C, Ctrl+R, Ctrl+W, Ctrl+K, Ctrl+D and the rest); the only plain Ctrl keys the app takes are text size and, in a browser tab, the ones Chrome keeps for itself.
 A ⇧ or ⌥ that a macOS chord adds to ⌘ makes it Alt+Shift there, the layer Windows Terminal puts its panes on (Alt+Shift+D splits a pane there too): ⌘T is Ctrl+Shift+T and ⇧⌘T is Alt+Shift+T, so no chord needs more than three keys.
 The chords the rule puts on that layer take no key a shell or an agent CLI documents: readline reads Alt+Shift+B as Alt+B (`do-lowercase-version`), so Alt+B, Alt+D and Alt+T still reach the shell and Claude Code.
 None of them is a key Windows, GNOME or Chrome lists as its own, except Chrome's Alt+Shift+T (below).
@@ -2666,8 +2665,8 @@ Each exception has a dominant convention on Windows and Linux, or a chord the sy
   The tree answers them only while it holds the keyboard, so a terminal keeps ⌘C for its selection and Ctrl+C for the interrupt, and a text field keeps its own.
 - Inside a text field, a palette, a board or a document, no terminal holds the keyboard, so the system's own command key applies: ⌘↵ is Ctrl+Enter (send a form, open a ⌘P result to the side, open a pull request on GitHub), ⌘-click is Ctrl-click (a link, a pull request, an issue), and Ctrl+S saves the document in front as well as Ctrl+Shift+S.
   A file or diff View's comment chord ⇧⌘. is Ctrl+Shift+. there for the same reason ([View openers and comments](#view-openers-and-comments)).
-- The digits follow the rule: a tab is ⌃1-9 on a Mac, beside ⌃⇥'s recent tab cycle, so it is Ctrl+1-9 there, the browsers' tab digits; a device is ⌘1-9, so it is Ctrl+Shift+1-9; an agent row stays ⌥1-9, Alt+1-9.
-  Ctrl+2 to Ctrl+8 are the control bytes a terminal sends for NUL, Escape and ^\ to ^_ (on a Mac ⌃2 to ⌃8 too), which no shell or agent CLI documents a use for, so the app takes them; ⌃1-9 is also the keys macOS offers for Switch to Desktop, off until the operator turns it on in System Settings, Keyboard Shortcuts, Mission Control, and a Mac that turned it on keeps those keys from the app.
+- The digits follow the rule: a device is ⌘1-9, so it is Ctrl+Shift+1-9 there, and an agent row stays ⌥1-9, Alt+1-9.
+  A tab has no digit: ⌃1-9 would take the control bytes ⌃2 to ⌃8 send a terminal (NUL, Escape, ^\ to ^_), and ⌃⇥ already steps through the recent tabs.
 
 ### In a terminal
 
@@ -2705,7 +2704,6 @@ The sheet carries no row or explanation for a command the removed native app alo
 | New tab | `⌘T` | `Ctrl+Shift+T` | `⌥T` | `Alt+T` |
 | Close focused view or pane | `⌘W` | `Ctrl+Shift+W` | `⌥W` | `Alt+W` |
 | Reopen closed tab (exception) | `⇧⌘T` | `Alt+Shift+T` | `⌥⇧T` | `Ctrl+Alt+Shift+T` |
-| Select tab 1-9 | `⌃1 … ⌃9` | `Ctrl+1 … Ctrl+9` | none | none |
 | Add project | `⇧⌘N` | `Alt+Shift+N` | none | none |
 | Start agent | `⌘N` | `Ctrl+Shift+N` | none | none |
 | Next recent tab | `⌃⇥` | `Ctrl+Tab` | `` ⌥` `` | `` Alt+` `` |
@@ -2765,8 +2763,8 @@ A chorded tooltip reads the label followed by the shortcut chord; a chordless co
 The sidebar Settings tooltip and accessible name append the host's current shortcut in parentheses to the translated label.
 There is no native platform tooltip layered underneath the shared one; the shared tooltip is the only tooltip in the main shell.
 Tooltip hover has a short reveal delay, and an exact modifier hold reveals shortcut hints faster than a hover tooltip does.
-In the desktop app, holding ⌃ alone (Ctrl on Windows and Linux) floats each tab's number at its top right in the agent tab strip in front, holding ⌥ alone floats each Agents-list row's number at its top right, and holding ⌘ alone (Ctrl+Shift on Windows and Linux) floats each device tile's number at its top left, the corner a tile's marks leave free: a keycap in the popover colors with a border, a small shadow and one mono digit, positioned over the tab or row rather than in it, so a title, an inline Rename field, a row's time, and its fold slot never move.
-The number is the screen order at that moment, first to ninth, left to right for tabs and top to bottom for the rows the Agents list draws (a folded parent's descendants are not rows), and an item past the ninth carries none.
+In the desktop app, holding ⌥ alone floats each Agents-list row's number at its top right, and holding ⌘ alone (Ctrl+Shift on Windows and Linux) floats each device tile's number at its top left, the corner a tile's marks leave free: a keycap in the popover colors with a border, a small shadow and one mono digit, positioned over the row or tile rather than in it, so a title, a row's time, its fold slot and a tile's marks never move.
+The number is the screen order at that moment, first to ninth, top to bottom for the rows the Agents list draws (a folded parent's descendants are not rows) and for the rail's tiles, and an item past the ninth carries none.
 While Projects is on screen the same hold shows those Agents-list numbers, since ⌥n still selects by them, each once: on the agent's raised row, else on its row under the checkout that owns its pane.
 The hint appears only after a short hold of the exact modifier; releasing it before then shows nothing, so a ⌘C never flashes numbers.
 Releasing the modifier, adding another, pressing any key during the hold (including the numbered chord itself), losing the window, hiding the page, or opening a sheet, menu, dialog, palette, or cycle clears the numbers at once; the same modifiers still held after that show nothing until they are released and held again.
