@@ -2947,8 +2947,7 @@ fn a_flows_pull_requests_settled_after_its_line_stand_for_its_result() {
     );
     // One still open: the flow's own end stands, here a wait it moved on from.
     assert!(matches!(&results[3], Some(FlowResult::MovedOn { line, .. }) if line == "CI 기다림"));
-    // The top state waits on the pull requests open when its turn ended,
-    // wherever they were printed: #41 merged only after it too.
+    // The top state waits on its own flow's pull requests: #45 is open.
     assert_eq!(record.status.unwrap().settled, None);
     store
         .connection
@@ -2960,8 +2959,75 @@ fn a_flows_pull_requests_settled_after_its_line_stand_for_its_result() {
         record.status.unwrap().settled,
         Some(PrSettlement {
             state: SettledState::Merged,
-            numbers: vec![41, 44],
+            numbers: vec![44],
             at_unix_ms: 9_800,
+        })
+    );
+}
+
+/// D-01, B2: the top state reads only the pull requests of the flow its turn
+/// belongs to: an earlier flow's merging later leaves a finished turn's line,
+/// one still open there blocks nothing, and a child's printed in the flow
+/// counts.
+#[test]
+fn the_top_state_reads_only_its_own_flows_pull_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "PR 올려줘");
+    closing(&mut store, "기록 화면 구현", 1_000, None);
+    stopped(&mut store, 1, LabelEnd::Waiting, "CI 기다림", &[]);
+    pull_request(&mut store, 41, 1_200, Some(8_000), None);
+    pull_request(&mut store, 42, 1_300, None, None);
+    request(&mut store, 2, "버그 찾아줘");
+    closing(&mut store, "버그 조사", 2_000, None);
+    stopped(&mut store, 2, LabelEnd::Done, "버그 3개 찾음", &[]);
+    let status = |store: &LinkStore| store.ledger_record(&session()).unwrap().status.unwrap();
+    assert_eq!(status(&store).settled, None);
+    assert_eq!(status(&store).line, "버그 3개 찾음");
+    // A child's pull request printed in this flow is this flow's.
+    let child = SessionIdentity {
+        session_id: "child".into(),
+        ..session()
+    };
+    store
+        .connection
+        .execute_batch(
+            "INSERT INTO prs VALUES('id:1',46,'project:app','feat/46','PR 46','https://github.com/acme/app/pull/46',2100,9000,9000,1);
+             INSERT INTO ledger_sightings VALUES('device-a','codex','child','pr','acme/app',46,2100);",
+        )
+        .unwrap();
+    store
+        .apply_ledger_update(&LedgerUpdate::Requests {
+            session: child.clone(),
+            cwd: "/repo".into(),
+            path: None,
+            requests: vec![RecordedRequest {
+                offset: 1,
+                at_unix_ms: 2_050,
+                text: "부모가 준 일".into(),
+                author: WorkAuthor::Parent,
+                ..RecordedRequest::default()
+            }],
+        })
+        .unwrap();
+    store
+        .apply_parents(&[crate::links::ParentFact {
+            device_id: child.device_id.clone(),
+            agent: child.agent.clone(),
+            session_id: child.session_id.clone(),
+            parent_device_id: "device-a".into(),
+            parent_agent: "codex".into(),
+            parent_session_id: "session-a".into(),
+            parent_name: "parent".into(),
+        }])
+        .unwrap();
+    store.refresh_ledger_outputs().unwrap();
+    assert_eq!(
+        status(&store).settled,
+        Some(PrSettlement {
+            state: SettledState::Merged,
+            numbers: vec![46],
+            at_unix_ms: 9_000,
         })
     );
 }
@@ -3078,9 +3144,9 @@ fn a_past_flow_shows_its_closing_line_or_reads_as_moved_on() {
     ));
 }
 
-/// D-03, B6: moving to the next flow closes the questions before it, its
-/// first turn cannot list one again, and asking it later in the new flow
-/// opens it again; a question the operator put away stays put away.
+/// D-03, B6: moving to the next flow closes the questions before it, and
+/// asking one again in the new flow opens it again; a question the operator
+/// put away stays put away.
 #[test]
 fn the_next_flow_closes_the_questions_before_it_and_a_later_ask_opens_one_again() {
     let directory = tempfile::tempdir().unwrap();
@@ -3115,13 +3181,7 @@ fn the_next_flow_closes_the_questions_before_it_and_a_later_ask_opens_one_again(
             .iter()
             .all(|missed| missed.kind != MissedKind::Ask)
     );
-    stopped(
-        &mut store,
-        2,
-        LabelEnd::Done,
-        "PRD 작성",
-        &["Q1 범위를 정해 주세요"],
-    );
+    stopped(&mut store, 2, LabelEnd::Done, "PRD 작성", &[]);
     assert!(asks(&store).is_empty());
     request(&mut store, 3, "범위 다시 보자");
     stopped(
@@ -3132,6 +3192,26 @@ fn the_next_flow_closes_the_questions_before_it_and_a_later_ask_opens_one_again(
         &["Q1 범위를 정해 주세요"],
     );
     assert_eq!(asks(&store), ["Q1 범위를 정해 주세요"]);
+    // One put away in a past flow stays put away when a later flow asks it.
+    let id = store.ledger_record(&session()).unwrap().asks[0].id.clone();
+    store
+        .apply_ledger_update(&LedgerUpdate::MissedStatus {
+            session: session(),
+            id,
+            status: MissedStatus::Dismissed,
+        })
+        .unwrap();
+    request(&mut store, 4, "다음 화면");
+    closing(&mut store, "설정 화면", 4_000, None);
+    request(&mut store, 5, "범위는?");
+    stopped(
+        &mut store,
+        5,
+        LabelEnd::Question,
+        "Q1",
+        &["Q1 범위를 정해 주세요"],
+    );
+    assert!(asks(&store).is_empty());
 }
 
 /// D-06, B9, B10: the record is named after the flow the operator asked
@@ -3141,6 +3221,8 @@ fn the_next_flow_closes_the_questions_before_it_and_a_later_ask_opens_one_again(
 fn the_record_is_named_after_its_largest_flow_and_the_pane_keeps_the_current_one() {
     let directory = tempfile::tempdir().unwrap();
     let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    let project = origin_project("device-a", "acme/app", 0);
+    store.apply_project(&project, 500).unwrap();
     request(&mut store, 1, "세션 기록 다시 설계해줘");
     let record = store.ledger_record(&session()).unwrap();
     let untitled = record.title.clone();
@@ -3161,13 +3243,16 @@ fn the_record_is_named_after_its_largest_flow_and_the_pane_keeps_the_current_one
         "알림 아이콘 교체"
     );
     assert_ne!(untitled, "알림 아이콘 교체");
-    let pane_title: Option<String> = store
-        .connection
-        .query_row(
-            "SELECT goal FROM ledger_chapters WHERE id='session-a' ORDER BY at DESC LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
+    request(&mut store, 7, "다음은 검색");
+    closing(&mut store, "검색 시안", 7_000, None);
+    let summaries = store.ledger_summaries(&project.key).unwrap();
+    let mine = summaries
+        .iter()
+        .find(|summary| summary.session == session())
         .unwrap();
-    assert_eq!(pane_title.as_deref(), Some("알림 아이콘 교체"));
+    assert_eq!(mine.title, "검색 시안");
+    assert_eq!(
+        store.ledger_record(&session()).unwrap().title,
+        "알림 아이콘 교체"
+    );
 }

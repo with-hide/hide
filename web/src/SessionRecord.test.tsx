@@ -283,6 +283,13 @@ it("says each child's state from its last real turn, and nothing judged with sum
   try { expect(text(off.container.querySelector("[data-record-child-state]"))).toBe("Unavailable"); } finally { await off.unmount(); }
 });
 
+it("says a stopped child's pull requests merged once they settled after its last turn (fact-status B2)", async () => {
+  const settled = { state: "merged" as const, numbers: [1541], at_unix_ms: 9_000 };
+  const record = { ...BASE, children: [{ ...child, status: { ...status("waiting", "Waiting for CI"), settled } }] };
+  const { container, unmount } = await mount(record);
+  try { expect(text(container.querySelector("[data-record-child-state]"))).toBe("Merged"); } finally { await unmount(); }
+});
+
 it("says how many old requests the record no longer shows (B30)", async () => {
   const { container, unmount } = await mount({ ...BASE, omitted_requests: 37 });
   try { expect(text(container.querySelector("[data-record-omitted]"))).toBe("37 older requests are not shown"); } finally { await unmount(); }

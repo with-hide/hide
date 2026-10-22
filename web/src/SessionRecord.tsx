@@ -606,15 +606,17 @@ function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue
       const held = live ? null : archivedMemberOf(rest, child.session);
       const away = held ? held.row.members[held.index]!.resume : null;
       const end = summaries ? child.status?.end ?? null : null;
-      const done = live ? live.status_code === "done" : !away && end === "done";
-      const state = away && away !== "resumed" ? archivedWord(t, away) : live ? statusText(t, live.status_code) : end ? t(`requests.end.${end}`) : t("common.unavailable");
+      // A stopped child's pull requests that settled after its last turn stand for it, as on the parent's top state (fact-status B2).
+      const settled = !live && !away && summaries ? child.status?.settled ?? null : null;
+      const done = live ? live.status_code === "done" : !away && (settled ? settled.state === "merged" : end === "done");
+      const state = away && away !== "resumed" ? archivedWord(t, away) : live ? statusText(t, live.status_code) : settled ? t(settled.state === "merged" ? "record.merged" : "record.closed") : end ? t(`requests.end.${end}`) : t("common.unavailable");
       const title = recordTitle(child, summaries);
       const prs = child.pr_groups.reduce((count, group) => count + group.outputs.length, 0);
       const branch = live ? branchChip(live) : child.cwd && child.cwd !== parent.cwd ? folderName(child.cwd) : null;
       const device = child.session.device_id !== parent.session.device_id ? machineName(rest?.navigator?.devices, child.session.device_id, t) : null;
       return <li key={key} className="min-w-0 border-b border-border last:border-b-0" data-record-child={child.session.session_id}>
         <button type="button" className={cn(ROW, "flex w-full items-start gap-sm py-sm hover:bg-accent")} aria-expanded={expanded === key} title={[branch, device].filter(Boolean).join(" · ")} onClick={() => setExpanded(expanded === key ? null : key)}>
-          {done ? <CheckIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-success" /> : live ? <StatusMark mark={live.mark} className={cn("mt-xs shrink-0", markTone(live))} /> : end === "waiting" ? <Clock3Icon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" /> : <SquareIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" />}
+          {done ? <CheckIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-success" /> : live ? <StatusMark mark={live.mark} className={cn("mt-xs shrink-0", markTone(live))} /> : end === "waiting" && !settled ? <Clock3Icon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" /> : <SquareIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" />}
           <span className="min-w-0 flex-1"><span className={cn("block truncate text-caption font-medium", done && "text-subtle-foreground")} title={title}>{title}</span><span className="mt-xs flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xxs text-micro text-muted-foreground"><AgentMark kind={child.session.agent} />{agentProductName(child.session.agent)} · <span data-record-child-state="true">{state}</span>{prs ? <span>· {t("recordCard.prs")} {prs}</span> : null}</span></span>
           <ChevronRightIcon aria-hidden="true" className={cn("mt-xs size-(--size-icon-sm) shrink-0 text-muted-foreground", expanded === key && "rotate-90")} />
         </button>

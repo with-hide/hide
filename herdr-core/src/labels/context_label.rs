@@ -368,17 +368,14 @@ pub(crate) fn parse(
         goal_update = GoalUpdate::Keep;
     }
     // Only a replace closes a flow; the line is drawn like a turn's, so it
-    // takes the line's rules.
-    let closed_result = if goal_update == GoalUpdate::Replace {
-        Some(truncate_phrase(
-            &normalize_text_field(&closed_result, true)
-                .ok_or_else(|| anyhow!("provider_invalid_closed_result"))?,
-            limits.line,
-        ))
-        .filter(|line| !line.is_empty())
-    } else {
-        None
-    };
+    // is cut like one. One the line's rules refuse is dropped alone: the
+    // past flow then reads from its own last turn (B5), and the rest of the
+    // answer stands.
+    let closed_result = (goal_update == GoalUpdate::Replace)
+        .then(|| normalize_text_field(&closed_result, true))
+        .flatten()
+        .map(|line| truncate_phrase(&line, limits.line))
+        .filter(|line| !line.is_empty());
     // Every surface draws it in one line, so the prompt's length rule is
     // enforced here whatever the model did with it: a longer line is cut
     // between words and ends in `…`, never refused or emptied, so a question
@@ -552,7 +549,8 @@ mod tests {
     }
 
     /// D-02, B4: a replace says how the flow it closes ended, in one line
-    /// cut like a turn's; any other answer closes nothing, whatever it says.
+    /// cut like a turn's, and one with a control character is dropped while the
+    /// rest of the answer stands; any other answer closes nothing.
     #[test]
     fn only_a_replace_carries_the_closed_flows_result() {
         for phase in [AnalysisPhase::TurnStart, AnalysisPhase::TurnEnd] {
@@ -592,12 +590,9 @@ mod tests {
             );
             answer["goal_update"] = json!("replace");
             answer["closed_result"] = json!("PRD\n작성");
-            assert_eq!(
-                parse(phase, OutputLanguage::Korean, answer)
-                    .unwrap_err()
-                    .to_string(),
-                "provider_invalid_closed_result"
-            );
+            let parsed = parse(phase, OutputLanguage::Korean, answer).unwrap();
+            assert_eq!(parsed.closed_result, None);
+            assert_eq!(parsed.goal.as_deref(), Some("출시 전 버그 수정 묶음"));
         }
     }
 

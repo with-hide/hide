@@ -289,6 +289,8 @@ export type FixtureLabel = {
   progress?: string;
   /** The label's one-line summary of the turn's request (`context_label.v20`), which the provider shim answers for the newest request the input owes a summary; none by default, when the request shows its own words. */
   request?: string;
+  /** How the flow this label's replace closes ended (`context_label.v21`); none by default. */
+  closedResult?: string;
   /** The reply the agent asks for; the label's line when given, with `question` its end. */
   reply?: string;
   question?: boolean;
@@ -335,6 +337,7 @@ export function labelMarker(label: FixtureLabel): string {
   const answer = {
     goal: label.task,
     goal_update: "replace",
+    closed_result: label.closedResult ?? "",
     request: label.request ?? "",
     // One line: the reply asked for when there is one, else the progress.
     line: label.reply ?? label.progress ?? "",

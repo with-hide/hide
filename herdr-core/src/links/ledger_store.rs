@@ -1165,18 +1165,6 @@ impl LinkStore {
                 // A turn with no request of its own starts at the input that
                 // woke it (D-03).
                 let start_at = start.unwrap_or(*started_at_unix_ms).min(*at_unix_ms);
-                // The first turn of a flow that follows another: moving on
-                // answered the questions before it, so this turn cannot list
-                // one of them again (PRD session-record-fact-status D-03).
-                let opens_flow: bool = tx
-                    .query_row(
-                        "SELECT (SELECT COUNT(*) FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3)>1 \
-                         AND NOT EXISTS(SELECT 1 FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 \
-                         AND start_at>=(SELECT MAX(at) FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3))",
-                        params![session.device_id, session.agent, session.session_id],
-                        |row| row.get(0),
-                    )
-                    .map_err(failed)?;
                 tx.execute(
                     "INSERT INTO ledger_turns(device,agent,id,offset,start_at,end_at,end,line,artifacts) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                     params![
@@ -1233,8 +1221,7 @@ impl LinkStore {
                             .query_row(
                                 "WITH flow(at) AS (SELECT COALESCE(MAX(at),0) FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3) \
                                 SELECT 1 FROM ledger_missed, flow WHERE device=?1 AND agent=?2 AND id=?3 \
-                                AND kind=?4 AND trim(text)=?6 AND (status=?7 OR (status=?5 AND ledger_missed.at>=flow.at) \
-                                OR (?8 AND ledger_missed.at<flow.at)) LIMIT 1",
+                                AND kind=?4 AND trim(text)=?6 AND (status=?7 OR (status=?5 AND ledger_missed.at>=flow.at)) LIMIT 1",
                                 params![
                                     session.device_id,
                                     session.agent,
@@ -1242,8 +1229,7 @@ impl LinkStore {
                                     encoded(&MissedKind::Ask)?,
                                     encoded(&MissedStatus::Open)?,
                                     missed.text.trim(),
-                                    encoded(&MissedStatus::Dismissed)?,
-                                    opens_flow
+                                    encoded(&MissedStatus::Dismissed)?
                                 ],
                                 |_| Ok(()),
                             )
@@ -1496,8 +1482,8 @@ impl LinkStore {
             .connection
             .prepare(
                 "SELECT o.kind,o.repo,o.number,o.title,o.url,o.state,o.created_at,COALESCE(f.stale,1),f.read_at,o.sighted_at, \
-            (SELECT COALESCE(p.merged_at,p.closed_at) FROM repo_names n JOIN prs p ON p.repo=n.repo AND p.number=o.number \
-            WHERE o.kind='pr' AND (n.name=o.repo OR n.repo=o.repo) LIMIT 1) \
+            (SELECT COALESCE(p.merged_at,p.closed_at) FROM prs p WHERE o.kind='pr' AND p.number=o.number \
+            AND p.repo=COALESCE((SELECT n.repo FROM repo_names n WHERE n.name=o.repo),o.repo)) \
             FROM ledger_outputs o LEFT JOIN ledger_output_facts f ON f.repo=o.repo AND f.kind=o.kind AND f.number=o.number \
             WHERE o.device=?1 AND o.agent=?2 AND o.id=?3 ORDER BY o.created_at DESC LIMIT 2001",
             )
@@ -2312,11 +2298,10 @@ fn waits(missed: &MissedWork, current_start: Option<u64>) -> bool {
 
 /// Hide's facts over the labels' lines (PRD session-record-fact-status
 /// D-01, B1-B3): a flow whose pull requests all merged or closed after its
-/// result reads as that. The top state does the same with every pull
-/// request not settled when its turn ended, wherever it was printed: a flow
-/// can open after the pull request its turn waits on, and a child's can come
-/// after the turn; a turn that asks the operator, is blocked or hit a limit
-/// stays on top.
+/// result reads as that. The top state does the same with the pull requests
+/// of the flow its turn belongs to that were not settled when it ended, a
+/// child's printed in that flow among them; a turn that asks the operator, is blocked or
+/// hit a limit stays on top.
 fn settle(record: &mut SessionRecord) {
     if record.flows.is_empty() {
         return;
@@ -2348,14 +2333,17 @@ fn settle(record: &mut SessionRecord) {
         && status.limited.is_none()
         && !matches!(status.end, LabelEnd::Question | LabelEnd::Blocked)
     {
-        let pending: Vec<&WorkOutput> = record
-            .outputs
+        let flow = starts
             .iter()
+            .rposition(|start| *start <= status.at_unix_ms)
+            .unwrap_or(0);
+        let pending: Vec<&WorkOutput> = made[flow]
+            .iter()
+            .copied()
             .filter(|output| {
-                output.kind == "pr"
-                    && output
-                        .settled_at_unix_ms
-                        .is_none_or(|at| at > status.at_unix_ms)
+                output
+                    .settled_at_unix_ms
+                    .is_none_or(|at| at > status.at_unix_ms)
             })
             .collect();
         status.settled = settlement(&pending);

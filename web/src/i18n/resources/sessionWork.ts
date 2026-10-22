@@ -76,7 +76,7 @@ const words = {
   "record.limited": ["Usage limit", "한도", "上限", "额度"],
   "record.merged": ["Merged", "머지됨", "マージ済み", "已合并"],
   "record.closed": ["Closed", "닫힘", "クローズ", "已关闭"],
-  "record.movedOn": ["Moved on", "넘어감", "次へ", "已转向"],
+  "record.movedOn": ["Moved on", "넘어감", "別の作業へ", "已转向"],
   "record.prCount": ["{{count}} PRs", "PR {{count}}개", "PR {{count}}件", "{{count}} 个 PR"],
   "sessionWork.draftNote": ["Draft from this turn and the issue template; you can edit it", "그 턴 대화와 이슈 템플릿에서 쓴 초안 · 고칠 수 있음", "このターンとテンプレートから作成・編集できます", "根据本轮对话和议题模板起草，可编辑"],
 } as const;
