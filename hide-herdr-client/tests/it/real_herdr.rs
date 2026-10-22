@@ -234,12 +234,6 @@ fn the_pinned_herdr_answers_a_request_and_streams_events_over_the_local_stream()
     );
 }
 
-/// The socket `hide_platform::host` names as Herdr's default is the one the
-/// pinned Herdr itself uses when nothing overrides it. The child inherits
-/// this process's home and config variables and none of Herdr's own, and is
-/// only asked for its status, which starts and creates nothing. Run by hand,
-/// point HOME (USERPROFILE on Windows) at a short empty folder so the answer
-/// never names the operator's socket.
 /// PRD herdr-takeover B23, D-25: where the pinned Herdr cannot hand its
 /// panes to another Herdr, Hide moves the operator's older server by stopping
 /// and restarting it after they confirm what ends. Herdr answers this on Unix
@@ -267,6 +261,12 @@ fn the_pinned_herdr_hands_a_server_over_live_on_unix_only() {
     );
 }
 
+/// The socket `hide_platform::host` names as Herdr's default is the one the
+/// pinned Herdr itself uses when nothing overrides it. The child inherits
+/// this process's home and config variables and none of Herdr's own, and is
+/// only asked for its status, which starts and creates nothing. Run by hand,
+/// point HOME (USERPROFILE on Windows) at a short empty folder so the answer
+/// never names the operator's socket.
 #[test]
 #[ignore = "needs the pinned Herdr: set HIDE_E2E_HERDR_BIN and run with --ignored"]
 fn the_default_socket_is_the_one_the_pinned_herdr_uses() {

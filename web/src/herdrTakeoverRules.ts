@@ -37,5 +37,8 @@ export function movedLine(takeover: HerdrTakeover | null | undefined): string | 
   return takeover?.stage === "moved" ? takeover.path_herdr_behind : null;
 }
 
-/** The one command that brings the operator's own `herdr` up to the server (D-12). */
-export const HERDR_UPDATE_COMMAND = "herdr update";
+/**
+ * The one command that brings the operator's own `herdr` up to the server (D-12): a plain `herdr update` refuses
+ * while a server runs, and `--handoff` hands the server to the updated binary with the panes kept (measured on 0.8.2).
+ */
+export const HERDR_UPDATE_COMMAND = "herdr update --handoff";

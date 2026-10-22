@@ -31,13 +31,26 @@ function useHerdrRestart(): { restarting: boolean; ended: HerdrRestart | null; r
     if (!bridge || restarting) return;
     setRestarting(true);
     setEnded(null);
+    // A restart that went through keeps the button held until the core's next look takes the offer away:
+    // a second press would stop Hide's own Herdr and end the panes' commands again.
     const settle = (answer: HerdrRestart) => {
       setEnded(answer);
-      setRestarting(false);
+      setRestarting(answer === "restarted");
     };
     void bridge.restartHerdr().then(settle, () => settle("stop_failed"));
   };
   return { restarting, ended, restart };
+}
+
+/** A restart whose stop did not end the server; one Hide cannot read leaves the operator a way on, as a failed move does (D-29). */
+function StopFailed({ takeover }: { takeover: HerdrTakeover }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <Note tone="error" data-herdr-takeover-failure="stop_failed">
+      {t("herdrTakeover.restart.stopFailed")}
+      {takeover.same_protocol ? null : <span className="block text-muted-foreground" data-herdr-takeover-stop-yourself="true">{t("herdrTakeover.stopYourself")}</span>}
+    </Note>
+  );
 }
 
 /** The operator's Herdr and the one Hide moves it to, with no count (D-22). */
@@ -147,7 +160,7 @@ function herdrStepParts({ takeover, actions, restart, t, onLater, onMoved }: {
       body: (
         <>
           <RestartTerms />
-          {restart.ended === "stop_failed" ? <Note tone="error" data-herdr-takeover-failure="stop_failed">{t("herdrTakeover.restart.stopFailed")}</Note> : null}
+          {restart.ended === "stop_failed" ? <StopFailed takeover={takeover} /> : null}
         </>
       ),
       // The button names what it does and holds no keyboard: Enter presses nothing here (B11).
@@ -272,7 +285,7 @@ export function HerdrOverview({ actions }: { actions: Actions }) {
         ) : (
           <Note data-herdr-takeover-desktop-only="true">{t("herdrTakeover.restart.desktopOnly")}</Note>
         )}
-        {restart.ended === "stop_failed" ? <Note tone="error" data-herdr-takeover-failure="stop_failed">{t("herdrTakeover.restart.stopFailed")}</Note> : null}
+        {restart.ended === "stop_failed" ? <StopFailed takeover={current} /> : null}
         <Dialog open={confirming} onOpenChange={setConfirming}>
           <DialogContent initialFocus="container" aria-describedby={undefined} data-herdr-takeover-confirm="restart">
             <DialogHeader>

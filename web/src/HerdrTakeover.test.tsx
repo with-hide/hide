@@ -119,7 +119,7 @@ it("a server Hide reads as it is can be left from the start, without the hint to
 it("a moved server whose operator's herdr is behind says so with a copyable herdr update, and Continue closes it (B5)", async () => {
   desktop();
   const { events, unmount } = await mount(state(offer({ stage: "moved", path_herdr_behind: "0.8.2" }), "herdr", "connected"));
-  expect(document.querySelector("[data-herdr-takeover-path-behind]")?.textContent).toContain("herdr update");
+  expect(document.querySelector("[data-herdr-takeover-path-behind]")?.textContent).toContain("herdr update --handoff");
   expect(document.body.textContent).toContain("0.8.2");
   await act(async () => button("[data-herdr-takeover-continue]")!.click());
   expect(sent(events)).toEqual([{ action: "continue" }]);
@@ -138,7 +138,21 @@ it("a restart shows what ends, takes no Enter, and runs only on its own button (
   await act(async () => button("[data-herdr-takeover-restart]")!.click());
   expect(restartHerdr).toHaveBeenCalledTimes(1);
   expect(document.querySelector('[data-herdr-takeover-failure="stop_failed"]')).not.toBeNull();
+  // A server Hide cannot read leaves a way on after the stop failed, as a failed move does (D-29).
+  expect(document.querySelector('[data-herdr-takeover-failure="stop_failed"] [data-herdr-takeover-stop-yourself]')).not.toBeNull();
+  expect(button("[data-herdr-takeover-restart]")!.disabled).toBe(false);
   expect(sent(events)).toEqual([]);
+  await unmount();
+});
+
+it("a restart that went through keeps its button held, so a second press cannot end the panes again", async () => {
+  const restartHerdr = desktop();
+  const { unmount } = await mount(state(offer({ kind: "restart", server_version: "0.9.1", same_protocol: true })));
+  await act(async () => button("[data-herdr-takeover-restart]")!.click());
+  expect(restartHerdr).toHaveBeenCalledTimes(1);
+  expect(button("[data-herdr-takeover-restart]")!.disabled).toBe(true);
+  await act(async () => button("[data-herdr-takeover-restart]")!.click());
+  expect(restartHerdr).toHaveBeenCalledTimes(1);
   await unmount();
 });
 

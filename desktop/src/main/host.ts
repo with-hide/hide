@@ -609,14 +609,6 @@ export class DesktopHost {
   }
 
   /**
-   * Add a project's Browse folder: the system's own folder picker, a sheet on
-   * this window on macOS, which can also make a new folder. Only this window's
-   * page on the daemon origin is answered; a refused sender and a cancelled
-   * pick both answer null, the chosen folder is answered in the wire spelling
-   * (`wirePath.ts`) or refused with the reason when it has none, and hided
-   * judges it like any other path. The log records the outcome, never the path.
-   */
-  /**
    * Restarting the operator's Herdr server on this app's Herdr (PRD
    * herdr-takeover B12, B13), asked by this window's shell after the operator
    * confirmed what ends; one runs at a time and a second ask answers with it.
@@ -675,6 +667,14 @@ export class DesktopHost {
     return "failed";
   }
 
+  /**
+   * Add a project's Browse folder: the system's own folder picker, a sheet on
+   * this window on macOS, which can also make a new folder. Only this window's
+   * page on the daemon origin is answered; a refused sender and a cancelled
+   * pick both answer null, the chosen folder is answered in the wire spelling
+   * (`wirePath.ts`) or refused with the reason when it has none, and hided
+   * judges it like any other path. The log records the outcome, never the path.
+   */
   private listenPickFolder(): void {
     ipcMain.handle(PICK_FOLDER_CHANNEL, async (event: IpcMainInvokeEvent) => {
       if (!this.fromShell(event) || !this.window) {
