@@ -1,25 +1,30 @@
 //! Each Workspace's presentation in a shell that draws Agent and View areas
 //! side by side (PRD S6 D-10, B8, B19, B20; S7 D-09, D-10, B14, B17; PRD
-//! right-lane D-01, D-03, D-05, D-11).
+//! right-lane D-01, D-03, D-05, D-11; PRD lane-two-columns D-01, D-02, D-09,
+//! D-10).
 //!
 //! A Workspace is one checkout on one device, keyed by the device id and the
 //! checkout path, because a Herdr workspace id is not stable across a Herdr
 //! restart and one checkout can hold tabs from several Herdr workspaces. The
-//! state is Hide's own presentation - the right lane's tool, its pin, the
-//! file tree column, the lane's and the tree's widths, and the View area
-//! tree with its displays ([`crate::view_layout`]) - and never a terminal
-//! layout: Herdr keeps panes, splits and zoom. Whether an unpinned lane is
-//! floating over the agents right now, and an expanded lane, are the
-//! shell's own moment and are never stored (D-11).
+//! state is Hide's own presentation - the right lane's two columns (the
+//! viewing column with the checkout's documents, the tool column beside the
+//! rail), its pin, the four widths, and the View area tree with its
+//! displays ([`crate::view_layout`]) - and never a terminal layout: Herdr
+//! keeps panes, splits and zoom. Whether an unpinned lane is floating over
+//! the agents right now, and an expanded lane, are the shell's own moment
+//! and are never stored (D-11).
 //!
 //! It lives in its own versioned file, apart from `core-state.json`, so a
 //! shell that does not know it never reads it and an older build's settings
 //! are never rewritten by it. A schema 1 file (S6, one strip of View tabs per
-//! Workspace) and a schema 2 file (the File Views and Tools columns, and the
-//! side panel and layouts before them) migrate on load and are written as
-//! schema 3 by the next save. A file this build cannot read, of another
-//! version or one whose migration fails, is moved aside, never overwritten,
-//! and the defaults load.
+//! Workspace), a schema 2 file (the File Views and Tools columns, and the
+//! side panel and layouts before them) and a schema 3 file (one lane showing
+//! one tool, with the file tree as a column of its Files tool) load their
+//! View lists, Agent layouts, groups and comments and start their lane
+//! closed at the default widths (lane-two-columns D-10: the old lane state
+//! is not carried over), and are written as schema 4 by the next save. A
+//! file this build cannot read, of another version or one whose migration
+//! fails, is moved aside, never overwritten, and the defaults load.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,71 +33,48 @@ use serde::{Deserialize, Serialize};
 
 use crate::view_layout::{DisplayKind, Layout};
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// The Workspaces remembered at once. The least recently used is forgotten
 /// first, so the file stays bounded however many checkouts come and go.
 pub const MAX_WORKSPACES: usize = 256;
 
-/// The widest a stored lane or tree width may be, in CSS pixels. The shell
-/// keeps each above its own minimum and Agent Views above its own as it
-/// draws; the core only keeps a crafted value from being absurd.
+/// The widest a stored column width may be, in CSS pixels. The shell keeps
+/// each above its own minimum and Agent Views above its own as it draws; the
+/// core only keeps a crafted value from being absurd.
 pub const MAX_WIDTH: u32 = 8192;
 
-/// The one tool the right lane shows (PRD right-lane D-01,
-/// sidebar-task-lens D-17): the Project's Memory and its pull requests, then
-/// the checkout's files (the View areas, with the file tree as a column of
-/// its own) and History, in the rail's order.
+/// The tool the lane's tool column shows (PRD lane-two-columns D-03, D-07,
+/// D-11): the Project's Memory and its pull requests, then the checkout's
+/// Explorer (the file tree) and History, in the rail's order. The documents
+/// are no tool: they are the viewing column's (`WorkspaceView::documents`).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tool {
-    /// The View areas.
-    Files,
-    /// History, the checkout's changes.
-    Changes,
-    /// The Project's pull requests. A lane left on the Work tool (`work`, or
-    /// `agent_sessions` before it) opens here once (PRD sidebar-task-lens
-    /// D-34), and the file keeps writing `work` ([`stored_tool`]): a build
-    /// before PRs refuses the whole file over a tool it does not know.
-    #[serde(alias = "work", alias = "agent_sessions")]
-    Prs,
     /// The Project's Memory.
     Memory,
+    /// The Project's pull requests.
+    Prs,
+    /// The file tree.
+    Explorer,
+    /// History, the checkout's changes.
+    Changes,
 }
 
 impl Tool {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
-            "files" => Some(Self::Files),
-            "changes" => Some(Self::Changes),
-            "prs" => Some(Self::Prs),
             "memory" => Some(Self::Memory),
+            "prs" => Some(Self::Prs),
+            "explorer" => Some(Self::Explorer),
+            "changes" => Some(Self::Changes),
             _ => None,
         }
     }
-
-    /// The name `workspace-views.json` keeps the tool under, one every
-    /// build since the Work tool reads.
-    fn stored_name(self) -> &'static str {
-        match self {
-            Self::Files => "files",
-            Self::Changes => "changes",
-            Self::Prs => "work",
-            Self::Memory => "memory",
-        }
-    }
-}
-
-fn stored_tool<S: serde::Serializer>(
-    tool: &Option<Tool>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    tool.map(Tool::stored_name).serialize(serializer)
 }
 
 /// A Workspace's PRs tool scope: whether its chip is `<checkout> only`,
-/// kept across a restart (PRD sidebar-task-lens B26). The file keeps it
-/// under the Work tool's `work` key, beside the basis older builds read.
+/// kept across a restart (PRD sidebar-task-lens B26).
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PrsView {
     #[serde(default)]
@@ -105,28 +87,9 @@ impl PrsView {
     }
 }
 
-/// The Tools column's tool as schema 2 stored it, read only to migrate.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-enum LegacyTool {
-    Explorer,
-    Changes,
-    AgentSessions,
-    Memory,
-}
-
-/// The side panel's state an entry stored before the columns, read only to
-/// tell whether its views showed.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-enum LegacyPanel {
-    Closed,
-    Open,
-    Expanded,
-}
-
-/// The three layouts a Workspace stored before the side panel, read only to
-/// tell whether its views showed.
+/// The three layouts a Workspace stored before the side panel (schema 1 and
+/// early schema 2), read only so the file still parses; the lane they
+/// described is not carried over.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum LegacyMode {
@@ -139,41 +102,40 @@ enum LegacyMode {
 pub struct WorkspaceView {
     pub device_id: String,
     pub path: String,
-    /// The tool the right lane shows, or `None` while the lane is closed.
-    /// An unpinned lane the operator hid by going back to a terminal keeps
-    /// its tool: hiding it is the shell's moment, not a close.
-    #[serde(serialize_with = "stored_tool")]
+    /// Whether the lane is open: its columns are drawn as `documents` and
+    /// `tool` say. A close keeps both, so ⌘E brings the lane back in the
+    /// shape it had (lane-two-columns B15). An unpinned lane the operator hid
+    /// by going back to a terminal stays open: hiding it is the shell's
+    /// moment, not a close.
+    pub open: bool,
+    /// Whether the viewing column shows the checkout's documents, the View
+    /// areas (D-01, D-04). The window's 보기 slot, while it is shown, stands
+    /// in front of them; the rail's document button brings them back.
+    pub documents: bool,
+    /// The tool column's tool, or `None` while there is no tool column.
     pub tool: Option<Tool>,
-    /// The tool the lane last showed, kept while it is closed so the next
-    /// open comes back on it; `None` for a lane that never showed one. Set
-    /// only through `set_tool`, so it follows `tool` and a close leaves it.
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "stored_tool"
-    )]
-    pub last_tool: Option<Tool>,
     /// The PRs tool's scope; left out of the file while default, so a
     /// Workspace that never used it reads as before.
-    #[serde(rename = "work", skip_serializing_if = "PrsView::is_default")]
+    #[serde(skip_serializing_if = "PrsView::is_default")]
     pub prs: PrsView,
     /// Whether the lane is pinned: docked beside Agent Views, taking its
-    /// width from them, rather than floating over them (D-03).
+    /// width from them, rather than floating over them (right-lane D-03).
     pub pinned: bool,
-    /// Whether the files tool shows the file tree column (D-05). It stays
-    /// on until the operator turns it off.
-    pub tree: bool,
-    /// The files tool's document width in CSS pixels once the operator
-    /// resized it; until then the shell's default. The same width floats and
-    /// docks (B6).
+    /// The viewing column's width while it shows the documents, in CSS
+    /// pixels, once the operator resized it; until then the shell's default.
+    /// The same width floats and docks (right-lane B6).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub lane_width: Option<u32>,
-    /// The width of every other tool and of the 보기 slot, the same way, so
-    /// a wide document does not widen Memory or PRs.
+    pub document_width: Option<u32>,
+    /// The viewing column's width while it shows the 보기 slot, the same way,
+    /// so a page widened to 900 leaves a card as it was (D-09).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail_width: Option<u32>,
+    /// The tool column's width while it shows the Explorer, the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explorer_width: Option<u32>,
+    /// The tool column's width for Memory, PRs and Changes, the same way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub panel_width: Option<u32>,
-    /// The tree column's width, the same way.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tree_width: Option<u32>,
     pub last_used_unix_ms: u64,
     /// The checkout's one View list, split and selection, whichever Agent tab
     /// is in front. Stored as `view_layout`: the keys earlier builds kept per
@@ -193,28 +155,29 @@ pub struct WorkspaceView {
     pub feedback: crate::view_feedback::Feedback,
 }
 
-/// A stored schema 3 entry.
+/// A stored schema 4 entry.
 #[derive(Deserialize)]
 struct StoredLane {
     device_id: String,
     path: String,
     #[serde(default)]
+    open: bool,
+    #[serde(default)]
+    documents: bool,
+    #[serde(default)]
     tool: Option<Tool>,
     #[serde(default)]
-    last_tool: Option<Tool>,
-    /// The Work tool's `lens` beside the scope is ignored (D-34).
-    #[serde(default)]
-    work: PrsView,
+    prs: PrsView,
     #[serde(default)]
     pinned: bool,
     #[serde(default)]
-    tree: bool,
+    document_width: Option<u32>,
     #[serde(default)]
-    lane_width: Option<u32>,
+    detail_width: Option<u32>,
+    #[serde(default)]
+    explorer_width: Option<u32>,
     #[serde(default)]
     panel_width: Option<u32>,
-    #[serde(default)]
-    tree_width: Option<u32>,
     #[serde(default)]
     last_used_unix_ms: u64,
     #[serde(default, rename = "view_layout")]
@@ -236,16 +199,15 @@ impl StoredLane {
         WorkspaceView {
             device_id: self.device_id,
             path: self.path,
+            open: self.open,
+            documents: self.documents,
             tool: self.tool,
-            // A file written before the last tool was kept has only the
-            // tool an open lane shows.
-            last_tool: self.last_tool.or(self.tool),
-            prs: self.work,
+            prs: self.prs,
             pinned: self.pinned,
-            tree: self.tree,
-            lane_width: self.lane_width,
+            document_width: self.document_width,
+            detail_width: self.detail_width,
+            explorer_width: self.explorer_width,
             panel_width: self.panel_width,
-            tree_width: self.tree_width,
             last_used_unix_ms: self.last_used_unix_ms,
             layout: self.layout,
             agent_layout: self.agent_layout,
@@ -257,139 +219,93 @@ impl StoredLane {
     }
 }
 
+/// A stored schema 3 entry: one lane showing one tool. Its lane (`tool`,
+/// `last_tool`, `pinned`, `tree` and the widths) is not read, because the
+/// lane has two columns now and the old shape is not carried over (D-10);
+/// the PRs scope under the Work tool's `work` key, and everything that is
+/// not the lane, are.
+#[derive(Deserialize)]
+struct StoredOneToolLane {
+    device_id: String,
+    path: String,
+    #[serde(default)]
+    work: PrsView,
+    #[serde(default)]
+    last_used_unix_ms: u64,
+    #[serde(default, rename = "view_layout")]
+    layout: Layout,
+    #[serde(default)]
+    agent_layout: crate::agent_layout::Layout,
+    #[serde(default)]
+    agent_groups: crate::agent_groups::Groups,
+    #[serde(default)]
+    agent_starts: std::collections::BTreeMap<String, crate::runtime::group_starts::StartIntent>,
+    #[serde(default)]
+    pane_moves: std::collections::BTreeMap<String, crate::runtime::pane_move::Intent>,
+    #[serde(default)]
+    feedback: crate::view_feedback::Feedback,
+}
+
+impl StoredOneToolLane {
+    fn into_view(self) -> WorkspaceView {
+        WorkspaceView {
+            prs: self.work,
+            last_used_unix_ms: self.last_used_unix_ms,
+            layout: self.layout,
+            agent_layout: self.agent_layout,
+            agent_groups: self.agent_groups,
+            agent_starts: self.agent_starts,
+            pane_moves: self.pane_moves,
+            feedback: self.feedback,
+            ..WorkspaceView::new(&self.device_id, &self.path)
+        }
+    }
+}
+
 /// An entry as any build of schema 2 wrote it: the columns' fields, or the
-/// side panel or the layout and boundary that came before them, with the
-/// one tool and its column or the two tool flags that came before those.
-/// Keys no longer read (`pinned` of the side panel, its shares, a tab's
-/// File Views visibility) are dropped by not being named here.
+/// side panel or the layout and boundary that came before them. Only the
+/// View list, the Agent layout and the stamp are read; the keys of the
+/// columns and panels (`views`, `tools`, `tool`, `panel`, `mode`, the widths
+/// and shares) are dropped by not being named here.
 #[derive(Deserialize)]
 struct StoredColumns {
     device_id: String,
     path: String,
-    #[serde(default)]
-    views: Option<bool>,
-    #[serde(default)]
-    panel: Option<LegacyPanel>,
-    #[serde(default)]
-    tool: Option<LegacyTool>,
-    #[serde(default)]
-    tools: Option<bool>,
-    #[serde(default = "default_explorer")]
-    explorer: bool,
-    #[serde(default)]
-    changes: bool,
-    #[serde(default)]
-    views_width: Option<u32>,
     #[serde(default)]
     last_used_unix_ms: u64,
     #[serde(default)]
     layout: Layout,
     #[serde(default)]
     agent_layout: crate::agent_layout::Layout,
-    #[serde(default)]
-    mode: Option<LegacyMode>,
-    #[serde(default)]
-    views_over_agents: bool,
 }
 
 impl StoredColumns {
-    /// The columns become the lane once (PRD right-lane D-11, B22): File
-    /// Views on gives the files tool, else Tools on gives its tool, the
-    /// Explorer becoming the files tool with its tree; neither gives a
-    /// closed lane. The pin starts off, and File Views' width is the lane's.
     fn into_view(self) -> WorkspaceView {
-        let (views, columns) = match (self.views, self.panel) {
-            (Some(views), _) => (views, true),
-            (None, Some(panel)) => (panel != LegacyPanel::Closed, false),
-            (None, None) => (legacy_views(self.mode, self.views_over_agents), false),
-        };
-        let (tool, tools) = match (self.tool, self.tools) {
-            (Some(tool), Some(tools)) => (tool, tools),
-            _ => legacy_tool(self.explorer, self.changes),
-        };
-        let (tool, tree) = lane_of(views, tools.then_some(tool));
         WorkspaceView {
-            device_id: self.device_id,
-            path: self.path,
-            tool,
-            last_tool: tool,
-            prs: PrsView::default(),
-            pinned: false,
-            tree,
-            // Widths stored before the columns were shares of a panel that
-            // floated; the lane starts at its default.
-            lane_width: if columns { self.views_width } else { None },
-            panel_width: None,
-            tree_width: None,
             last_used_unix_ms: self.last_used_unix_ms,
             layout: self.layout,
             agent_layout: self.agent_layout,
-            agent_groups: Default::default(),
-            agent_starts: Default::default(),
-            pane_moves: Default::default(),
-            feedback: Default::default(),
+            ..WorkspaceView::new(&self.device_id, &self.path)
         }
     }
 }
 
-/// The lane an entry of the columns restarts with: the files tool where
-/// File Views was on, else the shown tool, the Explorer as the files tool
-/// with its tree; and whether the tree is on, which it is wherever the
-/// Explorer showed.
-fn lane_of(views: bool, shown_tool: Option<LegacyTool>) -> (Option<Tool>, bool) {
-    let tree = shown_tool == Some(LegacyTool::Explorer);
-    let tool = if views {
-        Some(Tool::Files)
-    } else {
-        shown_tool.map(|tool| match tool {
-            LegacyTool::Explorer => Tool::Files,
-            LegacyTool::Changes => Tool::Changes,
-            LegacyTool::AgentSessions => Tool::Prs,
-            LegacyTool::Memory => Tool::Memory,
-        })
-    };
-    (tool, tree)
-}
-
-/// Whether an entry stored before the side panel showed its views: Agents
-/// only did not, unless its View areas were drawn over the agents; Agents
-/// and Views and Views only did.
-fn legacy_views(mode: Option<LegacyMode>, over: bool) -> bool {
-    match mode {
-        None | Some(LegacyMode::Agents) => over,
-        Some(LegacyMode::Together | LegacyMode::Views) => true,
-    }
-}
-
-/// The tool an entry stored with two independent flags showed: the
-/// Explorer when it showed, since it won the panel while both did, else
-/// History when that showed; with neither, nothing showed.
-fn legacy_tool(explorer: bool, changes: bool) -> (LegacyTool, bool) {
-    match (explorer, changes) {
-        (false, true) => (LegacyTool::Changes, true),
-        (explorer, _) => (LegacyTool::Explorer, explorer),
-    }
-}
-
-fn default_explorer() -> bool {
-    true
-}
-
 impl WorkspaceView {
     /// A Workspace seen for the first time shows Agent Views alone: the
-    /// lane closed, unpinned, without its tree (B1).
+    /// lane closed, unpinned, no column and the default widths (B1, B23).
     pub fn new(device_id: &str, path: &str) -> Self {
         Self {
             device_id: device_id.to_owned(),
             path: path.to_owned(),
+            open: false,
+            documents: false,
             tool: None,
-            last_tool: None,
             prs: PrsView::default(),
             pinned: false,
-            tree: false,
-            lane_width: None,
+            document_width: None,
+            detail_width: None,
+            explorer_width: None,
             panel_width: None,
-            tree_width: None,
             last_used_unix_ms: 0,
             layout: Layout::default(),
             agent_layout: crate::agent_layout::Layout::default(),
@@ -404,24 +320,45 @@ impl WorkspaceView {
         self.device_id == device_id && self.path == path
     }
 
-    /// Shows a tool or closes the lane. A tool shown is remembered, a close
-    /// is not a forgetting: the next open returns to `last_tool`.
-    pub fn set_tool(&mut self, tool: Option<Tool>) {
-        self.tool = tool;
-        if tool.is_some() {
-            self.last_tool = tool;
-        }
+    /// Opens the lane on a tool: the tool column shows it, and a closed
+    /// lane opens with its viewing column back as it was (B14, lane-two-
+    /// columns mockup: opening something in a closed lane brings the other
+    /// column back as it was before the close).
+    pub fn show_tool(&mut self, tool: Tool) {
+        self.tool = Some(tool);
+        self.open = true;
     }
 
-    /// Whether the lane holds the View areas: it is open on the files tool.
-    pub fn shows_files(&self) -> bool {
-        self.tool == Some(Tool::Files)
+    /// Closes the tool column alone (B14); the viewing column stays.
+    pub fn close_tool(&mut self) {
+        self.tool = None;
     }
 
-    /// Whether the file tree column is drawn: the files tool with the tree
-    /// on, or with no view to show beside it (B12).
-    pub fn shows_tree(&self) -> bool {
-        self.shows_files() && (self.tree || self.layout.displays().next().is_none())
+    /// Shows the documents in the viewing column and opens a closed lane
+    /// (B6, B11).
+    pub fn show_documents(&mut self) {
+        self.documents = true;
+        self.open = true;
+    }
+
+    /// Whether anything of the Workspace's own is drawn while the lane is
+    /// open: the documents (with a view to show) or a tool. The window's
+    /// 보기 slot is drawn besides.
+    pub fn has_column(&self) -> bool {
+        (self.documents && self.layout.display_count() > 0) || self.tool.is_some()
+    }
+
+    /// Whether the viewing column holds the View areas: the lane is open
+    /// with the documents shown, whether or not the window's 보기 slot
+    /// stands in front of them.
+    pub fn shows_documents(&self) -> bool {
+        self.open && self.documents
+    }
+
+    /// Whether the tool column shows the Explorer: the readers that gate on
+    /// the tree (the device Explorer watch) read only then.
+    pub fn shows_explorer(&self) -> bool {
+        self.open && self.tool == Some(Tool::Explorer)
     }
 }
 
@@ -478,9 +415,16 @@ struct StoredWorkspaceViews<'a> {
 }
 
 #[derive(Deserialize)]
-struct StoredV3 {
+struct StoredV4 {
     #[serde(default)]
     workspaces: Vec<StoredLane>,
+}
+
+/// Schema 3: one lane showing one tool. Read only to migrate.
+#[derive(Deserialize)]
+struct StoredV3 {
+    #[serde(default)]
+    workspaces: Vec<StoredOneToolLane>,
 }
 
 /// Schema 2: the File Views and Tools columns. Read only to migrate.
@@ -508,12 +452,10 @@ struct StoredV1 {
 struct V1View {
     device_id: String,
     path: String,
+    /// Read so an older file still parses; the lane is not carried over.
     #[serde(default)]
+    #[allow(dead_code)]
     mode: Option<LegacyMode>,
-    #[serde(default = "default_explorer")]
-    explorer: bool,
-    #[serde(default)]
-    changes: bool,
     #[serde(default)]
     tabs: Vec<V1Tab>,
     #[serde(default)]
@@ -554,12 +496,7 @@ impl V1View {
             area.displays = displays;
             area.active = active.or_else(|| area.displays.last().map(|display| display.id.clone()));
         }
-        let (tool, tools) = legacy_tool(self.explorer, self.changes);
-        let (tool, tree) = lane_of(legacy_views(self.mode, false), tools.then_some(tool));
         WorkspaceView {
-            tool,
-            last_tool: tool,
-            tree,
             last_used_unix_ms: self.last_used_unix_ms,
             layout,
             ..WorkspaceView::new(&self.device_id, &self.path)
@@ -606,6 +543,19 @@ pub fn load(path: &Path, now_unix_ms: u64) -> (WorkspaceViews, LoadOutcome) {
         }
     };
     let reason = match serde_json::from_slice::<StoredVersion>(&bytes) {
+        Ok(StoredVersion { schema_version: 4 }) => {
+            match serde_json::from_slice::<StoredV4>(&bytes) {
+                Ok(stored) => {
+                    let views = stored
+                        .workspaces
+                        .into_iter()
+                        .map(StoredLane::into_view)
+                        .collect();
+                    return settle(views, None);
+                }
+                Err(error) => format!("the file is not valid: {error}"),
+            }
+        }
         Ok(StoredVersion { schema_version: 3 }) => {
             match serde_json::from_slice::<serde_json::Value>(&bytes).and_then(|mut value| {
                 let dropped = drop_retired_cards(&mut value);
@@ -615,9 +565,9 @@ pub fn load(path: &Path, now_unix_ms: u64) -> (WorkspaceViews, LoadOutcome) {
                     let views = stored
                         .workspaces
                         .into_iter()
-                        .map(StoredLane::into_view)
+                        .map(StoredOneToolLane::into_view)
                         .collect();
-                    let (views, mut outcome) = settle(views, None);
+                    let (views, mut outcome) = settle(views, Some(3));
                     if dropped > 0
                         && let LoadOutcome::Loaded { repairs, .. } = &mut outcome
                     {
@@ -627,7 +577,7 @@ pub fn load(path: &Path, now_unix_ms: u64) -> (WorkspaceViews, LoadOutcome) {
                     }
                     return (views, outcome);
                 }
-                Err(error) => format!("the file is not valid: {error}"),
+                Err(error) => format!("the schema 3 file could not be migrated: {error}"),
             }
         }
         Ok(StoredVersion { schema_version: 2 }) => {
@@ -700,9 +650,10 @@ fn settle(
 ) -> (WorkspaceViews, LoadOutcome) {
     let mut repairs = Vec::new();
     for view in &mut workspaces {
-        view.lane_width = view.lane_width.map(clamp_width);
+        view.document_width = view.document_width.map(clamp_width);
+        view.detail_width = view.detail_width.map(clamp_width);
+        view.explorer_width = view.explorer_width.map(clamp_width);
         view.panel_width = view.panel_width.map(clamp_width);
-        view.tree_width = view.tree_width.map(clamp_width);
         for note in view
             .layout
             .repair()
@@ -783,10 +734,15 @@ mod tests {
         }
     }
 
-    /// S7 B14, PRD right-lane B22: the lane (its tool, pin, tree and both
-    /// widths) and a nested tree come back with its axes, ratios, order,
-    /// previews, active displays and the area in use; runtime bindings are
-    /// never written.
+    /// The lane a view holds, as the shell reads it.
+    fn lane(view: &WorkspaceView) -> (bool, bool, Option<Tool>, bool) {
+        (view.open, view.documents, view.tool, view.pinned)
+    }
+
+    /// S7 B14, PRD right-lane B22, lane-two-columns B17: the lane (its two
+    /// columns, pin and four widths) and a nested tree come back with its
+    /// axes, ratios, order, previews, active displays and the area in use;
+    /// runtime bindings are never written.
     #[test]
     fn a_saved_lane_and_nested_layout_load_back_as_they_were() {
         let folder = scratch("roundtrip");
@@ -794,11 +750,13 @@ mod tests {
         let path = root.join("workspace-views.json");
         let mut views = WorkspaceViews::default();
         let entry = views.entry("local", "/repo");
-        entry.set_tool(Some(Tool::Changes));
+        entry.show_documents();
+        entry.show_tool(Tool::Changes);
         entry.pinned = true;
-        entry.tree = true;
-        entry.lane_width = Some(720);
-        entry.tree_width = Some(300);
+        entry.document_width = Some(720);
+        entry.detail_width = Some(400);
+        entry.explorer_width = Some(300);
+        entry.panel_width = Some(420);
         let layout = &mut entry.layout;
         for (path, kind, committed, preview) in [
             ("/repo/a.md", DisplayKind::File, None, false),
@@ -823,21 +781,21 @@ mod tests {
         save(&path, &views).unwrap();
 
         let written = fs::read_to_string(&path).unwrap();
-        assert!(written.contains("\"schema_version\": 3"));
+        assert!(written.contains("\"schema_version\": 4"));
         assert!(!written.contains("bound-at-runtime"));
         let (loaded, outcome) = load(&path, 1);
         assert_eq!(outcome, current());
         assert_eq!(loaded, unbound(views));
         let view = &loaded.workspaces[0];
+        assert_eq!(lane(view), (true, true, Some(Tool::Changes), true));
         assert_eq!(
             (
-                view.tool,
-                view.pinned,
-                view.tree,
-                view.lane_width,
-                view.tree_width
+                view.document_width,
+                view.detail_width,
+                view.explorer_width,
+                view.panel_width
             ),
-            (Some(Tool::Changes), true, true, Some(720), Some(300))
+            (Some(720), Some(400), Some(300), Some(420))
         );
         let layout = &view.layout;
         let Node::Split(root_split) = &layout.root else {
@@ -856,47 +814,59 @@ mod tests {
         assert_eq!(kept, vec![("/repo/a.md", false), ("/repo/d.md", true)]);
     }
 
-    /// B1: a Workspace seen for the first time has its lane closed,
-    /// unpinned and without its tree.
+    /// B1, B23: a Workspace seen for the first time has its lane closed,
+    /// unpinned, with no column and the default widths.
     #[test]
     fn a_new_workspace_starts_with_the_lane_closed() {
         let view = WorkspaceView::new("local", "/repo");
+        assert_eq!(lane(&view), (false, false, None, false));
         assert_eq!(
             (
-                view.tool,
-                view.pinned,
-                view.tree,
-                view.lane_width,
-                view.tree_width
+                view.document_width,
+                view.detail_width,
+                view.explorer_width,
+                view.panel_width
             ),
-            (None, false, false, None, None)
+            (None, None, None, None)
         );
-        assert!(!view.shows_files());
-        assert!(!view.shows_tree());
+        assert!(!view.has_column());
+        assert!(!view.shows_explorer());
     }
 
-    /// B12: the files tool with no view to show draws the tree alone,
-    /// whether or not the tree is on.
+    /// B5, B12, B14, B15: the documents count as a column only with a view to
+    /// show, a tool closes alone, and a close keeps both columns' shape for
+    /// the reopen.
     #[test]
-    fn the_files_tool_without_a_view_shows_the_tree() {
+    fn the_columns_open_close_and_keep_their_shape_through_a_close() {
         let mut view = WorkspaceView::new("local", "/repo");
-        view.set_tool(Some(Tool::Files));
-        assert!(view.shows_tree());
+        view.show_documents();
+        assert_eq!(lane(&view), (true, true, None, false));
+        assert!(!view.has_column(), "no view to show");
         let display = view
             .layout
             .new_display("/repo/a.md", DisplayKind::File, None, false);
         view.layout.insert("a1", display, 1).unwrap();
-        assert!(!view.shows_tree());
-        view.tree = true;
-        assert!(view.shows_tree());
-        view.set_tool(Some(Tool::Memory));
-        assert!(!view.shows_tree());
+        assert!(view.has_column());
+        view.show_tool(Tool::Explorer);
+        assert!(view.shows_explorer());
+        view.close_tool();
+        assert_eq!(lane(&view), (true, true, None, false));
+        assert!(!view.shows_explorer());
+        view.show_tool(Tool::Memory);
+        view.open = false;
+        assert_eq!(lane(&view), (false, true, Some(Tool::Memory), false));
+        assert!(!view.shows_explorer(), "a closed lane draws no tool");
+        view.show_tool(Tool::Memory);
+        assert_eq!(
+            lane(&view),
+            (true, true, Some(Tool::Memory), false),
+            "the reopen brings the documents back beside the tool"
+        );
     }
 
-    /// S7 D-10, B17; PRD right-lane D-11: an S6 file becomes one area
+    /// S7 D-10, B17; lane-two-columns D-10: an S6 file becomes one area
     /// holding its tabs in saved order, with its active tab and its preview,
-    /// its shown views become the files tool, and the next save writes
-    /// schema 3.
+    /// its lane starts closed, and the next save writes schema 4.
     #[test]
     fn a_schema_1_file_migrates_into_one_area() {
         let folder = scratch("migrate");
@@ -932,16 +902,8 @@ mod tests {
             }
         ));
         let view = &loaded.workspaces[0];
-        assert_eq!(
-            (
-                view.tool,
-                view.pinned,
-                view.tree,
-                view.lane_width,
-                view.last_used_unix_ms
-            ),
-            (Some(Tool::Files), false, false, None, 7)
-        );
+        assert_eq!(lane(view), (false, false, None, false));
+        assert_eq!(view.last_used_unix_ms, 7);
         assert_eq!(view.layout.area_count(), 1);
         let area = view.layout.active_area();
         let displays: Vec<_> = area
@@ -966,8 +928,8 @@ mod tests {
     }
 
     /// S6 B20, S7 B17, PRD right-lane B22: a file this build cannot read,
-    /// of an unknown version, one whose migration fails or a schema 3 entry
-    /// naming a tool no lane has, is kept byte for byte beside the path,
+    /// of an unknown version, one whose migration fails or a schema 4 entry
+    /// naming a tool no column has, is kept byte for byte beside the path,
     /// and the defaults load.
     #[test]
     fn an_unreadable_future_or_unmigratable_file_is_preserved_and_defaults_load() {
@@ -979,7 +941,8 @@ mod tests {
             br#"{"schema_version":9,"workspaces":[]}"#.as_slice(),
             br#"{"schema_version":1,"workspaces":[{"device_id":"local"}]}"#.as_slice(),
             br#"{"schema_version":2,"workspaces":[{"device_id":"local"}]}"#.as_slice(),
-            br#"{"schema_version":3,"workspaces":[{"device_id":"local","path":"/r","tool":"explorer"}]}"#.as_slice(),
+            br#"{"schema_version":3,"workspaces":[{"device_id":"local"}]}"#.as_slice(),
+            br#"{"schema_version":4,"workspaces":[{"device_id":"local","path":"/r","tool":"files"}]}"#.as_slice(),
         ]
         .into_iter()
         .enumerate()
@@ -1101,14 +1064,13 @@ mod tests {
         entry
     }
 
-    /// PRD sidebar-task-lens B30, D-34: a lane stored on the Work tool
-    /// (`work`, or `agent_sessions` before it) restarts on PRs with its other
-    /// choices and its scope chip unchanged, the Work basis is dropped, and
-    /// the next save writes the tool as `work` again, which every build since
-    /// Work reads (a build before PRs refuses a file naming `prs`).
+    /// PRD lane-two-columns D-10, B23: a schema 3 lane, whatever tool, tree,
+    /// pin and widths it stored, starts closed at the default widths; its
+    /// View list, comments and PRs scope (under the Work tool's `work` key)
+    /// stay, and the next save writes schema 4 with none of the old keys.
     #[test]
-    fn a_lane_stored_on_work_restarts_on_prs_and_keeps_its_scope() {
-        let folder = scratch("work-tool");
+    fn a_schema_3_lane_starts_closed_and_keeps_its_views_and_prs_scope() {
+        let folder = scratch("one-tool-lane");
         let path = folder.path().join("workspace-views.json");
         fs::write(
             &path,
@@ -1116,94 +1078,101 @@ mod tests {
                 "schema_version": 3,
                 "workspaces": [
                     {"device_id": "local", "path": "/old", "tool": "agent_sessions",
-                     "pinned": true, "lane_width": 500},
+                     "pinned": true, "lane_width": 500, "tree": true, "tree_width": 260,
+                     "view_layout": one_view_layout(), "feedback": {"next_id": 7},
+                     "view_bookmarks": {"w:t1": {"a1": "d1"}}, "view_owner": "w:t1"},
                     {"device_id": "local", "path": "/new", "tool": "work", "last_tool": "work",
                      "work": {"lens": "sessions", "only_checkout": true}},
+                    {"device_id": "local", "path": "/files", "tool": "files", "last_tool": "memory",
+                     "panel_width": 440},
                 ]
             })
             .to_string(),
         )
         .unwrap();
         let (loaded, outcome) = load(&path, 1);
-        assert!(matches!(outcome, LoadOutcome::Loaded { ref repairs, .. } if repairs.is_empty()));
-        assert_eq!(loaded.workspaces[0].tool, Some(Tool::Prs));
-        assert_eq!(loaded.workspaces[0].prs, PrsView::default());
-        assert!(loaded.workspaces[0].pinned);
-        assert_eq!(loaded.workspaces[0].lane_width, Some(500));
-        assert_eq!(loaded.workspaces[1].tool, Some(Tool::Prs));
+        assert!(matches!(
+            outcome,
+            LoadOutcome::Loaded { migrated_from: Some(3), ref repairs } if repairs.is_empty()
+        ));
+        for view in &loaded.workspaces {
+            assert_eq!(lane(view), (false, false, None, false), "{}", view.path);
+            assert_eq!(
+                (
+                    view.document_width,
+                    view.detail_width,
+                    view.explorer_width,
+                    view.panel_width
+                ),
+                (None, None, None, None),
+                "{}",
+                view.path
+            );
+        }
+        let old = loaded.get("local", "/old").unwrap();
+        assert_eq!(old.layout.display_count(), 1);
+        assert_eq!(old.feedback.next_id, 7, "the comments survive");
         assert_eq!(
-            loaded.workspaces[1].prs,
+            loaded.get("local", "/new").unwrap().prs,
             PrsView {
                 only_checkout: true
             }
         );
+        assert_eq!(
+            loaded.get("local", "/files").unwrap().prs,
+            PrsView::default()
+        );
+
         save(&path, &loaded).unwrap();
         let written = fs::read_to_string(&path).unwrap();
-        assert!(
-            !written.contains("agent_sessions") && !written.contains("\"prs\""),
-            "the tool is written under the name older builds read"
-        );
-        let (again, _) = load(&path, 2);
-        assert_eq!(again, loaded);
+        assert!(written.contains("\"schema_version\": 4"));
+        for retired in [
+            "last_tool",
+            "\"tree\"",
+            "lane_width",
+            "tree_width",
+            "\"work\"",
+            "agent_sessions",
+            "view_bookmarks",
+            "view_owner",
+        ] {
+            assert!(!written.contains(retired), "{retired} is not written again");
+        }
         let stored: serde_json::Value = serde_json::from_str(&written).unwrap();
-        assert_eq!(stored["workspaces"][1]["tool"], "work");
         assert_eq!(
-            stored["workspaces"][1]["work"],
+            stored["workspaces"][1]["prs"],
             serde_json::json!({"only_checkout": true})
         );
         assert!(
-            stored["workspaces"][0].get("work").is_none(),
+            stored["workspaces"][0].get("prs").is_none(),
             "a default scope leaves the file as it was"
         );
+        let (again, outcome) = load(&path, 2);
+        assert_eq!(outcome, current());
+        // A comment list with nothing in it is not written, so only the
+        // columns, the scope and the views are compared.
+        let shape = |views: &WorkspaceViews| {
+            views
+                .workspaces
+                .iter()
+                .map(|view| {
+                    (
+                        view.path.clone(),
+                        lane(view),
+                        view.prs,
+                        view.layout.display_count(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shape(&again), shape(&loaded));
     }
 
-    /// A closed lane returns to the tool it last showed: the key is stored
-    /// while the lane is closed, an entry written before it falls back to
-    /// the tool an open lane shows, and a lane that never showed one has
-    /// none (the shell opens it on Files).
+    /// PRD lane-two-columns D-10: every shape schema 2 stored loads its View
+    /// list and Agent layout with the lane closed, and the next save writes
+    /// none of the columns' keys.
     #[test]
-    fn the_last_tool_is_stored_beside_a_closed_lane_and_read_from_older_files() {
-        let folder = scratch("last-tool");
-        let path = folder.path().join("workspace-views.json");
-        let mut views = WorkspaceViews::default();
-        let entry = views.entry("local", "/closed");
-        entry.set_tool(Some(Tool::Memory));
-        entry.set_tool(None);
-        assert_eq!((entry.tool, entry.last_tool), (None, Some(Tool::Memory)));
-        assert_eq!(views.entry("local", "/never").last_tool, None);
-        save(&path, &views).unwrap();
-        let (loaded, _) = load(&path, 1);
-        let closed = loaded.get("local", "/closed").unwrap();
-        assert_eq!((closed.tool, closed.last_tool), (None, Some(Tool::Memory)));
-
-        fs::write(
-            &path,
-            serde_json::json!({
-                "schema_version": 3,
-                "workspaces": [
-                    {"device_id": "local", "path": "/open", "tool": "changes"},
-                    {"device_id": "local", "path": "/shut"},
-                ]
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let (older, _) = load(&path, 2);
-        assert_eq!(
-            older.get("local", "/open").unwrap().last_tool,
-            Some(Tool::Changes)
-        );
-        assert_eq!(older.get("local", "/shut").unwrap().last_tool, None);
-    }
-
-    /// PRD right-lane D-11, B22: every shape schema 2 stored becomes the
-    /// lane once. File Views on gives the files tool, else Tools on gives
-    /// its tool, the Explorer as the files tool with its tree on; neither
-    /// gives a closed lane. The pin starts off, File Views' width is the
-    /// lane's, a tab's File Views visibility is dropped while the stored View
-    /// list stays, and the next save writes none of the columns' keys.
-    #[test]
-    fn a_schema_2_workspace_becomes_its_lane_once() {
+    fn a_schema_2_workspace_loads_its_views_with_the_lane_closed() {
         let folder = scratch("columns");
         let root = folder.path().to_path_buf();
         let path = root.join("workspace-views.json");
@@ -1213,13 +1182,10 @@ mod tests {
                 "schema_version": 2,
                 "workspaces": [
                     stored_entry("/views", serde_json::json!({"views": true, "tools": true, "tool": "changes", "views_width": 700, "tools_width": 300})),
-                    stored_entry("/sessions", serde_json::json!({"views": false, "tools": true, "tool": "agent_sessions", "tools_width": 300})),
                     stored_entry("/explorer", serde_json::json!({"views": false, "tools": true, "tool": "explorer"})),
-                    stored_entry("/both", serde_json::json!({"views": true, "tools": true, "tool": "explorer"})),
                     stored_entry("/closed", serde_json::json!({"views": false, "tools": false, "tool": "memory", "view_visibility": {"w:t1": true}, "view_owner": "w:t1"})),
-                    stored_entry("/panel", serde_json::json!({"panel": "open", "pinned": true, "views_width": 900, "tool": "changes", "tools": false})),
+                    stored_entry("/panel", serde_json::json!({"panel": "floating", "pinned": true, "views_width": 900})),
                     stored_entry("/layout", serde_json::json!({"mode": "agents", "explorer": false, "changes": false})),
-                    stored_entry("/flags", serde_json::json!({"mode": "agents", "explorer": false, "changes": true})),
                 ]
             })
             .to_string(),
@@ -1235,39 +1201,15 @@ mod tests {
                 repairs: Vec::new(),
             }
         );
-        let lanes: Vec<_> = loaded
-            .workspaces
-            .iter()
-            .map(|view| {
-                (
-                    view.path.as_str(),
-                    view.tool,
-                    view.tree,
-                    view.pinned,
-                    view.lane_width,
-                    view.tree_width,
-                )
-            })
-            .collect();
-        assert_eq!(
-            lanes,
-            vec![
-                ("/views", Some(Tool::Files), false, false, Some(700), None),
-                ("/sessions", Some(Tool::Prs), false, false, None, None),
-                ("/explorer", Some(Tool::Files), true, false, None, None),
-                ("/both", Some(Tool::Files), true, false, None, None),
-                ("/closed", None, false, false, None, None),
-                ("/panel", Some(Tool::Files), false, false, None, None),
-                ("/layout", None, false, false, None, None),
-                ("/flags", Some(Tool::Changes), false, false, None, None),
-            ]
-        );
-        let closed = loaded.get("local", "/closed").unwrap();
-        assert_eq!(closed.layout.display_count(), 1, "views are kept closed");
+        assert_eq!(loaded.workspaces.len(), 5);
+        for view in &loaded.workspaces {
+            assert_eq!(lane(view), (false, false, None, false), "{}", view.path);
+            assert_eq!(view.layout.display_count(), 1, "views are kept");
+        }
 
         save(&path, &loaded).unwrap();
         let written = fs::read_to_string(&path).unwrap();
-        assert!(written.contains("\"schema_version\": 3"));
+        assert!(written.contains("\"schema_version\": 4"));
         for retired in [
             "\"views\"",
             "\"tools\"",
@@ -1285,36 +1227,11 @@ mod tests {
         assert_eq!(again, loaded);
     }
 
-    /// B31: a panel value no build wrote makes the file unreadable, which
-    /// keeps it aside and loads the defaults.
+    /// The checkout's View list and selection survive a save, and a schema 4
+    /// file carrying keys this build does not read loads the lane with an
+    /// empty View list and no repair.
     #[test]
-    fn an_unknown_panel_value_takes_the_unreadable_path() {
-        let folder = scratch("legacy-panel-unknown");
-        let root = folder.path().to_path_buf();
-        let path = root.join("workspace-views.json");
-        let body = serde_json::json!({
-            "schema_version": 2,
-            "workspaces": [{"device_id": "local", "path": "/r", "panel": "floating"}]
-        })
-        .to_string();
-        fs::write(&path, &body).unwrap();
-        let (loaded, outcome) = load(&path, 3);
-        assert!(loaded.workspaces.is_empty());
-        let LoadOutcome::Unreadable {
-            preserved_as: Some(preserved),
-            ..
-        } = outcome
-        else {
-            panic!("expected the unreadable path, got {outcome:?}");
-        };
-        assert_eq!(fs::read_to_string(preserved).unwrap(), body);
-    }
-
-    /// The checkout's View list and selection survive obsolete tab bookmarks. A
-    /// schema 3 file written by an earlier build, with its per-tab keys, loads
-    /// the lane and the Agent layout with an empty View list and no repair.
-    #[test]
-    fn the_checkout_views_survive_a_save_and_obsolete_tab_keys_are_ignored() {
+    fn the_checkout_views_survive_a_save_and_obsolete_keys_are_ignored() {
         let folder = scratch("bookmarks");
         let path = folder.path().join("workspace-views.json");
         let mut views = WorkspaceViews::default();
@@ -1328,7 +1245,6 @@ mod tests {
 
         let written = fs::read_to_string(&path).unwrap();
         assert!(written.contains("\"view_layout\"") && !written.contains("\"tab_views\""));
-        assert!(!written.contains("\"view_bookmarks\"") && !written.contains("\"layout\": {"));
         fs::write(
             &path,
             written.replacen(
@@ -1350,13 +1266,11 @@ mod tests {
         fs::write(
             &path,
             serde_json::json!({
-                "schema_version": 3,
+                "schema_version": 4,
                 "workspaces": [stored_entry("/old", serde_json::json!({
-                    "tool": "changes", "pinned": true, "tree": true,
-                    "lane_width": 500, "tree_width": 260,
+                    "open": true, "documents": true, "tool": "changes", "pinned": true,
+                    "document_width": 500, "explorer_width": 260,
                     "feedback": {"next_id": 7},
-                    "view_bookmarks": {"w:t1": {"a1": "d1"}},
-                    "view_owner": "w:t1",
                     "view_presentations": {"w:t2": {"layout": one_view_layout()}},
                 }))]
             })
@@ -1366,21 +1280,11 @@ mod tests {
         let (older, outcome) = load(&path, 2);
         let old = older.get("local", "/old").unwrap();
         assert_eq!(outcome, current());
+        assert_eq!(old.layout.display_count(), 0, "a `layout` key is not read");
+        assert_eq!(lane(old), (true, true, Some(Tool::Changes), true));
         assert_eq!(
-            old.layout.display_count(),
-            0,
-            "the per-tab lists are not read"
-        );
-        assert_eq!((old.tool, old.pinned), (Some(Tool::Changes), true));
-        assert_eq!(
-            (
-                old.tree,
-                old.lane_width,
-                old.tree_width,
-                old.feedback.next_id
-            ),
-            (true, Some(500), Some(260), 7),
-            "the lane's other choices and the comments survive (D-20)"
+            (old.document_width, old.explorer_width, old.feedback.next_id),
+            (Some(500), Some(260), 7)
         );
     }
 

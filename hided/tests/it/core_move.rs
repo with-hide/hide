@@ -3161,7 +3161,10 @@ fn seed_through_events(fixture: &Fixture) -> Result<()> {
             "project_checkouts_fold",
             json!({"workspace_id": target_project, "expanded": false}),
         ),
-        ("workspace_view", json!({"tool": "files", "pinned": true})),
+        (
+            "workspace_view",
+            json!({"tool": "explorer", "pinned": true}),
+        ),
         (
             "browser_open",
             json!({"url": "https://example.test/seed", "workspace": {"device_id": SOURCE_NODE, "path": source}}),
@@ -3434,7 +3437,7 @@ fn kept_per_machine(dir: &std::path::Path, own: &str) -> Result<Value> {
             .into_iter()
             .flatten()
             .filter(|row| row["device_id"].as_str().and_then(|device| machine_of(device, own).ok()) == Some(machine))
-            .map(|row| unqualified(&json!({"path": row["path"], "tool": row["tool"], "pinned": row["pinned"], "tree": row["tree"], "layout": row["view_layout"], "agent_layout": row["agent_layout"]})))
+            .map(|row| unqualified(&json!({"path": row["path"], "open": row["open"], "documents": row["documents"], "tool": row["tool"], "pinned": row["pinned"], "layout": row["layout"], "agent_layout": row["agent_layout"]})))
             .collect();
         let label_records: serde_json::Map<String, Value> = labels["targets"]
             .as_object()

@@ -903,7 +903,7 @@ fn a_pre_group_workspace_file_restores_the_entire_ungrouped_tree() {
 
     // The existing schema-3 format has agent_layout but no named collection.
     let mut legacy: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
-    assert_eq!(legacy["schema_version"], 3);
+    assert_eq!(legacy["schema_version"], 4);
     for workspace in legacy["workspaces"].as_array_mut().unwrap() {
         workspace.as_object_mut().unwrap().remove("agent_groups");
     }

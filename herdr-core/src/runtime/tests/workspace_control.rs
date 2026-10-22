@@ -555,7 +555,7 @@ fn views_of(runtime: &Runtime, key: (&str, &str)) -> bool {
         .workspaces
         .iter()
         .find(|view| view.is(key.0, key.1))
-        .map(|view| view.tool == Some(crate::workspace_views::Tool::Files))
+        .map(|view| view.shows_documents())
         .unwrap()
 }
 
