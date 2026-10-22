@@ -4,7 +4,7 @@
 //! The takeover the core asks is a stand-in whose answers each test hands to
 //! the runtime itself, so the order of looks and moves is the test's.
 
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak, mpsc};
 
 use super::first_run::{event, first_run_pass, report_here, step};
 use super::*;
@@ -15,12 +15,15 @@ use crate::model::FirstRunStep;
 /// own, since its handle to the runtime leads nowhere.
 struct StandIn {
     look: Look,
-    delay: std::time::Duration,
+    /// A look that answers only once the test lets go of the other end.
+    held: Option<Mutex<mpsc::Receiver<()>>>,
 }
 
 impl HerdrTakeover for StandIn {
     fn look(&self) -> Look {
-        std::thread::sleep(self.delay);
+        if let Some(held) = &self.held {
+            let _ = held.lock().unwrap().recv();
+        }
         self.look.clone()
     }
 
@@ -38,7 +41,7 @@ fn installed() -> Runtime {
     runtime.install_herdr_takeover(
         Arc::new(StandIn {
             look: Look::Nothing,
-            delay: std::time::Duration::ZERO,
+            held: None,
         }),
         Weak::new(),
         crate::handle::ChangeNotifier::noop(),
@@ -104,11 +107,13 @@ fn the_wizard_opens_on_herdr_only_while_there_may_be_a_server_to_move() {
 /// that found nothing, so the wizard is never held on its Herdr step.
 #[test]
 fn a_look_that_does_not_answer_in_time_finds_nothing() {
+    let (release, held) = mpsc::channel();
     let slow: Arc<dyn HerdrTakeover> = Arc::new(StandIn {
         look: offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL),
-        delay: std::time::Duration::from_secs(2),
+        held: Some(Mutex::new(held)),
     });
     let look = bounded_look_for_test(&slow, std::time::Duration::from_millis(50));
+    drop(release);
     assert!(
         matches!(&look, Look::Unreadable { stage, .. } if stage == "timeout"),
         "{look:?}"

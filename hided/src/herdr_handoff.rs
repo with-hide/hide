@@ -216,6 +216,9 @@ enum Owner {
     Unknown,
 }
 
+/// The step that could not read the server, and why.
+type Unread = (&'static str, String);
+
 impl LocalTakeover {
     /// The takeover of a daemon that runs from a desktop package with that
     /// package's own Herdr on `socket`; `None` for any other daemon (a
@@ -265,7 +268,7 @@ impl LocalTakeover {
 
     /// The server on the socket, who runs it, and what it is offered; the
     /// pid is `None` where the system cannot name a socket's peer.
-    fn judge(&self) -> Result<Option<(Option<u32>, Offer)>, (&'static str, String)> {
+    fn judge(&self) -> Result<Option<(Option<u32>, Offer)>, Unread> {
         let ours_file = file_id(&self.ours).map_err(|error| ("ours", error.to_string()))?;
         let (pid, owner) = match server_on(&self.socket) {
             Ok(None) => return Ok(None),
