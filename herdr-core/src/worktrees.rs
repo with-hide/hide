@@ -62,6 +62,9 @@ pub struct WorktreeProjectRequest {
     /// repository default branch.
     pub bases: BTreeMap<String, String>,
     pub base_override: Option<String>,
+    /// The default branch GitHub names for the repository, which the node
+    /// prefers over `origin/HEAD` (PRD git-freshness D-07).
+    pub remote_default: Option<String>,
     /// An explicit read of this project, independent of other repositories.
     pub generation: u64,
 }
@@ -280,6 +283,48 @@ impl GitWatch {
             .iter()
             .map(|project| project.root_path.clone())
             .collect();
+        let node = std::sync::Arc::clone(&self.node);
+        self.reconcile_with(requested_roots, || {
+            projects
+                .iter()
+                .take(GIT_WATCH_LIMIT)
+                .filter_map(|project| {
+                    crate::node_access::call_as::<Option<RepositoryDirs>>(
+                        node.as_ref(),
+                        Call::Repository {
+                            path: project.root_path.to_string_lossy().into_owned(),
+                        },
+                        REPOSITORY_TIMEOUT,
+                    )
+                    .ok()
+                    .flatten()
+                    .map(|repository| {
+                        (
+                            project.root_path.clone(),
+                            PathBuf::from(repository.common_dir),
+                        )
+                    })
+                })
+                .collect()
+        });
+    }
+
+    /// Watches `projects`, each with the common directory its own read
+    /// already named, so nothing is asked of the node to find them.
+    fn reconcile_known(&mut self, projects: BTreeMap<PathBuf, PathBuf>) {
+        let requested_roots: Vec<_> = projects.keys().cloned().collect();
+        self.reconcile_with(requested_roots, || {
+            projects.into_iter().take(GIT_WATCH_LIMIT).collect()
+        });
+    }
+
+    /// Follows the requested projects; `desired` names each one's common
+    /// directory, and is asked only when the requested set changed.
+    fn reconcile_with(
+        &mut self,
+        requested_roots: Vec<PathBuf>,
+        desired: impl FnOnce() -> BTreeMap<PathBuf, PathBuf>,
+    ) {
         let restart_due = self.subscription.is_none()
             && !self.registered.is_empty()
             && self.retry_at.is_some_and(|at| at <= Instant::now());
@@ -290,32 +335,13 @@ impl GitWatch {
             }
             return;
         }
+        let requested = requested_roots.len();
         self.requested_roots = requested_roots;
-        let desired: BTreeMap<PathBuf, PathBuf> = projects
-            .iter()
-            .take(GIT_WATCH_LIMIT)
-            .filter_map(|project| {
-                crate::node_access::call_as::<Option<RepositoryDirs>>(
-                    self.node.as_ref(),
-                    Call::Repository {
-                        path: project.root_path.to_string_lossy().into_owned(),
-                    },
-                    REPOSITORY_TIMEOUT,
-                )
-                .ok()
-                .flatten()
-                .map(|repository| {
-                    (
-                        project.root_path.clone(),
-                        PathBuf::from(repository.common_dir),
-                    )
-                })
-            })
-            .collect();
-        if projects.len() > GIT_WATCH_LIMIT {
+        let desired = desired();
+        if requested > GIT_WATCH_LIMIT {
             crate::diagnostic!(serde_json::json!({
                 "component": "worktrees", "kind": "git_watch.over_budget",
-                "projects": projects.len(), "cap": GIT_WATCH_LIMIT
+                "projects": requested, "cap": GIT_WATCH_LIMIT
             }));
         }
         let desired_common: BTreeSet<_> = desired.values().cloned().collect();
@@ -584,6 +610,65 @@ impl Drop for GitWatch {
     }
 }
 
+/// The Git watch on a connected device (PRD git-freshness D-08): the same
+/// `Call::GitWatch` over that device's link, following the repositories its
+/// worktree read found there, so a branch, worktree or fetched ref that moves
+/// on the device is read again by the device catalog without a reconnect.
+/// `crate::fetch::FetchPump` drives it off every lock; nothing here blocks.
+/// A device, its link, and the repositories its watch follows: each root
+/// with the common directory the device named for it.
+pub(crate) type DeviceWatchSet = (
+    String,
+    std::sync::Arc<dyn crate::node_access::NodeLink>,
+    BTreeMap<PathBuf, PathBuf>,
+);
+
+pub(crate) struct DeviceGitWatch {
+    link: std::sync::Arc<dyn crate::node_access::NodeLink>,
+    watch: GitWatch,
+}
+
+impl DeviceGitWatch {
+    pub(crate) fn new(link: std::sync::Arc<dyn crate::node_access::NodeLink>) -> Self {
+        Self {
+            watch: GitWatch::new(std::sync::Arc::clone(&link)),
+            link,
+        }
+    }
+
+    /// Whether this watch runs over `link`; a new connection needs a new one.
+    pub(crate) fn watches_over(
+        &self,
+        link: &std::sync::Arc<dyn crate::node_access::NodeLink>,
+    ) -> bool {
+        std::sync::Arc::ptr_eq(&self.link, link)
+    }
+
+    /// Follows `projects` (each root with the common directory the device
+    /// named for it) and answers the roots whose Git facts changed and have
+    /// been quiet for the debounce; every root after a lapse in cover.
+    pub(crate) fn changed(&mut self, projects: BTreeMap<PathBuf, PathBuf>) -> Vec<PathBuf> {
+        self.watch.reconcile_known(projects);
+        self.watch.settled()
+    }
+
+    /// Ends the watch while no renderer is attached (`GitWatch::rest`).
+    pub(crate) fn rest(&mut self) {
+        self.watch.rest();
+    }
+}
+
+#[cfg(test)]
+impl DeviceGitWatch {
+    /// The device has said it is watching, so no later change is missed.
+    pub(crate) fn watching(&self) -> bool {
+        self.watch
+            .subscription
+            .as_ref()
+            .is_some_and(|subscription| subscription.watching)
+    }
+}
+
 pub struct WorktreeReader {
     inner: BackgroundRead<ObservedRequest, (ObservedRequest, Vec<ProjectAnswer>)>,
     git_watch: GitWatch,
@@ -712,6 +797,58 @@ fn read_observed(
         })
         .collect();
     ((*generation, *removals, observations.clone()), answers)
+}
+
+/// Whether a worktree's work is merged: the one judgment the sidebar's
+/// landed mark and the disk cleanup review share (PRD git-freshness D-06).
+///
+/// `in_base` is Git's answer: HEAD is in the repository's default branch,
+/// locally or as last fetched. `merged_heads` is GitHub's: the exact head
+/// commits of the pull requests it merged into that branch, which is the
+/// only proof a squash or rebase merge leaves, and `None` when GitHub has
+/// never answered for the repository. A head that moved past its merged pull
+/// request is not that pull request's head, and an absent GitHub answer is
+/// never read as merged (D-12).
+pub(crate) fn merged(
+    in_base: Option<bool>,
+    head: Option<&str>,
+    merged_heads: Option<&BTreeSet<String>>,
+) -> Option<bool> {
+    if in_base == Some(true) {
+        return Some(true);
+    }
+    if head
+        .zip(merged_heads)
+        .is_some_and(|(head, heads)| heads.contains(head))
+    {
+        return Some(true);
+    }
+    in_base
+}
+
+/// The exact head commits of the pull requests GitHub merged into `base`,
+/// from the last pull request list GitHub answered for the project, kept
+/// while a later read fails (D-12); `None` when it never answered.
+pub(crate) fn merged_heads(
+    github: Option<&crate::model::GithubProjectSnapshot>,
+    base: Option<&str>,
+) -> Option<BTreeSet<String>> {
+    let github = github.filter(|github| {
+        github.pull_requests_read || github.status.last_success_at_unix_ms.is_some()
+    })?;
+    let base = base?;
+    Some(
+        github
+            .pull_requests
+            .iter()
+            .filter(|pull_request| {
+                pull_request.badge == crate::model::PullRequestBadge::Merged
+                    && pull_request.base_branch == base
+            })
+            .filter_map(|pull_request| pull_request.head_oid.clone())
+            .filter(|head| hide_node_link::gh::is_commit(head))
+            .collect(),
+    )
 }
 
 /// The sole deletion policy, consumed by all three presentation surfaces.
@@ -854,6 +991,7 @@ fn read(
             path: path.to_owned(),
             bases: project.bases.clone(),
             base_override: project.base_override.clone(),
+            remote_default: project.remote_default.clone(),
             reuse_unchanged,
         },
         WORKTREES_TIMEOUT,
@@ -877,7 +1015,7 @@ fn read_project(
         root,
         root_path,
         bases,
-        base_override,
+        (base_override, None),
         &hide_host::worktrees::Measured::default(),
         false,
     ))
@@ -954,6 +1092,7 @@ fn worktree_snapshot(facts: hide_node_link::worktrees::WorktreeFacts) -> Worktre
         behind: facts.behind,
         added_lines: facts.added_lines,
         removed_lines: facts.removed_lines,
+        in_base: facts.merged,
         merged: facts.merged,
         upstream_state: facts.upstream_state,
         unpushed: facts.unpushed.map(|unpushed| UnpushedSnapshot {
@@ -985,6 +1124,86 @@ mod tests {
     use hide_host::worktrees::{
         parse_ahead_behind, parse_shortstat, parse_worktree_list, resolve_base,
     };
+
+    #[test]
+    fn merged_is_git_ancestry_or_a_merged_pull_request_at_exactly_this_head() {
+        let head = "a".repeat(40);
+        let heads = BTreeSet::from([head.clone()]);
+        let other = BTreeSet::from(["b".repeat(40)]);
+        let empty = BTreeSet::new();
+        // (Git's answer, GitHub's heads) -> merged
+        for (in_base, github, expected) in [
+            (Some(true), None, Some(true)),
+            (Some(true), Some(&other), Some(true)),
+            // A squash or rebase merge: GitHub's exact head is the proof.
+            (Some(false), Some(&heads), Some(true)),
+            (None, Some(&heads), Some(true)),
+            // A HEAD past its merged pull request is not that pull request.
+            (Some(false), Some(&other), Some(false)),
+            (Some(false), Some(&empty), Some(false)),
+            // No GitHub answer is never read as merged (D-12).
+            (Some(false), None, Some(false)),
+            (None, None, None),
+            (None, Some(&other), None),
+        ] {
+            assert_eq!(
+                merged(in_base, Some(&head), github),
+                expected,
+                "{in_base:?} {github:?}"
+            );
+        }
+        assert_eq!(merged(Some(false), None, Some(&heads)), Some(false));
+    }
+
+    #[test]
+    fn merged_heads_are_the_merged_pull_requests_into_the_default_branch() {
+        use crate::model::{
+            GithubProjectSnapshot, PullRequestBadge, PullRequestChecks, PullRequestSnapshot,
+        };
+        let pull = |head: char, base: &str, badge| PullRequestSnapshot {
+            closing_issues: Vec::new(),
+            title: String::new(),
+            checks: PullRequestChecks::Unknown,
+            number: 1,
+            head_branch: "feature".into(),
+            base_branch: base.into(),
+            url: String::new(),
+            badge,
+            review: None,
+            is_draft: false,
+            merged_at_unix_ms: None,
+            updated_at_unix_ms: None,
+            created_at_unix_ms: None,
+            closed_at_unix_ms: None,
+            head_oid: Some(head.to_string().repeat(40)),
+            cross_repository: false,
+            work: Default::default(),
+        };
+        let mut github = GithubProjectSnapshot {
+            pull_requests: vec![
+                pull('a', "develop", PullRequestBadge::Merged),
+                pull('b', "main", PullRequestBadge::Merged),
+                pull('c', "develop", PullRequestBadge::Open),
+                pull('d', "develop", PullRequestBadge::Closed),
+            ],
+            ..Default::default()
+        };
+        // GitHub never answered: no heads at all, not an empty set.
+        assert_eq!(merged_heads(Some(&github), Some("develop")), None);
+        github.pull_requests_read = true;
+        assert_eq!(
+            merged_heads(Some(&github), Some("develop")),
+            Some(BTreeSet::from(["a".repeat(40)]))
+        );
+        assert_eq!(merged_heads(Some(&github), None), None);
+        // A failed later read keeps the last answer it was restored with.
+        github.pull_requests_read = false;
+        github.status.last_success_at_unix_ms = Some(1);
+        assert_eq!(
+            merged_heads(Some(&github), Some("main")),
+            Some(BTreeSet::from(["b".repeat(40)]))
+        );
+    }
 
     #[test]
     fn porcelain_records_name_the_main_worktree_and_each_branch() {
@@ -1177,6 +1396,7 @@ mod tests {
                 root_path: PathBuf::from(root),
                 bases: BTreeMap::new(),
                 base_override: None,
+                remote_default: None,
                 generation: 0,
             })
             .collect()

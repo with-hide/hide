@@ -844,6 +844,7 @@ fn contract(link: &dyn NodeLink, project: &Path) -> Vec<Value> {
             path,
             bases: BTreeMap::new(),
             base_override: None,
+            remote_default: None,
             reuse_unchanged: false,
         },
         Call::HookDiagnosis,

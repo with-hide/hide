@@ -199,7 +199,13 @@ use crate::error::HostError;
 /// 51: kit calls distinguish attaching to a saved Herdr session from server
 /// replacement consent, and pane proofs carry passive hook observations.
 /// Older helpers could replace the selected server or reject its observation.
-pub const PROTOCOL_VERSION: u32 = 51;
+/// 52: the core fetches a node's repositories in the background
+/// (`Call::FetchRemote`), reads a header's incoming and unpushed commits, and
+/// names GitHub's default branch to the worktree read; the core also keeps a
+/// `Call::GitWatch` open on each connected device, and both run on a lane of
+/// their own (`Call::is_background`). An older helper cannot fetch without
+/// prompting and is upgraded at Hello.
+pub const PROTOCOL_VERSION: u32 = 52;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -299,6 +305,12 @@ pub enum Call {
     Hello,
     /// Read-only status and current commit for the front checkout's header.
     CheckoutGit {
+        path: String,
+    },
+    /// Fetches `origin` of the repository that holds `path` without asking
+    /// for anything (`hide_host::worktrees::fetch_remote`), within
+    /// `worktrees::FETCH_TIME`; answers `worktrees::FetchOutcome`.
+    FetchRemote {
         path: String,
     },
     RootOpen {
@@ -409,7 +421,8 @@ pub enum Call {
     },
     /// The worktrees of the repository that holds `path`
     /// (`hide_host::worktrees::read`), measured against `bases` or the
-    /// operator's `base_override`. `null` for a folder that is not a
+    /// operator's `base_override`, with `remote_default` the default branch
+    /// GitHub names, preferred over `origin/HEAD`. `null` for a folder that is not a
     /// repository. With `reuse_unchanged`, a worktree whose HEAD, index and
     /// base refs did not move since the node last measured it keeps that
     /// measurement; without it every worktree is measured again.
@@ -417,6 +430,8 @@ pub enum Call {
         path: String,
         bases: std::collections::BTreeMap<String, String>,
         base_override: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote_default: Option<String>,
         #[serde(default)]
         reuse_unchanged: bool,
     },
@@ -923,6 +938,13 @@ impl Call {
         )
     }
 
+    /// Background Git work a core keeps out on a link for long: a device's
+    /// Git watch and a background fetch. It runs on a lane of its own at
+    /// both ends, so it never takes a worker an ordinary call needs.
+    pub fn is_background(&self) -> bool {
+        matches!(self, Self::GitWatch { .. } | Self::FetchRemote { .. })
+    }
+
     /// Whether a device's node answers this request. A device answers the
     /// work on its own files, repositories, sessions, processes, kit and
     /// panes; what acts with the operator's own logins (GitHub, the AI
@@ -951,6 +973,7 @@ impl Call {
             | Self::Project { .. }
             | Self::Worktrees { .. }
             | Self::CheckoutGit { .. }
+            | Self::FetchRemote { .. }
             | Self::BranchCheck { .. }
             | Self::Directory { .. }
             | Self::Registrable { .. }

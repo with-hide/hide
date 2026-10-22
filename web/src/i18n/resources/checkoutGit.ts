@@ -32,7 +32,20 @@ export const checkoutGitEnglish = {
   "checkoutGit.ci.unavailable": "Commit checks unavailable",
   "checkoutGit.ci.stale": "Commit checks out of date",
   "checkoutGit.checked": "Checked: {{time}}",
-  "checkoutGit.openChecks": "Open checks"
+  "checkoutGit.openChecks": "Open checks",
+  "checkoutGit.checkedAgo": "Remote checked {{time}} ago",
+  "checkoutGit.observed.stale": "Value from {{time}} ago",
+  "checkoutGit.observed.gitFailed": "Git read failed · value from {{time}} ago",
+  "checkoutGit.observed.gitFailedNever": "Git read failed",
+  "checkoutGit.observed.githubFailed": "GitHub read failed · value from {{time}} ago",
+  "checkoutGit.observed.githubFailedNever": "GitHub read failed",
+  "checkoutGit.notChecked": "Remote not checked yet",
+  "checkoutGit.fetchFailing": "Couldn't reach the remote · as of {{time}} ago",
+  "checkoutGit.fetchFailingNever": "Couldn't reach the remote",
+  "checkoutGit.incoming": "Not pulled",
+  "checkoutGit.incomingMore": "+{{count}} more not pulled",
+  "checkoutGit.unpushed": "Not pushed",
+  "checkoutGit.openCommit": "Open commit on GitHub"
 };
 
 export const checkoutGitCatalogs = {
@@ -69,7 +82,20 @@ export const checkoutGitCatalogs = {
   "checkoutGit.ci.unavailable": "커밋 검사를 읽을 수 없음",
   "checkoutGit.ci.stale": "커밋 검사 정보가 오래됨",
   "checkoutGit.checked": "확인 시각: {{time}}",
-  "checkoutGit.openChecks": "검사 열기"
+  "checkoutGit.openChecks": "검사 열기",
+  "checkoutGit.checkedAgo": "{{time}} 전 확인",
+  "checkoutGit.observed.stale": "{{time}} 전 값",
+  "checkoutGit.observed.gitFailed": "Git 읽기 실패 · {{time}} 전 값",
+  "checkoutGit.observed.gitFailedNever": "Git 읽기 실패",
+  "checkoutGit.observed.githubFailed": "GitHub 읽기 실패 · {{time}} 전 값",
+  "checkoutGit.observed.githubFailedNever": "GitHub 읽기 실패",
+  "checkoutGit.notChecked": "아직 확인 안 함",
+  "checkoutGit.fetchFailing": "원격 확인 실패 · {{time}} 전 값",
+  "checkoutGit.fetchFailingNever": "원격 확인 실패",
+  "checkoutGit.incoming": "받지 않음",
+  "checkoutGit.incomingMore": "받지 않은 커밋 {{count}}개 더",
+  "checkoutGit.unpushed": "푸시 안 됨",
+  "checkoutGit.openCommit": "GitHub에서 커밋 열기"
 },
 "zh-CN": {
   "checkoutGit.files": "未提交文件记录 {{count}} 条",
@@ -103,7 +129,20 @@ export const checkoutGitCatalogs = {
   "checkoutGit.ci.unavailable": "无法读取提交检查",
   "checkoutGit.ci.stale": "提交检查信息已过期",
   "checkoutGit.checked": "检查时间：{{time}}",
-  "checkoutGit.openChecks": "打开检查"
+  "checkoutGit.openChecks": "打开检查",
+  "checkoutGit.checkedAgo": "{{time}}前已检查远程",
+  "checkoutGit.observed.stale": "{{time}}前的值",
+  "checkoutGit.observed.gitFailed": "Git 读取失败 · {{time}}前的值",
+  "checkoutGit.observed.gitFailedNever": "Git 读取失败",
+  "checkoutGit.observed.githubFailed": "GitHub 读取失败 · {{time}}前的值",
+  "checkoutGit.observed.githubFailedNever": "GitHub 读取失败",
+  "checkoutGit.notChecked": "尚未检查远程",
+  "checkoutGit.fetchFailing": "无法连接远程 · {{time}}前的值",
+  "checkoutGit.fetchFailingNever": "无法连接远程",
+  "checkoutGit.incoming": "未拉取",
+  "checkoutGit.incomingMore": "还有 {{count}} 个未拉取",
+  "checkoutGit.unpushed": "未推送",
+  "checkoutGit.openCommit": "在 GitHub 上打开提交"
 },
 "ja": {
   "checkoutGit.files": "未コミットのファイル {{count}} 件",
@@ -137,6 +176,19 @@ export const checkoutGitCatalogs = {
   "checkoutGit.ci.unavailable": "コミットの検査を読み取れません",
   "checkoutGit.ci.stale": "コミットの検査情報が古くなっています",
   "checkoutGit.checked": "確認時刻: {{time}}",
-  "checkoutGit.openChecks": "検査を開く"
+  "checkoutGit.openChecks": "検査を開く",
+  "checkoutGit.checkedAgo": "{{time}}前にリモートを確認",
+  "checkoutGit.observed.stale": "{{time}}前の値",
+  "checkoutGit.observed.gitFailed": "Git読み取り失敗 · {{time}}前の値",
+  "checkoutGit.observed.gitFailedNever": "Git読み取り失敗",
+  "checkoutGit.observed.githubFailed": "GitHub読み取り失敗 · {{time}}前の値",
+  "checkoutGit.observed.githubFailedNever": "GitHub読み取り失敗",
+  "checkoutGit.notChecked": "リモートは未確認",
+  "checkoutGit.fetchFailing": "リモートを確認できません · {{time}}前の値",
+  "checkoutGit.fetchFailingNever": "リモートを確認できません",
+  "checkoutGit.incoming": "未取得",
+  "checkoutGit.incomingMore": "未取得があと {{count}} 件",
+  "checkoutGit.unpushed": "未プッシュ",
+  "checkoutGit.openCommit": "GitHub でコミットを開く"
 }
 } satisfies Catalogs<typeof checkoutGitEnglish>;

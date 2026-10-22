@@ -79,6 +79,11 @@ pub struct ProjectIssuesSnapshot {
     /// follows it (PRD link-graph D-35). Reader provenance, not a wire field.
     #[serde(skip)]
     pub repository_id: Option<String>,
+    /// The branch GitHub names as the repository's default, which the
+    /// worktree reader prefers over `origin/HEAD` (PRD git-freshness D-07).
+    /// Reader provenance, not a wire field.
+    #[serde(skip)]
+    pub default_branch: Option<String>,
     /// Whether the repository is public, `None` until GitHub said
     /// (`공개`, PRD overview-device-tasks D-35).
     #[serde(default, skip_serializing_if = "Option::is_none")]

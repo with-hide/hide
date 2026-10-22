@@ -79,6 +79,7 @@ fn pr_runtime(pull_requests: Vec<PullRequestSnapshot>) -> Runtime {
                 overflow: false,
                 dependencies_failure: None,
                 repository_id: None,
+                default_branch: None,
             },
             status: crate::model::GithubStatusSnapshot {
                 available: true,

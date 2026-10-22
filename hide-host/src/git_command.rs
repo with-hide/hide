@@ -11,7 +11,7 @@ use crate::error::{ErrorCode, HostError, HostResult};
 
 /// Runs `command` in `root` and answers its output, trimmed. A read, a
 /// branch check and a fetch are bounded (`worktrees::git`); a checkout and a
-/// branch setting run as the operator's git would.
+/// branch setting get the long bound of a change (`git_run::CHANGE_DEADLINE`).
 pub fn run(root: &Path, command: &GitCommand) -> HostResult<String> {
     let args = command
         .args()
@@ -52,13 +52,19 @@ pub fn run(root: &Path, command: &GitCommand) -> HostResult<String> {
         | GitCommand::Checkout { .. }
         | GitCommand::SetBranchConfig { .. }
         | GitCommand::UnsetBranchConfig { .. } => {
-            let output = hide_platform::programs::command("git")
-                .arg("--no-optional-locks")
-                .arg("-C")
-                .arg(root)
-                .args(&args)
-                .output()
-                .map_err(|error| failed(format!("git could not be run: {error}")))?;
+            let output = crate::git_run::output(
+                crate::git_run::at(root).args(&args),
+                crate::git_run::CHANGE_DEADLINE,
+                None,
+            )
+            .map_err(|error| failed(format!("git could not be run: {error}")))?
+            .ok_or_else(|| {
+                failed(format!(
+                    "git {} did not finish within {} minutes and was stopped",
+                    args[0],
+                    crate::git_run::CHANGE_DEADLINE.as_secs() / 60
+                ))
+            })?;
             // `config --unset-all` exits 5 when the setting is not there,
             // which is the state it was asked for.
             let unset_absent = matches!(command, GitCommand::UnsetBranchConfig { .. })

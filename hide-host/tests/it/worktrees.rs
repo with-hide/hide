@@ -27,6 +27,7 @@ fn a_public_read_spends_one_deadline_on_discovery_metadata_and_measurement() {
             Path::new(&root),
             &Default::default(),
             None,
+            None,
             &hide_host::worktrees::Measured::default(),
             false,
         )
@@ -169,6 +170,7 @@ fn a_locked_worktree_is_named_with_its_reason_and_manual_unlock_action_before_re
     let facts = hide_host::worktrees::read(
         &root,
         &Default::default(),
+        None,
         None,
         &hide_host::worktrees::Measured::default(),
         false,
@@ -645,4 +647,283 @@ fn draining_waits_only_for_the_entries_it_was_given() {
     assert_eq!(left, 0);
     assert!(!ours.exists());
     assert!(theirs.exists(), "an entry nobody named stays");
+}
+
+/// The repository's default branch is the one GitHub names when this clone
+/// has it, else `origin/HEAD`'s; `merged` is measured against that default,
+/// not against a branch's pull request base (PRD git-freshness D-06, D-07).
+#[test]
+fn the_default_branch_github_names_wins_over_origin_head_and_decides_merged() {
+    let repository = repository();
+    let root = repository.path();
+    git(root, &["branch", "develop"]);
+    git(root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(
+        root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    let linked_folder = tempfile::tempdir().unwrap();
+    let linked = linked_folder.path().join("feature");
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            linked.to_str().unwrap(),
+            "main",
+        ],
+    );
+    git(&linked, &["commit", "-q", "--allow-empty", "-m", "feature"]);
+    git(root, &["branch", "-f", "develop", "feature"]);
+    let read = |remote_default: Option<&str>| {
+        let bases = std::collections::BTreeMap::from([("feature".to_owned(), "main".to_owned())]);
+        let facts = hide_host::worktrees::read(
+            root,
+            &bases,
+            None,
+            remote_default,
+            &hide_host::worktrees::Measured::default(),
+            false,
+        )
+        .unwrap();
+        let feature = facts
+            .worktrees
+            .iter()
+            .find(|worktree| worktree.branch.as_deref() == Some("feature"))
+            .cloned()
+            .unwrap();
+        (facts, feature)
+    };
+
+    let (facts, feature) = read(Some("develop"));
+    assert_eq!(facts.default_branch.as_deref(), Some("develop"));
+    assert_eq!(facts.base_source, "github");
+    // Merged into the default branch even though its pull request's base
+    // (main) does not hold it; `ahead` still counts against that base.
+    assert_eq!(feature.merged, Some(true));
+    assert_eq!(feature.base_branch.as_deref(), Some("main"));
+    assert_eq!(feature.ahead, 1);
+
+    let (facts, feature) = read(None);
+    assert_eq!(facts.default_branch.as_deref(), Some("main"));
+    assert_eq!(facts.base_source, "origin_head");
+    assert_eq!(feature.merged, Some(false));
+
+    // A GitHub default this clone cannot resolve is not taken.
+    let (facts, _) = read(Some("release"));
+    assert_eq!(facts.default_branch.as_deref(), Some("main"));
+}
+
+/// A clone of `remote` with the fixture's identity, on `main`.
+fn clone_of(remote: &Path) -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    git(
+        root.parent().unwrap(),
+        &[
+            "clone",
+            "-q",
+            remote.to_str().unwrap(),
+            root.to_str().unwrap(),
+        ],
+    );
+    git(root, &["config", "user.name", "Fixture"]);
+    git(root, &["config", "user.email", "fixture@example.invalid"]);
+    git(root, &["config", "commit.gpgsign", "false"]);
+    directory
+}
+
+/// A background fetch moves remote-tracking refs only: the header then
+/// counts and lists what the remote has that HEAD does not, a branch the
+/// remote deleted reads as gone, and `FETCH_HEAD` (the operator's own
+/// fetch time) is not written (PRD git-freshness D-01, D-04, B1, B8).
+#[test]
+fn a_background_fetch_brings_incoming_commits_and_prunes_without_touching_the_branch() {
+    use hide_node_link::worktrees::{FetchOutcome, FetchSkip};
+    let seed = repository();
+    let remote = tempfile::tempdir().unwrap();
+    git(
+        remote.path().parent().unwrap(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            seed.path().to_str().unwrap(),
+            remote.path().to_str().unwrap(),
+        ],
+    );
+    let ours = clone_of(remote.path());
+    let theirs = clone_of(remote.path());
+    git(ours.path(), &["branch", "-q", "topic"]);
+    git(ours.path(), &["push", "-q", "-u", "origin", "topic"]);
+    git(
+        ours.path(),
+        &["commit", "-q", "--allow-empty", "-m", "local only"],
+    );
+    for index in 0..7 {
+        git(
+            theirs.path(),
+            &[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                &format!("theirs {index}"),
+            ],
+        );
+    }
+    git(theirs.path(), &["push", "-q", "origin", "main"]);
+    git(
+        theirs.path(),
+        &["push", "-q", "origin", "--delete", "topic"],
+    );
+    let local_head = output(ours.path(), &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    let before = hide_host::worktrees::checkout_git(ours.path()).unwrap();
+    assert_eq!((before.ahead, before.behind), (Some(1), Some(0)));
+    assert!(before.incoming_commits.is_empty());
+    assert_eq!(before.unpushed_commits, std::slice::from_ref(&local_head));
+
+    assert_eq!(
+        hide_host::worktrees::fetch_remote(ours.path()),
+        FetchOutcome::Fetched
+    );
+    assert!(!ours.path().join(".git/FETCH_HEAD").exists());
+    let after = hide_host::worktrees::checkout_git(ours.path()).unwrap();
+    assert_eq!((after.ahead, after.behind), (Some(1), Some(7)));
+    assert_eq!(
+        after
+            .incoming_commits
+            .iter()
+            .map(|commit| commit.subject.as_str())
+            .collect::<Vec<_>>(),
+        ["theirs 6", "theirs 5", "theirs 4", "theirs 3", "theirs 2"]
+    );
+    // HEAD and the working tree stay where the operator left them.
+    assert_eq!(
+        output(ours.path(), &["rev-parse", "HEAD"]).trim(),
+        local_head
+    );
+    assert_eq!(after.unpushed_commits, std::slice::from_ref(&local_head));
+    git(ours.path(), &["checkout", "-q", "topic"]);
+    assert_eq!(
+        hide_host::worktrees::checkout_git(ours.path())
+            .unwrap()
+            .upstream_state,
+        "gone"
+    );
+    assert!(
+        output(ours.path(), &["branch", "--list", "topic"]).contains("topic"),
+        "the local branch stays"
+    );
+
+    let plain = repository();
+    assert_eq!(
+        hide_host::worktrees::fetch_remote(plain.path()),
+        FetchOutcome::Skipped {
+            reason: FetchSkip::NoOrigin
+        }
+    );
+
+    // A refspec that writes local branches (a mirror's) is never applied:
+    // beside the usual one, the local-only branch survives the prune and
+    // `main` keeps its local commit; alone, nothing is fetched.
+    git(ours.path(), &["checkout", "-q", "--detach"]);
+    git(ours.path(), &["branch", "-q", "local-only", "main"]);
+    git(
+        ours.path(),
+        &[
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/heads/*",
+        ],
+    );
+    let branch = |name: &str| {
+        output(ours.path(), &["rev-parse", &format!("refs/heads/{name}")])
+            .trim()
+            .to_owned()
+    };
+    assert_eq!(
+        hide_host::worktrees::fetch_remote(ours.path()),
+        FetchOutcome::Fetched
+    );
+    assert_eq!(branch("main"), local_head);
+    assert_eq!(branch("local-only"), local_head);
+    git(
+        ours.path(),
+        &[
+            "config",
+            "--unset",
+            "remote.origin.fetch",
+            r"^\+refs/heads/\*:refs/remotes/origin/\*$",
+        ],
+    );
+    // A value that would read as an option is neither passed nor run.
+    let ran = ours.path().join("upload-pack-ran");
+    git(
+        ours.path(),
+        &[
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            &format!(
+                "--upload-pack=touch {}:refs/remotes/origin/x",
+                ran.display()
+            ),
+        ],
+    );
+    assert_eq!(
+        hide_host::worktrees::fetch_remote(ours.path()),
+        FetchOutcome::Skipped {
+            reason: FetchSkip::NoTrackingRefs
+        }
+    );
+    assert!(!ran.exists());
+    assert_eq!(branch("main"), local_head);
+    assert_eq!(branch("local-only"), local_head);
+}
+
+/// A remote that cannot be reached fails at once as offline, with nothing
+/// waiting on a prompt (PRD git-freshness B4, B5).
+#[test]
+fn an_unreachable_remote_fails_without_prompting() {
+    use hide_node_link::worktrees::{FetchFailure, FetchOutcome};
+    let repository = repository();
+    let root = repository.path();
+    // Port 9 (discard) refuses on a loopback with nothing listening.
+    git(
+        root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://user:secret@127.0.0.1:9/x.git",
+        ],
+    );
+    let started = std::time::Instant::now();
+    let outcome = hide_host::worktrees::fetch_remote(root);
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    let FetchOutcome::Failed { failure, reason } = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(failure, FetchFailure::Offline, "{reason}");
+    assert!(!reason.contains("secret"), "{reason}");
+    git(
+        root,
+        &["remote", "set-url", "origin", "ssh://git@127.0.0.1:9/x.git"],
+    );
+    let FetchOutcome::Failed { failure, .. } = hide_host::worktrees::fetch_remote(root) else {
+        panic!("an unreachable ssh remote cannot fetch");
+    };
+    assert_eq!(failure, FetchFailure::Offline);
 }

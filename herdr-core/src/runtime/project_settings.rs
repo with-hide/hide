@@ -391,6 +391,12 @@ impl Runtime {
             before.and_then(|record| record.repository.as_ref()) != after.repository.as_ref();
         let base_changed =
             before.and_then(|record| record.base_branch.as_ref()) != after.base_branch.as_ref();
+        // The header says whether the remote time is Hide's fetch or the
+        // operator's own; a switch turned on is fetched on the pump's next
+        // pass, since the repository has no fetch record while it is off.
+        if before.and_then(|record| record.auto_fetch) != after.auto_fetch {
+            self.refresh_checkout_header();
+        }
         if repository_changed {
             let live = self
                 .link_projects()

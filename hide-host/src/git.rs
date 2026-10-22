@@ -183,7 +183,7 @@ impl<'a> GitDirectory<'a> {
     }
 
     fn command(self) -> Command {
-        let mut command = hide_platform::programs::command("git");
+        let mut command = crate::git_run::command();
         // A path is a path, never a pathspec pattern: a file named `*.rs` or
         // `:(top)x` selects only itself.
         command.arg("--literal-pathspecs");
@@ -215,7 +215,7 @@ impl<'a> GitDirectory<'a> {
 fn git_output(git: GitDirectory<'_>, arguments: &[&str]) -> HostResult<std::process::Output> {
     let mut command = git.command();
     command.args(arguments);
-    crate::worktrees::output_within(&mut command, crate::worktrees::GIT_DEADLINE)
+    crate::git_run::output(&mut command, crate::worktrees::GIT_DEADLINE, None)
         .map_err(|error| HostError::new(ErrorCode::Io, format!("git could not be run: {error}")))?
         .ok_or_else(|| {
             HostError::new(

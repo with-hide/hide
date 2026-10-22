@@ -2567,6 +2567,7 @@ mod tests {
                 issue_source: None,
                 new_work: None,
                 base_branch: None,
+                auto_fetch: None,
                 link_scopes: Default::default(),
                 guardrails: None,
                 unknown: Default::default(),

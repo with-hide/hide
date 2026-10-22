@@ -153,3 +153,15 @@ it("keeps a folder's Git protections off and unavailable, and names the agents t
     expect(document.querySelector("[data-project-guard-uncovered]")?.textContent).toContain("Guardrails don't apply to Codex, Grok.");
   });
 });
+
+it("turns the background fetch off and on for the project, on until the operator says otherwise (B9)", async () => {
+  await withScene("lang=en&state=guard-off", async (sheet) => {
+    const control = () => sheet().querySelector<HTMLButtonElement>('[role="switch"][aria-label="Check the remote in the background"]')!;
+    expect(control().getAttribute("aria-checked")).toBe("true");
+    await act(async () => control().click());
+    expect(saved()?.auto_fetch).toBe(false);
+    expect(control().getAttribute("aria-checked")).toBe("false");
+    await act(async () => control().click());
+    expect(saved()?.auto_fetch).toBe(true);
+  });
+});

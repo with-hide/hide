@@ -20,7 +20,7 @@ import { installProbe, probeEnabled } from "./probe";
 import { configurePaneVisits, expectPane, expectSurface, focusSignature } from "./recent";
 import { FirstRunWizard } from "./FirstRunWizard";
 import { useAgentNotifications } from "./agentNotices";
-import { useGithubLook } from "./githubLook";
+import { useFetchLook, useGithubLook } from "./githubLook";
 import { SettingsGate } from "./SettingsSheet";
 import { StartPanelHost } from "./StartPanel";
 import { GroupNameDialog } from "./AgentGroupControls";
@@ -54,6 +54,7 @@ export function App() {
   useUsageWindowHint(actions);
   useAgentNotifications(actions);
   useGithubLook(actions);
+  useFetchLook(actions);
   // Open in VS Code is offered only where the desktop app found it (D-14).
   useEffect(() => readEditorAvailability(), []);
 

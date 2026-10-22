@@ -83,10 +83,13 @@ pub(crate) struct PollProject {
     pub(crate) heads: Vec<String>,
 }
 
-/// The projects a pass found a change in.
+/// The projects a pass found a change in, and those it is not watching now.
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct PollAnswer {
     pub(crate) changed: Vec<String>,
+    /// Paused after a failure, or every project at the rate limit's floor:
+    /// their marks are stale until a read answers (PRD git-freshness B23).
+    pub(crate) held: Vec<String>,
 }
 
 /// A failed `gh` command.
@@ -238,6 +241,11 @@ pub(crate) fn pass(
     let mut answer = PollAnswer::default();
     if let Some(until) = state.rate_until {
         if clock.unix < until {
+            answer.held = request
+                .projects
+                .iter()
+                .map(|project| project.path.clone())
+                .collect();
             return answer;
         }
         state.rate_until = None;
@@ -390,6 +398,12 @@ pub(crate) fn pass(
             Some(kind) => pause(state, project, kind, clock.now),
         }
     }
+    answer.held = request
+        .projects
+        .iter()
+        .filter(|project| state.rate_until.is_some() || state.pauses.contains_key(&project.path))
+        .map(|project| project.path.clone())
+        .collect();
     answer
 }
 
@@ -997,10 +1011,12 @@ mod tests {
         let request = request(vec![project("/app", &[])]);
         let answer = run(&mut state, &script, &request, now, 1000);
         assert!(answer.changed.is_empty());
+        assert_eq!(answer.held, ["/app"], "a paused project's marks go stale");
         assert!(state.pauses.contains_key("/app"));
         let later = state.pauses["/app"].until;
-        run(&mut state, &script, &request, later, 1100);
+        let answer = run(&mut state, &script, &request, later, 1100);
         assert!(state.pauses.is_empty(), "a good answer ends the pause");
+        assert!(answer.held.is_empty());
     }
 
     #[test]
@@ -1018,10 +1034,15 @@ mod tests {
         );
         assert_eq!(state.rate_until, Some(2000));
         script.take_asked();
-        run(&mut state, &script, &request, now, 1999);
+        let answer = run(&mut state, &script, &request, now, 1999);
         assert!(
             script.asked_endpoints().is_empty(),
             "stopped until the reset"
+        );
+        assert_eq!(
+            answer.held,
+            ["/a", "/b"],
+            "every mark goes stale at the floor"
         );
         run(&mut state, &script, &request, now, 2000);
         assert!(

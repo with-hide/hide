@@ -1642,6 +1642,8 @@ pub(super) enum Event {
     TaskAgentRetry(TaskAgentRetryPayload),
     RemoveWorktree(RemoveWorktreePayload),
     GithubRequest(GithubRequestPayload),
+    /// The operator's window came forward (PRD git-freshness D-02).
+    FetchLook,
     OverviewRefresh(OverviewRefreshPayload),
     OverviewOpenResult(PaneTargetPayload),
     RequestView(RequestViewPayload),
@@ -1928,6 +1930,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "task_agent_retry" => decode!(TaskAgentRetryPayload, TaskAgentRetry),
         "remove_worktree" => decode!(RemoveWorktreePayload, RemoveWorktree),
         "github_request" => decode!(GithubRequestPayload, GithubRequest),
+        "fetch_look" => Ok(Event::FetchLook),
         "overview_refresh" => decode!(OverviewRefreshPayload, OverviewRefresh),
         "overview_open_result" => decode!(PaneTargetPayload, OverviewOpenResult),
         "request_view" => decode!(RequestViewPayload, RequestView),
@@ -3703,6 +3706,11 @@ impl Runtime {
                     self.persist_ui_state();
                 }
                 changed
+            }
+            Event::FetchLook => {
+                // Changes nothing on screen; the fetch pump reads the result.
+                self.look_for_fetch(std::time::Instant::now());
+                false
             }
             Event::GithubRequest(payload) => {
                 if payload.look && !payload.refresh {

@@ -67,6 +67,10 @@ pub struct ProjectSettings {
     pub new_work: Option<NewWorkLocation>,
     #[serde(default)]
     pub base_branch: Option<BaseBranchChoice>,
+    /// Whether Hide fetches the repository's `origin` in the background
+    /// (PRD git-freshness D-01); absent, as an older record reads, is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_fetch: Option<bool>,
     /// Bare legacy issue tokens retain the repository they already named.
     /// New explicit links carry their own owner/repo and need no binding.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -100,6 +104,8 @@ pub struct Patch {
     pub new_work: Option<NewWorkLocation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<BaseBranchChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_fetch: Option<bool>,
     /// The whole set of protections, replacing the record's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guardrails: Option<Rules>,
@@ -115,6 +121,7 @@ impl ProjectSettings {
             issue_source: None,
             new_work: None,
             base_branch: None,
+            auto_fetch: None,
             link_scopes: BTreeMap::new(),
             guardrails: None,
             unknown: serde_json::Map::new(),
@@ -158,6 +165,9 @@ impl ProjectSettings {
         }
         if let Some(base) = patch.base_branch {
             next.base_branch = Some(base);
+        }
+        if let Some(auto_fetch) = patch.auto_fetch {
+            next.auto_fetch = Some(auto_fetch);
         }
         if let Some(mut rules) = patch.guardrails {
             // A field kept for a newer build is the record's: the shell sends
@@ -244,6 +254,18 @@ pub(crate) fn base_choice<'a>(
         Some(BaseBranchChoice::Branch { branch }) => Some(branch),
         None => legacy.get(root).map(String::as_str),
     }
+}
+
+/// Whether Hide fetches this repository in the background: on unless the
+/// operator turned it off (D-01).
+pub(crate) fn auto_fetch(
+    records: &BTreeMap<String, ProjectSettings>,
+    device: &str,
+    root: &str,
+) -> bool {
+    get(records, device, root)
+        .and_then(|record| record.auto_fetch)
+        .unwrap_or(true)
 }
 
 /// A path can carry several branches and each branch can acquire a new bare token.

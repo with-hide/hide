@@ -16,17 +16,14 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
-use hide_node_link::worktrees::{GIT_WATCH_LIMIT, WORKTREES_READ_TIME};
+use hide_node_link::worktrees::{FETCH_TIME, FetchOutcome, GIT_WATCH_LIMIT, WORKTREES_READ_TIME};
 
 use hide_platform::process::OwnedChild;
 
 use crate::error::{ErrorCode, HostError, HostResult};
 
-/// The most one `git` invocation may take. A repository that cannot answer in
-/// this time reports its status unavailable rather than holding every other
-/// project's answer behind it; a status over evicted iCloud files ran for
-/// minutes before this bound existed.
-pub const GIT_DEADLINE: Duration = Duration::from_secs(15);
+/// The most one `git` invocation may take ([`crate::git_run::DEADLINE`]).
+pub use crate::git_run::DEADLINE as GIT_DEADLINE;
 
 /// The most of a repository read one worktree's measurement may take, its
 /// ignored-folder scan included, so one slow worktree leaves the others of
@@ -53,39 +50,12 @@ pub fn checkout_git(path: &Path) -> HostResult<hide_node_link::worktrees::Checko
     )
     .map_err(fail)?;
     let mut facts = checkout_status(&status).map_err(fail)?;
-    if let Some(head) = facts.head_sha.as_deref() {
-        let log = git_within_limit(
-            path,
-            &["log", "-z", "-5", "--format=%H%x00%ct%x00%s", head, "--"],
-            until.saturating_duration_since(Instant::now()),
-            Some(64 * 1024),
-        )
-        .map_err(fail)?;
-        let fields: Vec<_> = log.split_terminator('\0').collect();
-        let (records, remainder) = fields.as_chunks::<3>();
-        if records.is_empty()
-            || !remainder.is_empty()
-            || records.len() > hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT
-        {
-            return Err(fail("Git returned an invalid commit history".to_owned()));
-        }
-        for record in records {
-            if !matches!(record[0].len(), 40 | 64)
-                || !record[0].bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                return Err(fail("Git returned an invalid commit SHA".to_owned()));
-            }
-            facts
-                .recent_commits
-                .push(hide_node_link::worktrees::CheckoutCommit {
-                    sha: record[0].to_owned(),
-                    subject: record[2].to_owned(),
-                    commit_unix_seconds: record[1]
-                        .parse()
-                        .map_err(|_| fail("Git returned an invalid commit time".to_owned()))?,
-                });
-        }
-        let latest = &facts.recent_commits[0];
+    if let Some(head) = facts.head_sha.clone() {
+        facts.recent_commits = commit_records(path, &head, until).map_err(fail)?;
+        let latest = facts
+            .recent_commits
+            .first()
+            .ok_or_else(|| fail("Git returned an invalid commit history".to_owned()))?;
         if latest.sha != head {
             return Err(fail(
                 "Git history did not start at the requested HEAD".to_owned(),
@@ -93,6 +63,14 @@ pub fn checkout_git(path: &Path) -> HostResult<hide_node_link::worktrees::Checko
         }
         facts.commit_unix_seconds = Some(latest.commit_unix_seconds);
         facts.subject = Some(latest.subject.clone());
+        // The incoming and unpushed lists add to the header; one that cannot
+        // be read in time, or whose upstream a fetch just pruned, leaves the
+        // other facts standing.
+        if let Err(reason) = commit_relations(path, &head, until, &mut facts) {
+            facts.unpushed_commits.clear();
+            facts.incoming_commits.clear();
+            facts.commits_unread = Some(reason);
+        }
     }
     let repository = hide_project::git::discover(path)
         .ok_or_else(|| fail("The checkout's Git directory is unavailable".to_owned()))?;
@@ -107,6 +85,268 @@ pub fn checkout_git(path: &Path) -> HostResult<hide_node_link::worktrees::Checko
         .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
         .and_then(|time| u64::try_from(time.as_millis()).ok());
     Ok(facts)
+}
+
+/// Which of the header's recent commits no remote-tracking ref holds, and
+/// the upstream's commits HEAD does not have yet.
+fn commit_relations(
+    path: &Path,
+    head: &str,
+    until: Instant,
+    facts: &mut hide_node_link::worktrees::CheckoutGit,
+) -> Result<(), String> {
+    // The newest commits no remote-tracking ref holds; the walk is the
+    // log's own order, so the five newest unpushed are among its first.
+    let unpushed = git_within_limit(
+        path,
+        &[
+            "rev-list",
+            &format!(
+                "--max-count={}",
+                hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT
+            ),
+            head,
+            "--not",
+            "--remotes",
+            "--",
+        ],
+        until.saturating_duration_since(Instant::now()),
+        Some(4 * 1024),
+    )?;
+    facts.unpushed_commits = unpushed
+        .lines()
+        .filter(|sha| facts.recent_commits.iter().any(|commit| commit.sha == *sha))
+        .map(str::to_owned)
+        .collect();
+    if facts.upstream_state == "tracked" && facts.behind.is_some_and(|behind| behind > 0) {
+        facts.incoming_commits = commit_records(path, &format!("{head}..@{{upstream}}"), until)?;
+    }
+    Ok(())
+}
+
+/// The newest commits `revision` names, at most
+/// [`hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT`], with their times
+/// and subjects; their output at most 64 KiB together.
+fn checkout_commits_text(path: &Path, revision: &str, until: Instant) -> Result<String, String> {
+    git_within_limit(
+        path,
+        &[
+            "log",
+            "-z",
+            &format!("-{}", hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT),
+            "--format=%H%x00%ct%x00%s",
+            revision,
+            "--",
+        ],
+        until.saturating_duration_since(Instant::now()),
+        Some(64 * 1024),
+    )
+}
+
+fn commit_records(
+    path: &Path,
+    revision: &str,
+    until: Instant,
+) -> Result<Vec<hide_node_link::worktrees::CheckoutCommit>, String> {
+    let log = checkout_commits_text(path, revision, until)?;
+    let fields: Vec<_> = log.split_terminator('\0').collect();
+    let (records, remainder) = fields.as_chunks::<3>();
+    if !remainder.is_empty() || records.len() > hide_node_link::worktrees::CHECKOUT_COMMIT_LIMIT {
+        return Err("Git returned an invalid commit history".to_owned());
+    }
+    records
+        .iter()
+        .map(|record| {
+            if !matches!(record[0].len(), 40 | 64)
+                || !record[0].bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err("Git returned an invalid commit SHA".to_owned());
+            }
+            Ok(hide_node_link::worktrees::CheckoutCommit {
+                sha: record[0].to_owned(),
+                subject: record[2].to_owned(),
+                commit_unix_seconds: record[1]
+                    .parse()
+                    .map_err(|_| "Git returned an invalid commit time".to_owned())?,
+            })
+        })
+        .collect()
+}
+
+/// Fetches `origin` of the repository that holds `path` (PRD git-freshness
+/// D-01): every branch's remote-tracking ref moves to the remote's, refs the
+/// remote deleted are pruned, no tag is fetched and `FETCH_HEAD`, the time
+/// an operator's own fetch is read by, is not written. Local branches and
+/// the working tree are never touched: only the configured refspecs that
+/// write under `refs/remotes/origin/` are passed, and `--refmap=` keeps any
+/// other one (a mirror's `refs/heads/*:refs/heads/*`) from being applied.
+/// Nothing can prompt (`git_run`), and the run ends within [`FETCH_TIME`].
+pub fn fetch_remote(path: &Path) -> FetchOutcome {
+    use hide_node_link::worktrees::{FetchFailure, FetchSkip};
+    let Some(repository) = hide_project::git::discover(path) else {
+        return FetchOutcome::Failed {
+            failure: FetchFailure::Other,
+            reason: "The folder is not a Git repository".to_owned(),
+        };
+    };
+    match repository.config() {
+        Ok(config) if config.origin_url().is_some() => {}
+        Ok(_) => {
+            return FetchOutcome::Skipped {
+                reason: FetchSkip::NoOrigin,
+            };
+        }
+        Err(reason) => {
+            return FetchOutcome::Failed {
+                failure: FetchFailure::Other,
+                reason,
+            };
+        }
+    }
+    let refspecs = match tracking_refspecs(path) {
+        Ok(refspecs) if refspecs.iter().any(|refspec| !refspec.starts_with('^')) => refspecs,
+        Ok(_) => {
+            return FetchOutcome::Skipped {
+                reason: FetchSkip::NoTrackingRefs,
+            };
+        }
+        Err(reason) => {
+            return FetchOutcome::Failed {
+                failure: FetchFailure::Other,
+                reason,
+            };
+        }
+    };
+    let mut command = crate::git_run::remote(path);
+    // Nothing the fetch starts outlives it or reaches past origin: no
+    // automatic gc or maintenance left running, no submodule fetched.
+    command.env("LC_ALL", "C").args([
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "maintenance.auto=false",
+        "fetch",
+        "--quiet",
+        "--prune",
+        "--no-tags",
+        "--no-recurse-submodules",
+    ]);
+    // `FETCH_HEAD` stays the operator's own fetch's; Git before 2.29 has no
+    // such option and writes it.
+    if crate::git_run::version().is_none_or(|version| version >= (2, 29)) {
+        command.arg("--no-write-fetch-head");
+    }
+    // `--` so no refspec read from the repository's config is taken as an
+    // option.
+    command.args(["--refmap=", "--", "origin"]).args(&refspecs);
+    let output = crate::git_run::output(&mut command, FETCH_TIME, Some(64 * 1024));
+    match output {
+        Ok(Some(output)) if output.status.success() => FetchOutcome::Fetched,
+        Ok(Some(output)) => fetch_failure(
+            &String::from_utf8_lossy(&output.stderr),
+            output.status.code(),
+        ),
+        Ok(None) => FetchOutcome::Failed {
+            failure: FetchFailure::Offline,
+            reason: format!(
+                "git fetch did not finish within {} seconds and was stopped",
+                FETCH_TIME.as_secs()
+            ),
+        },
+        Err(error) => FetchOutcome::Failed {
+            failure: FetchFailure::Other,
+            reason: format!("git fetch could not be run: {error}"),
+        },
+    }
+}
+
+/// `origin`'s configured fetch refspecs that only write remote-tracking refs
+/// (`refs/remotes/origin/...`), with its negative ones; a refspec that would
+/// write a local branch, a tag or anything else is left out, and so is one
+/// that would read as an option.
+fn tracking_refspecs(path: &Path) -> Result<Vec<String>, String> {
+    let output = crate::git_run::output(
+        crate::git_run::at(path).args(["config", "--get-all", "remote.origin.fetch"]),
+        crate::git_run::DEADLINE,
+        Some(64 * 1024),
+    )
+    .map_err(|error| format!("git config could not be run: {error}"))?
+    .ok_or("git config did not answer in time")?;
+    // Exit 1 is "no such key": a remote with no fetch refspec fetches nothing.
+    if !output.status.success() && output.status.code() != Some(1) {
+        return Err(format!(
+            "git config stopped with status {:?}",
+            output.status.code()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|refspec| !refspec.trim_start_matches('+').starts_with('-'))
+        .filter(|refspec| {
+            refspec.starts_with('^')
+                || refspec
+                    .trim_start_matches('+')
+                    .split_once(':')
+                    .is_some_and(|(_, destination)| destination.starts_with("refs/remotes/origin/"))
+        })
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Git's words for a failed fetch, read in the C locale. A ref lock another
+/// Git holds is the operator's own fetch running beside this one, which is
+/// no failure (D-02).
+fn fetch_failure(stderr: &str, code: Option<i32>) -> FetchOutcome {
+    use hide_node_link::worktrees::{FetchFailure, FetchSkip};
+    let said = |needle: &str| stderr.contains(needle);
+    // Two refs that cannot both exist (`a` and `a/b`) also cannot be locked,
+    // and no other Git will ever release that.
+    if (said("cannot lock ref")
+        || (said("Unable to create") && said(".lock"))
+        || said("but expected"))
+        && !said("exists; cannot create")
+    {
+        return FetchOutcome::Skipped {
+            reason: FetchSkip::Busy,
+        };
+    }
+    let failure = if said("Authentication failed")
+        || said("could not read Username")
+        || said("could not read Password")
+        || said("terminal prompts disabled")
+        || said("Permission denied")
+        || said("Host key verification failed")
+        || said("Repository not found")
+        || said("returned error: 403")
+        || said("returned error: 401")
+    {
+        FetchFailure::Auth
+    } else if said("Could not resolve host")
+        || said("Could not resolve hostname")
+        || said("Connection refused")
+        || said("Connection timed out")
+        || said("Operation timed out")
+        || said("Network is unreachable")
+        || said("No route to host")
+        || said("Failed to connect")
+    {
+        FetchFailure::Offline
+    } else {
+        FetchFailure::Other
+    };
+    let reason = stderr
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("fatal:").map(str::trim))
+        .map(crate::clone::redact)
+        .unwrap_or_else(|| {
+            format!(
+                "git fetch stopped with status {}",
+                code.map_or("unknown".to_owned(), |code| code.to_string())
+            )
+        });
+    FetchOutcome::Failed { failure, reason }
 }
 
 fn checkout_status(status: &str) -> Result<hide_node_link::worktrees::CheckoutGit, String> {
@@ -171,13 +411,15 @@ fn checkout_status(status: &str) -> Result<hide_node_link::worktrees::CheckoutGi
 
 /// Reads the repository that holds `path`: its main worktree, default
 /// branch, local branches and every listed worktree. `bases` names a branch's
-/// pull request base; `base_override` is the operator's chosen base. With
+/// pull request base; `base_override` is the operator's chosen base and
+/// `remote_default` the default branch GitHub names. With
 /// `reuse_unchanged`, a worktree whose inputs did not move since `measured`
 /// last saw it keeps that measurement.
 pub fn read(
     path: &Path,
     bases: &BTreeMap<String, String>,
     base_override: Option<&str>,
+    remote_default: Option<&str>,
     measured: &Measured,
     reuse_unchanged: bool,
 ) -> Option<RepositoryWorktrees> {
@@ -197,7 +439,7 @@ pub fn read(
         &root,
         root_path,
         bases,
-        base_override,
+        (base_override, remote_default),
         measured,
         reuse_unchanged,
         until,
@@ -210,7 +452,7 @@ pub fn read_project(
     root: &Path,
     root_path: String,
     bases: &BTreeMap<String, String>,
-    base_override: Option<&str>,
+    (base_override, remote_default): (Option<&str>, Option<&str>),
     measured: &Measured,
     reuse_unchanged: bool,
 ) -> RepositoryWorktrees {
@@ -218,7 +460,7 @@ pub fn read_project(
         root,
         root_path,
         bases,
-        base_override,
+        (base_override, remote_default),
         measured,
         reuse_unchanged,
         Instant::now() + WORKTREES_READ_TIME,
@@ -227,16 +469,24 @@ pub fn read_project(
 
 /// The read's discovery and metadata share its measurement's absolute end;
 /// entering with a known main worktree does not renew that time.
+///
+/// The repository's default branch is the one GitHub names when this clone
+/// can resolve it, else what `origin/HEAD` names (PRD git-freshness D-07);
+/// the operator's chosen base, when it resolves, is measured against instead.
 fn read_project_until(
     root: &Path,
     root_path: String,
     bases: &BTreeMap<String, String>,
-    base_override: Option<&str>,
+    (base_override, remote_default): (Option<&str>, Option<&str>),
     measured: &Measured,
     reuse_unchanged: bool,
     until: Instant,
 ) -> RepositoryWorktrees {
-    let default_branch = default_branch(root, until);
+    let remote_default =
+        remote_default.filter(|branch| resolvable_base(root, branch, until).is_some());
+    let default_branch = remote_default
+        .map(str::to_owned)
+        .or_else(|| default_branch(root, until));
     let refs = Refs::read(root, until);
     let branches = refs.as_ref().map(Refs::branches).unwrap_or_default();
     let valid_override = base_override.filter(|base| resolvable_base(root, base, until).is_some());
@@ -254,6 +504,8 @@ fn read_project_until(
         });
     let base_source = if valid_override.is_some() {
         "specified"
+    } else if remote_default.is_some() {
+        "github"
     } else if default_branch.is_some() {
         "origin_head"
     } else {
@@ -502,7 +754,7 @@ type Kept = BTreeMap<PathBuf, (Inputs, WorktreeFacts)>;
 
 /// The shape of a repository's file; a file of another version, or one that
 /// does not read, is taken as nothing kept.
-const KEPT_FILE_VERSION: u32 = 1;
+const KEPT_FILE_VERSION: u32 = 2;
 /// The largest repository file read back: some thousands of worktrees' facts.
 const KEPT_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -722,8 +974,10 @@ struct Inputs {
     listed: ListedWorktree,
     index: Option<(u64, SystemTime)>,
     base: Option<String>,
+    /// The repository base `merged` is measured against.
+    default_base: Option<String>,
     upstream: Option<String>,
-    commits: [Option<String>; 3],
+    commits: [Option<String>; 5],
 }
 
 impl Inputs {
@@ -736,10 +990,17 @@ impl Inputs {
             .branch
             .as_deref()
             .and_then(|branch| refs.upstream(&format!("refs/heads/{branch}")));
+        let default_base = bases.default_branch.map(str::to_owned);
         let commits = [
             base.as_deref()
                 .and_then(|base| refs.commit(&format!("refs/heads/{base}"))),
             base.as_deref()
+                .and_then(|base| refs.commit(&format!("refs/remotes/origin/{base}"))),
+            default_base
+                .as_deref()
+                .and_then(|base| refs.commit(&format!("refs/heads/{base}"))),
+            default_base
+                .as_deref()
                 .and_then(|base| refs.commit(&format!("refs/remotes/origin/{base}"))),
             upstream
                 .as_deref()
@@ -749,6 +1010,7 @@ impl Inputs {
             listed: listed.clone(),
             index,
             base,
+            default_base,
             upstream,
             commits,
         }
@@ -900,8 +1162,11 @@ fn describe_within(listed: ListedWorktree, bases: &Bases<'_>, until: Instant) ->
         .map(|result| record_failure(result, &mut unavailable_reason, (0, 0)))
         .unwrap_or((0, 0));
 
-    let merged = base_branch
-        .as_deref()
+    // Merged means in the repository's base, the one judgment the sidebar
+    // and the cleanup review share (PRD git-freshness D-06); a stacked pull
+    // request's parent branch is what `ahead` counts against, not this.
+    let merged = bases
+        .default_branch
         .and_then(|base| merged_into(&listed.path, base, until));
     let (upstream_state, unpushed, behind_upstream) = record_failure(
         upstream(&listed.path, listed.branch.as_deref(), until),
@@ -1143,12 +1408,10 @@ fn merged_into(path: &Path, base: &str, until: Instant) -> Option<bool> {
         if left.is_zero() {
             return None;
         }
-        let output = output_within(
-            hide_platform::programs::command("git")
-                .arg("-C")
-                .arg(path)
-                .args(["merge-base", "--is-ancestor", "HEAD", &candidate]),
+        let output = crate::git_run::output(
+            crate::git_run::at(path).args(["merge-base", "--is-ancestor", "HEAD", &candidate]),
             left.min(GIT_DEADLINE),
+            None,
         )
         .ok()??;
         match output.status.code() {
@@ -1331,16 +1594,8 @@ fn git_within_limit(
     {
         calls.push((cwd.to_owned(), arguments.first().unwrap_or(&"").to_string()));
     }
-    let output = output_limited(
-        hide_platform::programs::command("git")
-            .arg("--no-optional-locks")
-            .arg("-C")
-            .arg(cwd)
-            .args(arguments),
-        deadline,
-        limit,
-    )
-    .map_err(|error| format!("git could not be run: {error}"))?;
+    let output = crate::git_run::output(crate::git_run::at(cwd).args(arguments), deadline, limit)
+        .map_err(|error| format!("git could not be run: {error}"))?;
     let Some(output) = output else {
         return Err(format!(
             "git {} did not finish within {} s",
@@ -1610,7 +1865,7 @@ trait WithinDeadline {
 
 impl WithinDeadline for Command {
     fn output_within_deadline(&mut self) -> Result<std::process::Output, String> {
-        output_within(self, GIT_DEADLINE)
+        crate::git_run::output(self, GIT_DEADLINE, None)
             .map_err(|error| format!("git could not be run: {error}"))?
             .ok_or_else(|| {
                 format!(
@@ -1637,7 +1892,7 @@ pub fn output_within(
 }
 
 #[allow(clippy::disallowed_methods)] // a bounded production wait
-fn output_limited(
+pub(crate) fn output_limited(
     command: &mut Command,
     deadline: Duration,
     limit: Option<u64>,
@@ -1711,7 +1966,7 @@ fn output_limited(
     if limit.is_some_and(|limit| stdout.len() as u64 > limit || stderr.len() as u64 > limit) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "Git header read exceeded its output limit",
+            "Git answered more than its output limit",
         ));
     }
     Ok(Some(std::process::Output {
@@ -1739,10 +1994,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
     if branch.starts_with('-') {
         return Err(invalid());
     }
-    let checked = hide_platform::programs::command("git")
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(repository_root)
+    let checked = crate::git_run::at(repository_root)
         .args(["check-ref-format", "--branch", branch])
         .output_within_deadline()
         .map_err(io_error)?;
@@ -1750,10 +2002,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
         return Err(invalid());
     }
     let reference = format!("refs/heads/{branch}");
-    let exists = hide_platform::programs::command("git")
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(repository_root)
+    let exists = crate::git_run::at(repository_root)
         .args(["show-ref", "--verify", "--quiet", &reference])
         .output_within_deadline()
         .map_err(io_error)?;
@@ -1774,10 +2023,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
     }
     // Ask Git itself for the branch-exists diagnostic. This command is
     // side-effect free because the branch was proven to exist above.
-    let refusal = hide_platform::programs::command("git")
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(repository_root)
+    let refusal = crate::git_run::at(repository_root)
         .args(["branch", "--", branch])
         .output_within_deadline()
         .map_err(io_error)?;
@@ -3026,5 +3272,70 @@ mod measure_tests {
         assert_eq!(files, GIT_WATCH_LIMIT);
         let last = PathBuf::from(format!("/repository-{GIT_WATCH_LIMIT}"));
         assert!(kept_file(folder.path(), &last).is_file());
+    }
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::fetch_failure;
+    use hide_node_link::worktrees::{FetchFailure, FetchOutcome, FetchSkip};
+
+    #[test]
+    fn the_operators_own_fetch_holding_a_ref_is_a_skip_not_a_failure() {
+        for stderr in [
+            "error: cannot lock ref 'refs/remotes/origin/main': is at 1 but expected 2",
+            "fatal: Unable to create '/r/.git/refs/remotes/origin/main.lock': File exists.",
+        ] {
+            assert_eq!(
+                fetch_failure(stderr, Some(1)),
+                FetchOutcome::Skipped {
+                    reason: FetchSkip::Busy
+                },
+                "{stderr}"
+            );
+        }
+    }
+
+    #[test]
+    fn refs_that_cannot_both_exist_are_a_failure_not_a_lock() {
+        assert!(matches!(
+            fetch_failure(
+                "error: cannot lock ref 'refs/remotes/origin/a/b': 'refs/remotes/origin/a' exists; cannot create 'refs/remotes/origin/a/b'",
+                Some(1)
+            ),
+            FetchOutcome::Failed {
+                failure: FetchFailure::Other,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_failed_fetch_names_its_kind_and_never_its_credentials() {
+        let case = |stderr: &str| match fetch_failure(stderr, Some(128)) {
+            FetchOutcome::Failed { failure, reason } => (failure, reason),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            case(
+                "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+            )
+            .0,
+            FetchFailure::Auth
+        );
+        assert_eq!(
+            case("git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.").0,
+            FetchFailure::Auth
+        );
+        assert_eq!(
+            case("ssh: Could not resolve hostname github.com: nodename nor servname provided\nfatal: Could not read from remote repository.").0,
+            FetchFailure::Offline
+        );
+        let (failure, reason) = case(
+            "fatal: unable to access 'https://me:token@example.com/x.git/': The requested URL returned error: 500",
+        );
+        assert_eq!(failure, FetchFailure::Other);
+        assert!(!reason.contains("token"), "{reason}");
+        assert_eq!(case("").1, "git fetch stopped with status 128");
     }
 }

@@ -42,6 +42,7 @@ mod documents;
 mod editor_preview;
 #[path = "tests/editor_reopen.rs"]
 mod editor_reopen;
+mod fetch;
 #[path = "tests/first_run.rs"]
 mod first_run;
 #[path = "tests/fork_registration.rs"]
