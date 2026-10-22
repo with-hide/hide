@@ -181,7 +181,9 @@ fn an_older_stub_is_replaced_without_the_operator_asking() {
     apply(&fixture.target, &Scope::agents(["grok"], []));
     let path = shared_skill(&fixture);
     let current = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, current.replace("hide-skill@1", "hide-skill@0")).unwrap();
+    let older = format!("hide-skill@{}", BROWSER_SKILL.version - 1);
+    let marker = format!("hide-skill@{}", BROWSER_SKILL.version);
+    std::fs::write(&path, current.replace(&marker, &older)).unwrap();
 
     let before = status(&fixture.target);
     assert_eq!(agent(&before, "grok").skill.state, ComponentState::Outdated);
@@ -192,6 +194,33 @@ fn an_older_stub_is_replaced_without_the_operator_asking() {
         ComponentState::Installed
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), current);
+}
+
+#[test]
+fn a_version_1_stub_with_a_plain_description_is_replaced() {
+    let fixture = Fixture::new();
+    install(&fixture, "grok", ".grok");
+    apply(&fixture.target, &Scope::agents(["grok"], []));
+    let path = shared_skill(&fixture);
+    // What builds before quoted descriptions wrote.
+    let version_1 = "---\nname: hide-browser\ndescription: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nRun `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n";
+    std::fs::write(&path, version_1).unwrap();
+    assert_eq!(
+        agent(&status(&fixture.target), "grok").skill.state,
+        ComponentState::Outdated
+    );
+
+    let report = apply(&fixture.target, &Scope::automatic());
+
+    assert_eq!(
+        agent(&report, "grok").skill.state,
+        ComponentState::Installed
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.starts_with(
+        "---\nname: hide-browser\ndescription: \"Read and drive a browser display inside Hide. Use when"
+    ));
+    assert_eq!(text, BROWSER_SKILL.text());
 }
 
 #[test]

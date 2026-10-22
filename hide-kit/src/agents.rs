@@ -210,7 +210,7 @@ pub const BROWSER_SKILL: Skill = Skill {
     name: "hide-browser",
     description: "Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.",
     body: "Run `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.",
-    version: 1,
+    version: 2,
 };
 
 /// Turns the session it runs in into a mission's Conductor (PRD
@@ -219,7 +219,7 @@ pub const CONDUCTOR_SKILL: Skill = Skill {
     name: "hide-conductor",
     description: "Run a mission in Hide as its Conductor: plan the work with the operator, start the agents that do it, follow their pull requests, and report. Use when the operator gives you a goal to carry out with several agents, or asks you to take over a mission.",
     body: "Run `hide mission help` and follow what it prints. It explains how to plan a mission with the operator, start and follow its workers, change the plan when told, merge, report, and take over a mission whose Conductor is gone.",
-    version: 1,
+    version: 2,
 };
 
 /// Every stub Hide writes; each skill folder holds all of them.
@@ -351,11 +351,15 @@ pub(crate) fn login_shell() -> Option<PathBuf> {
 // --- The skill stub ------------------------------------------------------------
 
 impl Skill {
-    /// The text of the stub.
+    /// The text of the stub. The description is a quoted YAML string: a
+    /// plain one ends at its first `: `, and a strict reader such as Pi's
+    /// then drops the whole skill (version 1's `hide-conductor`).
     pub(crate) fn text(self) -> String {
+        // A JSON string is a YAML double-quoted scalar.
+        let description = serde_json::Value::from(self.description).to_string();
         format!(
-            "---\nname: {}\ndescription: {}\n---\n\n<!-- {SKILL_MARKER_NAME}@{}: written by Hide; remove it from Settings, Agents -->\n\n{}\n",
-            self.name, self.description, self.version, self.body
+            "---\nname: {}\ndescription: {description}\n---\n\n<!-- {SKILL_MARKER_NAME}@{}: written by Hide; remove it from Settings, Agents -->\n\n{}\n",
+            self.name, self.version, self.body
         )
     }
 
