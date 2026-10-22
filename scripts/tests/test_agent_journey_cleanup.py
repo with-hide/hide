@@ -15,8 +15,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import ci
 from agent_journey.journey import Journey
-from agent_journey.cli import budget_failures, claude_trusts, hide_ai_requests, leftover_copies, measured_clone
-from agent_journey.local import claude_session_folders, disable_hide_ai, wrapper
+from agent_journey.cli import budget_failures, hide_ai_requests, leftover_copies, measured_clone, provider_keys
+from agent_journey.local import ROUTES, claude_session_folders, disable_hide_ai, opencode_key_names, wrapper
 from agent_journey.report import markdown
 
 GIT_ENV = {"PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
@@ -49,14 +49,6 @@ class MeasuredRepository(unittest.TestCase):
             git(root, "branch", "journey/r1-codex")
             self.assertEqual(git(checkout, "for-each-ref"), before)
 
-    def test_claude_trust_comes_from_the_folder_or_one_above_it(self):
-        with tempfile.TemporaryDirectory() as folder:
-            operator = Path(folder)
-            (operator / ".claude.json").write_text(json.dumps({"projects": {
-                "/work": {"hasTrustDialogAccepted": True}, "/other": {"hasTrustDialogAccepted": False}}}))
-            self.assertTrue(claude_trusts(operator, Path("/work/run/probe/daemon-home/projects/measured")))
-            self.assertFalse(claude_trusts(operator, Path("/other/measured")))
-
 
 class ProviderKeys(unittest.TestCase):
     def test_a_provider_key_in_the_shell_reaches_no_agent(self):
@@ -80,21 +72,63 @@ class LocalStarts(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         self.base = Path(folder.name).resolve()
 
-    def test_a_wake_start_through_the_panes_claude_carries_the_route(self):
+    def start(self, kind, keys=None, shell=None):
+        """Starts the pane's `kind` as Hide's Wake does (`--resume <id>`), from
+        a pane environment holding `shell`; returns the stand-in's arguments and
+        environment."""
+        home = self.base / "daemon-home"
+        stand_in, argv, env = self.base / kind, self.base / "argv", self.base / "env"
+        stand_in.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > {argv}\nenv > {env}\n')
+        stand_in.chmod(0o700)
+        target = wrapper(self.base / "bin", stand_in, self.base / "operator", self.base / "state", kind,
+                         home, None, "/usr/bin:/bin", keys=keys)
+        subprocess.run([str(target), "--resume", "session-1"], check=True,
+                       env={"PATH": "/usr/bin:/bin", **(shell or {})})
+        variables = dict(line.split("=", 1) for line in env.read_text().splitlines() if "=" in line)
+        return home, target, argv.read_text().splitlines(), variables
+
+    def test_a_wake_start_through_the_panes_claude_reads_its_private_folder_and_the_operators_login(self):
         # Hide's Wake and Fork start `claude --resume <id> ...` by name in the pane,
         # which runs this wrapper, so the route rides on every start.
-        home = self.base / "daemon-home"
-        stand_in, argv = self.base / "claude", self.base / "argv"
-        stand_in.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > {argv}\n')
-        stand_in.chmod(0o700)
-        target = wrapper(self.base / "bin", stand_in, self.base / "operator", self.base / "state", "claude",
-                         home, None, "/usr/bin")
-        subprocess.run([str(target), "--resume", "session-1"], check=True, env={"PATH": "/usr/bin:/bin"})
-        self.assertEqual(argv.read_text().splitlines(), [
-            "--settings", str(home / ".claude/settings.json"), "--setting-sources", "project,local",
-            "--resume", "session-1"])
-        # The file those arguments name is there before the kit fills it, as Claude refuses a missing one.
-        self.assertEqual(json.loads((home / ".claude/settings.json").read_text()), {})
+        home, _, argv, variables = self.start("claude", shell={"CLAUDE_CONFIG_DIR": "/operator/elsewhere"})
+        self.assertEqual(argv, ["--resume", "session-1"])
+        # Its configuration, sessions and the trust Hide records are the candidate's;
+        # an empty secure-storage folder keeps the keychain entry the operator's own.
+        self.assertEqual(variables["CLAUDE_CONFIG_DIR"], str(home / ".claude"))
+        self.assertEqual(variables["CLAUDE_SECURESTORAGE_CONFIG_DIR"], "")
+        self.assertEqual(variables["HOME"], str(self.base / "operator"))
+        # So the never-trusted start leaves nothing in the operator's ~/.claude.json and is measured.
+        self.assertIsNone(ROUTES["claude"]["untrusted"])
+
+    def test_opencode_receives_only_the_variables_its_chosen_provider_names(self):
+        config = {"model": "bai/flash", "small_model": "bai/flash", "provider": {
+            "bai": {"options": {"apiKey": "{env:BAI_API_KEY}", "headers": {"X-Org": "{env:BAI_ORG}"}}},
+            "other": {"options": {"apiKey": "{env:OTHER_API_KEY}"}}}}
+        names = opencode_key_names(config)
+        self.assertEqual(names, {"bai": ["BAI_API_KEY", "BAI_ORG"]})
+        self.assertEqual(opencode_key_names({"provider": config["provider"]}), {})
+        shell = {"BAI_API_KEY": "bai-secret-value", "BAI_ORG": "org-1", "OTHER_API_KEY": "other-secret",
+                 "GEMINI_API_KEY": "gemini-secret"}
+        runtime = SimpleNamespace(probe=self.base / "probe", credential_roots=set())
+        keys, refusal = provider_keys(runtime, "opencode", names, shell)
+        self.assertIsNone(refusal)
+        # The files go with the probe, even when the cleanup is unconfirmed.
+        self.assertEqual(runtime.credential_roots, {self.base / "probe/keys/opencode"})
+        self.assertTrue(all(file.stat().st_mode & 0o777 == 0o600 for file in keys.values()))
+        # The pane's environment carries no key; the wrapper adds exactly the named ones.
+        _, target, _, variables = self.start("opencode", keys)
+        self.assertEqual((variables["BAI_API_KEY"], variables["BAI_ORG"]), ("bai-secret-value", "org-1"))
+        self.assertNotIn("OTHER_API_KEY", variables)
+        self.assertNotIn("GEMINI_API_KEY", variables)
+        self.assertNotIn("bai-secret-value", target.read_text())
+
+    def test_a_chosen_providers_variable_the_shell_lacks_leaves_opencode_unmeasured_with_its_name(self):
+        runtime = SimpleNamespace(probe=self.base / "probe", credential_roots=set())
+        keys, refusal = provider_keys(runtime, "opencode", {"bai": ["BAI_API_KEY"]}, {"BAI_API_KEY": ""})
+        self.assertEqual(keys, {})
+        self.assertEqual(refusal, "opencode's chosen provider bai reads BAI_API_KEY from the environment, which the "
+                                  "shell running the journey does not set; set it there and rerun")
+        self.assertFalse((self.base / "probe").exists())
 
     def test_hide_ai_is_off_in_the_candidates_private_home(self):
         disable_hide_ai(self.base / "home")

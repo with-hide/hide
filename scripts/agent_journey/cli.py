@@ -38,8 +38,8 @@ from .controller import Controller
 from .contract import load_contract
 from .daemon import Daemon
 from .journey import STEPS, Journey, token
-from .local import (ROUTES, TRUST, allow_one_shot_references, claude_session_folders, disable_hide_ai,
-                    opencode_model, operator_trust, route, wrapper)
+from .local import (ROUTES, TRUST, allow_one_shot_references, claude_config, claude_session_folders,
+                    disable_hide_ai, opencode_model, operator_trust, route, wrapper)
 from .report import save, table_lines
 
 KIT_SECONDS = 90
@@ -181,16 +181,27 @@ def check_operator_trust(report, operator, run, when):
                 f"the candidate left Claude trust in the operator's {path} after its worktrees were removed: {', '.join(keys)}")
 
 
-def claude_trusts(operator, root):
-    """Whether the operator's Claude trusts the measured repository, read
-    only: Claude Code 2.1.302 takes a folder's trust from the folder or the
-    nearest one above it that is trusted."""
-    try:
-        projects = json.loads((operator / ".claude.json").read_text()).get("projects", {})
-    except (OSError, ValueError):
-        return False
-    return any((projects.get(str(folder)) or {}).get("hasTrustDialogAccepted") is True
-               for folder in (root, *root.parents))
+def provider_keys(runtime, kind, names, environment=None):
+    """Private files holding the values of the variables `names` (by
+    provider) from the journey's own environment, for an agent's wrapper to
+    read at each start; under the probe, which the cleanup removes even when
+    it is unconfirmed. Returns the files by variable and the refusal of a
+    variable the environment does not carry, or None."""
+    environment = os.environ if environment is None else environment
+    for provider, variables in names.items():
+        missing = [name for name in variables if not environment.get(name)]
+        if missing:
+            return {}, (f"{kind}'s chosen provider {provider} reads {', '.join(missing)} from the environment, which "
+                        "the shell running the journey does not set; set it there and rerun")
+    variables = sorted({name for values in names.values() for name in values})
+    if not variables:
+        return {}, None
+    folder = runtime.probe / "keys" / kind
+    runtime.credential_roots.add(folder)
+    private_directory(folder)
+    for name in variables:
+        write_private(folder / name, environment[name].encode())
+    return {name: folder / name for name in variables}, None
 
 
 def git(runtime, args, cwd):
@@ -296,10 +307,18 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
             cells.settle_agent(table, key, f"CLI not installed: {kind} is not on PATH")
             continue
         extra = fake_lane.configure(kind, runtime.home, fake[key], root, local=True) if fake else None
+        keys = {}
         if extra is not None:
             agent["fake_env"] = sorted(extra)
+        elif kind == "claude":
+            claude_config(runtime.home, root)
         elif kind == "opencode":
-            opencode_model(operator, runtime.home / opencode_service.CONFIG)
+            keys, refusal = provider_keys(runtime, kind, opencode_model(operator, runtime.home / opencode_service.CONFIG))
+            agent["key_env"] = sorted(keys)
+            if refusal:
+                agent["login"] = refusal
+                cells.settle_agent(table, key, refusal)
+                continue
         private = runtime.home / entry["config"] if entry["config"] else None
         if private is not None and entry["copies"] and not fake:
             # Made before the CLI's first run: any run, `--version` included,
@@ -308,7 +327,7 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
             # refuses a folder that is not private.
             private_directory(private)
         launch = wrapper(runtime.bin, executables[key], operator, runtime.state, kind, runtime.home, sandbox,
-                         os.environ.get("PATH", ""), extra)
+                         os.environ.get("PATH", ""), extra, keys)
         environment = {**clean_env(), "HOME": str(operator), "TMPDIR": str(run / "agent-tmp")}
         if kind == "opencode":
             agent["service_port"] = opencode_service.configure(runtime.home / opencode_service.CONFIG)
@@ -318,11 +337,6 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
         agent["pin"] = clis.pin(kind, agent["version"])
         if fake:
             ready.append(key)
-            continue
-        if kind == "claude" and not claude_trusts(operator, root):
-            agent["trust"] = f"Claude trusts neither the measured repository {root} nor a folder above it"
-            cells.settle_agent(table, key, "Claude trusts no folder above the measured repository; open Claude once in "
-                               f"{runtime.checkout} and accept")
             continue
         if entry["copies"]:
             runtime.credential_roots.add(private)
@@ -617,9 +631,9 @@ def main(argv=None):
                                                 markers=(fake_key, fake_key[-20:], *urls.values()))
             watch.check(watch.result(watch.before))
         report["package"] = str(package(runtime))
-        # Codex's sessions belong in its private home, never the operator's, and
-        # in CI mode or with the fake model Claude's do too: it writes them there.
-        for relative in (".codex/sessions",) if local and not fake else (".codex/sessions", ".claude/projects"):
+        # Codex's and Claude's sessions belong in their private folders, never
+        # the operator's: each writes them there in every mode.
+        for relative in (".codex/sessions", ".claude/projects"):
             sessions = runtime.home / relative
             if sessions.is_symlink():
                 sessions.unlink()
@@ -682,7 +696,8 @@ def main(argv=None):
                                   sessions=(ROUTES[rows[key]["herdr_kind"]]["sessions"](operator, runtime.home)
                                             if legacy else runtime.home),
                                   route=({**route(rows[key]["herdr_kind"], runtime.home),
-                                          **({"fake_env": agent["fake_env"]} if fake else {})} if legacy
+                                          **({"fake_env": agent["fake_env"]} if fake else {}),
+                                          **({"key_env": agent["key_env"]} if agent.get("key_env") else {})} if legacy
                                          else {"args": [], "env": ci.route_names(rows[key]["herdr_kind"], fixture_bin,
                                                                                  agent.get("fake_env"))}),
                                   composer_judge=composer_judge,
