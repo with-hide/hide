@@ -692,8 +692,8 @@ A Conductor is named as one only while its pane runs the Conductor's session (th
 The state is the row's mark as every surface draws it ([status-model.md: The mark](status-model.md#the-mark)): `turn`, `going`, `waiting`, `done`, `unread`, `quiet`, `unknown` or `asleep`, and `disconnected` for every agent on a device that does not answer.
 A device's projects carry `@ <device>` on their line; its panes are the last ones Hide had from it while it does not answer.
 After the tree, `not in a pane` lists the live registrations no pane on screen holds (a sleeping agent, an older registration of a pane that now runs another session), and `--all` adds `ended`, the ended registrations.
-`--here` keeps the project of the pane it runs in, with its agents' delegated agents wherever they live, and is refused `here_unavailable` from a caller with no pane in a project Hide shows.
-`--json` prints the same answer as one line in the `agent` envelope, `{"ok":true,"value":{"panes":[…],"agents":[…]}}`, flat rather than nested: each pane carries its machine, project, checkout, tab, `you`, and its agent with `parent_machine` and `parent_pane` for the nesting; its schema is the contract's `ps` answer.
+`--here` keeps every pane of the project of the pane it runs in, with its agents' delegated agents wherever they live (a pane of the project whose parent lives in another project is drawn in its own tab), and is refused `here_unavailable` from a caller with no pane in a project Hide shows.
+`--json` prints the same answer as one line in the `agent` envelope, `{"ok":true,"value":{"panes":[…],"agents":[…],"missions_unreadable":false}}`, flat rather than nested: each pane carries its machine, project, checkout, tab, `you`, and its agent with `parent_machine` and `parent_pane` for the nesting; its schema is the contract's `ps` answer.
 The tree uses box-drawing characters on every system: Rust writes UTF-8 to a pipe and UTF-16 to a Windows console, so no console Hide supports needs a fallback.
 
 The answer is what the core already holds: the navigator's projects, tabs and agent rows, each device's last session, the mission map and the delivery ledger.
