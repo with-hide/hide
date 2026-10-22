@@ -29,7 +29,9 @@ test("the 태스크 list and raised-child pane bands preserve native terminal ge
     await expect(pane.locator('[data-pane-header-band="raised"]')).toBeVisible({ timeout: 30_000 });
     const treeButton = pane.locator(`[data-pane-tree="${parent}"]`);
     await expect(treeButton).toBeVisible();
-    await expect(treeButton).toHaveText("1");
+    // One child: its status mark stands in for the count, with no `+N`.
+    await expect(treeButton.locator("[data-pane-tree-mark]")).toHaveCount(1);
+    await expect(treeButton).toHaveText("");
     await expect(pane.locator(`[data-pane-child-name]`)).toHaveCount(0);
     await expect(pane.locator(`[data-pane-own-progress="${parent}"]`)).toHaveCount(0);
     const raisedRow = pane.locator('[data-pane-header-band="raised"]');

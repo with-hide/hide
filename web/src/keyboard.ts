@@ -13,7 +13,7 @@
 // The same listener watches the modifiers for the hold hint (PRD
 // electron-digit-shortcuts-hints D-03, D-04): every keydown and keyup feeds
 // the pure state in `hints.ts`, one timer advances its deadline, and only
-// the family it reveals (`tabs`, `agents` or none) is published to the ui
+// the family it reveals (`agents`, `devices` or none) is published to the ui
 // store, so an unrevealed hold renders nothing. Losing the window, a page
 // going hidden, a layer opening or any key pressed during the hold ends it.
 
@@ -23,14 +23,13 @@ import { focusBrowserDisplay } from "./browserViews";
 import { advanceHint, clearHint, holdModifiers, idleHint, modifiersOf, NO_MODIFIERS, revealedFamily, type HintState } from "./hints";
 import { browserBridge, CHECK_UPDATES_COMMAND, hostBridge, hostKind, keySystem, SETUP_COMMAND } from "./host";
 import { useSetupWalk } from "./FirstRunWizard";
-import { numberedTabs, sidebarNumbers } from "./numbering";
+import { numberedDevices, sidebarNumbers } from "./numbering";
 import { availableEntries, currentEntry, expectPane, expectSurface, observeEntries, observePane, observeProject, paneItem, panelItem, projectItem, reconcileCycle, recentEntries, recentProjectOrder, type CycleItem } from "./recent";
-import { projectsOf, remoteContext, remoteView } from "./remote";
+import { projectsOf, remoteContext } from "./remote";
 import { hostChord, hostRegistry, isNumberedCommand, releaseModifier, matchHost, numberedCommand, REGISTRY, storedBindings, type CommandId, type Digit, type NumberedFamily } from "./shortcuts";
-import { editorFor, focusedCheckout, localDeviceId, type AgentRow, type SnapshotRest, type Workspace } from "./snapshot";
+import { editorFor, type AgentRow, type SnapshotRest, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore, type Cycle } from "./ui";
-import { workspaceViewOf } from "./workspace";
 import { drawnViews, installKeyboardOwner, keyboardCommandOwner, noteCommandDelivered, subscribeKeyboardOwner } from "./viewFocus";
 
 /**
@@ -97,26 +96,9 @@ export function reconcileHeldCycle(cycle: Cycle, rest: SnapshotRest | null): Cyc
   return kept.items.length >= fewest ? { ...cycle, ...kept } : null;
 }
 
-/**
- * The strip ⌘n numbers: the checkout the Agent area draws, a selected
- * device's own view or this machine's focused checkout (PRD
- * electron-digit-shortcuts-hints B1).
- */
-function stripCheckout(rest: SnapshotRest | null) {
-  const remote = remoteContext(rest);
-  if (remote) return remoteView(remote.session, rest?.workspace_view)?.checkout ?? null;
-  return focusedCheckout(rest);
-}
-
-/** What ⌘n or ⌥n selects now, or null when nothing holds that number. */
+/** What ⌥n or ⌘n selects now, or null when nothing holds that number. */
 export function numberedTarget(family: NumberedFamily, number: Digit, state: { rest: SnapshotRest | null; agents: AgentRow[] }): string | null {
-  if (family === "tabs") {
-    const checkout = stripCheckout(state.rest);
-    const view = workspaceViewOf(state.rest);
-    const deviceId = remoteContext(state.rest)?.device.id ?? localDeviceId(state.rest);
-    const layout = view?.device_id === deviceId && view.path === checkout?.path ? (view.agent_layout ?? null) : null;
-    return checkout ? (numberedTabs(checkout, layout).get(number) ?? null) : null;
-  }
+  if (family === "devices") return numberedDevices(state.rest?.navigator?.devices).get(number) ?? null;
   return sidebarNumbers(state, useUiStore.getState()).get(number) ?? null;
 }
 
@@ -199,7 +181,7 @@ export function installKeyboard(actions: Actions): () => void {
       const numbered = numberedCommand(id)!;
       const target = numberedTarget(numbered.family, numbered.number, useShellStore.getState());
       if (!target) return;
-      if (numbered.family === "tabs") actions.focusTab(target);
+      if (numbered.family === "devices") actions.focusDevice(target);
       else actions.openListedAgent(target);
       return;
     }

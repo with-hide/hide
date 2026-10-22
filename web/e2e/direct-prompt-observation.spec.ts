@@ -112,8 +112,13 @@ test("piped, named and loop-free direct prompts draw lines and an unseen start k
     await post('herdr agent prompt "$p" "third note" >/dev/null', { stdout: "", stderr: "" });
     await post("herdr agent prompt nobody 'fourth note'", herdrCall(herdr, ["agent", "prompt", "nobody", "fourth note"]));
 
-    // The Overview draws the pair as one direct-input line.
+    // The Overview draws the pair as one direct-input line, bare until one of its sessions is pointed at;
+    // then its middle counts the two inputs with no letter count.
     await expect(page.locator(".og-direct-input").first()).toBeAttached({ timeout: 20_000 });
+    await expect(page.locator("[data-graph-exchange]")).toHaveCount(0);
+    await page.locator(`[data-graph-session="${sender}"] .og-session-target`).hover();
+    await expect(page.locator("[data-graph-exchange]")).toHaveText("2");
+    await expect(page.locator("[data-graph-exchange] svg")).toHaveCount(1);
     await screenshot(page, "direct-prompt-observation-overview");
 
     // B14: a start whose answer names the pane and its session records the started agent as a root

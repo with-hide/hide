@@ -1,16 +1,14 @@
 import { deviceScope } from "./agentScope";
-// What ⌘n and ⌥n select, and the number each tab and agent row carries
-// while a hold reveals it (PRD electron-digit-shortcuts-hints D-02). The
-// number is the screen order at that moment, first to ninth: the strip's
-// tabs left to right, the sidebar list's drawn rows top to bottom, the
+// What ⌥n and ⌘n select, and the number each agent row and device tile
+// carries while a hold reveals it (PRD electron-digit-shortcuts-hints D-02).
+// The number is the screen order at that moment, first to ninth: the rail's
+// devices top to bottom, the sidebar list's drawn rows top to bottom, the
 // 프로젝트 tree's roots or, while the `프로젝트 | 태스크` switch shows the 태스크
 // list, its task rows (PRD sidebar-task-lens). A tenth item has no number,
 // and a number with nothing at it selects nothing.
 
-import { areasOf } from "./areaLayout";
-import type { AgentLayout } from "./agentLayout";
 import type { TreeRow } from "./agentRow";
-import { frontDeviceId } from "./devices";
+import { frontDeviceId, railDeviceIds } from "./devices";
 import { deviceListedAgents } from "./navigation";
 import { agentsByPane, allAgents as everyPaneAgent } from "./paneAgents";
 import { projectRows, activeCheckouts, inactiveCheckouts, folderCheckout, projectExpanded } from "./projects";
@@ -19,23 +17,11 @@ import { sidebarNamedGroups, sidebarTabGroups } from "./sidebarTabs";
 import { groupFoldKey, useGroupFolds } from "./groupTabs";
 import { contextWorkspaces, contextAgents } from "./remote";
 import { DIGITS, type Digit } from "./shortcuts";
-import { catalogWorkspaces, type AgentRow, type Checkout, type SnapshotRest } from "./snapshot";
+import { catalogWorkspaces, type AgentRow, type Checkout, type Device, type SnapshotRest } from "./snapshot";
 import { drawnTasks, taskList, taskSections } from "./taskList";
-import { agentEntries } from "./workspace";
 
 /** The page-local folds the two lists' drawn orders depend on (`ui.ts`). */
 export type SidebarFolds = { raisedOpen: readonly string[]; taskFoldsOpen: readonly string[] };
-
-/** Local area tree order, then each bar left to right; devices retain their strip order. */
-export function numberedTabs(checkout: Checkout, layout?: AgentLayout | null): Map<Digit, string> {
-  const numbered = new Map<Digit, string>();
-  const entries = agentEntries(checkout);
-  const placed = layout ? areasOf(layout.root).flatMap((area) => area.displays.map((item) => item.id)) : entries.map((entry) => entry.source_id);
-  placed.filter((id) => entries.some((entry) => entry.source_id === id) || layout?.drafts?.includes(id))
-    .slice(0, DIGITS.length)
-    .forEach((id, index) => numbered.set(DIGITS[index]!, id));
-  return numbered;
-}
 
 /** The pane id at each number, the first nine of `panes` in their order, a pane counted once. */
 export function numberedPanes(panes: readonly string[]): Map<Digit, string> {
@@ -43,6 +29,16 @@ export function numberedPanes(panes: readonly string[]): Map<Digit, string> {
   const seen = new Set<string>();
   panes.filter((pane) => !seen.has(pane) && !!seen.add(pane)).slice(0, DIGITS.length).forEach((pane, index) => numbered.set(DIGITS[index]!, pane));
   return numbered;
+}
+
+/**
+ * The device id at each number ⌘n selects: the rail's tiles top to bottom,
+ * the window's own machine first, numbered the same whether the rail shows
+ * or not. A tile drawn before the core named its machine has no id to
+ * select, so it holds no number.
+ */
+export function numberedDevices(devices: readonly Device[] | undefined): Map<Digit, string> {
+  return numberedPanes(railDeviceIds(devices).filter((id) => id !== ""));
 }
 
 /** The pane id at each number of the Agents list's drawn rows, in number order. */

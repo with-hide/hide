@@ -984,6 +984,8 @@ export type PaneHeader = {
   request?: PaneTurnRequest;
   /** The turn finished and the operator has not looked at the pane since (B10). */
   finished?: boolean;
+  /** The agent waits on its children: how many descendants work, said after the request. */
+  waiting_on_children?: number;
 };
 /** The shown request in one line and its images, which the row counts. */
 export type PaneTurnRequest = {text: string | null; images: number};

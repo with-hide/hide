@@ -20,14 +20,14 @@ import {
   type SheetRow,
   type StoredShortcutSets,
 } from "./shortcuts";
-import { commandTitle } from "./commandTitle";
+import { commandTitle, FAMILY_TITLE } from "./commandTitle";
 import { useShellStore } from "./store";
 import type { TFunction } from "i18next";
 
 /** A sheet row's title: a folded numbered family reads with its range ("1-9"). */
 export function sheetRowTitle(row: SheetRow, t: TFunction<"translation">): string {
   if (!row.range) return commandTitle(row.id, t);
-  return t(numberedCommand(row.id)!.family === "tabs" ? "commands.select_tab" : "commands.select_agent", { number: row.range });
+  return t(FAMILY_TITLE[numberedCommand(row.id)!.family], { number: row.range });
 }
 
 export function commandGroupTitle(group: Command["group"], t: TFunction<"translation">): string {

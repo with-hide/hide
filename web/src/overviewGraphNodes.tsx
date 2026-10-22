@@ -1,5 +1,5 @@
-import { BaseEdge, Handle, Position, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
-import { ChevronsDownUpIcon } from "lucide-react";
+import { BaseEdge, EdgeLabelRenderer, Handle, Position, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
+import { ChevronsDownUpIcon, MailIcon, TerminalIcon } from "lucide-react";
 import { useId } from "react";
 import { AgentMark } from "./AgentMark";
 import { badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
@@ -8,6 +8,7 @@ import { AskLine } from "./components/agent-tree";
 import { RevisitStar, starred } from "./components/revisit-mark";
 import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
+import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { GraphAgent, GraphProject, ProjectSummary } from "./overviewGraphModel";
 import type { ProjectAccent } from "./overviewGraphLines";
@@ -39,7 +40,9 @@ export type TeamNode = Node<{ path: string; width: number; height: number; selec
 export type TeamFold = { count: number; turn: number; going: number; done: number; folded: boolean; toggle: () => void };
 export type SessionNode = Node<{ row: GraphAgent; root: boolean; context: boolean; muted: boolean; highlighted: boolean; current: boolean; team: TeamFold | null; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
 /** A straight relationship between two orbs, already trimmed to their edges; it carries no words. */
-export type LineEdge = Edge<{ x1: number; y1: number; x2: number; y2: number }, "line">;
+/** A line's letters and Herdr inputs, summed over both directions, and its hint saying them per direction. */
+export type ExchangeBadge = { letters: number; direct: number; label: string };
+export type LineEdge = Edge<{ x1: number; y1: number; x2: number; y2: number; exchange?: ExchangeBadge }, "line">;
 
 /** Handles are invisible routing anchors; no connection can be edited. */
 function Ports() {
@@ -139,5 +142,16 @@ export function LineGraphEdge(props: EdgeProps<LineEdge>) {
   return <>
     <path className="og-edge-underlay" d={path} fill="none" />
     <BaseEdge id={props.id} path={path} interactionWidth={0} style={props.style} markerEnd={props.markerEnd} markerStart={props.markerStart} />
+    {props.data.exchange ? <EdgeLabelRenderer><ExchangeCount {...props.data.exchange} x={(x1 + x2) / 2} y={(y1 + y2) / 2} /></EdgeLabelRenderer> : null}
   </>;
+}
+
+/** The badge at a line's middle: an envelope with its letters, a prompt with its Herdr inputs, each only when nonzero. */
+function ExchangeCount({ letters, direct, label, x, y }: ExchangeBadge & { x: number; y: number }) {
+  return <Hint label={label} contentClassName="whitespace-pre-line">
+    <span role="img" className="og-exchange nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }} data-graph-exchange="true">
+      {letters ? <span><MailIcon aria-hidden="true" />{letters}</span> : null}
+      {direct ? <span><TerminalIcon aria-hidden="true" />{direct}</span> : null}
+    </span>
+  </Hint>;
 }

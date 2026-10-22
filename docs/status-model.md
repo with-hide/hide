@@ -419,9 +419,9 @@ The sidebar tree under an opened root is `agent_scope.sidebar_tree.visible_rows`
 The shell shows five siblings per parent and folds the rest behind `N개 더` (`web/src/sidebarTree.ts`).
 A grandchild's own children open in the tree popover instead of a third level.
 A delegated row whose checkout differs from its parent's carries `row.state.branch_badge` (`agent_state/axes.rs::apply_lineage`): that checkout's branch, or its label when it has none, the name the sidebar gives the checkout; a device checkout's label is its folder name, so the label alone would name a folder there.
-The tree popover (`web/src/components/agent-tree-popover.tsx`) opens from the children button at the right end of the pane's second row, a grandchild's chevron and an ask band's fallback `외 N건` when that button is unavailable.
-The children button reads `자식 N`, after the subtree's operator-raised `descendant_mark.count` with the turn mark when it is positive; its tooltip and accessible name spell out the live direct child total and every `direct_child_counts` state, and ordinary child requests are named only there, because they are the parent's to answer (status-marks B21).
-Each child's own state is the mark beside its name on the same row, the mark its sidebar row draws; unknown children are excluded from the resting remainder of the tooltip.
+The tree popover (`web/src/components/agent-tree-popover.tsx`) opens from the children button at the left end of the pane's second row, a grandchild's chevron and an ask band's fallback `외 N건` when that button is unavailable.
+The children button's face is the marks of the first three direct children that have one, in tree order, with `+N` for the rest (a child of unknown state draws none), its border in the warning colour while the subtree's operator-raised `descendant_mark.count` is positive; its tooltip and accessible name spell out the live direct child total and every `direct_child_counts` state, and ordinary child requests are named only there, because they are the parent's to answer (status-marks B21).
+Each child's own state is the mark beside its name on the same row, the mark its sidebar row draws, followed by its agent's logo in both logo view modes; unknown children are excluded from the resting remainder of the tooltip.
 Its head names the parent with its direct child count, and its body draws the same rows two levels deep with five siblings each, the children that finished and were read, with nothing below them raised or working, folded below them behind `끝난 자식 N`; choosing a grandchild that has children re-roots the popover on it.
 Arrows move, Right and Left open and fold a branch, Enter opens the agent's pane, and Escape closes it and returns focus to what opened it.
 Opened from a pane button with a raised mark, or the fallback ask-band button, it starts with the raised branches open and draws each ask on the row it raised (`raised_pane_id`) with its verb, what to do and Open, which for a draft goes to the parent holding it.
@@ -790,7 +790,7 @@ A project with no GitHub remote has no board, and `gh` missing or signed out is 
 
 ### A task's stage
 
-A task's four-step stage (`작업 → PR → 검토 → 머지`), which feeds the task's state and which no screen draws since the session record's `지금` box replaced its bar (PRD pr-card-and-session-record-redesign B14), reuses this cached PR answer through the agents' PR summaries (`agent_state/tally/tasks.rs::stage`): with any pull request the bar stands at the least advanced one that is not merged, a draft, pending, failing or closed one at two steps and a mergeable one at three, and at four once every one merged; with none it is one step while a member works in a linked worktree, and a task that is only a conversation has no bar.
+A task's four-step stage (`작업 → PR → 검토 → 머지`), which feeds the task's state and which no screen draws since the session record's `지금` box replaced its bar (PRD pr-card-and-session-record-redesign B14), reuses this cached PR answer through the agents' PR summaries, reading only the live ones, so a pull request merged before the operator's last request never counts (`agent_state/tally/tasks.rs::stage`): with any pull request the bar stands at the least advanced one that is not merged, a draft, pending, failing or closed one at two steps and a mergeable one at three, and at four once every one merged; with none it is one step while a member works in a linked worktree, and a task that is only a conversation has no bar.
 A failed or unrequested lookup never becomes a merged or empty stage: a member whose PR state is unread adds nothing.
 The workspace inspector uses the canonical representative agent and disconnected override; inspection itself never acknowledges an agent.
 
@@ -805,10 +805,10 @@ No latest-session, cwd or reverse owner-hash guess is made.
 
 The core publishes `record_connection` as `checking`, `confirmed` or `unconfirmed` when a row has display history.
 Checking and unconfirmed history keeps its last title and valid PRs dimmed, with the localized connection words only in the hint and accessible name; confirmed history removes that treatment.
-A provisional PR participates in the display summary without gaining current work duty or a session-created relation; the normal merged/closed display filter still applies.
+A provisional PR participates in the display summary without gaining current work duty or a session-created relation; the normal closed display filter still applies.
 It cannot change a task's stage, and a tab's title provenance follows the core's focused pane even when several panes share a title.
 Failure keeps display history and retries through the existing single reader, at most once per pane per fifteen seconds after an unsuccessful confirmation.
-The row's branch may differ from a saved PR's branch; existing closed/merged filters remain, and a provisional relation never grants current PR duty or a confirmed-created mark.
+The row's branch may differ from a saved PR's branch; the closed filter remains, and a provisional relation never grants current PR duty or a confirmed-created mark.
 This connection state is separate from hook installation diagnosis and GitHub read staleness.
 A different provider or reference clears the old display, and generation fencing rejects old reads and analyses even on an A-to-B-to-A return.
 
@@ -968,7 +968,8 @@ A blocked menu takes Approval before an unread AI question's Answer.
 A current native `user_turn.kind = question` instead takes Answer while its session holds for a reply, including after it is read and when its content is absent.
 Native plan approval keeps Approval; the typed native wait, rather than a provider name or an AI question label, distinguishes these cases.
 Reading an AI question skips its demand rung and leaves a dimmed question; menu and plan approval stay in Needs You until answered.
-`row.state.pr` is the row's own PR summary (PRD D-18, D-39): the live PRs it holds the duty of, never a descendant's, with the count, the worst state and each PR worst first, each state the one rule of Pull request visual states decides; a closed PR is not counted.
+`row.state.pr` is the row's own PR summary (PRD D-18, D-39): the live PRs it holds the duty of and every merged one however long ago it merged, never a descendant's, with the count, the worst state and each PR worst first, each state the one rule of Pull request visual states decides; a closed PR is not counted.
+A merged pull request keeps its mark after the operator's next request, because the mark says what the row made; the verb's `result`, the `live` flag and a task's stage still follow D-43, so an earlier merge never reads as the current request's progress.
 Without a label line the row keeps its outline but carries no invented line.
 Delegated children are never tasks of their own: they are drawn under their root through every row the operator expands, at any depth (`sessions_expanded_agent_pane_ids` in core UI state holds each expanded pane).
 A Hide AI row for a home is a task only while it is in Needs You, where it draws the home's turn under the agent's own ask or block cause and opens the home when chosen.
@@ -1048,11 +1049,11 @@ Regression owners: `agent_state::escalation::tests`, `runtime::tests::lineage`, 
 
 ### Quiet pane headers
 
-`agent_state/header.rs` publishes a working-line flag, at most one notice, at most one band, the current pane agent's own live Working progress when it has a nonblank sentence, and the turn's request while the second row shows the turn (PRD pane-last-request B1, B10, B11): the pane's own or a raised ask, Working, or a finished turn the operator has not looked at (`finished`, with the label's result sentence as its progress).
+`agent_state/header.rs` publishes a working-line flag, at most one notice, at most one band, the current pane agent's own live Working progress when it has a nonblank sentence, and the turn's request while the second row shows the turn (PRD pane-last-request B1, B10, B11): the pane's own or a raised ask, Working, a finished turn the operator has not looked at (`finished`, with the label's result sentence as its progress), or a wait on children while any descendant works (`waiting_on_children`, the working descendants' count).
 The notice says why the terminal is not live and is drawn in the pane's body: the device away first, then Herdr's restoration failure, sleep, and the stream's own state (ended with its exit code, released, closing, unavailable, starting, or a wheel another client holds); a device's unavailable pane reads `reconnecting` or `helper_not_allowed` by what its link waits for.
 A pane with a notice takes no answer, so it has no band, progress or working line.
 The band is the operator's turn and nothing else: the pane's own Approval, Answer or Blocked first, then the lead raised descendant, then the pane's own Stopped.
-A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; a finished turn the operator has not looked at still shows its request and result without a band until the pane is read; Working has a thin blue line and can show its own progress, while CI wait, child wait, a read finished turn and Idle have nothing.
+A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; a finished turn the operator has not looked at still shows its request and result without a band until the pane is read; Working has a thin blue line and can show its own progress, a wait on working children shows its request and `대기 · 자식 N명 작업 중`, while CI wait, a read finished turn and Idle have nothing.
 A band stays until it is answered, not until it is read: `Band.read` says the operator has had the pane focused since it arrived, and a question the operator read but did not answer keeps its Answer band although the row's verb has left Answer.
 An ask band is quiet text on the secondary fill with a warning rail (PRD D-43): the pane's own ask starts with its verb and says what is asked (for an Answer, the row's second line, so a native question reads as itself).
 A raised descendant's `RaisedAsk` starts with its verb, then the originating agent's name and `(자식)` for a direct child or `(하위 세션)` for a deeper descendant, what to do, the unreceived parent for an Answer, the elapsed time, and Open.
@@ -1062,7 +1063,7 @@ An Approval band carries no reason: the core reads no approval command and a gen
 What Hide could not read, such as an approval command, is not written on the band, since the operator cannot act on its absence (design principle #13).
 The band and progress row overlay the terminal so state changes never resize its PTY grid.
 The identity row reads the ancestor path, the status mark, the agent's logo, title, the letters-waiting pill from `row.letters_waiting`, the pane's own PR mark from `row.state.pr`, the Not connected chip and the existing controls; the ancestors' names drop first when narrow, leaving `›` and the accessible name.
-A parent's second row keeps the tree icon, direct-child count and chevron at its left; without a band the rest of the row shows its own valid Working progress, or no text when it has none.
+A parent's second row keeps the children button at its left, the first three marked direct children's status marks with `+N` for the rest and the chevron (the count alone with a device away or no child to mark); without a band the rest of the row shows its own valid Working progress, its wait on working children, or no text when it has neither.
 Child names and states remain in the tree popover, while the button's accessible name and tooltip describe the live count and state counts.
 An unavailable device anywhere in that known subtree preserves the last topology count and connection reason in the button's name and tooltip; without a band, it also shows that reason beside any progress.
 Pending or failed relationship navigation stays visible at its popover, ancestor step or band's Open with retry where available, and in the retained Agent-area status when the source pane is no longer on screen.

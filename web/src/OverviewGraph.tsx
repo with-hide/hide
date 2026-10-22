@@ -10,7 +10,7 @@ import { askWhat } from "./components/agent-tree";
 import { RevisitStar, starred } from "./components/revisit-mark";
 import { Button } from "./components/ui/button";
 import { useEscapeLayer, useReturnFocus } from "./components/ui/layer";
-import { between, cloud, communicationLines, lineageLines, projectAccent, teamOutline, turnLines, type Area, type Orb } from "./overviewGraphLines";
+import { between, cloud, communicationLines, exchangeLines, lineageLines, projectAccent, teamOutline, turnLines, type Area, type Orb } from "./overviewGraphLines";
 import { Hint } from "./components/ui/tooltip";
 import { StatusMark } from "./components/status-mark";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -19,7 +19,7 @@ import { Input } from "./components/ui/input";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
 import { GRAPH_CHOICES_DEFAULTS, graphActivity, graphProjectIdOf, graphProjectKey, graphSessionId, graphSessionIdOf, graphSessionKey, overviewGraphModel, overviewGraphTeam, sameGraphScope, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
 import { projectDropPlaces, useGraphTheme, useOverviewGraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
-import { ClusterGraphNode, GlowGraphNode, GraphLine, GraphStateCounts, hasGraphLine, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, TeamGraphNode, type ClusterNode, type GlowNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type TeamNode } from "./overviewGraphNodes";
+import { ClusterGraphNode, GlowGraphNode, GraphLine, GraphStateCounts, hasGraphLine, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, TeamGraphNode, type ClusterNode, type ExchangeBadge, type GlowNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type TeamNode } from "./overviewGraphNodes";
 import type { BoardProject } from "./projectBoard";
 import { sessionOfAgentOn } from "./sessionWork";
 import type { GraphScope, OverviewGraphChoices, WorkSession } from "./snapshot";
@@ -313,11 +313,11 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   const arrow = (color: string) => ({ type: MarkerType.ArrowClosed, color, width: 18, height: 18, orient: "auto-start-reverse" });
   const clearance = size ? size.gap / 3 : 0;
   const edges: Edge[] = [];
-  const line = (id: string, from: string, to: string, className: string, extra: Partial<LineEdge> = {}) => {
+  const line = (id: string, from: string, to: string, className: string, extra: Partial<LineEdge> = {}, exchange?: ExchangeBadge) => {
     const a = orbs.get(from);
     const b = orbs.get(to);
-    const data = a && b ? between(a, b, clearance) : null;
-    if (data) edges.push({ id, source: from, target: to, sourceHandle: "source", targetHandle: "target", type: "line", className, data, focusable: false, selectable: false, zIndex: 0, ...extra } satisfies LineEdge);
+    const ends = a && b ? between(a, b, clearance) : null;
+    if (ends) edges.push({ id, source: from, target: to, sourceHandle: "source", targetHandle: "target", type: "line", className, data: { ...ends, exchange }, focusable: false, selectable: false, zIndex: 0, ...extra } satisfies LineEdge);
   };
   const lineState = { selection, lineageTeam, pointed, teams: model.teams };
   // Every drawn root, and every folded project, is tied faintly to the operator; one holding the
@@ -339,26 +339,15 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   for (const { parent, child, emphasized } of lineageLines(model.visible.filter((row) => endpoint.get(row.id) === row.id).map((row) => row.id), model.layoutParents, teamOf, chosenTeam)) {
     if (endpoint.get(parent) === parent) line(`lineage:${parent}:${child}`, parent, child, `og-lineage${emphasized ? " og-emphasized" : ""}`);
   }
-  // A pair is drawn between what its sessions are drawn as; pairs folded onto the same two ends are
-  // one line that is emphasised, lettered or two-way when any of them is; two ends folded into one draw nothing.
-  const merged = new Map<string, { id: string; from: string; to: string; active: boolean; muted: boolean; letters: boolean; directions: Set<string> }>();
-  for (const { pair, active, muted } of communicationLines(model.communication, (id) => endpoint.has(id), lineState)) {
-    const from = endpoint.get(pair.source)!;
-    const to = endpoint.get(pair.target)!;
-    if (from === to) continue;
-    const key = JSON.stringify([from, to].sort());
-    const entry = merged.get(key) ?? { id: pair.id, from, to, active: false, muted: true, letters: false, directions: new Set<string>() };
-    entry.active ||= active;
-    entry.muted &&= muted;
-    entry.letters ||= pair.letters > 0;
-    for (const direction of pair.directions) entry.directions.add(`${endpoint.get(direction.from)}>${endpoint.get(direction.to)}`);
-    merged.set(key, entry);
-  }
-  for (const { id, from, to, active, muted, letters, directions } of merged.values()) {
+  // A line touching the chosen or pointed session carries its counts; its hint says them per direction.
+  const drawnName = (id: string) => agentsById.get(id)?.agent.identity_label ?? projectsById.get(clusterProject.get(id) ?? "")?.project.workspace.label ?? id;
+  const counts = (row: { letters: number; direct: number }) => [row.letters ? t("overviewGraph.letterCount", { count: row.letters }) : null, row.direct ? t("overviewGraph.inputCount", { count: row.direct }) : null].filter(Boolean).join(" · ");
+  for (const { id, from, to, active, muted, badged, letters, direct, directions } of exchangeLines(communicationLines(model.communication, (id) => endpoint.has(id), lineState), (id) => endpoint.get(id), lineState)) {
     const marker = arrow("var(--subtle-foreground)");
-    const forward = directions.has(`${from}>${to}`);
+    const forward = directions.some((row) => row.from === from && row.to === to);
     const [start, end] = forward ? [from, to] : [to, from];
-    line(id, start, end, `og-communication${letters ? "" : " og-direct-input"}${active ? " og-emphasized" : muted ? " og-muted" : ""}`, { markerEnd: marker, markerStart: directions.size > 1 ? marker : undefined });
+    const exchange = badged ? { letters, direct, label: directions.map((row) => t("overviewGraph.exchangeLine", { from: drawnName(row.from), to: drawnName(row.to), counts: counts(row) })).join("\n") } : undefined;
+    line(id, start, end, `og-communication${letters ? "" : " og-direct-input"}${active ? " og-emphasized" : muted ? " og-muted" : ""}`, { markerEnd: marker, markerStart: directions.length > 1 ? marker : undefined }, exchange);
   }
   const positionOf = (id: string) => orbs.get(id) ?? { x: 0, y: 0 };
   // A session follows the hand through the physics; a project's name or folded circle carries every session of the project.

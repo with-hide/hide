@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { groupNameProblem } from "./groupTabs";
-import { numberedTabs } from "./numbering";
 import { sidebarNamedGroups, sidebarTabGroups } from "./sidebarTabs";
 import { inlineStartKey } from "./startDraft";
-import type { AgentLayout, AgentStartTarget } from "./agentLayout";
+import type { AgentStartTarget } from "./agentLayout";
 import type { Checkout, Tab } from "./snapshot";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 
@@ -42,12 +41,6 @@ describe("named groups (group-tabs B4, B12, B20, B25)", () => {
     expect(groups[1]!.segments.flatMap(({ rows }) => rows.map(({ agent }) => agent.pane_id))).toEqual(["root", "child"]);
     expect(groups[1]!.drafts).toEqual(["draft-1"]);
     expect(groups[2]!.segments).toEqual([]);
-  });
-
-  it("numbers only the selected group's live and draft tabs in their drawn order", () => {
-    const checkout = { strip: ["hidden", "visible"].map((id) => ({ id, source_id: id, kind: "herdr" })) } as Checkout;
-    const layout: AgentLayout = { group_id: "work", drafts: ["draft-1"], root: { area: { id: "a1", active: "draft-1", displays: [{ id: "draft-1" }, { id: "visible" }] } }, active_area: "a1", canvases: {}, limits: { areas: 6, depth: 3, displays: 64 }, display_count: 2 };
-    expect([...numberedTabs(checkout, layout)]).toEqual([[1, "draft-1"], [2, "visible"]]);
   });
 
   it("keeps inputs separate when two groups reuse area IDs or a tab offers add-agent", () => {

@@ -111,6 +111,7 @@ Closing the last view leaves the lane on Files in that state when the operator t
 Opening a file, a diff or a page from the tree, Changes, ⌘P, a terminal link, Open in Browser or Open server opens the lane on Files, over the agents or docked as its pin says, with the opened tab in its active View area; another tool showing gives way to Files.
 Select in File Tree, a reveal, or a terminal link that names a folder opens Files with the tree on and the row unfolded and selected.
 ⌘E (`Toggle right lane`) closes the lane while it shows and otherwise brings it back on the tool it last showed in that Workspace, whichever way the lane was closed (its × button, the pressed rail icon, ⌘E or a tool's chord), and on Files for a Workspace whose lane never showed a tool; the tool is kept with the Workspace, so it holds after an app restart, and the path menu's Show right lane brings back the same tool.
+Files coming back with a view takes the keyboard into its active View area, the editor of the document there or the page, as an open does, so typing, ⌘S and ⌘W act on what came back rather than on the terminal it was pressed from; another tool, or Files with no view, leaves the keyboard where it was.
 ⇧⌘L (`Toggle Memory tool`), ⇧⌘R (`Toggle PRs tool`) and ⇧⌘G (`Toggle Changes tool`) press that tool's rail icon: the lane opens on it, or closes when it already shows it; ⇧⌘E opens Files with its tree as before, and `Toggle Files tool` has no chord until one is bound (PRD sidebar-task-lens D-19, D-29).
 On Windows and Linux they are Alt+Shift+L, R and G; in a browser tab Chrome keeps ⇧⌘R for reload, so PRs is ⌥⇧R there, and ⌥⌘1-4 do nothing anywhere.
 A chord the operator had bound to the retired `Toggle Work tool` is dropped without an error, and the rest of their set stays.
@@ -215,8 +216,7 @@ After restart the saved intent can still be checked without recovering or resend
 If the original terminal's identity cannot be proven, the check keeps the result uncertain and never starts a replacement process.
 A disconnected device disables the start controls and sends no start; Enter during IME composition does not submit.
 
-Electron's numbered tab shortcuts and hold keycaps share the selected group's saved Agent area tree order, then each bar's left-to-right tab order.
-Moving or reordering a tab updates both numbers together; waiting overflow tabs have no number.
+Tabs have no numbered shortcut or hold keycap; ⌃⇥ steps through the recent tabs (see Keyboard shortcuts per system).
 
 At most 64 normal Agent tabs are placed across all the checkout's groups together, counting drafts, live tabs and pending admissions; each group has up to six areas and three split levels.
 New tab, Reopen that needs a tab, and protected replacement close count pending admissions and refuse before any external effect when full; the existing one-line notice asks the operator to close a tab.
@@ -531,7 +531,7 @@ Whether the lane draws that record is read from the slot's front item and the la
 A plain shell, and an agent pane whose session is not known yet, keeps the plain head with nothing to press; the head becomes the button in place once the session is known, on a device's pane as on this Mac's (B24).
 Over a narrow window the record shows in the lane floating over the panes (`web/src/PaneHeaderBand.tsx`, `PaneRecordButton`).
 The provider logo is drawn on a pane's own header, and in the heads and places that are about the agent or its provider itself: the start picker, Settings, the footer's usage chips and the Usage pages, the session record's head, the tree popover's head, the last-words popover's head, the phone's detail head, the Memory tab's Hide AI chip, the first-run tiles, and the selected View's toolbar ([View openers and comments](#view-openers-and-comments)).
-The sidebar's 프로젝트 and 태스크 rows and the Agent tabs draw it only by the operator's choice or while ⌥ is held ([Agent logo view mode](#agent-logo-view-mode)); ⌘K and the recent-pane list and the phone's list lead with the status mark alone in both modes (PRD agent-mark-quiet); a session record's children and the PR card's session rows draw the logo after the status mark in both modes (PRD record-card-readability D-06, D-09).
+The sidebar's 프로젝트 and 태스크 rows and the Agent tabs draw it only by the operator's choice or while ⌥ is held ([Agent logo view mode](#agent-logo-view-mode)); ⌘K and the recent-pane list and the phone's list lead with the status mark alone in both modes (PRD agent-mark-quiet); a session record's children, the PR card's session rows and the child tree popover's rows draw the logo after the status mark in both modes (PRD record-card-readability D-06, D-09).
 A pane header draws exactly one logo, the pane's own agent, for each of the seven supported agents: Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity, the same logo Settings and the first-run choice draw.
 A row without a logo names its agent by product name (`Claude Code`, `Codex`, the adapter's label, never the raw kind) in its hover hint and its accessible name, and the pane header's logo and title say it the same way.
 Only a plain shell and an agent Hide does not support draw the neutral `>_`.
@@ -553,8 +553,8 @@ The zoom control names the panes it hides and unzooms the tab; the input pane ke
 The second row over the terminal shows the pane's turn, `<request> → <answer>` with no word before the request (the button's accessible name still begins `요청:`), with a child-tree button at its left when direct children are known (PRD pane-last-request).
 The request is the operator's last one, the label's one-line summary of it, read against the conversation (`제안대로 진행 + 애매한 상태 더 점검` for `ㅇㅇ 그렇게 해 … 점검들 좀 해줘`), in quiet text; until the label has summarized it, with summaries off, after a failed judgment or for a turn before the summary existed, it is the request's own first line, and a request of images alone reads `이미지 N`.
 A letter another agent sent after it does not replace it; a delegated child with no operator request shows its sender's last request the same way.
-The answer is the operator's ask, the agent's own Working progress (`작업 중` without a sentence), or, for a finished turn the operator has not looked at, `끝남` and its result sentence; once the operator has looked the row goes.
-The request shows only with an answer: a pane that waits, rests or finished and was read has no row (only the children button when it has live children).
+The answer is the operator's ask, the agent's own Working progress (`작업 중` without a sentence), for a finished turn the operator has not looked at, `끝남` and its result sentence, or, while the agent waits on working children, `대기 · 자식 N명 작업 중`, the words its sidebar row says; once the operator has looked at a finished turn the row goes.
+The request shows only with an answer: a pane that waits on anything but working children, rests or finished and was read has no row (only the children button when it has live children).
 When the request and the answer do not fit one line the answer moves to a second row under the request, each cut only when it overflows its own row, and the two return to one line when the pane widens; the children button stays at the first row's left, the request is never folded into an icon, and both rows overlay the terminal without changing its grid.
 The request is a button the keyboard reaches: the pointer or focus on it opens the turn card under it, a press pins the card and a second press or Esc closes it, and Esc on a card neither pinned nor focused stays the terminal's.
 With the card open, Tab from the request or the title moves the keyboard into the card to `기록 열기`, the card stays open while focus is in it, Shift+Tab before its start goes back to the trigger, Tab past its end and Esc in the card close it and return focus to the trigger, which keeps it closed until the pointer or focus comes anew; only Tab moves focus in, so the pointer never takes the terminal's keyboard, and a card the pointer only shows is no Escape layer, so Esc reaches the terminal.
@@ -570,9 +570,9 @@ Open goes to the raised descendant, or for a draft to the parent whose input hol
 An ask is quiet text on the secondary fill with a warning rail; the request text gets three shares of the flexible space, and the asking agent and an unreceived-letter explanation get one each, so they do not consume the whole reason at narrow widths or enlarged text.
 Without an ask, the row shows the current pane agent's own nonblank progress only while its state is live Working, and a finished turn's result sentence only until the operator looks; idle and disconnected states cannot retain either sentence.
 The label worker retires the previous turn's sentence as soon as it proves a new human turn, even when the agent stays Working, before the new turn's analysis arrives.
-The row does not substitute a child's line or the pane title for missing progress.
-The children button stays at the row's left whenever the pane has live direct children, with an ask or progress on the row or neither: a tree icon, the actual number and a chevron open the existing tree popover ([status-model.md](status-model.md#the-descendant-mark-and-the-tree-popover)).
-The row never lists individual child names or a second status icon; child names, states and navigation remain in the popover.
+The row does not substitute a child's line or the pane title for missing progress; a wait on children names only how many work.
+The children button stays at the row's left whenever the pane has live direct children, with an ask or progress on the row or neither: a tree icon, the status marks of the first three direct children that have one, in tree order, with `+N` for the others, and a chevron open the existing tree popover ([status-model.md](status-model.md#the-descendant-mark-and-the-tree-popover)); a child of unknown state draws no mark and counts in `+N`, and with a device away or no child to mark the face keeps the number.
+The row never lists individual child names; child names, lines and navigation remain in the popover.
 Its tooltip and accessible name spell out the live direct child total and every state count; an ordinary child's question, approval or error is its parent's to answer, so it is named only there, and a dot on a name is a reported completion, not verified delivery of a task.
 The button opens with the raised branches expanded whenever its core raised count is positive; `외 N건` remains only when the children button is unavailable.
 If the parent or a known descendant's device is not connected, the button keeps the last topology total and the reason in its tooltip and accessible name; the connection reason is also visible beside any progress until the connection returns.
@@ -987,6 +987,7 @@ The ring colour and shape of each circle encode its mark (working, waiting, my t
 Lines carry no words.
 Parent-to-child lines are always drawn faint; choosing a session brightens its team's lines and draws one dashed outline around the team's circles and words, which goes away when the choice is cleared (D-03).
 Letters and Herdr direct input between the same two sessions are one line with direction arrows: solid when any letter exists, short dots when only direct input does.
+A communication line touching the chosen session, or the session under the pointer or keyboard focus, carries one small badge at its middle: an envelope with its letter count and a prompt with its direct-input count, each only when nonzero, summed over both directions; its hint says the counts per direction with both sessions' names, and every other line stays bare.
 A pair in different teams is always drawn; a pair inside one team is drawn only while that team is chosen.
 Every drawn root is joined to `나` by a faint line; a root whose mark is `turn` draws an amber arrow to `나` instead, and a descendant's ask reaches the operator through its root, which the core marks as the operator's turn.
 A folded team that holds the operator's turn draws the amber ring on its root and the amber arrow to `나`; a folded project keeps its colour border and wears the turn's `!` badge at the top of its circle, with the same amber arrow (B26).
@@ -1195,6 +1196,8 @@ Inside a group 내 차례 and 다시 볼 것 stand longest-waiting first and the
 Inside `쉬는 중`, both views order rows by their latest actual native prompt, newest first, so the order matches the age on each row; unknown prompt times stand last and equal times retain their existing order.
 
 A row is one task, its root agent; descendants are its children only, and a memory question, a pull request with no session, a delegated child are never rows of their own (B7).
+Keep the sidebar and task list (the former Sessions list) easy to scan: the root task and its parent-child hierarchy lead, PRs stay summarized in their mark, and check details belong in the PR card rather than additional list rows.
+When refining these surfaces, simplify the amount of visible detail and the relationship between PRs and delegated work without hiding the operator's next action.
 Its first line is the row's own status mark (the sidebar's, status-marks D-12), the title, while folded no count of its children but `! N` in the warning colour when a hidden descendant asks the operator (status-marks D-24, B35), the PR mark and the elapsed time (B8, B10).
 In both 프로젝트 and 태스크, a session's elapsed time measures its latest actual native prompt, including a real request letter from another agent, rather than its latest state change.
 State changes and a daemon restart preserve that reference; a new session never inherits it, and an unknown prompt time leaves the slot empty until the native read succeeds.
@@ -2021,6 +2024,7 @@ The counts come from the device's published `agent_scope` values; the browser do
 A device that is not connected dims its glyph and wears a `×` at the bottom-right, with no mark, since its last counts are not current; selected, its sidebar shows only its name, `연결 안 됨` and `다시 연결`, which retries the connection in place, and never the tree it last reported.
 A delayed or failed agent-state query alone leaves the connected device, its tree and terminals available; retained agent activity uses the existing Unknown state until a successful query confirms it, without a disconnected message or a new alert.
 Selecting a device tile sends `focus_device`, and the sidebar becomes that device's single project and session list; no row there names the device.
+In the desktop app ⌘1-9 (Ctrl+Shift+1-9 on Windows and Linux) selects the tile at that number, top to bottom with This Mac first, whether or not the rail shows, and holding ⌘ alone floats each tile's number at its top left (see Keycaps, tooltips, and icon buttons); a number with no tile does nothing.
 Every tile is a button reached with Tab and chosen with Enter or Space, named for assistive technology by the device, its connection and each count it marks (`mini, 연결 안 됨`, `This Mac, Needs You 2, Done 1`).
 `기기 추가` opens Settings › Devices with the Add device dialog in front, as the hidden rail's `기기 추가…` and the Add a project dialog's host list do.
 Removing the device in front moves the front to This Mac; that device's agents and its `~/hide` stay on it, and the rail stays.
@@ -2671,7 +2675,8 @@ Each exception has a dominant convention on Windows and Linux, or a chord the sy
   The tree answers them only while it holds the keyboard, so a terminal keeps ⌘C for its selection and Ctrl+C for the interrupt, and a text field keeps its own.
 - Inside a text field, a palette, a board or a document, no terminal holds the keyboard, so the system's own command key applies: ⌘↵ is Ctrl+Enter (send a form, open a ⌘P result to the side, open a pull request on GitHub), ⌘-click is Ctrl-click (a link, a pull request, an issue), and Ctrl+S saves the document in front as well as Ctrl+Shift+S.
   A file or diff View's comment chord ⇧⌘. is Ctrl+Shift+. there for the same reason ([View openers and comments](#view-openers-and-comments)).
-- Tab digits follow the rule (Ctrl+Shift+1-9, as in WezTerm): Windows Terminal, GNOME Terminal and the browsers each use a different modifier, so no convention outweighs the rule.
+- The digits follow the rule: a device is ⌘1-9, so it is Ctrl+Shift+1-9 there, and an agent row stays ⌥1-9, Alt+1-9.
+  A tab has no digit: ⌃1-9 would take the control bytes ⌃2 to ⌃8 send a terminal (NUL, Escape, ^\ to ^_), and ⌃⇥ already steps through the recent tabs.
 
 ### In a terminal
 
@@ -2709,7 +2714,6 @@ The sheet carries no row or explanation for a command the removed native app alo
 | New tab | `⌘T` | `Ctrl+Shift+T` | `⌥T` | `Alt+T` |
 | Close focused view or pane | `⌘W` | `Ctrl+Shift+W` | `⌥W` | `Alt+W` |
 | Reopen closed tab (exception) | `⇧⌘T` | `Alt+Shift+T` | `⌥⇧T` | `Ctrl+Alt+Shift+T` |
-| Select tab 1-9 | `⌘1 … ⌘9` | `Ctrl+Shift+1 … Ctrl+Shift+9` | none | none |
 | Add project | `⇧⌘N` | `Alt+Shift+N` | none | none |
 | Start agent | `⌘N` | `Ctrl+Shift+N` | none | none |
 | Next recent tab | `⌃⇥` | `Ctrl+Tab` | `` ⌥` `` | `` Alt+` `` |
@@ -2719,6 +2723,7 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Next recent project (exception) | `⌥⇥` | `` Ctrl+Shift+` `` | `⌥⇥` | `` Ctrl+Shift+` `` |
 | Previous recent project (exception) | `⌥⇧⇥` | `` Ctrl+Alt+Shift+` `` | `⌥⇧⇥` | `` Ctrl+Alt+Shift+` `` |
 | Select agent 1-9 | `⌥1 … ⌥9` | `Alt+1 … Alt+9` | none | none |
+| Select device 1-9 | `⌘1 … ⌘9` | `Ctrl+Shift+1 … Ctrl+Shift+9` | none | none |
 | Search | `⌘K` | `Ctrl+Shift+K` | `⌘K` | `Ctrl+Shift+K` |
 | Open file | `⌘P` | `Ctrl+Shift+P` | `⌘P` | `Ctrl+Shift+P` |
 | Overview | `⇧⌘O` | `Alt+Shift+O` | `⇧⌘O` | `Alt+Shift+O` |
@@ -2767,8 +2772,8 @@ A chorded tooltip reads the label followed by the shortcut chord; a chordless co
 The sidebar Settings tooltip and accessible name append the host's current shortcut in parentheses to the translated label.
 There is no native platform tooltip layered underneath the shared one; the shared tooltip is the only tooltip in the main shell.
 Tooltip hover has a short reveal delay, and an exact modifier hold reveals shortcut hints faster than a hover tooltip does.
-In the desktop app, holding ⌘ alone (Ctrl+Shift on Windows and Linux) floats each tab's number at its top right in the agent tab strip in front, and holding ⌥ alone floats each Agents-list row's number at its top right: a keycap in the popover colors with a border, a small shadow and one mono digit, positioned over the tab or row rather than in it, so a title, an inline Rename field, a row's time, and its fold slot never move.
-The number is the screen order at that moment, first to ninth, left to right for tabs and top to bottom for the rows the Agents list draws (a folded parent's descendants are not rows), and an item past the ninth carries none.
+In the desktop app, holding ⌥ alone floats each Agents-list row's number at its top right, and holding ⌘ alone (Ctrl+Shift on Windows and Linux) floats each device tile's number at its top left, the corner a tile's marks leave free: a keycap in the popover colors with a border, a small shadow and one mono digit, positioned over the row or tile rather than in it, so a title, a row's time, its fold slot and a tile's marks never move.
+The number is the screen order at that moment, first to ninth, top to bottom for the rows the Agents list draws (a folded parent's descendants are not rows) and for the rail's tiles, and an item past the ninth carries none.
 While Projects is on screen the same hold shows those Agents-list numbers, since ⌥n still selects by them, each once: on the agent's raised row, else on its row under the checkout that owns its pane.
 The hint appears only after a short hold of the exact modifier; releasing it before then shows nothing, so a ⌘C never flashes numbers.
 Releasing the modifier, adding another, pressing any key during the hold (including the numbered chord itself), losing the window, hiding the page, or opening a sheet, menu, dialog, palette, or cycle clears the numbers at once; the same modifiers still held after that show nothing until they are released and held again.

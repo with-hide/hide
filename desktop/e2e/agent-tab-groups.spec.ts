@@ -47,11 +47,6 @@ test("Agent edge drag splits the desktop column into two live tab groups", async
       expect(history.match(/(?:^|\n)desktop-group-live\r?(?=\n|$)/g) ?? [], `${pane} output`).toHaveLength(1);
     }
     await expect(page.locator('[data-transport="released"]')).toHaveCount(0);
-    await page.keyboard.down("Meta");
-    await expect(page.locator(`[data-tab="${herdr.tab}"] [data-keycap="1"]`)).toBeVisible();
-    await expect(page.locator(`[data-tab="${created.result.tab.tab_id}"] [data-keycap="2"]`)).toBeVisible();
-    await page.keyboard.up("Meta");
-    await expect(page.locator("[data-keycap]")).toHaveCount(0);
     await screenshot(page, "desktop-agent-groups-split");
   } finally {
     await app?.close().catch(() => undefined);

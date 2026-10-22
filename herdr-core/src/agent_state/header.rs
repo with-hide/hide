@@ -22,6 +22,11 @@ pub struct Header {
     /// (B10); `progress` is then the label's result sentence, if any.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub finished: bool,
+    /// The agent waits on its children: how many descendants work. The row
+    /// then says `대기 · 자식 N명 작업 중` after the request, the words its
+    /// sidebar row says, and never a child's own line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_on_children: Option<u32>,
 }
 
 /// The shown request in one line, the label's summary or its own first line,
@@ -211,6 +216,10 @@ pub(crate) fn of(
         // pull request's result is its mark's, not the row's (B10, B11).
         let finished =
             agent.state.verb == super::RequestVerb::Result && agent.completed && agent.unread;
+        let waiting_on_children = (agent.state.verb == super::RequestVerb::Waiting
+            && agent.wait == Some(crate::model::AgentWait::Children))
+        .then_some(agent.descendant_counts.working)
+        .filter(|working| *working > 0);
         let sentence = |line: Option<&str>| {
             line.map(str::trim)
                 .filter(|line| !line.is_empty())
@@ -230,8 +239,11 @@ pub(crate) fn of(
                 None
             },
             working,
-            request: (working || finished).then(|| turn_request(agent)).flatten(),
+            request: (working || finished || waiting_on_children.is_some())
+                .then(|| turn_request(agent))
+                .flatten(),
             finished,
+            waiting_on_children,
             ..Header::default()
         };
     };
