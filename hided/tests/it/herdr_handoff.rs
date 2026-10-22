@@ -10,20 +10,28 @@
 //! never touched, and a handoff that failed is not tried again for the same
 //! server.
 //!
+//! This machine's server the operator started from their own older Herdr
+//! moves only when the operator asks (`hided::herdr_handoff::LocalTakeover`,
+//! PRD herdr-takeover): one on the protocol this build reads (0.9.1) and one
+//! on an older protocol (0.8.2) are offered and moved with their panes, and
+//! a failed move is remembered for that server and tried again on a press.
+//!
 //! Real processes against the pinned Herdr, so the tests are ignored by
 //! default; run them with `--ignored`, the pinned binary in
-//! `HIDE_E2E_HERDR_BIN` and an older release (Herdr 0.9.1, which the remote
-//! mailbox lane fetches) in `HIDE_E2E_HERDR_OLDER_BIN`. Herdr hands a server
-//! over on Unix only.
+//! `HIDE_E2E_HERDR_BIN`, an older release on the same protocol (Herdr 0.9.1,
+//! which the remote mailbox lane fetches) in `HIDE_E2E_HERDR_OLDER_BIN` and
+//! one on an older protocol (Herdr 0.8.2) in `HIDE_E2E_HERDR_OLDER_PROTOCOL_BIN`.
+//! Herdr hands a server over on Unix only.
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use herdr_core::herdr_takeover::{FailureCause, HerdrTakeover, Look, Moved, OfferKind};
 use hide_kit::device_herdr::{BehindCause, HerdrUpdate};
 use hide_platform::fs::identity::{canonical, file_id};
 use hide_platform::process::{image_of, is_alive};
-use hided::herdr_handoff::{Outcome, device_update, hand_off};
+use hided::herdr_handoff::{LocalTakeover, Outcome, device_update, hand_off};
 use serde_json::Value;
 
 use crate::private_herdr::{PrivateHerdr, herdr_command};
@@ -342,6 +350,175 @@ fn a_refused_device_handoff_leaves_the_server_and_is_not_repeated() {
     };
     assert_eq!(*cause, BehindCause::HandoffFailed);
     assert!(reason.contains("earlier handoff"), "{reason}");
+    assert_eq!(server_pid(&herdr.socket), pid);
+}
+
+fn older_protocol_bin() -> PathBuf {
+    PathBuf::from(
+        std::env::var_os("HIDE_E2E_HERDR_OLDER_PROTOCOL_BIN")
+            .expect("HIDE_E2E_HERDR_OLDER_PROTOCOL_BIN names a Herdr on an older protocol"),
+    )
+}
+
+fn version_of(herdr: &Path) -> String {
+    String::from_utf8(
+        std::process::Command::new(herdr)
+            .arg("--version")
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .split_whitespace()
+    .last()
+    .unwrap()
+    .to_owned()
+}
+
+/// B1, B4, B5, B7, B21: a server the operator started from their own older
+/// Herdr, on this build's protocol or an older one, is offered for a move,
+/// moves to the app's Herdr with its pane's process alive and listed when
+/// asked, and is then nothing to move; the operator's `herdr` is never
+/// written, and when it is behind the server the move says which release.
+fn operator_server_moves_when_asked(older: PathBuf, same_protocol: bool) {
+    let pinned = pinned_bin();
+    let device = DeviceHome::new(&pinned);
+    let operator = device.operator_herdr("operator", &older);
+    let before = std::fs::read(&operator).unwrap();
+    let mut herdr = PrivateHerdr::start_any(operator.clone(), &device.root.path().join("a"));
+    let (pane, pane_pid) = pane_process(&herdr, device.root.path(), "operator");
+    let from_pid = server_pid(&herdr.socket);
+    let takeover = LocalTakeover::new(
+        device.pinned.clone(),
+        herdr.socket.clone(),
+        device.root.path().join("state/herdr-handoff.json"),
+    )
+    .with_operator_herdr(operator.clone());
+
+    let Look::Offer(offer) = takeover.look() else {
+        panic!("the operator's older server is not offered");
+    };
+    assert_eq!(offer.kind, OfferKind::Move);
+    assert_eq!(offer.server_version, version_of(&older));
+    assert_eq!(offer.version, crate::private_herdr::pinned_version());
+    assert_eq!(offer.server_pid, Some(from_pid));
+    assert_eq!(
+        offer.server_protocol == hide_herdr_client::HERDR_PROTOCOL_REVISION,
+        same_protocol
+    );
+    assert_eq!(offer.failed_before, None);
+    assert_eq!(server_pid(&herdr.socket), from_pid, "a look moves nothing");
+
+    let moved = takeover.hand_over();
+    let Moved::Done {
+        to_pid,
+        path_herdr_behind,
+        ..
+    } = moved
+    else {
+        panic!("the server was not moved: {moved:?}");
+    };
+    herdr.bin = device.pinned.clone();
+    assert_eq!(
+        image_of(to_pid).unwrap().file,
+        file_id(&device.pinned).unwrap()
+    );
+    assert!(is_alive(pane_pid), "the pane's process ended with the move");
+    let panes = run(&herdr, &["pane", "list"], Path::new(""));
+    assert!(
+        panes["result"]["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|listed| listed["pane_id"] == pane.as_str()),
+        "the pane is gone from the moved server: {panes}"
+    );
+    // The operator's own herdr speaks the old protocol after a move off an
+    // older one, and keeps up after a move off 0.9.x (B5).
+    assert_eq!(
+        path_herdr_behind,
+        (!same_protocol).then(|| version_of(&older))
+    );
+    assert_eq!(takeover.look(), Look::Nothing);
+    assert_eq!(std::fs::read(&operator).unwrap(), before);
+
+    herdr.stop().unwrap();
+    wait_until("the moved server ends", || !is_alive(to_pid));
+}
+
+#[test]
+#[ignore = "needs the pinned and an older Herdr: set HIDE_E2E_HERDR_BIN and HIDE_E2E_HERDR_OLDER_BIN and run with --ignored"]
+fn the_operators_server_on_this_protocol_moves_when_asked() {
+    operator_server_moves_when_asked(older_bin(), true);
+}
+
+#[test]
+#[ignore = "needs the pinned Herdr and one on an older protocol: set HIDE_E2E_HERDR_BIN and HIDE_E2E_HERDR_OLDER_PROTOCOL_BIN and run with --ignored"]
+fn the_operators_server_on_an_older_protocol_moves_when_asked() {
+    operator_server_moves_when_asked(older_protocol_bin(), false);
+}
+
+/// B8, D-23: a move the app's Herdr refuses leaves the server and its pane,
+/// names the refusal, is remembered for that server by an app started again,
+/// and is still tried on the next press.
+#[test]
+#[ignore = "needs the pinned and an older Herdr: set HIDE_E2E_HERDR_BIN and HIDE_E2E_HERDR_OLDER_BIN and run with --ignored"]
+fn a_refused_move_is_remembered_and_tried_again_on_a_press() {
+    let pinned = pinned_bin();
+    let device = DeviceHome::new(&pinned);
+    // The app's Herdr names the pinned release but cannot take a server.
+    std::fs::remove_file(&device.pinned).unwrap();
+    std::fs::write(
+        &device.pinned,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = status ]; then exec '{}' \"$@\"; fi\nexit 1\n",
+            pinned.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &device.pinned,
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+    )
+    .unwrap();
+    let operator = device.operator_herdr("operator", &older_bin());
+    let herdr = PrivateHerdr::start_any(operator.clone(), &device.root.path().join("a"));
+    let (_, pane_pid) = pane_process(&herdr, device.root.path(), "refused");
+    let pid = server_pid(&herdr.socket);
+    let record = device.root.path().join("state/herdr-handoff.json");
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    let app = || LocalTakeover::new(device.pinned.clone(), herdr.socket.clone(), record.clone());
+
+    let first = app().hand_over();
+    assert!(
+        matches!(
+            &first,
+            Moved::Failed {
+                cause: FailureCause::Refused,
+                ..
+            }
+        ),
+        "{first:?}"
+    );
+    assert_eq!(server_pid(&herdr.socket), pid);
+    assert_eq!(image_of(pid).unwrap().file, file_id(&operator).unwrap());
+    assert!(is_alive(pane_pid));
+
+    let Look::Offer(offer) = app().look() else {
+        panic!("the server is no longer offered after its failed move");
+    };
+    assert_eq!(offer.failed_before, Some(FailureCause::Refused));
+    let again = app().hand_over();
+    assert!(
+        matches!(
+            &again,
+            Moved::Failed {
+                cause: FailureCause::Refused,
+                ..
+            }
+        ),
+        "a press tries again: {again:?}"
+    );
     assert_eq!(server_pid(&herdr.socket), pid);
 }
 

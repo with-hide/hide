@@ -200,6 +200,8 @@ pub struct LocalTakeover {
     record: PathBuf,
     /// The version `ours` names for itself, read once.
     version: std::sync::OnceLock<String>,
+    /// The operator's own `herdr`; `None` finds it as their terminal would.
+    operator_herdr: Option<PathBuf>,
 }
 
 /// Who runs the server on the socket.
@@ -242,7 +244,15 @@ impl LocalTakeover {
             socket,
             record,
             version: std::sync::OnceLock::new(),
+            operator_herdr: None,
         }
+    }
+
+    /// Reads `herdr` as the operator's own rather than the one their
+    /// terminal finds (an isolated test's).
+    pub fn with_operator_herdr(mut self, herdr: PathBuf) -> Self {
+        self.operator_herdr = Some(herdr);
+        self
     }
 
     fn version(&self) -> Result<String, String> {
@@ -325,7 +335,10 @@ impl LocalTakeover {
     /// says so itself (`herdr status client --json`, which every release
     /// from 0.7.5 answers with its `protocol`).
     fn path_herdr_behind(&self) -> Option<String> {
-        let herdr = hide_platform::programs::find_cli("herdr")?;
+        let herdr = match &self.operator_herdr {
+            Some(herdr) => herdr.clone(),
+            None => hide_platform::programs::find_cli("herdr")?,
+        };
         let mut command = hide_platform::programs::command(&herdr);
         command.args(["status", "client", "--json"]);
         let finished = hide_platform::process::run_to_end(
@@ -871,6 +884,52 @@ mod tests {
         }
         assert_eq!(many.failed.len(), ATTEMPTS_KEPT);
         assert_eq!(many.failed(&first), None, "the oldest attempts go first");
+    }
+
+    /// D-23: this machine's record keeps a failed move only while its server
+    /// process runs and the app's Herdr is the release it was moving to.
+    #[test]
+    fn a_failed_move_is_forgotten_once_its_server_ends_or_the_pin_moves() {
+        let me = std::process::id();
+        let live = Attempt {
+            socket: PathBuf::from("/tmp/herdr.sock"),
+            pid: me,
+            started: hide_platform::process::start_time(me).unwrap(),
+            pinned: PathBuf::from("/Applications/hide.app/Contents/Resources/herdr"),
+        };
+        let ended = Attempt {
+            started: live.started.wrapping_add(1),
+            ..live.clone()
+        };
+        let record = Attempts::default()
+            .add_with_cause(
+                ended.clone(),
+                "handoff: refused".into(),
+                Some(FailureCause::Refused),
+                Some("0.9.5".into()),
+            )
+            .add_with_cause(
+                live.clone(),
+                "confirm: other".into(),
+                Some(FailureCause::NotConfirmed),
+                Some("0.9.5".into()),
+            )
+            .add_with_cause(
+                live.clone(),
+                "handoff: refused again".into(),
+                Some(FailureCause::Refused),
+                Some("0.9.5".into()),
+            );
+        assert_eq!(record.failed.len(), 2, "the same attempt keeps one line");
+        let current = record.current("0.9.5");
+        assert!(current.failed_attempt(&ended).is_none());
+        assert_eq!(
+            current
+                .failed_attempt(&live)
+                .and_then(|failed| failed.cause),
+            Some(FailureCause::Refused)
+        );
+        assert!(current.current("0.9.6").failed.is_empty());
     }
 
     #[test]
