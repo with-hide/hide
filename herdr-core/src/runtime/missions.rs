@@ -888,18 +888,10 @@ impl Runtime {
             .iter()
             .map(|mission| mission.id.clone())
             .collect();
-        let slot = &mut self.snapshot.ui_state.detail;
-        let had = slot.items.len();
-        slot.items.retain(|item| match item {
+        self.drop_detail_items(|item| match item {
             DetailItem::Mission { mission } => known.contains(mission),
             _ => true,
         });
-        if slot.items.is_empty() {
-            slot.shown = false;
-        }
-        if slot.items.len() != had {
-            self.persist_ui_state();
-        }
         self.save_missions();
         true
     }

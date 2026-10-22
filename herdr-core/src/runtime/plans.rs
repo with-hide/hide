@@ -637,9 +637,7 @@ impl Runtime {
         if dropped > 0 {
             self.plans.edit += 1;
             // A slot item of a session that is gone would draw nothing.
-            let slot = &mut self.snapshot.ui_state.detail;
-            let had = slot.items.len();
-            slot.items.retain(|item| match item {
+            self.drop_detail_items(|item| match item {
                 crate::model::DetailItem::Plan { session } => {
                     !sessions.iter().any(|(machine, id)| {
                         session.device_id == *machine && session.session_id == *id
@@ -647,12 +645,6 @@ impl Runtime {
                 }
                 _ => true,
             });
-            if slot.items.is_empty() {
-                slot.shown = false;
-            }
-            if slot.items.len() != had {
-                self.persist_ui_state();
-            }
         }
         dropped > 0
     }

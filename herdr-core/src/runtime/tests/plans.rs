@@ -270,9 +270,20 @@ fn a_plan_goes_with_its_deleted_session() {
     let root = tempfile::tempdir().unwrap();
     let (runtime, sender, _worker) = start(root.path());
     let mut runtime = runtime.lock().unwrap();
-    command(&mut runtime, &sender, plan(false)).unwrap();
+    let (answer, _) = command(&mut runtime, &sender, plan(false)).unwrap();
+    let session: SessionIdentity = serde_json::from_value(answer["session"].clone()).unwrap();
+    runtime
+        .snapshot
+        .ui_state
+        .detail
+        .open(crate::model::DetailItem::Plan { session });
     assert!(!runtime.drop_plans_of(&[(crate::node::TEST_NODE.into(), "other".into())]));
     assert!(runtime.drop_plans_of(&[(crate::node::TEST_NODE.into(), "sender-session".into())]));
+    // Its map leaves the slot as ✕ leaves it, the slot empty and not drawn.
+    assert_eq!(
+        runtime.snapshot.ui_state.detail,
+        crate::model::DetailSlot::default()
+    );
     let (answer, _) = command(&mut runtime, &sender, json!({"verb": "show"})).unwrap();
     assert!(answer["plan"].is_null());
     assert!(answer["context"]["plan"].is_null());
