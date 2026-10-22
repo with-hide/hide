@@ -112,6 +112,12 @@ pub struct CleanupSnapshot {
     pub free_bytes: Option<u64>,
     pub free_before: Option<u64>,
     pub free_after: Option<u64>,
+    /// Heads GitHub answered merged into the default branch when the review
+    /// asked by branch, past the pull request list the sidebar reads. The
+    /// core keeps them so the sidebar's landed mark gives the same answer
+    /// (PRD git-freshness B17); never sent to the shell.
+    #[serde(skip)]
+    pub merge_proofs: BTreeSet<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -686,7 +692,8 @@ fn inspect(
 ) -> Result<CleanupSnapshot, String> {
     let node = context.node.as_ref();
     let base = merge.base.as_deref();
-    inspect_with_merge_proofs(
+    let mut proved = BTreeSet::new();
+    let mut snapshot = inspect_with_merge_proofs(
         node,
         root,
         current,
@@ -695,7 +702,7 @@ fn inspect(
         only,
         base,
         |branch, head| {
-            merge_proof(merge.heads.as_ref(), head, || {
+            let heads = merge_proof(merge.heads.as_ref(), head, || {
                 let github = context
                     .github
                     .as_ref()
@@ -709,9 +716,16 @@ fn inspect(
                     )?,
                     base,
                 ))
-            })
+            })?;
+            if heads.contains(head) && merge.heads.as_ref().is_none_or(|list| !list.contains(head))
+            {
+                proved.insert(head.to_owned());
+            }
+            Ok(heads)
         },
-    )
+    )?;
+    snapshot.merge_proofs = proved;
+    Ok(snapshot)
 }
 
 /// GitHub's merged heads for one worktree. The pull request list the sidebar

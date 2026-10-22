@@ -1822,6 +1822,13 @@ pub struct Runtime {
     /// no other review starts and the snapshot cannot be dismissed, so two
     /// workers never overlap however the sheet is opened and closed.
     cleanup_worker: Option<u64>,
+    /// Heads a disk cleanup review proved merged by asking GitHub by branch,
+    /// by project (its node, `None` for this machine, its root and the
+    /// default branch judged against), which the sidebar's landed mark
+    /// joins to the pull request list so the two never disagree (PRD
+    /// git-freshness B17). A merged head stays merged; at most
+    /// `REVIEW_PROOF_LIMIT` per project.
+    pub(super) review_merge_proofs: BTreeMap<(Option<String>, String, String), BTreeSet<String>>,
     /// Bumped when the worktree list itself is known to have changed through a
     /// manual refresh, a refused removal, or an observed Herdr worktree event.
     worktree_generation: u64,
@@ -2366,6 +2373,7 @@ impl Runtime {
             cleanup_published_node: None,
             next_cleanup_id: 0,
             cleanup_worker: None,
+            review_merge_proofs: BTreeMap::new(),
             worktree_generation: 0,
             worktree_removals: 0,
             removed_worktrees: Vec::new(),

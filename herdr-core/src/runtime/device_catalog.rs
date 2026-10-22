@@ -61,10 +61,16 @@ impl Runtime {
                 let mut listed = listed.clone();
                 // The one merged judgment, from the device's own pull
                 // requests when this core reads them (PRD git-freshness D-06).
-                let merged_heads = crate::worktrees::merged_heads(
-                    self.device_github
-                        .get(target)
-                        .and_then(|github| github.project(&project.path)),
+                let merged_heads = super::projects::with_review_proofs(
+                    crate::worktrees::merged_heads(
+                        self.device_github
+                            .get(target)
+                            .and_then(|github| github.project(&project.path)),
+                        listed.base_branch.as_deref(),
+                    ),
+                    &self.review_merge_proofs,
+                    Some(target),
+                    &project.path,
                     listed.base_branch.as_deref(),
                 );
                 for worktree in &mut listed.worktrees {
