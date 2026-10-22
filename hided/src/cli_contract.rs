@@ -249,6 +249,8 @@ pub const COMMANDS: &[Spec] = &[
             optional("--path", Text),
             optional("--model", Text),
             optional("--effort", Text),
+            optional("--brief", Text),
+            optional("--brief-file", Text),
             switch("--help"),
             switch("--json"),
         ],
@@ -271,6 +273,9 @@ pub const COMMANDS: &[Spec] = &[
             "identity_waits_full",
             "session_too_long",
             "codex_capability_unknown",
+            "invalid_brief",
+            "brief_not_submitted",
+            "mission_brief_missing",
         ],
     },
     // Without --json it prints the same answer as a tree for a person.

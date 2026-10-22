@@ -170,6 +170,7 @@ pub(crate) mod tests {
             path: None,
             args: Vec::new(),
             launch: Default::default(),
+            brief: None,
             task,
         };
         let reserved = apply(
@@ -419,6 +420,7 @@ pub(crate) mod tests {
                 path: None,
                 args: Vec::new(),
                 launch: Default::default(),
+                brief: None,
                 task,
             },
         };

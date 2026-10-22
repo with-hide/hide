@@ -82,12 +82,37 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   The operator's changes in conversation change this mission only; the settings stay as they are.
 - The first plan opens the map in the operator's 보기 slot, once.
 
+## Cutting the mission and briefing a worker
+
+A node is one reviewable deliverable, never a step; the work inside a node (reading, trying, failing, retrying) is the worker's own.
+Cut only on one of these four lines, and keep everything else inside one node:
+
+- another node needs what it makes (a schema, an API, a merged screen);
+- the two can run at the same time without touching the same files;
+- another pair of eyes is worth a separate agent (a review, a verify, an isolated-app check);
+- the operator wants to merge it on its own.
+
+Do not cut a node into "implement, test, document": that is one worker's turn order, and three agents would each rebuild the context the first one had.
+Put a `verify` node after every `change` node, worked by an agent other than the author; its brief says what to check, where (an isolated candidate app, never the operator's), and what to hand back (a letter naming each behaviour pass or fail with the evidence).
+A `research` node only when the plan cannot be written without its answer; a question a worker can settle in its own pane is not a node.
+
+Every worker's brief, change or verify, says in its first line what the node is, then:
+
+- the contract and the exact scope (the behaviours or decisions by number), and what is explicitly another node's;
+- the branch and worktree the spawn made, and that commits go on that branch only;
+- the checks the diff touches, by the repository's own commands, and that a screen change needs a screenshot in the pull request;
+- the pull request rules: the repository's template, its title form, no agent attribution anywhere;
+- the limits: start no agents of its own, merge nothing, never touch the operator's app or Herdr server, never force push or rebase, stop and write a letter when the goal or scope would change;
+- what to send back and when: a `--kind progress` letter with its plan before code, and a `--kind report` letter with the pull request number and the evidence when done.
+
 ## 3. Starting
 
 - Start nothing before the operator approves the plan; then run `hide mission start`.
   Hide refuses a worker before that (`mission_not_started`).
-- Start each worker with `hide agent spawn --parent here --intent <mission-id>:<node-key> …`, a `change` node in its own worktree (`--branch` a new branch, `--path` beside the project), a `research` node in the project's checkout.
-  Retrying a node uses the same intent, so it never makes a second agent; a new attempt with another worker uses a new intent.
+- Start each worker with `hide agent spawn --parent here --intent <mission-id>:<node-key> --brief-file <path> …`, a `change` node in its own worktree (`--branch` a new branch, `--path` beside the project), a `research` node in the project's checkout.
+  The brief is the worker's first prompt: Hide submits it once the agent takes input and keeps it as a delivered letter under the node's intent, so the worker starts on it without anyone typing and a wake later finds it.
+  A node's worker without a brief is refused (`mission_brief_missing`); a brief holds at most 16 KiB, so a longer one goes in a file the brief names.
+  Retrying a node uses the same intent, so it never makes a second agent or submits the brief twice; a new attempt with another worker uses a new intent.
 - Then record it: `hide mission node <key> --status working --agent-id <agent-N>`.
 - A worker runs only on the machine the project is on (`mission_machine_refused`).
 - At most the mission's cap of workers run at once, reviewers and verifiers included and you not counted; Hide refuses one more (`mission_cap_reached`).
@@ -132,12 +157,14 @@ The operator's words are the controls; there are no buttons.
 ## 7. The report
 
 When every node reached the scope, report in conversation and close: `hide mission close --as done --report-file report.md`.
+Write it so a reader who saw none of the mission can act, in four parts:
 
 - One line saying what was done.
-- Every pull request or branch with its state and the merge order.
-- What was not finished and why; an unfinished node is never reported as done.
-- What the operator has to do.
-- For each node, the evidence it is done (CI, review, check output, screenshot).
+- Every pull request or branch with its state, its review, its verify result and the merge order.
+- What was not finished, by node, with why and what would finish it; an unfinished node is never reported as done.
+- What the operator has to do, as a list they can tick.
+
+For each node, the evidence it is done (CI, review, check output, screenshot) goes with its pull request.
 
 A `pr`-scope mission that leaves a stack waiting for the operator's merge closes `--as merge_wait` after the report and stays open quietly; when the operator merges the lower pull request, move the one above and check it; once every pull request of the stack is merged Hide closes the mission as done itself, with or without you there.
 A further instruction to a done mission opens it again (`hide mission reopen`), and so does a new commit or a review asking for changes on one of its pull requests; its merge does not.

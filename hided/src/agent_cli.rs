@@ -3,12 +3,19 @@
 use crate::env::{self, Env};
 use herdr_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [-- <native args>]";
-pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [-- <native args>]
+pub const USAGE: &str = "hide agent register [--check] [--machine <device>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
+pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
   Hide starts the agent with them and starts it with them again whenever it wakes, forks or reopens the agent.
   Native arguments after -- reach this start only; a restart resumes the conversation without them.
+
+Give the agent its brief with --brief <text> or --brief-file <path> (at most 16 KiB):
+  Hide starts the agent and submits the brief as its first prompt once the agent takes input,
+  and records the same text as a delivered letter under the spawn's intent, so the agent starts on it
+  without anyone typing and a later wake finds it. A mission node's worker (an intent of the form
+  <mission-id>:<node-key>) needs one; without it the spawn is refused with mission_brief_missing.
+  Running the same command again never submits the brief twice.
 
 Choose responsibility when spawning:
   With --parent here (or your own id): delegate work you will supervise.
@@ -66,6 +73,8 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
                         "--path",
                         "--model",
                         "--effort",
+                        "--brief",
+                        "--brief-file",
                     ]
                     .as_slice(),
                     "end" => ["--actor"].as_slice(),
@@ -79,7 +88,9 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
                     .filter(|value| {
                         !value.is_empty()
                             && !value.starts_with("--")
-                            && !value.chars().any(char::is_control)
+                            // A brief is prose with line breaks; every other
+                            // value is one line.
+                            && (flag == "--brief" || !value.chars().any(char::is_control))
                     })
                     .ok_or(USAGE)?
                     .clone();
@@ -125,8 +136,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
             let kind = take("--kind")?;
             let repo = take("--repo")?;
             let branch = take("--branch")?;
+            let brief = brief(flags.remove("--brief"), flags.remove("--brief-file"))?;
             Command::Spawn {
                 mission: None,
+                brief,
                 parent: flags.remove("--parent"),
                 machine: flags.remove("--machine"),
                 name,
@@ -156,6 +169,31 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Delivery,
     };
     Ok(Delivery::Agents { command })
 }
+/// The brief from `--brief` or `--brief-file`, one of them at most: the
+/// file is read here, in the caller's own account, and refused before the
+/// daemon is asked when it cannot be read, is blank or is past a letter's
+/// body limit.
+fn brief(text: Option<String>, file: Option<String>) -> Result<Option<String>, String> {
+    let brief = match (text, file) {
+        (None, None) => return Ok(None),
+        (Some(_), Some(_)) => return Err("Give --brief or --brief-file, not both".into()),
+        (Some(text), None) => text,
+        (None, Some(path)) => std::fs::read_to_string(&path)
+            .map_err(|error| format!("--brief-file {path} could not be read: {error}"))?,
+    };
+    if brief.trim().is_empty() {
+        return Err("The brief is blank".into());
+    }
+    if brief.len() > herdr_core::delivery::BODY_LIMIT {
+        return Err(format!(
+            "The brief is {} bytes; a brief holds at most {} bytes",
+            brief.len(),
+            herdr_core::delivery::BODY_LIMIT
+        ));
+    }
+    Ok(Some(brief))
+}
+
 pub fn run(env: &Env, command: Delivery) -> Result<(), String> {
     let result = (|| {
         let mut credential = crate::workspace_cli::Credential::acquire(env)?;
@@ -321,6 +359,65 @@ mod tests {
         assert!(launch.is_default());
         assert!(spawn(&["--effort", "high", "--effort", "low"]).is_err());
         assert!(SPAWN_HELP.contains("[--model <model>] [--effort <effort>]"));
+    }
+
+    /// The brief rides the spawn: from the flag or from a file, never both,
+    /// with line breaks kept, and refused before the daemon is asked when it
+    /// is blank or past a letter's body (PRD mission fixes (a)).
+    #[test]
+    fn spawn_takes_its_brief_from_text_or_a_file_and_explains_it_in_its_help() {
+        let spawn = |extra: &[&str]| {
+            let mut args = vec![
+                "spawn",
+                "--name",
+                "worker",
+                "--intent",
+                "mission-1:api",
+                "--kind",
+                "claude",
+                "--repo",
+                "/fixture",
+                "--branch",
+                "topic",
+            ];
+            args.extend_from_slice(extra);
+            line(&args)
+        };
+        let brief_of = |parsed: Delivery| {
+            let Delivery::Agents {
+                command: Command::Spawn { brief, .. },
+            } = parsed
+            else {
+                panic!("spawn")
+            };
+            brief
+        };
+        assert_eq!(brief_of(spawn(&[]).unwrap()), None);
+        assert_eq!(
+            brief_of(spawn(&["--brief", "Node api: add the call.\nReport by letter."]).unwrap()),
+            Some("Node api: add the call.\nReport by letter.".into())
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("brief-api.md");
+        std::fs::write(&file, "# api\n\nAdd the call.\n").unwrap();
+        assert_eq!(
+            brief_of(spawn(&["--brief-file", file.to_str().unwrap()]).unwrap()),
+            Some("# api\n\nAdd the call.\n".into())
+        );
+        assert!(spawn(&["--brief", "x", "--brief-file", file.to_str().unwrap()]).is_err());
+        assert!(
+            spawn(&[
+                "--brief-file",
+                dir.path().join("missing.md").to_str().unwrap()
+            ])
+            .is_err()
+        );
+        assert!(spawn(&["--brief", " \n "]).is_err());
+        let long = "x".repeat(herdr_core::delivery::BODY_LIMIT + 1);
+        assert!(spawn(&["--brief", &long]).is_err());
+        assert!(USAGE.contains("[--brief <text> | --brief-file <path>]"));
+        assert!(SPAWN_HELP.contains("--brief-file <path>"));
+        assert!(SPAWN_HELP.contains("mission_brief_missing"));
     }
 
     #[test]

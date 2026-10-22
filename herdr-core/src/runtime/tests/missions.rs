@@ -83,13 +83,13 @@ fn mission_slot_items(runtime: &Runtime) -> usize {
         .count()
 }
 
-fn spawn(machine: Option<&str>) -> crate::delivery::Command {
+fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::delivery::Command {
     crate::delivery::Command::Agents {
         command: crate::coordination::Command::Spawn {
             parent: Some("here".into()),
             machine: machine.map(str::to_owned),
             name: "worker".into(),
-            intent: "mission-1:cause".into(),
+            intent: intent.into(),
             kind: "codex".into(),
             repo: PROJECT.into(),
             branch: "cause".into(),
@@ -97,15 +97,33 @@ fn spawn(machine: Option<&str>) -> crate::delivery::Command {
             args: Vec::new(),
             launch: Default::default(),
             task: None,
+            brief: brief.map(str::to_owned),
             mission: None,
         },
     }
 }
 
+/// The node `cause`'s worker, started on its brief.
 fn prepare_spawn(
     runtime: &mut Runtime,
     conductor: &Actor,
     machine: Option<&str>,
+) -> Result<(), String> {
+    prepare_spawn_of(
+        runtime,
+        conductor,
+        machine,
+        "mission-1:cause",
+        Some("Find the cause."),
+    )
+}
+
+fn prepare_spawn_of(
+    runtime: &mut Runtime,
+    conductor: &Actor,
+    machine: Option<&str>,
+    intent: &str,
+    brief: Option<&str>,
 ) -> Result<(), String> {
     runtime
         .prepare_delivery(
@@ -113,9 +131,48 @@ fn prepare_spawn(
             &conductor.pane_id,
             &authority(conductor).context,
             None,
-            spawn(machine),
+            spawn(machine, intent, brief),
         )
         .map(drop)
+}
+
+/// A mission node's worker starts on its brief, or it would stand at an
+/// empty prompt until a person typed, because a letter cannot wake a
+/// session before its first turn: a spawn under a node's intent without a
+/// brief is refused, while a worker under another intent (a reviewer) and a
+/// spawn outside any mission are taken as before.
+#[test]
+fn a_mission_nodes_worker_is_refused_without_its_brief() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug", "cap": 3}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    assert_eq!(
+        prepare_spawn_of(&mut runtime, &conductor, None, "mission-1:cause", None).unwrap_err(),
+        "mission_brief_missing"
+    );
+    assert_eq!(
+        prepare_spawn_of(&mut runtime, &conductor, None, "mission-1:fix", None).unwrap_err(),
+        "mission_brief_missing"
+    );
+    prepare_spawn_of(
+        &mut runtime,
+        &conductor,
+        None,
+        "mission-1:cause",
+        Some("Find it."),
+    )
+    .unwrap();
+    // Not a node of the plan: a reviewer the Conductor names its own way.
+    prepare_spawn_of(&mut runtime, &conductor, None, "mission-1:review-fix", None).unwrap();
+    prepare_spawn_of(&mut runtime, &conductor, None, "plain", None).unwrap();
 }
 
 #[test]
@@ -169,7 +226,14 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
     // A pane that conducts nothing spawns as it always did.
     assert!(
         runtime
-            .mission_spawn_admission(&conductor, None, "codex", &Default::default())
+            .mission_spawn_admission(
+                &conductor,
+                None,
+                "codex",
+                &Default::default(),
+                "plain",
+                false
+            )
             .unwrap()
             .is_none()
     );
@@ -193,7 +257,14 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
         "a worker runs only on the machine the project is on (D-41)"
     );
     let admission = runtime
-        .mission_spawn_admission(&conductor, None, "codex", &Default::default())
+        .mission_spawn_admission(
+            &conductor,
+            None,
+            "codex",
+            &Default::default(),
+            "plain",
+            false,
+        )
         .unwrap()
         .expect("a running mission's spawn is one of its workers");
     assert_eq!(
@@ -211,7 +282,14 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
     .unwrap();
     assert!(
         runtime
-            .mission_spawn_admission(&conductor, None, "codex", &Default::default())
+            .mission_spawn_admission(
+                &conductor,
+                None,
+                "codex",
+                &Default::default(),
+                "plain",
+                false
+            )
             .unwrap()
             .is_none()
     );
@@ -1024,7 +1102,7 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
     };
     let admit = |runtime: &Runtime, kind: &str, choice: hide_agent_adapter::LaunchChoice| {
         runtime
-            .mission_spawn_admission(&conductor, None, kind, &choice)
+            .mission_spawn_admission(&conductor, None, kind, &choice, "plain", false)
             .map(|admission| admission.is_some())
     };
     // No candidates: any agent the machine has.

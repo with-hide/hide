@@ -93,6 +93,12 @@ pub enum Command {
         /// Hide's own identity may give one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task: Option<SpawnTask>,
+        /// The child's first prompt, which Hide submits once the agent takes
+        /// input and records as a delivered letter under the spawn's intent,
+        /// so the child starts on it without a person typing. Part of the
+        /// intent like `args`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        brief: Option<String>,
         /// The mission this spawn starts a worker of, and its cap (PRD
         /// software-factory-conductor D-45). Only the core sets it, from the
         /// caller's mission; no command names it.
@@ -100,6 +106,11 @@ pub enum Command {
         mission: Option<crate::runtime::missions::MissionAdmission>,
     },
 }
+
+/// How long a spawn waits for its agent to take input before the brief is
+/// submitted: the TUI of a started agent takes seconds to draw its prompt,
+/// and a trust question at startup holds it longer.
+pub(crate) const BRIEF_READY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// How long a mission's spawn with no child yet counts as a worker being
 /// made. A start takes seconds to a minute or two; one still childless past
@@ -410,6 +421,15 @@ pub struct SpawnRecord {
     /// The mission the child is a worker of, counted against its cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mission: Option<String>,
+    /// The child's first prompt (`Command::Spawn::brief`), part of the
+    /// intent; the letter made of it when the child binds carries the same
+    /// text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<String>,
+    /// Whether the brief was submitted to the agent, so a retry after it
+    /// never submits it twice (engineering #11).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub briefed: bool,
     /// When the spawn was reserved; a record written before it existed has
     /// 0.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -432,6 +452,10 @@ pub(crate) enum Mutation {
     Reserve {
         parent: String,
         command: Command,
+    },
+    /// The spawn's brief was submitted to its agent.
+    Briefed {
+        id: String,
     },
     Advance {
         seed_tab: Option<naming::SeedTab>,
@@ -868,12 +892,18 @@ pub(crate) fn apply(
                 args,
                 launch,
                 task,
+                brief,
                 mission,
                 ..
             } = command
             else {
                 return Err("invalid_spawn".into());
             };
+            if brief.as_ref().is_some_and(|brief| {
+                brief.trim().is_empty() || brief.len() > crate::delivery::BODY_LIMIT
+            }) {
+                return Err("invalid_brief".into());
+            }
             let mode = if matches!(
                 command,
                 Command::Spawn {
@@ -945,6 +975,7 @@ pub(crate) fn apply(
                     || record.mode != mode
                     || record.args != *args
                     || record.launch != *launch
+                    || record.brief != *brief
                     || !task_agrees
                 {
                     return Err("intent_conflict".into());
@@ -992,9 +1023,33 @@ pub(crate) fn apply(
                 auto_watch_id: None,
                 task: task.clone(),
                 mission: mission.as_ref().map(|admission| admission.mission.clone()),
+                brief: brief.clone(),
+                briefed: false,
                 reserved_at_unix_ms: now,
             };
             ledger.spawns.push(record.clone());
+            Ok(json!(record))
+        }
+        Mutation::Briefed { id } => {
+            let parent = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?
+                .parent
+                .clone();
+            if !resolve_actor(ledger, &parent).is_some_and(|parent| parent.same_identity(caller)) {
+                return Err("parent_authority_required".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            if record.pane.is_none() || record.typed == 0 || record.brief.is_none() {
+                return Err("spawn_incomplete".into());
+            }
+            record.briefed = true;
             Ok(json!(record))
         }
         Mutation::Advance {
@@ -1157,7 +1212,37 @@ pub(crate) fn apply(
                 .iter_mut()
                 .find(|spawn| &spawn.id == id)
                 .ok_or("spawn_unavailable")?;
+            let first_bind = spawn.child.is_none();
             spawn.child = Some(child);
+            let spawn = spawn.clone();
+            // The brief the agent already read is the first letter under the
+            // spawn's intent, delivered: the ledger and the wake-up line
+            // carry what the child was started on, and a letter the parent
+            // sends later under the same intent is this one.
+            if first_bind && let Some(brief) = spawn.brief.as_deref().filter(|_| spawn.briefed) {
+                let sender = resolve_actor(ledger, &spawn.parent)
+                    .ok_or("parent_unavailable")?
+                    .clone();
+                let letter = crate::delivery::mailbox::send(
+                    ledger,
+                    &sender,
+                    &record.actor,
+                    &spawn.intent,
+                    brief,
+                    "request",
+                    None,
+                    now,
+                )?;
+                let id = letter.id;
+                let letter = ledger
+                    .letters
+                    .iter_mut()
+                    .find(|letter| letter.id == id)
+                    .ok_or("letter_unavailable")?;
+                letter.state = crate::delivery::ledger::State::Delivered;
+                letter.hook_confirmed = Some(true);
+                letter.bell_sent = true;
+            }
             Ok(json!(spawn))
         }
         Mutation::Complete { id } => {
@@ -1730,6 +1815,7 @@ mod tests {
             args: vec!["--model".into(), "fixture model".into()],
             launch: Default::default(),
             task: None,
+            brief: None,
         }
     }
     fn register_as(
@@ -2522,6 +2608,171 @@ mod tests {
         child.actor.device_id = device.into();
         child.project = Some("/fixture/topic".into());
         (ledger, actor, parent_id, id, child)
+    }
+
+    /// A spawn's brief is part of its intent, is marked submitted once so a
+    /// retry never types it twice, and becomes the child's first letter when
+    /// the child binds: delivered and confirmed under the spawn's intent,
+    /// from the parent, so the ledger and a later wake carry it.
+    #[test]
+    fn a_spawns_brief_is_one_delivered_letter_under_its_intent() {
+        let mut ledger = Ledger::default();
+        let parent = record("parent", "native-parent", None);
+        let actor = parent.actor.clone();
+        let parent_id = register(&mut ledger, parent, &actor);
+        let briefed = |brief: &str| {
+            let mut command = command("mission-1:api");
+            if let Command::Spawn { brief: slot, .. } = &mut command {
+                *slot = Some(brief.into());
+            }
+            command
+        };
+        let reserve = |ledger: &mut Ledger, command: Command, now: u64| {
+            apply(
+                ledger,
+                &actor,
+                &Mutation::Reserve {
+                    parent: parent_id.clone(),
+                    command,
+                },
+                now,
+            )
+        };
+        assert_eq!(
+            reserve(&mut ledger, briefed("  \n"), 1).unwrap_err(),
+            "invalid_brief"
+        );
+        assert_eq!(
+            reserve(
+                &mut ledger,
+                briefed(&"x".repeat(crate::delivery::BODY_LIMIT + 1)),
+                1
+            )
+            .unwrap_err(),
+            "invalid_brief"
+        );
+        let reserved = reserve(
+            &mut ledger,
+            briefed("Node api: add the call.\nReport by letter."),
+            1,
+        )
+        .unwrap();
+        let spawn = reserved["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            reserved["brief"],
+            "Node api: add the call.\nReport by letter."
+        );
+        assert!(
+            reserved["briefed"].is_null(),
+            "not submitted yet: {reserved}"
+        );
+        assert_eq!(
+            reserve(&mut ledger, briefed("Another brief."), 2).unwrap_err(),
+            "intent_conflict"
+        );
+        assert_eq!(
+            reserve(&mut ledger, command("mission-1:api"), 2).unwrap_err(),
+            "intent_conflict",
+            "the same intent without the brief is another spawn"
+        );
+        // Nothing is marked submitted before the agent was started.
+        assert_eq!(
+            apply(
+                &mut ledger,
+                &actor,
+                &Mutation::Briefed { id: spawn.clone() },
+                2
+            )
+            .unwrap_err(),
+            "spawn_incomplete"
+        );
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Advance {
+                seed_tab: None,
+                id: spawn.clone(),
+                path: Some("/fixture/topic".into()),
+                pane: Some("worker-pane".into()),
+                terminal: None,
+                shell: None,
+                child: None,
+            },
+            2,
+        )
+        .unwrap();
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Typed { id: spawn.clone() },
+            3,
+        )
+        .unwrap();
+        let marked = apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Briefed { id: spawn.clone() },
+            3,
+        )
+        .unwrap();
+        assert_eq!(marked["briefed"], true);
+        assert!(
+            ledger.letters.is_empty(),
+            "no letter before the child is known"
+        );
+
+        let mut child = record("worker-pane", "native-child", Some(parent_id.clone()));
+        child.name = Some("worker".into());
+        child.project = Some("/fixture/topic".into());
+        let bound = apply(
+            &mut ledger,
+            &actor,
+            &Mutation::BindChild {
+                id: spawn.clone(),
+                record: child.clone(),
+            },
+            4,
+        )
+        .unwrap();
+        let child_id = bound["child"].as_str().unwrap().to_owned();
+        assert_eq!(ledger.letters.len(), 1);
+        let letter = &ledger.letters[0];
+        assert_eq!(letter.intent, "mission-1:api");
+        assert_eq!(letter.kind, "request");
+        assert_eq!(letter.body, "Node api: add the call.\nReport by letter.");
+        assert!(letter.sender.same_identity(&actor));
+        assert!(letter.recipient.same_identity(&child.actor));
+        assert_eq!(letter.state, crate::delivery::ledger::State::Delivered);
+        assert_eq!(letter.hook_confirmed, Some(true));
+        assert!(letter.bell_sent);
+        assert_eq!(letter.created_at_unix_ms, 4);
+        // Bound again on a retry, the letter is not made twice.
+        let again = apply(
+            &mut ledger,
+            &actor,
+            &Mutation::BindChild {
+                id: spawn.clone(),
+                record: child,
+            },
+            5,
+        )
+        .unwrap();
+        assert_eq!(again["child"], child_id);
+        assert_eq!(ledger.letters.len(), 1);
+        // A spawn without a brief makes no letter.
+        let (mut plain, caller, _, plain_spawn, plain_child) = pending_spawn();
+        apply(
+            &mut plain,
+            &caller,
+            &Mutation::BindChild {
+                id: plain_spawn,
+                record: plain_child,
+            },
+            3,
+        )
+        .unwrap();
+        assert!(plain.letters.is_empty());
+        ledger.validate().unwrap();
     }
 
     #[test]

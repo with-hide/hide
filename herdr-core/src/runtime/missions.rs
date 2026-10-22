@@ -817,12 +817,25 @@ impl Runtime {
         machine: Option<&str>,
         kind: &str,
         launch: &hide_agent_adapter::LaunchChoice,
+        intent: &str,
+        briefed: bool,
     ) -> Result<Option<MissionAdmission>, String> {
         let Some(mission) = self.missions.book.conducted_open(actor) else {
             return Ok(None);
         };
         if mission.status == MissionStatus::Planning {
             return Err("mission_not_started".into());
+        }
+        // A node's worker starts on its brief, or stands at an empty prompt
+        // until a person types: a letter cannot wake a session that has not
+        // run its first turn (delivery.md, session_unread).
+        if !briefed
+            && intent
+                .strip_prefix(&mission.id)
+                .and_then(|rest| rest.strip_prefix(':'))
+                .is_some_and(|key| mission.node(key).is_some())
+        {
+            return Err("mission_brief_missing".into());
         }
         let worker_machine = machine.unwrap_or(actor.device_id.as_str());
         if worker_machine != mission.device_id {
