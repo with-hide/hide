@@ -300,6 +300,13 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
             agent["fake_env"] = sorted(extra)
         elif kind == "opencode":
             opencode_model(operator, runtime.home / opencode_service.CONFIG)
+        private = runtime.home / entry["config"] if entry["config"] else None
+        if private is not None and entry["copies"] and not fake:
+            # Made before the CLI's first run: any run, `--version` included,
+            # makes its folders with the account's umask (OpenCode 2.0.29
+            # makes its XDG data folder 0755), and the login copy below
+            # refuses a folder that is not private.
+            private_directory(private)
         launch = wrapper(runtime.bin, executables[key], operator, runtime.state, kind, runtime.home, sandbox,
                          os.environ.get("PATH", ""), extra)
         environment = {**clean_env(), "HOME": str(operator), "TMPDIR": str(run / "agent-tmp")}
@@ -317,7 +324,6 @@ def prepare_local(runtime, report, table, rows, measured, operator, root, fake, 
             cells.settle_agent(table, key, "Claude trusts no folder above the measured repository; open Claude once in "
                                f"{runtime.checkout} and accept")
             continue
-        private = runtime.home / entry["config"] if entry["config"] else None
         if entry["copies"]:
             runtime.credential_roots.add(private)
             recipe = {"id": key, "overlay": {"env": {}, "copies": entry["copies"], "settings": [],
