@@ -1,5 +1,5 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
-//! `request`, `inbox`, `watch`, `mission`): each command's words, arguments and options, where its
+//! `request`, `inbox`, `watch`, `mission`, `device`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -18,7 +18,9 @@ use serde_json::{Map, Value, json};
 pub const FORMAT: u32 = 1;
 
 /// The topics whose every command is in the table.
-const TOPICS: &[&str] = &["agent", "ps", "request", "inbox", "watch", "mission"];
+const TOPICS: &[&str] = &[
+    "agent", "ps", "request", "inbox", "watch", "mission", "device",
+];
 
 /// What a value must be for the command's parser to take it.
 #[derive(Clone, Copy)]
@@ -249,6 +251,8 @@ pub const COMMANDS: &[Spec] = &[
             optional("--path", Text),
             optional("--model", Text),
             optional("--effort", Text),
+            cleared("--brief", Text, &["--brief-file"]),
+            cleared("--brief-file", Text, &["--brief"]),
             switch("--help"),
             switch("--json"),
         ],
@@ -271,6 +275,9 @@ pub const COMMANDS: &[Spec] = &[
             "identity_waits_full",
             "session_too_long",
             "codex_capability_unknown",
+            "invalid_brief",
+            "brief_not_submitted",
+            "mission_brief_missing",
         ],
     },
     // Without --json it prints the same answer as a tree for a person.
@@ -282,6 +289,54 @@ pub const COMMANDS: &[Spec] = &[
         rest: None,
         answers: &["ps"],
         refusals: &["here_unavailable", "ps_answer_unreadable"],
+    },
+    // Only the core's own machine may run these. Add registers the device
+    // without Hide's helper, which the operator allows on its row.
+    Spec {
+        words: &["device", "list"],
+        arguments: &[],
+        repeats: None,
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_list"],
+        refusals: &["machine_not_permitted"],
+    },
+    Spec {
+        words: &["device", "add"],
+        arguments: &[Arg {
+            name: "ssh_alias",
+            value: Key,
+        }],
+        repeats: None,
+        options: &[
+            optional("--name", Text),
+            optional("--socket", Text),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_added"],
+        refusals: &[
+            "machine_not_permitted",
+            "device_invalid",
+            "device_duplicate",
+        ],
+    },
+    Spec {
+        words: &["device", "remove"],
+        arguments: &[Arg {
+            name: "device_id",
+            value: Key,
+        }],
+        repeats: None,
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_removed"],
+        refusals: &[
+            "machine_not_permitted",
+            "device_unknown",
+            "device_local_remove_denied",
+            "device_files_open",
+        ],
     },
     spec(
         &["request", "send"],
@@ -628,6 +683,7 @@ fn body() -> Value {
             "inbox": {"ok": "ok", "answer": "result", "code": "reason"},
             "watch": {"ok": "ok", "answer": "result", "code": "reason"},
             "mission": {"ok": "ok", "answer": "result", "code": "reason"},
+            "device": {"ok": "ok", "answer": "value", "code": "error.code"},
         },
         "answers": answers(),
     })
@@ -656,6 +712,9 @@ fn answers() -> Value {
         "agent_catalog".into(),
         shape(&["machine", "installed_known", "items"]),
     );
+    map.insert("device_list".into(), shape(&["devices"]));
+    map.insert("device_added".into(), shape(&["device", "next_action"]));
+    map.insert("device_removed".into(), shape(&["device_id"]));
     answers
 }
 
@@ -780,9 +839,11 @@ mod tests {
         matches!(
             parse_args(argv),
             Ok(CommandKind::Delivery(_)
+                | CommandKind::AgentSpawnBriefFile { .. }
                 | CommandKind::Mission(_)
                 | CommandKind::AgentCatalog { .. }
-                | CommandKind::Ps(_))
+                | CommandKind::Ps(_)
+                | CommandKind::Device(_))
         )
     }
 
@@ -825,10 +886,16 @@ mod tests {
                         .iter()
                         .find(|other| other.name == *conflict)
                         .unwrap();
+                    // The conflict goes before `--`: after it, every word
+                    // is the agent's own, not an option of the command.
                     let mut both = allowed.clone();
-                    both.push(other.name.to_owned());
+                    let at = both
+                        .iter()
+                        .position(|word| word == "--")
+                        .unwrap_or(both.len());
+                    both.insert(at, other.name.to_owned());
                     if let Some(value) = other.value {
-                        both.push(sample(value).0);
+                        both.insert(at + 1, sample(value).0);
                     }
                     assert!(
                         !takes(&both),

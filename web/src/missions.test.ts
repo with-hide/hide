@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { chipWords, conductedBy, kindWord, missionCounts, nodeLine, nodeMark, shownNodes, stackWaiting, takeOverPrompt, takeOverProvider, workerWords, FOLD_DONE_OVER } from "./missions";
+import { chipWords, conductedBy, kindWord, launchModelOf, missionCounts, nodeLine, nodeMark, shownNodes, stackWaiting, stepsOf, takeOverPrompt, takeOverProvider, workerWords, FOLD_DONE_OVER } from "./missions";
 import type { Mission, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -27,7 +27,7 @@ describe("the wire values", () => {
   it("words every node status, kind and block the core sends", () => {
     for (const status of contract.mission_node_status) expect(english).toHaveProperty(`mission.status.${status}`);
     for (const kind of contract.mission_node_kind) expect(english).toHaveProperty(kindWord(kind));
-    for (const blocked of contract.mission_blocked) expect(nodeLine(mission("m"), node("n", { blocked }), t)).toMatch(/^Waiting · earlier node/);
+    for (const blocked of contract.mission_blocked) expect(nodeLine(node("n", { blocked }), t)).toMatch(/^Waiting · earlier node/);
     for (const scope of contract.mission_scope) expect(english).toHaveProperty(`mission.scope.${scope}`);
     for (const status of contract.mission_status) expect(chipWords(mission("m", { status })).key).toMatch(/^mission\.chip/);
   });
@@ -53,11 +53,17 @@ describe("the numbers and words", () => {
     expect(chipWords(m)).toEqual({ key: "mission.chip", counts: "2/3" });
   });
 
-  it("names the node a planned one waits for once the mission runs, and only its kind while it is planned", () => {
+  it("reads a node's kind while it waits on an earlier node, since the edge says what it waits for, and its line once it has one", () => {
     const nodes = [node("cause", { title: "Find the cause", kind: "research", status: "working" }), node("fix", { depends_on: ["cause"] })];
-    expect(nodeLine(mission("m", { nodes }), nodes[1]!, t)).toBe("Waiting for Find the cause");
-    expect(nodeLine(mission("m", { nodes, status: "planning" }), nodes[1]!, t)).toBe("Change");
-    expect(nodeLine(mission("m", { nodes }), { ...nodes[1]!, line: "CI failed" }, t)).toBe("CI failed");
+    expect(nodeLine(nodes[1]!, t)).toBe("Change");
+    expect(nodeLine({ ...nodes[1]!, line: "CI failed" }, t)).toBe("CI failed");
+    expect(nodeLine(node("n", { blocked: "upstream_failed" }), t)).toBe("Waiting · earlier node failed");
+  });
+
+  it("draws the four step cells for a change node only", () => {
+    expect(stepsOf(node("a"))).toBe(4);
+    expect(stepsOf(node("a", { kind: "research", delivery: null }))).toBe(0);
+    expect(stepsOf(node("a", { kind: "verify", delivery: null }))).toBe(0);
   });
 
   it("wears its worker's mark while it works, and its own state otherwise", () => {
@@ -68,10 +74,26 @@ describe("the numbers and words", () => {
     expect(nodeMark(node("a", { status: "done" }), null)).toBe("done");
   });
 
-  it("names a worker by its model and effort, `auto` for an effort the Conductor chooses", () => {
-    expect(workerWords(node("a", { worker: { agent: "codex", model: "gpt-6-astra", effort: "high", effort_auto: true } }), "auto")).toBe("gpt-6-astra·high");
-    expect(workerWords(node("a", { worker: { agent: "claude", effort_auto: true } }), "auto")).toBe("claude·auto");
-    expect(workerWords(node("a", { worker: { agent: "pi" } }), "auto")).toBe("pi");
+  it("names a worker by its model and effort, never its agent, `auto` for an effort the Conductor chooses", () => {
+    expect(workerWords(node("a", { worker: { agent: "codex", model: "gpt-6-astra", effort: "high", effort_auto: true } }), null, "auto")).toBe("gpt-6-astra·high");
+    expect(workerWords(node("a", { worker: { agent: "claude", model: "opus", effort_auto: true } }), null, "auto")).toBe("opus·auto");
+    // An agent that takes no model: the effort alone, or nothing.
+    expect(workerWords(node("a", { worker: { agent: "opencode", effort_auto: true } }), null, "auto")).toBe("auto");
+    expect(workerWords(node("a", { worker: { agent: "opencode" } }), null, "auto")).toBeNull();
+  });
+
+  it("shows the model the pane runs while the node works, and the plan's otherwise", () => {
+    const planned = node("a", { worker: { agent: "claude", model: "opus", effort: "high" } });
+    expect(workerWords(planned, "sonnet", "auto")).toBe("opus·high");
+    expect(workerWords({ ...planned, status: "working" }, "sonnet", "auto")).toBe("sonnet·high");
+    expect(workerWords({ ...planned, status: "review" }, "sonnet", "auto")).toBe("sonnet·high");
+    expect(workerWords({ ...planned, status: "working" }, null, "auto")).toBe("opus·high");
+    const m = mission("m", { device_id: "mac" });
+    const rest = { overview_graph: { sessions: [{ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model: "sonnet" }, { device_id: "mini", pane_id: "p9", session_digest: "e", launch_model: "haiku" }] } } as unknown as SnapshotRest;
+    expect(launchModelOf(rest, m, node("a", { pane_id: "p9" }))).toBe("sonnet");
+    expect(launchModelOf(rest, m, node("a", { pane_id: "p9", machine: "mini" }))).toBe("haiku");
+    expect(launchModelOf(rest, m, node("a", { pane_id: "p8" }))).toBeNull();
+    expect(launchModelOf(rest, m, node("a"))).toBeNull();
   });
 
   it("folds done nodes away only on a long plan", () => {

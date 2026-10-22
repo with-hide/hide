@@ -32,10 +32,12 @@ describe("Add a project", () => {
 
     it("browses this window's own machine and makes a new project on the core's, both on one machine", () => {
       const devices = [device("core", "", "local"), device("mini", "Mini")];
-      expect(hostWays("core", devices)).toEqual({ browse: true, otherWays: true, pickParent: true });
-      expect(hostWays("mini", devices)).toEqual({ browse: false, otherWays: false, pickParent: false });
+      expect(hostWays("core", devices, true)).toEqual({ own: true, browse: true, otherWays: true, pickParent: true });
+      expect(hostWays("mini", devices, true)).toEqual({ own: false, browse: false, otherWays: false, pickParent: false });
       // Before the snapshot names a machine, the empty id is the core's own, where the window runs.
-      expect(hostWays("", undefined)).toEqual({ browse: true, otherWays: true, pickParent: true });
+      expect(hostWays("", undefined, true)).toEqual({ own: true, browse: true, otherWays: true, pickParent: true });
+      // A browser tab has no folder picker: its own machine takes a typed path, and the other ways stay, without the parent picker.
+      expect(hostWays("core", devices, false)).toEqual({ own: true, browse: false, otherWays: true, pickParent: false });
     });
 
     it("in a window on a node whose core runs elsewhere, browses the window's machine only, and makes a new project on the core's without its picker", () => {
@@ -43,8 +45,8 @@ describe("Add a project", () => {
       vi.stubGlobal("navigator", { platform: "MacIntel" });
       window.location.hash = "#token=t&node=mbp";
       const devices = [{ ...device("mini-node", "Mac mini", "local") }, { ...device("mbp", "MacBook-Pro.local"), dials_in: true }];
-      expect(hostWays("mbp", devices)).toEqual({ browse: true, otherWays: false, pickParent: false });
-      expect(hostWays("mini-node", devices)).toEqual({ browse: false, otherWays: true, pickParent: false });
+      expect(hostWays("mbp", devices, true)).toEqual({ own: true, browse: true, otherWays: false, pickParent: false });
+      expect(hostWays("mini-node", devices, true)).toEqual({ own: false, browse: false, otherWays: true, pickParent: false });
       expect(addProjectHosts(devices, t).map((host) => host.label)).toEqual(["This Mac", "Mac mini"]);
     });
   });

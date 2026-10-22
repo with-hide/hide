@@ -968,11 +968,20 @@ impl Runtime {
                     mission,
                     kind,
                     launch,
+                    intent,
+                    brief,
                     ..
                 },
         } = &mut command
         {
-            *mission = self.mission_spawn_admission(&actor, machine.as_deref(), kind, launch)?;
+            *mission = self.mission_spawn_admission(
+                &actor,
+                machine.as_deref(),
+                kind,
+                launch,
+                intent,
+                brief.is_some(),
+            )?;
         }
         // Only the pane's own session proves its composer was submitted, so a
         // stray `hide inbox --hook` from a tool in the pane clears no draft.

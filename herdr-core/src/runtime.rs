@@ -1387,6 +1387,14 @@ pub struct Runtime {
     ai_observing: bool,
     /// A start surface shows its model menu; reads the catalog only.
     ai_start_observing: bool,
+    /// How many Hide AI reads have landed (`ingest_background_ai`), so a
+    /// one-shot ask can tell whether a read came since it was made.
+    ai_reads: u64,
+    /// `hide agent catalog` asked for one read of the model lists while a
+    /// provider was still unread (PRD mission fixes (b)): the count of reads
+    /// at the ask, which holds the providers observed until the next read
+    /// lands and then clears itself.
+    ai_catalog_read_asked: Option<u64>,
     /// What the providers last answered. Held beside the snapshot so a
     /// changed choice can restamp the rows without asking again.
     background_ai_providers: Vec<crate::model::BackgroundAiProviderSnapshot>,
@@ -2190,6 +2198,8 @@ impl Runtime {
             pending_ai_settings_save: None,
             ai_observing: false,
             ai_start_observing: false,
+            ai_reads: 0,
+            ai_catalog_read_asked: None,
             background_ai_providers: Vec::new(),
             usage_window_visible: false,
             usage_ledger_client: None,

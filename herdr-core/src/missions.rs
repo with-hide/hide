@@ -446,6 +446,13 @@ impl ConductorSettings {
     }
 }
 
+/// Whether `agent` takes a model at its start, by its own declaration.
+pub(crate) fn takes_model(agent: &str) -> bool {
+    hide_agent_adapter::adapter(agent)
+        .and_then(|row| row.start)
+        .is_some_and(|dialect| !dialect.options().model.is_empty())
+}
+
 /// Whether `agent` is an agent Hide starts, and `model` and `effort` are
 /// values it takes, by the agent's own declaration.
 pub(crate) fn check_worker(
@@ -816,6 +823,12 @@ pub(crate) fn apply_plan(
                 worker.effort.as_deref(),
             )
             .map_err(|code| format!("mission_{code}"))?;
+            // A worker that takes a model names one, so the map and the
+            // start never read an empty choice; an agent that takes none
+            // keeps `null` (PRD mission fixes (b)).
+            if worker.model.is_none() && takes_model(&worker.agent) {
+                return Err("mission_model_missing".into());
+            }
         }
     }
     for node in &input.nodes {
@@ -1119,6 +1132,9 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_cap_out_of_range" => "Use a concurrency cap from 1 to 16",
         "mission_agent_unknown" | "mission_model_invalid" | "mission_effort_invalid" => {
             "Run hide agent catalog to see the agents, models and efforts this machine takes"
+        }
+        "mission_model_missing" => {
+            "Name the model of every worker that takes one: fill it from the candidate's fixed model, your choice from the catalog, or the catalog's cli_default_model"
         }
         "mission_text_invalid" | "mission_plan_invalid" => {
             "Check the command's text and JSON and retry"
@@ -1507,7 +1523,7 @@ mod tests {
         let mut planned = node("a", NodeKind::Change, &[]);
         planned.worker = Some(Worker {
             agent: "claude".into(),
-            model: None,
+            model: Some("opus".into()),
             effort: None,
             effort_auto: false,
         });

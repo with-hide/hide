@@ -535,11 +535,35 @@ impl Core {
         &self,
         device: &str,
         machine: Option<&str>,
+        timed_out: bool,
     ) -> Result<serde_json::Value, String> {
         if !check_owner_thread(self, "agent.catalog") {
             return Err("catalog_unavailable".into());
         }
-        lock_recover(&self.runtime).agent_catalog(device, machine)
+        lock_recover(&self.runtime).agent_catalog(device, machine, timed_out)
+    }
+
+    /// `hide device` for a caller on `device`: a registration or removal
+    /// changes the snapshot the shell draws, so it announces like a dispatch.
+    pub fn device_command(
+        &self,
+        device: &str,
+        command: crate::device_command::DeviceCommand,
+    ) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "device.command") {
+            return Err("device_unavailable".into());
+        }
+        let (answer, retired_syncs) = {
+            let mut runtime = lock_recover(&self.runtime);
+            let answer = runtime.device_command(device, command);
+            (answer, runtime.take_retired_remote_syncs())
+        };
+        drop(retired_syncs);
+        let (value, changed) = answer?;
+        if changed {
+            notify_change(self);
+        }
+        Ok(value)
     }
 
     /// `hide ps` for a caller on `device` in `pane`: the rows are taken under

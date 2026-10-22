@@ -32,14 +32,14 @@ function mission(extra: Partial<Mission> = {}): Mission {
   return { id: "mission-1", title: "Fix the bug", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: Date.now() - 180_000, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
-async function mount(missions: { items: Mission[]; failed?: string }, remote: unknown[] = []) {
+async function mount(missions: { items: Mission[]; failed?: string }, remote: unknown[] = [], sessions: unknown[] = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("CSS", { escape: (value: string) => value });
   initializeInterfaceI18n("en");
   useShellStore.setState({
     agents: [],
-    rest: { missions, navigator: { devices: [{ id: "mac", kind: "local", label: "This Mac" }, { id: "mini", kind: "remote", label: "mini" }], workspaces: [] }, status: { remote } } as unknown as SnapshotRest,
+    rest: { missions, navigator: { devices: [{ id: "mac", kind: "local", label: "This Mac" }, { id: "mini", kind: "remote", label: "mini" }], workspaces: [] }, status: { remote }, overview_graph: { sessions } } as unknown as SnapshotRest,
   });
   const events: Parameters<DispatchFn>[0][] = [];
   const actions = createActions((event) => { events.push(event); return true; });
@@ -114,22 +114,31 @@ it("dims a mission whose device does not answer and says whose last values it sh
   } finally { await map.unmount(); }
 });
 
-it("draws a PR node with its band, its mark, the base of its stack and its steps, and a research node with its line only", async () => {
+it("draws a PR node with its band, its mark, the base of its stack, its steps and the model its pane runs, and a research node with its line and no steps", async () => {
   const nodes = [
-    node("api", { pr: 1503, pr_state: "mergeable", stage: 3, status: "review" }),
+    node("api", { pr: 1503, pr_state: "mergeable", stage: 3, status: "review", pane_id: "p9", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
     node("screen", { pr: 1504, base_pr: 1503, pr_state: "failed", stage: 2, status: "failed", depends_on: ["api"], line: "CI failed · attempt 2/2", attempts: 2 }),
-    node("cause", { kind: "research", delivery: null, status: "done", line: "The cache was stale" }),
+    node("cause", { kind: "research", delivery: null, status: "done", line: "The cache was stale", worker: { agent: "opencode", effort_auto: false } }),
+    node("together", { kind: "verify", delivery: null, status: "planned", depends_on: ["screen"], worker: { agent: "codex", model: "gpt-6-astra", effort_auto: true } }),
   ];
-  const map = await mount({ items: [mission({ nodes })] });
+  const map = await mount({ items: [mission({ nodes })] }, [], [{ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model: "sonnet" }]);
   try {
     const screen = map.q('[data-mission-node="screen"]')!;
     expect(screen.className).toContain("border-l-pr-failed");
     expect(screen.querySelector("[data-pr-mark]")?.getAttribute("data-pr-mark")).toBe("failed");
     expect(screen.querySelector("[data-node-base]")?.textContent).toContain(`${"#"}1503`);
     expect(screen.querySelector("[data-node-steps]")?.getAttribute("data-node-steps")).toBe("2");
+    // The worker line is the model the pane runs, never the agent's name; a planned node shows the plan's.
+    expect(map.q('[data-mission-node="api"] [data-node-worker]')?.getAttribute("data-node-worker")).toBe("sonnet·high");
+    expect(map.q('[data-mission-node="together"] [data-node-worker]')?.getAttribute("data-node-worker")).toBe("gpt-6-astra·auto");
+    expect(map.q('[data-mission-node="cause"] [data-node-worker]')).toBeNull();
     const cause = map.q('[data-mission-node="cause"]')!;
     expect(cause.querySelector("[data-pr-mark]")).toBeNull();
+    expect(cause.querySelector("[data-node-steps]")).toBeNull();
+    expect(map.q('[data-mission-node="together"] [data-node-steps]')).toBeNull();
     expect(cause.querySelector("[data-node-line]")?.textContent).toBe("The cache was stale");
+    // A planned node waiting on an earlier one reads its kind: the edge says what it waits for.
+    expect(map.q('[data-mission-node="together"] [data-node-line]')?.textContent).toBe("Verify together");
     await act(async () => screen.click());
     const detail = document.querySelector<HTMLElement>('[data-mission-detail="screen"]')!;
     expect(detail.textContent).toContain("Attempts2");

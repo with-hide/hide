@@ -22,6 +22,16 @@ pub fn valid_herdr_session(session: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
 }
 
+/// Whether `alias` is one SSH config token Hide may hand to `ssh`: never
+/// empty, an option, a path or more than one word.
+pub fn ssh_alias_is_one_token(alias: &str) -> bool {
+    !(alias.is_empty()
+        || alias.chars().any(char::is_whitespace)
+        || alias.bytes().any(|byte| byte.is_ascii_control())
+        || alias.contains('/')
+        || alias.starts_with('-'))
+}
+
 /// Which trust or sign-in step a connection failure names, read off the
 /// words this module wrote into it: a changed host key, an unknown one, or a
 /// refused authentication (PRD S5.5 B38). Any other failure is `None`.

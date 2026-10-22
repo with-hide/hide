@@ -1,11 +1,12 @@
 // Add a project: a Host selector and, on the machine this window runs on,
 // Browse folder, which opens the system's own folder picker through the
 // desktop app; any other machine's folders are not this window's to browse,
-// so it gets a `~/` path field its own node judges. The other ways to add
+// so it gets a `~/` path field its own node judges. A browser tab has no
+// picker, so its own machine gets that field too. The other ways to add
 // (Clone from URL, Create new project), each its own view of this dialog, sit
 // on the core's machine, the one a new project is made on (`hostWays`). Every
 // way sends one `create_workspace` and reads its answer through
-// `useRegistration`. A browser tab has no picker and never opens this dialog.
+// `useRegistration`.
 
 import { CornerDownLeftIcon, FolderOpenIcon, FolderPlusIcon, LinkIcon, type LucideIcon } from "lucide-react";
 import type { TFunction } from "i18next";
@@ -23,6 +24,7 @@ import { RegistrationStatus, useRegistration } from "./registration";
 import type { MessageKey } from "./i18n/catalogs";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { FirstRunProjectForm, WorkspaceRegistration } from "./snapshot";
+import { hostBridge } from "./host";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -93,7 +95,7 @@ export function AddProjectViews({
   const hosts = addProjectHosts(devices, t);
   const [chosen, setChosen] = useState(() => initialHost(hosts, draft?.device ?? focused));
   const host = hosts.find((row) => row.id === chosen) ?? hosts[0]!;
-  const ways = hostWays(host.id, devices);
+  const ways = hostWays(host.id, devices, hostBridge() !== null);
   // A clone still running when the dialog opens is shown where it started.
   const [view, setView] = useState<"add" | OtherWay["id"]>(() => (cloneRunning(useShellStore.getState().rest?.repository_clone) ? "clone" : draft?.form?.view || "add"));
   const [form, setForm] = useState<FirstRunProjectForm>(draft?.form ?? {});
@@ -244,7 +246,7 @@ export function AddProjectViews({
                       {t("common.add")}
                     </Button>
                   </div>
-                  <p className="text-body text-muted-foreground">{t("addProject.homeNote", { host: host.label })}</p>
+                  <p className="text-body text-muted-foreground">{ways.own ? t("addProject.homeNoteOwn") : t("addProject.homeNote", { host: host.label })}</p>
                 </div>
               )}
               <RegistrationStatus registration={registration} />

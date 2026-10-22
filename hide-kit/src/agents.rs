@@ -10,9 +10,10 @@
 //!
 //! Three things a row can turn on for an agent the operator switched on:
 //!
-//! - Hide's skill stub ([`SKILLS`]: `hide`; [`RETIRED_SKILLS`] are taken out), in
-//!   the folder the agent reads ([`SkillDir`]); the folder is shared by every
-//!   agent that reads it, so the stubs stay while any of them is on;
+//! - Hide's skill stubs ([`SKILLS`]: `hide` and `hide-conductor`;
+//!   [`RETIRED_SKILLS`] are taken out), in the folder the agent reads
+//!   ([`SkillDir`]); the folder is shared by every agent that reads it, so
+//!   the stubs stay while any of them is on;
 //! - a hook: Claude Code and Codex keep their kit parts
 //!   ([`HookSupport::Part`]); Grok, whose documented command hooks
 //!   can refuse a shell call and report subagents, get Hide's hook file of
@@ -215,8 +216,21 @@ pub const GUIDE_SKILL: Skill = Skill {
     version: 1,
 };
 
-/// Every stub Hide writes; each skill folder holds all of them.
-pub const SKILLS: [Skill; 1] = [GUIDE_SKILL];
+/// The Conductor's stub: a mission of agents, which `hide mission help`
+/// owns. Version 1 had a plain description that Pi's strict front matter
+/// dropped (`Skill::text`); it is an older version of this stub, replaced by
+/// the marker rule like any other.
+pub const CONDUCTOR_SKILL: Skill = Skill {
+    name: "hide-conductor",
+    description: "Conduct a mission of agents in Hide: plan it with the operator, start the workers, replan, report. Use when the operator asks for a mission or for several PRs carried as a group.",
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide mission help` and follow what it prints: it is the Conductor's contract, with the commands, how to cut the mission into nodes and brief each worker, the cap and the candidates, replanning on the operator's words, merging, the report and taking a mission over.",
+    version: 2,
+};
+
+/// Every stub Hide writes; each skill folder holds all of them. A new stub
+/// is one more entry here and nothing else: the observe, write and remove
+/// passes read the array.
+pub const SKILLS: [Skill; 2] = [GUIDE_SKILL, CONDUCTOR_SKILL];
 
 /// A stub an earlier build wrote and this one takes out, by its exact text:
 /// a file that differs in any byte was edited by the operator and stays.
@@ -227,28 +241,16 @@ pub struct RetiredSkill {
     pub text: &'static str,
 }
 
-/// `hide-browser` and `hide-conductor` version 1, whose guides `hide guide`
-/// now routes to.
-pub const RETIRED_SKILLS: [RetiredSkill; 2] = [
-    RetiredSkill {
-        name: "hide-browser",
-        text: concat!(
-            "---\nname: hide-browser\n",
-            "description: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n",
-            "---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\n",
-            "Run `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n",
-        ),
-    },
-    RetiredSkill {
-        name: "hide-conductor",
-        text: concat!(
-            "---\nname: hide-conductor\n",
-            "description: Run a mission in Hide as its Conductor: plan the work with the operator, start the agents that do it, follow their pull requests, and report. Use when the operator gives you a goal to carry out with several agents, or asks you to take over a mission.\n",
-            "---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\n",
-            "Run `hide mission help` and follow what it prints. It explains how to plan a mission with the operator, start and follow its workers, change the plan when told, merge, report, and take over a mission whose Conductor is gone.\n",
-        ),
-    },
-];
+/// `hide-browser` version 1, whose guide `hide guide` now routes to.
+pub const RETIRED_SKILLS: [RetiredSkill; 1] = [RetiredSkill {
+    name: "hide-browser",
+    text: concat!(
+        "---\nname: hide-browser\n",
+        "description: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n",
+        "---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\n",
+        "Run `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n",
+    ),
+}];
 
 /// The marker line of a stub, which proves Hide wrote it and says which
 /// text it was. A file without it is the operator's and is never touched.

@@ -2169,10 +2169,27 @@ impl Runtime {
                 .collect()
         });
         crate::ai::AiRequest {
-            observing: self.ai_observing || self.ai_start_observing,
+            observing: self.ai_observing
+                || self.ai_start_observing
+                || self.ai_catalog_read_pending(),
             models: settings.models_by_provider(),
             selecting,
             cli_found,
+        }
+    }
+
+    /// Whether `hide agent catalog` is waiting for one read of the model
+    /// lists: asked, and no read has landed since. It observes the providers
+    /// as the start panel does, and only until that read.
+    pub(crate) fn ai_catalog_read_pending(&self) -> bool {
+        self.ai_catalog_read_asked == Some(self.ai_reads)
+    }
+
+    /// Asks for one read of the model lists for the catalog, unless one is
+    /// already on its way.
+    pub(crate) fn ask_ai_catalog_read(&mut self) {
+        if !self.ai_catalog_read_pending() {
+            self.ai_catalog_read_asked = Some(self.ai_reads);
         }
     }
 
@@ -2215,6 +2232,9 @@ impl Runtime {
         &mut self,
         read: crate::model::BackgroundAiSnapshot,
     ) -> bool {
+        // Counted before anything else, so a read that changed nothing still
+        // ends the catalog's wait for it.
+        self.ai_reads = self.ai_reads.wrapping_add(1);
         // A read that asked only the agents being selected from knows
         // nothing of the others: their rows stay as they were.
         let mut providers = if self.background_ai_providers.is_empty() {

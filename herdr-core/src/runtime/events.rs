@@ -2304,6 +2304,30 @@ impl Runtime {
                         );
                         return true;
                     }
+                    // A folder that is a project already is answered, not made
+                    // again, once a removal closing its panes has had its say: the shell refuses a spelling it can match itself,
+                    // but a typed `~/` path reaches the core as the absolute one
+                    // hided's boundary resolved, which only the core can match.
+                    if !payload.new_folder {
+                        let wanted = payload.path.trim_end_matches('/');
+                        let registered = self
+                            .snapshot
+                            .ui_state
+                            .workspace_registrations
+                            .iter()
+                            .find(|row| {
+                                row.device_id == self.node.as_str()
+                                    && row.path.trim_end_matches('/') == wanted
+                            });
+                        if let Some(existing) = registered {
+                            self.set_error(
+                                "workspace.create_registered",
+                                format!("{} is already a project", existing.label),
+                                false,
+                            );
+                            return true;
+                        }
+                    }
                     if !self
                         .workspace_creations_in_flight
                         .insert(payload.path.clone())
@@ -2845,176 +2869,15 @@ impl Runtime {
                 true
             }
             Event::RegisterDevice(payload) => {
-                let id = payload.id.trim().to_owned();
-                let label = payload.label.trim().to_owned();
-                let ssh_alias = payload.ssh_alias.trim().to_owned();
-                if id.is_empty() || label.is_empty() || ssh_alias.is_empty() {
-                    self.set_error(
-                        "device.invalid",
-                        "Device id, label, and SSH alias are required",
-                        false,
-                    );
-                    return true;
+                if let Err(refusal) = self.register_device(payload) {
+                    self.set_error(refusal.code, refusal.message, false);
                 }
-                if !hide_node_link::terminal::device_id_is_unambiguous(&id) {
-                    self.set_error("device.invalid", "A device id cannot contain \":\"", false);
-                    return true;
-                }
-                let herdr_socket_path = payload
-                    .herdr_socket_path
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|path| !path.is_empty())
-                    .map(str::to_owned);
-                if payload
-                    .herdr_session
-                    .as_deref()
-                    .is_some_and(|session| !hide_node_link::device::valid_herdr_session(session))
-                    || (payload.herdr_session.is_some() && herdr_socket_path.is_some())
-                {
-                    self.set_error(
-                        "device.invalid",
-                        "Choose one valid Herdr session or an explicit socket",
-                        false,
-                    );
-                    return true;
-                }
-                if herdr_socket_path
-                    .as_deref()
-                    .is_some_and(|path| !crate::remote::valid_remote_socket_path(path))
-                {
-                    self.set_error(
-                        "device.invalid",
-                        "The device's Herdr socket must be an absolute path on the device",
-                        false,
-                    );
-                    return true;
-                }
-                // `local` named this machine before node ids; a device under
-                // that name would read as this machine in an unconverted key.
-                if id == self.node.as_str()
-                    || id == crate::node::LEGACY_LOCAL_DEVICE_ID
-                    || self
-                        .snapshot
-                        .ui_state
-                        .device_registrations
-                        .iter()
-                        .any(|device| device.id == id)
-                {
-                    self.set_error(
-                        "device.duplicate",
-                        format!("Device {id} is already registered"),
-                        false,
-                    );
-                    return true;
-                }
-                let registration = crate::model::DeviceRegistration {
-                    id: id.clone(),
-                    label,
-                    origin: crate::model::LinkOrigin::Dialed {
-                        ssh_alias: ssh_alias.clone(),
-                    },
-                    herdr_socket_path,
-                    herdr_session: payload.herdr_session,
-                    host_consent: payload.host_consent.then(|| self.new_host_consent()),
-                };
-                self.snapshot
-                    .ui_state
-                    .device_registrations
-                    .push(registration.clone());
-                self.rebuild_device_rows();
-                self.persist_current_ui_state();
-                self.push_diagnostic(
-                    "device.registered",
-                    format!("Registered SSH device {id} ({ssh_alias})"),
-                );
-                self.connect_remote_device(&registration);
                 true
             }
             Event::RemoveDevice(payload) => {
-                if payload.device_id == self.node.as_str() {
-                    self.set_error(
-                        "device.local_remove_denied",
-                        "The core's own machine cannot be removed".to_owned(),
-                        false,
-                    );
-                    return true;
+                if let Err(refusal) = self.remove_device(&payload.device_id) {
+                    self.set_error(refusal.code, refusal.message, false);
                 }
-                let Some(registration) = self
-                    .snapshot
-                    .ui_state
-                    .device_registrations
-                    .iter()
-                    .find(|device| device.id == payload.device_id)
-                    .cloned()
-                else {
-                    self.set_error(
-                        "device.unknown",
-                        format!("Device {} is not registered", payload.device_id),
-                        false,
-                    );
-                    return true;
-                };
-                self.snapshot
-                    .ui_state
-                    .device_registrations
-                    .retain(|device| device.id != payload.device_id);
-                self.delivery_panes.remove(&payload.device_id);
-                // Hide's kit comes off the device on its own helper
-                // connection, which the disconnect below leaves open for it.
-                let kit_removal = self.queue_device_kit_removal(&registration);
-                self.disconnect_remote_device(
-                    &payload.device_id,
-                    super::devices::Retiring::Removed,
-                );
-                self.forget_device_directories(&payload.device_id);
-                // Removing a device removes Hide's own record of it: its
-                // project registrations, expanded folders and file tabs. Its
-                // panes, agents and folders are not touched.
-                let scope = format!("remote:{}:", payload.device_id);
-                let device_folds = [
-                    format!("cleanup/{}", payload.device_id),
-                    crate::project_context::no_agents_fold_key(&payload.device_id),
-                ];
-                self.snapshot.ui_state.session_open_folds.retain(|key| {
-                    let project = key.strip_prefix("asleep/").unwrap_or(key);
-                    !project.starts_with(&scope) && !device_folds.contains(key)
-                });
-                let registrations = self.snapshot.ui_state.workspace_registrations.len();
-                self.snapshot
-                    .ui_state
-                    .workspace_registrations
-                    .retain(|registration| registration.device_id != payload.device_id);
-                let registrations =
-                    registrations - self.snapshot.ui_state.workspace_registrations.len();
-                let ui = &mut self.snapshot.ui_state;
-                ui.device_expanded_paths.remove(&payload.device_id);
-                let tabs = self
-                    .snapshot
-                    .editor
-                    .tabs
-                    .iter()
-                    .filter(|tab| tab.checkout_id.starts_with(&scope))
-                    .count();
-                self.retire_device_editor_tabs(&payload.device_id);
-                self.forget_device_views(&payload.device_id);
-                self.forget_device_sleep(&payload.device_id);
-                self.forget_device_launches(&payload.device_id);
-                self.forget_recent_checkouts(|held| held.device_id == payload.device_id);
-                self.rebuild_device_rows();
-                self.rebuild_tab_strips();
-                self.persist_current_ui_state();
-                self.push_diagnostic(
-                    "device.unregistered",
-                    format!(
-                        "Unregistered device {}; forgot {registrations} project registrations and closed {tabs} file tabs; {}",
-                        payload.device_id,
-                        match kit_removal {
-                            Ok(()) => "Hide's kit is coming off the device".to_owned(),
-                            Err(reason) => format!("Hide's kit stays on the device because {reason}"),
-                        }
-                    ),
-                );
                 true
             }
             Event::TestDevice(payload) => {

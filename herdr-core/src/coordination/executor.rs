@@ -130,6 +130,68 @@ fn wait_native_identity(
         );
     }
 }
+/// Submits `brief` to the agent `name` in `pane` through Herdr's
+/// `agent.prompt`, the one submission path the doorbell uses too, once
+/// Herdr reports the agent ready for input (`BRIEF_READY_WAIT`). An agent
+/// that never takes input in that time, or a refused submission, is
+/// `brief_not_submitted`: nothing was typed, and the same command submits
+/// it then.
+#[allow(clippy::disallowed_methods)] // a production wait on Herdr's readiness, bounded by the deadline
+fn submit_brief(
+    connector: &dyn ApiConnector,
+    spawn: &str,
+    pane: &str,
+    name: &str,
+    brief: &str,
+) -> Result<(), String> {
+    let deadline = Instant::now() + super::BRIEF_READY_WAIT;
+    let refused = |kind: &str, detail: String| {
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": kind, "spawn": spawn, "pane_id": pane, "detail": detail,
+        }));
+        "brief_not_submitted".to_owned()
+    };
+    loop {
+        let agent = request_with_connector(
+            connector,
+            "agent.get",
+            crate::wire::agent_target_params(pane)?,
+            Duration::from_secs(5),
+        )
+        .map_err(|error| format!("{error}"))
+        .and_then(crate::wire::delivery_agent)
+        .map_err(|detail| refused("brief.agent_unread", detail))?;
+        if agent.pane_id == pane && agent.name == name && agent.readiness.accepts_input() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(refused(
+                "brief.agent_not_ready",
+                format!(
+                    "readiness {:?} after {:?}",
+                    agent.readiness,
+                    super::BRIEF_READY_WAIT
+                ),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let submitted = request_with_connector(
+        connector,
+        "agent.prompt",
+        crate::wire::delivery_prompt_params(pane, brief)?,
+        Duration::from_secs(10),
+    )
+    .map_err(|error| refused("brief.prompt_refused", format!("{error}")))?;
+    crate::wire::delivery_prompted(submitted)
+        .map_err(|detail| refused("brief.prompt_refused", detail))?;
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": "brief.submitted", "spawn": spawn, "pane_id": pane,
+        "bytes": brief.len(),
+    }));
+    Ok(())
+}
+
 /// The actor of `agent` on `device`; `on_node` when that device is the core's
 /// own node, whose panes the core names without a device prefix.
 fn actor_for(agent: &ProjectedAgent, device: &str, on_node: bool) -> Result<Actor, String> {
@@ -483,11 +545,18 @@ fn spawn(
         args,
         launch,
         task,
+        brief,
         mission: _,
     } = &command
     else {
         return Err("invalid_spawn".into());
     };
+    if brief
+        .as_ref()
+        .is_some_and(|brief| brief.trim().is_empty() || brief.len() > crate::delivery::BODY_LIMIT)
+    {
+        return Err("invalid_brief".into());
+    }
     if parent.as_ref().is_some_and(|parent| !super::key(parent))
         || machine.as_ref().is_some_and(|machine| !super::key(machine))
         || ![name, intent, kind, repo, branch]
@@ -900,6 +969,23 @@ fn spawn(
                 authority,
                 actor,
                 Mutation::Typed {
+                    id: reserved.id.clone(),
+                },
+            )?)
+            .map_err(|_| "spawn_unavailable")?;
+        }
+        // The brief is the child's first prompt, submitted once the agent
+        // takes input and before its session is waited for: an agent that
+        // reports its session only at its first turn (Codex, OpenCode 2)
+        // reports it on this very turn. A spawn asked again after the brief
+        // went in never submits it twice.
+        if let Some(brief) = reserved.brief.as_deref().filter(|_| !reserved.briefed) {
+            submit_brief(connector.as_ref(), &reserved.id, pane, name, brief)?;
+            reserved = serde_json::from_value(mutate(
+                client,
+                authority,
+                actor,
+                Mutation::Briefed {
                     id: reserved.id.clone(),
                 },
             )?)
@@ -1655,6 +1741,7 @@ mod tests {
                         args: Vec::new(),
                         launch: Default::default(),
                         task: None,
+                        brief: None,
                     },
                 },
                 1,
@@ -1902,6 +1989,7 @@ mod tests {
                 args: Vec::new(),
                 launch: Default::default(),
                 task: None,
+                brief: None,
             };
             let spawn = super::super::apply(
                 &mut state,

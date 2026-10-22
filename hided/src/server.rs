@@ -1296,6 +1296,13 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "mission_cap_reached" => {
             "The mission's workers are at its cap; wait for one to finish and end it with hide agent end <id>, then run the same command again with the same intent"
         }
+        "mission_brief_missing" => {
+            "A mission node's worker starts on its brief: spawn again with --brief-file <path> (or --brief <text>) holding what the node is to do"
+        }
+        "invalid_brief" => "The brief must be text of at most 16 KiB that is not blank",
+        "brief_not_submitted" => {
+            "The agent started but did not take its brief within 30 seconds; look at its pane, then run the same command again with the same intent, which submits the brief without starting the agent again"
+        }
         "mission_not_started" => {
             "The operator has not approved the mission's plan; show it to them and run hide mission start once they approve"
         }
@@ -1396,6 +1403,8 @@ enum ScopedRequest {
     Ps {
         all: bool,
     },
+    /// `hide device`: the core's own device registrations.
+    Device(herdr_core::device_command::DeviceCommand),
 }
 
 impl ScopedRequest {
@@ -1411,6 +1420,7 @@ impl ScopedRequest {
                 | Self::Mission(..)
                 | Self::AgentCatalog(..)
                 | Self::Ps { .. }
+                | Self::Device(..)
         )
     }
 }
@@ -1524,6 +1534,12 @@ async fn scoped_client_loop(
                             Some(Value::Bool(true)) => Some(ScopedRequest::Ps { all: true }),
                             _ => None,
                         },
+                        Some("device") => serde_json::from_value::<
+                            herdr_core::device_command::DeviceCommand,
+                        >(value["command"].clone())
+                        .ok()
+                        .filter(herdr_core::device_command::DeviceCommand::valid)
+                        .map(ScopedRequest::Device),
                         _ => None,
                     };
                     // A plan carries its whole node list, so a mission
@@ -1652,6 +1668,13 @@ async fn scoped_client_loop(
                                     core.ps(&cap.context.device_id, &cap.pane_id, all)
                                         .map_err(|code| {
                                             let next = crate::server::delivery_next_action(&code);
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::Device(command) => {
+                                    core.device_command(&cap.context.device_id, command)
+                                        .map_err(|code| {
+                                            let next = herdr_core::device_command::next_action(&code);
                                             (code, next)
                                         })?
                                 }

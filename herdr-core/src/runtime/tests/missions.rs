@@ -83,13 +83,13 @@ fn mission_slot_items(runtime: &Runtime) -> usize {
         .count()
 }
 
-fn spawn(machine: Option<&str>) -> crate::delivery::Command {
+fn spawn(machine: Option<&str>, intent: &str, brief: Option<&str>) -> crate::delivery::Command {
     crate::delivery::Command::Agents {
         command: crate::coordination::Command::Spawn {
             parent: Some("here".into()),
             machine: machine.map(str::to_owned),
             name: "worker".into(),
-            intent: "mission-1:cause".into(),
+            intent: intent.into(),
             kind: "codex".into(),
             repo: PROJECT.into(),
             branch: "cause".into(),
@@ -97,15 +97,33 @@ fn spawn(machine: Option<&str>) -> crate::delivery::Command {
             args: Vec::new(),
             launch: Default::default(),
             task: None,
+            brief: brief.map(str::to_owned),
             mission: None,
         },
     }
 }
 
+/// The node `cause`'s worker, started on its brief.
 fn prepare_spawn(
     runtime: &mut Runtime,
     conductor: &Actor,
     machine: Option<&str>,
+) -> Result<(), String> {
+    prepare_spawn_of(
+        runtime,
+        conductor,
+        machine,
+        "mission-1:cause",
+        Some("Find the cause."),
+    )
+}
+
+fn prepare_spawn_of(
+    runtime: &mut Runtime,
+    conductor: &Actor,
+    machine: Option<&str>,
+    intent: &str,
+    brief: Option<&str>,
 ) -> Result<(), String> {
     runtime
         .prepare_delivery(
@@ -113,9 +131,48 @@ fn prepare_spawn(
             &conductor.pane_id,
             &authority(conductor).context,
             None,
-            spawn(machine),
+            spawn(machine, intent, brief),
         )
         .map(drop)
+}
+
+/// A mission node's worker starts on its brief, or it would stand at an
+/// empty prompt until a person typed, because a letter cannot wake a
+/// session before its first turn: a spawn under a node's intent without a
+/// brief is refused, while a worker under another intent (a reviewer) and a
+/// spawn outside any mission are taken as before.
+#[test]
+fn a_mission_nodes_worker_is_refused_without_its_brief() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug", "cap": 3}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    assert_eq!(
+        prepare_spawn_of(&mut runtime, &conductor, None, "mission-1:cause", None).unwrap_err(),
+        "mission_brief_missing"
+    );
+    assert_eq!(
+        prepare_spawn_of(&mut runtime, &conductor, None, "mission-1:fix", None).unwrap_err(),
+        "mission_brief_missing"
+    );
+    prepare_spawn_of(
+        &mut runtime,
+        &conductor,
+        None,
+        "mission-1:cause",
+        Some("Find it."),
+    )
+    .unwrap();
+    // Not a node of the plan: a reviewer the Conductor names its own way.
+    prepare_spawn_of(&mut runtime, &conductor, None, "mission-1:review-fix", None).unwrap();
+    prepare_spawn_of(&mut runtime, &conductor, None, "plain", None).unwrap();
 }
 
 #[test]
@@ -169,7 +226,14 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
     // A pane that conducts nothing spawns as it always did.
     assert!(
         runtime
-            .mission_spawn_admission(&conductor, None, "codex", &Default::default())
+            .mission_spawn_admission(
+                &conductor,
+                None,
+                "codex",
+                &Default::default(),
+                "plain",
+                false
+            )
             .unwrap()
             .is_none()
     );
@@ -193,7 +257,14 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
         "a worker runs only on the machine the project is on (D-41)"
     );
     let admission = runtime
-        .mission_spawn_admission(&conductor, None, "codex", &Default::default())
+        .mission_spawn_admission(
+            &conductor,
+            None,
+            "codex",
+            &Default::default(),
+            "plain",
+            false,
+        )
         .unwrap()
         .expect("a running mission's spawn is one of its workers");
     assert_eq!(
@@ -211,7 +282,14 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
     .unwrap();
     assert!(
         runtime
-            .mission_spawn_admission(&conductor, None, "codex", &Default::default())
+            .mission_spawn_admission(
+                &conductor,
+                None,
+                "codex",
+                &Default::default(),
+                "plain",
+                false
+            )
             .unwrap()
             .is_none()
     );
@@ -781,7 +859,9 @@ fn a_devices_catalog_says_why_it_has_no_models_rather_than_listing_none() {
     let mut runtime = fixture.runtime.lock().unwrap();
     let node = crate::node::TEST_NODE;
     assert_eq!(
-        runtime.agent_catalog(node, Some("mini")).unwrap_err(),
+        runtime
+            .agent_catalog(node, Some("mini"), false)
+            .unwrap_err(),
         "machine_unknown"
     );
     let remote = |state: &str| crate::model::RemoteStatusSnapshot {
@@ -796,11 +876,13 @@ fn a_devices_catalog_says_why_it_has_no_models_rather_than_listing_none() {
     };
     runtime.snapshot.status.remote.push(remote("disconnected"));
     assert_eq!(
-        runtime.agent_catalog(node, Some("mini")).unwrap_err(),
+        runtime
+            .agent_catalog(node, Some("mini"), false)
+            .unwrap_err(),
         "machine_unavailable"
     );
     runtime.snapshot.status.remote[0] = remote("connected");
-    let catalog = runtime.agent_catalog(node, Some("mini")).unwrap();
+    let catalog = runtime.agent_catalog(node, Some("mini"), false).unwrap();
     assert_eq!(catalog["machine"], "mini");
     let items = catalog["items"].as_array().unwrap();
     assert!(!items.is_empty());
@@ -814,6 +896,153 @@ fn a_devices_catalog_says_why_it_has_no_models_rather_than_listing_none() {
         }
     }
     assert!(items.iter().any(|item| item["takes_model"] == true));
+}
+
+/// The catalog on the core's own machine asks for one read of the model
+/// lists when a list is unread, as the start panel does, and says a read is
+/// pending; once the read lands it names the models and asks no more, and
+/// a caller whose wait is over gets `models_read_timeout` beside the CLI's
+/// default model, so a plan made from it is never empty (mission fixes (b)).
+#[test]
+fn the_catalog_asks_for_one_model_read_and_names_the_default_when_it_times_out() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let node = crate::node::TEST_NODE;
+    assert!(!runtime.ai_request().observing, "nobody is looking yet");
+
+    let catalog = runtime.agent_catalog(node, None, false).unwrap();
+    assert_eq!(catalog["machine"], node);
+    assert_eq!(catalog["models_read_pending"], true);
+    assert!(
+        runtime.ai_request().observing,
+        "the catalog's ask observes the providers until a read lands"
+    );
+    let item = |catalog: &Value, id: &str| {
+        catalog["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {id} in {catalog}"))
+    };
+    let claude = item(&catalog, "claude-code");
+    assert_eq!(claude["takes_model"], true);
+    assert!(claude["models"].is_null());
+    assert_eq!(claude["models_unavailable_reason"], "models_unread");
+    assert_eq!(
+        claude["cli_default_model"],
+        hide_ai::ProviderId::CLAUDE.default_model(),
+        "the measured CLI default stands in while the list is unread"
+    );
+    let opencode = item(&catalog, "opencode");
+    assert_eq!(opencode["takes_model"], false);
+    assert!(opencode["cli_default_model"].is_null());
+
+    // The caller's wait is over: an unread list says so, beside the default.
+    let late = runtime.agent_catalog(node, None, true).unwrap();
+    assert_eq!(late["models_read_pending"], false);
+    assert_eq!(
+        item(&late, "claude-code")["models_unavailable_reason"],
+        "models_read_timeout"
+    );
+    assert_eq!(
+        item(&late, "claude-code")["cli_default_model"],
+        hide_ai::ProviderId::CLAUDE.default_model()
+    );
+    assert!(
+        runtime.ai_request().observing,
+        "the ask stands until a read lands"
+    );
+
+    // The read lands: the models are named and nothing observes any more.
+    runtime.ingest_background_ai(super::agents_settings_remote::ready_read(&[
+        "claude", "codex",
+    ]));
+    assert!(!runtime.ai_request().observing);
+    let read = runtime.agent_catalog(node, None, false).unwrap();
+    assert_eq!(
+        read["models_read_pending"], true,
+        "grok and the others are still unread"
+    );
+    assert_eq!(item(&read, "claude-code")["models"], json!(["m-1", "m-2"]));
+    assert!(item(&read, "claude-code")["models_unavailable_reason"].is_null());
+    assert_eq!(item(&read, "codex")["models"], json!(["m-1", "m-2"]));
+    // Every list read: no ask is made.
+    runtime.ingest_background_ai(super::agents_settings_remote::ready_read(
+        &hide_ai::PROVIDERS
+            .iter()
+            .map(|provider| provider.as_str())
+            .collect::<Vec<_>>(),
+    ));
+    let all = runtime.agent_catalog(node, None, false).unwrap();
+    assert_eq!(all["models_read_pending"], false);
+    assert!(!runtime.ai_request().observing);
+}
+
+/// A plan names the model of every worker that takes one: refused
+/// `mission_model_missing` otherwise, while an agent that takes no model
+/// keeps `null` (mission fixes (b)).
+#[test]
+fn a_plan_names_the_model_of_every_worker_that_takes_one() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let plan_with = |worker: Value, kind: &str| {
+        let mut node = json!({"key": "one", "title": "One", "kind": kind, "worker": worker});
+        if kind == "change" {
+            node["delivery"] = json!("pr");
+        }
+        json!({"op": "plan", "plan": {"nodes": [node]}})
+    };
+    for kind in ["change", "research", "verify"] {
+        assert_eq!(
+            command(
+                &mut runtime,
+                "sender",
+                plan_with(json!({"agent": "claude"}), kind)
+            )
+            .unwrap_err(),
+            "mission_model_missing",
+            "{kind}"
+        );
+        assert_eq!(
+            command(
+                &mut runtime,
+                "sender",
+                plan_with(json!({"agent": "codex", "effort": "high"}), kind)
+            )
+            .unwrap_err(),
+            "mission_model_missing",
+            "{kind}"
+        );
+    }
+    assert!(crate::missions::next_action("mission_model_missing").contains("cli_default_model"));
+    let (planned, _) = command(
+        &mut runtime,
+        "sender",
+        plan_with(
+            json!({"agent": "claude", "model": "opus", "effort": "high"}),
+            "change",
+        ),
+    )
+    .unwrap();
+    assert_eq!(planned["mission"]["nodes"][0]["worker"]["model"], "opus");
+    // OpenCode takes no model: it keeps null.
+    let (planned, _) = command(
+        &mut runtime,
+        "sender",
+        plan_with(json!({"agent": "opencode"}), "research"),
+    )
+    .unwrap();
+    assert!(planned["mission"]["nodes"][0]["worker"]["model"].is_null());
+    // A node with no worker yet is still planned.
+    command(&mut runtime, "sender", plan()).unwrap();
 }
 
 /// A mission left waiting on the operator's merges closes itself once its
@@ -1024,7 +1253,7 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
     };
     let admit = |runtime: &Runtime, kind: &str, choice: hide_agent_adapter::LaunchChoice| {
         runtime
-            .mission_spawn_admission(&conductor, None, kind, &choice)
+            .mission_spawn_admission(&conductor, None, kind, &choice, "plain", false)
             .map(|admission| admission.is_some())
     };
     // No candidates: any agent the machine has.

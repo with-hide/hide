@@ -2749,9 +2749,8 @@ export function createActions(send: DispatchFn) {
       ui().openOverlay("find");
     },
 
-    /** Add a project; a browser tab has no folder picker, so only the desktop app offers it. */
+    /** Add a project: the dialog, whose ways depend on the host chosen and on whether this window has a folder picker (`hostWays`). */
     openAddProject() {
-      if (!hostBridge()) return diagnostic("add project: this host has no folder picker");
       ui().openOverlay("add_project");
     },
 
