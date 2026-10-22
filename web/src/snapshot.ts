@@ -1526,7 +1526,7 @@ export type KitComponentState = "installed" | "outdated" | "not_installed" | "re
 export type KitAgentAvailability = "available" | "not_installed" | "unsupported_system";
 
 /** The first-run wizard's steps (`contracts/snapshot-wire-enums.json`: `first_run_step`). */
-export type FirstRunStep = "agents" | "devices" | "notifications" | "project" | "done";
+export type FirstRunStep = "herdr" | "agents" | "devices" | "notifications" | "project" | "done";
 
 export type FirstRun = { version: number; step: FirstRunStep };
 export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };

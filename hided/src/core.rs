@@ -868,6 +868,17 @@ fn owner_loop(
             }
         }
     });
+    // Only a daemon running from a desktop package with that package's own
+    // Herdr offers to move the operator's older server onto it (PRD
+    // herdr-takeover).
+    let takeover = crate::herdr_handoff::LocalTakeover::for_daemon(
+        options.herdr_bin_path.as_deref().map(std::path::Path::new),
+        options
+            .herdr_socket_path
+            .as_deref()
+            .map(std::path::Path::new),
+        &state_dir,
+    );
     let Some(core) = Core::create_with_product_analytics(
         options,
         std::sync::Arc::new(own_node),
@@ -890,6 +901,9 @@ fn owner_loop(
     core.on_change(move || {
         let _ = notify.send(());
     });
+    if let Some(takeover) = takeover {
+        core.set_herdr_takeover(Arc::new(takeover));
+    }
     let _ = ready.send(Ok(()));
     let mut _held_roots = hide_node::HeldRoots::default();
     while let Ok(command) = commands.recv() {

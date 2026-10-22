@@ -1334,6 +1334,13 @@ pub(super) struct FirstRunAdvancePayload {
     pub(super) notifications: Option<bool>,
 }
 
+/// The operator's answer to moving their older Herdr server (PRD
+/// herdr-takeover): one press, one event.
+#[derive(Debug, Deserialize)]
+pub(super) struct HerdrTakeoverPayload {
+    pub(super) action: super::herdr_takeover::TakeoverAction,
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct FirstRunBackPayload {
     pub(super) from: crate::model::FirstRunStep,
@@ -1611,6 +1618,7 @@ pub(super) enum Event {
     AgentOnboardingApply(AgentOnboardingApplyPayload),
     FirstRunAdvance(FirstRunAdvancePayload),
     FirstRunBack(FirstRunBackPayload),
+    HerdrTakeover(HerdrTakeoverPayload),
     FirstRunDraft(FirstRunDraftPayload),
     DesktopNotificationsSet(DesktopNotificationsSetPayload),
     DesktopNotificationsDoneSet(DesktopNotificationsDoneSetPayload),
@@ -1890,6 +1898,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "agent_onboarding_apply" => decode!(AgentOnboardingApplyPayload, AgentOnboardingApply),
         "first_run_advance" => decode!(FirstRunAdvancePayload, FirstRunAdvance),
         "first_run_back" => decode!(FirstRunBackPayload, FirstRunBack),
+        "herdr_takeover" => decode!(HerdrTakeoverPayload, HerdrTakeover),
         "first_run_draft" => decode!(FirstRunDraftPayload, FirstRunDraft),
         "desktop_notifications_set" => {
             decode!(DesktopNotificationsSetPayload, DesktopNotificationsSet)
@@ -4039,6 +4048,7 @@ impl Runtime {
                 self.advance_first_run(payload.from, payload.notifications)
             }
             Event::FirstRunBack(payload) => self.back_first_run(payload.from),
+            Event::HerdrTakeover(payload) => self.herdr_takeover_action(payload.action),
             Event::FirstRunDraft(payload) => self.update_first_run_draft(payload),
             Event::DesktopNotificationsSet(payload) => self
                 .set_desktop_notification_preferences(Some(payload.enabled), payload.done_enabled),

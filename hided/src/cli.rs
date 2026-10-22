@@ -1686,13 +1686,9 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
 }
 
 /// The Herdr the app in `kit` ships, when it is the one this connect was
-/// given (`HERDR_BIN_PATH`): the host hands its own unless the operator
-/// named another, whose server is theirs to keep.
+/// given (`HERDR_BIN_PATH`).
 fn given_herdr(env: &Env, kit: &Path) -> Option<std::path::PathBuf> {
-    let shipped = kit.join(format!("herdr{}", std::env::consts::EXE_SUFFIX));
-    let given = env.herdr_bin_path.as_deref()?;
-    let same = hide_platform::fs::identity::same_file(given, &shipped).ok()?;
-    same.then_some(shipped)
+    crate::herdr_handoff::shipped_herdr(kit, env.herdr_bin_path.as_deref())
 }
 
 /// How long an updated core has to answer `/health` once its update said

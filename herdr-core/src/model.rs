@@ -2831,6 +2831,9 @@ pub struct FirstRun {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FirstRunStep {
+    /// Moving the operator's older Herdr server onto this app's Herdr,
+    /// shown only while there is one to move (PRD herdr-takeover B1).
+    Herdr,
     Agents,
     Devices,
     Notifications,
@@ -2841,6 +2844,7 @@ pub enum FirstRunStep {
 impl FirstRunStep {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Herdr => "herdr",
             Self::Agents => "agents",
             Self::Devices => "devices",
             Self::Notifications => "notifications",
@@ -5747,6 +5751,8 @@ pub struct StatusSnapshot {
     pub server_discovery: ServerDiscoverySnapshot,
     pub tab_rename: Option<TabRenameSnapshot>,
     pub herdr: ProviderStatusSnapshot,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub herdr_takeover: Option<HerdrTakeoverSnapshot>,
     pub remote: Vec<RemoteStatusSnapshot>,
     pub environment: Vec<EnvironmentStatusSnapshot>,
     pub agent_hooks: AgentHooksSnapshot,
@@ -6081,6 +6087,30 @@ pub struct ProviderStatusSnapshot {
     pub received_version: Option<String>,
 }
 
+/// What Hide offers for the operator's own older Herdr server on this
+/// machine's socket, and how far the offer went (PRD herdr-takeover). Absent
+/// while there is nothing to offer.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HerdrTakeoverSnapshot {
+    /// `move`, `restart` (Herdr cannot hand over here: Windows) or
+    /// `update_hide` (a newer protocol than this build speaks).
+    pub kind: String,
+    /// `offered`, `moving`, `failed`, or `moved` until the operator has read
+    /// what the move left them to do.
+    pub stage: String,
+    pub server_version: String,
+    /// The release this app ships.
+    pub version: String,
+    /// The server speaks the protocol this build reads, so Hide works with
+    /// it as it is and the operator may leave it for later (D-16).
+    pub same_protocol: bool,
+    /// `refused`, `not_confirmed` or `unreadable` while `stage` is `failed`.
+    pub failure: Option<String>,
+    /// After a move: the operator's own `herdr`'s version when its protocol
+    /// is older than the server's (B5).
+    pub path_herdr_behind: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RemoteStatusSnapshot {
     pub target_id: String,
@@ -6342,6 +6372,7 @@ impl Snapshot {
                     received_protocol: None,
                     received_version: None,
                 },
+                herdr_takeover: None,
                 remote: Vec::new(),
                 environment: Vec::new(),
                 agent_hooks: AgentHooksSnapshot::default(),
@@ -7332,6 +7363,7 @@ mod wire_enum_tests {
         checked.insert("agent_onboarding");
 
         let first_run = [
+            FirstRunStep::Herdr,
             FirstRunStep::Agents,
             FirstRunStep::Devices,
             FirstRunStep::Notifications,
@@ -7340,7 +7372,8 @@ mod wire_enum_tests {
         ];
         for variant in first_run {
             match variant {
-                FirstRunStep::Agents
+                FirstRunStep::Herdr
+                | FirstRunStep::Agents
                 | FirstRunStep::Devices
                 | FirstRunStep::Notifications
                 | FirstRunStep::Project

@@ -14,7 +14,7 @@
   "checkout_purpose_origin": ["token", "branch_description", "agent_title", "pull_request_title"],
   "document_kind": ["text", "markdown", "image", "pdf", "binary"],
   "editor_tab_kind": ["file", "diff", "session"],
-  "first_run_step": ["agents", "devices", "notifications", "project", "done"],
+  "first_run_step": ["herdr", "agents", "devices", "notifications", "project", "done"],
   "screen_intro": ["factory"],
   "agent_logo_mode": ["shown", "hidden"],
   "herdr_behind_cause": ["cannot_hand_off", "handoff_failed"],

@@ -23,11 +23,20 @@
 //! the pinned copy the build brought whenever it runs an older stable
 //! release of Herdr (D-04, D-06). A failed handoff is tried once per server
 //! process and pin (D-13).
+//!
+//! This machine's server the operator runs from their own older Herdr is
+//! moved only when the operator asks, from the first-run wizard or Overview
+//! (PRD herdr-takeover D-14): [`LocalTakeover`] is what the core asks, and
+//! it judges the server by the same [`device_step`] a device's node does
+//! (D-08). A failed move is remembered by server process and pin in one
+//! file of this machine's state folder (D-23), so the step opens on its
+//! failure after a restart, and a press always tries again.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use herdr_core::herdr_takeover::{FailureCause, HerdrTakeover, Look, Moved, Offer, OfferKind};
 use hide_kit::device_herdr::{BehindCause, HerdrUpdate};
 use hide_platform::fs::identity::file_id;
 use hide_platform::ipc::LocalStream;
@@ -170,6 +179,260 @@ pub fn hand_off(ours: &Path, socket: &Path) -> Outcome {
             elapsed_ms,
         },
         Err((stage, detail)) => Outcome::Failed { stage, detail },
+    }
+}
+
+/// The Herdr the desktop package in `kit` ships, when it is the one this
+/// process was given (`HERDR_BIN_PATH`): the host hands its own unless the
+/// operator named another, whose server is theirs to keep.
+pub fn shipped_herdr(kit: &Path, given: Option<&Path>) -> Option<PathBuf> {
+    let shipped = kit.join(format!("herdr{}", std::env::consts::EXE_SUFFIX));
+    let same = hide_platform::fs::identity::same_file(given?, &shipped).ok()?;
+    same.then_some(shipped)
+}
+
+/// This machine's Herdr server against the Herdr this app ships, for the
+/// core to offer and, on the operator's press, to move (PRD
+/// herdr-takeover).
+pub struct LocalTakeover {
+    ours: PathBuf,
+    socket: PathBuf,
+    record: PathBuf,
+    /// The version `ours` names for itself, read once.
+    version: std::sync::OnceLock<String>,
+}
+
+/// Who runs the server on the socket.
+#[derive(Debug, Eq, PartialEq)]
+enum Owner {
+    Ours,
+    /// Another Hide app's Herdr: `hide connect` moves it on its own (B15).
+    AnotherApp,
+    Operator,
+    /// The system does not say which program a process runs (Windows), so
+    /// only the versions decide (D-27).
+    Unknown,
+}
+
+impl LocalTakeover {
+    /// The takeover of a daemon that runs from a desktop package with that
+    /// package's own Herdr on `socket`; `None` for any other daemon (a
+    /// development build, a node a move placed, a Herdr the operator named),
+    /// which then offers nothing.
+    pub fn for_daemon(
+        herdr: Option<&Path>,
+        socket: Option<&Path>,
+        state_dir: &Path,
+    ) -> Option<Self> {
+        let kit = std::env::current_exe()
+            .and_then(|path| path.canonicalize())
+            .ok()
+            .as_deref()
+            .and_then(hide_kit::bundled_kit_dir)?;
+        Some(Self::new(
+            shipped_herdr(&kit, herdr)?,
+            socket?.to_path_buf(),
+            hide_kit::layout::herdr_takeover_record(state_dir),
+        ))
+    }
+
+    pub fn new(ours: PathBuf, socket: PathBuf, record: PathBuf) -> Self {
+        Self {
+            ours,
+            socket,
+            record,
+            version: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn version(&self) -> Result<String, String> {
+        if let Some(version) = self.version.get() {
+            return Ok(version.clone());
+        }
+        let version = version_of(&self.ours)?;
+        Ok(self.version.get_or_init(|| version).clone())
+    }
+
+    /// The server on the socket, who runs it, and what it is offered; the
+    /// pid is `None` where the system cannot name a socket's peer.
+    fn judge(&self) -> Result<Option<(Option<u32>, Offer)>, (&'static str, String)> {
+        let ours_file = file_id(&self.ours).map_err(|error| ("ours", error.to_string()))?;
+        let (pid, owner) = match server_on(&self.socket) {
+            Ok(None) => return Ok(None),
+            Ok(Some((pid, Ok(image)))) => {
+                let owner = if image.file == ours_file {
+                    Owner::Ours
+                } else if image
+                    .path
+                    .parent()
+                    .is_some_and(hide_kit::holds_package_runtime)
+                {
+                    Owner::AnotherApp
+                } else {
+                    Owner::Operator
+                };
+                (pid, owner)
+            }
+            Ok(Some((pid, Err(error)))) if error.kind() == io::ErrorKind::Unsupported => {
+                (pid, Owner::Unknown)
+            }
+            Ok(Some((_, Err(error)))) | Err(error) => return Err(("program", error.to_string())),
+        };
+        if matches!(owner, Owner::Ours | Owner::AnotherApp) {
+            return Ok(None);
+        }
+        let pong = ask(&self.socket, "ping", herdr_core::wire::ping_params())
+            .and_then(herdr_core::wire::server_pong)
+            .map_err(|detail| ("ping", detail))?;
+        let version = self.version().map_err(|detail| ("version", detail))?;
+        let server_protocol = u64::from(pong.protocol);
+        let kind = match device_step(&version, &pong.version, pong.live_handoff) {
+            DeviceStep::Current => return Ok(None),
+            DeviceStep::Kept if server_protocol > hide_herdr_client::HERDR_PROTOCOL_REVISION => {
+                OfferKind::UpdateHide
+            }
+            DeviceStep::Kept => return Ok(None),
+            DeviceStep::HandOver => OfferKind::Move,
+            DeviceStep::CannotHandOff => OfferKind::Restart,
+        };
+        let failed_before = match (kind, pid) {
+            (OfferKind::Move, Some(pid)) => {
+                let attempt = Attempt::of(&self.socket, pid, &self.ours)
+                    .map_err(|error| ("program", error.to_string()))?;
+                Attempts::read(&self.record)
+                    .map_err(|detail| ("record", detail))?
+                    .current(&version)
+                    .failed_attempt(&attempt)
+                    .map(|failed| failed.cause.unwrap_or(FailureCause::Refused))
+            }
+            _ => None,
+        };
+        Ok(Some((
+            pid,
+            Offer {
+                kind,
+                server_pid: pid,
+                server_version: pong.version,
+                server_protocol,
+                version,
+                failed_before,
+            },
+        )))
+    }
+
+    /// The operator's own `herdr`, the one their terminal finds, when it
+    /// speaks an older protocol than the server it would talk to now: it
+    /// says so itself (`herdr status client --json`, which every release
+    /// from 0.7.5 answers with its `protocol`).
+    fn path_herdr_behind(&self) -> Option<String> {
+        let herdr = hide_platform::programs::find_cli("herdr")?;
+        let mut command = hide_platform::programs::command(&herdr);
+        command.args(["status", "client", "--json"]);
+        let finished = hide_platform::process::run_to_end(
+            &mut command,
+            ASK_WITHIN,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .ok()
+        .filter(|finished| finished.succeeded())?;
+        let answer: serde_json::Value = serde_json::from_str(finished.stdout.trim()).ok()?;
+        let protocol = answer["protocol"].as_u64()?;
+        (protocol < hide_herdr_client::HERDR_PROTOCOL_REVISION)
+            .then(|| answer["version"].as_str().map(str::to_owned))
+            .flatten()
+    }
+}
+
+impl HerdrTakeover for LocalTakeover {
+    fn look(&self) -> Look {
+        match self.judge() {
+            Ok(None) => Look::Nothing,
+            Ok(Some((_, offer))) => Look::Offer(offer),
+            Err((stage, detail)) => Look::Unreadable {
+                stage: stage.to_owned(),
+                detail,
+            },
+        }
+    }
+
+    fn hand_over(&self) -> Moved {
+        let unreadable = |stage: &str, detail: String| Moved::Failed {
+            cause: FailureCause::Unreadable,
+            stage: stage.to_owned(),
+            detail,
+        };
+        // Judged again: the server may have changed since the offer.
+        let (pid, offer) = match self.judge() {
+            Ok(Some((Some(pid), offer))) if offer.kind == OfferKind::Move => (pid, offer),
+            Ok(_) => {
+                return unreadable("look", "the server is no longer one to move".to_owned());
+            }
+            Err((stage, detail)) => return unreadable(stage, detail),
+        };
+        let ours_file = match file_id(&self.ours) {
+            Ok(file) => file,
+            Err(error) => return unreadable("ours", error.to_string()),
+        };
+        match hand_over(&self.ours, &ours_file, &offer.version, &self.socket) {
+            Ok(Handed { to_pid, elapsed_ms }) => Moved::Done {
+                from_pid: pid,
+                to_pid,
+                elapsed_ms,
+                path_herdr_behind: self.path_herdr_behind(),
+            },
+            Err((stage, detail)) => {
+                let cause = match stage {
+                    "handoff" => FailureCause::Refused,
+                    "confirm" => FailureCause::NotConfirmed,
+                    _ => FailureCause::Unreadable,
+                };
+                let reason = format!("{stage}: {detail}");
+                let kept = Attempt::of(&self.socket, pid, &self.ours)
+                    .map_err(|error| error.to_string())
+                    .and_then(|attempt| {
+                        Attempts::read(&self.record)?
+                            .current(&offer.version)
+                            .add_with_cause(
+                                attempt,
+                                reason.clone(),
+                                Some(cause),
+                                Some(offer.version.clone()),
+                            )
+                            .write(&self.record)
+                    });
+                Moved::Failed {
+                    cause,
+                    stage: stage.to_owned(),
+                    detail: match kept {
+                        Ok(()) => reason,
+                        Err(error) => format!("{reason}; the attempt was not recorded: {error}"),
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// The server answering on `socket`, by its pid where the system names a
+/// socket's peer, and the program it runs where the system says.
+#[allow(clippy::type_complexity)]
+fn server_on(socket: &Path) -> io::Result<Option<(Option<u32>, io::Result<Image>)>> {
+    let stream = match LocalStream::connect(socket) {
+        Ok(stream) => stream,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    match stream.peer_pid() {
+        Ok(pid) => Ok(Some((Some(pid), image_of(pid)))),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(Some((None, Err(error)))),
+        Err(error) => Err(error),
     }
 }
 
@@ -377,6 +640,14 @@ struct FailedAttempt {
     #[serde(flatten)]
     attempt: Attempt,
     reason: String,
+    /// What the screen names, for a move this machine's operator asked for;
+    /// a device's record has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cause: Option<FailureCause>,
+    /// The release of the app's Herdr it was moving to: an app update keeps
+    /// the program's path, so the release is what makes a new pin new.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
 }
 
 impl Attempts {
@@ -392,15 +663,46 @@ impl Attempts {
 
     /// Why `attempt` failed before, when it did.
     fn failed(&self, attempt: &Attempt) -> Option<&str> {
-        self.failed
-            .iter()
-            .find(|failed| failed.attempt == *attempt)
+        self.failed_attempt(attempt)
             .map(|failed| failed.reason.as_str())
     }
 
+    fn failed_attempt(&self, attempt: &Attempt) -> Option<&FailedAttempt> {
+        self.failed.iter().find(|failed| failed.attempt == *attempt)
+    }
+
+    /// This machine's record without the moves whose server process has
+    /// ended or whose app Herdr is no longer `version` (D-23).
+    fn current(mut self, version: &str) -> Self {
+        self.failed.retain(|failed| {
+            failed.version.as_deref() == Some(version)
+                && hide_platform::process::start_time(failed.attempt.pid).ok()
+                    == Some(failed.attempt.started)
+        });
+        self
+    }
+
     /// The record with `attempt` added and only the newest attempts kept.
-    fn add(mut self, attempt: Attempt, reason: String) -> Self {
-        self.failed.push(FailedAttempt { attempt, reason });
+    fn add(self, attempt: Attempt, reason: String) -> Self {
+        self.add_with_cause(attempt, reason, None, None)
+    }
+
+    /// [`Attempts::add`] naming what the screen says of it; the same
+    /// attempt failing again replaces its line.
+    fn add_with_cause(
+        mut self,
+        attempt: Attempt,
+        reason: String,
+        cause: Option<FailureCause>,
+        version: Option<String>,
+    ) -> Self {
+        self.failed.retain(|failed| failed.attempt != attempt);
+        self.failed.push(FailedAttempt {
+            attempt,
+            reason,
+            cause,
+            version,
+        });
         let over = self.failed.len().saturating_sub(ATTEMPTS_KEPT);
         self.failed.drain(..over);
         self

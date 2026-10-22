@@ -624,6 +624,20 @@ impl Core {
         released
     }
 
+    /// What moves this machine's Herdr server onto the Herdr this app ships
+    /// (PRD herdr-takeover); a daemon outside a desktop package installs
+    /// none, and then nothing is ever offered. Looks at the server at once.
+    pub fn set_herdr_takeover(&self, takeover: Arc<dyn crate::herdr_takeover::HerdrTakeover>) {
+        if check_owner_thread(self, "set_herdr_takeover") {
+            let mut runtime = lock_recover(&self.runtime);
+            runtime.install_herdr_takeover(
+                takeover,
+                Arc::downgrade(&self.runtime),
+                self.notifier.clone(),
+            );
+        }
+    }
+
     /// The checkout roots the daemon verified, by the identity each was
     /// opened with, which the core's own file work is checked against.
     pub fn set_file_roots(&self, roots: crate::files::FileRoots) {
