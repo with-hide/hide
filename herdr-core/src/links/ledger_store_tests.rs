@@ -2859,7 +2859,7 @@ fn a_version_7_record_keeps_a_plan_beside_its_session_until_the_session_goes() {
             plan: Some(Box::new(plan.clone())),
         })
         .unwrap();
-    assert_eq!(store.ledger_plans().unwrap(), [plan.clone()]);
+    assert_eq!(store.ledger_plans().unwrap(), std::slice::from_ref(&plan));
     assert_eq!(
         store.ledger_record(&session()).unwrap().plan.as_deref(),
         Some(&crate::plans::view_of(&plan, ""))

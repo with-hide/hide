@@ -407,7 +407,7 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
     };
     // The guardrails hold in any session of a guarded project, a Herdr pane
     // or not (PRD agent-guardrails B22); the guards after them only in one.
-    if let Some(reason) = guardrails::refusal_for(home, runtime, pane.as_deref(), &call) {
+    if let Some(reason) = guardrails::refusal_for(home, runtime, pane.as_deref(), call) {
         return json!({ "deny": reason });
     }
     // The pane's plan record: a plan waiting for review, a mission's scope

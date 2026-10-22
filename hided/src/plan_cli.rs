@@ -45,19 +45,16 @@ fn value<'a>(args: &'a [String], at: usize, flag: &str) -> Result<&'a str, Strin
     Ok(value)
 }
 
-/// A command line's positionals and valued options; `--ask` takes its
-/// reason only when one follows that is not another flag.
-fn flags(
-    args: &[String],
-    valued: &[&str],
-) -> Result<
-    (
-        Vec<String>,
-        BTreeMap<String, String>,
-        Option<Option<String>>,
-    ),
-    String,
-> {
+/// A command line's positionals and valued options; `ask` is `Some` when
+/// `--ask` was given, with its reason when one followed.
+struct Flags {
+    positional: Vec<String>,
+    values: BTreeMap<String, String>,
+    ask: Option<Option<String>>,
+}
+
+/// `--ask` takes its reason only when one follows that is not another flag.
+fn flags(args: &[String], valued: &[&str]) -> Result<Flags, String> {
     let mut positional = Vec::new();
     let mut values = BTreeMap::new();
     let mut ask = None;
@@ -93,7 +90,11 @@ fn flags(
             at += 1;
         }
     }
-    Ok((positional, values, ask))
+    Ok(Flags {
+        positional,
+        values,
+        ask,
+    })
 }
 
 fn agent(positional: Vec<String>) -> Result<Option<String>, String> {
@@ -121,8 +122,11 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PlanCli, Stri
             };
         }
         "set" => {
-            let (positional, values, ask) =
-                flags(rest, &["--file", "--json", "--ask", "--reason"])?;
+            let Flags {
+                positional,
+                values,
+                ask,
+            } = flags(rest, &["--file", "--json", "--ask", "--reason"])?;
             if !positional.is_empty() {
                 return Err(USAGE.to_owned());
             }
@@ -147,7 +151,9 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PlanCli, Stri
             }
         }
         "node" => {
-            let (positional, values, _) = flags(rest, &["--status", "--line"])?;
+            let Flags {
+                positional, values, ..
+            } = flags(rest, &["--status", "--line"])?;
             let [key] = positional.as_slice() else {
                 return Err(USAGE.to_owned());
             };
@@ -170,7 +176,7 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PlanCli, Stri
             }
         }
         "approve" | "drop" | "show" => {
-            let (positional, _, _) = flags(rest, &[])?;
+            let positional = flags(rest, &[])?.positional;
             let agent = agent(positional)?;
             match verb.as_str() {
                 "approve" => PlanCommand::Approve { agent },

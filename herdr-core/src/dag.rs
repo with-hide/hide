@@ -180,7 +180,7 @@ pub(crate) fn depths<N: Node>(nodes: &[N]) -> BTreeMap<&str, usize> {
 
 /// The topmost node `pick` accepts: the shallowest, and of those the first
 /// in the list.
-pub(crate) fn topmost<'a, N: Node>(nodes: &'a [N], pick: impl Fn(&N) -> bool) -> Option<&'a N> {
+pub(crate) fn topmost<N: Node>(nodes: &[N], pick: impl Fn(&N) -> bool) -> Option<&N> {
     let depths = depths(nodes);
     nodes
         .iter()
