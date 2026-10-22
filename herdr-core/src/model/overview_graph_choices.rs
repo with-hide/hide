@@ -282,6 +282,16 @@ impl OverviewGraphChoices {
             project_places: readable(stored.project_places, &mut skipped, place_valid),
             session_places: readable(stored.session_places, &mut skipped, place_valid),
         };
+        // A hand-edited store over the cap keeps its most recent records.
+        for overflow in [
+            trim(&mut choices.hidden_projects),
+            trim(&mut choices.folded_projects),
+            trim(&mut choices.team_folds),
+            trim(&mut choices.project_places),
+            trim(&mut choices.session_places),
+        ] {
+            skipped += overflow;
+        }
         // A record named twice (a hand edit, or two ids a core move made one)
         // keeps its most recent copy.
         skipped += dedupe(&mut choices.hidden_projects, |key| key.clone());
@@ -293,16 +303,6 @@ impl OverviewGraphChoices {
         skipped += dedupe(&mut choices.session_places, |place| {
             (place.scope.clone(), place.key.clone())
         });
-        // A hand-edited store over the cap keeps its most recent records.
-        for overflow in [
-            trim(&mut choices.hidden_projects),
-            trim(&mut choices.folded_projects),
-            trim(&mut choices.team_folds),
-            trim(&mut choices.project_places),
-            trim(&mut choices.session_places),
-        ] {
-            skipped += overflow;
-        }
         Ok((choices, skipped))
     }
 }

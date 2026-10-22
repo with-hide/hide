@@ -156,6 +156,8 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   const returnFocus = useReturnFocus(selection !== null, { target: () => opener.current, within: () => host.current?.querySelector<HTMLElement>(".og-details") ?? null });
   const close = useCallback(() => {
     returnFocus(new Event("closeAutoFocus", { cancelable: true }));
+    // A show-again the core never answered stops holding the choice open once it closes.
+    revealing.current = null;
     setSelection(null);
   }, [returnFocus]);
   useEscapeLayer(selection !== null, close);

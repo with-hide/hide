@@ -2,7 +2,7 @@
 //! B16): one operator action is one event, a repeat changes nothing, and a
 //! change naming nothing is refused whole.
 use super::*;
-use crate::model::OverviewGraphFocus;
+use crate::model::overview_graph_choices::OverviewGraphFocus;
 
 fn change(runtime: &mut Runtime, change: serde_json::Value) -> bool {
     runtime.dispatch_json(&explorer_event(

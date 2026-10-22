@@ -1422,7 +1422,8 @@ mod tests {
     /// load says so; an unreadable value loads the defaults.
     #[test]
     fn the_overview_map_s_choices_survive_a_relaunch_and_an_unreadable_record_alone_is_dropped() {
-        use crate::model::{OverviewGraphChange, OverviewGraphFocus};
+        use crate::model::OverviewGraphChange;
+        use crate::model::overview_graph_choices::OverviewGraphFocus;
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("state.json");
         let mut state = UiStateSnapshot {

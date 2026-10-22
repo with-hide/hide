@@ -6388,7 +6388,7 @@ impl PetSnapshot {
 }
 
 mod overview_graph;
-mod overview_graph_choices;
+pub(crate) mod overview_graph_choices;
 /// The sections of [`Snapshot`] that ride the revisioned `rest` channel of
 /// the delta wire: everything except the editor and the changes view (each
 /// with its own revision), the terminal chunk ring (sequence cursor), and the
@@ -6398,7 +6398,7 @@ mod overview_graph_choices;
 mod rest;
 pub use overview_graph::{GraphDirectInput, GraphParty, GraphSession, OverviewGraphSnapshot};
 pub use overview_graph_choices::{
-    OVERVIEW_GRAPH_LIST_LIMIT, OverviewGraphChange, OverviewGraphChoices, OverviewGraphFocus,
+    OVERVIEW_GRAPH_LIST_LIMIT, OverviewGraphChange, OverviewGraphChoices,
 };
 pub use rest::{RestSections, RestWire};
 
@@ -7053,6 +7053,7 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "task_view", &views);
         checked.insert("task_view");
+        use overview_graph_choices::OverviewGraphFocus;
         let focuses = [
             OverviewGraphFocus::All,
             OverviewGraphFocus::Turn,
