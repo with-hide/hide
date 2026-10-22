@@ -1643,6 +1643,12 @@ impl Runtime {
         let mut merged = github;
         keep_previous_reads(&mut merged, &self.github);
         self.read_merges_made_here(&mut merged);
+        // A mission's pull request that merged, was asked for changes or got
+        // a new commit wakes its Conductor (PRD software-factory-conductor
+        // D-39); each node keeps what it was last told, so an unchanged
+        // answer wakes nothing.
+        let node = self.node.as_str().to_owned();
+        self.note_mission_pulls(&node, &merged);
         if self.github == merged {
             // Nothing to show changed, but a project that returned nothing
             // stops loading.
@@ -3307,6 +3313,7 @@ impl Runtime {
         if let Some(previous) = self.device_github.get(device_id) {
             keep_previous_reads(&mut merged, previous);
         }
+        self.note_mission_pulls(device_id, &merged);
         if self.device_github.get(device_id) == Some(&merged) {
             return false;
         }
@@ -3449,6 +3456,7 @@ impl Runtime {
     }
 
     pub(super) fn apply_pull_requests(&mut self) -> bool {
+        self.mission_pulls_moved();
         let mut changed = false;
         let github = self.github.clone();
         let awaiting: HashSet<String> = self

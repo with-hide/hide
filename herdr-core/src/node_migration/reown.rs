@@ -21,7 +21,7 @@ use serde_json::{Map, Value};
 
 use super::{
     CORE_STATE, DELIVERY_LEDGER, KEYS, LABELS, LINKS, LOCAL_ISSUES, MARKER_FILE, MARKER_VERSION,
-    Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS, read_json,
+    MISSIONS, Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS, read_json,
     read_marker, write,
 };
 use crate::node::NodeId;
@@ -194,6 +194,7 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
         LABELS,
         DELIVERY_LEDGER,
         LOCAL_ISSUES,
+        MISSIONS,
     ] {
         let path = staging.join(file);
         let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
@@ -1106,7 +1107,11 @@ fn still_naming(value: &Value, change: &OwnerChange, at: &str) -> Option<String>
             if carries(key) || is_alias(key) {
                 return Some(place);
             }
-            if matches!(key.as_str(), "body" | "facts") {
+            // A mission's words are the Conductor's text, like a body.
+            if matches!(
+                key.as_str(),
+                "body" | "facts" | "title" | "line" | "decision" | "delay" | "report" | "criteria"
+            ) {
                 return None;
             }
             still_naming(entry, change, &place)
@@ -1518,6 +1523,15 @@ mod tests {
             LOCAL_ISSUES,
             json!({"version": 1, "projects": {M_ROOT: [{"number": 1}]}, "devices": {ALIAS: {C_ROOT: [{"number": 2}]}}}),
         );
+        // A mission conducted on each machine, for a project on it.
+        write(
+            MISSIONS,
+            json!({"schema_version": 1, "next": 4, "missions": (0..3).map(|index| json!({
+                "id": format!("mission-{}", index + 1), "device_id": devices[index],
+                "workspace_id": registrations[index], "project": ([M_ROOT, C_ROOT, X_ROOT][index]),
+                "conductor": {"actor": actor(index), "session": {"device_id": devices[index], "agent": "claude", "session_id": "s"}},
+            })).collect::<Vec<_>>()}),
+        );
         write(MARKER_FILE, json!({"version": 1, "node": M}));
         let memory = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
         for (device, root) in [(M, M_ROOT), (ALIAS, C_ROOT), (X, X_ROOT)] {
@@ -1599,10 +1613,11 @@ mod tests {
     fn every_key_of_every_shape_is_spelled_as_the_new_core_writes_it() {
         let dir = macbook_folder();
         let state = dir.path();
-        let original: BTreeMap<&str, Value> = [CORE_STATE, WORKSPACE_VIEWS, DELIVERY_LEDGER]
-            .into_iter()
-            .map(|file| (file, read(&state.join(file))))
-            .collect();
+        let original: BTreeMap<&str, Value> =
+            [CORE_STATE, WORKSPACE_VIEWS, DELIVERY_LEDGER, MISSIONS]
+                .into_iter()
+                .map(|file| (file, read(&state.join(file))))
+                .collect();
         reown(state, &forward(), &forward_ids()).unwrap();
 
         for (file, value) in &original {

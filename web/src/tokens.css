@@ -266,6 +266,14 @@
   --size-agent-children-popover: 280px;
   --size-usage-popover: 320px;
   --size-pr-popover: 360px;
+  --size-mission-node: 224px;
+  --size-mission-node-gap: 24px;
+  --size-mission-layer-gap: 40px;
+  --size-mission-band: 3px;
+  --size-mission-step: 14px;
+  --size-mission-step-h: 4px;
+  --size-mission-popover: 320px;
+  --size-mission-edge: 1.5px;
   --size-pr-number: 38px;
   --size-pr-review: 70px;
   --size-pr-slot: 72px;

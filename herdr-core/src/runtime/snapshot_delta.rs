@@ -90,6 +90,9 @@ impl Runtime {
         // What a screen is about to be shown as the keyboard's pane is what
         // the nodes compare its next key with.
         self.sync_terminal_focus();
+        // A mission's map follows its workers, its Conductor's pane and its
+        // pull requests; the section is sent again only when it moved.
+        self.refresh_missions();
         self.note_snapshot_sent();
         if self.delta.usage_edit != self.usage_edit {
             self.delta.revision += 1;

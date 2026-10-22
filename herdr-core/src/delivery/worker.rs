@@ -206,6 +206,19 @@ impl Client {
             .recv_timeout(timeout)
             .map_err(|_| "delivery_timeout".to_owned())?
     }
+
+    /// Queues `effect` without waiting for its answer: a change made under
+    /// the runtime lock that must reach the store before any command its
+    /// caller sends next, which the queue's order guarantees.
+    pub(crate) fn post(&self, effect: Effect) -> Result<(), String> {
+        let (reply, _) = mpsc::sync_channel(1);
+        self.requests
+            .try_send(Request { effect, reply })
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => "capacity".to_owned(),
+                mpsc::TrySendError::Disconnected(_) => "delivery_unavailable".to_owned(),
+            })
+    }
 }
 
 struct Request {
@@ -978,7 +991,12 @@ fn run(
                 .as_ref()
                 .map_err(|error| error.code().to_owned())
                 .and(result);
-            let _ = request.reply.send(result);
+            // A posted effect has no one waiting, so its failure is logged.
+            if let Err(mpsc::SendError(Err(code))) = request.reply.send(result) {
+                crate::diagnostic!(json!({
+                    "component": "delivery", "kind": "effect.unanswered_failure", "code": code,
+                }));
+            }
         }
     }
     while let Ok(request) = requests.try_recv() {

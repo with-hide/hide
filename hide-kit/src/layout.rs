@@ -162,6 +162,12 @@ pub fn composer_checks(state_dir: &Path) -> PathBuf {
     state_dir.join("composer-checks.json")
 }
 
+/// Each Conductor's mission: its plan, nodes, reasons and report, kept
+/// across a restart; its owner is the core's mission store.
+pub fn missions(state_dir: &Path) -> PathBuf {
+    state_dir.join("missions.json")
+}
+
 /// The last GitHub answer per project, restored when the daemon starts; its
 /// owner is the core's GitHub store.
 pub fn github_snapshot(state_dir: &Path) -> PathBuf {

@@ -14,6 +14,7 @@ import { askParts, DescendantMark, TreeChevron, TreeRails, type TreePlace } from
 import { childrenOf } from "./components/agent-tree-popover";
 import { Elapsed } from "./components/elapsed";
 import { AgentPrMark, useAgentStaleness } from "./components/pr-mark";
+import { MissionChip } from "./components/mission-chip";
 import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
@@ -380,6 +381,7 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
           </button>
           {open ? null : <DescendantMark agent={agent} />}
           <AgentPrMark agent={agent} family={family} staleness={staleness} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
+          <MissionChip agent={agent} onOpen={(id) => actions.openMission(id)} />
           <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: card.state === "revisit" || starred(agent), disabled, actions }} />
         </div>
         <SecondLine entry={entry} showProject={showProject} />
@@ -446,6 +448,7 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
               {row.starred ? <RevisitStar /> : null}
             </button>
             {parts ? <PartsMark parts={parts} /> : null}
+            <MissionChip agent={{ session: root.session }} onOpen={(id) => actions.openMission(id)} />
             <span className="grid shrink-0 items-center justify-items-end" onClick={(event) => event.stopPropagation()}>
               <Elapsed since={row.archived_at_unix_ms} className={cn("pointer-events-none col-start-1 row-start-1 text-micro text-muted-foreground tabular-nums", hidden)} />
               <span className={cn("col-start-1 row-start-1 flex items-center", shown)}>

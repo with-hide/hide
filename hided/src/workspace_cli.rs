@@ -416,6 +416,46 @@ pub fn request_memory(
     })
 }
 
+/// `hide mission`: a Conductor's command over its mission, answered by
+/// the core without a shell. Running it again converges: a plan or node
+/// change repeated changes nothing more.
+pub fn request_mission(
+    credential: &mut Credential,
+    command: &herdr_core::missions::MissionCommand,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange(
+            path,
+            &reference,
+            json!({"type":"mission","request_id":request_id,"command":command}),
+            &request_id,
+            true,
+            after,
+        )
+    })
+}
+
+/// `hide agent catalog`: read from what the core holds.
+pub fn request_agent_catalog(
+    credential: &mut Credential,
+    machine: Option<&str>,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange(
+            path,
+            &reference,
+            json!({"type":"agent_catalog","request_id":request_id,"machine":machine}),
+            &request_id,
+            false,
+            after,
+        )
+    })
+}
+
 /// Losing the final capability claim cannot turn durable success into retry.
 pub fn request_delivery(
     credential: &mut Credential,

@@ -5,7 +5,7 @@
 //! changes nothing.
 
 use super::*;
-use crate::agents::{SKILL_NAME, skill_text};
+use crate::agents::BROWSER_SKILL;
 
 const HOOK_COMMAND: &str = "[ -x /kit/hide-agent-hooks ] && /kit/hide-agent-hooks hook --runtime qwen-code --event SessionStart --source hide-guidance@1 || true";
 
@@ -22,7 +22,7 @@ fn qwen_skill(fixture: &Fixture) -> PathBuf {
     fixture
         .home()
         .join(".qwen/skills")
-        .join(SKILL_NAME)
+        .join(BROWSER_SKILL.name)
         .join("SKILL.md")
 }
 
@@ -45,7 +45,7 @@ fn qwen_as_an_earlier_build_left_it(fixture: &Fixture) {
         })
         .to_string(),
     );
-    write(&qwen_skill(fixture), &skill_text());
+    write(&qwen_skill(fixture), &BROWSER_SKILL.text());
     write(
         &fixture.home().join(".hide/kit/installed.json"),
         r#"{"format":1,"installed":["hook:qwen-code","skill:qwen"],"agents":{"qwen-code":true}}"#,
@@ -64,7 +64,7 @@ fn cursor_as_an_earlier_build_left_it(fixture: &Fixture) {
     );
     write(
         &fixture.home().join(".agents/skills/hide-browser/SKILL.md"),
-        &skill_text(),
+        &BROWSER_SKILL.text(),
     );
     write(
         &fixture.home().join(".hide/kit/installed.json"),
@@ -265,7 +265,7 @@ fn the_shared_stub_stays_while_a_supported_agent_still_reads_it() {
     let shared = fixture
         .home()
         .join(".agents/skills")
-        .join(SKILL_NAME)
+        .join(BROWSER_SKILL.name)
         .join("SKILL.md");
     assert!(shared.is_file());
     // An earlier build also had Amp on, which read the same folder.
@@ -288,9 +288,9 @@ fn the_shared_stub_goes_with_the_last_retired_agent_that_read_it() {
     let shared = fixture
         .home()
         .join(".agents/skills")
-        .join(SKILL_NAME)
+        .join(BROWSER_SKILL.name)
         .join("SKILL.md");
-    write(&shared, &skill_text());
+    write(&shared, &BROWSER_SKILL.text());
     write(
         &fixture.home().join(".hide/kit/installed.json"),
         r#"{"format":1,"installed":["skill:agents"],"agents":{"amp":true,"goose":true}}"#,
@@ -314,9 +314,12 @@ fn the_shared_stub_goes_with_the_last_retired_agent_that_read_it() {
 fn a_shared_stub_that_could_not_be_removed_is_removed_by_a_later_pass() {
     use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new();
-    let folder = fixture.home().join(".agents/skills").join(SKILL_NAME);
+    let folder = fixture
+        .home()
+        .join(".agents/skills")
+        .join(BROWSER_SKILL.name);
     let shared = folder.join("SKILL.md");
-    write(&shared, &skill_text());
+    write(&shared, &BROWSER_SKILL.text());
     write(
         &fixture.home().join(".hide/kit/installed.json"),
         r#"{"format":1,"installed":["skill:agents"],"agents":{"amp":true}}"#,
@@ -372,7 +375,7 @@ fn shared_skill(fixture: &Fixture) -> PathBuf {
     fixture
         .home()
         .join(".agents/skills")
-        .join(SKILL_NAME)
+        .join(BROWSER_SKILL.name)
         .join("SKILL.md")
 }
 
@@ -408,7 +411,7 @@ fn gemini_as_an_earlier_build_left_it(fixture: &Fixture) {
             .join(".gemini/tmp/project/chats/session-1.json"),
         "{\"messages\":[]}",
     );
-    write(&shared_skill(fixture), &skill_text());
+    write(&shared_skill(fixture), &BROWSER_SKILL.text());
     write(
         &fixture.home().join(".hide/kit/installed.json"),
         r#"{"format":1,"installed":["hook:gemini-cli","skill:agents"],"agents":{"gemini-cli":true}}"#,

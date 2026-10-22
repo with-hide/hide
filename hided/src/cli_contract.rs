@@ -1,5 +1,5 @@
 //! The contract of the commands other tools call (`hide agent`, `request`,
-//! `inbox`, `watch`): each command's words, arguments and options, where its
+//! `inbox`, `watch`, `mission`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -18,7 +18,7 @@ use serde_json::{Map, Value, json};
 pub const FORMAT: u32 = 1;
 
 /// The topics whose every command is in the table.
-const TOPICS: &[&str] = &["agent", "request", "inbox", "watch"];
+const TOPICS: &[&str] = &["agent", "request", "inbox", "watch", "mission"];
 
 /// What a value must be for the command's parser to take it.
 #[derive(Clone, Copy)]
@@ -41,6 +41,8 @@ pub enum Input {
     Approval,
     /// A decimal integer from 0 to 2^64 - 1.
     Unsigned,
+    /// A JSON document of the shape the command names.
+    Json,
     OneOf(&'static [&'static str]),
 }
 
@@ -54,6 +56,7 @@ impl Input {
             Sha256 => "sha256",
             Approval => "approval",
             Unsigned => "unsigned",
+            Json => "json",
             OneOf(_) => "one_of",
         }
     }
@@ -123,6 +126,28 @@ const fn switch(name: &'static str) -> Opt {
     }
 }
 
+/// An option whose value can instead be cleared by another switch.
+const fn cleared(name: &'static str, value: Input, conflicts: &'static [&'static str]) -> Opt {
+    Opt {
+        name,
+        value: Some(value),
+        required: false,
+        requires: &[],
+        conflicts,
+    }
+}
+
+/// The switch that clears another option's value.
+const fn clearing(name: &'static str, conflicts: &'static [&'static str]) -> Opt {
+    Opt {
+        name,
+        value: None,
+        required: false,
+        requires: &[],
+        conflicts,
+    }
+}
+
 const fn spec(
     words: &'static [&'static str],
     arguments: &'static [Arg],
@@ -140,7 +165,7 @@ const fn spec(
     }
 }
 
-use Input::{Approval, Body, Key, OneOf, Session, Sha256, Text, Unsigned};
+use Input::{Approval, Body, Json, Key, OneOf, Session, Sha256, Text, Unsigned};
 
 const ID: &[Arg] = &[Arg {
     name: "id",
@@ -326,6 +351,164 @@ pub const COMMANDS: &[Spec] = &[
     ),
     spec(&["watch", "stop"], ID, &[], &["stopped"]),
     spec(&["watch", "list"], &[], &[], &["watch_list"]),
+    spec(
+        &["agent", "catalog"],
+        &[],
+        &[optional("--machine", Text), switch("--json")],
+        &["agent_catalog"],
+    ),
+    Spec {
+        words: &["mission", "create"],
+        arguments: &[],
+        repeats: None,
+        options: &[
+            required("--title", Text),
+            optional("--scope", OneOf(&["pr", "merge"])),
+            optional("--cap", Unsigned),
+            optional("--github", Text),
+        ],
+        rest: None,
+        answers: &["mission_created"],
+        refusals: &[
+            "mission_already_conducting",
+            "mission_full",
+            "mission_projects_loading",
+            "mission_project_unknown",
+            "mission_cap_out_of_range",
+        ],
+    },
+    Spec {
+        words: &["mission", "plan"],
+        arguments: &[],
+        repeats: None,
+        options: &[
+            optional("--mission", Key),
+            Opt {
+                name: "--file",
+                value: Some(Text),
+                required: false,
+                requires: &[],
+                conflicts: &["--json"],
+            },
+            Opt {
+                name: "--json",
+                value: Some(Json),
+                required: false,
+                requires: &[],
+                conflicts: &["--file"],
+            },
+        ],
+        rest: None,
+        answers: &["mission_planned"],
+        refusals: &[
+            "mission_plan_invalid",
+            "mission_not_conductor",
+            "mission_closed",
+            "mission_cancelled",
+            "mission_too_many_nodes",
+            "mission_node_in_progress",
+            "mission_dependency_unknown",
+            "mission_dependency_cycle",
+        ],
+    },
+    Spec {
+        words: &["mission", "node"],
+        arguments: &[Arg {
+            name: "node",
+            value: Key,
+        }],
+        repeats: None,
+        options: &[
+            optional("--mission", Key),
+            optional("--status", OneOf(crate::mission_cli::STATUSES)),
+            cleared("--agent-id", Key, &["--no-agent-id"]),
+            cleared("--pr", Unsigned, &["--no-pr"]),
+            cleared("--base-pr", Unsigned, &["--no-base-pr"]),
+            cleared("--branch", Text, &["--no-branch"]),
+            optional("--attempts", Unsigned),
+            cleared("--line", Text, &["--no-line"]),
+            cleared("--change", Text, &["--no-change"]),
+            cleared("--review", Text, &["--no-review"]),
+            clearing("--no-agent-id", &["--agent-id"]),
+            clearing("--no-pr", &["--pr"]),
+            clearing("--no-base-pr", &["--base-pr"]),
+            clearing("--no-branch", &["--branch"]),
+            clearing("--no-line", &["--line"]),
+            clearing("--no-change", &["--change"]),
+            clearing("--no-review", &["--review"]),
+        ],
+        rest: None,
+        answers: &["mission"],
+        refusals: &[
+            "mission_node_unknown",
+            "mission_not_conductor",
+            "mission_closed",
+        ],
+    },
+    spec(
+        &["mission", "start"],
+        &[],
+        &[optional("--mission", Key)],
+        &["mission"],
+    ),
+    spec(
+        &["mission", "decide"],
+        &[],
+        &[
+            optional("--mission", Key),
+            cleared("--line", Text, &["--clear"]),
+            clearing("--clear", &["--line"]),
+        ],
+        &["mission"],
+    ),
+    spec(
+        &["mission", "delay"],
+        &[],
+        &[
+            optional("--mission", Key),
+            cleared("--line", Text, &["--clear"]),
+            clearing("--clear", &["--line"]),
+        ],
+        &["mission"],
+    ),
+    spec(
+        &["mission", "close"],
+        &[],
+        &[
+            optional("--mission", Key),
+            required("--as", OneOf(&["done", "merge_wait", "cancelled"])),
+            cleared("--report", Text, &["--report-file"]),
+            cleared("--report-file", Text, &["--report"]),
+        ],
+        &["mission"],
+    ),
+    spec(
+        &["mission", "reopen"],
+        &[],
+        &[optional("--mission", Key)],
+        &["mission"],
+    ),
+    Spec {
+        words: &["mission", "take"],
+        arguments: ID,
+        repeats: None,
+        options: &[],
+        rest: None,
+        answers: &["mission"],
+        refusals: &[
+            "mission_conducted",
+            "mission_cancelled",
+            "mission_other_project",
+        ],
+    },
+    spec(
+        &["mission", "show"],
+        &[],
+        &[optional("--mission", Key)],
+        &["mission"],
+    ),
+    spec(&["mission", "list"], &[], &[], &["mission_list"]),
+    spec(&["mission", "settings"], &[], &[], &["mission_settings"]),
 ];
 
 /// The command `args` (the words after `hide`) name, by its longest words.
@@ -423,6 +606,7 @@ fn body() -> Value {
             "body": format!("not blank, at most {BODY_LIMIT} bytes"),
             "approval": "not blank, at most 256 bytes, no control characters",
             "unsigned": "a decimal integer from 0 to 18446744073709551615",
+            "json": "a JSON document of the shape hide mission help shows",
             "one_of": "one of the listed values",
         },
         // Where each topic's printed line carries the answer and, when the
@@ -432,9 +616,36 @@ fn body() -> Value {
             "request": {"ok": "ok", "answer": "result", "code": "reason"},
             "inbox": {"ok": "ok", "answer": "result", "code": "reason"},
             "watch": {"ok": "ok", "answer": "result", "code": "reason"},
+            "mission": {"ok": "ok", "answer": "result", "code": "reason"},
         },
-        "answers": herdr_core::delivery::answer::answer_schemas(),
+        "answers": answers(),
     })
+}
+
+/// The answer schemas: the delivery answers' own, and the mission
+/// commands' envelopes, whose mission object is documented by `hide
+/// mission help` and the snapshot it is drawn from.
+fn answers() -> Value {
+    let mut answers = herdr_core::delivery::answer::answer_schemas();
+    let object = json!({"type": "object"});
+    let shape = |fields: &[&str]| {
+        let properties: Map<String, Value> = fields
+            .iter()
+            .map(|field| ((*field).to_owned(), object.clone()))
+            .collect();
+        json!({"type": "object", "properties": properties, "required": fields})
+    };
+    let map = answers.as_object_mut().expect("the answers are an object");
+    map.insert("mission".into(), shape(&["mission"]));
+    map.insert("mission_created".into(), shape(&["mission", "settings"]));
+    map.insert("mission_planned".into(), shape(&["mission", "overlaps"]));
+    map.insert("mission_list".into(), shape(&["items"]));
+    map.insert("mission_settings".into(), shape(&["settings"]));
+    map.insert(
+        "agent_catalog".into(),
+        shape(&["machine", "installed_known", "items"]),
+    );
+    answers
 }
 
 /// `value` with every object's keys in order, so the digest does not depend
@@ -498,6 +709,7 @@ mod tests {
             ),
             Approval => ("approved by the lead", " "),
             Unsigned => ("1", "-1"),
+            Json => ("{\"nodes\": []}", "{nodes"),
             OneOf(values) => (values[0], "other"),
         };
         (taken.to_owned(), refused.to_owned())
@@ -554,7 +766,12 @@ mod tests {
     }
 
     fn takes(argv: &[String]) -> bool {
-        matches!(parse_args(argv), Ok(CommandKind::Delivery(_)))
+        matches!(
+            parse_args(argv),
+            Ok(CommandKind::Delivery(_)
+                | CommandKind::Mission(_)
+                | CommandKind::AgentCatalog { .. })
+        )
     }
 
     /// Each command the contract names parses with everything it names, and

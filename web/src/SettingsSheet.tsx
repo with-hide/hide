@@ -5,7 +5,7 @@
 // shows as pending until the snapshot says it landed. The sheet is the shell:
 // each page is its own module under `settings/`.
 
-import { BellIcon, GaugeIcon, BotIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, GaugeIcon, BotIcon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
 import { GithubIcon } from "./components/github-icon";
 import { useState } from "react";
 import type { Actions } from "./actions";
@@ -19,6 +19,7 @@ import { awayDevice, coreMachineName, machineName } from "./screenMachine";
 import { SETTINGS_GROUPS, type SettingsTab } from "./settings";
 import { AboutTab } from "./settings/AboutTab";
 import { AgentsTab } from "./settings/AgentsTab";
+import { ConductorTab } from "./settings/ConductorTab";
 import { DevicesTab } from "./settings/DevicesTab";
 import { GeneralTab } from "./settings/GeneralTab";
 import { GithubTab } from "./settings/GithubTab";
@@ -45,6 +46,7 @@ const TAB_ICONS: Record<SettingsTab, LucideIcon> = {
   shortcuts: KeyboardIcon,
   agents: BotIcon,
   hideAi: SparklesIcon,
+  conductor: ListTreeIcon,
   mobile: SmartphoneIcon,
   github: GithubIcon,
   about: InfoIcon,
@@ -124,6 +126,7 @@ function SettingsSheet({ actions }: { actions: Actions }) {
               {tab === "shortcuts" ? <ShortcutsTab actions={actions} /> : null}
               {tab === "agents" ? <AgentsTab actions={actions} /> : null}
               {tab === "hideAi" ? <HideAiTab actions={actions} /> : null}
+              {tab === "conductor" ? <ConductorTab actions={actions} /> : null}
               {tab === "mobile" ? <MobileTab actions={actions} /> : null}
               {tab === "github" ? <GithubTab actions={actions} /> : null}
               {tab === "about" ? <AboutTab /> : null}

@@ -47,6 +47,7 @@ pub mod live;
 pub mod local_issues;
 pub mod memory_command;
 pub mod memory_hook;
+pub mod missions;
 mod model;
 pub mod node;
 pub mod node_access;

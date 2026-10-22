@@ -48,6 +48,13 @@ Regression owners: `a_hide_started_row_follows_its_attempts_pull_request_into_an
 An agent reporting a Project Memory card stale (`hide memory stale`) changes no agent row, group, badge, notification or snapshot field, and the operator is told nothing (PRD memory-stale-cards D-11, B15).
 The hold is the card's, not the agent's: it decides only what the hooks give, and `hide memory show` is where it is seen ([ARCHITECTURE.md: A card an agent reports stale](ARCHITECTURE.md#a-card-an-agent-reports-stale)).
 
+### A mission adds no status
+
+A Conductor and its workers are ordinary agents: a Conductor's row, its workers' rows and their delegated tabs read and group as any agent's do, and a mission adds no attention state, group, badge or notification (PRD software-factory-conductor D-14).
+The mission's own states (`planning`, `running`, `merge_wait`, `done`, `cancelled`) and each node's live only in the mission record and are drawn only on the map and the row's mission chip ([UI_BEHAVIOR.md: A mission's map](UI_BEHAVIOR.md#a-missions-map)).
+A decision the Conductor waits on reaches the operator through the Conductor's own row, which asks as any agent asks.
+A wake the core sends the Conductor for a pull request change is a letter from `hide:conductor`, delivered and read like any other ([delivery.md: Missions](delivery.md#missions)).
+
 ## agent_status provenance and background waits
 
 Herdr owns the raw `agent_status`; Hide reads it through `agent.list`/`agent.get`, converts it at `herdr-core/src/wire.rs` and derives its axes in `agent_state/axes.rs`.

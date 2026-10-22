@@ -714,6 +714,7 @@ function RaisedAgentRow({ listed: { agent, device }, context }: { listed: Listed
       number={context.numberOf?.(agent.pane_id, null) ?? null}
       menu={context.agentRowMenu}
       family={context.familyOf(agent)}
+      onOpenMission={(id) => context.actions.openMission(id)}
     />
   );
 }
@@ -1636,6 +1637,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, context }: { ch
             number={depth === 0 ? context.numberOf?.(agent.pane_id, checkoutId) ?? null : null}
             menu={context.agentRowMenu}
             family={context.familyOf(agent)}
+            onOpenMission={depth === 0 ? (id) => context.actions.openMission(id) : undefined}
           />
         );
       })}

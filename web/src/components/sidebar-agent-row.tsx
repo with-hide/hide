@@ -21,6 +21,7 @@ import { AgentPrHover, PrHoverCard, useAgentStaleness } from "./pr-mark";
 import { ownPulls, type SessionPull } from "../prMark";
 import { AgentTreePopover } from "./agent-tree-popover";
 import { Elapsed } from "./elapsed";
+import { MissionChip } from "./mission-chip";
 import { EntryContextMenu, type MenuEntry } from "./entry-menu";
 import { DeviceChip } from "./device-chip";
 import { StatusMark } from "./status-mark";
@@ -103,6 +104,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   number = null,
   menu,
   family,
+  onOpenMission,
 }: {
   agent: AgentRow;
   device: string | null;
@@ -129,6 +131,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   menu: AgentRowMenu;
   /** On a root with children: its own and every descendant's PRs, which its mark gathers as the 태스크 row's does. */
   family?: SessionPull[];
+  /** Opens a mission's map from the Conductor's mark (PRD software-factory-conductor B14). */
+  onOpenMission?: (missionId: string) => void;
 }) {
   const { t } = useInterfaceTranslation();
   const main = useRef<HTMLButtonElement>(null);
@@ -225,6 +229,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
             {ask ? null : <AgentPrHover agent={agent} family={family} staleness={staleness} card={(icon) => <PrHoverCard agent={agent} pulls={family ?? ownPulls(agent)} staleness={staleness} onOpenPullRequest={onOpenPullRequest}>{icon}</PrHoverCard>} />}
             {ask || !folded ? null : <span className="pointer-events-none flex shrink-0"><DescendantMark agent={agent} /></span>}
             {agent.letters_waiting ? <RowLetterMark /> : null}
+            {onOpenMission && !ask ? <MissionChip agent={agent} onOpen={onOpenMission} /> : null}
             {/* A time the core never measured draws nothing, and nothing stands in for it. */}
             <Elapsed since={agent.last_prompt_at_unix_ms} aria-hidden="true" className="pointer-events-none shrink-0 font-mono text-caption text-muted-foreground" data-agent-elapsed="true" />
             {/* Every row ends in the fold slot, so every time ends on one column (sidebar-readability D-3). */}

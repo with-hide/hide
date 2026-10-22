@@ -31,7 +31,11 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
     // that happens to hold the separator is never read as a next action.
     match refusal.split_once(DETAIL) {
         Some((
-            code @ ("machine_unknown" | crate::agent_start::SHELL_STARTING | "card_not_processed"),
+            code @ ("machine_unknown"
+            | crate::agent_start::SHELL_STARTING
+            | "card_not_processed"
+            | "mission_cap_reached"
+            | "mission_conducted"),
             detail,
         )) => (code, Some(detail)),
         _ => (refusal, None),
@@ -89,7 +93,55 @@ pub enum Command {
         /// Hide's own identity may give one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task: Option<SpawnTask>,
+        /// The mission this spawn starts a worker of, and its cap (PRD
+        /// software-factory-conductor D-45). Only the core sets it, from the
+        /// caller's mission; no command names it.
+        #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+        mission: Option<crate::runtime::missions::MissionAdmission>,
     },
+}
+
+/// How long a mission's spawn with no child yet counts as a worker being
+/// made. A start takes seconds to a minute or two; one still childless past
+/// this failed and was left (a retry under a new intent is its own spawn),
+/// so it stops holding a place under the cap.
+pub(crate) const MISSION_RESERVATION_HOLD_MS: u64 = 10 * 60 * 1000;
+
+/// The workers a mission has now (D-29): spawns made for it whose child has
+/// not ended, and those still being made, which will be one.
+pub(crate) fn mission_workers(ledger: &Ledger, mission: &str, now: u64) -> usize {
+    ledger
+        .spawns
+        .iter()
+        .filter(|spawn| spawn.mission.as_deref() == Some(mission))
+        .filter(|spawn| match &spawn.child {
+            None => {
+                !spawn.completed
+                    && now.saturating_sub(spawn.reserved_at_unix_ms) < MISSION_RESERVATION_HOLD_MS
+            }
+            Some(child) => ledger
+                .agents
+                .iter()
+                .any(|agent| &agent.id == child && !agent.ended),
+        })
+        .count()
+}
+
+/// The earliest time after `now` a mission's worker still being made stops
+/// counting against its cap, so a count read now holds until then.
+pub(crate) fn mission_reservations_end(ledger: &Ledger, now: u64) -> u64 {
+    ledger
+        .spawns
+        .iter()
+        .filter(|spawn| spawn.mission.is_some() && spawn.child.is_none() && !spawn.completed)
+        .map(|spawn| {
+            spawn
+                .reserved_at_unix_ms
+                .saturating_add(MISSION_RESERVATION_HOLD_MS)
+        })
+        .filter(|end| *end > now)
+        .min()
+        .unwrap_or(u64::MAX)
 }
 
 /// The serialized value of a Memory card's promotion into the repository.
@@ -355,6 +407,17 @@ pub struct SpawnRecord {
     /// What Hide started the child for; absent for every other spawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<SpawnTask>,
+    /// The mission the child is a worker of, counted against its cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission: Option<String>,
+    /// When the spawn was reserved; a record written before it existed has
+    /// 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub reserved_at_unix_ms: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 pub(crate) enum Mutation {
@@ -403,6 +466,14 @@ pub(crate) enum Mutation {
     /// (`executor::link_started`).
     RegisterStarted {
         record: AgentRecord,
+    },
+    /// A session took `mission` over (PRD software-factory-conductor B43):
+    /// its workers, their starts and the watches on them become those of
+    /// the registration `conductor`. Only Hide's own identity asks it, from
+    /// the mission's takeover.
+    AdoptMissionWorkers {
+        mission: String,
+        conductor: String,
     },
 }
 
@@ -797,6 +868,7 @@ pub(crate) fn apply(
                 args,
                 launch,
                 task,
+                mission,
                 ..
             } = command
             else {
@@ -830,6 +902,29 @@ pub(crate) fn apply(
             if task.as_ref().is_some_and(|task| task.kind.home().is_none()) {
                 return Err("task_kind_unknown".into());
             }
+            // The mission's Conductor now may have taken it over from the
+            // one that started its workers, as a session that registered
+            // only to start this: its workers become its own first, so this
+            // start finds the worker it already has (B43).
+            if let Some(admission) = mission {
+                adopt_mission_workers(ledger, &admission.mission, parent)?;
+            }
+            // A mission's start asked again after it stopped holding its place
+            // takes one again under the cap, or waits, so a start that comes
+            // back late never runs one worker past it (engineering #15).
+            if let Some(admission) = mission
+                && let Some(record) = ledger
+                    .spawns
+                    .iter()
+                    .find(|record| &record.parent == parent && &record.intent == intent)
+                && record.mission.as_deref() == Some(admission.mission.as_str())
+                && record.child.is_none()
+                && !record.completed
+                && now.saturating_sub(record.reserved_at_unix_ms) >= MISSION_RESERVATION_HOLD_MS
+                && mission_workers(ledger, &admission.mission, now) >= usize::from(admission.cap)
+            {
+                return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
+            }
             if let Some(record) = ledger
                 .spawns
                 .iter_mut()
@@ -857,7 +952,17 @@ pub(crate) fn apply(
                 if record.task.is_none() {
                     record.task.clone_from(task);
                 }
+                if record.mission.is_some() && record.child.is_none() && !record.completed {
+                    record.reserved_at_unix_ms = now;
+                }
                 return Ok(json!(record));
+            }
+            // A new worker past its mission's cap waits for one to end; the
+            // same intent asked again above still answers the spawn it made.
+            if let Some(admission) = mission
+                && mission_workers(ledger, &admission.mission, now) >= usize::from(admission.cap)
+            {
+                return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
             }
             if ledger.spawns.len() >= SPAWN_LIMIT {
                 return Err("capacity".into());
@@ -886,6 +991,8 @@ pub(crate) fn apply(
                 completed: false,
                 auto_watch_id: None,
                 task: task.clone(),
+                mission: mission.as_ref().map(|admission| admission.mission.clone()),
+                reserved_at_unix_ms: now,
             };
             ledger.spawns.push(record.clone());
             Ok(json!(record))
@@ -947,6 +1054,8 @@ pub(crate) fn apply(
                 }
                 record.seed_tab = Some(seed.clone());
             }
+            // A step forward keeps a mission's start holding its place.
+            record.reserved_at_unix_ms = now;
             if path.is_some() {
                 record.path = path.clone()
             };
@@ -1120,7 +1229,90 @@ pub(crate) fn apply(
             validate_registration_name(caller, record)?;
             insert_record(ledger, record, false)
         }
+        Mutation::AdoptMissionWorkers { mission, conductor } => {
+            if !caller.hide_owned() {
+                return Err("parent_authority_required".into());
+            }
+            let moved = adopt_mission_workers(ledger, mission, conductor)?;
+            Ok(json!({"moved": moved}))
+        }
     }
+}
+
+/// Makes the registration `conductor`, which conducts `mission` now, the
+/// parent of each of the mission's worker starts another registration made,
+/// with the worker's own record (its parent, or its origin when it was
+/// started without one) and the watches on it, so its retries, reports and
+/// warnings are the new Conductor's (PRD software-factory-conductor B43).
+/// A start it already asked under the same intent keeps its own record.
+fn adopt_mission_workers(
+    ledger: &mut Ledger,
+    mission: &str,
+    conductor: &str,
+) -> Result<usize, String> {
+    let heir = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == conductor && !record.ended)
+        .ok_or("agent_unavailable")?
+        .actor
+        .clone();
+    let heir = named(ledger, &heir);
+    let mut moved = 0;
+    for index in 0..ledger.spawns.len() {
+        let spawn = &ledger.spawns[index];
+        if spawn.mission.as_deref() != Some(mission) || spawn.parent == conductor {
+            continue;
+        }
+        if ledger
+            .spawns
+            .iter()
+            .any(|other| other.parent == conductor && other.intent == spawn.intent)
+        {
+            continue;
+        }
+        let former = spawn.parent.clone();
+        let former_actor = ledger
+            .agents
+            .iter()
+            .find(|record| record.id == former)
+            .map(|record| record.actor.clone());
+        let child = spawn.child.clone();
+        let auto_watch = spawn.auto_watch_id.clone();
+        ledger.spawns[index].parent = conductor.to_owned();
+        moved += 1;
+        let Some(child) = child else { continue };
+        let mut child_actor = None;
+        if let Some(record) = ledger.agents.iter_mut().find(|record| record.id == child) {
+            if record.parent.as_ref() == Some(&former) {
+                record.parent = Some(conductor.to_owned());
+            }
+            if record.origin.as_ref() == Some(&former) {
+                record.origin = Some(conductor.to_owned());
+            }
+            child_actor = Some(record.actor.clone());
+        }
+        for watch in &mut ledger.watches {
+            let on_worker = auto_watch.as_ref() == Some(&watch.id)
+                || (child_actor
+                    .as_ref()
+                    .is_some_and(|actor| actor.same_identity(&watch.target))
+                    && former_actor
+                        .as_ref()
+                        .is_some_and(|actor| actor.same_identity(&watch.parent)));
+            if on_worker && !watch.parent.same_identity(&heir) {
+                watch.generation = watch.generation.saturating_add(1);
+                watch.parent = heir.clone();
+            }
+        }
+    }
+    if moved > 0 {
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.workers_adopted",
+            "mission": mission, "conductor": conductor, "count": moved,
+        }));
+    }
+    Ok(moved)
 }
 
 /// The device a spawn's child lives on: the one the caller named, else the
@@ -1526,6 +1718,7 @@ mod tests {
 
     fn command(intent: &str) -> Command {
         Command::Spawn {
+            mission: None,
             parent: Some("here".into()),
             machine: None,
             name: "worker".into(),
@@ -1854,6 +2047,273 @@ mod tests {
             Some(id)
         );
     }
+    /// A mission's workers past its cap are refused with the cap named,
+    /// while asking again for a worker it already has still answers it, and
+    /// an ended worker frees its place (PRD software-factory-conductor B12).
+    #[test]
+    fn a_mission_spawn_past_its_cap_is_refused_and_an_ended_worker_frees_a_place() {
+        let mut ledger = Ledger::default();
+        let conductor = record("conductor", "native-conductor", None);
+        let caller = conductor.actor.clone();
+        let id = register(&mut ledger, conductor, &caller);
+        let worker = |intent: &str| {
+            let mut spawn = command(intent);
+            if let Command::Spawn { mission: slot, .. } = &mut spawn {
+                *slot = Some(crate::runtime::missions::MissionAdmission {
+                    mission: "mission-1".into(),
+                    cap: 1,
+                });
+            }
+            Mutation::Reserve {
+                parent: id.clone(),
+                command: spawn,
+            }
+        };
+        let first = apply(&mut ledger, &caller, &worker("mission-1:a"), 2).unwrap();
+        assert_eq!(first["mission"], "mission-1");
+        assert_eq!(mission_workers(&ledger, "mission-1", 6), 1);
+        let refused = apply(&mut ledger, &caller, &worker("mission-1:b"), 3).unwrap_err();
+        assert_eq!(split_refusal(&refused), ("mission_cap_reached", Some("1")));
+        assert_eq!(
+            apply(&mut ledger, &caller, &worker("mission-1:a"), 4).unwrap()["id"],
+            first["id"]
+        );
+        // Another mission and an ordinary spawn are not counted here.
+        assert_eq!(mission_workers(&ledger, "mission-2", 6), 0);
+        apply(
+            &mut ledger,
+            &caller,
+            &Mutation::Reserve {
+                parent: id.clone(),
+                command: command("plain"),
+            },
+            5,
+        )
+        .unwrap();
+        assert_eq!(mission_workers(&ledger, "mission-1", 6), 1);
+        // The worker came up and then ended: its place is free again.
+        let child = register(
+            &mut ledger,
+            record("child", "native-child", Some(id.clone())),
+            &caller,
+        );
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "mission-1:a")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.completed = true;
+        assert_eq!(mission_workers(&ledger, "mission-1", 6), 1);
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == child)
+            .unwrap()
+            .ended = true;
+        assert_eq!(mission_workers(&ledger, "mission-1", 6), 0);
+        apply(&mut ledger, &caller, &worker("mission-1:b"), 6).unwrap();
+        // A start that never produced its worker stops holding the place
+        // once it is long past, so a retry under a new intent can start.
+        let later = 6 + MISSION_RESERVATION_HOLD_MS;
+        assert_eq!(mission_workers(&ledger, "mission-1", later - 1), 1);
+        assert_eq!(mission_workers(&ledger, "mission-1", later), 0);
+        apply(&mut ledger, &caller, &worker("mission-1:c"), later).unwrap();
+        // The start that stopped holding its place comes back while `c` holds
+        // the one place: it waits rather than run a second worker, and takes
+        // the place again once `c` is gone.
+        assert_eq!(
+            split_refusal(&apply(&mut ledger, &caller, &worker("mission-1:b"), later).unwrap_err()),
+            ("mission_cap_reached", Some("1"))
+        );
+        let gone = later + MISSION_RESERVATION_HOLD_MS;
+        apply(&mut ledger, &caller, &worker("mission-1:b"), gone).unwrap();
+        assert_eq!(mission_workers(&ledger, "mission-1", gone), 1);
+    }
+    /// A session that takes a mission over gets its workers: asking a start
+    /// again under the same intent answers the worker it already has, the
+    /// worker is its child, and the watch on the worker, which a report
+    /// ends and warnings go to, is its own (B43).
+    #[test]
+    fn a_mission_taken_over_hands_its_workers_to_the_new_conductor() {
+        let mut ledger = Ledger::default();
+        let former = record("former", "native-former", None);
+        let former_actor = former.actor.clone();
+        let former_id = register(&mut ledger, former, &former_actor);
+        let worker_spawn = || {
+            let mut spawn = command("mission-1:api");
+            if let Command::Spawn { mission: slot, .. } = &mut spawn {
+                *slot = Some(crate::runtime::missions::MissionAdmission {
+                    mission: "mission-1".into(),
+                    cap: 2,
+                });
+            }
+            spawn
+        };
+        let first = apply(
+            &mut ledger,
+            &former_actor,
+            &Mutation::Reserve {
+                parent: former_id.clone(),
+                command: worker_spawn(),
+            },
+            2,
+        )
+        .unwrap();
+        let child = register(
+            &mut ledger,
+            record("worker", "native-worker", Some(former_id.clone())),
+            &former_actor,
+        );
+        let child_actor = ledger
+            .agents
+            .iter()
+            .find(|agent| agent.id == child)
+            .unwrap()
+            .actor
+            .clone();
+        let watch = watch::start(&mut ledger, &former_actor, &child_actor, 3).unwrap();
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "mission-1:api")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.completed = true;
+        spawn.auto_watch_id = Some(watch.id.clone());
+        // The former Conductor's pane is gone; another session registers.
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == former_id)
+            .unwrap()
+            .ended = true;
+        let heir = record("heir", "native-heir", None);
+        let heir_actor = heir.actor.clone();
+        let heir_id = register(&mut ledger, heir, &heir_actor);
+
+        let adopt = Mutation::AdoptMissionWorkers {
+            mission: "mission-1".into(),
+            conductor: heir_id.clone(),
+        };
+        assert_eq!(
+            apply(&mut ledger, &heir_actor, &adopt, 4).unwrap_err(),
+            "parent_authority_required",
+            "only Hide hands workers over"
+        );
+        let hide = Actor::hide("conductor", "node");
+        assert_eq!(apply(&mut ledger, &hide, &adopt, 4).unwrap()["moved"], 1);
+
+        let again = apply(
+            &mut ledger,
+            &heir_actor,
+            &Mutation::Reserve {
+                parent: heir_id.clone(),
+                command: worker_spawn(),
+            },
+            5,
+        )
+        .unwrap();
+        assert_eq!(again["id"], first["id"], "the same worker, not a second");
+        assert_eq!(again["child"], child.as_str());
+        let worker = ledger
+            .agents
+            .iter()
+            .find(|agent| agent.id == child)
+            .unwrap();
+        assert_eq!(worker.parent.as_deref(), Some(heir_id.as_str()));
+        let moved = ledger.watches.iter().find(|w| w.id == watch.id).unwrap();
+        assert!(moved.parent.same_identity(&heir_actor));
+        assert!(moved.generation > watch.generation);
+        // Asked again, nothing moves twice.
+        assert_eq!(apply(&mut ledger, &hide, &adopt, 6).unwrap()["moved"], 0);
+    }
+
+    /// The session that took a mission over may register only to start a
+    /// worker: that start hands it the workers first, one started without a
+    /// parent included, so a retry under the same intent is the worker it
+    /// already has and the ledger stays valid.
+    #[test]
+    fn a_new_conductors_first_start_takes_the_missions_workers() {
+        let mut ledger = Ledger::default();
+        let former = record("former", "native-former", None);
+        let former_actor = former.actor.clone();
+        let former_id = register(&mut ledger, former, &former_actor);
+        let handoff = |mission: &str| {
+            let mut spawn = command("mission-1:docs");
+            if let Command::Spawn {
+                mission: slot,
+                parent,
+                ..
+            } = &mut spawn
+            {
+                *parent = None;
+                *slot = Some(crate::runtime::missions::MissionAdmission {
+                    mission: mission.into(),
+                    cap: 2,
+                });
+            }
+            spawn
+        };
+        let first = apply(
+            &mut ledger,
+            &former_actor,
+            &Mutation::Reserve {
+                parent: former_id.clone(),
+                command: handoff("mission-1"),
+            },
+            2,
+        )
+        .unwrap();
+        let child_record = record("docs", "native-docs", None);
+        let child_actor = child_record.actor.clone();
+        let child = register(&mut ledger, child_record, &child_actor);
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == child)
+            .unwrap()
+            .origin = Some(former_id.clone());
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "mission-1:docs")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.pane = Some("docs".into());
+        spawn.path = Some("/fixture/docs".into());
+        spawn.completed = true;
+        validate_records(&ledger).unwrap();
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == former_id)
+            .unwrap()
+            .ended = true;
+        let heir = record("heir", "native-heir", None);
+        let heir_actor = heir.actor.clone();
+        let heir_id = register(&mut ledger, heir, &heir_actor);
+
+        let again = apply(
+            &mut ledger,
+            &heir_actor,
+            &Mutation::Reserve {
+                parent: heir_id.clone(),
+                command: handoff("mission-1"),
+            },
+            3,
+        )
+        .unwrap();
+        assert_eq!(again["id"], first["id"]);
+        let worker = ledger
+            .agents
+            .iter()
+            .find(|agent| agent.id == child)
+            .unwrap();
+        assert_eq!(worker.origin.as_deref(), Some(heir_id.as_str()));
+        validate_records(&ledger).unwrap();
+    }
+
     #[test]
     fn a_parent_intent_has_one_durable_child_and_other_parents_have_their_own() {
         let mut ledger = Ledger::default();

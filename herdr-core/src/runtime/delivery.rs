@@ -917,7 +917,7 @@ impl Runtime {
         caller: &str,
         expected: &Context,
         hint: Option<&str>,
-        command: Command,
+        mut command: Command,
     ) -> Result<Prepared, String> {
         let context = self
             .workspace_control_query(device, caller, Query::Info)
@@ -957,6 +957,22 @@ impl Runtime {
         if crate::delivery::reserved_name(&actor.name) {
             // A pane named like a Factory would read as one (D-14).
             return Err("reserved_name".into());
+        }
+        // A Conductor's spawn is one of its mission's workers: refused before
+        // the plan is approved or on another machine, and capped in the
+        // ledger (PRD software-factory-conductor B4, B11, B12).
+        if let Command::Agents {
+            command:
+                crate::coordination::Command::Spawn {
+                    machine,
+                    mission,
+                    kind,
+                    launch,
+                    ..
+                },
+        } = &mut command
+        {
+            *mission = self.mission_spawn_admission(&actor, machine.as_deref(), kind, launch)?;
         }
         // Only the pane's own session proves its composer was submitted, so a
         // stray `hide inbox --hook` from a tool in the pane clears no draft.
@@ -1330,6 +1346,7 @@ impl Runtime {
     pub(crate) fn code_owned_authority_current(&self, caller: &str, actor: &Actor) -> bool {
         caller == actor.pane_id
             && (*actor == Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, self.node.as_str())
+                || *actor == Actor::hide(super::missions::CONDUCTOR_ROLE, self.node.as_str())
                 || *actor == Actor::operator(self.node.as_str()))
     }
 

@@ -334,6 +334,10 @@ impl Core {
             );
             let restored = checks.restore();
             lock_recover(&runtime).install_composer_checks(checks, restored);
+            let missions =
+                crate::missions::MissionStore::new(hide_kit::layout::missions(directory));
+            let restored = missions.restore();
+            lock_recover(&runtime).install_mission_store(missions, restored);
         }
         // Before any coordinator starts, because each builds its label worker
         // on these, and before the kit runs, because the plugin state the
@@ -501,6 +505,40 @@ impl Core {
             return Err("delivery_unavailable".into());
         }
         lock_recover(&self.runtime).prepare_delivery(device, caller, expected, hint, command)
+    }
+
+    /// Runs a Conductor's `hide mission` command (PRD
+    /// software-factory-conductor D-23): one change under the lock, saved
+    /// by the mission store's own thread.
+    pub fn mission_command(
+        &self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+        command: crate::missions::MissionCommand,
+    ) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "mission.command") {
+            return Err("mission_unavailable".into());
+        }
+        let (answer, changed) =
+            lock_recover(&self.runtime).mission_command(device, caller, expected, command)?;
+        if changed {
+            notify_change(self);
+        }
+        Ok(answer)
+    }
+
+    /// `hide agent catalog`: the agents, models and efforts of `machine`, or
+    /// of the caller's own `device` (PRD software-factory-conductor D-35).
+    pub fn agent_catalog(
+        &self,
+        device: &str,
+        machine: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "agent.catalog") {
+            return Err("catalog_unavailable".into());
+        }
+        lock_recover(&self.runtime).agent_catalog(device, machine)
     }
 
     /// Checks a `hide memory` caller and takes what its command needs; the

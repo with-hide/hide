@@ -5,6 +5,7 @@ use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 mod agent_areas;
+mod agent_catalog;
 pub(crate) mod agent_choice;
 mod agent_close;
 mod agent_groups;
@@ -43,6 +44,7 @@ pub(crate) mod memory_analysis;
 pub(crate) mod memory_evidence;
 pub(crate) mod memory_promotion;
 mod memory_verify;
+pub(crate) mod missions;
 mod op_timing;
 mod operations;
 pub(crate) mod output_language;
@@ -1136,6 +1138,9 @@ pub struct Runtime {
     /// When each observed pane's input was last traced (`delivery.input`).
     delivery_input_traced: HashMap<String, u64>,
     composer_store: Option<crate::composer_store::ComposerStore>,
+    /// Each Conductor's mission and the store that keeps them
+    /// (`missions.rs`, PRD software-factory-conductor D-22).
+    missions: missions::MissionRuntime,
     /// The agent versions whose composer was checked against its
     /// declaration (`composer_checks.rs`), and the store that keeps them.
     composer_checks: Vec<crate::composer_checks::Check>,
@@ -1989,6 +1994,10 @@ impl Runtime {
                         "ui_state.detail_unknown",
                         "The stored 보기 slot was not recognized; it loaded empty",
                     ),
+                    persistence::UnrecognizedField::ConductorSettings => (
+                        "ui_state.conductor_settings_unknown",
+                        "The stored Settings › Conductor was not recognized; the defaults were used",
+                    ),
                 })
                 .collect(),
             persistence::LoadDisposition::Missing => vec![(
@@ -2089,6 +2098,7 @@ impl Runtime {
             composer_marks: Vec::new(),
             delivery_input_traced: HashMap::new(),
             composer_store: None,
+            missions: missions::MissionRuntime::default(),
             composer_checks: Vec::new(),
             composer_checks_store: None,
             delivery_overflow: HashSet::new(),

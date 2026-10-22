@@ -483,6 +483,7 @@ fn spawn(
         args,
         launch,
         task,
+        mission: _,
     } = &command
     else {
         return Err("invalid_spawn".into());
@@ -1642,6 +1643,7 @@ mod tests {
                 &Mutation::Reserve {
                     parent: self.parent.clone(),
                     command: Command::Spawn {
+                        mission: None,
                         parent: Some(self.parent.clone()),
                         machine: None,
                         name: name.into(),
@@ -1888,6 +1890,7 @@ mod tests {
                 .unwrap()
                 .to_owned();
             let command = Command::Spawn {
+                mission: None,
                 parent: Some("here".into()),
                 machine: None,
                 name: "recipient".into(),

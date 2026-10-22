@@ -197,6 +197,12 @@ struct StoredUiState {
     project_issue_sources: BTreeMap<String, String>,
     #[serde(default)]
     issue_settings: StoredIssueSettings,
+    /// Absent in a store written before Settings › Conductor, which loads
+    /// the defaults. Kept as a value, as `detail` is, so one this build
+    /// cannot read or refuses loads the defaults instead of making the whole
+    /// store unreadable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    conductor_settings: Option<serde_json::Value>,
     /// The agent kind and per-kind model last started with. Absent in a
     /// store written before it existed, which seeds it once from the removed
     /// `issue_settings.default_agent` (PRD home-device-rail D-18).
@@ -264,6 +270,8 @@ pub enum UnrecognizedField {
     SidebarLens,
     /// The lane's 보기 slot; it loaded empty.
     Detail,
+    /// Settings › Conductor; the defaults were used.
+    ConductorSettings,
 }
 
 /// What the removed native app's state file holds for `shortcut_bindings`.
@@ -433,6 +441,16 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 DetailSlot::default()
             }),
     };
+    let conductor_settings = match stored.conductor_settings {
+        None => crate::missions::ConductorSettings::default(),
+        Some(value) => serde_json::from_value::<crate::missions::ConductorSettings>(value)
+            .ok()
+            .filter(|settings| settings.validate().is_ok())
+            .unwrap_or_else(|| {
+                unrecognized.push(UnrecognizedField::ConductorSettings);
+                crate::missions::ConductorSettings::default()
+            }),
+    };
     let disposition = if unrecognized.is_empty() {
         LoadDisposition::Loaded
     } else {
@@ -520,6 +538,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
                 )
             }),
             issue_settings: stored.issue_settings.settings,
+            conductor_settings,
             agent_sleep: {
                 let mut store = stored.agent_sleep;
                 store.after_load();
@@ -680,6 +699,10 @@ pub fn save(
             settings: state.issue_settings.clone(),
             default_agent: None,
         },
+        conductor_settings: Some(
+            serde_json::to_value(&state.conductor_settings)
+                .expect("Settings › Conductor serializes"),
+        ),
         agent_start: Some(state.agent_start.clone()),
         agent_sleep: state.agent_sleep.clone(),
         session_archive: state.session_archive.clone(),
@@ -1412,6 +1435,42 @@ mod tests {
         );
         assert_eq!(unknown_state.sidebar_lens, SidebarLens::Projects);
         assert_eq!(unknown_state.detail, DetailSlot::default());
+    }
+
+    /// Settings › Conductor survives a relaunch, and a value this build
+    /// cannot read (a later build's field, a cap out of range) loads the
+    /// defaults and says so while every other stored choice still loads.
+    #[test]
+    fn conductor_settings_this_build_cannot_read_load_the_defaults_and_keep_the_rest() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("state.json");
+        let mut state = UiStateSnapshot::default();
+        state.conductor_settings.concurrency = 6;
+        save(&path, &state, &PaneTerminalSizes::new()).expect("persist the settings");
+        let (restored, _sizes, disposition) = load(&path);
+        assert_eq!(disposition, LoadDisposition::Loaded);
+        assert_eq!(restored.conductor_settings.concurrency, 6);
+
+        for settings in [
+            r#"{"concurrency":3,"later_field":true}"#,
+            r#"{"concurrency":99}"#,
+        ] {
+            let stored = format!(
+                r#"{{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+                "sidebar_lens":"tasks","conductor_settings":{settings}}}"#
+            );
+            let (state, _sizes, disposition) = decode(stored.as_bytes());
+            assert_eq!(
+                disposition,
+                LoadDisposition::Unrecognized(vec![UnrecognizedField::ConductorSettings]),
+                "{settings}"
+            );
+            assert_eq!(
+                state.conductor_settings,
+                crate::missions::ConductorSettings::default()
+            );
+            assert_eq!(state.sidebar_lens, SidebarLens::Tasks);
+        }
     }
 
     #[test]

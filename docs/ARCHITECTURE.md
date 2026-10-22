@@ -1123,6 +1123,22 @@ The snapshot publishes `navigator.archived_sessions` (each record's phase, wheth
 Both are optional fields, so the protocol's version did not move: an older device daemon or phone reads the snapshot as before and simply offers no archive.
 Persistence uses the folder barrier the dormant records use, on every system (The platform layer); the Windows check lane runs `an_archived_session_saves_through_the_folders_barrier_and_loads_back`.
 
+## Conductor missions
+
+A Conductor's mission (PRD software-factory-conductor) is a core-owned record, `herdr-core/src/missions.rs` for the model and the store and `runtime/missions.rs` for the commands, admissions and wakes; the Conductor's own judgement (what to start, retry or ask) stays in its conversation, and the record holds only what the map shows and the contracts Hide enforces: one Conductor per mission, no worker before the plan is approved, a worker only on the project's machine, and the mission's cap.
+Each `hide mission` command is one typed event applied under `Mutex<Runtime>` ([delivery.md: Missions](delivery.md#missions)).
+The book is saved to `missions.json` in the state folder (`hide_kit::layout::missions`) by its own `LatestFile` save thread, read back at launch with an 8 MiB cap, and bounded at 128 missions of at most 64 nodes; a book that cannot be read is logged as `missions.unreadable`, is never overwritten, and every mission command answers `mission_unavailable` until it can be read.
+The book moves with the core to another machine (`node_migration::MOVES_WITH_CORE`): a move maps each mission's machine, Project registration (`workspace_id`) and Conductor's pane and session machine as it maps the ledger's (`node_migration::KEYS`, `reown`), and keeps its paths, which sit beside its machine.
+It is published as its own revisioned rest section, `missions`, made on the snapshot read (`refresh_missions`): with no mission that read does nothing, and otherwise it compares the book's change count, the count of pull request answers, the ledger it last read, each open mission's Conductor presence and each mission's device answer, and makes views again only when one moved or a worker still being made stops counting against its cap; a closed mission's view is made again only when the book, its pull requests or its device's answer moved, and the worker registrations are read in one pass over the ledger for the nodes that name one.
+The map is a 보기 slot item, `DetailItem::Mission { mission }`, which draws that section and starts no read.
+A build from before missions does not know that item: it reads a saved slot holding one as unrecognized and starts with an empty slot (`persistence::decode`), keeping the rest of the saved UI state.
+Settings › Conductor is `ui_state.conductor_settings`, saved in `core-state.json` as a plain value, as the 보기 slot is, so a stored value this build cannot read or refuses loads the defaults (`ui_state.conductor_settings_unknown`) and the rest of the saved UI state still loads; each edit sends only the fields it changes (`conductor_settings_set`).
+The cap is enforced where a spawn is reserved: `prepare_delivery` computes the spawn's `MissionAdmission` from the caller's open mission, and the ledger's reserve counts that mission's live workers under the same lock, so two spawns at once cannot both pass.
+A take hands the mission's workers to the new Conductor in the ledger (`Mutation::AdoptMissionWorkers`), queued on the delivery worker before the take answers, so it lands before any command the new Conductor sends next; a mission spawn's reserve makes the same handover first, for a Conductor that registered only to start it.
+Pull request wakes are decided on the GitHub ingest, compared with each node's last seen head, review and merge, recorded on the mission (at most 32 unsent) until their letter is in the Conductor's inbox, and sent by `hide:conductor` from one thread of their own, at most 256 at a time.
+A command whose change would take the saved book past a 7 MiB write budget, under the 8 MiB read cap, is undone and answered `mission_full`.
+Deleting a Conductor's archived session deletes its missions in the same transition.
+
 ## The link record
 
 The link record (PRD link-graph) keeps which sessions made or worked on which pull request, which issues each pull request is linked to and from where, and which worktrees each branch had, after the panes, the branches and the provider files that said so are gone.

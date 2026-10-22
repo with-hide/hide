@@ -1167,7 +1167,91 @@ export type TaskView = "status" | "project";
 /** One thing the lane's 보기 slot shows (`DetailItem`, PRD sidebar-task-lens D-50). */
 export type DetailItem =
   | { kind: "pull_request"; workspace_id: string; number: number }
-  | { kind: "record"; session: WorkSession };
+  | { kind: "record"; session: WorkSession }
+  | { kind: "mission"; mission: string };
+
+/** A mission's state (`contracts/snapshot-wire-enums.json`: `mission_status`). */
+export type MissionStatus = "planning" | "running" | "merge_wait" | "done" | "cancelled";
+/** How far a mission goes (`mission_scope`): ready pull requests, or through the merge. */
+export type MissionScope = "pr" | "merge";
+/** A node's kind (`mission_node_kind`), each done by its own rule (D-15). */
+export type MissionNodeKind = "change" | "research" | "verify";
+/** How a change node's work lands (`mission_delivery`). */
+export type MissionDelivery = "pr" | "direct";
+/** A node's state as its Conductor records it (`mission_node_status`). */
+export type MissionNodeStatus = "planned" | "working" | "waiting" | "review" | "held" | "done" | "failed" | "dropped";
+/** Why a node waits on an earlier one (`mission_blocked`, D-46). */
+export type MissionBlocked = "upstream_failed" | "upstream_dropped";
+
+/** The agent a node or a candidate names, with its model and effort. */
+export type MissionWorker = { agent: string; model?: string | null; effort?: string | null; effort_auto?: boolean };
+
+/** One node of a mission's map, with what the map draws and nothing the shell works out (`NodeView`). */
+export type MissionNode = {
+  key: string;
+  title: string;
+  kind: MissionNodeKind;
+  depends_on: string[];
+  status: MissionNodeStatus;
+  blocked: MissionBlocked | null;
+  delivery: MissionDelivery | null;
+  worker: MissionWorker | null;
+  agent_id: string | null;
+  /** The worker's pane on `machine`, which its status mark and 터미널로 이동 follow. */
+  pane_id: string | null;
+  machine: string | null;
+  pr: number | null;
+  base_pr: number | null;
+  branch: string | null;
+  pr_state: PrState | null;
+  pr_url: string | null;
+  /** The node's step of four (D-42, D-48); none for a node without a pull request or branch (D-53). */
+  stage: number | null;
+  attempts: number;
+  line: string | null;
+  change: string | null;
+  review: string | null;
+  criteria: string | null;
+  started_at_unix_ms: number | null;
+  finished_at_unix_ms: number | null;
+};
+
+/** One mission as the map draws it (`MissionView`). */
+export type Mission = {
+  id: string;
+  title: string;
+  workspace_id: string;
+  project: string;
+  checkout_path: string;
+  device_id: string;
+  status: MissionStatus;
+  scope: MissionScope;
+  cap: number;
+  conductor: { pane_id: string; name: string; agent_kind: string; session: WorkSession | null; present: boolean };
+  nodes: MissionNode[];
+  merge_order: string[];
+  check: string | null;
+  github: string | null;
+  decision: string | null;
+  delay: string | null;
+  report: string | null;
+  created_at_unix_ms: number;
+  started_at_unix_ms: number | null;
+  closed_at_unix_ms: number | null;
+  /** Workers counted against the cap now (D-29). */
+  running: number;
+  /** The project's device does not answer; the map dims its last values (B20). */
+  stale: boolean;
+  github_stale: boolean;
+  github_read_at_unix_ms: number | null;
+};
+
+/** The missions the core keeps; `failed` when the record could not be read (B21). */
+export type MissionsSnapshot = { items: Mission[]; failed?: string };
+
+/** Settings › Conductor (D-31): the cap, the default scope and the worker candidates. */
+export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[] };
 
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };
@@ -2023,6 +2107,8 @@ export type OverviewGraphMetadata = {
 
 export type SnapshotRest = {
   overview_graph?: OverviewGraphMetadata;
+  /** Every mission and its map (PRD software-factory-conductor). */
+  missions?: MissionsSnapshot;
   git_worktrees_loading?: boolean;
   navigator?: {
     agent_scope?: AgentScope;
@@ -2124,6 +2210,7 @@ export type SnapshotRest = {
     project_settings?: Record<string, ProjectSettings>;
     project_settings_writes?: Record<string, ProjectSettingsWrite & { device_id: string; root: string }>;
     issue_settings?: IssueSettings;
+    conductor_settings?: ConductorSettings;
     agent_start?: AgentStartChoice;
     /** The checkouts last brought to the front, newest first, up to ten (PRD cmdk-recent). */
     recent_checkouts?: RecentCheckout[];

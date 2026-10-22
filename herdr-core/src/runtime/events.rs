@@ -936,6 +936,21 @@ pub(super) struct IssueSourceSetPayload {
     pub(super) source: String,
 }
 
+/// `conductor_settings_set`: the fields of Settings › Conductor one edit
+/// changes (PRD software-factory-conductor D-31, B48); an absent field keeps
+/// its value, so two edits sent before the first one's echo do not undo each
+/// other.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ConductorSettingsSetPayload {
+    #[serde(default)]
+    pub(super) concurrency: Option<u8>,
+    #[serde(default)]
+    pub(super) default_scope: Option<crate::missions::MissionScope>,
+    #[serde(default)]
+    pub(super) candidates: Option<Vec<crate::missions::Candidate>>,
+}
+
 /// `issue_settings_set`: how starting work from an issue behaves; an absent
 /// field keeps its value.
 #[derive(Debug, Deserialize)]
@@ -1606,6 +1621,7 @@ pub(super) enum Event {
     IssueSourceSet(IssueSourceSetPayload),
     ProjectSettingsSet(super::project_settings::SetPayload),
     IssueSettingsSet(IssueSettingsSetPayload),
+    ConductorSettingsSet(ConductorSettingsSetPayload),
     IssueDetailRequest(IssueDetailRequestPayload),
     GithubSearch(GithubSearchPayload),
     WorktreeNameSuggest(WorktreeNameSuggestPayload),
@@ -1887,6 +1903,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "issue_source_set" => decode!(IssueSourceSetPayload, IssueSourceSet),
         "project_settings_set" => decode!(super::project_settings::SetPayload, ProjectSettingsSet),
         "issue_settings_set" => decode!(IssueSettingsSetPayload, IssueSettingsSet),
+        "conductor_settings_set" => decode!(ConductorSettingsSetPayload, ConductorSettingsSet),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
         "github_search" => decode!(GithubSearchPayload, GithubSearch),
         "worktree_name_suggest" => decode!(WorktreeNameSuggestPayload, WorktreeNameSuggest),
@@ -3943,6 +3960,19 @@ impl Runtime {
             Event::IssueSourceSet(payload) => self.set_issue_source(payload),
             Event::ProjectSettingsSet(payload) => self.set_project_settings(payload),
             Event::IssueSettingsSet(payload) => self.set_issue_settings(payload),
+            Event::ConductorSettingsSet(payload) => {
+                let mut settings = self.snapshot.ui_state.conductor_settings.clone();
+                if let Some(concurrency) = payload.concurrency {
+                    settings.concurrency = concurrency;
+                }
+                if let Some(scope) = payload.default_scope {
+                    settings.default_scope = scope;
+                }
+                if let Some(candidates) = payload.candidates {
+                    settings.candidates = candidates;
+                }
+                self.set_conductor_settings(settings)
+            }
             Event::IssueDetailRequest(payload) => self.request_issue_detail(payload),
             Event::GithubSearch(payload) => self.request_github_search(payload),
             Event::WorktreeNameSuggest(payload) => self.suggest_worktree_name(payload),
@@ -4343,6 +4373,8 @@ impl Runtime {
                     // Settings › Issues owns these through their own events.
                     project_issue_sources: current.project_issue_sources,
                     issue_settings: current.issue_settings,
+                    // Settings › Conductor owns it through its own event.
+                    conductor_settings: current.conductor_settings,
                     // Every agent start owns this; a shared save carries it.
                     agent_start: current.agent_start,
                     agent_sleep: current.agent_sleep,

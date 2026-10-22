@@ -47,6 +47,10 @@ const PROJECT_MEMORY: &str = hide_memory::DATABASE_FILE;
 pub(crate) const SESSION_SEARCH: &str = "session-search.sqlite3";
 const LINKS: &str = "links.sqlite3";
 const LOCAL_ISSUES: &str = "local-issues.json";
+/// The Conductors' missions (`hide_kit::layout::missions`). Written only by
+/// builds that have node ids, so the layer-1 conversion has nothing in it to
+/// rewrite; a core move maps its machines, panes and projects.
+pub(crate) const MISSIONS: &str = "missions.json";
 const FACTORY: &str = "factory.sqlite3";
 /// Where a move keeps its staging copies (`reown::staging_dir`); the
 /// move's other files, which `hide_kit::layout` names, are `UNBOUND`.
@@ -68,6 +72,7 @@ pub const MOVES_WITH_CORE: &[&str] = &[
     hide_kit::layout::USAGE_STORE,
     hide_kit::layout::PRODUCT_ANALYTICS_ID,
     LOCAL_ISSUES,
+    MISSIONS,
     PROJECT_MEMORY,
     SESSION_SEARCH,
     FACTORY,
@@ -780,6 +785,38 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         "/devices/{key}",
         Mechanism::Rewritten,
         Moves::OwnPath("projects"),
+    ),
+    // A mission's project, its checkout and its nodes' paths are paths
+    // beside its `device_id`, and its workers are ledger ids: they stay.
+    (
+        MISSIONS,
+        "/missions/*/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        MISSIONS,
+        "/missions/*/workspace_id",
+        Mechanism::Owned,
+        Moves::Registration,
+    ),
+    (
+        MISSIONS,
+        "/missions/*/conductor/actor/pane_id",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        MISSIONS,
+        "/missions/*/conductor/actor/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        MISSIONS,
+        "/missions/*/conductor/session/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
     ),
 ];
 
@@ -1619,6 +1656,17 @@ mod tests {
             "local-issues.json",
             json!({"version": 1, "projects": {root.clone(): []}, "devices": {"mini": {"/srv/p": []}}}),
         );
+        // A mission book is written only by a build with node ids.
+        write(
+            MISSIONS,
+            json!({"schema_version": 1, "next": 2, "missions": [{
+                "id": "mission-1", "device_id": NODE, "workspace_id": "workspace:a", "project": root,
+                "conductor": {
+                    "actor": {"pane_id": "w1:p1", "name": "conductor", "kind": "claude", "device_id": NODE},
+                    "session": {"device_id": NODE, "agent": "claude", "session_id": "s"},
+                },
+            }]}),
+        );
 
         let memory = hide_memory::MemoryStore::open(&state.join(PROJECT_MEMORY)).unwrap();
         memory
@@ -1904,6 +1952,7 @@ mod tests {
         "editor_text_scale",
         "agent_sleep_after_hours",
         "issue_settings",
+        "conductor_settings",
         "agent_start",
     ];
 

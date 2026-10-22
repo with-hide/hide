@@ -57,6 +57,18 @@ enum Command {
         command: herdr_core::memory_command::MemoryCommand,
         reply: Sender<Result<herdr_core::memory_command::PreparedMemory, String>>,
     },
+    Mission {
+        device_id: String,
+        pane_id: String,
+        expected: Context,
+        command: herdr_core::missions::MissionCommand,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
+    AgentCatalog {
+        device_id: String,
+        machine: Option<String>,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
     SetFileRoots {
         roots: Vec<(std::path::PathBuf, std::fs::File)>,
         reply: Sender<Result<(), String>>,
@@ -274,6 +286,48 @@ impl CoreHandle {
             })
             .map_err(|_| "memory_unavailable".to_owned())?;
         result.recv().map_err(|_| "memory_unavailable".to_owned())?
+    }
+
+    /// Runs a Conductor's `hide mission` command on the owner thread.
+    pub fn mission(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+        command: herdr_core::missions::MissionCommand,
+    ) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::Mission {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                command,
+                reply,
+            })
+            .map_err(|_| "mission_unavailable".to_owned())?;
+        result
+            .recv()
+            .map_err(|_| "mission_unavailable".to_owned())?
+    }
+
+    /// `hide agent catalog`, read on the owner thread.
+    pub fn agent_catalog(
+        &self,
+        device: &str,
+        machine: Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::AgentCatalog {
+                device_id: device.to_owned(),
+                machine,
+                reply,
+            })
+            .map_err(|_| "catalog_unavailable".to_owned())?;
+        result
+            .recv()
+            .map_err(|_| "catalog_unavailable".to_owned())?
     }
 
     pub fn set_file_roots(
@@ -820,6 +874,22 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.prepare_memory(&device_id, &pane_id, &expected, command));
+            }
+            Command::Mission {
+                device_id,
+                pane_id,
+                expected,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.mission_command(&device_id, &pane_id, &expected, command));
+            }
+            Command::AgentCatalog {
+                device_id,
+                machine,
+                reply,
+            } => {
+                let _ = reply.send(core.agent_catalog(&device_id, machine.as_deref()));
             }
 
             Command::DeliveryPrepare {

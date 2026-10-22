@@ -159,6 +159,7 @@ pub(crate) mod tests {
         child: Child,
     ) -> Result<String, String> {
         let command = crate::coordination::Command::Spawn {
+            mission: None,
             parent: delegated.then(|| parent.to_owned()),
             machine: (child.machine != caller.device_id).then(|| child.machine.to_owned()),
             name: format!("child-{branch}"),
@@ -407,6 +408,7 @@ pub(crate) mod tests {
         let again = |task| Mutation::Reserve {
             parent: origin.clone(),
             command: crate::coordination::Command::Spawn {
+                mission: None,
                 parent: None,
                 machine: None,
                 name: "child-hide-memory-m72".into(),

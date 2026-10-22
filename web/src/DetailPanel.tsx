@@ -1,10 +1,12 @@
-import { ArrowLeftIcon, ExternalLinkIcon, FileTextIcon, GitPullRequestIcon, XIcon } from "lucide-react";
+import { ArrowLeftIcon, ExternalLinkIcon, FileTextIcon, GitPullRequestIcon, NetworkIcon, XIcon } from "lucide-react";
 import { cn } from "./lib/utils";
 import { PR_LOOK } from "./prMark";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
+import { MissionMap } from "./MissionMap";
+import { missionOf } from "./missions";
 import { PrCardView } from "./PrCard";
 import { SlotSessionRecord } from "./SessionRecord";
 import { recordTitle, workKey } from "./sessionWork";
@@ -14,7 +16,8 @@ import { catalogWorkspaces, type DetailItem, type DetailSlot, type WorkSession }
 import { useShellStore } from "./store";
 
 // The lane's 보기 slot (PRD sidebar-task-lens D-50, B46-B49): one pull
-// request's card or one session's record, a window's and no checkout's, so
+// request's card, one session's record or a mission's map (PRD
+// software-factory-conductor D-14), a window's and no checkout's, so
 // it stays when the Agent tab or the checkout changes. The core keeps what
 // it holds and its history; this draws the item in front under the slot's
 // head of ←, its name, GitHub for a card, and ✕.
@@ -40,6 +43,7 @@ function useItemTitle(item: DetailItem | null): string {
       const project = catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id);
       return t("detail.pr", { number: item.number, project: project?.label ?? "" });
     }
+    if (item.kind === "mission") return t("detail.mission", { title: missionOf(s.rest, item.mission)?.title ?? item.mission });
     const title = sessionTitle(s, item.session);
     return title ? t("detail.record", { title }) : t("detail.recordUntitled");
   });
@@ -55,6 +59,7 @@ export function DetailIcon({ item, className }: { item: DetailItem; className?: 
   const state = useShellStore((s) => item.kind === "pull_request"
     ? catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id)?.pull_requests?.find((row) => row.number === item.number)?.state ?? null
     : null);
+  if (item.kind === "mission") return <NetworkIcon aria-hidden="true" className={className} data-detail-mark="mission" />;
   if (item.kind !== "pull_request") return <FileTextIcon aria-hidden="true" className={className} />;
   const look = state ? PR_LOOK[state] : null;
   const Icon = look?.icon ?? GitPullRequestIcon;
@@ -78,7 +83,7 @@ export function DetailPanel({ actions }: { actions: Actions }) {
     return catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id)?.pull_requests?.find((row) => row.number === item.number)?.url ?? null;
   });
   if (!item) return null;
-  const key = item.kind === "pull_request" ? `pr:${item.workspace_id}:${item.number}` : `record:${workKey(item.session)}`;
+  const key = item.kind === "pull_request" ? `pr:${item.workspace_id}:${item.number}` : item.kind === "mission" ? `mission:${item.mission}` : `record:${workKey(item.session)}`;
   return (
     // The slot reads as a page on the lane: its head keeps the lane's surface
     // and what it holds, a card or a record alike, sits on the page's.
@@ -114,7 +119,9 @@ export function DetailPanel({ actions }: { actions: Actions }) {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" key={key}>
         {item.kind === "pull_request"
           ? <PrCardView workspaceId={item.workspace_id} number={item.number} actions={actions} />
-          : <SlotSessionRecord actions={actions} target={item.session} />}
+          : item.kind === "mission"
+            ? <MissionMap missionId={item.mission} actions={actions} />
+            : <SlotSessionRecord actions={actions} target={item.session} />}
       </div>
     </aside>
   );

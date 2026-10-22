@@ -1,6 +1,6 @@
 import ELK from "elkjs/lib/elk.bundled.js";
 import { describe, expect, it, vi } from "vitest";
-import { LAYOUT_NODE_LIMIT, edgePath, placeGraph, placeWithin, type NodeBox } from "./dependencyLayout";
+import { LAYOUT_NODE_LIMIT, edgePath, placeGraph, placeWithin, squarePath, type NodeBox } from "./dependencyLayout";
 
 const SPACING = { betweenLayers: 96, betweenNodes: 24 };
 const card = (id: string): NodeBox => ({ id, width: 288, height: 120 });
@@ -21,6 +21,43 @@ function samples(d: string): { x: number; y: number }[] {
   }
   return points;
 }
+
+describe("a mission map's top-down flow", () => {
+  it("puts a node below what it waits on and routes every edge in square legs that never cross a card", async () => {
+    const nodes = ["cause", "fix", "api", "screen", "report"].map(card);
+    const edges = [
+      { from: "cause", to: "fix" },
+      { from: "api", to: "screen" },
+      { from: "fix", to: "report" },
+      { from: "screen", to: "report" },
+      { from: "api", to: "report" },
+    ];
+    const placement = await placeGraph(new ELK(), nodes, edges, SPACING, "down");
+    const at = (id: string) => placement.nodes.get(id)!;
+    expect(at("fix").y).toBeGreaterThan(at("cause").y);
+    expect(at("report").y).toBeGreaterThan(at("screen").y);
+    expect(at("report").layer).toBe(2);
+    for (const edge of placement.edges) {
+      expect(edge.d).not.toContain(" C ");
+      const [from, to] = edge.id.split(">") as [string, string];
+      const points = edge.d.match(/-?\d+(\.\d+)?/g)!.map(Number);
+      for (const node of nodes) {
+        if (node.id === from || node.id === to) continue;
+        const place = at(node.id);
+        for (let index = 0; index + 1 < points.length; index += 2) {
+          const [x, y] = [points[index]!, points[index + 1]!];
+          expect(x > place.x && x < place.x + node.width && y > place.y && y < place.y + node.height, `${edge.id} passes through ${node.id}`).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("rounds a corner by the radius, and by half the shorter leg when a jog is shorter than that", () => {
+    expect(squarePath([{ x: 0, y: 0 }, { x: 0, y: 40 }, { x: 40, y: 40 }], 8)).toBe("M 0 0 L 0 32 Q 0 40, 8 40 L 40 40");
+    expect(squarePath([{ x: 0, y: 0 }, { x: 0, y: 6 }, { x: 40, y: 6 }], 8)).toBe("M 0 0 L 0 3 Q 0 6, 3 6 L 40 6");
+    expect(squarePath([{ x: 0, y: 0 }, { x: 0, y: 40 }], 8)).toBe("M 0 0 L 0 40");
+  });
+});
 
 describe("placeGraph", () => {
   it("routes a long edge around the cards of the columns it passes, not across them", async () => {
