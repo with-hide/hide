@@ -391,20 +391,24 @@ fn dir_state(
             Some("taken out after Hide installed it; Reinstall puts it back".to_owned()),
         ),
         SkillObserved::Missing => (ComponentState::NotInstalled, None),
-        SkillObserved::Foreign => (
+        SkillObserved::Foreign(names) => (
             ComponentState::Absent,
-            Some(format!(
-                "skills named {} that Hide did not write are already there; Hide left them alone",
-                skill_names()
-            )),
+            Some(match names.as_slice() {
+                [name] => format!(
+                    "a skill named {name} that Hide did not write is already there; Hide left it alone"
+                ),
+                _ => format!(
+                    "skills named {} that Hide did not write are already there; Hide left them alone",
+                    sentence_list(names)
+                ),
+            }),
         ),
         SkillObserved::Unreadable(reason) => (ComponentState::Failed, Some(reason.clone())),
     }
 }
 
-/// Hide's skill names as a sentence lists them: `a, b and c`.
-fn skill_names() -> String {
-    let names = crate::agents::SKILLS.map(|skill| skill.name);
+/// Names as a sentence lists them: `a, b and c`.
+fn sentence_list(names: &[&str]) -> String {
     match names.split_last() {
         Some((last, [])) => (*last).to_owned(),
         Some((last, rest)) => format!("{} and {last}", rest.join(", ")),

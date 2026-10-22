@@ -385,7 +385,7 @@ impl Skill {
                 }
                 Some(version) if version < self.version => SkillObserved::Stale,
                 Some(_) => SkillObserved::Edited,
-                None => SkillObserved::Foreign,
+                None => SkillObserved::Foreign(vec![self.name]),
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => SkillObserved::Missing,
             Err(error) => {
@@ -425,8 +425,9 @@ pub(crate) enum SkillObserved {
     /// Reinstall puts Hide's text back.
     Edited,
     Missing,
-    /// A file there that Hide did not write; it is left as it is.
-    Foreign,
+    /// Files there that Hide did not write, by the stub names they hold;
+    /// they are left as they are.
+    Foreign(Vec<&'static str>),
     Unreadable(String),
 }
 
@@ -449,13 +450,20 @@ fn combine(each: [SkillObserved; SKILLS.len()]) -> SkillObserved {
     {
         return SkillObserved::Unreadable(reason.clone());
     }
+    let foreign: Vec<&'static str> = each
+        .iter()
+        .flat_map(|observed| match observed {
+            SkillObserved::Foreign(names) => names.clone(),
+            _ => Vec::new(),
+        })
+        .collect();
     let own: Vec<&SkillObserved> = each
         .iter()
-        .filter(|observed| **observed != SkillObserved::Foreign)
+        .filter(|observed| !matches!(observed, SkillObserved::Foreign(_)))
         .collect();
     let any = |wanted: &[SkillObserved]| own.iter().any(|observed| wanted.contains(observed));
     if own.is_empty() {
-        SkillObserved::Foreign
+        SkillObserved::Foreign(foreign)
     } else if own
         .iter()
         .all(|observed| **observed == SkillObserved::Missing)
@@ -468,7 +476,7 @@ fn combine(each: [SkillObserved; SKILLS.len()]) -> SkillObserved {
     } else if own.len() < each.len() {
         // Hide's other stubs are in place; the operator's file keeps the
         // name, which is what the report says.
-        SkillObserved::Foreign
+        SkillObserved::Foreign(foreign)
     } else {
         SkillObserved::Current
     }
@@ -482,7 +490,7 @@ pub(crate) fn install_skill(dir: SkillDir, home: &Path, reinstall: bool) -> Resu
         let write = match skill.observe_in(&root) {
             SkillObserved::Missing | SkillObserved::Stale => true,
             SkillObserved::Edited => reinstall,
-            SkillObserved::Current | SkillObserved::Foreign => false,
+            SkillObserved::Current | SkillObserved::Foreign(_) => false,
             SkillObserved::Unreadable(reason) => return Err(reason),
         };
         if write {
@@ -509,7 +517,7 @@ pub(crate) fn remove_skill_in(root: &Path) -> Result<bool, String> {
     for skill in SKILLS {
         match skill.observe_in(root) {
             // An edited stub carries the operator's changes, so it stays.
-            SkillObserved::Missing | SkillObserved::Foreign | SkillObserved::Edited => {}
+            SkillObserved::Missing | SkillObserved::Foreign(_) | SkillObserved::Edited => {}
             SkillObserved::Unreadable(reason) => return Err(reason),
             SkillObserved::Current | SkillObserved::Stale => {
                 let path = skill.file_in(root);

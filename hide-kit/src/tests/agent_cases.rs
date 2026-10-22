@@ -200,18 +200,27 @@ fn an_older_stub_is_replaced_without_the_operator_asking() {
 fn a_version_1_stub_with_a_plain_description_is_replaced() {
     let fixture = Fixture::new();
     install(&fixture, "grok", ".grok");
-    let path = shared_skill(&fixture);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    // What builds before quoted descriptions wrote.
-    std::fs::write(&path, "---\nname: hide-browser\ndescription: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nRun `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n").unwrap();
-
     apply(&fixture.target, &Scope::agents(["grok"], []));
-
-    assert!(
-        std::fs::read_to_string(&path)
-            .unwrap()
-            .starts_with("---\nname: hide-browser\ndescription: \"Read and drive a browser display inside Hide. Use when")
+    let path = shared_skill(&fixture);
+    // What builds before quoted descriptions wrote.
+    let version_1 = "---\nname: hide-browser\ndescription: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nRun `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n";
+    std::fs::write(&path, version_1).unwrap();
+    assert_eq!(
+        agent(&status(&fixture.target), "grok").skill.state,
+        ComponentState::Outdated
     );
+
+    let report = apply(&fixture.target, &Scope::automatic());
+
+    assert_eq!(
+        agent(&report, "grok").skill.state,
+        ComponentState::Installed
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.starts_with(
+        "---\nname: hide-browser\ndescription: \"Read and drive a browser display inside Hide."
+    ));
+    assert_eq!(text, BROWSER_SKILL.text());
 }
 
 #[test]
@@ -376,9 +385,7 @@ fn an_operators_own_hide_skill_stays_beside_hides_other_stubs() {
     assert_eq!(skill.state, ComponentState::Absent);
     assert_eq!(
         skill.reason.as_deref(),
-        Some(
-            "skills named hide, hide-browser and hide-conductor that Hide did not write are already there; Hide left them alone"
-        )
+        Some("a skill named hide that Hide did not write is already there; Hide left it alone")
     );
     assert_eq!(std::fs::read_to_string(&own).unwrap(), mine);
     for stub in [BROWSER_SKILL, CONDUCTOR_SKILL] {
