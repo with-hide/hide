@@ -2166,7 +2166,11 @@ impl LabelWorker {
         let flow_at_unix_ms = turn_events
             .iter()
             .find(|event| event.kind == LabelEventKind::Human && operator(event))
-            .or_else(|| events.iter().rfind(|event| event.kind == LabelEventKind::Human))
+            .or_else(|| {
+                events
+                    .iter()
+                    .rfind(|event| event.kind == LabelEventKind::Human)
+            })
             .map_or(0, |event| event.at_unix_ms);
         let goal_command = goal_command_agent(pane.agent.as_str())
             && turn_events.iter().any(|event| {
@@ -2357,19 +2361,24 @@ impl LabelWorker {
                 });
                 // A summary the ledger did not take is asked again; one with
                 // no ledger to take it is not, since nothing would keep it.
-                let offsets = summaries.iter().map(|summary| summary.offset).collect::<Vec<_>>();
+                let offsets = summaries
+                    .iter()
+                    .map(|summary| summary.offset)
+                    .collect::<Vec<_>>();
                 let client = self.ledger.lock().ok().and_then(|client| client.clone());
                 let kept = match (outcome.ledger_session.clone(), client) {
                     _ if summaries.is_empty() => true,
-                    (Some(session), Some(client)) => match client.ledger(LedgerUpdate::Summaries { session, summaries }) {
-                        Ok(()) => true,
-                        Err(code) => {
-                            crate::diagnostic!(
-                                json!({"component":"labels","kind":"ledger.enqueue_failed","pane_id":pane_id,"code":code})
-                            );
-                            false
+                    (Some(session), Some(client)) => {
+                        match client.ledger(LedgerUpdate::Summaries { session, summaries }) {
+                            Ok(()) => true,
+                            Err(code) => {
+                                crate::diagnostic!(
+                                    json!({"component":"labels","kind":"ledger.enqueue_failed","pane_id":pane_id,"code":code})
+                                );
+                                false
+                            }
                         }
-                    },
+                    }
                     _ => true,
                 };
                 if kept {
@@ -2650,7 +2659,7 @@ fn owed_requests(
             events
                 .iter()
                 .find(|event| event.offset == request.offset)
-                .is_none_or(|event| feeds_work(event))
+                .is_none_or(feeds_work)
         }) {
             owed.insert((request.at_unix_ms, request.offset), request.text.clone());
         }

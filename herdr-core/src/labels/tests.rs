@@ -1907,7 +1907,10 @@ fn an_end_moves_the_goal_of_an_operator_turn_and_never_of_a_turn_no_operator_sub
     observe(&mut worker, &idle);
     settle(&mut worker, &woken);
     assert_eq!(harness.backend.calls(), named + 3);
-    assert_eq!(task(shown(&worker, &idle)).as_deref(), Some("끝에서 바꾼 이름"));
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("끝에서 바꾼 이름")
+    );
 }
 
 #[test]
@@ -3415,21 +3418,30 @@ fn only_a_turn_the_operator_started_moves_the_goal() {
 fn a_turn_end_that_reads_a_new_deliverable_opens_a_flow() {
     let harness = Harness::new();
     let (mut worker, woken, _) = harness.worker(harness.store());
-    let mut turns = vec![("user", "요청 보기 목업 그려줘"), ("assistant", "목업을 그렸어요")];
+    let mut turns = vec![
+        ("user", "요청 보기 목업 그려줘"),
+        ("assistant", "목업을 그렸어요"),
+    ];
     let path = harness.session("a", "native-a", &turns);
     harness.input.record("w1:p1", turn_at(0) - 300, false);
     harness.backend.answer("요청 보기 목업 그리기", "done", "");
     observe(&mut worker, &agent(&path, "idle", 1));
     settle(&mut worker, &woken);
 
-    turns.extend([("user", "좋아 이걸로 PRD 써줘"), ("assistant", "PRD 초안을 썼어요")]);
+    turns.extend([
+        ("user", "좋아 이걸로 PRD 써줘"),
+        ("assistant", "PRD 초안을 썼어요"),
+    ]);
     harness.session("a", "native-a", &turns);
     harness.input.record("w1:p1", turn_at(2) - 300, false);
     harness.backend.begin("요청 보기 목업 그리기");
     let working = agent(&path, "working", 2);
     observe(&mut worker, &working);
     settle(&mut worker, &woken);
-    assert_eq!(task(shown(&worker, &working)).as_deref(), Some("요청 보기 목업 그리기"));
+    assert_eq!(
+        task(shown(&worker, &working)).as_deref(),
+        Some("요청 보기 목업 그리기")
+    );
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "요청 보기 PRD 작성", "goal_update": "replace",
         "line": "PRD 초안 작성", "end": "done",
@@ -3438,7 +3450,10 @@ fn a_turn_end_that_reads_a_new_deliverable_opens_a_flow() {
     let idle = agent(&path, "idle", 3);
     observe(&mut worker, &idle);
     settle(&mut worker, &woken);
-    assert_eq!(task(shown(&worker, &idle)).as_deref(), Some("요청 보기 PRD 작성"));
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("요청 보기 PRD 작성")
+    );
 }
 
 /// B15: a letter that lands while the agent works does not hide the
@@ -3447,7 +3462,10 @@ fn a_turn_end_that_reads_a_new_deliverable_opens_a_flow() {
 fn a_goal_command_followed_by_a_letter_in_the_same_turn_still_opens_a_flow() {
     let harness = Harness::new();
     let (mut worker, woken, _) = harness.worker(harness.store());
-    let mut turns = vec![("user", "요청 보기 목업 그려줘"), ("assistant", "목업을 그렸어요")];
+    let mut turns = vec![
+        ("user", "요청 보기 목업 그려줘"),
+        ("assistant", "목업을 그렸어요"),
+    ];
     let path = harness.session("a", "native-a", &turns);
     harness.input.record("w1:p1", turn_at(0) - 300, false);
     harness.backend.answer("요청 보기 목업 그리기", "done", "");
@@ -3457,7 +3475,10 @@ fn a_goal_command_followed_by_a_letter_in_the_same_turn_still_opens_a_flow() {
     turns.extend([
         ("user", "/goal 요청 보기 구현"),
         ("assistant", "구현을 시작했어요"),
-        ("user", "Hide letter letter-1 from impl-a (claude) [report]\n끝났어요"),
+        (
+            "user",
+            "Hide letter letter-1 from impl-a (claude) [report]\n끝났어요",
+        ),
         ("assistant", "구현을 마쳤어요"),
     ]);
     harness.session("a", "native-a", &turns);
@@ -3470,7 +3491,10 @@ fn a_goal_command_followed_by_a_letter_in_the_same_turn_still_opens_a_flow() {
     let idle = agent(&path, "idle", 3);
     observe(&mut worker, &idle);
     settle(&mut worker, &woken);
-    assert_eq!(task(shown(&worker, &idle)).as_deref(), Some("요청 보기 구현"));
+    assert_eq!(
+        task(shown(&worker, &idle)).as_deref(),
+        Some("요청 보기 구현")
+    );
 }
 
 /// B3, D-06: a block lasts until the agent runs again; a working state ends it
@@ -5694,7 +5718,10 @@ fn a_flow_opened_by_a_turn_with_a_late_letter_starts_at_the_operators_request() 
         },
         LedgerContext::default(),
     );
-    let mut lines = vec![("user", "요청 보기 목업 그려줘"), ("assistant", "목업을 그렸어요")];
+    let mut lines = vec![
+        ("user", "요청 보기 목업 그려줘"),
+        ("assistant", "목업을 그렸어요"),
+    ];
     let path = later_session(&harness, &lines);
     harness.input.record("w1:p1", LATER - 300, false);
     harness.backend.answer("요청 보기 목업 그리기", "done", "");
@@ -5703,7 +5730,10 @@ fn a_flow_opened_by_a_turn_with_a_late_letter_starts_at_the_operators_request() 
     lines.extend([
         ("user", "/goal 요청 보기 구현"),
         ("assistant", "구현을 시작했어요"),
-        ("user", "Hide letter letter-1 from impl-a (claude) [report]\n끝났어요"),
+        (
+            "user",
+            "Hide letter letter-1 from impl-a (claude) [report]\n끝났어요",
+        ),
         ("assistant", "구현을 마쳤어요"),
     ]);
     later_session(&harness, &lines);

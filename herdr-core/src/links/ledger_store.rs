@@ -1404,19 +1404,22 @@ impl LinkStore {
                 *request_budget -= 1;
                 let (offset, at, text, author, summary, answers, letter_from, images) =
                     row.map_err(failed)?;
-                requests.push(shown_request(&session.agent, RecordedRequest {
-                    offset,
-                    at_unix_ms: at,
-                    text,
-                    author: decoded(author)?,
-                    images,
-                    summary,
-                    answers,
-                    letter_from,
-                    count: 1,
-                    repeats: Vec::new(),
-                    goal_command: false,
-                }));
+                requests.push(shown_request(
+                    &session.agent,
+                    RecordedRequest {
+                        offset,
+                        at_unix_ms: at,
+                        text,
+                        author: decoded(author)?,
+                        images,
+                        summary,
+                        answers,
+                        letter_from,
+                        count: 1,
+                        repeats: Vec::new(),
+                        goal_command: false,
+                    },
+                ));
             }
             requests.reverse();
             record.flows = place_flows(&chapters, requests, &turns);

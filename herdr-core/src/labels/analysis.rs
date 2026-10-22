@@ -881,7 +881,8 @@ mod tests {
             assistant("끝", 6),
         ];
         let judged = turn_key(&events[..2]);
-        let offsets = |slice: &[LabelEvent]| slice.iter().map(|event| event.offset).collect::<Vec<_>>();
+        let offsets =
+            |slice: &[LabelEvent]| slice.iter().map(|event| event.offset).collect::<Vec<_>>();
         assert_eq!(offsets(this_turn(&events, judged)), [2, 3, 4, 5, 6]);
         assert_eq!(offsets(this_turn(&events, None)), [5, 6]);
         assert_eq!(offsets(this_turn(&events, Some(0))), [5, 6]);
