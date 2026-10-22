@@ -301,8 +301,9 @@ test("the lane chord brings the card back with its tool and alone, and the slot 
     fs.writeFileSync(path.join(other, "README.md"), "# other\n");
     await registerFolder(page, daemon, other);
     await page.locator('[data-sidebar-lens-option="projects"]').click();
-    await expect(page.locator("[data-project]")).toHaveCount(2, { timeout: 20_000 });
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "other" }).locator("[data-checkout]").first())).click();
+    const otherRow = page.locator("[data-project]", { hasText: "other" });
+    await expect(otherRow).toHaveCount(1, { timeout: 20_000 });
+    await (await showProjectRow(page, otherRow.locator("[data-checkout]").first())).click();
     await expect(screen).toHaveAttribute("data-lane-mode", "closed");
     await expect(slot).toHaveAttribute("aria-pressed", "false");
     await slot.click();
