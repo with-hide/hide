@@ -2201,6 +2201,75 @@ fn closing_the_lane_whole_keeps_the_card_and_the_slot_button_opens_a_closed_lane
     assert!(!runtime.snapshot.ui_state.detail.shown);
 }
 
+/// PRD lane-two-columns B9, B19: with the lane already open on a tool, a
+/// card opened, the rail's button on a shown slot and ← are each a call
+/// the viewing column's, so a stacked lane draws the slot over the tool
+/// instead of leaving it behind.
+#[test]
+fn every_way_the_slot_comes_forward_is_a_viewing_column_call() {
+    use crate::model::LaneCallSide;
+    let (mut runtime, _checkout_id, _directory) = views_runtime("lane-slot-forward");
+    let pulls: Vec<crate::model::PullRequestSnapshot> = [42, 43]
+        .into_iter()
+        .map(|number| {
+            serde_json::from_value(serde_json::json!({
+                "number":number,"title":"Ship","url":format!("https://github.com/acme/app/pull/{number}"),
+                "head_branch":format!("feature-{number}"),"base_branch":"main","badge":"open","checks":"passing",
+                "is_draft":false,"closing_issues":[]
+            }))
+            .unwrap()
+        })
+        .collect();
+    runtime.snapshot.navigator.workspaces[0].pull_requests = pulls;
+    let called = |runtime: &Runtime| {
+        let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+        (
+            view.open,
+            view.tool,
+            view.lane_called,
+            view.lane_called_side,
+        )
+    };
+    layout(&mut runtime, serde_json::json!({"tool": "prs"}));
+    let (_, _, tool_call, _) = called(&runtime);
+    for (step, event, payload) in [
+        (
+            "a card",
+            "pr_open",
+            serde_json::json!({"workspace_id": "workspace:order", "pr_number": 42}),
+        ),
+        (
+            "a second card",
+            "pr_open",
+            serde_json::json!({"workspace_id": "workspace:order", "pr_number": 43}),
+        ),
+        (
+            "the button on a shown slot",
+            "detail_show",
+            serde_json::json!({"shown": true}),
+        ),
+        ("←", "detail_back", serde_json::json!({})),
+    ] {
+        let before = called(&runtime).2;
+        assert!(
+            runtime.dispatch_json(&explorer_event(event, payload)),
+            "{step}"
+        );
+        let (open, tool, after, side) = called(&runtime);
+        assert!(
+            after > before,
+            "{step} is a call with the lane already open"
+        );
+        assert_eq!(
+            (open, tool, side),
+            (true, Some(Tool::Prs), LaneCallSide::View),
+            "{step}"
+        );
+        assert!(runtime.snapshot.ui_state.detail.shown, "{step}");
+    }
+    assert!(called(&runtime).2 > tool_call);
+}
+
 /// PRD lane-two-columns B8, B19: a call records which column it brought
 /// forward, so a reveal into the Explorer the tool column already shows is
 /// read as the tool column's, not guessed from a tool that did not change.

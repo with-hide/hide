@@ -309,6 +309,33 @@ test("the lane chord brings the card back with its tool and alone, and the slot 
   });
 });
 
+test("in a stacked lane with the PRs tool in front, a row brings its card forward over the tool (lane-two-columns B9, B19)", async ({ page }) => {
+  await openWork(page, async ({ work }) => {
+    const screen = page.locator("[data-workspace-screen]");
+    // A document in the viewing column and the PRs tool, pinned, in a body
+    // with room for one column only: the lane stacks with the tool in front.
+    await showTool(page, "explorer");
+    await page.locator('[data-explorer-row$="/README.md"]').dblclick();
+    await expect(screen).toHaveAttribute("data-lane-view", "documents");
+    await showTool(page, "prs");
+    await setLanePinned(page, true);
+    await page.setViewportSize({ width: 1100, height: 1000 });
+    await expect(screen).toHaveAttribute("data-lane-stacked", "true");
+    await expect(screen).toHaveAttribute("data-lane-shows", "prs");
+    await expect(screen).toHaveAttribute("data-lane-view", "none");
+    await work.locator('[data-pr-row="31"]').click();
+    await expect(cardOf(page, 31)).toBeVisible({ timeout: 30_000 });
+    await expect(screen).toHaveAttribute("data-lane-view", "detail");
+    await expect(screen).toHaveAttribute("data-lane-shows", "none");
+    // The PRs icon brings the tool back in front, and the slot button the card.
+    await showTool(page, "prs");
+    await expect(screen).toHaveAttribute("data-lane-view", "none");
+    await page.locator('[data-lane-tool="detail"]').click();
+    await expect(cardOf(page, 31)).toBeVisible();
+    await expect(screen).toHaveAttribute("data-lane-view", "detail");
+  });
+});
+
 test("a branch update on a pull request that moved is refused, looked at again, then goes out on the new head", async ({ page }) => {
   await openWork(page, async ({ gh, work }) => {
     // GitHub refuses, the card says it changed, Look again reads it and the

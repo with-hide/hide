@@ -109,7 +109,7 @@ impl Runtime {
         if self.snapshot.ui_state.detail != before {
             self.persist_ui_state();
         }
-        self.open_front_lane();
+        self.call_front_lane();
         true
     }
 
@@ -125,6 +125,8 @@ impl Runtime {
         self.persist_ui_state();
         if self.snapshot.ui_state.detail.items.is_empty() {
             self.show_front_documents_if_any();
+        } else {
+            self.call_front_lane();
         }
         true
     }
@@ -157,15 +159,18 @@ impl Runtime {
         }
         if detail.shown == shown {
             // The slot is the window's: shown, it may still stand in a
-            // checkout whose own lane is closed, and the button opens that
-            // lane (B22, B11).
-            return shown && self.open_front_lane();
+            // checkout whose own lane is closed, or behind a stacked lane's
+            // tool, and the button brings it forward (B22, B11, B19).
+            if shown {
+                self.call_front_lane();
+            }
+            return shown;
         }
         detail.shown = shown;
         if shown {
             let top = self.snapshot.ui_state.detail.top().cloned();
             self.read_detail_top(top.as_ref(), true);
-            self.open_front_lane();
+            self.call_front_lane();
         } else {
             self.fold_front_documents();
         }
@@ -173,23 +178,25 @@ impl Runtime {
         true
     }
 
-    /// Opens the front Workspace's lane, so the slot is drawn; its columns
-    /// come back as they were (lane-two-columns B15). Whether it was closed.
-    fn open_front_lane(&mut self) -> bool {
+    /// The one way the slot comes forward, whatever opened it (a card, a
+    /// record, the map, ← or the rail's button): the front Workspace's lane
+    /// opens when it was closed, its columns as they were (lane-two-columns
+    /// B15), and the call is numbered as the viewing column's, so a stacked
+    /// lane draws the slot over its tool (B9, B19).
+    fn call_front_lane(&mut self) {
         let Some(key) = self.front_workspace_key() else {
-            return false;
+            return;
         };
         let Some(store) = self.workspace_views.as_mut() else {
-            return false;
+            return;
         };
         let entry = store.views.entry(&key.0, &key.1);
-        if entry.open {
-            return false;
-        }
+        let was_closed = !entry.open;
         entry.open = true;
         store.call_lane(&key, crate::model::LaneCallSide::View);
-        self.persist_workspace_views();
-        true
+        if was_closed {
+            self.persist_workspace_views();
+        }
     }
 
     /// The slot emptied: the documents take the viewing column when the
