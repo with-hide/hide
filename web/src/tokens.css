@@ -191,6 +191,8 @@
   --size-lane-page: 900px;
   --size-tree-min: 180px;
   --size-tree-ideal: 240px;
+  --size-lane-panel-min: 360px;
+  --size-lane-panel-ideal: 400px;
   --size-tool-rail: 48px;
   --size-tool-rail-button: 40px;
   --size-workspace-area-min: 224px;

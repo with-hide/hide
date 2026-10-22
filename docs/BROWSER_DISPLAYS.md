@@ -483,7 +483,7 @@ A shell drag (a tab, a divider, a lane divider, a tree item) marks the document 
 A new shell drag sets that mark rather than adding its guide to the overlay selector; a drag inside a page never touches the shell and is the page's own.
 Radix layers and the Recent cycle mount as children of the body, where the sync watches for them.
 While a layer that can move with its anchor (a popover, a menu) is drawn over a page the sync follows it every frame.
-Pages sit only in the right lane's files tool, and the lane is drawn over Agent Views or beside them, never under another part of the shell (PRD right-lane D-02), so a page needs no still for the lane; a lane put away or closed, or the files tool under another tool, hides its slots before the lane goes inert, which hides their pages without closing them.
+Pages sit only among the documents of the right lane's viewing column, and the lane is drawn over Agent Views or beside them, never under another part of the shell (PRD right-lane D-02), so a page needs no still for the lane; a lane put away or closed, or the documents folded, behind the 보기 slot or behind a stacked tool column, hides its slots before they go inert, which hides their pages without closing them (PRD lane-two-columns B3).
 
 The idle still is one capture per shown page of the front Workspace, kept with the page's address and its slot's size; a still of another address or size is never drawn.
 It is taken once a page has been quiet for half a second (`STILL_QUIET_MS`) after its load finished, its address changed, its slot changed size, or it came into view, and only while the page is shown, uncovered, loaded and not failed; nothing else asks, so an idle page is not captured again, and there is no timer per frame or per tick.

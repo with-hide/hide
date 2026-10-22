@@ -17,6 +17,7 @@ pub mod coordination;
 pub mod dag;
 pub mod delivery;
 mod device_catalog;
+pub mod device_command;
 pub mod diagnostics;
 pub mod direct_observation;
 mod disk;

@@ -14,7 +14,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { runInPane, startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
-import { countSent, enterWorkspace, showExplorer, showProjectRow, showTool } from "../../web/e2e/wire";
+import { chooseExpand, countSent, enterWorkspace, setLanePinned, showDocuments, showExplorer, showProjectRow } from "../../web/e2e/wire";
 import { fitWindow, focusPage, hostLog, isolate, launch, NEEDS_FOCUS, nodeOf, relaunch, screenshot, shellPage, test, type Isolated } from "./fixture";
 import { compositorPresents, quietFor } from "../../web/e2e/wait";
 
@@ -222,14 +222,17 @@ test(`browser: Agent tabs share one page per address through a background open a
   const otherPane = created.result.root_pane.pane_id;
   const url = `${origin}/a.html`;
   const chooseTab = async (id: string, callFiles = true) => {
-    // The lane over the agents can cover their tab strip: the Files icon
-    // closes it for the choice, and the files tool comes back after unless
-    // the next open calls it (PRD right-lane B2, B16).
-    const files = page.locator('[data-lane-tool="files"]');
-    if ((await files.getAttribute("aria-pressed")) === "true") await files.click();
+    // The lane over the agents can cover their tab strip: ⌘E closes it for
+    // the choice, and the documents come back after unless the next open
+    // calls them (PRD right-lane B2, B16; lane-two-columns B15).
+    const screen = page.locator("[data-workspace-screen]");
+    if ((await screen.getAttribute("data-lane-mode")) !== "closed") {
+      await menuClick("toggle_lane");
+      await expect(screen).toHaveAttribute("data-lane-mode", "closed");
+    }
     await page.locator(`[data-agent-tab-bar] [data-tab="${id}"]`).click();
     await expect(page.locator(`[data-agent-tab-bar] [data-tab="${id}"]`)).toHaveAttribute("aria-selected", "true");
-    if (callFiles) await showTool(page, "files");
+    if (callFiles) await showDocuments(page);
   };
   try {
     const opened = await openFromCli(url, ["--wait"]);
@@ -463,7 +466,7 @@ test("browser: a page opens from an agent's pane, follows its area, moves withou
   app = await relaunch(run.env);
   const again = await shellPage(app);
   await enterWorkspace(again, "fixture");
-  await showTool(again, "files");
+  await showDocuments(again);
   await expect(tab(again, "Page A")).toBeVisible({ timeout: 20_000 });
   await tab(again, "Page A").click();
   await expect.poll(async () => (await views()).find((view) => view.url === `${origin}/a.html`)?.visible).toBe(true);
@@ -476,7 +479,7 @@ test("browser: a page opens from an agent's pane, follows its area, moves withou
     const plain = await browser.newPage();
     await plain.goto(status.url);
     await enterWorkspace(plain, "fixture");
-    await showTool(plain, "files");
+    await showDocuments(plain);
     await tab(plain, "Page A").click();
     // Page C, opened beside Page A, shows the same notice in its own area.
     await expect(plain.locator(`[data-browser-display="${a}"] [data-area-empty="browser-host"]`)).toContainText("Pages open in the hide desktop app.");
@@ -564,17 +567,18 @@ test("browser: a shell layer never has a page drawn over it, and a page tab's hi
   await expect(page.locator("[data-browser-still]")).toHaveCount(0);
   await app.evaluate(() => { (globalThis as unknown as { __captureProbe: { delay: number } }).__captureProbe.delay = 0; });
 
-  // In a narrow window the lane still carries the page: another tool hides
-  // it, and the Files icon puts it back on its slot (PRD right-lane B19,
-  // B21).
+  // In a narrow window the lane still carries the page: the columns stack,
+  // a tool called comes in front and hides it, and the documents button
+  // puts it back on its slot (PRD right-lane B19, B21; lane-two-columns B19).
   await fitWindow(app, { width: 720, height: WINDOW.height });
-  await showTool(page, "files");
+  await showDocuments(page);
   await expectOnSlot(page, url, a);
   await page.locator('[data-lane-tool="prs"]').click();
   await expect(page.locator('[data-lane="prs"]')).toBeVisible();
-  await expect.poll(shown, { message: "another tool in the lane hides the page" }).toBe(false);
+  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-stacked", "true");
+  await expect.poll(shown, { message: "the tool in front of the stacked lane hides the page" }).toBe(false);
   await windowShot("browser-narrow-tools");
-  await page.locator('[data-lane-tool="files"]').click();
+  await page.locator('[data-lane-tool="documents"]').click();
   await expect.poll(shown).toBe(true);
   await expectOnSlot(page, url, a);
 });
@@ -1057,16 +1061,14 @@ test("zoom: the text-size commands zoom a focused page in Chrome's steps and a p
   await windowShot("browser-zoom-pinched");
 });
 
-/** The files tool expanded over the body with its tree off, so its areas have the width to sit side by side (PRD right-lane B8). */
+/** The documents expanded over the body with the tool column closed, so their areas have the width to sit side by side (PRD right-lane B8; lane-two-columns B14, B20). */
 async function widenFiles(page: Page): Promise<void> {
-  await showTool(page, "files");
-  if ((await page.locator('[data-lane-tree="beside"]').count()) > 0) {
-    await page.locator("[data-lane-more]").click();
-    await page.locator('[data-lane-menu-item="tree"]').click();
-  }
-  await expect(page.locator('[data-lane-tree="beside"]')).toHaveCount(0);
+  await showDocuments(page);
+  const tool = page.locator('[data-lane-column="tool"]');
+  if ((await tool.count()) > 0) await tool.locator("[data-lane-tool-close]").click();
+  await expect(tool).toHaveCount(0);
   const screen = page.locator("[data-workspace-screen]");
-  if ((await screen.getAttribute("data-lane-mode")) !== "expanded") await page.locator("[data-lane-expand]").click();
+  if ((await screen.getAttribute("data-lane-mode")) !== "expanded") await chooseExpand(page);
   await expect(screen).toHaveAttribute("data-lane-mode", "expanded");
 }
 
@@ -1089,8 +1091,8 @@ async function bodyWidth(page: Page, width: number): Promise<number> {
   return zoom;
 }
 
-/** A lane width as the core stores it for the checkout, absent until it is first set: Files' `lane_width` or the other tools' `panel_width`. */
-function storedLaneWidth(field: "lane_width" | "panel_width" = "lane_width"): number | undefined {
+/** A lane width as the core stores it for the checkout, absent until it is first set: the documents' `document_width` or the panel tools' `panel_width` (PRD lane-two-columns D-09). */
+function storedLaneWidth(field: "document_width" | "panel_width" = "document_width"): number | undefined {
   const views = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "workspace-views.json"), "utf8")) as { workspaces: ({ path: string } & Partial<Record<typeof field, number>>)[] };
   return views.workspaces.find((entry) => entry.path.endsWith(`${path.sep}fixture`) || entry.path.endsWith("/fixture"))?.[field];
 }
@@ -1117,7 +1119,7 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
   expect(await openFromCli(site, ["--wait"])).toMatchObject({ ok: true });
   await expect(divider).toHaveAttribute("aria-valuenow", "900");
   await expect.poll(() => storedLaneWidth()).toBe(900);
-  // Only Files widens; the width Memory and the other tools share is left as it was.
+  // Only the documents widen; the width Memory and the other panel tools share is left as it was.
   expect(storedLaneWidth("panel_width")).toBeUndefined();
   const displayId = await displayIdOf(page, "Site");
   // The page fills its slot, the lane's 900 less the area's edges; the shell
@@ -1162,16 +1164,16 @@ test("page width: widening leaves Agent Views 480 pinned or not, never narrows, 
   const body = 1200;
   await bodyWidth(page, body);
   const divider = page.locator('[data-lane-divider="lane"]');
-  const tree = page.locator('[data-lane-divider="tree"]');
-  // What Agent Views keeps beside the lane and its tree (B2).
-  const room = async () => body - 8 - ((await tree.count()) ? Number(await tree.getAttribute("aria-valuenow")) + 8 : 0) - 480;
+  const tool = page.locator('[data-lane-column="tool"]');
+  // What Agent Views keeps beside the documents and the tool column (B2).
+  const room = async () => body - 8 - ((await tool.count()) ? Math.round((await tool.boundingBox())!.width) + 8 : 0) - 480;
 
   expect(await openFromCli(`${origin}/site.html`, ["--wait"])).toMatchObject({ ok: true });
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
   await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBe(await room());
 
   // Pinned and narrowed to its minimum, the next page widens it only as far again.
-  await page.locator("[data-lane-pin]").click();
+  await setLanePinned(page, true);
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
   const box = (await divider.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + 100);
@@ -1185,7 +1187,7 @@ test("page width: widening leaves Agent Views 480 pinned or not, never narrows, 
   await expect.poll(() => storedLaneWidth()).toBe(widened);
 
   // A wider window and an expanded lane: a page opened there changes no width.
-  await page.locator("[data-lane-expand]").click();
+  await chooseExpand(page);
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "expanded");
   expect(await openFromCli(`${origin}/a.html`, ["--wait"])).toMatchObject({ ok: true });
   await expect(tab(page, "Page A")).toHaveAttribute("aria-selected", "true");

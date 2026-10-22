@@ -1015,7 +1015,8 @@ Removal does not need the helper, and must not: it reads the configuration file 
 Removing a device from Hide does that on the device while its helper is connected (D-16); the operator removes a hook on their own machine by editing the file, and the kit then leaves it removed.
 
 `hide-agent-hooks doctor [--json]` prints the same judgement in a terminal, because a broken hook shows on screen only as a Not connected chip on a Claude Code or Codex pane and nowhere for any other agent, and the output of that command is the evidence.
-Install and remove are deliberately not CLI subcommands: writing to the operator's configuration is the kit's decision, agreed to when the app was installed or the device added, not something a stray command line performs.
+Install and remove are deliberately not CLI subcommands: writing to the operator's configuration is the kit's decision, agreed to when the app was installed or a device's helper allowed in Settings › Devices, not something a stray command line performs.
+`hide device add` registers a device without that agreement, so it installs nothing, and `hide device remove` takes the kit off only as removing the device in Settings does.
 
 ## Testing
 

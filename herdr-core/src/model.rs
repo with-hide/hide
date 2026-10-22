@@ -235,36 +235,51 @@ impl<T: Serialize> Serialize for Edited<T> {
     }
 }
 
+/// The column a lane call brought forward (PRD lane-two-columns B19).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaneCallSide {
+    /// The viewing column: the documents or the 보기 slot.
+    #[default]
+    View,
+    /// The tool column.
+    Tool,
+}
+
 /// What the front Workspace shows: its right lane (the tool, the pin, the
 /// file tree and both widths) and its View area tree (PRD right-lane D-11).
 /// The editor's `active_tab_id` is the document of the active area's active
 /// display.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+
 pub struct WorkspaceViewSnapshot {
     pub device_id: String,
     pub path: String,
     /// The active checkout only, read by its own node independently of Changes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) git: Option<crate::checkout_git::Header>,
-    /// The tool the lane shows, or null while it is closed. An unpinned
-    /// lane is drawn over the agents only once a call opened it (D-02).
+    /// Whether the lane is open (PRD lane-two-columns B1, B15); closed, it
+    /// keeps `documents` and `tool` for the next open. An unpinned lane is
+    /// drawn over the agents only once a call opened it (right-lane D-02).
+    pub open: bool,
+    /// Whether the viewing column shows the checkout's documents; the
+    /// window's 보기 slot, while shown, stands in front of them (D-04).
+    pub documents: bool,
+    /// The tool column's tool, or null while there is none.
     pub tool: Option<crate::workspace_views::Tool>,
-    /// The tool the lane last showed, null for a lane that never showed
-    /// one; the tool the next open returns to.
-    pub last_tool: Option<crate::workspace_views::Tool>,
     /// The PRs tool's scope chip, kept for this Workspace.
     pub prs: crate::workspace_views::PrsView,
-    /// Whether the lane is pinned beside Agent Views (D-03).
+    /// Whether the lane is pinned beside Agent Views (right-lane D-03).
     pub pinned: bool,
-    /// Whether the files tool shows the file tree column (D-05).
-    pub tree: bool,
-    /// The files tool's document width in CSS pixels, or null for the
-    /// shell's default until it is resized.
-    pub lane_width: Option<u32>,
-    /// The other tools' and the 보기 slot's width, the same way.
+    /// The viewing column's width with the documents, in CSS pixels, or
+    /// null for the shell's default until it is resized (D-09).
+    pub document_width: Option<u32>,
+    /// The viewing column's width with the 보기 slot, the same way.
+    pub detail_width: Option<u32>,
+    /// The tool column's width with the Explorer, the same way.
+    pub explorer_width: Option<u32>,
+    /// The tool column's width with Memory, PRs or Changes, the same way.
     pub panel_width: Option<u32>,
-    /// The tree column's width, the same way.
-    pub tree_width: Option<u32>,
     /// The last width request the core accepted for this Workspace. Runtime
     /// only, so a shell can distinguish its latest intent from an older echo.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -273,6 +288,11 @@ pub struct WorkspaceViewSnapshot {
     /// core started; a number past `lane_calls` as the shell last read it is
     /// a call the shell shows by drawing the lane (D-02, B16).
     pub lane_called: u64,
+    /// Which column the last call brought forward, so a lane too narrow to
+    /// draw both knows which to draw (PRD lane-two-columns B19): the
+    /// viewing column for an open, the 보기 slot or ⌘E, the tool column for
+    /// a tool, a reveal or a folder link.
+    pub lane_called_side: LaneCallSide,
     /// How many lane calls the core has numbered, in any Workspace.
     pub lane_calls: u64,
     /// Whether this is the Workspace the operator last chose, now or before a

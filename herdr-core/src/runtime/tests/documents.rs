@@ -1744,7 +1744,7 @@ fn a_quit_mid_restore_keeps_the_stored_layout_byte_for_byte() {
     // and a.txt in the area beside it, which was in use.
     let mut views = crate::workspace_views::WorkspaceViews::default();
     let entry = views.entry(DEVICE, &f.root.to_string_lossy());
-    entry.tool = Some(crate::workspace_views::Tool::Files);
+    entry.show_documents();
     let layout = &mut entry.layout;
     let diff = layout.new_display(&f.path("a.txt"), DisplayKind::Diff, Some(false), false);
     layout.insert("a1", diff, 1).unwrap();
@@ -1960,9 +1960,8 @@ fn a_gui_file_read_opens_file_views_when_its_document_lands() {
         let mut runtime = f.shared.lock().unwrap();
         runtime.sync_workspace_view();
         let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-        assert_eq!(
-            view.tool,
-            Some(crate::workspace_views::Tool::Files),
+        assert!(
+            view.open && view.documents,
             "a successful GUI open must be visible"
         );
         assert_eq!(view.layout.display_count, 1);
@@ -2083,9 +2082,8 @@ fn a_coalesced_gui_read_serves_each_live_requesting_tab() {
         let mut runtime = f.shared.lock().unwrap();
         runtime.sync_workspace_view();
         let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-        assert_eq!(
-            view.tool,
-            Some(crate::workspace_views::Tool::Files),
+        assert!(
+            view.open && view.documents,
             "B's explicit GUI open must become visible (A closed: {close_a})"
         );
         assert_eq!(view.layout.display_count, 1);
@@ -2169,9 +2167,8 @@ fn a_gui_read_places_an_existing_dirty_buffer_in_its_requesting_tab() {
     runtime.snapshot.navigator.workspaces[0].checkouts[0].active_tab_id = Some("tab-a".to_owned());
     runtime.sync_workspace_view();
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-    assert_eq!(
-        view.tool,
-        Some(crate::workspace_views::Tool::Files),
+    assert!(
+        view.open && view.documents,
         "A's GUI placement must survive an existing buffer"
     );
     assert_eq!(view.layout.display_count, 1);
@@ -2372,9 +2369,8 @@ fn a_gui_read_survives_another_tabs_clean_buffer_retirement() {
     runtime.snapshot.navigator.workspaces[0].checkouts[0].active_tab_id = Some("tab-a".to_owned());
     runtime.sync_workspace_view();
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-    assert_eq!(
-        view.tool,
-        Some(crate::workspace_views::Tool::Files),
+    assert!(
+        view.open && view.documents,
         "A still owns its accepted GUI open"
     );
     assert_eq!(view.layout.display_count, 1);

@@ -188,7 +188,7 @@ test("Recent Panels crosses checkouts onto a display and a tab; Recent Projects 
     // The Explorer also opens the agent list; Escape cancels without a move.
     await showExplorer(page);
     const file = page.locator(`[data-explorer-row="${path.join(root, "plan.txt")}"]`);
-    const explorer = page.locator('[data-lane-tree] [role="tree"]');
+    const explorer = page.locator('[data-lane="explorer"] [role="tree"]');
     await explorer.focus();
     await expect(explorer).toBeFocused();
     focuses = sent.get("focus_pane") ?? 0;

@@ -350,6 +350,11 @@ fn lane_tool(runtime: &Runtime) -> Option<crate::workspace_views::Tool> {
     runtime.snapshot.workspace_view.as_ref().unwrap().tool
 }
 
+fn lane_documents(runtime: &Runtime) -> bool {
+    let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+    view.open && view.documents
+}
+
 /// B1, B13: every tab sees the checkout's one list and the lane is the
 /// Workspace's; a View another tab opened is in the list at once.
 #[test]
@@ -363,7 +368,7 @@ fn every_tab_sees_the_checkouts_one_list_and_the_lane_stays_the_workspaces() {
     open(&mut runtime, &checkout, &directory, "b.md");
     view_event(
         &mut runtime,
-        serde_json::json!({"tool": "prs", "pinned": true, "lane_width": 444}),
+        serde_json::json!({"tool": "prs", "pinned": true, "document_width": 444}),
     );
     focus_tab(&mut runtime, &checkout, &directory, TABS[0]);
     assert_eq!(strip(&runtime, &directory), ["a.md", "b.md"]);
@@ -374,7 +379,7 @@ fn every_tab_sees_the_checkouts_one_list_and_the_lane_stays_the_workspaces() {
     );
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(
-        (view.tool, view.pinned, view.lane_width),
+        (view.tool, view.pinned, view.document_width),
         (Some(crate::workspace_views::Tool::Prs), true, Some(444))
     );
 }
@@ -489,7 +494,7 @@ fn focus_between_tabs_on_screen_does_not_change_the_lane() {
 /// lane, and no tab remembers it, so going to that tab moves nothing either.
 #[test]
 fn a_background_agents_open_joins_the_list_and_moves_nothing() {
-    for tool in [serde_json::json!("files"), serde_json::Value::Null] {
+    for tool in [serde_json::json!("changes"), serde_json::Value::Null] {
         let (mut runtime, checkout, directory) = setup(if tool.is_null() {
             "background-closed"
         } else {
@@ -537,22 +542,19 @@ fn tool_of(value: &serde_json::Value) -> Option<crate::workspace_views::Tool> {
 }
 
 /// PRD right-lane B12: only the operator's close of the last view closes the
-/// lane. An agent's `hide view close` of it, from the front tab, leaves the
-/// lane on the files tool with the tree as it was, as an operator's close of
-/// the same view with the tree off would not.
+/// viewing column. An agent's `hide view close` of it, from the front tab,
+/// leaves the documents shown, as an operator's close of the same view
+/// would not.
 #[test]
 fn an_agent_closing_the_last_view_leaves_the_lane_open() {
     let (mut runtime, checkout, directory) = setup("agent-close-lane");
     let lane = |runtime: &Runtime| {
         let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-        (view.tool, view.tree, view.layout.display_count)
+        (view.open, view.documents, view.layout.display_count)
     };
     open(&mut runtime, &checkout, &directory, "a.md");
     let a = display_id(&runtime, &directory, "a.md");
-    assert_eq!(
-        lane(&runtime),
-        (Some(crate::workspace_views::Tool::Files), false, 1)
-    );
+    assert_eq!(lane(&runtime), (true, true, 1));
     control(
         &mut runtime,
         "w-order:t1:p",
@@ -563,21 +565,18 @@ fn an_agent_closing_the_last_view_leaves_the_lane_open() {
         "agent-close",
     );
     runtime.sync_workspace_view();
-    assert_eq!(
-        lane(&runtime),
-        (Some(crate::workspace_views::Tool::Files), false, 0)
-    );
+    assert_eq!(lane(&runtime), (true, true, 0));
 }
 
 /// B6: from the pane the operator is in, `hide file open` and `hide view
-/// select` call the lane as a click does, and a file opened while the tree
-/// showed alone opens beside it.
+/// select` call the lane as a click does, and a file opened while the
+/// Explorer shows opens beside it, the Explorer staying (lane-two-columns B6).
 #[test]
-fn a_front_tab_open_calls_the_lane_and_keeps_a_lone_tree() {
+fn a_front_tab_open_calls_the_lane_and_keeps_the_explorer() {
     let (mut runtime, checkout, directory) = setup("front-open");
     open(&mut runtime, &checkout, &directory, "a.md");
     let a = display_id(&runtime, &directory, "a.md");
-    view_event(&mut runtime, serde_json::json!({"tool": null}));
+    view_event(&mut runtime, serde_json::json!({"open": false}));
     let calls = runtime.snapshot.workspace_view.as_ref().unwrap().lane_calls;
     let selected = control(
         &mut runtime,
@@ -594,13 +593,13 @@ fn a_front_tab_open_calls_the_lane_and_keeps_a_lone_tree() {
     );
     runtime.sync_workspace_view();
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-    assert_eq!(view.tool, Some(crate::workspace_views::Tool::Files));
+    assert!(view.open && view.documents);
     assert!(view.lane_called > calls, "a put-away lane comes forward");
 
-    // The files tool shows its tree alone, and the open keeps it beside.
+    // The Explorer shows alone, and the open keeps it beside the document.
     let (mut runtime, _checkout, directory) = setup("front-open-tree");
-    view_event(&mut runtime, serde_json::json!({"tool": "files"}));
-    assert!(!runtime.snapshot.workspace_view.as_ref().unwrap().tree);
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    assert!(!runtime.snapshot.workspace_view.as_ref().unwrap().documents);
     control_file(
         &mut runtime,
         "w-order:t1:p",
@@ -611,9 +610,11 @@ fn a_front_tab_open_calls_the_lane_and_keeps_a_lone_tree() {
     );
     runtime.sync_workspace_view();
     assert_eq!(strip(&runtime, &directory), ["b.md"]);
-    assert!(
-        runtime.snapshot.workspace_view.as_ref().unwrap().tree,
-        "the tree stays beside the opened file"
+    let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+    assert_eq!(
+        (view.documents, view.tool),
+        (true, Some(crate::workspace_views::Tool::Explorer)),
+        "the Explorer stays beside the opened file"
     );
 }
 
@@ -1076,7 +1077,7 @@ fn a_device_workspace_keeps_its_view_when_its_visible_tab_changes() {
         entry.layout.insert("a1", display, 1).unwrap();
     }
     let ids: Vec<String> = entry.layout.displays().map(|d| d.id.clone()).collect();
-    entry.tool = Some(crate::workspace_views::Tool::Files);
+    entry.show_documents();
     let front = |runtime: &Runtime| {
         runtime
             .view_layout_of(&(device.to_owned(), "/srv/remote".to_owned()))
@@ -1086,10 +1087,7 @@ fn a_device_workspace_keeps_its_view_when_its_visible_tab_changes() {
             .clone()
     };
     runtime.sync_workspace_view();
-    assert_eq!(
-        lane_tool(&runtime),
-        Some(crate::workspace_views::Tool::Files)
-    );
+    assert!(lane_documents(&runtime));
     assert_eq!(
         front(&runtime),
         Some(ids[1].clone()),
@@ -1106,9 +1104,8 @@ fn a_device_workspace_keeps_its_view_when_its_visible_tab_changes() {
     );
     runtime.sync_workspace_view();
     assert_eq!(front(&runtime), Some(ids[1].clone()));
-    assert_eq!(
-        lane_tool(&runtime),
-        Some(crate::workspace_views::Tool::Files),
+    assert!(
+        lane_documents(&runtime),
         "the device tab's change keeps the lane"
     );
     super::device_catalog::dispatch(

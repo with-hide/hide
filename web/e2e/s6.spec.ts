@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { declareParent, herdrHasFocus, startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { chooseLane, countSent, screenshot, showExplorer } from "./wire";
+import { chooseLane, countSent, pinState, screenshot, setLanePinned, showExplorer } from "./wire";
 import { chord } from "./chords";
 import { projectRow } from "./overview-entry";
 import { toPage } from "../../desktop/src/main/wirePath";
@@ -99,20 +99,20 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     const toolbarBox = (await page.locator("[data-workspace-toolbar]").boundingBox())!;
     expect(toolbarBox.y + toolbarBox.height).toBeLessThanOrEqual(bodyBox.y + 1);
 
-    // B1, B20: each rail icon names itself and its scope in its hint, and
-    // reads pressed only while the lane shows its tool.
-    const filesIcon = page.locator('[data-lane-tool="files"]');
+    // B1, B20; lane-two-columns B2: each rail icon names itself and its
+    // scope in its hint, and reads pressed only while its column shows it;
+    // with no document the documents button is off and says so.
+    const documentsIcon = page.locator('[data-lane-tool="documents"]');
     const prsIcon = page.locator('[data-lane-tool="prs"]');
-    await expect(filesIcon).toHaveAttribute("aria-pressed", "false");
+    await expect(documentsIcon).toHaveAttribute("aria-pressed", "false");
+    await expect(documentsIcon).toBeDisabled();
     await prsIcon.hover();
     await expect(page.locator('[data-slot="tooltip-content"]')).toContainText("PRs");
-    await filesIcon.hover();
-    await expect(page.locator('[data-slot="tooltip-content"]')).toContainText("Files");
     await page.mouse.move(bodyBox.x + 40, bodyBox.y + 40);
 
-    // The PRs icon opens the lane on PRs over the agents, the path's menu
-    // closes it, ⌘E brings the closed lane back on PRs, the tool it last
-    // showed, and the rail swaps the one tool it holds (B2, B20, D-01).
+    // The PRs icon opens the tool column on PRs over the agents, the path's
+    // menu closes the lane, ⌘E brings the closed lane back in its shape, and
+    // the rail swaps the one tool the column holds (B2, B20; lane-two-columns B14, B15).
     const lane = page.locator("[data-lane-frame]");
     const agentArea = page.locator("[data-agent-area]");
     await prsIcon.click();
@@ -120,11 +120,11 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
     await expect.poll(() => last.get("workspace_view")).toEqual({ tool: "prs" });
     await expect(prsIcon).toHaveAttribute("aria-pressed", "true");
-    const laneIdeal = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--size-lane-ideal")));
-    expect((await lane.boundingBox())!.width).toBeCloseTo(laneIdeal, 0);
+    const panelIdeal = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--size-lane-panel-ideal")));
+    expect((await lane.boundingBox())!.width).toBeCloseTo(panelIdeal, 0);
     await chooseLane(page);
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed");
-    await expect.poll(() => last.get("workspace_view")).toEqual({ tool: null });
+    await expect.poll(() => last.get("workspace_view")).toEqual({ open: false });
     await page.keyboard.press(chord("toggle_lane"));
     await expect(workspace).toHaveAttribute("data-lane-shows", "prs");
     await page.locator('[data-lane-tool="changes"]').click();
@@ -144,7 +144,7 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     await expect(lane.locator('[data-tab-kind="file"]')).toHaveCount(2);
     await settled();
     const resizesBeforePin = resizes();
-    await page.locator("[data-lane-pin]").click();
+    await setLanePinned(page, true);
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await expect.poll(() => last.get("workspace_view")).toEqual({ pinned: true });
     await expect.poll(resizes, { timeout: 10_000 }).toBeGreaterThan(resizesBeforePin);
@@ -182,18 +182,18 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     await page.keyboard.press("Escape");
     await screenshot(page, "s6-lane-docked");
 
-    // ⌘E closes the lane without closing a view; the Files icon counts the
-    // views it keeps, and the keyboard that was in the lane goes back to the
-    // focused pane (B2, B7, B17). Opening it brings the same tabs, docked.
+    // ⌘E closes the lane without closing a view; the documents button counts
+    // the views it keeps, and the keyboard that was in the lane goes back to
+    // the focused pane (B2, B7, B17). Opening it brings the same tabs, docked.
     await settled();
     const resizesBeforeClose = resizes();
     await lane.locator("[data-editor-body] .cm-content").click();
     await page.keyboard.press(chord("toggle_lane"));
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed");
-    await expect.poll(() => last.get("workspace_view")).toEqual({ tool: null });
-    await expect(filesIcon).toHaveAttribute("aria-pressed", "false");
-    await expect(filesIcon.locator("[data-lane-badge]")).toHaveText("2");
-    await expect(filesIcon).toHaveAttribute("aria-description", "2 views open");
+    await expect.poll(() => last.get("workspace_view")).toEqual({ open: false });
+    await expect(documentsIcon).toHaveAttribute("aria-pressed", "false");
+    await expect(documentsIcon.locator("[data-lane-badge]")).toHaveText("2");
+    await expect(documentsIcon).toHaveAttribute("aria-description", "2 views open");
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.closest("[data-pane-view]")?.getAttribute("data-pane-view") ?? null))
       .not.toBeNull();
@@ -201,10 +201,11 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     await settled();
     expect(resizes() - resizesBeforeClose).toBe(panesShown);
     await screenshot(page, "s6-lane-closed");
-    await filesIcon.click();
+    await documentsIcon.click();
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
+    await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
     await expect(lane.locator('[data-tab-kind="file"]')).toHaveCount(2);
-    await expect(filesIcon.locator("[data-lane-badge]")).toHaveCount(0);
+    await expect(documentsIcon.locator("[data-lane-badge]")).toHaveText("2");
 
     // An agent chosen from the sidebar changes no lane (B22, D-17).
     await page.locator(`[data-agent-open="${parent}"]`).first().click();
@@ -217,7 +218,7 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     const sentBeforeNarrow = sent.get("workspace_view") ?? 0;
     await page.setViewportSize({ width: 1000, height: 1000 });
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
-    await expect(page.locator("[data-lane-pin]")).toHaveAttribute("data-lane-pin", "narrow");
+    expect(await pinState(page)).toBe("narrow");
     await expect(agentArea).toBeVisible();
     await screenshot(page, "s6-lane-narrow");
     expect(sent.get("workspace_view") ?? 0).toBe(sentBeforeNarrow);
@@ -280,7 +281,8 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     await page.goto("about:blank");
     await open(page, daemon);
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked", { timeout: 20_000 });
-    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-shows", "files");
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-shows", "explorer");
     await expect.poll(async () => (await lane.boundingBox())!.width).toBeCloseTo(laneWidth, 0);
     await expect(page.locator('[data-view-area] [data-tab-kind="file"]')).toHaveCount(2, { timeout: 15_000 });
     await expect(page.locator('[data-view-area] [data-unavailable="true"]')).toHaveCount(1);

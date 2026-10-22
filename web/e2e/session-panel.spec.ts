@@ -79,8 +79,8 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     const sent = countSent(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator(`nav[data-sidebar] [data-agent-open="${parent}"]`).first().click();
-    // The rail has no Work tool; the Project's Memory and PRs come first (B23).
-    await expect.poll(() => page.locator("[data-lane-tool]").evaluateAll((tools) => tools.map((tool) => tool.getAttribute("aria-label")))).toEqual(["Memory", "PRs", "Files", "Changes"]);
+    // The rail has no Work tool; after the viewing column's documents button, the Project's Memory and PRs come first (B23; lane-two-columns B2).
+    await expect.poll(() => page.locator("[data-lane-tool]").evaluateAll((tools) => tools.map((tool) => tool.getAttribute("aria-label")))).toEqual(["Documents", "Memory", "PRs", "Explorer", "Changes"]);
     const tasks = await showTasks(page);
     const row = (pane: string) => tasks.locator(`[data-task-row="${pane}"]`);
     const group = (name: string) => tasks.locator(`[data-task-group="${name}"]`);

@@ -1,5 +1,5 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
-//! `request`, `inbox`, `watch`, `mission`): each command's words, arguments and options, where its
+//! `request`, `inbox`, `watch`, `mission`, `device`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -19,7 +19,7 @@ pub const FORMAT: u32 = 1;
 
 /// The topics whose every command is in the table.
 const TOPICS: &[&str] = &[
-    "agent", "ps", "request", "inbox", "watch", "mission", "plan",
+    "agent", "ps", "request", "inbox", "watch", "mission", "plan", "device",
 ];
 
 /// What a value must be for the command's parser to take it.
@@ -289,6 +289,54 @@ pub const COMMANDS: &[Spec] = &[
         rest: None,
         answers: &["ps"],
         refusals: &["here_unavailable", "ps_answer_unreadable"],
+    },
+    // Only the core's own machine may run these. Add registers the device
+    // without Hide's helper, which the operator allows on its row.
+    Spec {
+        words: &["device", "list"],
+        arguments: &[],
+        repeats: None,
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_list"],
+        refusals: &["machine_not_permitted"],
+    },
+    Spec {
+        words: &["device", "add"],
+        arguments: &[Arg {
+            name: "ssh_alias",
+            value: Key,
+        }],
+        repeats: None,
+        options: &[
+            optional("--name", Text),
+            optional("--socket", Text),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_added"],
+        refusals: &[
+            "machine_not_permitted",
+            "device_invalid",
+            "device_duplicate",
+        ],
+    },
+    Spec {
+        words: &["device", "remove"],
+        arguments: &[Arg {
+            name: "device_id",
+            value: Key,
+        }],
+        repeats: None,
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_removed"],
+        refusals: &[
+            "machine_not_permitted",
+            "device_unknown",
+            "device_local_remove_denied",
+            "device_files_open",
+        ],
     },
     spec(
         &["request", "send"],
@@ -715,6 +763,7 @@ fn body() -> Value {
             "watch": {"ok": "ok", "answer": "result", "code": "reason"},
             "mission": {"ok": "ok", "answer": "result", "code": "reason"},
             "plan": {"ok": "ok", "answer": "result", "code": "reason"},
+            "device": {"ok": "ok", "answer": "value", "code": "error.code"},
         },
         "answers": answers(),
     })
@@ -746,6 +795,9 @@ fn answers() -> Value {
         "agent_catalog".into(),
         shape(&["machine", "installed_known", "items"]),
     );
+    map.insert("device_list".into(), shape(&["devices"]));
+    map.insert("device_added".into(), shape(&["device", "next_action"]));
+    map.insert("device_removed".into(), shape(&["device_id"]));
     answers
 }
 
@@ -874,7 +926,8 @@ mod tests {
                 | CommandKind::Mission(_)
                 | CommandKind::Plan(_)
                 | CommandKind::AgentCatalog { .. }
-                | CommandKind::Ps(_))
+                | CommandKind::Ps(_)
+                | CommandKind::Device(_))
         )
     }
 

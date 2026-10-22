@@ -2,7 +2,9 @@
 // Compare the visible parts of the sidebar 태스크 list's rows, including
 // Korean text and fixed facts. Truncated text is clipped to its visible box;
 // a part drawn transparent (the time slot's buttons at rest) is not on
-// screen. Font and contrast remain a visual judgment.
+// screen, and the row's buttons float over the end of its line on purpose,
+// so they are checked against the row's edge but not against what they
+// cover. Font and contrast remain a visual judgment.
 export async function measure(page) {
   return page.evaluate(() => {
     const partProblems = [], rowsFit = [], overflow = [];
@@ -22,7 +24,7 @@ export async function measure(page) {
         if (box.bottom > edge.bottom + 0.5) rowsFit.push(`${name}: ${part.textContent} spills below its row`);
       }
       for (const [index, a] of parts.entries()) for (const b of parts.slice(index + 1)) {
-        if (a.contains(b) || b.contains(a)) continue;
+        if (a.contains(b) || b.contains(a) || a.closest('[data-row-actions]') || b.closest('[data-row-actions]')) continue;
         const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
         if (Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left) > 1 && Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top) > 1) partProblems.push(`${name}: ${a.textContent} overlaps ${b.textContent}`);
       }

@@ -6,7 +6,7 @@ import { startHided, type Daemon } from "./hided-fixture";
 import { waitForTerminal } from "./group-start-helper";
 import { openOverview } from "./overview-entry";
 import { FIRST_GOAL } from "./session-work-fixture";
-import { enterWorkspace, showTool } from "./wire";
+import { enterWorkspace, showExplorer } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -60,7 +60,7 @@ test("a record shown in the lane's 보기 slot stays through pin, unpin and a wi
     const pane = herdr.panes[0]!;
     labelAgent(herdr, pane, { task: FIRST_GOAL, at: Date.now(), end: "done" });
     // The lane has a tool to pin, then the record takes its slot (PRD sidebar-task-lens B15).
-    await showTool(page, "files");
+    await showExplorer(page);
     await page.locator(`[data-pane-view="${pane}"] [data-pane-record]`).click({ timeout: 45_000 });
     const record = page.locator('aside[data-lane="detail"] [data-session-record="lane"]');
     await expect(record).toBeVisible({ timeout: 30_000 });

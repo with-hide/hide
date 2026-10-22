@@ -476,12 +476,7 @@ fn alias_error(alias: &str, cause: impl fmt::Display) -> RemoteError {
 }
 
 fn validate_alias(alias: &str) -> RemoteResult<()> {
-    if alias.is_empty()
-        || alias.chars().any(char::is_whitespace)
-        || alias.bytes().any(|byte| byte.is_ascii_control())
-        || alias.contains('/')
-        || alias.starts_with('-')
-    {
+    if !hide_node_link::device::ssh_alias_is_one_token(alias) {
         return Err(remote_error(
             "ssh-alias-import",
             alias,

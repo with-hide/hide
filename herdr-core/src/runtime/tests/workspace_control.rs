@@ -538,7 +538,7 @@ fn a_select_calls_the_lane_only_from_the_pane_the_operator_is_in() {
         .unwrap()
         .lane_called
         .get(&(key.0.to_owned(), key.1.to_owned()))
-        .copied();
+        .map(|(number, _)| *number);
     assert_eq!(
         numbered,
         Some(1),
@@ -555,7 +555,7 @@ fn views_of(runtime: &Runtime, key: (&str, &str)) -> bool {
         .workspaces
         .iter()
         .find(|view| view.is(key.0, key.1))
-        .map(|view| view.tool == Some(crate::workspace_views::Tool::Files))
+        .map(|view| view.shows_documents())
         .unwrap()
 }
 

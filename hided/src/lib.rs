@@ -19,6 +19,7 @@ pub mod core_update;
 pub mod delivery_cli;
 pub mod demand;
 pub mod desktop_notices;
+pub mod device_cli;
 pub mod ending;
 pub mod env;
 pub mod file_url;

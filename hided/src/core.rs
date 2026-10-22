@@ -96,6 +96,11 @@ enum Command {
         all: bool,
         reply: Sender<Result<serde_json::Value, String>>,
     },
+    Device {
+        device_id: String,
+        command: herdr_core::device_command::DeviceCommand,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
     SetFileRoots {
         roots: Vec<(std::path::PathBuf, std::fs::File)>,
         reply: Sender<Result<(), String>>,
@@ -433,6 +438,23 @@ impl CoreHandle {
             })
             .map_err(|_| "ps_unavailable".to_owned())?;
         result.recv().map_err(|_| "ps_unavailable".to_owned())?
+    }
+
+    /// `hide device`, run on the owner thread.
+    pub fn device_command(
+        &self,
+        device: &str,
+        command: herdr_core::device_command::DeviceCommand,
+    ) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::Device {
+                device_id: device.to_owned(),
+                command,
+                reply,
+            })
+            .map_err(|_| "device_unavailable".to_owned())?;
+        result.recv().map_err(|_| "device_unavailable".to_owned())?
     }
 
     pub fn set_file_roots(
@@ -1020,6 +1042,14 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.ps(&device_id, &pane_id, all));
+            }
+
+            Command::Device {
+                device_id,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.device_command(&device_id, command));
             }
 
             Command::DeliveryPrepare {

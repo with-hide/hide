@@ -28,6 +28,7 @@ pub enum CommandKind {
     },
     /// `hide ps [--all] [--here] [--json]`.
     Ps(crate::ps_cli::Options),
+    Device(crate::device_cli::DeviceCli),
     Help,
     AgentSpawnHelp,
     /// `hide version [--json]`: this build's version, commit and contract.
@@ -203,6 +204,11 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::cli_contract::admit(&args[1..])
                 .map_err(|refusal| format!("{refusal}\n{}", crate::ps_cli::USAGE))?;
             crate::ps_cli::parse(iter).map(CommandKind::Ps)
+        }
+        Some("device") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", crate::device_cli::USAGE))?;
+            crate::device_cli::parse(iter).map(CommandKind::Device)
         }
         Some(topic @ ("request" | "inbox" | "watch")) => {
             crate::cli_contract::admit(&args[1..])
@@ -553,6 +559,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         println!("{}", crate::delivery_cli::USAGE);
         println!("{}", crate::agent_cli::USAGE);
         println!("{}", crate::ps_cli::USAGE);
+        println!("{}", crate::device_cli::USAGE);
         println!("{}", crate::mission_cli::USAGE);
         println!("{}", crate::plan_cli::USAGE);
         println!(
@@ -590,6 +597,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Plan(_)
                     | CommandKind::AgentCatalog { .. }
                     | CommandKind::Ps(_)
+                    | CommandKind::Device(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
                     | CommandKind::ObservationHook { .. }
@@ -621,6 +629,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Plan(command) => crate::plan_cli::run(&env, command),
         CommandKind::AgentCatalog { machine } => crate::mission_cli::run_catalog(&env, machine),
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
+        CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
         CommandKind::Delivery(command) => {
             if matches!(&command, herdr_core::delivery::Command::Agents { .. }) {
                 crate::agent_cli::run(&env, command)

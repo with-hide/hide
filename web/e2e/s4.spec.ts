@@ -43,8 +43,8 @@ test("History opens a scoped patch, then updates after editing the original file
     const sent = countSent(page, lastSent);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "history-repo" }).locator("[data-checkout]").first())).click();
-    // The lane holds one tool; Changes swaps the files tool and its tree out
-    // (PRD right-lane D-01).
+    // The tool column holds one tool; Changes swaps the Explorer out (PRD
+    // lane-two-columns B14).
     await showExplorer(page);
     await showTool(page, "changes");
     await expect(page.locator("[data-explorer]")).toHaveCount(0);
@@ -63,20 +63,20 @@ test("History opens a scoped patch, then updates after editing the original file
     expect(sent.get("file_save") ?? 0).toBe(0);
     await screenshot(page, "s4-working-diff");
 
-    // An opened diff shows in the files tool, so Changes is pressed again
-    // for the next row (PRD right-lane B16).
-    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-shows", "files");
-    await showTool(page, "changes");
+    // An opened diff shows in the viewing column and Changes stays in the
+    // tool column for the next row (PRD lane-two-columns B7).
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-shows", "changes");
     await page.locator('[data-history-group="committed"][data-history-path="branch.txt"]').click();
     await expect(page.locator('[data-diff-group="committed"] [data-patch-view] .cm-content')).toContainText("+branch");
-    await showTool(page, "changes");
     await row.click();
     await expect(page.locator('[data-diff-group="working"]')).toBeVisible();
-    // ⌘E closes the lane that shows, and again brings it back on Files, the tool it last showed (B20).
+    // ⌘E closes the lane that shows, and again brings both columns back (B15).
     await page.keyboard.press(chord("toggle_lane"));
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "closed");
     await page.keyboard.press(chord("toggle_lane"));
-    await expect(page.locator('[data-lane="files"]')).toBeVisible();
+    await expect(page.locator('[data-lane="changes"]')).toBeVisible();
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
     await page.keyboard.press(chord("toggle_lane"));
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "closed");
     await showExplorer(page);

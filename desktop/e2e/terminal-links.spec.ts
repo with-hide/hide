@@ -23,7 +23,7 @@ import { pathToFileURL } from "node:url";
 import { linkCandidates } from "../../web/src/terminalLinks";
 import { toPage } from "../src/main/wirePath";
 import { printFileCommand, startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
-import { countSent, enterWorkspace, showTool } from "../../web/e2e/wire";
+import { countSent, enterWorkspace, setLanePinned, showExplorer } from "../../web/e2e/wire";
 import { fitWindow, hostLog, isolate, launch, screenshot, shellPage, test, type Isolated } from "./fixture";
 import { measureFor, quietFor } from "../../web/e2e/wait";
 
@@ -138,13 +138,13 @@ async function metaClick(page: Page, point: { x: number; y: number }): Promise<v
  * Pins the files tool so it docks, and waits for the pane's grid to settle.
  * A docked lane narrows Agent Views once (PRD right-lane B5) and stays
  * through the terminal clicks below; past the first open, which brings the
- * tree beside it, a link that opens a file or page moves nothing and the
- * printed rows stay where the probe reads them.
+ * documents beside the Explorer, a link that opens a file or page moves
+ * nothing and the printed rows stay where the probe reads them.
  */
 async function dockFiles(page: Page, paneId: string): Promise<void> {
   const before = await paneCols(page, paneId);
-  await showTool(page, "files");
-  await page.locator('[data-lane-pin="off"]').click();
+  await showExplorer(page);
+  await setLanePinned(page, true);
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
   await narrowed(page, paneId, before);
 }
@@ -255,15 +255,16 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   );
 
   // A URL opens as a browser display in the Workspace, and the program hears
-  // no click. It opens beside the tree that filled the empty lane, which stays
-  // on, so the docked lane widens by it and the pane rewraps once (PRD
-  // right-lane B10, B12).
+  // no click. It opens in the viewing column beside the Explorer, which stays
+  // in its column, so the docked lane widens by it and the pane rewraps once
+  // (PRD lane-two-columns B5, B7).
   const clicksBefore = sent.get("terminal_click") ?? 0;
   let point = await pointOf(page, paneId, `${origin}/a.html`, { offset: 4 });
   await hoverLink(page, paneId, point);
   await page.mouse.click(point.x, point.y);
   await expect(viewTab(page, "Page A")).toBeVisible({ timeout: 20_000 });
-  await expect(page.locator('[data-lane-tree="beside"]')).toBeVisible();
+  await expect(page.locator('[data-lane="explorer"]')).toBeVisible();
+  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
   await narrowed(page, paneId, grid.cols);
   expect(sent.get("terminal_click") ?? 0).toBe(clicksBefore);
   expect(dialogs).toEqual([]);

@@ -38,7 +38,7 @@ export function scopedSurfaces(rest: SnapshotRest | null, scope: CycleScope): { 
   const frame = areaFrame(scope.kind);
   if (!checkout || checkout.id !== scope.checkoutId || checkout.path !== scope.path || !frame || frame.workspace.device_id !== scope.deviceId || frame.workspace.path !== scope.path || (useUiStore.getState().screen?.kind !== "workspace" || useUiStore.getState().overviewOpen)) return null;
   const view = workspaceViewOf(rest);
-  if (!view || view.device_id !== scope.deviceId || view.path !== scope.path || (scope.kind === "view" && view.tool !== "files")) return null;
+  if (!view || view.device_id !== scope.deviceId || view.path !== scope.path || (scope.kind === "view" && !(view.open && view.documents))) return null;
   const layout = scope.kind === "view" ? view.layout : (view.agent_layout ?? frame.layout);
   if (!layout) return null;
   const area = findArea(layout.root, scope.areaId);

@@ -47,6 +47,18 @@ hide agent catalog [--machine <device id>]
 - `hide agent catalog` lists the agents installed here, their models, efforts and usage, so you can choose `--kind`, `--model` and `--effort`.
 - A child of yours belongs to you: answer its letters, and tell the operator only what they have to decide.
 
+## Devices
+
+```
+hide device list [--json]
+hide device add <ssh alias> [--name <name>] [--socket <path>] [--json]
+hide device remove <device id> [--json]
+```
+
+- Add or remove a device only when the operator asked for it, and only from the machine that runs Hide; on a device these are refused with `machine_not_permitted`.
+- `add` takes a `Host` name from `~/.ssh/config` and registers the device without Hide's helper; tell the operator what its answer says: they open Settings › Devices and choose Allow and install on its row, and until then its files, Git and terminals wait.
+- `list` gives each device's id, the one `--machine` takes, its state and whether its helper is allowed; `remove` forgets a device, takes Hide's kit off it when its helper was allowed, and leaves its panes, agents and files running there.
+
 ## The operator's screen
 
 ```

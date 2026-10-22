@@ -97,8 +97,10 @@ impl Runtime {
         true
     }
 
-    /// Opens `item` in the slot, in front, and the lane draws it (B14, B15,
-    /// B47); the Workspace, its Agent tab and the keyboard stay (D-43).
+    /// Opens `item` in the slot, in front, and the front Workspace's lane
+    /// opens to draw it in its viewing column (B14, B15, B47; lane-two-
+    /// columns B9); the Workspace, its Agent tab and the keyboard stay
+    /// (D-43).
     pub(super) fn open_detail(&mut self, item: DetailItem) -> bool {
         let before = self.snapshot.ui_state.detail.clone();
         self.snapshot.ui_state.detail.open(item);
@@ -107,10 +109,12 @@ impl Runtime {
         if self.snapshot.ui_state.detail != before {
             self.persist_ui_state();
         }
+        self.call_front_lane();
         true
     }
 
-    /// ←: the item opened before the one shown, or the slot closes (B47).
+    /// ←: the item opened before the one shown, or the slot empties as ✕
+    /// empties it (B47).
     pub(super) fn detail_back(&mut self) -> bool {
         if self.snapshot.ui_state.detail.items.is_empty() {
             return false;
@@ -119,11 +123,17 @@ impl Runtime {
         self.snapshot.ui_state.detail.back();
         self.read_detail_top(before.top(), false);
         self.persist_ui_state();
+        if self.snapshot.ui_state.detail.items.is_empty() {
+            self.show_front_documents_if_any();
+        } else {
+            self.call_front_lane();
+        }
         true
     }
 
-    /// ✕: the slot empties and the rail drops it; the lane goes back to the
-    /// tool its Workspace had, or closes when it had none (B47).
+    /// ✕: the slot empties and the rail drops it; the viewing column shows
+    /// the documents when the Workspace has some, else closes (lane-two-
+    /// columns B13).
     pub(super) fn close_detail(&mut self) -> bool {
         let before = self.snapshot.ui_state.detail.clone();
         if before == crate::model::DetailSlot::default() {
@@ -134,26 +144,98 @@ impl Runtime {
             self.close_session_record();
         }
         self.persist_ui_state();
+        self.show_front_documents_if_any();
         true
     }
 
-    /// The rail's 보기 slot pressed (`shown`), or the lane closed over it.
+    /// The rail's 보기 button (B46; lane-two-columns B11): pressed while
+    /// the slot is behind, the lane opens and draws it in front; pressed
+    /// while it is in front, the viewing column folds, the documents with
+    /// it, and the slot stays on the rail to come back to.
     pub(super) fn show_detail(&mut self, shown: bool) -> bool {
         let detail = &mut self.snapshot.ui_state.detail;
-        if detail.items.is_empty() || detail.shown == shown {
+        if detail.items.is_empty() {
             return false;
+        }
+        if detail.shown == shown {
+            // The slot is the window's: shown, it may still stand in a
+            // checkout whose own lane is closed, or behind a stacked lane's
+            // tool, and the button brings it forward (B22, B11, B19).
+            if shown {
+                self.call_front_lane();
+            }
+            return shown;
         }
         detail.shown = shown;
         if shown {
             let top = self.snapshot.ui_state.detail.top().cloned();
             self.read_detail_top(top.as_ref(), true);
+            self.call_front_lane();
+        } else {
+            self.fold_front_documents();
         }
         self.persist_ui_state();
         true
     }
 
-    /// A lane tool was called: the lane draws that tool, and the slot stays
-    /// on the rail to come back to (B46, B49). Whether anything changed.
+    /// The one way the slot comes forward, whatever opened it (a card, a
+    /// record, the map, ← or the rail's button): the front Workspace's lane
+    /// opens when it was closed, its columns as they were (lane-two-columns
+    /// B15), and the call is numbered as the viewing column's, so a stacked
+    /// lane draws the slot over its tool (B9, B19).
+    fn call_front_lane(&mut self) {
+        let Some(key) = self.front_workspace_key() else {
+            return;
+        };
+        let Some(store) = self.workspace_views.as_mut() else {
+            return;
+        };
+        let entry = store.views.entry(&key.0, &key.1);
+        let was_closed = !entry.open;
+        entry.open = true;
+        store.call_lane(&key, crate::model::LaneCallSide::View);
+        if was_closed {
+            self.persist_workspace_views();
+        }
+    }
+
+    /// The slot emptied: the documents take the viewing column when the
+    /// front Workspace has some, else the column closes (B13).
+    fn show_front_documents_if_any(&mut self) {
+        let Some(key) = self.front_workspace_key() else {
+            return;
+        };
+        let Some(store) = self.workspace_views.as_mut() else {
+            return;
+        };
+        let entry = store.views.entry(&key.0, &key.1);
+        let documents = entry.open && entry.layout.display_count() > 0;
+        if entry.documents == documents {
+            return;
+        }
+        entry.documents = documents;
+        self.persist_workspace_views();
+    }
+
+    /// The viewing column folded behind the rail's 보기 button (B11).
+    fn fold_front_documents(&mut self) {
+        let Some(key) = self.front_workspace_key() else {
+            return;
+        };
+        let Some(store) = self.workspace_views.as_mut() else {
+            return;
+        };
+        let entry = store.views.entry(&key.0, &key.1);
+        if !entry.documents {
+            return;
+        }
+        entry.documents = false;
+        self.persist_workspace_views();
+    }
+
+    /// The documents came in front, or the lane closed: the slot stops
+    /// being drawn and stays on the rail to come back to (B46, B49;
+    /// lane-two-columns B10). Whether anything changed.
     pub(super) fn leave_detail(&mut self) -> bool {
         if !self.snapshot.ui_state.detail.shown {
             return false;

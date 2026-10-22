@@ -26,9 +26,9 @@ import { locateDisplay } from "./areaLayout";
 import { workspaceViewOf } from "./workspace";
 
 /**
- * The front Workspace's View areas, the lane's files tool. With no display
- * the files tool draws its tree alone (`laneFrame`'s `treeOnly`), so these
- * are drawn only while a view is open or a file of this checkout is opening.
+ * The front Workspace's View areas, the lane's documents (PRD lane-two-columns
+ * D-03). With no display the viewing column is not drawn, so these are on
+ * screen only while a view is open or a file of this checkout is opening.
  */
 export function ViewAreas({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();

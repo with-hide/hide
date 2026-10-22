@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import { startHerdr } from "../../web/e2e/herdr-fixture";
-import { countSent, sendEvent, showProjectRow, showTool } from "../../web/e2e/wire";
+import { countSent, sendEvent, setLanePinned, showProjectRow, showTool } from "../../web/e2e/wire";
 import { fitWindow, isolate, launch, screenshot, test } from "./fixture";
 import { seedReconciliation } from "./memory-reconcile-fixture";
 import { placedProgressBatch, progressGithub } from "./memory-progress-fixture";
@@ -101,7 +101,7 @@ test("Memory progress expands whole rows and follows the live promotion agent th
     await progress.locator('[data-memory-row-toggle="1"]').press("Space");
     await expect(progress.locator("[data-memory-progress-detail]")).toHaveCount(0);
     await fitWindow(app, { width: 1440, height: 900 });
-    await page.locator('[data-lane-pin="off"]').click();
+    await setLanePinned(page, true);
     const divider = page.locator('[data-lane-divider="lane"]');
     for (let step = 0; step < 6; step++) await divider.press("ArrowRight");
     await expect.poll(() => page.locator("[data-lane-frame]").evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(360);

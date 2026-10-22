@@ -30,4 +30,9 @@ mod tests {
     fn the_guide_spells_hide_ps_as_the_command_parses_it() {
         assert!(TEXT.contains(crate::ps_cli::USAGE));
     }
+
+    #[test]
+    fn the_guide_spells_hide_device_as_the_command_parses_it() {
+        assert!(TEXT.contains(crate::device_cli::USAGE));
+    }
 }
