@@ -1198,6 +1198,8 @@ Inside a group 내 차례 and 다시 볼 것 stand longest-waiting first and the
 Inside `쉬는 중`, both views order rows by their latest actual native prompt, newest first, so the order matches the age on each row; unknown prompt times stand last and equal times retain their existing order.
 
 A row is one task, its root agent; descendants are its children only, and a memory question, a pull request with no session, a delegated child are never rows of their own (B7).
+Keep the sidebar and task list (the former Sessions list) easy to scan: the root task and its parent-child hierarchy lead, PRs stay summarized in their mark, and check details belong in the PR card rather than additional list rows.
+When refining these surfaces, simplify the amount of visible detail and the relationship between PRs and delegated work without hiding the operator's next action.
 Its first line is the row's own status mark (the sidebar's, status-marks D-12), the title, while folded no count of its children but `! N` in the warning colour when a hidden descendant asks the operator (status-marks D-24, B35), the PR mark and the elapsed time (B8, B10).
 In both 프로젝트 and 태스크, a session's elapsed time measures its latest actual native prompt, including a real request letter from another agent, rather than its latest state change.
 State changes and a daemon restart preserve that reference; a new session never inherits it, and an unknown prompt time leaves the slot empty until the native read succeeds.
