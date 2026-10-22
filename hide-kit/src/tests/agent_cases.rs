@@ -218,7 +218,7 @@ fn a_version_1_stub_with_a_plain_description_is_replaced() {
     );
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.starts_with(
-        "---\nname: hide-browser\ndescription: \"Read and drive a browser display inside Hide."
+        "---\nname: hide-browser\ndescription: \"Read and drive a browser display inside Hide;"
     ));
     assert_eq!(text, BROWSER_SKILL.text());
 }
@@ -294,7 +294,7 @@ fn every_skill_folder_gets_every_stub_and_a_folder_from_before_a_stub_gets_it() 
         }
     }
     assert!(CONDUCTOR_SKILL.text().contains("hide mission help"));
-    assert!(GUIDE_SKILL.text().contains("Run `hide guide`"));
+    assert!(GUIDE_SKILL.text().contains("run `hide guide`"));
 
     // A folder an older Hide wrote holds the browser stub alone.
     let conductor = fixture

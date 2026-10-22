@@ -209,14 +209,14 @@ pub struct Skill {
 /// The guide to Hide as a whole; the other stubs are its topics.
 pub const GUIDE_SKILL: Skill = Skill {
     name: "hide",
-    description: "Work inside Hide, the operator's workspace for coding agents: send and answer letters to other agents, start agents and follow them, show the operator a file or a diff, and read or add Project Memory. Use when a task involves another agent, the operator's screen in Hide, or Project Memory, or when you need to know what Hide offers here.",
-    body: "Run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory, and which skill to read for a browser or a mission.",
+    description: "Only for a session in a pane Hide manages, never an ordinary terminal. Work inside Hide, the operator's workspace for coding agents: send and answer letters to other agents, start agents and follow them, show the operator a file or a diff, and read or add Project Memory. Use when a task involves another agent, the operator's screen in Hide, or Project Memory, or when you need to know what Hide offers here.",
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory, and which skill to read for a browser or a mission.",
     version: 2,
 };
 
 pub const BROWSER_SKILL: Skill = Skill {
     name: "hide-browser",
-    description: "Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.",
+    description: "Read and drive a browser display inside Hide; only for a session in a pane Hide manages. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.",
     body: "Run `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.",
     version: 2,
 };
@@ -225,7 +225,7 @@ pub const BROWSER_SKILL: Skill = Skill {
 /// software-factory-conductor B1).
 pub const CONDUCTOR_SKILL: Skill = Skill {
     name: "hide-conductor",
-    description: "Run a mission in Hide as its Conductor: plan the work with the operator, start the agents that do it, follow their pull requests, and report. Use when the operator gives you a goal to carry out with several agents, or asks you to take over a mission.",
+    description: "Run a mission in Hide as its Conductor: plan the work with the operator, start the agents that do it, follow their pull requests, and report. Only for a session in a pane Hide manages. Use when the operator gives you a goal to carry out with several agents, or asks you to take over a mission.",
     body: "Run `hide mission help` and follow what it prints. It explains how to plan a mission with the operator, start and follow its workers, change the plan when told, merge, report, and take over a mission whose Conductor is gone.",
     version: 2,
 };
