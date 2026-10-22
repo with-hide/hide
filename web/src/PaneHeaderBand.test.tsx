@@ -93,15 +93,18 @@ function childrenFixture(): AgentRow[] {
   return [{ ...seed, lineage_child_pane_ids: [...children.map((child) => child.pane_id), "closed"], direct_child_counts: { error: 0, approval: 0, question: 1, working: 1, done: 1 } }, ...children];
 }
 
-// PRD B1-B2: the resting row names no child; the tree button keeps its full counts.
-it("puts the tree and direct-child number first while keeping state counts accessible", async () => {
+// PRD B1-B2: the resting row names no child; the tree button shows the first
+// children's marks in tree order, `+N` for the rest, and keeps its full counts.
+it("puts the tree and the first children's marks first while keeping state counts accessible", async () => {
   const agents = childrenFixture().map((row) => row.pane_id === "result" ? { ...row, mark: "done" as const } : row.pane_id === "idle" ? { ...row, mark: "quiet" as const } : row);
   const { container, unmount } = await mount({ working: true, notice: null, band: null }, agents);
   try {
     const row = container.querySelector('[data-pane-header-band="children"]')!;
     const trigger = row.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
     expect(trigger.getAttribute("aria-label")).toBe("Child agents 5 · Child requests: 1 · Working: 1 · Reported results: 1 · Unknown state: 1 · Resting: 1");
-    expect(trigger.textContent).toBe("5");
+    expect([...trigger.querySelectorAll("[data-pane-tree-mark]")].map((mark) => [mark.getAttribute("data-pane-tree-mark"), mark.getAttribute("data-mark")])).toEqual([["question", "quiet"], ["working", "going"], ["result", "done"]]);
+    // The unknown child draws no mark, so it is counted with the rest.
+    expect(trigger.textContent).toBe("+2");
     expect(row.firstElementChild?.firstElementChild).toBe(trigger);
     // An ordinary child's question is its parent's to answer: no raised count.
     expect(trigger.querySelector('[data-mark="turn"]')).toBeNull();
@@ -131,7 +134,7 @@ it("puts the pane's own approval after the tree and keeps raised counts in its n
     expect(row.querySelector("[data-pane-band-who]")).toBeNull();
     expect(row.querySelector("[data-pane-child-names]")).toBeNull();
     const trigger = row.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
-    expect(trigger.textContent).toBe("5");
+    expect(trigger.textContent).toBe("+2");
     expect(trigger.getAttribute("aria-label")).toContain("Descendant requests needing you: 2");
     expect(row.textContent).toContain("Run the verification command");
     expect(container.querySelector("[data-pane-band-more]")).toBeNull();
@@ -160,6 +163,32 @@ it("never counts a core unknown child as resting or a result when the wire omits
   const { container, unmount } = await mount({ working: false, notice: null, band: null }, [{ ...parent!, lineage_child_pane_ids: [child.pane_id], direct_child_counts: { error: 0, approval: 0, question: 0, working: 0, done: 0 } }, child]);
   try {
     expect(container.querySelector("[data-pane-tree]")?.getAttribute("aria-label")).toBe("Child agents 1 · Unknown state: 1");
+    // With no child to draw a mark for, the face keeps the number.
+    expect(container.querySelector("[data-pane-tree]")?.textContent).toBe("1");
+  } finally { await unmount(); }
+});
+
+it("says the parent waits on its working children after the request, in the sidebar's words", async () => {
+  const { container, unmount } = await mount({ working: false, notice: null, band: null, request: { text: "Find the missing requests", images: 0 }, waiting_on_children: 2 }, childrenFixture());
+  try {
+    const row = container.querySelector('[data-pane-header-band="waiting"]')!;
+    expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
+    expect(row.querySelector("[data-pane-turn-request-text]")?.textContent).toBe("Find the missing requests");
+    expect(row.querySelector("[data-pane-children-wait]")?.textContent).toBe("Waiting · 2 children working");
+    expect(row.querySelector("[data-pane-own-progress]")).toBeNull();
+  } finally { await unmount(); }
+});
+
+it("draws each child's logo after its status mark in the tree popover", async () => {
+  const agents = childrenFixture().map((row) => row.pane_id === "working" ? { ...row, agent_kind: "codex" } : row);
+  const { container, unmount } = await mount({ working: false, notice: null, band: null }, agents);
+  try {
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-tree]")!.click());
+    const child = document.querySelector('[data-agent-child="working"]')!;
+    const mark = child.querySelector("[data-mark]")!;
+    const logo = child.querySelector("[data-agent-mark]")!;
+    expect(logo.getAttribute("data-agent-mark")).toBe("codex");
+    expect(mark.compareDocumentPosition(logo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   } finally { await unmount(); }
 });
 

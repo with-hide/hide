@@ -17,11 +17,12 @@ import { relationState } from "./lineage";
 import { deviceConnected } from "./devices";
 import { remoteTargetOfPane } from "./remote";
 import { useRelationProgress } from "./PaneRelations";
-import { markWords, recordWords } from "./agentRow";
+import { markTone, markWords, recordWords } from "./agentRow";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { paneChildren, type PaneChildren } from "./paneChildren";
 import { sessionOfAgentOn } from "./sessionWork";
 import { statusText } from "./agentStatus";
+import { StatusMark } from "./components/status-mark";
 import { PaneTurnCard, requestWords, type TurnCardTrigger } from "./PaneTurnCard";
 
 /**
@@ -89,10 +90,11 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const ownProgress = band ? null : header?.progress ?? null;
   const request = header?.request ?? null;
   const finished = !band && (header?.finished ?? false);
+  const waitingOnChildren = band ? null : header?.waiting_on_children ?? null;
   // Before any early return: a hook runs on every render.
   const unreachable = useUnreachable(band?.action?.pane_id ?? null);
   const workingLine = header?.working ? <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[calc(2*var(--size-hairline))] bg-agent-working" data-pane-working-line={paneId} /> : null;
-  if (!band && !children && !ownProgress && !request && !finished) return workingLine;
+  if (!band && !children && !ownProgress && !request && !finished && !waitingOnChildren) return workingLine;
   const tracked = band?.action && relation?.sourcePaneId === paneId && relation.targetPaneId === band.action.pane_id ? relation : null;
   const progress = relationState(tracked, outcome, t);
   const navigation = progress?.phase === "failed" ? progress.message : progress?.phase === "pending" ? t("panes.relation.opening", { name: tracked!.label }) : null;
@@ -101,12 +103,13 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
     {band ? <AskBand paneId={paneId} band={band} navigation={navigation} unreachable={unreachable} failed={progress?.phase === "failed"} actions={actions} hasTree={children !== null} /> : <>
       {finished ? <span className="shrink-0 font-semibold text-foreground" data-pane-finished={paneId}>{t("paneTurn.finished")}</span> : null}
       {!finished && !ownProgress && request && header?.working ? <span className="shrink-0" data-pane-working-word={paneId}>{statusText(t, "working")}</span> : null}
+      {waitingOnChildren ? <span className="min-w-0 flex-1 truncate" data-pane-children-wait={paneId}>{[statusText(t, "waiting"), t("agents.line.children", { count: waitingOnChildren })].join(" · ")}</span> : null}
       {ownProgress ? <Hint label={ownProgress}><span className="min-w-0 flex-1 truncate" data-pane-own-progress={paneId}>{ownProgress}</span></Hint> : null}
       {childConnection ? <span className={cn("min-w-0 truncate", ownProgress ? "max-w-1/4 shrink" : "flex-1")} title={childConnection} data-pane-child-connection={paneId}>{childConnection}</span> : null}
     </>}
     {band?.action ? <button type="button" data-pane-band-open={paneId} disabled={unreachable !== null || progress?.phase === "pending" || (progress?.phase === "failed" && !progress.retryable)} aria-busy={progress?.phase === "pending"} className="shrink-0 rounded-xs border border-border bg-background px-xs py-xxs text-micro text-foreground outline-none hover:brightness-95 focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50" onClick={() => actions.followRelation(paneId, band.action!.pane_id, band.action!.label)}>{progress?.phase === "failed" && progress.retryable ? t("common.retry") : t("common.open")}</button> : null}
   </>;
-  const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : request ? "request" : "children");
+  const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : waitingOnChildren ? "waiting" : request ? "request" : "children");
   const tone = band ? "border-l-2 border-warning text-foreground" : "text-muted-foreground";
   return <div className="absolute inset-x-0 top-0 z-10 bg-background">
     {/* One row whether or not it leads with a request, so the tree's
@@ -292,9 +295,15 @@ function PaneAgentPrMark({ agent, family, actions }: { agent: AgentRow; family?:
   return <AgentPrMark agent={agent} family={family} staleness={staleness} side="bottom" onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />;
 }
 
+/** How many direct children the children button draws a mark for before `+N`. */
+const CHILD_MARKS = 3;
+
 /**
- * The children button at the row's left edge. Its hint and name spell out
- * every state count while the face holds only tree, direct-child count and chevron.
+ * The children button at the row's left edge. Its face holds the tree, the
+ * first direct children's status marks in tree order with `+N` for the rest,
+ * and the chevron; its hint and name spell out every state count. A child of
+ * unknown state draws no mark, so it is counted in `+N`, and with a device
+ * away the face keeps the last total, since no mark can claim current work.
  */
 function PaneTreeButton({ paneId, children, agents, actions, connection }: { paneId: string; children: PaneChildren; agents: AgentRow[]; actions: Actions; connection: string | null }) {
   const { t } = useInterfaceTranslation();
@@ -303,6 +312,8 @@ function PaneTreeButton({ paneId, children, agents, actions, connection }: { pan
   // A device that is away keeps its raised count off the button, while the
   // tree still opens on the raised branches that remain reachable.
   const raised = connection ? 0 : children.raised;
+  const marked = connection ? [] : children.children.filter((child) => child.mark !== "unknown").slice(0, CHILD_MARKS);
+  const rest = count - marked.length;
   return <AgentTreePopover
     parent={children.parent}
     agents={agents}
@@ -313,7 +324,8 @@ function PaneTreeButton({ paneId, children, agents, actions, connection }: { pan
     triggerLabel={label}
     trigger={<button type="button" aria-label={label} data-pane-tree={paneId} className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border bg-background px-xs text-micro text-subtle-foreground outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", raised > 0 ? "border-warning/60" : "border-border")}>
       <ListTreeIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
-      <span aria-hidden="true" className="font-mono">{count}</span>
+      {marked.map((child) => <StatusMark key={child.pane_id} mark={child.mark} className={markTone(child)} data-pane-tree-mark={child.pane_id} />)}
+      {rest > 0 ? <span aria-hidden="true" className="font-mono">{marked.length > 0 ? `+${rest}` : rest}</span> : null}
       <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
     </button>}
   />;

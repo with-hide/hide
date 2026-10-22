@@ -338,6 +338,7 @@ function TreeItem({
       <span className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
         <span className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <StatusMark mark={unavailable ? null : child.mark} className={unavailable ? undefined : markTone(child)} />
+          <AgentMark kind={child.agent_kind} />
           <AgentRecordTitle agent={child} className="text-foreground" />
           <AgentPrHover agent={child} staleness={staleness} />
           {line.hasChildren && !line.open && !unavailable ? <DescendantMark agent={child} /> : null}
