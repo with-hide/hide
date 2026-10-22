@@ -57,6 +57,112 @@ pub struct AgentList {
     pub items: Vec<AgentView>,
 }
 
+/// `hide ps`: every live pane, where it sits and the agent it holds, and
+/// the registered agents no live pane holds (`runtime::ps`).
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct Ps {
+    /// In the order the sidebar lists them: by project, checkout and tab.
+    pub panes: Vec<PsPane>,
+    /// Registered agents with no pane on screen: asleep, on a device that
+    /// is not connected, or whose pane Hide no longer sees; with `--all`
+    /// the ended ones too.
+    pub agents: Vec<PsAgent>,
+    /// The mission record could not be read, so no row names its mission.
+    pub missions_unreadable: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PsPane {
+    /// The device id the pane runs on.
+    pub machine: String,
+    /// The name another device was registered under, or its id when it has
+    /// none; null on this machine.
+    pub machine_label: Option<String>,
+    pub project: String,
+    pub project_path: String,
+    /// The checkout's branch, or its folder's name.
+    pub checkout: String,
+    pub checkout_path: String,
+    pub worktree: bool,
+    pub tab: Option<String>,
+    pub tab_id: Option<String>,
+    /// Herdr's pane id on `machine`.
+    pub pane: String,
+    /// The pane's own title, for a pane that holds no agent.
+    pub title: Option<String>,
+    /// The pane `hide ps` was run from.
+    pub you: bool,
+    pub agent: Option<PsAgent>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PsAgent {
+    /// The registration id; null for an agent Hide did not register.
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub kind: String,
+    pub state: PsState,
+    /// The title every surface calls the agent by.
+    pub label: Option<String>,
+    /// The row's second line: what it asks, did or waits on.
+    pub line: Option<String>,
+    pub machine: String,
+    pub pane: String,
+    /// The live agent this one was delegated by, as the screen nests it.
+    pub parent_machine: Option<String>,
+    pub parent_pane: Option<String>,
+    /// The registration id of the parent the registration names.
+    pub parent: Option<String>,
+    /// The name of the agent watching this one.
+    pub watched_by: Option<String>,
+    pub mission: Option<PsMission>,
+    /// The project path the registration names.
+    pub project: Option<String>,
+}
+
+/// The row's mark as every surface draws it (docs/status-model.md, The
+/// mark), `disconnected` for a row on a device that does not answer, and
+/// `ended` for an ended registration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PsState {
+    Turn,
+    Going,
+    Waiting,
+    Done,
+    Unread,
+    Quiet,
+    Unknown,
+    Asleep,
+    Disconnected,
+    Ended,
+}
+
+impl From<crate::agent_state::RowMark> for PsState {
+    fn from(mark: crate::agent_state::RowMark) -> Self {
+        use crate::agent_state::RowMark;
+        match mark {
+            RowMark::Turn => Self::Turn,
+            RowMark::Going => Self::Going,
+            RowMark::Waiting => Self::Waiting,
+            RowMark::Done => Self::Done,
+            RowMark::Unread => Self::Unread,
+            RowMark::Quiet => Self::Quiet,
+            RowMark::Unknown => Self::Unknown,
+            RowMark::Asleep => Self::Asleep,
+        }
+    }
+}
+
+/// The open mission an agent conducts or works a node of.
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct PsMission {
+    pub id: String,
+    pub title: String,
+    /// `conductor`, or the key of the node the agent works.
+    pub role: String,
+}
+
 /// `hide agent register --check` for a caller not yet registered.
 #[derive(Serialize, JsonSchema)]
 pub struct RegisterCheck {
@@ -99,6 +205,7 @@ pub fn answer_schemas() -> Value {
         "agent": schemars::schema_for!(AgentView),
         "agent_list": schemars::schema_for!(AgentList),
         "agent_register_check": schemars::schema_for!(RegisterCheck),
+        "ps": schemars::schema_for!(Ps),
         "letter": schemars::schema_for!(Letter),
         "inbox": schemars::schema_for!(Vec<InboxEntry>),
         "intake": schemars::schema_for!(Intake),

@@ -1353,6 +1353,12 @@ pub struct SidebarAgentSnapshot {
     /// The shell derives elapsed time on its shared clock, without snapshots.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_prompt_at_unix_ms: Option<u64>,
+    /// The later of the latest request and the latest reply in this proven
+    /// session, in epoch milliseconds: what idle-agent sleep counts its
+    /// hours from, because a relaunch or a Herdr handoff moves no line of
+    /// the conversation. `None` until a session read proves one.
+    #[serde(skip_serializing)]
+    pub last_conversation_at_unix_ms: Option<u64>,
     /// The ordering key: `changed_at_unix_ms` as thirteen digits when the
     /// core has it, otherwise Herdr's state change sequence zero-padded.
     pub last_activity: String,

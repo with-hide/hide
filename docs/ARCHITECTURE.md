@@ -1033,6 +1033,10 @@ A committed visit that changes the tab on screen, Wake agent and Retry resume; a
 A failed wake shows a plain reason (`The working folder … no longer exists.`, `The conversation couldn’t be resumed.`, `The agent did not become ready in time.`) and keeps Herdr's code and message in the `agent_sleep.wake_failed` diagnostic.
 Herdr answers the start once it has typed the start line, so a wake whose agent has not appeared in its pane by the start's deadline (`AGENT_START_DEADLINE`, 120 s, read at the next minute's tick) fails the same way with `The agent did not become ready in time.`, rather than reading waking for good (`a_wake_whose_agent_never_appears_fails_at_the_starts_deadline`).
 The last look is stamped when a visit commits and once a minute while a pane is in the tab on screen, and the stamps are saved through the coalesced state save, never published.
+The hours count from the later of the agent's last conversation line and its last look (`PaneStamps::idle_since`).
+The last conversation line is the newest request or reply the session read proves (`last_conversation_at_unix_ms`), because a relaunch or a Herdr handoff reports a state for a moment and moves the change stamp without adding a line to the conversation; on 2026-10-22 one app update restarted every idle agent's 24 hours that way.
+Until a session read proves a line, the change stamp stands in, so a restart only ever delays a sleep.
+A wake stamps a last look, as a visit does, because the conversation it resumes is as old as the sleep and would make the agent due again at the next minute.
 A relaunch forgets an end that was in flight, because it cannot know whether it landed, and reads a wake that was in flight as still asleep until an agent appears in the pane.
 
 The panes of a node that dials the core (A core on another machine) sleep as the core's own do (PRD core-host-node-remote-core B13); a device the core dials does not, and `agent_sleep::sleep_refusal` says so from the pane's `SleepMachine`.

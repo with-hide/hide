@@ -69,6 +69,12 @@ enum Command {
         machine: Option<String>,
         reply: Sender<Result<serde_json::Value, String>>,
     },
+    Ps {
+        device_id: String,
+        pane_id: String,
+        all: bool,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
     SetFileRoots {
         roots: Vec<(std::path::PathBuf, std::fs::File)>,
         reply: Sender<Result<(), String>>,
@@ -328,6 +334,20 @@ impl CoreHandle {
         result
             .recv()
             .map_err(|_| "catalog_unavailable".to_owned())?
+    }
+
+    /// `hide ps`, read on the owner thread.
+    pub fn ps(&self, device: &str, pane: &str, all: bool) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::Ps {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                all,
+                reply,
+            })
+            .map_err(|_| "ps_unavailable".to_owned())?;
+        result.recv().map_err(|_| "ps_unavailable".to_owned())?
     }
 
     pub fn set_file_roots(
@@ -890,6 +910,14 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.agent_catalog(&device_id, machine.as_deref()));
+            }
+            Command::Ps {
+                device_id,
+                pane_id,
+                all,
+                reply,
+            } => {
+                let _ = reply.send(core.ps(&device_id, &pane_id, all));
             }
 
             Command::DeliveryPrepare {
