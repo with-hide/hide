@@ -274,7 +274,7 @@ export function BacklogItemPanel({ panel, projects, actions }: { panel: Extract<
               : origin.session ? (
                 <button type="button" className="flex w-full min-w-0 flex-col items-start gap-xxs rounded-sm px-xs py-xs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={() => { const session = origin.session!; actions.closeOverview(); actions.openSessionRecord(session); }} data-item-origin-session="true">
                   <span className="font-medium text-foreground">{origin.session_title ?? ""}</span>
-                  {origin.task_name ? <span className="text-subtle-foreground">{origin.task_name}</span> : null}
+                  {origin.flow_name ? <span className="text-subtle-foreground">{origin.flow_name}</span> : null}
                   {origin.missed_text ? <span className="flex items-start gap-xxs text-warning"><FlagIcon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) shrink-0" />{origin.missed_text}</span> : null}
                 </button>
               ) : null}

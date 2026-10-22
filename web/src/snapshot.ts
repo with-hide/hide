@@ -596,7 +596,7 @@ export type BacklogOrigin = {
   session: WorkSession | null;
   session_title: string | null;
   missed_text: string | null;
-  task_name: string | null;
+  flow_name: string | null;
   request: string | null;
   answer: string | null;
 };

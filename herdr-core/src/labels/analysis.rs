@@ -68,14 +68,33 @@ pub(crate) struct Analysis {
     /// the operator has asked for work.
     pub(crate) goal: Option<String>,
     pub(crate) goal_update: GoalUpdate,
-    /// The turn's opening message in one line, read against the earlier
-    /// events (PRD pane-last-request D-03); empty when it says nothing.
-    pub(crate) request: String,
+    /// The summaries of the requests the context listed as unsummarized,
+    /// by their ids (PRD session-record-goal-flow D-06).
+    pub(crate) requests: Vec<RequestLine>,
     /// This turn's work while it runs, its result once over, or what the
     /// operator is to answer or do when it ended on a question.
     pub(crate) line: String,
     pub(crate) end: LabelEnd,
     pub(crate) work: Option<crate::links::ledger::TurnJudgment>,
+}
+
+/// One request's summary as a provider gave it, keyed by the id the
+/// context gave the request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RequestLine {
+    pub(crate) id: String,
+    pub(crate) summary: String,
+    /// The question the request answers, when it is a reply.
+    pub(crate) answers: Option<String>,
+}
+
+/// A request owed a summary, as the context lists it: the id the answer
+/// keys its summary by, its words and the end of the agent message before it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwedLine {
+    pub(crate) id: String,
+    pub(crate) text: String,
+    pub(crate) before: Option<String>,
 }
 
 /// A clearer name for the same assignment is distinct from a new assignment.
@@ -107,6 +126,10 @@ pub enum LabelEnd {
     Waiting,
     /// It stopped before the request was done, without asking.
     Unfinished,
+    /// The agent's provider refused the turn: a usage limit or an API error
+    /// (PRD session-record-goal-flow D-10). The record skips such a turn for
+    /// its top state and shows its line as a badge; a row draws it as blocked.
+    Limited,
 }
 
 /// Why one analysis produced no verdict.
@@ -280,6 +303,8 @@ fn latest_exchange(events: &[LabelEvent]) -> String {
     render(&conversation[start..])
 }
 
+/// The turn from its human message on, after the agent message that
+/// message replied to (D-07): a short answer means nothing without it.
 fn latest_turn_exchange(events: &[LabelEvent]) -> String {
     let conversation = conversation(events);
     let Some(start) = conversation
@@ -288,7 +313,63 @@ fn latest_turn_exchange(events: &[LabelEvent]) -> String {
     else {
         return String::new();
     };
+    let start = match start.checked_sub(1) {
+        Some(before) if conversation[before].kind == LabelEventKind::Assistant => before,
+        _ => start,
+    };
     render(&conversation[start..])
+}
+
+/// The longest end of the agent message before an owed request that the
+/// context carries, in characters.
+const BEFORE_CHARS: usize = 300;
+
+/// The agent message right before the human message at `offset`, its last
+/// [`BEFORE_CHARS`] characters, when the retained events still hold it.
+pub(crate) fn message_before(events: &[LabelEvent], offset: u64) -> Option<String> {
+    let at = events.iter().position(|event| event.offset == offset)?;
+    events[..at]
+        .iter()
+        .rev()
+        .find(|event| {
+            matches!(
+                event.kind,
+                LabelEventKind::Human | LabelEventKind::Assistant
+            )
+        })
+        .filter(|event| event.kind == LabelEventKind::Assistant && !event.text.trim().is_empty())
+        .map(|event| tail(&event.text, BEFORE_CHARS))
+}
+
+/// The owed requests as one section's body, each with its id and the end of
+/// the message before it, the room split evenly among them so the last is
+/// never cut out (B34).
+fn owed_section(owed: &[OwedLine], room: usize) -> String {
+    if owed.is_empty() {
+        return "<none/>".to_owned();
+    }
+    let each = room / owed.len();
+    owed.iter()
+        .map(|line| {
+            let id = format!("[{}]", line.id);
+            let before = line.before.as_deref().map(|before| {
+                format!(
+                    "\nbefore: assistant: {}",
+                    tail(&mask(&strip_code_fences(before)), each * 2 / 5)
+                )
+            });
+            let spent = chars(&id) + before.as_deref().map_or(0, chars) + 8;
+            format!(
+                "{id}{}\nuser: {}",
+                before.unwrap_or_default(),
+                head(
+                    &mask(&strip_code_fences(&line.text)),
+                    each.saturating_sub(spent)
+                )
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n---\n")
 }
 
 /// The operator's first three and last eight requests with an explicit
@@ -329,51 +410,53 @@ fn initial_operator_requests(
 pub(crate) fn analysis_context(
     events: &[LabelEvent],
     operator: &dyn Fn(&LabelEvent) -> bool,
+    owed: &[OwedLine],
 ) -> String {
     let Some(requests) = initial_operator_requests(events, operator) else {
         return String::new();
     };
+    let half = MAX_REQUEST_SECTION_CHARS / 2;
+    let initial = format!(
+        "<initial-operator-requests>\n{}\n</initial-operator-requests>",
+        head(&mask(&strip_code_fences(&requests)), half)
+    );
     bounded_context(
-        "<initial-operator-requests>\n",
-        &requests,
-        "\n</initial-operator-requests>",
+        &format!("{initial}\n<unsummarized-requests>\n"),
+        &owed_section(
+            owed,
+            MAX_REQUEST_SECTION_CHARS.saturating_sub(chars(&initial) + 60),
+        ),
+        "\n</unsummarized-requests>",
         &latest_exchange(events),
     )
 }
 
-/// The rolling text for a goal that already exists: the operator's new
-/// requests as goal evidence, and the latest exchange for the line and the
-/// end.
+/// The rolling text for a goal that already exists: the requests still
+/// owed a summary, and the latest exchange for the line and the end.
 pub(crate) fn rolling_analysis_context(
     previous_goal: &str,
     goal_evidence: &str,
-    new_requests: &[LabelEvent],
+    owed: &[OwedLine],
     events: &[LabelEvent],
 ) -> String {
-    let delta = new_requests
-        .iter()
-        .filter(|event| event.kind == LabelEventKind::Human)
-        .map(|event| format!("user: {}", event.text))
-        .collect::<Vec<_>>()
-        .join("\n---\n");
-    let delta = if delta.is_empty() {
-        "<none/>".to_owned()
-    } else {
-        delta
-    };
-    bounded_context(
-        &format!(
-            "<previous-goal>{}</previous-goal>\n<goal-evidence>{}</goal-evidence>\n<new-operator-requests>\n",
-            // A goal stored by an earlier build is not bounded by this one's
-            // limits; it may not crowd the new requests out.
-            head(
-                &mask(&strip_code_fences(previous_goal)),
-                MAX_REQUEST_SECTION_CHARS / 4
-            ),
-            head(goal_evidence, MAX_GOAL_EVIDENCE_CHARS),
+    let open = format!(
+        "<previous-goal>{}</previous-goal>\n<goal-evidence>{}</goal-evidence>\n<unsummarized-requests>\n",
+        // A goal stored by an earlier build is not bounded by this one's
+        // limits; it may not crowd the new requests out.
+        head(
+            &mask(&strip_code_fences(previous_goal)),
+            MAX_REQUEST_SECTION_CHARS / 4
         ),
-        &delta,
-        "\n</new-operator-requests>",
+        head(goal_evidence, MAX_GOAL_EVIDENCE_CHARS),
+    );
+    const CLOSE: &str = "\n</unsummarized-requests>";
+    bounded_context(
+        &open,
+        &owed_section(
+            owed,
+            MAX_REQUEST_SECTION_CHARS.saturating_sub(chars(&open) + chars(CLOSE)),
+        ),
+        CLOSE,
         &latest_turn_exchange(events),
     )
 }
@@ -614,22 +697,9 @@ fn strip_code_fences(text: &str) -> String {
         .join("\n")
 }
 
-/// The ledger's side of an END request: who the request is from, the tasks a
-/// verdict may continue (open ones, and the newest finished ones, which a
-/// request that asks for them again reopens) and the open missed items.
-pub(crate) fn work_context(
-    work_author: bool,
-    ledger: &crate::links::ledger::LedgerContext,
-) -> String {
-    let tasks = |tasks: &[crate::links::ledger::WorkTask]| {
-        serde_json::json!(
-            tasks
-                .iter()
-                .map(|task| serde_json::json!({"id": task.id, "name": task.name}))
-                .collect::<Vec<_>>()
-        )
-        .to_string()
-    };
+/// The ledger's side of an END request: the open missed lines, the
+/// operator's open questions among them, which a turn may resolve.
+pub(crate) fn work_context(ledger: &crate::links::ledger::LedgerContext) -> String {
     let missed = serde_json::json!(
         ledger
             .open_missed
@@ -638,11 +708,7 @@ pub(crate) fn work_context(
             .collect::<Vec<_>>()
     )
     .to_string();
-    redact(&format!(
-        "\n<work-author>{work_author}</work-author>\n<open-tasks>{}</open-tasks>\n<finished-tasks>{}</finished-tasks>\n<open-missed>{missed}</open-missed>",
-        tasks(&ledger.open_tasks),
-        tasks(&ledger.finished_tasks),
-    ))
+    redact(&format!("\n<open-missed>{missed}</open-missed>"))
 }
 
 /// [`mask`], then its tail of the last [`MAX_ANALYSIS_CONTEXT_CHARS`] + 1
@@ -779,6 +845,20 @@ pub(crate) fn assistant(text: &str, at: u64) -> LabelEvent {
 mod tests {
     use super::*;
 
+    /// The human events as the requests a label still owes a summary.
+    fn owed(events: &[LabelEvent]) -> Vec<OwedLine> {
+        events
+            .iter()
+            .filter(|event| event.kind == LabelEventKind::Human)
+            .enumerate()
+            .map(|(index, event)| OwedLine {
+                id: format!("r{}", index + 1),
+                text: event.text.clone(),
+                before: None,
+            })
+            .collect()
+    }
+
     #[test]
     fn goal_truncates_on_a_word_boundary_and_rejects_short_or_multiline_titles() {
         assert_eq!(
@@ -801,7 +881,7 @@ mod tests {
         let events = (0..15)
             .map(|index| human(&format!("turn {index}"), index))
             .collect::<Vec<_>>();
-        let context = analysis_context(&events, &|_| true);
+        let context = analysis_context(&events, &|_| true, &[]);
         for kept in [0, 1, 2, 7, 14] {
             assert!(
                 context.contains(&format!("user: turn {kept}\n"))
@@ -820,7 +900,7 @@ mod tests {
             human("테스트 결과 알려줘", 3),
             assistant("결과", 4),
         ];
-        let context = analysis_context(&events, &|event| event.offset != 3);
+        let context = analysis_context(&events, &|event| event.offset != 3, &[]);
         let (requests, exchange) = context
             .split_once("<latest-exchange>")
             .expect("the context has both sections");
@@ -839,7 +919,7 @@ mod tests {
         ];
         let cursor = task_input_cursor(&events[..1]);
         let delta = new_human_turns(&events, cursor);
-        let context = rolling_analysis_context("이전 작업 제목", "", &delta, &events);
+        let context = rolling_analysis_context("이전 작업 제목", "", &owed(&delta), &events);
         assert!(context.contains("<previous-goal>이전 작업 제목</previous-goal>"));
         assert!(context.contains("user: new request"));
         assert!(!context.contains("user: old request"));
@@ -872,8 +952,12 @@ mod tests {
             assistant(&"큰 출력 ".repeat(2_000), 4),
         ];
         let evidence = goal_evidence(&events[..1], &|_| true).unwrap();
-        let context =
-            rolling_analysis_context("개선사항 구현 및 배포", &evidence, &events[2..3], &events);
+        let context = rolling_analysis_context(
+            "개선사항 구현 및 배포",
+            &evidence,
+            &owed(&events[2..3]),
+            &events,
+        );
         assert!(context.contains("에이전트 그래프의 필터와 프로젝트 접기를 개선해줘"));
         assert!(context.contains("그 방향으로 진행해"));
         assert_eq!(context.chars().count(), MAX_ANALYSIS_CONTEXT_CHARS);
@@ -912,8 +996,8 @@ mod tests {
             human("두 번째 요청", 3),
             assistant(&reminder, 4),
         ];
-        let initial = analysis_context(&events, &|_| true);
-        let rolling = rolling_analysis_context("이전 작업 제목", "", &events[2..3], &events);
+        let initial = analysis_context(&events, &|_| true, &[]);
+        let rolling = rolling_analysis_context("이전 작업 제목", "", &owed(&events[2..3]), &events);
         for (context, kept) in [
             (&initial, "user: 첫 요청 문장"),
             (&rolling, "<previous-goal>이전 작업 제목</previous-goal>"),
@@ -939,16 +1023,15 @@ mod tests {
             assistant("마지막 답", 4),
         ];
         for context in [
-            analysis_context(&events, &|_| true),
-            rolling_analysis_context("이전 작업 제목", "", &events, &events),
+            analysis_context(&events, &|_| true, &[]),
+            rolling_analysis_context("이전 작업 제목", "", &owed(&events), &events),
         ] {
             let (requests, exchange) = sections(&context);
             assert!(requests.chars().count() <= MAX_REQUEST_SECTION_CHARS);
             assert!(requests.contains("user: 첫 요청 머리"), "{requests}");
             assert!(
-                requests.ends_with("…\n</initial-operator-requests>")
-                    || requests.ends_with("…\n</new-operator-requests>"),
-                "{requests}"
+                requests.contains("…\n"),
+                "a long request is cut: {requests}"
             );
             assert!(exchange.contains("assistant: 마지막 답"));
         }
@@ -959,7 +1042,7 @@ mod tests {
         let goal = "이전 빌드가 남긴 긴 목표 ".repeat(400);
         let answer = "긴 답 ".repeat(2_000);
         let events = vec![human("새 요청", 1), assistant(&answer, 2)];
-        let context = rolling_analysis_context(&goal, "", &events[..1], &events);
+        let context = rolling_analysis_context(&goal, "", &owed(&events[..1]), &events);
         assert!(context.chars().count() <= MAX_ANALYSIS_CONTEXT_CHARS);
         assert!(sections(&context).0.contains("user: 새 요청"));
     }
@@ -968,7 +1051,7 @@ mod tests {
     fn short_requests_leave_the_rest_of_the_bound_to_the_exchange() {
         let answer = "긴 답 ".repeat(2_000);
         let events = vec![human("짧은 요청", 1), assistant(&answer, 2)];
-        let context = analysis_context(&events, &|_| true);
+        let context = analysis_context(&events, &|_| true, &[]);
         let (requests, exchange) = sections(&context);
         assert!(requests.chars().count() < 200);
         assert_eq!(context.chars().count(), MAX_ANALYSIS_CONTEXT_CHARS);
@@ -1015,6 +1098,7 @@ mod tests {
                 1,
             )],
             &|_| true,
+            &[],
         );
         assert!(context.contains("[redacted-secret]"));
         assert!(context.contains("[redacted-personal]"));
@@ -1132,8 +1216,8 @@ mod tests {
         ]) {
             let events = [human(&request, 1)];
             for context in [
-                analysis_context(&events, &|_| true),
-                rolling_analysis_context("기존 작업 결과물", "", &events, &events),
+                analysis_context(&events, &|_| true, &[]),
+                rolling_analysis_context("기존 작업 결과물", "", &owed(&events), &events),
             ] {
                 if !context.contains(&expected_request) || context.contains(&request) {
                     failures.push(format!(
@@ -1156,8 +1240,8 @@ mod tests {
         );
         let events = [human(request, 1)];
         for context in [
-            analysis_context(&events, &|_| true),
-            rolling_analysis_context("기존 작업 결과물", "", &events, &events),
+            analysis_context(&events, &|_| true, &[]),
+            rolling_analysis_context("기존 작업 결과물", "", &owed(&events), &events),
         ] {
             assert!(context.contains(request), "{context}");
         }

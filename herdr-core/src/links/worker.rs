@@ -10,9 +10,8 @@
 //! a batch a minute.
 
 use super::ledger::{
-    LEDGER_DEPTH_LIMIT, LEDGER_QUEUE_LIMIT, LEDGER_RPC_LIMIT, LedgerAnswer, LedgerCall,
-    LedgerContext, LedgerUpdate, SessionIdentity, SessionRecord, SessionSearchOptions,
-    SessionSearchPage, SessionSearchPresence, WorkProgress,
+    LEDGER_QUEUE_LIMIT, LEDGER_RPC_LIMIT, LedgerAnswer, LedgerCall, LedgerContext, LedgerUpdate,
+    SessionIdentity, SessionRecord, SessionSearchOptions, SessionSearchPage, SessionSearchPresence,
 };
 use super::observation::{self, DirectFact};
 use super::store::{ArchivedSession, IssueLinks, LinkStore, LocalFiles, Opened, PrLinks};
@@ -22,7 +21,7 @@ use super::{
 };
 use crate::node_access::NodeLink;
 use hide_session::links::{self, Candidate, ReadRequest};
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -66,8 +65,6 @@ pub trait Sink: Send + 'static {
     fn session_search(&self, _generation: u64, _answer: Result<SessionSearchPage, String>) {}
     /// Each project's counts and chips, by workspace id, when one changed.
     fn summaries(&self, summaries: BTreeMap<String, ProjectLinkSummary>);
-    /// Each live pane session's tasks and children, when one changed.
-    fn progress(&self, progress: Vec<WorkProgress>);
     /// A panel read's answer; `generation` fences a superseded one.
     fn panel(&self, generation: u64, answer: Result<PanelAnswer, String>);
     /// Whether the first fill or a listing's reads are running (B24).
@@ -480,10 +477,6 @@ struct State {
     panel: Option<PanelRequest>,
     panel_answer: Option<Result<PanelAnswer, String>>,
     summaries: BTreeMap<String, ProjectLinkSummary>,
-    progress: Vec<WorkProgress>,
-    /// The store revision and the pane sessions `progress` was read at; the
-    /// same pair again means the same answer, so nothing is read.
-    progress_read: Option<((u64, i64), BTreeSet<SessionIdentity>)>,
     queue: VecDeque<Candidate>,
     /// The listing whose files are being read, until its last page drains.
     listing: Option<Listing>,
@@ -525,8 +518,6 @@ impl State {
             panel: None,
             panel_answer: None,
             summaries: BTreeMap::new(),
-            progress: Vec::new(),
-            progress_read: None,
             queue: VecDeque::new(),
             listing: None,
             filled: false,
@@ -913,17 +904,14 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             state.filled_unknown = false;
             state.filled = store.meta(BACKFILL_DONE).is_ok_and(|done| done.is_some());
         }
-        // Lineage first: a letter's turn queued beside it is recorded against
-        // the task that spawned its sender only once the child is known
-        // (PRD task-continuation D-02).
+        // Lineage first: a context read beside it names the parent.
         if let Some(parents) = state.parents.take() {
             let children = store.apply_parents(&parents);
             for child in children.iter().flatten() {
-                update_context_ancestors(client, store, child);
+                update_context(client, store, child);
             }
             if children.is_err() {
-                // Kept for the next pass: a descendant letter's turn waits
-                // for lineage facts the store has taken.
+                // Kept for the next pass.
                 state.parents.get_or_insert(parents);
             }
             state.wrote(children.map(|_| ()), "parents");
@@ -934,10 +922,6 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 let Some(update) = state.ledger.front() else {
                     break;
                 };
-                if store.awaits_lineage(update) {
-                    state.ledger_retry_at = Some(Instant::now() + Duration::from_secs(1));
-                    break;
-                }
                 let session = update.session().clone();
                 let result = store.apply_ledger_update(update);
                 if let Err(code) = &result
@@ -960,7 +944,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                     mailbox.ledger_pending = mailbox.ledger_pending.saturating_sub(1);
                 }
                 state.dirty_at.get_or_insert_with(Instant::now);
-                update_context_ancestors(client, store, &session);
+                update_context(client, store, &session);
             }
         }
         if std::mem::take(&mut state.projects_due) {
@@ -971,14 +955,6 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             }
             let result = store.refresh_ledger_outputs();
             state.wrote(result, "ledger_outputs");
-            let held = client
-                .1
-                .lock()
-                .map(|contexts| contexts.values.keys().cloned().collect::<Vec<_>>())
-                .unwrap_or_default();
-            for session in held {
-                update_context_ancestors(client, store, &session);
-            }
             state.dirty_at.get_or_insert_with(Instant::now);
         }
         if state.panes_at.is_none_or(|at| at.elapsed() >= PANES_EVERY) {
@@ -1058,7 +1034,6 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         {
             state.dirty_at = None;
             publish_summaries(store, &mut state, sink);
-            publish_progress(store, &mut state, sink);
             if state.panel.is_some() {
                 answer_panel(store, own, paths, &mut state, sink);
             }
@@ -1672,90 +1647,22 @@ fn publish_summaries(store: &LinkStore, state: &mut State, sink: &impl Sink) {
     }
 }
 
-/// The chip and checklist of every session a pane carries, from the same
-/// record the context reads; one that cannot be read keeps what it showed.
-fn publish_progress(store: &LinkStore, state: &mut State, sink: &impl Sink) {
-    let sessions = state
-        .panes
-        .iter()
-        .map(|pane| SessionIdentity {
-            device_id: pane.device_id.clone(),
-            agent: pane.agent.clone(),
-            session_id: pane.session_id.clone(),
-        })
-        .collect::<BTreeSet<_>>();
-    let revision = store.revision().ok();
-    if revision.is_some_and(|revision| {
-        state
-            .progress_read
-            .as_ref()
-            .is_some_and(|(read, panes)| *read == revision && *panes == sessions)
-    }) {
-        return;
-    }
-    let mut progress = Vec::new();
-    let mut failed = false;
-    for session in &sessions {
-        match store.ledger_progress(session) {
-            Ok(Some(row)) => progress.push(row),
-            Ok(None) => {}
-            Err(code) => {
-                failed = true;
-                log_write(&code, "ledger_progress");
-                progress.extend(
-                    state
-                        .progress
-                        .iter()
-                        .find(|held| &held.session == session)
-                        .cloned(),
-                );
-            }
-        }
-    }
-    // A failed read is not taken as read: the next summary pass reads again.
-    state.progress_read = revision
-        .filter(|_| !failed)
-        .map(|revision| (revision, sessions));
-    if progress != state.progress {
-        state.progress = progress.clone();
-        sink.progress(progress);
-    }
-}
-
+/// A read that recorded requests changes which of them a label still owes a
+/// summary, so the session's cached context is read again.
 fn refresh_reader_context(
     client: &LinkClient,
     store: &LinkStore,
     device: &str,
     answer: &links::ReadAnswer,
 ) {
-    if answer.facts.prs.is_empty() && answer.facts.issues.is_empty() {
+    if answer.facts.requests.is_empty() {
         return;
     }
     match store.ledger_file_session(device, &answer.path) {
-        Ok(Some(session)) => update_context_ancestors(client, store, &session),
+        Ok(Some(session)) => update_context(client, store, &session),
         Ok(None) => {}
         Err(code) => log_write(&code, "ledger_reader_context"),
     }
-}
-
-fn update_context_ancestors(client: &LinkClient, store: &LinkStore, session: &SessionIdentity) {
-    let mut current = session.clone();
-    let mut seen = std::collections::BTreeSet::new();
-    for _ in 0..=LEDGER_DEPTH_LIMIT {
-        if !seen.insert(current.clone()) {
-            break;
-        }
-        update_context(client, store, &current);
-        match store.ledger_parent(&current) {
-            Ok(Some(parent)) => current = parent,
-            Ok(None) => return,
-            Err(code) => {
-                log_write(&code, "ledger_parent");
-                return;
-            }
-        }
-    }
-    log_write("ledger_parent_capacity", "ledger_context");
 }
 
 fn update_context(client: &LinkClient, store: &LinkStore, session: &SessionIdentity) {
@@ -1902,91 +1809,6 @@ mod tests {
         assert_eq!(client.observe(pending), Err("links_worker_closed".into()));
     }
 
-    #[test]
-    fn a_leaf_change_refreshes_the_cached_root_at_the_supported_depth_limit() {
-        use crate::labels::analysis::LabelEnd;
-        use crate::links::ledger::{RecordedRequest, TaskDecision, TurnJudgment, WorkAuthor};
-        let directory = tempfile::tempdir().unwrap();
-        let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
-        let chain = (0..=LEDGER_DEPTH_LIMIT)
-            .map(|depth| SessionIdentity {
-                device_id: "remote".into(),
-                agent: "claude".into(),
-                session_id: format!("session-{depth}"),
-            })
-            .collect::<Vec<_>>();
-        for session in &chain {
-            store
-                .apply_ledger_update(&LedgerUpdate::Requests {
-                    session: session.clone(),
-                    cwd: "/repo".into(),
-                    path: None,
-                    requests: vec![RecordedRequest {
-                        offset: 1,
-                        at_unix_ms: CREATED,
-                        text: "Build the current root task".into(),
-                        author: WorkAuthor::Operator,
-                        task_ids: vec![],
-                        chapter_id: None,
-                        judged: false,
-                    }],
-                })
-                .unwrap();
-        }
-        store
-            .apply_parents(
-                &chain
-                    .windows(2)
-                    .map(|pair| ParentFact {
-                        device_id: pair[1].device_id.clone(),
-                        agent: pair[1].agent.clone(),
-                        session_id: pair[1].session_id.clone(),
-                        parent_device_id: pair[0].device_id.clone(),
-                        parent_agent: pair[0].agent.clone(),
-                        parent_session_id: pair[0].session_id.clone(),
-                        parent_name: "Parent".into(),
-                        name: "child".into(),
-                        reported_at_unix_ms: None,
-                        live: true,
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap();
-        let client = LinkClient::full_mailbox_for_test();
-        client.prime_context_for_test(chain[0].clone(), store.ledger_context(&chain[0]).unwrap());
-        store
-            .apply_ledger_update(&LedgerUpdate::Chapter {
-                session: chain[0].clone(),
-                goal: "Current goal".into(),
-                at_unix_ms: CREATED,
-            })
-            .unwrap();
-        store
-            .apply_ledger_update(&LedgerUpdate::TurnEnd {
-                session: chain[0].clone(),
-                offset: 1,
-                started_at_unix_ms: CREATED + 1,
-                at_unix_ms: CREATED + 1,
-                end: LabelEnd::Working,
-                work_author: true,
-                letter: None,
-                turn_witness: None,
-                judgment: TurnJudgment {
-                    task: TaskDecision::New {
-                        names: vec!["Current root task".into()],
-                    },
-                    ..Default::default()
-                },
-            })
-            .unwrap();
-        assert!(client.context(&chain[0]).unwrap().open_tasks.is_empty());
-        update_context_ancestors(&client, &store, chain.last().unwrap());
-        assert_eq!(
-            client.context(&chain[0]).unwrap().open_tasks[0].name,
-            "Current root task"
-        );
-    }
-
     /// A Claude Code session file that printed pull request 7.
     fn printed_a_pull_request(home: &Path, id: &str, at: &str) -> String {
         let folder = home.join(".claude/projects/-work-app");
@@ -2029,7 +1851,7 @@ mod tests {
     #[test]
     fn a_session_the_ledger_never_recorded_fails_no_write_and_stops_no_context() {
         use crate::labels::analysis::LabelEnd;
-        use crate::links::ledger::{RecordedRequest, TaskDecision, TurnJudgment, WorkAuthor};
+        use crate::links::ledger::{RecordedRequest, TurnJudgment, WorkAuthor};
         let home = tempfile::tempdir().unwrap();
         let directory = tempfile::tempdir().unwrap();
         let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
@@ -2061,9 +1883,7 @@ mod tests {
                     at_unix_ms: CREATED,
                     text: "Build the release".into(),
                     author: WorkAuthor::Operator,
-                    task_ids: vec![],
-                    chapter_id: None,
-                    judged: false,
+                    ..RecordedRequest::default()
                 }],
             })
             .unwrap();
@@ -2072,6 +1892,7 @@ mod tests {
                 session: session("root"),
                 goal: "Ship the release".into(),
                 at_unix_ms: CREATED,
+                change: crate::links::ledger::FlowChange::New,
             })
             .unwrap();
         store
@@ -2082,14 +1903,9 @@ mod tests {
                 at_unix_ms: CREATED + 1,
                 end: LabelEnd::Working,
                 work_author: true,
-                letter: None,
+                line: String::new(),
                 turn_witness: None,
-                judgment: TurnJudgment {
-                    task: TaskDecision::New {
-                        names: vec!["Release build".into()],
-                    },
-                    ..Default::default()
-                },
+                judgment: TurnJudgment::default(),
             })
             .unwrap();
         let child = printed_a_pull_request(home.path(), "child", "2026-09-27T00:00:00Z");
@@ -2106,9 +1922,6 @@ mod tests {
             parent_agent: "claude".into(),
             parent_session_id: "root".into(),
             parent_name: "lead".into(),
-            name: "child".into(),
-            reported_at_unix_ms: None,
-            live: true,
         };
         store
             .apply_parents(&[parented(&session("child")), parented(&pi)])
@@ -2127,19 +1940,13 @@ mod tests {
                 .any(|record| record["kind"] == "store.write_failed"),
             "{records:?}"
         );
-        assert_eq!(
-            client.context(&session("root")).unwrap().open_tasks[0].name,
-            "Release build"
-        );
         let unrecorded = client.context(&pi).unwrap();
         assert_eq!(unrecorded.parent_name.as_deref(), Some("lead"));
-        assert!(unrecorded.open_tasks.is_empty());
+        assert!(unrecorded.owed.is_empty());
         assert!(
             client
                 .context(&session("removed"))
-                .unwrap()
-                .open_tasks
-                .is_empty()
+                .is_none_or(|context| context.owed.is_empty())
         );
         assert_eq!(
             store
@@ -2286,106 +2093,10 @@ mod tests {
         assert_eq!(store.ledger_record(&identity).unwrap().repository, None);
     }
 
-    #[test]
-    fn a_panes_progress_is_read_again_only_after_the_store_or_the_panes_change() {
-        struct Count(Arc<Mutex<Vec<Vec<WorkProgress>>>>);
-        impl Sink for Count {
-            fn summaries(&self, _summaries: BTreeMap<String, ProjectLinkSummary>) {}
-            fn progress(&self, progress: Vec<WorkProgress>) {
-                self.0.lock().unwrap().push(progress);
-            }
-            fn panel(&self, _generation: u64, _answer: Result<PanelAnswer, String>) {}
-            fn filling(&self, _filling: bool) {}
-            fn devices(&self) -> Vec<(String, Arc<dyn NodeLink>)> {
-                Vec::new()
-            }
-        }
-        let directory = tempfile::tempdir().unwrap();
-        let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
-        let session = SessionIdentity {
-            device_id: "device-a".into(),
-            agent: "codex".into(),
-            session_id: "session-a".into(),
-        };
-        let ask = |store: &mut LinkStore, offset: u64, names: &[&str]| {
-            store
-                .apply_ledger_update(&LedgerUpdate::Requests {
-                    session: session.clone(),
-                    cwd: "/repo".into(),
-                    path: None,
-                    requests: vec![crate::links::ledger::RecordedRequest {
-                        offset,
-                        at_unix_ms: offset * 1_000,
-                        text: "고쳐줘".into(),
-                        author: crate::links::ledger::WorkAuthor::Operator,
-                        task_ids: vec![],
-                        chapter_id: None,
-                        judged: false,
-                    }],
-                })
-                .unwrap();
-            store
-                .apply_ledger_update(&LedgerUpdate::TurnEnd {
-                    session: session.clone(),
-                    offset,
-                    started_at_unix_ms: offset * 1_000 + 500,
-                    at_unix_ms: offset * 1_000 + 500,
-                    end: crate::labels::analysis::LabelEnd::Waiting,
-                    work_author: true,
-                    letter: None,
-                    turn_witness: None,
-                    judgment: crate::links::ledger::TurnJudgment {
-                        task: crate::links::ledger::TaskDecision::New {
-                            names: names.iter().map(|name| (*name).into()).collect(),
-                        },
-                        ..Default::default()
-                    },
-                })
-                .unwrap();
-        };
-        store
-            .apply_ledger_update(&LedgerUpdate::Chapter {
-                session: session.clone(),
-                goal: "출시 전 수정".into(),
-                at_unix_ms: 500,
-            })
-            .unwrap();
-        ask(&mut store, 1, &["README 태그", "댓글 위치"]);
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let sink = Count(seen.clone());
-        let mut state = State::new();
-        state.panes = Arc::new(vec![PaneFact {
-            device_id: session.device_id.clone(),
-            agent: session.agent.clone(),
-            session_id: session.session_id.clone(),
-            cwd: "/repo".into(),
-            branch: None,
-        }]);
-        publish_progress(&store, &mut state, &sink);
-        assert_eq!(seen.lock().unwrap().len(), 1);
-        assert_eq!(seen.lock().unwrap()[0][0].total, 2);
-        // Nothing moved: no read, so a held answer the store would not give
-        // stays, and nothing is published.
-        state.progress = Vec::new();
-        publish_progress(&store, &mut state, &sink);
-        assert_eq!(seen.lock().unwrap().len(), 1);
-        assert!(state.progress.is_empty());
-        // A judged turn changes the store, so the pane is read and published again.
-        ask(&mut store, 2, &["HTML 댓글"]);
-        publish_progress(&store, &mut state, &sink);
-        assert_eq!(seen.lock().unwrap().len(), 2);
-        assert_eq!(seen.lock().unwrap()[1][0].total, 3);
-        // The pane closing changes the sessions read, and the row goes.
-        state.panes = Arc::default();
-        publish_progress(&store, &mut state, &sink);
-        assert_eq!(seen.lock().unwrap().last().unwrap(), &Vec::new());
-    }
-
     #[derive(Default)]
     struct Seen {
         panel: Option<Result<PanelAnswer, String>>,
         summaries: BTreeMap<String, ProjectLinkSummary>,
-        progress: Vec<WorkProgress>,
     }
 
     struct TestSink {
@@ -2396,9 +2107,6 @@ mod tests {
     impl Sink for TestSink {
         fn summaries(&self, summaries: BTreeMap<String, ProjectLinkSummary>) {
             self.seen.lock().unwrap().summaries = summaries;
-        }
-        fn progress(&self, progress: Vec<WorkProgress>) {
-            self.seen.lock().unwrap().progress = progress;
         }
         fn panel(&self, _generation: u64, answer: Result<PanelAnswer, String>) {
             self.seen.lock().unwrap().panel = Some(answer);

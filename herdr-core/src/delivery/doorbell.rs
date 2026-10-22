@@ -445,13 +445,14 @@ impl Doorbell {
                 })
                 .count();
             let line = bell_line(owner, &ledger, letter, others);
+            let sender = bell_sender(owner, &ledger, letter);
             match deliver(
                 owner,
                 client,
                 connector.as_ref(),
                 &letter.id,
                 &observed,
-                &line,
+                (&line, &sender),
                 stop,
             ) {
                 Ok(Outcome::Rung) => {
@@ -562,6 +563,18 @@ impl Doorbell {
 /// watches. Memory only: the ledger is the pass's copy and the title one short
 /// look under the lock.
 fn bell_line(owner: &Mutex<Runtime>, ledger: &Ledger, letter: &Letter, others: usize) -> String {
+    let name = bell_sender(owner, ledger, letter);
+    super::bell::line(&super::bell::Ring {
+        sender: &name,
+        kind: &letter.kind,
+        body: &letter.body,
+        others,
+        inbox: super::bell::names_inbox(&letter.recipient.kind),
+    })
+}
+
+/// The name a bell gives the letter's writer (`bell_line`).
+fn bell_sender(owner: &Mutex<Runtime>, ledger: &Ledger, letter: &Letter) -> String {
     let about = letter
         .watch_warning
         .as_ref()
@@ -572,7 +585,7 @@ fn bell_line(owner: &Mutex<Runtime>, ledger: &Ledger, letter: &Letter, others: u
         .rev()
         .find(|record| record.actor.same_identity(about))
         .and_then(|record| record.name.clone());
-    let name = registered
+    registered
         .or_else(|| {
             owner
                 .lock()
@@ -580,14 +593,7 @@ fn bell_line(owner: &Mutex<Runtime>, ledger: &Ledger, letter: &Letter, others: u
                 .and_then(|guard| guard.delivery_title(about))
         })
         .filter(|name| crate::display_text::one_line(name, 1).is_some())
-        .unwrap_or_else(|| crate::sidebar::provider_name(Some(&about.kind)));
-    super::bell::line(&super::bell::Ring {
-        sender: &name,
-        kind: &letter.kind,
-        body: &letter.body,
-        others,
-        inbox: super::bell::names_inbox(&letter.recipient.kind),
-    })
+        .unwrap_or_else(|| crate::sidebar::provider_name(Some(&about.kind)))
 }
 
 fn record(client: &Client, id: &str, observed: &Observation, sent: bool) {
@@ -660,7 +666,7 @@ fn deliver(
     connector: &dyn ApiConnector,
     id: &str,
     observed: &Observation,
-    line: &str,
+    (line, sender): (&str, &str),
     stop: &AtomicBool,
 ) -> Result<Outcome, &'static str> {
     if stop.load(Ordering::Acquire) {
@@ -707,6 +713,14 @@ fn deliver(
     // bursts (herdrdev/herdr#3187). Raw pane input bypasses that contract.
     let parameters = wire::delivery_prompt_params(&observed.raw_pane_id, line)
         .map_err(|_| "herdr_parameters")?;
+    // The message the bell writes into the conversation is the letter's,
+    // never the operator's request (PRD session-record-goal-flow D-19): the
+    // label reads it as a letter from `sender` by this record, as it reads
+    // an operator's message by a submit.
+    owner
+        .lock()
+        .map_err(|_| "runtime_unavailable")?
+        .record_bell(&observed.actor.pane_id, line, sender);
     let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
         .map_err(|_| "herdr_call_failed")?;
     wire::delivery_prompted(submitted).map_err(|_| "herdr_format")?;

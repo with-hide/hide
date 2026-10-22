@@ -31,9 +31,25 @@ pub(crate) struct Submit {
     pub(crate) while_working: bool,
 }
 
+/// A bell line Hide typed into a pane: when, its exact words and the name of
+/// the letter's writer (PRD session-record-goal-flow D-19). The words are
+/// Hide's own line, never the operator's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Bell {
+    pub(crate) at_unix_ms: u64,
+    pub(crate) line: String,
+    pub(crate) sender: String,
+}
+
+/// Bells kept per pane, newest last.
+pub(crate) const BELLS_PER_PANE: usize = 16;
+
 #[derive(Default)]
 struct Record {
     panes: HashMap<(String, String), VecDeque<Submit>>,
+    bells: HashMap<(String, String), VecDeque<Bell>>,
+    /// Pane keys by their last bell, oldest first.
+    bell_order: VecDeque<(String, String)>,
     /// Pane keys by their last submit, oldest first.
     order: VecDeque<(String, String)>,
     next_seq: u64,
@@ -80,6 +96,43 @@ impl OperatorInput {
             submits.pop_front();
         }
         submits.push_back(submit);
+    }
+
+    /// Records a bell line typed into `pane_id`, named as `record` names it.
+    pub(crate) fn record_bell(&self, pane_id: &str, at_unix_ms: u64, line: &str, sender: &str) {
+        let key = label_key(&self.node, pane_id);
+        let Ok(mut record) = self.record.lock() else {
+            return;
+        };
+        if let Some(position) = record.bell_order.iter().position(|known| *known == key) {
+            record.bell_order.remove(position);
+        } else if record.bell_order.len() >= PANES
+            && let Some(oldest) = record.bell_order.pop_front()
+        {
+            record.bells.remove(&oldest);
+        }
+        record.bell_order.push_back(key.clone());
+        let bells = record.bells.entry(key).or_default();
+        if bells.len() >= BELLS_PER_PANE {
+            bells.pop_front();
+        }
+        bells.push_back(Bell {
+            at_unix_ms,
+            line: line.to_owned(),
+            sender: sender.to_owned(),
+        });
+    }
+
+    /// The bells recorded for a worker's pane, oldest first.
+    pub(crate) fn bells(&self, target: &str, pane_id: &str) -> Vec<Bell> {
+        let Ok(record) = self.record.lock() else {
+            return Vec::new();
+        };
+        record
+            .bells
+            .get(&(target.to_owned(), pane_id.to_owned()))
+            .map(|bells| bells.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// The submits recorded for a worker's pane, oldest first.

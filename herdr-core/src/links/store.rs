@@ -24,7 +24,7 @@ use std::time::Duration;
 #[path = "ledger_store.rs"]
 mod ledger;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 const SCHEMA: &str = "
 CREATE TABLE projects(key TEXT PRIMARY KEY, device TEXT NOT NULL, root TEXT NOT NULL,
@@ -84,19 +84,6 @@ pub enum Opened {
 
 pub struct LinkStore {
     connection: Connection,
-    /// What the delivery registry says of each child the last lineage facts
-    /// named: the name its letters carry, its newest report to its parent and
-    /// whether a pane runs it. Memory only, and `None` until the runtime's
-    /// first facts after a start, so a letter's turn waits for them.
-    lineage: Option<BTreeMap<SessionIdentity, ChildLineage>>,
-}
-
-/// A child's delivery facts (PRD task-continuation D-02, D-08).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ChildLineage {
-    pub(crate) name: String,
-    pub(crate) reported_at_unix_ms: Option<u64>,
-    pub(crate) live: bool,
 }
 
 enum OpenFailure {
@@ -338,10 +325,7 @@ impl LinkStore {
         connection
             .execute("DELETE FROM ledger_project_connections", [])
             .map_err(classify)?;
-        Ok(Self {
-            connection,
-            lineage: None,
-        })
+        Ok(Self { connection })
     }
 
     /// A reader's connection: the panel and `hide links` never write.
@@ -363,10 +347,7 @@ impl LinkStore {
         if version != SCHEMA_VERSION {
             return Err("links_store_unavailable".to_owned());
         }
-        Ok(Self {
-            connection,
-            lineage: None,
-        })
+        Ok(Self { connection })
     }
 
     pub fn meta(&self, key: &str) -> Result<Option<String>, String> {
@@ -1046,7 +1027,6 @@ impl LinkStore {
     ) -> Result<Vec<SessionIdentity>, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let mut children = Vec::with_capacity(parents.len());
-        let mut lineage = BTreeMap::new();
         for parent in parents {
             let child = SessionIdentity {
                 device_id: parent.device_id.clone(),
@@ -1070,18 +1050,9 @@ impl LinkStore {
                 name: parent.parent_name.clone(),
             };
             record_parent(&tx, &child, &named)?;
-            lineage.insert(
-                child.clone(),
-                ChildLineage {
-                    name: parent.name.clone(),
-                    reported_at_unix_ms: parent.reported_at_unix_ms,
-                    live: parent.live,
-                },
-            );
             children.push(child);
         }
         tx.commit().map_err(failed)?;
-        self.lineage = Some(lineage);
         Ok(children)
     }
 
@@ -1243,7 +1214,6 @@ impl LinkStore {
                 "ledger_sightings",
                 "ledger_titles",
                 "ledger_chapters",
-                "ledger_tasks",
                 "ledger_missed",
                 "ledger_turns",
                 "ledger_outputs",
@@ -2171,9 +2141,10 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         } else {
             ""
         };
+        let flows = if version < 7 { ledger::FLOW_SCHEMA } else { "" };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");

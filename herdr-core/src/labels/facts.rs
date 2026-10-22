@@ -23,7 +23,7 @@ use hide_session::{ConversationCheckpoint, PrSighting};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::input::Submit;
+use super::input::{Bell, Submit};
 
 /// The most of a request's text kept.
 pub(crate) const MAX_TEXT_BYTES: usize = 8 * 1024;
@@ -153,6 +153,8 @@ type Shown = (
 /// What the requester judgement knows about the pane's input.
 pub(crate) struct InputView<'a> {
     pub(crate) submits: &'a [Submit],
+    /// The bell lines Hide typed into the pane.
+    pub(crate) bells: &'a [Bell],
     /// When this daemon began seeing the pane's input.
     pub(crate) observed_since_unix_ms: u64,
     /// The newest submit already matched to a message.
@@ -383,6 +385,15 @@ fn judge(event: &LabelEvent, input: &mut InputView<'_>, log: &LogTarget<'_>) -> 
     if let Some(sender) = event.sender.as_ref() {
         return Requester::Named(sender.clone());
     }
+    // A bell line Hide typed is the letter's, by the record Hide kept when
+    // it typed it, not by how the words look (D-19).
+    if let Some(bell) = input.bells.iter().rev().find(|bell| {
+        bell.line == event.text.trim()
+            && bell.at_unix_ms <= event.at_unix_ms.saturating_add(CLOCK_SLACK_MS)
+            && event.at_unix_ms.saturating_sub(bell.at_unix_ms) <= QUEUED_SUBMIT_WINDOW_MS
+    }) {
+        return Requester::Named(bell.sender.clone());
+    }
     if event.at_unix_ms < input.observed_since_unix_ms {
         return Requester::Unobserved;
     }
@@ -467,6 +478,16 @@ mod tests {
         submits: &[Submit],
         claimed: &mut Option<Submit>,
     ) {
+        fold_with_bells(facts, events, submits, &[], claimed);
+    }
+
+    fn fold_with_bells(
+        facts: &mut SessionFacts,
+        events: &[LabelEvent],
+        submits: &[Submit],
+        bells: &[Bell],
+        claimed: &mut Option<Submit>,
+    ) {
         facts.fold(
             ReadFacts {
                 events,
@@ -477,6 +498,7 @@ mod tests {
             },
             InputView {
                 submits,
+                bells,
                 observed_since_unix_ms: 1_000,
                 claimed,
             },
@@ -509,6 +531,30 @@ mod tests {
     }
 
     #[test]
+    fn a_bell_line_hide_typed_is_the_senders_letter_even_after_an_operator_submit() {
+        let mut facts = SessionFacts::default();
+        let mut claimed = None;
+        // The operator pressed Enter just before Hide typed the bell, which
+        // the submit window alone would read as the operator's request.
+        let submits = [submit(1, 10_000, false)];
+        let bells = [Bell {
+            at_unix_ms: 10_100,
+            line: "🦉 letter from ci-lead".into(),
+            sender: "ci-lead".into(),
+        }];
+        fold_with_bells(
+            &mut facts,
+            &[human("🦉 letter from ci-lead", 10_300, 1)],
+            &submits,
+            &bells,
+            &mut claimed,
+        );
+        assert!(facts.operator_request.is_none());
+        let letter = facts.other_request.as_ref().unwrap();
+        assert_eq!(letter.requester, Requester::Named("ci-lead".into()));
+    }
+
+    #[test]
     fn a_native_title_clear_removes_the_old_name_but_absence_preserves_it() {
         let mut facts = SessionFacts::default();
         let mut claimed = None;
@@ -527,6 +573,7 @@ mod tests {
                 },
                 InputView {
                     submits: &[],
+                    bells: &[],
                     observed_since_unix_ms: 1_000,
                     claimed: &mut claimed,
                 },
@@ -734,6 +781,7 @@ mod tests {
                 },
                 InputView {
                     submits: &[],
+                    bells: &[],
                     observed_since_unix_ms: 1_000,
                     claimed: &mut claimed,
                 },

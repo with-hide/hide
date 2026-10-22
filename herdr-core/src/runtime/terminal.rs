@@ -722,6 +722,15 @@ impl Runtime {
             crate::agent_state::is_running(row),
         );
     }
+    /// Hide typed a letter's bell line into `pane_id` (D-19).
+    pub(crate) fn record_bell(&self, pane_id: &str, line: &str, sender: &str) {
+        if let Some(services) = self.label_services.as_ref() {
+            services
+                .input
+                .record_bell(pane_id, unix_milliseconds(), line, sender);
+        }
+    }
+
     /// The agent row for a pane on this machine or on a device.
     pub(super) fn agent_row(&self, pane_id: &str) -> Option<&SidebarAgentSnapshot> {
         let local = self.snapshot.navigator.agents.iter();

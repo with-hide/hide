@@ -4558,8 +4558,8 @@ fn a_codex_goal_is_the_operators_request_and_its_turn_reminder_is_not() {
         .collect::<Vec<_>>();
     assert_eq!(
         humans,
-        ["출시 전 검수 리포트를 \"확실하게\" 정리해줘\n\n에이전트별로 나눠서"],
-        "the objective, unwrapped and decoded, is the one request"
+        ["/goal 출시 전 검수 리포트를 \"확실하게\" 정리해줘\n\n에이전트별로 나눠서"],
+        "the objective, unwrapped and decoded, is the one request, marked as the goal command"
     );
     assert!(
         transcript

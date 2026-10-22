@@ -64,15 +64,15 @@ impl Scripted {
             format!("{goal} 진행")
         };
         self.answers.lock().unwrap().push_back(json!({
-            "goal": goal, "goal_update": "replace", "request": format!("{goal} 요청"), "line": line, "end": end,
-            "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
+            "goal": goal, "goal_update": "replace", "line": line, "end": end,
+            "work": {"missed": [], "resolved": [], "artifacts": []},
         }));
     }
 
     /// A turn start's answer, which says nothing of how the turn ends.
     fn begin(&self, goal: &str) {
         self.answers.lock().unwrap().push_back(json!({
-            "goal": goal, "goal_update": "replace", "request": format!("{goal} 요청"), "line": format!("{goal} 진행"),
+            "goal": goal, "goal_update": "replace", "line": format!("{goal} 진행"),
         }));
     }
 
@@ -136,16 +136,44 @@ impl AiBackend for Scripted {
             .unwrap()
             .pop_front()
             .ok_or_else(|| AiError::Transient("no scripted answer".to_owned()))?;
-        // Answers written before v19 asked for a request summary give none.
+        // An answer that does not script its request summaries summarizes
+        // every request the input owes one, as a provider is asked to.
         let mut value = value;
         if let Some(answer) = value.as_object_mut() {
-            answer.entry("request").or_insert(json!(""));
+            let summary = match answer.get("goal").and_then(Value::as_str) {
+                Some(goal) => format!("{goal} 요청"),
+                None => "요청 요약".to_owned(),
+            };
+            answer.entry("requests").or_insert_with(|| {
+                Value::Array(
+                    owed_ids(&request.input)
+                        .into_iter()
+                        .map(|id| json!({"id": id, "summary": summary, "answers": null}))
+                        .collect(),
+                )
+            });
         }
         Ok(AiResponse {
             value,
             usage: Default::default(),
         })
     }
+}
+
+/// The ids of the requests an input asks summaries for, in order.
+fn owed_ids(input: &str) -> Vec<String> {
+    let Some(section) = input
+        .split_once("<unsummarized-requests>")
+        .and_then(|(_, rest)| rest.split_once("</unsummarized-requests>"))
+        .map(|(section, _)| section)
+    else {
+        return Vec::new();
+    };
+    section
+        .lines()
+        .filter_map(|line| line.strip_prefix('[')?.strip_suffix(']'))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Counts the reads it passes on to this machine's files.
@@ -867,7 +895,6 @@ fn an_end_waits_for_parent_authority_after_a_cold_context() {
     worker.tick(Instant::now() + Duration::from_secs(1));
     settle(&mut worker, &woken);
     assert_eq!(harness.backend.calls(), 1);
-    assert!(harness.backend.inputs.lock().unwrap()[0].contains("<work-author>true</work-author>"));
     assert!(
         store.target(LOCAL_TARGET)["w1:p1"]
             .analysis_turn_end
@@ -1126,7 +1153,7 @@ fn claude_session(session: &str) -> crate::links::ledger::SessionIdentity {
 }
 
 #[test]
-fn the_end_request_names_the_finished_tasks_a_re_request_may_continue() {
+fn the_end_request_owes_summaries_for_the_ledgers_unsummarized_requests_and_its_own() {
     use crate::links::ledger::{LedgerContext, SessionIdentity};
     let harness = Harness::new();
     let store = harness.store();
@@ -1158,16 +1185,12 @@ fn the_end_request_names_the_finished_tasks_a_re_request_may_continue() {
             session_id: "native-a".into(),
         },
         LedgerContext {
-            finished_tasks: vec![crate::links::ledger::WorkTask {
-                id: "task-1".into(),
-                chapter_id: "chapter-1".into(),
-                name: "설치 빌드 실측".into(),
+            owed: vec![crate::links::ledger::OwedRequest {
+                offset: 0,
                 at_unix_ms: 1,
-                last_at_unix_ms: 2,
-                end: super::analysis::LabelEnd::Done,
-                done: true,
-                unjudged: false,
+                text: "어제 남긴 측정 요청".into(),
             }],
+            newest_offset: Some(0),
             ..Default::default()
         },
     );
@@ -1175,12 +1198,15 @@ fn the_end_request_names_the_finished_tasks_a_re_request_may_continue() {
     observe(&mut worker, &agent(&path, "idle", 3));
     settle(&mut worker, &woken);
     assert_eq!(harness.backend.calls(), 1);
-    assert!(
-        harness.backend.inputs.lock().unwrap()[0].contains(
-            r#"<finished-tasks>[{"id":"task-1","name":"설치 빌드 실측"}]</finished-tasks>"#
-        ),
-        "the judgment sees the finished task and its ID"
-    );
+    let input = harness.backend.inputs.lock().unwrap()[0].clone();
+    // B12: the stored request left unsummarized and the turn's own request
+    // are both owed, oldest first, each under the id its summary returns by.
+    assert_eq!(owed_ids(&input), ["r1", "r2"]);
+    let owed = input.split_once("<unsummarized-requests>").unwrap().1;
+    let first = owed.find("어제 남긴 측정 요청").unwrap();
+    let second = owed.find("설치하고 재측정해줘").unwrap();
+    assert!(first < second, "{owed}");
+    assert!(!input.contains("finished-tasks"));
 }
 
 #[test]
@@ -1643,7 +1669,7 @@ fn a_short_turn_with_a_new_job_renames_the_pane_and_a_follow_up_does_not() {
     harness.input.record("w1:p1", turn_at(4) - 300, false);
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "README 파일 위치 확인 작업", "goal_update": "keep", "line": "README.md였음", "end": "done",
-        "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+        "work": {"missed": [], "resolved": [], "artifacts": []},
     }));
     observe(&mut worker, &agent(&path, "working", 9));
     settle(&mut worker, &woken);
@@ -1682,7 +1708,7 @@ fn a_vague_goal_can_be_refined_at_the_end_without_losing_its_assignment() {
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "에이전트 그래프 필터와 프로젝트 접기", "goal_update": "refine",
         "line": "필터와 접기를 반영함", "end": "done",
-        "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+        "work": {"missed": [], "resolved": [], "artifacts": []},
     }));
     let idle = agent(&path, "idle", 2);
     observe(&mut worker, &idle);
@@ -1705,7 +1731,7 @@ fn a_vague_goal_can_be_refined_at_the_end_without_losing_its_assignment() {
         harness.backend.answers.lock().unwrap().push_back(json!({
             "goal": "에이전트 그래프 필터와 프로젝트 접기", "goal_update": "keep",
             "line": reply, "end": "done",
-            "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+            "work": {"missed": [], "resolved": [], "artifacts": []},
         }));
         observe(&mut worker, &agent(&path, "idle", seq));
         settle(&mut worker, &woken);
@@ -1769,7 +1795,7 @@ fn historical_requests_are_not_backfilled_as_the_current_assignments_evidence() 
     harness.session("a", "native-a", &turns);
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "Bastion IP 등록 및 회신", "goal_update": "keep", "line": "IP 등록 완료 회신", "end": "done",
-        "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+        "work": {"missed": [], "resolved": [], "artifacts": []},
     }));
     let (mut worker, woken, _) = harness.worker(harness.store());
     let idle = agent(&path, "idle", 2);
@@ -1805,7 +1831,7 @@ fn another_agents_follow_up_cannot_refine_the_operators_goal() {
     );
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "자식이 제안한 다른 작업 이름", "goal_update": "refine", "line": "보고 확인", "end": "done",
-        "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+        "work": {"missed": [], "resolved": [], "artifacts": []},
     }));
     let idle = agent(&path, "idle", 8);
     observe(&mut worker, &idle);
@@ -1824,7 +1850,7 @@ fn an_end_renames_only_an_operator_turn_whose_start_was_never_asked() {
     let renaming = |goal: &str| {
         json!({
             "goal": goal, "goal_update": "replace", "line": "끝냄", "end": "done",
-            "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+            "work": {"missed": [], "resolved": [], "artifacts": []},
         })
     };
     let mut harness = Harness::new();
@@ -2467,11 +2493,10 @@ fn a_null_goal_is_valid_but_an_absent_or_invalid_goal_is_not() {
     use super::analysis::{AnalysisPhase, LabelEnd};
     use super::context_label::{parse, request};
     for phase in [AnalysisPhase::TurnStart, AnalysisPhase::TurnEnd] {
-        let mut answer = json!({"goal": null, "goal_update": "keep", "request": "", "line": ""});
+        let mut answer = json!({"goal": null, "goal_update": "keep", "requests": [], "line": ""});
         if phase == AnalysisPhase::TurnEnd {
             answer["end"] = json!("done");
-            answer["work"] =
-                json!({"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null});
+            answer["work"] = json!({"missed":[],"resolved":[],"artifacts":[]});
         }
         let parsed = parse(phase, hide_ai::OutputLanguage::Korean, answer.clone()).unwrap();
         assert_eq!(parsed.goal, None);
@@ -2530,7 +2555,7 @@ fn greetings_keep_the_native_title_until_real_work_sets_a_goal() {
     }
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": null, "goal_update": "keep", "line": "", "end": "done",
-        "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
+        "work": {"missed": [], "resolved": [], "artifacts": []},
     }));
     let idle = agent(&path, "idle", 1);
     observe(&mut worker, &idle);
@@ -2557,7 +2582,7 @@ fn greetings_keep_the_native_title_until_real_work_sets_a_goal() {
     harness.input.record("w1:p1", turn_at(2) - 300, false);
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": null, "goal_update": "keep", "line": "", "end": "done",
-        "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
+        "work": {"missed": [], "resolved": [], "artifacts": []},
     }));
     observe(&mut worker, &agent(&path, "idle", 2));
     settle(&mut worker, &woken);
@@ -2588,7 +2613,7 @@ fn greetings_keep_the_native_title_until_real_work_sets_a_goal() {
     harness.session("greeting", "native-greeting", &completed_turn);
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": null, "goal_update": "keep", "line": "배포 환경을 선택하세요", "end": "question",
-        "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
+        "work": {"missed": [], "resolved": [], "artifacts": []},
     }));
     let question = agent(&path, "idle", 4);
     observe(&mut worker, &question);
@@ -2673,8 +2698,8 @@ fn a_long_line_is_cut_between_words_and_a_question_stays_a_question() {
             AnalysisPhase::TurnEnd,
             language,
             json!({
-                "goal": null, "goal_update": "keep", "request": "", "line": line, "end": end,
-                "work": {"task": {"kind": "none"}, "missed": [], "resolved": [], "output_task_id": null},
+                "goal": null, "goal_update": "keep", "requests": [], "line": line, "end": end,
+                "work": {"missed": [], "resolved": [], "artifacts": []},
             }),
         )
         .unwrap()
@@ -2757,7 +2782,14 @@ fn each_turn_boundary_is_asked_only_what_it_can_know() {
     );
     assert_eq!(
         end.output_schema["properties"]["end"]["enum"],
-        json!(["question", "blocked", "waiting", "unfinished", "done"])
+        json!([
+            "limited",
+            "question",
+            "blocked",
+            "waiting",
+            "unfinished",
+            "done"
+        ])
     );
     // The order the prompt checks them in is the status model's precedence:
     // the operator's move, then a stated cause, then something else's move,
@@ -2768,6 +2800,8 @@ fn each_turn_boundary_is_asked_only_what_it_can_know() {
             .find(&format!("{word}: "))
             .unwrap_or_else(|| panic!("{word}"))
     };
+    // A provider refusal is checked first: it is no stop of the work's own.
+    assert!(at("limited") < at("question"));
     assert!(at("question") < at("blocked") && at("blocked") < at("waiting"));
     assert!(at("waiting") < at("unfinished") && at("unfinished") < at("done"));
     assert!(
@@ -2793,7 +2827,7 @@ fn turn_end_asks_only_for_work_outside_the_assigned_task() {
     assert_eq!(
         end.output_schema["properties"]["work"]["properties"]["missed"]["items"]["properties"]["kind"]
             ["enum"],
-        json!(["problem", "follow_up"])
+        json!(["problem", "follow_up", "ask"])
     );
 }
 
@@ -2830,14 +2864,14 @@ fn a_label_request_carries_its_language_and_that_languages_lengths() {
         let mut answer = json!({
             "goal": "w".repeat(goal + 5),
             "goal_update": "replace",
-            "request": "r".repeat(line + 5),
+            "requests": [{"id": "r1", "summary": "r".repeat(line + 5), "answers": null}],
             "line": "l".repeat(line + 5),
         });
         let parsed = parse(AnalysisPhase::TurnStart, language, answer.clone()).unwrap();
         assert_eq!(parsed.goal.unwrap().chars().count(), goal);
         assert_eq!(parsed.line.chars().count(), line);
         // The request summary is drawn in the same one line (D-08).
-        assert_eq!(parsed.request.chars().count(), line);
+        assert_eq!(parsed.requests[0].summary.chars().count(), line);
         answer["goal"] = json!("w".repeat(goal));
         let parsed = parse(AnalysisPhase::TurnStart, language, answer).unwrap();
         assert_eq!(parsed.goal.unwrap(), "w".repeat(goal));
@@ -3490,7 +3524,7 @@ fn a_usage_limited_turn_clears_its_line_and_recovers_when_the_provider_wait_ends
 
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": null, "goal_update": "keep", "line": "검증 결과를 정리했습니다", "end": "done",
-        "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
+        "work": {"missed": [], "resolved": [], "artifacts": []},
     }));
     // The account can answer again, but the worker still owes the deadline.
     limits.set(hide_ai::UsageLimit::Percent(90), &reading(0.0));
@@ -5349,7 +5383,7 @@ fn a_pane_with_no_goal_is_still_analyzed_after_a_restart() {
     let no_goal = || {
         json!({
             "goal": null, "goal_update": "keep", "line": "", "end": "done",
-            "work":{"task":{"kind":"none"},"missed":[],"resolved":[],"output_task_id":null},
+            "work": {"missed": [], "resolved": [], "artifacts": []},
         })
     };
     let mut turns = vec![("user", "안녕하세요"), ("assistant", "안녕하세요!")];
@@ -5392,12 +5426,11 @@ fn a_pane_with_no_goal_is_still_analyzed_after_a_restart() {
     );
 }
 
-/// PRD task-continuation D-02, D-03, D-09: a turn a letter woke tells the
-/// ledger who sent it and when it arrived, and a watch alert's or a reply's
-/// failed turn leaves no unknown behind.
+/// A turn a letter woke records the letter under its sender and the turn's
+/// start, and a letter turn's failure leaves no unknown behind (PRD
+/// session-record-goal-flow B24).
 #[test]
-fn a_letter_turn_end_names_its_sender_and_start_and_a_failed_watch_or_reply_turn_stays_unrecorded()
-{
+fn a_letter_turn_records_its_sender_and_start_and_a_failed_watch_or_reply_turn_stays_unrecorded() {
     use crate::links::ledger::{LedgerContext, LedgerUpdate, SessionIdentity};
     let harness = Harness::new();
     let store = harness.store();
@@ -5443,13 +5476,11 @@ fn a_letter_turn_end_names_its_sender_and_start_and_a_failed_watch_or_reply_turn
             .into_iter()
             .filter_map(|update| match update {
                 LedgerUpdate::TurnEnd {
-                    letter,
                     work_author,
                     started_at_unix_ms,
                     at_unix_ms,
                     ..
                 } => Some((
-                    letter,
                     work_author,
                     started_at_unix_ms,
                     started_at_unix_ms <= at_unix_ms,
@@ -5459,10 +5490,21 @@ fn a_letter_turn_end_names_its_sender_and_start_and_a_failed_watch_or_reply_turn
             .collect::<Vec<_>>()
     };
     // The turn starts at the letter, 2099-10-01T00:00:02Z.
-    assert_eq!(
-        turn_ends(),
-        [(Some("impl-a".to_owned()), false, 4_094_496_002_000, true)]
-    );
+    assert_eq!(turn_ends(), [(false, 4_094_496_002_000, true)]);
+    // The letter is kept as a dim line under its sender, never a request
+    // of the operator's (B24).
+    let letters = client
+        .ledger_updates_for_test()
+        .into_iter()
+        .filter_map(|update| match update {
+            LedgerUpdate::Requests { requests, .. } => Some(requests),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|request| request.letter_from)
+        .collect::<Vec<_>>();
+    assert!(letters.iter().all(|sender| sender == "impl-a"));
+    assert!(!letters.is_empty());
     let unjudged = || {
         client
             .ledger_updates_for_test()
@@ -5520,7 +5562,13 @@ fn a_letter_turn_end_names_its_sender_and_start_and_a_failed_watch_or_reply_turn
     settle(&mut worker, &woken);
     worker.tick(Instant::now() + Duration::from_secs(1));
     settle(&mut worker, &woken);
-    assert_eq!(unjudged(), before + 1, "a descendant letter's failure does");
+    // With no task checklist, a child's progress letter is a letter like
+    // any other: nothing the record shows waits on its judgment.
+    assert_eq!(
+        unjudged(),
+        before,
+        "a descendant letter's failure records no unknown"
+    );
 }
 
 /// `Harness::session` with turns dated after the worker switched summaries

@@ -32,8 +32,8 @@ use serde_json::json;
 
 use super::analysis::{AnalysisFailure, LabelEnd};
 use super::analysis::{
-    AnalysisPhase, GoalUpdate, analysis_context, analysis_phase, context_fingerprint,
-    goal_evidence, interrupted, new_human_turns, newest_user_is_last, retain_bounded,
+    AnalysisPhase, GoalUpdate, OwedLine, analysis_context, analysis_phase, context_fingerprint,
+    goal_evidence, interrupted, message_before, newest_user_is_last, retain_bounded,
     rolling_analysis_context, task_input_cursor, turn_key,
 };
 use super::analyzer::{AnalysisJob, AnalysisResult, LabelAnalyzer};
@@ -45,8 +45,9 @@ use super::overlay::LabelOverlay;
 use super::record::{MetadataWrite, RecordBinding, RecordConnection};
 use super::store::{LabelStore, PaneRecord};
 use crate::links::ledger::{
-    LedgerAnswer, LedgerCall, LedgerUpdate, RecordedRequest, SessionIdentity, SessionMetadata,
-    WorkAuthor,
+    FlowChange, LedgerAnswer, LedgerCall, LedgerContext, LedgerUpdate, RecordedRequest,
+    RequestSummary, SUMMARY_BATCH, SessionIdentity, SessionMetadata, WorkAuthor,
+    without_attachments,
 };
 use crate::links::worker::LinkClient;
 
@@ -228,12 +229,13 @@ struct AnalysisMeta {
     /// The ledger names the pane's parent, so its header shows its newest
     /// request, whoever sent it, rather than the operator's.
     delegated: bool,
-    /// The sender of the descendant's report, progress or block that woke
-    /// the turn: the one letter that continues its task, the ledger checking
-    /// the lineage (PRD task-continuation D-02). A watch alert or a reply
-    /// carries no work.
-    work_letter: Option<String>,
     turn_witness: Option<String>,
+    /// The ids the context gave the requests owed a summary, and the
+    /// offsets they stand for (PRD session-record-goal-flow D-06).
+    owed: Vec<(String, u64)>,
+    /// The turn began with the operator's `/goal`, which opens a flow
+    /// whatever the answer says (D-09, B14).
+    goal_command: bool,
     offset: Option<u64>,
     at_unix_ms: u64,
     request_at_unix_ms: u64,
@@ -1574,6 +1576,7 @@ impl LabelWorker {
             pane.claimed_submit = None;
         }
         let submits = self.input.submits(&target, pane_id);
+        let bells = self.input.bells(&target, pane_id);
         // Migrate Pi names written by older readers before applying the next
         // name (including an explicit clear). Older remote helpers use that
         // same source-less custom slot, so their reads are demoted too.
@@ -1602,6 +1605,7 @@ impl LabelWorker {
             },
             InputView {
                 submits: &submits,
+                bells: &bells,
                 observed_since_unix_ms: pane.input_observed_since_unix_ms,
                 claimed: &mut pane.claimed_submit,
             },
@@ -1632,26 +1636,41 @@ impl LabelWorker {
             let parent = context
                 .as_ref()
                 .and_then(|context| context.parent_name.clone());
-            let requests = transcript
+            // A request is the work's author's; a letter (an envelope, or the
+            // doorbell's line Hide typed) keeps its sender and stays in the
+            // record as a letter (D-18, D-19); anything else is not the
+            // record's.
+            let letter = |event: &LabelEvent| match record.facts.requester_at(event.offset) {
+                Some(Requester::Named(name)) => Some(name.clone()),
+                _ => event.sender.clone(),
+            };
+            let recorded = transcript
                 .events
                 .iter()
                 .filter(|event| {
                     event.kind == LabelEventKind::Human
-                        && record.facts.feeds_work(event, parent.as_deref())
-                        && !event.text.trim().is_empty()
+                        && (!event.text.trim().is_empty() || event.images > 0)
                 })
-                .map(|event| RecordedRequest {
-                    offset: event.offset,
-                    at_unix_ms: event.at_unix_ms,
-                    text: hide_session::links::cut(&event.text),
-                    author: if parent.is_some() {
-                        WorkAuthor::Parent
+                .filter_map(|event| {
+                    let letter_from = if record.facts.feeds_work(event, parent.as_deref()) {
+                        None
                     } else {
-                        WorkAuthor::Operator
-                    },
-                    task_ids: vec![],
-                    chapter_id: None,
-                    judged: false,
+                        Some(letter(event)?)
+                    };
+                    Some(RecordedRequest {
+                        offset: event.offset,
+                        at_unix_ms: event.at_unix_ms,
+                        text: hide_session::links::cut(&event.text),
+                        author: if parent.is_some() {
+                            WorkAuthor::Parent
+                        } else {
+                            WorkAuthor::Operator
+                        },
+                        images: event.images,
+                        letter_from,
+                        count: 1,
+                        ..RecordedRequest::default()
+                    })
                 })
                 .collect::<Vec<_>>();
             let excluded = transcript
@@ -1660,15 +1679,19 @@ impl LabelWorker {
                 .filter(|event| {
                     event.kind == LabelEventKind::Human
                         && context.is_some()
-                        && !record.facts.feeds_work(event, parent.as_deref())
+                        && !recorded
+                            .iter()
+                            .any(|request| request.offset == event.offset)
                 })
                 .map(|event| event.offset)
                 .collect::<Vec<_>>();
+            let requests = recorded;
             if let Some(client) = self.ledger.lock().ok().and_then(|client| client.clone()) {
                 let unjudged = requests
                     .iter()
                     .filter(|request| {
-                        !self.summaries || request.at_unix_ms < self.summaries_on_since
+                        request.letter_from.is_none()
+                            && (!self.summaries || request.at_unix_ms < self.summaries_on_since)
                     })
                     .map(|request| request.offset)
                     .collect();
@@ -1951,11 +1974,28 @@ impl LabelWorker {
             .is_some_and(operator);
         let start_skipped =
             phase == AnalysisPhase::TurnEnd && record.analysis_turn_start != Some(turn);
-        let mut delta = new_human_turns(events, record.task_input_cursor);
-        delta.retain(operator);
-        // Only one newly assigned request has a known origin. A first read
+        let ledger_session = record.native_session_id.as_ref().map(|id| SessionIdentity {
+            device_id: self
+                .target
+                .strip_prefix("device:")
+                .unwrap_or(&self.target)
+                .to_owned(),
+            agent: pane.agent.as_str().to_owned(),
+            session_id: id.clone(),
+        });
+        let ledger_client = self.ledger.lock().ok().and_then(|client| client.clone());
+        let ledger = ledger_session.as_ref().and_then(|session| {
+            ledger_client
+                .as_ref()
+                .and_then(|client| client.context(session))
+        });
+        // Only the newly assigned request has a known origin. A first read
         // containing several historical requests cannot prove which one
         // established the current goal; never label the oldest as its origin.
+        let delta = super::analysis::new_human_turns(events, record.task_input_cursor)
+            .into_iter()
+            .filter(operator)
+            .collect::<Vec<_>>();
         let evidence_events: &[LabelEvent] = if delta.len() == 1
             && events
                 .iter()
@@ -1990,22 +2030,38 @@ impl LabelWorker {
                     .any(|event| event.kind == LabelEventKind::Human)
             })
             .and_then(|start| goal_evidence(&events[start..], &operator));
+        let parent_name = ledger
+            .as_ref()
+            .and_then(|ledger| ledger.parent_name.clone());
+        // The turn's own request is summarized for the pane's header whoever
+        // typed it, except a letter, which is never a request (B24).
+        let turn_request = events
+            .iter()
+            .rfind(|event| event.kind == LabelEventKind::Human)
+            .filter(|event| {
+                event.sender.is_none()
+                    && !matches!(facts.requester_at(event.offset), Some(Requester::Named(_)))
+            });
+        let (owed_offsets, owed): (Vec<u64>, Vec<OwedLine>) = owed_requests(
+            events,
+            ledger.as_ref(),
+            &record.summarized,
+            &|event| facts.feeds_work(event, parent_name.as_deref()),
+            turn_request,
+            self.summaries_on_since,
+        )
+        .into_iter()
+        .unzip();
         let mut context = if initial_context && record.goal.is_none() {
-            analysis_context(events, &operator)
+            analysis_context(events, &operator, &owed)
         } else {
-            // An end whose start was never asked sees the requests the
-            // start would have, so it can tell a new job from a follow-up.
             rolling_analysis_context(
                 record.goal.as_deref().unwrap_or_default(),
                 evidence_refresh
                     .as_deref()
                     .or(record.goal_evidence.as_deref())
                     .unwrap_or_default(),
-                if phase == AnalysisPhase::TurnStart || start_skipped {
-                    &delta
-                } else {
-                    &[]
-                },
+                &owed,
                 events,
             )
         };
@@ -2028,21 +2084,6 @@ impl LabelWorker {
             self.dirty = true;
             return false;
         }
-        let ledger_session = record.native_session_id.as_ref().map(|id| SessionIdentity {
-            device_id: self
-                .target
-                .strip_prefix("device:")
-                .unwrap_or(&self.target)
-                .to_owned(),
-            agent: pane.agent.as_str().to_owned(),
-            session_id: id.clone(),
-        });
-        let ledger_client = self.ledger.lock().ok().and_then(|client| client.clone());
-        let ledger = ledger_session.as_ref().and_then(|session| {
-            ledger_client
-                .as_ref()
-                .and_then(|client| client.context(session))
-        });
         if phase == AnalysisPhase::TurnEnd
             && let Some(session) = ledger_session.as_ref()
             && let Some(client) = ledger_client.as_ref()
@@ -2108,14 +2149,13 @@ impl LabelWorker {
             .rfind(|event| event.kind == LabelEventKind::Human)
             .and_then(|event| hide_session::label_transcript::work_turn(events, event.offset))
             .map(|turn| turn.witness());
-        let work_letter = events
-            .iter()
-            .rfind(|event| event.kind == LabelEventKind::Human)
-            .and_then(|event| hide_session::envelope_header(&event.text))
-            .filter(|(_, kind)| matches!(kind.as_str(), "report" | "progress" | "block"))
-            .map(|(sender, _)| sender);
+        let goal_command = operator_turn
+            && events
+                .iter()
+                .rfind(|event| event.kind == LabelEventKind::Human)
+                .is_some_and(|event| goal_command(&event.text));
         if phase == AnalysisPhase::TurnEnd {
-            context.push_str(&super::analysis::work_context(work_author, &ledger));
+            context.push_str(&super::analysis::work_context(&ledger));
         }
         let generation = pane.generation;
         let retry = if phase == AnalysisPhase::TurnEnd && pane.end_retried == Some(turn) {
@@ -2140,8 +2180,13 @@ impl LabelWorker {
             ledger_session,
             work_author,
             delegated: ledger.parent_name.is_some(),
-            work_letter,
             turn_witness,
+            owed: owed
+                .iter()
+                .zip(&owed_offsets)
+                .map(|(line, offset)| (line.id.clone(), *offset))
+                .collect(),
+            goal_command,
             offset: events
                 .iter()
                 .rfind(|event| event.kind == LabelEventKind::Human)
@@ -2241,22 +2286,71 @@ impl LabelWorker {
                 // A new assignment still belongs to the operator's first
                 // boundary. A clearer name for that same assignment may
                 // arrive at its end; another agent's letter cannot rename it.
+                // The operator's `/goal` opens a flow whatever the answer
+                // says (D-09, B14); a goal the parser refused keeps the flow.
+                let goal_update = if outcome.goal_command && analysis.goal.is_some() {
+                    GoalUpdate::Replace
+                } else {
+                    analysis.goal_update
+                };
                 let may_update_goal = previous_goal.is_none()
                     || (outcome.operator_turn
                         && !stale_display
-                        && analysis.goal_update == GoalUpdate::Refine)
+                        && goal_update == GoalUpdate::Refine)
                     || ((outcome.initial_context
                         || outcome.phase == AnalysisPhase::TurnStart
-                        || outcome.start_skipped)
+                        || outcome.start_skipped
+                        || outcome.goal_command)
                         && outcome.operator_turn
-                        && analysis.goal_update == GoalUpdate::Replace);
-                let goal_changed = may_update_goal && previous_goal != analysis.goal;
+                        && goal_update == GoalUpdate::Replace);
+                let goal_changed =
+                    may_update_goal && analysis.goal.is_some() && previous_goal != analysis.goal;
                 if goal_changed {
                     record.goal = analysis.goal.clone();
                 }
+                // A new goal opens a flow; a clearer name for the same work
+                // renames the one it is in (D-09).
+                let change = if previous_goal.is_none() || goal_update == GoalUpdate::Replace {
+                    FlowChange::New
+                } else {
+                    FlowChange::Rename
+                };
+                let summaries = analysis
+                    .requests
+                    .iter()
+                    .filter_map(|line| {
+                        let offset = outcome
+                            .owed
+                            .iter()
+                            .find(|(id, _)| *id == line.id)
+                            .map(|(_, offset)| *offset)?;
+                        Some(RequestSummary {
+                            offset,
+                            summary: line.summary.clone(),
+                            answers: line.answers.clone(),
+                        })
+                    })
+                    .filter(|summary| !summary.summary.is_empty())
+                    .collect::<Vec<_>>();
+                let turn_summary = outcome.offset.and_then(|offset| {
+                    summaries
+                        .iter()
+                        .find(|summary| summary.offset == offset)
+                        .map(|summary| summary.summary.clone())
+                });
+                record.note_summarized(summaries.iter().map(|summary| summary.offset));
+                if let Some(session) = outcome.ledger_session.clone()
+                    && !summaries.is_empty()
+                    && let Some(client) = self.ledger.lock().ok().and_then(|client| client.clone())
+                    && let Err(code) = client.ledger(LedgerUpdate::Summaries { session, summaries })
+                {
+                    crate::diagnostic!(
+                        json!({"component":"labels","kind":"ledger.enqueue_failed","pane_id":pane_id,"code":code})
+                    );
+                }
                 if record.goal.is_some()
                     && (previous_goal.is_none()
-                        || (may_update_goal && analysis.goal_update == GoalUpdate::Replace))
+                        || (may_update_goal && goal_update == GoalUpdate::Replace))
                 {
                     record.goal_evidence.clone_from(&outcome.goal_evidence);
                     record.goal_evidence_start = outcome.goal_evidence_start;
@@ -2277,6 +2371,11 @@ impl LabelWorker {
                             session: session.clone(),
                             goal,
                             at_unix_ms: outcome.request_at_unix_ms,
+                            change: if goal_changed {
+                                change
+                            } else {
+                                FlowChange::Rename
+                            },
                         })
                     {
                         crate::diagnostic!(
@@ -2292,8 +2391,8 @@ impl LabelWorker {
                             started_at_unix_ms: outcome.request_at_unix_ms,
                             at_unix_ms: outcome.at_unix_ms,
                             end: analysis.end,
+                            line: analysis.line.clone(),
                             work_author: outcome.work_author,
-                            letter: outcome.work_letter.clone(),
                             turn_witness: outcome.turn_witness.clone(),
                             judgment,
                         })
@@ -2324,7 +2423,7 @@ impl LabelWorker {
                         let outcome_kept = !stale_display || stale_turn;
                         turns_changed = record.record_turn(
                             offset,
-                            &analysis.request,
+                            turn_summary.as_deref().unwrap_or_default(),
                             outcome_kept.then_some((analysis.end, analysis.line.as_str())),
                             outcome.request_at_unix_ms,
                         );
@@ -2374,7 +2473,7 @@ impl LabelWorker {
                     "operator_turn": outcome.operator_turn,
                     "goal_chars": analysis.goal.as_ref().map_or(0, |goal| goal.chars().count()),
                     "line_chars": analysis.line.chars().count(),
-                    "request_chars": analysis.request.chars().count(),
+                    "requests": analysis.requests.len(),
                     "end": analysis.end,
                     "context_chars": outcome.context_chars,
                     "turn": format!("{:016x}", outcome.turn),
@@ -2398,7 +2497,7 @@ impl LabelWorker {
                     }
                     self.dirty = true;
                     if outcome.phase == AnalysisPhase::TurnEnd
-                        && (outcome.work_author || outcome.work_letter.is_some())
+                        && outcome.work_author
                         && let Some(session) = outcome.ledger_session.clone()
                         && let Some(offset) = outcome.offset
                         && let Some(client) =
@@ -2448,7 +2547,7 @@ impl LabelWorker {
                 // when its judgment fails: a watch alert or a reply moves
                 // none (B4, D-09).
                 if outcome.phase == AnalysisPhase::TurnEnd
-                    && (outcome.work_author || outcome.work_letter.is_some())
+                    && outcome.work_author
                     && let Some(session) = outcome.ledger_session.clone()
                     && let Some(offset) = outcome.offset
                     && let Some(client) = self.ledger.lock().ok().and_then(|client| client.clone())
@@ -2492,6 +2591,99 @@ impl LabelWorker {
 /// (status-model.md, A quiet row that waits). The two causes call for
 /// different action, so each has a kind of its own: one is a limit to raise,
 /// the other a record this reader could not follow.
+/// Whether a message is the operator's `/goal` command, as the session
+/// reader writes it.
+fn goal_command(text: &str) -> bool {
+    text.trim_start()
+        .strip_prefix("/goal")
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+}
+
+/// The requests one analysis summarizes (PRD session-record-goal-flow D-06,
+/// B6, B34): those the ledger says are owed, and those it has not recorded
+/// yet, oldest first, at most [`SUMMARY_BATCH`]; the turn's own request is
+/// always among them, so the pane's header has its summary. A request this
+/// record already summarized is not asked again while the ledger catches up,
+/// and none older than the moment summaries came on is asked at all.
+fn owed_requests(
+    events: &[LabelEvent],
+    ledger: Option<&LedgerContext>,
+    summarized: &[u64],
+    feeds_work: &dyn Fn(&LabelEvent) -> bool,
+    turn_request: Option<&LabelEvent>,
+    since: u64,
+) -> Vec<(u64, OwedLine)> {
+    let mut owed = std::collections::BTreeMap::new();
+    if let Some(ledger) = ledger {
+        for request in &ledger.owed {
+            owed.insert((request.at_unix_ms, request.offset), request.text.clone());
+        }
+    }
+    let requests = events
+        .iter()
+        .filter(|event| {
+            event.kind == LabelEventKind::Human
+                && event.at_unix_ms >= since
+                && (!event.text.trim().is_empty() || event.images > 0)
+                && feeds_work(event)
+        })
+        .collect::<Vec<_>>();
+    // With no ledger context yet, only the turn's own request is known to
+    // be new.
+    let newest = ledger.map(|ledger| ledger.newest_offset);
+    for event in &requests {
+        let unrecorded = match newest {
+            Some(newest) => newest.is_none_or(|newest| event.offset > newest),
+            None => requests
+                .last()
+                .is_some_and(|last| last.offset == event.offset),
+        };
+        let key = (event.at_unix_ms, event.offset);
+        if unrecorded || owed.contains_key(&key) {
+            owed.insert(key, event.text.clone());
+        }
+    }
+    if let Some(event) = turn_request {
+        owed.insert((event.at_unix_ms, event.offset), event.text.clone());
+    }
+    owed.retain(|(_, offset), _| !summarized.contains(offset));
+    let current = turn_request
+        .or(requests.last().copied())
+        .map(|event| (event.at_unix_ms, event.offset))
+        .filter(|key| owed.contains_key(key));
+    let mut chosen = owed
+        .keys()
+        .copied()
+        .filter(|key| Some(*key) != current)
+        .take(SUMMARY_BATCH - usize::from(current.is_some()))
+        .collect::<Vec<_>>();
+    chosen.extend(current);
+    chosen
+        .into_iter()
+        .enumerate()
+        .map(|(index, key)| {
+            let (text, images) = without_attachments(&owed[&key]);
+            let images = images
+                + events
+                    .iter()
+                    .find(|event| event.offset == key.1)
+                    .map_or(0, |event| event.images);
+            let text = match images {
+                0 => text,
+                n => format!("[image ×{n}] {text}").trim().to_owned(),
+            };
+            (
+                key.1,
+                OwedLine {
+                    id: format!("r{}", index + 1),
+                    text,
+                    before: message_before(events, key.1),
+                },
+            )
+        })
+        .collect()
+}
+
 fn wake_loss_diagnostic(pane_id: &str, cause: hide_session::turns::WakeLoss) -> serde_json::Value {
     use hide_session::turns::WakeLoss;
     match cause {
