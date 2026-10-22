@@ -18,7 +18,7 @@ import { familyPulls, PR_LOOK, type SessionPull } from "./prMark";
 import { CheckoutCardHint, pullRequestOpenExternal } from "./components/pr-card";
 import { DeviceRail } from "./components/device-rail";
 import { frontDeviceId, frontTitle, railShown, readsHere, sidebarBody } from "./devices";
-import { badgeWords } from "./agentRow";
+import { asksOperator, badgeWords } from "./agentRow";
 import { Badge } from "./components/ui/badge";
 import { cn } from "./lib/utils";
 import { agentNumber, sidebarAgentNumbers } from "./numbering";
@@ -1132,7 +1132,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
   const sleeping = useSleepingCheckout(checkout.path, workspace.device_id);
   const emptyTabs = useEmptyNamedTabs(checkout, workspace.device_id, agentRows, context.agents);
   const { foldable, open, purpose, secondLine, raisedFrom } = checkoutDisclosure(checkout, agentRows, view, context, t, sleeping.length + emptyTabs, hideAi);
-  const visibleRows = open ? agentRows : agentRows.filter((row) => row.depth === 0 && row.agent.state.needs_you);
+  const visibleRows = open ? agentRows : agentRows.filter((row) => row.depth === 0 && asksOperator(row.agent));
   const marks = checkout.agent_summary?.marks;
   return (
     <li
@@ -1241,7 +1241,7 @@ const FolderRowView = memo(function FolderRowView({
   const { foldable, purpose, raisedFrom } = disclosure;
   const open = asleep ? projectExpanded(workspace) : disclosure.open;
   const secondLine = asleep ? !open && checkoutHasSecondLine(view, purpose, raisedFrom) : disclosure.secondLine;
-  const visibleRows = open ? agentRows : agentRows.filter((row) => row.depth === 0 && row.agent.state.needs_you);
+  const visibleRows = open ? agentRows : agentRows.filter((row) => row.depth === 0 && asksOperator(row.agent));
   return (
     <li data-project={workspace.id} data-checkout-open={open ? "true" : undefined} className={cn(inset, !first && (open ? BLOCK_GAP : "mt-xs"))}>
       <EntryContextMenu

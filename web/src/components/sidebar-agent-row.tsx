@@ -149,8 +149,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   const titleTone = agent.state.title_emphasized || (selected && agent.state.selection_emphasizes_title) ? "text-foreground" : "text-subtle-foreground";
   // The mark's state and word ride the row's hint, which the mark sits inside (B3).
   const title = device ? `${agent.identity_label} · ${device}` : agent.identity_label;
-  // Only the project tree draws a resolved row (it carries `tree`); the raised lists leave it out.
-  const resting = tree && agent.resolved;
+  // Only a root in the project tree draws a resolved row (it carries `tree`); the raised lists leave it out and a child keeps its own look.
+  const resting = tree && depth === 0 && agent.resolved;
   const hint = [resting ? t("sidebar.resolvedHint", { label: title }) : title, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
   const staleness = ask ? undefined : agentPrStaleness;
   const folded = tree ? tree.open !== true : true;

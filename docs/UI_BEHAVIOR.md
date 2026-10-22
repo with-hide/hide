@@ -1682,7 +1682,8 @@ It takes a root shortcut number in physical order, opens its pane when pressed, 
 Group, tab and agent controls are stops in Arrow Up/Down and Home/End traversal, and click, Enter and Space use the same navigation.
 Lineage children retain their `--size-lineage-indent` step and elbow rails, and each root's lineage disclosure stays in its trailing slot.
 A tab has no disclosure state of its own; a stored tab fold from an earlier version is ignored on load and dropped on the next write.
-A catalog without named-group metadata draws no tab line, and a named empty tab remains reachable.
+A catalog without named-group metadata draws the same tab lines, and a named empty tab remains reachable.
+A folded checkout keeps drawing and numbering only the roots that ask for the operator, and a resolved root asks for nothing even when its session ended on a question.
 Focused sidebar agent and checkout rows use the neutral `--secondary` fill.
 Root shortcuts follow the physical grouping order and deduplicate raised occurrences, with no numbers for group lines, tab lines or children.
 A closed checkout draws its status badge and still shows questioning or blocked Needs You rows.
