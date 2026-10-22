@@ -116,7 +116,7 @@ pub struct NodeView {
     pub finished_at_unix_ms: Option<u64>,
     /// The worker's own plan (PRD hide-plan D-17, D-18): the value its pane's
     /// chip and map draw, for the card's fourth line and the node's detail.
-    pub plan: Option<super::plans::PlanView>,
+    pub plan: Option<crate::plans::PlanView>,
 }
 
 /// A spawn admitted as one of a mission's workers: its cap is checked in

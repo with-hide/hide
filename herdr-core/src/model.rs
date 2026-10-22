@@ -3585,6 +3585,10 @@ pub enum DetailItem {
     },
     /// A Conductor's mission map (PRD software-factory-conductor D-14).
     Mission { mission: String },
+    /// A session's own plan, drawn large (PRD hide-plan B11).
+    Plan {
+        session: crate::links::ledger::SessionIdentity,
+    },
 }
 
 /// The lane's 보기 slot (PRD sidebar-task-lens D-50): what it opened, oldest
@@ -7714,6 +7718,80 @@ mod wire_enum_tests {
             assert_wire(&contract, "mission_blocked", &blocked);
             checked.insert("mission_blocked");
         }
+
+        {
+            use crate::plans::{Output, Review, StepStatus};
+            let statuses = [
+                StepStatus::Planned,
+                StepStatus::Working,
+                StepStatus::Done,
+                StepStatus::Dropped,
+            ];
+            for variant in statuses {
+                match variant {
+                    StepStatus::Planned
+                    | StepStatus::Working
+                    | StepStatus::Done
+                    | StepStatus::Dropped => {}
+                }
+            }
+            assert_wire(&contract, "plan_step_status", &statuses);
+            checked.insert("plan_step_status");
+            let reviews = [Review::Approved, Review::Proposed];
+            for variant in reviews {
+                match variant {
+                    Review::Approved | Review::Proposed => {}
+                }
+            }
+            assert_wire(&contract, "plan_review", &reviews);
+            checked.insert("plan_review");
+            let outputs = [Output::Pr, Output::File, Output::None];
+            for variant in outputs {
+                match variant {
+                    Output::Pr | Output::File | Output::None => {}
+                }
+            }
+            assert_wire(&contract, "plan_output", &outputs);
+            checked.insert("plan_output");
+        }
+
+        let session = crate::links::ledger::SessionIdentity {
+            device_id: "mac".into(),
+            agent: "codex".into(),
+            session_id: "s".into(),
+        };
+        let items = [
+            DetailItem::PullRequest {
+                workspace_id: "w".into(),
+                number: 1,
+            },
+            DetailItem::Record {
+                session: session.clone(),
+            },
+            DetailItem::Mission {
+                mission: "mission-1".into(),
+            },
+            DetailItem::Plan { session },
+        ];
+        for item in &items {
+            match item {
+                DetailItem::PullRequest { .. }
+                | DetailItem::Record { .. }
+                | DetailItem::Mission { .. }
+                | DetailItem::Plan { .. } => {}
+            }
+        }
+        let kinds: Vec<String> = items
+            .iter()
+            .map(|item| {
+                serde_json::to_value(item).unwrap()["kind"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert_wire(&contract, "detail_item_kind", &kinds);
+        checked.insert("detail_item_kind");
 
         let unchecked = contract
             .keys()

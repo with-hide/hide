@@ -14,7 +14,7 @@ use super::Runtime;
 use crate::delivery::Actor;
 use crate::links::ledger::{LedgerAnswer, LedgerCall, LedgerUpdate, SessionIdentity};
 use crate::model::SidebarAgentSnapshot;
-use crate::plans::{self, PLAN_LIMIT, Plan, PlanCommand, Progress, Review, Step, StepStatus};
+use crate::plans::{self, PLAN_LIMIT, Plan, PlanCommand, PlanView, Review, view_of};
 use crate::workspace_control::{Caller, Context, Query};
 use hide_agent_hooks::plan_record::{
     ConductorWork, MissionWork, PlanContext, PlanSummary, StepName,
@@ -44,57 +44,6 @@ pub(crate) struct PlanRuntime {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct PlansSnapshot {
     pub items: Vec<PlanView>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct PlanView {
-    /// The pane as the agent rows name it.
-    pub pane_id: String,
-    pub session: SessionIdentity,
-    pub steps: Vec<StepView>,
-    pub review: Review,
-    pub ask: Option<String>,
-    pub progress: Progress,
-    pub created_at_unix_ms: u64,
-    pub updated_at_unix_ms: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct StepView {
-    #[serde(flatten)]
-    pub step: Step,
-    /// A step it waits on is neither done nor dropped (B7's dashed card).
-    pub waiting: bool,
-}
-
-/// What every surface draws of `plan`: the map, the chip and a mission
-/// node's own plan read this one value (D-10, D-18).
-pub(crate) fn view_of(plan: &Plan, pane_id: &str) -> PlanView {
-    let steps = plan
-        .steps
-        .iter()
-        .map(|step| StepView {
-            waiting: step.status != StepStatus::Done
-                && step.status != StepStatus::Dropped
-                && step.depends_on.iter().any(|key| {
-                    plan.steps.iter().any(|other| {
-                        other.key == *key
-                            && !matches!(other.status, StepStatus::Done | StepStatus::Dropped)
-                    })
-                }),
-            step: step.clone(),
-        })
-        .collect();
-    PlanView {
-        pane_id: pane_id.to_owned(),
-        session: plan.session.clone(),
-        steps,
-        review: plan.review,
-        ask: plan.ask.clone(),
-        progress: plans::progress(plan),
-        created_at_unix_ms: plan.created_at_unix_ms,
-        updated_at_unix_ms: plan.updated_at_unix_ms,
-    }
 }
 
 /// Whether a row's pane id names `pane`, which a registration may hold
@@ -591,6 +540,23 @@ impl Runtime {
         let dropped = before - self.plans.book.len();
         if dropped > 0 {
             self.plans.edit += 1;
+            // A slot item of a session that is gone would draw nothing.
+            let slot = &mut self.snapshot.ui_state.detail;
+            let had = slot.items.len();
+            slot.items.retain(|item| match item {
+                crate::model::DetailItem::Plan { session } => {
+                    !sessions.iter().any(|(machine, id)| {
+                        session.device_id == *machine && session.session_id == *id
+                    })
+                }
+                _ => true,
+            });
+            if slot.items.is_empty() {
+                slot.shown = false;
+            }
+            if slot.items.len() != had {
+                self.persist_ui_state();
+            }
         }
         dropped > 0
     }

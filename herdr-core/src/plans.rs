@@ -420,6 +420,57 @@ pub struct Progress {
     pub finished: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PlanView {
+    /// The pane as the agent rows name it; empty in a session's record.
+    pub pane_id: String,
+    pub session: SessionIdentity,
+    pub steps: Vec<StepView>,
+    pub review: Review,
+    pub ask: Option<String>,
+    pub progress: Progress,
+    pub created_at_unix_ms: u64,
+    pub updated_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StepView {
+    #[serde(flatten)]
+    pub step: Step,
+    /// A step it waits on is neither done nor dropped (B7's dashed card).
+    pub waiting: bool,
+}
+
+/// What every surface draws of `plan`: the map, the chip and a mission
+/// node's own plan read this one value (D-10, D-18).
+pub fn view_of(plan: &Plan, pane_id: &str) -> PlanView {
+    let steps = plan
+        .steps
+        .iter()
+        .map(|step| StepView {
+            waiting: step.status != StepStatus::Done
+                && step.status != StepStatus::Dropped
+                && step.depends_on.iter().any(|key| {
+                    plan.steps.iter().any(|other| {
+                        other.key == *key
+                            && !matches!(other.status, StepStatus::Done | StepStatus::Dropped)
+                    })
+                }),
+            step: step.clone(),
+        })
+        .collect();
+    PlanView {
+        pane_id: pane_id.to_owned(),
+        session: plan.session.clone(),
+        steps,
+        review: plan.review,
+        ask: plan.ask.clone(),
+        progress: progress(plan),
+        created_at_unix_ms: plan.created_at_unix_ms,
+        updated_at_unix_ms: plan.updated_at_unix_ms,
+    }
+}
+
 /// The current step is the topmost working one, otherwise the topmost
 /// planned one (D-03); the next is the topmost planned step that is not it.
 pub fn progress(plan: &Plan) -> Progress {

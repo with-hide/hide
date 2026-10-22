@@ -238,8 +238,8 @@ impl Runtime {
             Some(DetailItem::Record { session }) => {
                 self.open_session_record(super::links::RecordOpenPayload { session });
             }
-            // A map draws the mission record the snapshot already carries.
-            Some(DetailItem::Mission { .. }) | None => {
+            // A map draws the mission or the plan the snapshot already carries.
+            Some(DetailItem::Mission { .. } | DetailItem::Plan { .. }) | None => {
                 if matches!(before, Some(DetailItem::Record { .. })) {
                     self.close_session_record();
                 }

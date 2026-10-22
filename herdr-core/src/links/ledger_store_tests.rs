@@ -2862,7 +2862,7 @@ fn a_version_7_record_keeps_a_plan_beside_its_session_until_the_session_goes() {
     assert_eq!(store.ledger_plans().unwrap(), [plan.clone()]);
     assert_eq!(
         store.ledger_record(&session()).unwrap().plan.as_deref(),
-        Some(&plan)
+        Some(&crate::plans::view_of(&plan, ""))
     );
     store
         .remove_sessions(&[super::super::SessionKey {

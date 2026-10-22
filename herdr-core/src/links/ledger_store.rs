@@ -1426,7 +1426,9 @@ impl LinkStore {
             record.project = project;
             record.repository = repository;
         }
-        record.plan = self.session_plan(session)?.map(Box::new);
+        record.plan = self
+            .session_plan(session)?
+            .map(|plan| Box::new(crate::plans::view_of(&plan, "")));
         if let Some((native, manual, state, omitted)) = self
             .connection
             .query_row(

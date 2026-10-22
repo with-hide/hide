@@ -640,10 +640,10 @@ pub struct SessionRecord {
     /// Non-PR outputs of this session and its descendants, newest first,
     /// each once (B22).
     pub artifacts: Vec<String>,
-    /// The session's own plan, kept after the session ends (PRD hide-plan
-    /// B9, B21).
+    /// The session's own plan as its map draws it, kept after the session
+    /// ends (PRD hide-plan B9, B21).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub plan: Option<Box<crate::plans::Plan>>,
+    pub plan: Option<Box<crate::plans::PlanView>>,
     pub children: Vec<SessionRecord>,
     /// Every missed line, for the ledger's own context and the backlog; the
     /// screen reads `asks`.
