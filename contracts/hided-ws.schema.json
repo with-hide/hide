@@ -677,7 +677,7 @@
       }
     },
     "sessionSearchOptions": {
-      "description": "History filters apply in the existing links worker before ranking and the 50-session page limit. Project is immutable original project, not today's cwd. Current/archived states require exact core evidence; retained means that state is unconfirmed. Default sources are operator requests only, each retained to 500 characters. Titles and tasks are opt-in, and tasks additionally require summaries enabled.",
+      "description": "History filters apply in the existing links worker before ranking and the 50-session page limit. Project is immutable original project, not today's cwd. Current/archived states require exact core evidence; retained means that state is unconfirmed. Default sources are operator requests only, each retained to 500 characters. Titles and goal flows are opt-in, and flows additionally require summaries enabled.",
       "type": "object",
       "additionalProperties": false,
       "properties": {

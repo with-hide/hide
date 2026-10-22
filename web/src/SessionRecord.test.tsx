@@ -161,6 +161,16 @@ it("lists what waits on the operator, puts one away with Skip and brings it back
     await act(async () => container.querySelector<HTMLButtonElement>('[data-record-ask-undo="ask-1"]')!.click());
     expect((sent.at(-1)!.payload as { status: string }).status).toBe("open");
   } finally { await unmount(); }
+  // Put away here, then opened again elsewhere: once the core stops listing it and lists it again, it is open again.
+  const reopened = await mount({ ...BASE, asks: [ask("ask-1", "Approve the PRD?")] });
+  const listed = (asks: MissedWork[]) => act(async () => useShellStore.setState({ sessionRecord: { session: SESSION, loading: false, failure: null, record: { ...BASE, asks } } }));
+  try {
+    await act(async () => reopened.container.querySelector<HTMLButtonElement>('[data-record-ask-dismiss="ask-1"]')!.click());
+    await listed([]);
+    expect(reopened.container.querySelector('[data-record-ask="ask-1"]')!.getAttribute("data-dismissed")).toBe("true");
+    await listed([ask("ask-1", "Approve the PRD?")]);
+    expect(reopened.container.querySelector('[data-record-ask="ask-1"]')!.getAttribute("data-dismissed")).toBeNull();
+  } finally { await reopened.unmount(); }
   const none = await mount(BASE);
   try { expect(none.container.querySelector("[data-record-asks]")).toBeNull(); } finally { await none.unmount(); }
 });
@@ -173,6 +183,9 @@ it("shows the last real turn on top with a usage limit as a badge, and blocked w
     expect(text(now)).toContain("Only the rehearsal is left");
     expect(text(now.querySelector("[data-record-limited]"))).toBe("Limit reached · resets 13:00");
   } finally { await limited.unmount(); }
+  // A limit the agent did not word still shows the badge.
+  const unworded = await mount({ ...BASE, status: status("done", "Rehearsal ready", "") });
+  try { expect(text(unworded.container.querySelector("[data-record-limited]"))).not.toBe(""); } finally { await unworded.unmount(); }
   const all = await mount({ ...BASE, status: status("blocked", "Usage limit", "Usage limit") });
   try { expect(all.container.querySelector("[data-record-now]")!.getAttribute("data-record-now")).toBe("blocked"); } finally { await all.unmount(); }
 });

@@ -165,7 +165,7 @@ When the behavior depends on the order of two events, the test fixes that order;
   A spec drives status through Herdr's own `agent_status` with `setFixtureLifecycle` and `finishFixtureTurn` (which needs `elsewhereTab`, so the turn ends unseen), because nothing else produces working, blocked or done.
   No spec writes a label or status pane token; the lineage tokens `declareParent` writes (`parent_pane`, `child_session`, `parent_session`) are the only ones a fixture reports, so a spawned child is labelled before its parent is declared (`spawnAgent` with a label).
   `desktop/e2e/session-labels.spec.ts` is the reference for the session boundary.
-  Recorded native-format blobs keep their historical label marker; `claude-shim.c` fits the controlled provider response to the requested START or END schema, supplying `work.task.none` for an older marker in a reader journey that judges no work.
+  Recorded native-format blobs keep their historical label marker; `claude-shim.c` fits the controlled provider response to the requested START or END schema, supplying an empty `work` judgment for an older marker that carries none and, for START and END, a summary of the newest request the input lists as owed.
   Work-ledger journeys name their work explicitly through `labelMarker`; the adapter does not replace an existing work judgment.
 
 ### Operating-system differences belong to one fixture helper

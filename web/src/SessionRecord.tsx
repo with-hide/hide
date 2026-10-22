@@ -15,7 +15,7 @@ import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import { orderedOutputs, outputPrState, recordTitle, recordTree, requestPreview, sessionOfAgentOn, sessionPlace, settledOutput, workKey } from "./sessionWork";
+import { holdsRequest, orderedOutputs, outputPrState, recordTitle, recordTree, requestPreview, sessionOfAgentOn, sessionPlace, settledOutput, workKey } from "./sessionWork";
 import { boardProjects } from "./navigation";
 import { cardLine, cardOfPane, cardQuestion, everyAgent } from "./overviewTasks";
 import { destinationOf } from "./overviewBacklog";
@@ -227,7 +227,7 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
       <p className={cn("flex min-w-0 flex-1 flex-wrap items-center gap-xs font-medium", kind === "working" ? "text-agent-working" : kind === "question" ? "text-warning" : kind === "blocked" ? "text-destructive" : "text-foreground")}>
         <span>{word}</span>
         {since !== null ? <Elapsed since={since} className="font-mono text-caption font-normal text-muted-foreground" data-record-now-elapsed="true" /> : null}
-        {status?.limited ? <span className="min-w-0 max-w-full truncate rounded-xs bg-destructive/10 px-xs text-micro font-normal text-destructive" title={status.limited} aria-label={`${t("record.limited")} · ${status.limited}`} data-record-limited="true">{status.limited}</span> : null}
+        {status && status.limited !== null ? <span className="min-w-0 max-w-full truncate rounded-xs bg-destructive/10 px-xs text-micro font-normal text-destructive" title={status.limited || t("record.limited")} aria-label={status.limited ? `${t("record.limited")} · ${status.limited}` : t("record.limited")} data-record-limited="true">{status.limited || t("record.limited")}</span> : null}
         <span className="rounded-xs border border-border px-xs text-micro font-normal text-muted-foreground" data-record-pane={pane ? "open" : "closed"}>{t(pane ? "recordCard.paneOpen" : "recordCard.paneClosed")}</span>
       </p>
       {button}
@@ -355,27 +355,36 @@ function RequestTime({ at, full = false }: { at: number; full?: boolean }) {
 
 /**
  * 나를 기다리는 것 (D-12, B11, B12): the agent's open questions and decisions,
- * each with 무시; a line put away keeps its place with 되돌리기 until the record
- * is read again. No line at all when nothing waits.
+ * each with 넘기기; a line put away keeps its place with 되돌리기 while this
+ * record stays open, and leaves that state when the core lists it as open
+ * again after it was gone. No line at all when nothing waits.
  */
 function Asks({ record, actions }: { record: RecordValue; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const [away, setAway] = useState<readonly MissedWork[]>([]);
-  const lines = [...record.asks, ...away.filter((ask) => !record.asks.some((open) => open.id === ask.id))].sort((a, b) => a.at_unix_ms - b.at_unix_ms);
+  // `gone` is set once the core no longer lists the line; listed again after that, it is open again.
+  const [away, setAway] = useState<readonly { ask: MissedWork; gone: boolean }[]>([]);
+  useEffect(() => {
+    const open = new Set(record.asks.map((ask) => ask.id));
+    setAway((held) => {
+      const next = held.filter((one) => !(one.gone && open.has(one.ask.id))).map((one) => (one.gone || open.has(one.ask.id) ? one : { ...one, gone: true }));
+      return next.length === held.length && next.every((one, index) => one === held[index]) ? held : next;
+    });
+  }, [record.asks]);
+  const lines = [...record.asks, ...away.map((one) => one.ask).filter((ask) => !record.asks.some((open) => open.id === ask.id))].sort((a, b) => a.at_unix_ms - b.at_unix_ms);
   if (!lines.length) return null;
   const small = "h-auto shrink-0 px-xs py-0 text-micro";
   return <section className="mt-lg min-w-0" aria-label={t("record.waiting")} data-record-asks={record.asks.length}>
     <SectionHead label={t("record.waiting")} count={record.asks.length} />
     <ul className="min-w-0">
       {lines.map((ask) => {
-        const dismissed = away.some((one) => one.id === ask.id);
+        const dismissed = away.some((one) => one.ask.id === ask.id);
         return <li key={ask.id} className="flex min-w-0 items-start gap-xs border-b border-border py-xs last:border-b-0" data-record-ask={ask.id} data-dismissed={dismissed ? "true" : undefined}>
           <CircleHelpIcon aria-hidden="true" className={cn("mt-xxs size-(--size-icon-sm) shrink-0", dismissed ? "text-muted-foreground" : "text-warning")} />
           <span className={cn("min-w-0 flex-1 whitespace-normal [overflow-wrap:anywhere]", dismissed ? "text-muted-foreground line-through" : "text-foreground")} title={ask.text}>{ask.text}</span>
           {dismissed ? (
-            <Button size="sm" variant="ghost" className={small} onClick={() => { actions.setMissedStatus(record.session, ask.id, "open"); setAway((held) => held.filter((one) => one.id !== ask.id)); }} data-record-ask-undo={ask.id}>{t("backlog.panel.undo")}</Button>
+            <Button size="sm" variant="ghost" className={small} onClick={() => { actions.setMissedStatus(record.session, ask.id, "open"); setAway((held) => held.filter((one) => one.ask.id !== ask.id)); }} data-record-ask-undo={ask.id}>{t("backlog.panel.undo")}</Button>
           ) : (
-            <Button size="sm" variant="ghost" className={small} onClick={() => { actions.setMissedStatus(record.session, ask.id, "dismissed"); setAway((held) => [...held, ask]); }} data-record-ask-dismiss={ask.id}>{t("sessionWork.dismiss")}</Button>
+            <Button size="sm" variant="ghost" className={small} onClick={() => { actions.setMissedStatus(record.session, ask.id, "dismissed"); setAway((held) => [...held, { ask, gone: false }]); }} data-record-ask-dismiss={ask.id}>{t("sessionWork.dismiss")}</Button>
           )}
         </li>;
       })}
@@ -398,7 +407,7 @@ function EndMark({ end }: { end: WorkEnd }) {
 function Flows({ record, locator }: { record: RecordValue; locator?: RequestLocator }) {
   const { t } = useInterfaceTranslation();
   const current = record.flows.at(-1)?.id ?? null;
-  const located = locator ? record.flows.find((flow) => flow.requests.some((request) => request.offset === locator.request_offset))?.id ?? null : null;
+  const located = locator ? record.flows.find((flow) => flow.requests.some((request) => holdsRequest(request, locator.request_offset)))?.id ?? null : null;
   // Only a click overrides the default; a new current flow opens and the one it follows folds.
   const [toggled, setToggled] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   useEffect(() => { if (located) setToggled((ids) => { const next = new Map(ids); next.delete(located); return next; }); }, [located, locator?.query]);
@@ -439,7 +448,7 @@ function Flows({ record, locator }: { record: RecordValue; locator?: RequestLoca
 function RawRequests({ record, locator }: { record: RecordValue; locator?: RequestLocator }) {
   const { t } = useInterfaceTranslation();
   const requests = useMemo(() => record.flows.flatMap((flow) => flow.requests).sort((a, b) => a.at_unix_ms - b.at_unix_ms || a.offset - b.offset), [record.flows]);
-  const located = locator !== undefined && requests.some((request) => request.offset === locator.request_offset);
+  const located = locator !== undefined && requests.some((request) => holdsRequest(request, locator.request_offset));
   return <section className="mt-lg min-w-0" data-record-raw-requests={requests.length}>
     <SectionHead label={t("sessionWork.requests")} count={requests.length} summary={t("recordCard.aiOff")} />
     <LocatorNotes locator={locator} located={located} />
@@ -467,7 +476,7 @@ function LocatorNotes({ locator, located }: { locator?: RequestLocator; located:
  */
 function RequestRow({ request, locator }: { request: WorkRequest; locator?: RequestLocator }) {
   const { t } = useInterfaceTranslation();
-  const matched = locator?.request_offset === request.offset;
+  const matched = locator !== undefined && holdsRequest(request, locator.request_offset);
   const [raw, setRaw] = useState(matched);
   const target = useRef<HTMLLIElement>(null);
   useEffect(() => {

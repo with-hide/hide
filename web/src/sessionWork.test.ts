@@ -2,7 +2,7 @@ import { legacyAgentRow } from "../test/legacyAgentRow";
 import type { BoardProject } from "./projectBoard";
 import { expect, it } from "vitest";
 import type { MissedWork, SessionWorkSummary } from "./snapshot";
-import { openMissedWork, outputPrState, recordTitle, requestPreview, sessionPlace, settledOutput } from "./sessionWork";
+import { holdsRequest, openMissedWork, outputPrState, recordTitle, requestPreview, sessionPlace, settledOutput } from "./sessionWork";
 
 const missed = (id: string, at: number, status: MissedWork["status"] = "open"): MissedWork => ({ id, kind: "problem", text: id, status, at_unix_ms: at, turn_offset: 1, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const work = (id: string, cwd: string, items: MissedWork[]): SessionWorkSummary => ({
@@ -49,4 +49,10 @@ it("resolves the live pane by device, provider and native session together", () 
   const session = { device_id: "local", agent: "claude", session_id: "shared" };
   expect(sessionPlace(projects, session, null, null)?.agent?.pane_id).toBe("right");
   expect(sessionPlace(projects, { ...session, agent: "opencode" }, null, null)).toBeNull();
+});
+
+it("finds a History hit in the line a repeat was merged into (B23)", () => {
+  expect(holdsRequest({ offset: 10, repeats: [14, 18] }, 18)).toBe(true);
+  expect(holdsRequest({ offset: 10 }, 10)).toBe(true);
+  expect(holdsRequest({ offset: 10, repeats: [14] }, 12)).toBe(false);
 });

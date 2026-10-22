@@ -1016,7 +1016,7 @@ An ask is shown in the record's `나를 기다리는 것`, is resolved by the tu
 Records written before `context_label.v10` may still hold a `leftover` item.
 
 A pull request is a session's output when the link reader saw it printed around GitHub's creation time, or when the label judged that the session made it (`created_prs`, recorded as a `pr` sighting), which finds the ones the reader's window missed (D-14, B21).
-The record's `pr_groups` holds this session's own pull requests, then one group per direct child, named by the child's title, holding the pull requests of that child and all its descendants, each pull request once (B18); `outputs` keeps every output of the tree for the screen's marks, and `artifacts` the tree's other outputs, newest first, each once, at most 24 (B22).
+The record's `pr_groups` holds this session's own pull requests, then one group per direct child, named by the child's title, holding the pull requests of that child and all its descendants, each pull request once (B18); `outputs` keeps every output of the tree for the screen's marks, and `artifacts` the tree's other outputs, each once, at most 24: this session's newest first, then each direct child's in the same order, a child's own before its descendants' (B22).
 A backlog item made from a missed line names, as where it came from, the flow that holds the line's turn (B31); History matches flow names as kind `flow` when titles and flows are asked for (B32).
 
 With summaries Off, the record shows the native or manual title, native status, every saved request as sent in time order, the pull requests and the children; it shows no flow name, result, summary, ask or end word, and turning summaries on shows the earlier judgments again (D-20, B28).

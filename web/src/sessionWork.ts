@@ -47,6 +47,11 @@ export function requestPreview(request: Pick<WorkRequest, "summary" | "text">): 
 }
 
 /** A pull request nothing more happens to: merged, or closed unmerged (B19). */
+/** Whether a record line is the message at `offset`, or a repeat merged into it (B23). */
+export function holdsRequest(request: Pick<WorkRequest, "offset" | "repeats">, offset: number): boolean {
+  return request.offset === offset || (request.repeats ?? []).includes(offset);
+}
+
 export const settledOutput = (output: Pick<WorkOutput, "state">) => output.state === "merged" || output.state === "closed";
 
 /** Where a session works: the project and checkout its pane is in, else the registered checkout holding its folder. */

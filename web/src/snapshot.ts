@@ -2051,7 +2051,7 @@ export type WorkSession = { device_id: string; agent: string; session_id: string
  * name in `goal_command`; a letter names its sender and is not counted as a
  * request; `count` is the same words sent again within a minute.
  */
-export type WorkRequest = { offset: number; at_unix_ms: number; text: string; author: "operator" | "parent"; images: number; summary: string | null; answers: string | null; letter_from: string | null; count: number; goal_command: boolean };
+export type WorkRequest = { offset: number; at_unix_ms: number; text: string; author: "operator" | "parent"; images: number; summary: string | null; answers: string | null; letter_from: string | null; count: number; repeats?: number[]; goal_command: boolean };
 export type WorkEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
 export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up" | "ask"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean };
 export type WorkOutput = { kind: "pr" | "issue"; repository: string; number: number; title: string; url: string; state: string; stale: boolean; last_read_at_unix_ms: number | null; created_at_unix_ms: number; source: WorkSession; source_name: string };
