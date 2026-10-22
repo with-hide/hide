@@ -34,7 +34,7 @@ const PLAN = {
   check: "true",
   nodes: [
     { key: "cause", title: "원인 조사", kind: "research" },
-    { key: "api", title: "API 추가", kind: "change", delivery: "pr", worker: { agent: "claude" } },
+    { key: "api", title: "API 추가", kind: "change", delivery: "pr", worker: { agent: "claude", model: "opus" } },
     { key: "screen", title: "API 쓰는 화면", kind: "change", delivery: "pr", depends_on: ["api"] },
   ],
 };

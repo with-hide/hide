@@ -717,6 +717,8 @@ A new Conductor with no registration at the take is handed them when it register
 Letters already sent to the former Conductor stay in its inbox.
 `hide mission reopen` of a done mission while its Conductor conducts another open one is refused `mission_already_conducting`, so a command or a start that names no mission always means the one open mission.
 Each command answers one JSON line, and the same command again changes nothing more.
+A plan is admitted only when every worker that takes a model names one (`mission_model_missing`, whose next action names the three places a model comes from: the candidate's fixed model, the catalog, or the catalog's `cli_default_model`); a worker of an agent that takes no model keeps `model: null`, so the map and the start never read an empty choice.
+`hide agent catalog` reads what the core holds, and Hide AI reads the model lists only while someone looks at them (`ai.rs`), so a catalog asked before Settings › Agents or a start panel was opened asks for one read the way the start panel does (`ask_ai_catalog_read`, observed until that read lands) and the daemon asks the core again every 250 ms, off the lock, for up to 10 seconds (`hided::core::CATALOG_WAIT`) while the answer says `models_read_pending`; after that an unread list is answered `models_unavailable_reason: models_read_timeout` beside `cli_default_model`, the provider snapshot's model where `cli_default` is true, so a plan made from it is never empty.
 
 A spawn by a pane that conducts an open mission is that mission's worker:
 

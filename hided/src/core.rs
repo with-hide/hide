@@ -4,6 +4,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
+/// How long `hide agent catalog` waits for one read of the model lists
+/// (PRD mission fixes (b)): a provider probe is a child process or two,
+/// which answers in seconds; past this the catalog answers what it has.
+const CATALOG_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+/// How often the catalog asks the core again while a read is on its way.
+const CATALOG_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
 use herdr_core::node_access::NodeLink;
 use herdr_core::workspace_control::{
     Action, ActionMaterial, ActionPreparation, ActionResult, Context, Query, QueryResult, Refusal,
@@ -67,6 +74,8 @@ enum Command {
     AgentCatalog {
         device_id: String,
         machine: Option<String>,
+        /// The caller's wait for a model-list read is over.
+        timed_out: bool,
         reply: Sender<Result<serde_json::Value, String>>,
     },
     Ps {
@@ -317,17 +326,42 @@ impl CoreHandle {
             .map_err(|_| "mission_unavailable".to_owned())?
     }
 
-    /// `hide agent catalog`, read on the owner thread.
+    /// `hide agent catalog`, read on the owner thread. While the core says a
+    /// read of the model lists is on its way, the answer is asked again
+    /// every `CATALOG_POLL` until it landed or `CATALOG_WAIT` is over, off
+    /// the owner thread and the runtime lock; the last ask says the wait is
+    /// over, so an unread list is answered as `models_read_timeout`.
+    #[allow(clippy::disallowed_methods)] // a production wait for the core's read, bounded by CATALOG_WAIT
     pub fn agent_catalog(
         &self,
         device: &str,
         machine: Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        let deadline = std::time::Instant::now() + CATALOG_WAIT;
+        loop {
+            let timed_out = std::time::Instant::now() >= deadline;
+            let answer = self.agent_catalog_once(device, machine.clone(), timed_out)?;
+            if timed_out || answer["models_read_pending"] != true {
+                return Ok(answer);
+            }
+            std::thread::sleep(
+                CATALOG_POLL.min(deadline.saturating_duration_since(std::time::Instant::now())),
+            );
+        }
+    }
+
+    fn agent_catalog_once(
+        &self,
+        device: &str,
+        machine: Option<String>,
+        timed_out: bool,
     ) -> Result<serde_json::Value, String> {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::AgentCatalog {
                 device_id: device.to_owned(),
                 machine,
+                timed_out,
                 reply,
             })
             .map_err(|_| "catalog_unavailable".to_owned())?;
@@ -907,9 +941,10 @@ fn owner_loop(
             Command::AgentCatalog {
                 device_id,
                 machine,
+                timed_out,
                 reply,
             } => {
-                let _ = reply.send(core.agent_catalog(&device_id, machine.as_deref()));
+                let _ = reply.send(core.agent_catalog(&device_id, machine.as_deref(), timed_out));
             }
             Command::Ps {
                 device_id,

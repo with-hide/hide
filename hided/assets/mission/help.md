@@ -32,7 +32,8 @@ Running a command again changes nothing more, so after a timeout read `hide miss
 
 - Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope and the worker candidates.
 - Run `hide agent catalog` for the agents installed here, their models, their efforts and their weekly usage.
-  A model list Hide could not read comes with `models_unavailable_reason` instead of models (a device's models are read on the core's machine only); start such an agent with the model its candidate fixes, or the CLI's default where none is fixed or there are no candidates.
+  The catalog reads the model lists if nobody has looked at them yet and waits up to 10 seconds for them; a list it still could not read comes with `models_unavailable_reason` instead of models (`models_read_timeout` after that wait; a device's models are read on the core's machine only) and `cli_default_model`, the model the agent runs with when asked for none.
+  Name such an agent's model from its candidate's fixed model, or from `cli_default_model`.
 - Run `gh auth status` and note the account; the plan names it (`GitHub: <account> (gh)`), and approving the plan approves that account.
   Check the account can do what the scope needs: push and open pull requests for `pr`, and merge as well for `merge`; `gh api repos/<owner>/<repo> --jq .permissions` answers it (`push` for `pr`, `push` and `maintain` or `admin`, or a merge the branch rules allow, for `merge`).
   If `gh` is not signed in or lacks a permission, ask the operator now and do no GitHub work.
@@ -73,6 +74,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
 - Stack a pull request on another only when it needs that unmerged change; otherwise every change starts from main.
   Merge from the bottom of a stack up, or as the repository's own rules say.
 - Choose workers from the candidates in Settings › Conductor and nowhere else; with no candidates, choose among the agents installed on this machine.
+  Every worker that takes a model names one (`mission_model_missing` otherwise): the candidate's fixed model, your choice from the catalog, or the catalog's `cli_default_model`; an agent that takes no model (`takes_model: false`) keeps `model: null`.
   A candidate with a fixed effort keeps it; with none, choose the effort per node and mark it `effort_auto`.
   Send no effort to an agent that takes none (`hide agent catalog` lists `efforts`).
   If no candidate can run, say so in the plan.
