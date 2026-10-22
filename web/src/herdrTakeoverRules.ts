@@ -10,14 +10,14 @@ export function herdrStepShown(takeover: HerdrTakeover | null | undefined): bool
   return takeover.stage === "moved" || takeover.kind === "move" || takeover.kind === "restart";
 }
 
-/** Not now: on a server Hide reads as it is from the start, and on any server once its move failed (D-16, D-29, D-31). */
+/** Not now: on a server Hide reads as it is from the start, and on any server once its move or restart failed (D-16, D-29, D-31). */
 export function leavesForLater(takeover: HerdrTakeover): boolean {
   return takeover.stage !== "moving" && (takeover.same_protocol || takeover.stage === "failed");
 }
 
-/** "Stop Herdr yourself": only for a server Hide cannot read whose move failed here (D-29). */
+/** "Stop Herdr yourself": only for a server Hide cannot read whose move or restart failed here (D-29). */
 export function stopYourselfShown(takeover: HerdrTakeover): boolean {
-  return takeover.kind === "move" && takeover.stage === "failed" && !takeover.same_protocol;
+  return takeover.stage === "failed" && !takeover.same_protocol;
 }
 
 /**

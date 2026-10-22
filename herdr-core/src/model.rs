@@ -6103,7 +6103,9 @@ pub struct HerdrTakeoverSnapshot {
     /// The server speaks the protocol this build reads, so Hide works with
     /// it as it is and the operator may leave it for later (D-16).
     pub same_protocol: bool,
-    /// `refused`, `not_confirmed` or `unreadable` while `stage` is `failed`.
+    /// `refused`, `not_confirmed` or `unreadable` while `stage` is `failed`
+    /// after a move, `stop_failed` after a restart that did not stop the
+    /// server.
     pub failure: Option<String>,
     /// After a move: the operator's own `herdr`'s version when its protocol
     /// is older than the server's (B5).

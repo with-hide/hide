@@ -25,8 +25,11 @@ import { checkForUpdates } from "./updates";
 /** How long a restart that went through holds its button while the core's look takes the offer away. */
 export const RESTART_HOLD_MS = 15_000;
 
-/** The host's restart, one at a time from this page: `restarting` while it runs, and how the last one ended. */
-function useHerdrRestart(actions: Actions): { restarting: boolean; ended: HerdrRestart | null; restart: () => void } {
+/**
+ * The host's restart, one at a time from this page: `restarting` while it runs. A stop that did not end the server
+ * is the core's to hold, as a failed move is, so the step keeps it and offers Not now (D-29).
+ */
+function useHerdrRestart(actions: Actions): { restarting: boolean; restart: () => void } {
   const [restarting, setRestarting] = useState(false);
   const [ended, setEnded] = useState<HerdrRestart | null>(null);
   // A restart that went through asks the core to look at the server, since the connection state may not have
@@ -47,21 +50,11 @@ function useHerdrRestart(actions: Actions): { restarting: boolean; ended: HerdrR
       setEnded(answer);
       setRestarting(answer === "restarted");
       if (answer === "restarted") actions.herdrTakeover("look");
+      if (answer === "stop_failed") actions.herdrTakeover("stop_failed");
     };
     void bridge.restartHerdr().then(settle, () => settle("stop_failed"));
   };
-  return { restarting, ended, restart };
-}
-
-/** A restart whose stop did not end the server; one Hide cannot read leaves the operator a way on, as a failed move does (D-29). */
-function StopFailed({ takeover }: { takeover: HerdrTakeover }) {
-  const { t } = useInterfaceTranslation();
-  return (
-    <Note tone="error" data-herdr-takeover-failure="stop_failed">
-      {t("herdrTakeover.restart.stopFailed")}
-      {takeover.same_protocol ? null : <span className="block text-muted-foreground" data-herdr-takeover-stop-yourself="true">{t("herdrTakeover.stopYourself")}</span>}
-    </Note>
-  );
+  return { restarting, restart };
 }
 
 /** The operator's Herdr and the one Hide moves it to, with no count (D-22). */
@@ -94,8 +87,8 @@ function Kept({ rows }: { rows: { label: string; ends?: boolean }[] }) {
   );
 }
 
-/** Why the last move did not happen, with the step to take where Hide cannot read the server (B8, D-29). */
-function MoveFailure({ takeover }: { takeover: HerdrTakeover }) {
+/** Why the last move or restart did not happen, with the step to take where Hide cannot read the server (B8, D-29). */
+function Failure({ takeover }: { takeover: HerdrTakeover }) {
   const { t } = useInterfaceTranslation();
   if (takeover.stage !== "failed" || !takeover.failure) return null;
   return (
@@ -171,7 +164,7 @@ function herdrStepParts({ takeover, actions, restart, t, onLater, onMoved }: {
       body: (
         <>
           <RestartTerms />
-          {restart.ended === "stop_failed" ? <StopFailed takeover={takeover} /> : null}
+          {restart.restarting ? null : <Failure takeover={takeover} />}
         </>
       ),
       // The button names what it does and holds no keyboard: Enter presses nothing here (B11).
@@ -204,7 +197,7 @@ function herdrStepParts({ takeover, actions, restart, t, onLater, onMoved }: {
           {t("herdrTakeover.move.terminal")}
           {takeover.same_protocol ? null : ` ${t("herdrTakeover.move.unreadable")}`}
         </p>
-        <MoveFailure takeover={takeover} />
+        <Failure takeover={takeover} />
       </>
     ),
     footer: (
@@ -296,7 +289,7 @@ export function HerdrOverview({ actions }: { actions: Actions }) {
         ) : (
           <Note data-herdr-takeover-desktop-only="true">{t("herdrTakeover.restart.desktopOnly")}</Note>
         )}
-        {restart.ended === "stop_failed" ? <StopFailed takeover={current} /> : null}
+        {restart.restarting ? null : <Failure takeover={current} />}
         <Dialog open={confirming} onOpenChange={setConfirming}>
           <DialogContent initialFocus="container" aria-describedby={undefined} data-herdr-takeover-confirm="restart">
             <DialogHeader>
@@ -324,7 +317,7 @@ export function HerdrOverview({ actions }: { actions: Actions }) {
       <Button onClick={() => actions.herdrTakeover("move")} disabled={moving} aria-busy={moving} data-herdr-takeover-move={current.stage}>
         {moving ? t("herdrTakeover.move.moving") : current.stage === "failed" ? t("herdrTakeover.retry") : t("herdrTakeover.move.button")}
       </Button>
-      <MoveFailure takeover={current} />
+      <Failure takeover={current} />
     </Place>
   );
 }

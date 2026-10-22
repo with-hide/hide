@@ -135,13 +135,23 @@ it("a restart shows what ends, takes no Enter, and runs only on its own button (
   await act(async () => { document.querySelector("[data-first-run]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true })); });
   expect(restartHerdr).not.toHaveBeenCalled();
   expect(document.activeElement?.hasAttribute("data-herdr-takeover-restart")).toBe(false);
+  expect(button("[data-herdr-takeover-later]")).toBeNull();
   await act(async () => button("[data-herdr-takeover-restart]")!.click());
   expect(restartHerdr).toHaveBeenCalledTimes(1);
-  expect(document.querySelector('[data-herdr-takeover-failure="stop_failed"]')).not.toBeNull();
-  // A server Hide cannot read leaves a way on after the stop failed, as a failed move does (D-29).
+  // The stop that did not end the server is the core's to hold, as a failed move is.
+  expect(sent(events)).toEqual([{ action: "stop_failed" }]);
+  expect(button("[data-herdr-takeover-restart]")!.disabled).toBe(false);
+  await unmount();
+});
+
+it("a restart whose stop failed names it, keeps the restart, and only then offers Not now with the step to stop Herdr yourself (B12, D-29)", async () => {
+  desktop();
+  const { events, unmount } = await mount(state(offer({ kind: "restart", stage: "failed", failure: "stop_failed" })));
+  expect(document.querySelector('[data-herdr-takeover-failure="stop_failed"]')?.textContent).toContain("Herdr did not stop");
   expect(document.querySelector('[data-herdr-takeover-failure="stop_failed"] [data-herdr-takeover-stop-yourself]')).not.toBeNull();
   expect(button("[data-herdr-takeover-restart]")!.disabled).toBe(false);
-  expect(sent(events)).toEqual([]);
+  await act(async () => button("[data-herdr-takeover-later]")!.click());
+  expect(sent(events)).toEqual([{ action: "later" }]);
   await unmount();
 });
 

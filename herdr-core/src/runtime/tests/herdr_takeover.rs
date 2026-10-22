@@ -240,6 +240,55 @@ fn a_server_on_the_same_protocol_can_be_left_and_a_restart_is_not_moved() {
     );
 }
 
+/// B12, D-29: a restart of a server Hide cannot read leaves no Not now until
+/// the desktop host says its stop did not end the server; the failure stays
+/// through looks at that same server, Not now then closes the wizard with
+/// the restart unanswered, and another server on the socket forgets it.
+#[test]
+fn a_restart_that_could_not_stop_the_server_lets_the_wizard_close() {
+    let mut runtime = installed();
+    runtime.ingest_herdr_look(offer(OfferKind::Restart, "0.8.2", OLD_PROTOCOL));
+    report_here(&mut runtime, &first_run_pass());
+    assert!(!act(&mut runtime, "later"), "no Not now before a failure");
+
+    assert!(act(&mut runtime, "stop_failed"));
+    assert_eq!(takeover(&runtime)["stage"], "failed");
+    assert_eq!(takeover(&runtime)["failure"], "stop_failed");
+    runtime.ingest_herdr_look(offer(OfferKind::Restart, "0.8.2", OLD_PROTOCOL));
+    assert_eq!(
+        takeover(&runtime)["failure"],
+        "stop_failed",
+        "the server that did not stop still answers"
+    );
+
+    assert!(act(&mut runtime, "later"));
+    assert_eq!(step(&runtime), None);
+    assert_eq!(
+        takeover(&runtime)["kind"],
+        "restart",
+        "Overview still offers it"
+    );
+
+    runtime.ingest_herdr_look(Look::Offer(Offer {
+        server_pid: Some(77),
+        ..match offer(OfferKind::Restart, "0.8.2", OLD_PROTOCOL) {
+            Look::Offer(offer) => offer,
+            _ => unreachable!(),
+        }
+    }));
+    assert_eq!(takeover(&runtime)["stage"], "offered");
+    assert_eq!(takeover(&runtime)["failure"], serde_json::Value::Null);
+}
+
+/// D-29: only a restart can fail to stop; a move's failure is the core's own.
+#[test]
+fn a_stop_failure_is_refused_where_no_restart_is_offered() {
+    let mut runtime = installed();
+    runtime.ingest_herdr_look(offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL));
+    assert!(!act(&mut runtime, "stop_failed"));
+    assert_eq!(takeover(&runtime)["stage"], "offered");
+}
+
 /// B18: a newer protocol is shown but never asks the wizard to wait.
 #[test]
 fn a_newer_protocol_offers_an_update_and_opens_no_herdr_step() {

@@ -36,7 +36,17 @@ pub(super) struct Takeover {
     /// The wizard was closed with the move unanswered (B9): it does not open
     /// again on its own until the server moves or Hide starts again.
     closed_unanswered: bool,
+    /// The server the last look offered something for.
+    offered_server: Option<Server>,
+    /// The server the desktop host's restart could not stop: its restart
+    /// step stays on that failure, with Not now, while it is the one that
+    /// answers (D-29).
+    stop_failed: Option<Server>,
 }
+
+/// A server as a look reads it: its process, where the system says, and its
+/// version.
+type Server = (Option<u32>, String);
 
 #[derive(Clone)]
 struct Worker {
@@ -52,13 +62,16 @@ pub(super) enum TakeoverAction {
     /// Move the server now; a second press while it moves is the same one.
     Move,
     /// Leave the step without moving: offered on a server Hide reads as it
-    /// is, and on any server once its move failed (D-16, D-29).
+    /// is, and on any server once its move or restart failed (D-16, D-29).
     Later,
     /// The moved server's step was read.
     Continue,
     /// Look at the server again: the desktop host restarted it, which the
     /// connection state may not show when the stop and start are quick.
     Look,
+    /// The desktop host's restart did not stop the server, so nothing
+    /// changed: the restart fails as a move does, and Not now appears (D-29).
+    StopFailed,
 }
 
 impl Runtime {
@@ -138,23 +151,40 @@ impl Runtime {
         let current = self.snapshot.status.herdr_takeover.clone();
         let next = match &look {
             Look::Nothing | Look::Unreadable { .. } => {
+                self.herdr_takeover.offered_server = None;
+                self.herdr_takeover.stop_failed = None;
                 // A move's step the operator has not read yet stays.
                 current.filter(|shown| shown.stage == "moved")
             }
-            Look::Offer(offer) => Some(HerdrTakeoverSnapshot {
-                kind: offer.kind.as_str().to_owned(),
-                stage: if offer.failed_before.is_some() {
-                    "failed"
-                } else {
-                    "offered"
+            Look::Offer(offer) => {
+                let server = (offer.server_pid, offer.server_version.clone());
+                let takeover = &mut self.herdr_takeover;
+                if takeover.stop_failed.as_ref() != Some(&server) {
+                    takeover.stop_failed = None;
                 }
-                .to_owned(),
-                server_version: offer.server_version.clone(),
-                version: offer.version.clone(),
-                same_protocol: offer.server_protocol == hide_herdr_client::HERDR_PROTOCOL_REVISION,
-                failure: offer.failed_before.map(|cause| cause.as_str().to_owned()),
-                path_herdr_behind: None,
-            }),
+                let stop_failed =
+                    takeover.stop_failed.is_some() && offer.kind == OfferKind::Restart;
+                takeover.offered_server = Some(server);
+                let failure = offer
+                    .failed_before
+                    .map(|cause| cause.as_str())
+                    .or(stop_failed.then_some(STOP_FAILED));
+                Some(HerdrTakeoverSnapshot {
+                    kind: offer.kind.as_str().to_owned(),
+                    stage: if failure.is_some() {
+                        "failed"
+                    } else {
+                        "offered"
+                    }
+                    .to_owned(),
+                    server_version: offer.server_version.clone(),
+                    version: offer.version.clone(),
+                    same_protocol: offer.server_protocol
+                        == hide_herdr_client::HERDR_PROTOCOL_REVISION,
+                    failure: failure.map(str::to_owned),
+                    path_herdr_behind: None,
+                })
+            }
         };
         if next != self.snapshot.status.herdr_takeover || matches!(look, Look::Unreadable { .. }) {
             crate::diagnostic!(look_record(&look));
@@ -251,6 +281,22 @@ impl Runtime {
                 true
             }
             TakeoverAction::Look => false,
+            TakeoverAction::StopFailed => {
+                if shown.kind != OfferKind::Restart.as_str() {
+                    return refused(action, "no restart is offered");
+                }
+                self.herdr_takeover.stop_failed = self.herdr_takeover.offered_server.clone();
+                crate::diagnostic!(serde_json::json!({
+                    "component": "herdr",
+                    "kind": "herdr.takeover_stop_failed",
+                    "server_version": shown.server_version,
+                }));
+                self.show_herdr_takeover(Some(HerdrTakeoverSnapshot {
+                    stage: "failed".into(),
+                    failure: Some(STOP_FAILED.into()),
+                    ..shown
+                }))
+            }
             TakeoverAction::Continue => {
                 if shown.stage != "moved" {
                     return refused(action, "nothing was moved");
@@ -351,6 +397,9 @@ impl Runtime {
         true
     }
 }
+
+/// The failure of a restart whose stop did not end the server.
+const STOP_FAILED: &str = "stop_failed";
 
 /// How long a look may take before it counts as one that found nothing to
 /// move: the wizard waits on its Herdr step for it, and a server that does

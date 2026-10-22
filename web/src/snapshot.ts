@@ -1725,7 +1725,7 @@ export type HerdrTakeover = {
   server_version: string;
   version: string;
   same_protocol: boolean;
-  failure: "refused" | "not_confirmed" | "unreadable" | null;
+  failure: "refused" | "not_confirmed" | "unreadable" | "stop_failed" | null;
   path_herdr_behind: string | null;
 };
 
