@@ -691,7 +691,7 @@ The same open-check rollup also supplies optional `PullRequestWork.check_counts`
 Completed success is passed; neutral and skipped remain skipped; failure conclusions are failed; active CheckRuns are running, queued CheckRuns waiting, and an unread or unfamiliar state unknown.
 Legacy StatusContexts keep SUCCESS, FAILURE/ERROR, PENDING and EXPECTED distinct; an absent rollup stays unknown while an explicitly empty rollup has zero checks.
 This adds no GitHub read or polling clock and leaves the existing merge eligibility calculation unchanged.
-The PRs tool (below) adds three reads to the same generation: the signed-in login (`gh api user --jq .login`, once per read of all projects, right after `auth status`), the open pull requests the account was asked to review (`gh pr list --search review-requested:@me`, numbers only), and one GraphQL query for each open pull request's place in the merge queue and the time of its last review request (`HidePrFacts`).
+The PR list (below) adds three reads to the same generation: the signed-in login (`gh api user --jq .login`, once per read of all projects, right after `auth status`), the open pull requests the account was asked to review (`gh pr list --search review-requested:@me`, numbers only), and one GraphQL query for each open pull request's place in the merge queue and the time of its last review request (`HidePrFacts`).
 The pull request list alone decides whether a project's read succeeds (issue #1189, which replaces PRD work-tab-pr-lens D-25's rule that any of the three failing failed the read).
 `gh auth status` failing is still the machine's refusal and fails every project's read.
 Each of the three is asked and judged on its own, and one that fails leaves the judgments derived from it unknown on every pull request, never "no": the login makes `mine` (`Option<bool>`, `None` when unknown), the review search with the login and the request list makes `asked_of_me` (`ReviewAsk::Unknown`), and the GraphQL query makes the queue place (`MergeQueuePlace::Unknown`) and the time of the last review request.
@@ -704,7 +704,7 @@ Either call failing fails the project's read, which keeps the last answer and st
 Which pull request belongs to a checkout is one rule (`github::belongs_to_checkout`, chosen by `pull_request_for_checkout`), because a branch name is used again for new work: a pull request from a fork never belongs to a local branch of the same name, an open one belongs to the checkout on its head branch, and a merged or closed one only while the checkout's commit (the worktree reader's `head_sha`, or, before that reader has answered, the commit `Repository::head_oid` read from the repository's own files with no process) is exactly the pull request's head commit on that branch; a checkout that was amended, rebased or left behind after the last push therefore loses its merged pull request.
 Several candidates resolve open, then merged, then closed, the most recently updated first among equals, and a checkout whose commit is not read yet takes no settled pull request.
 The sidebar row, the worktree catalog, the agent rows' PR mark and the link and hand-off actions all ask that rule, and a catalog read that moves a HEAD decides the connection again.
-The PRs tool and a worktree's base still list one pull request per head branch (`preferred_per_branch`).
+The PR list and a worktree's base still list one pull request per head branch (`preferred_per_branch`).
 The same generation also reads open issues, their Project Status, and PR closing references for Project Home.
 The issue list uses `sort:updated-desc` and reads one sentinel beyond the 200-issue display cap so overflow is based on evidence.
 Issue references accept a GitHub issue URL, `owner/repo#N`, or `#N` when the repository is known; unsupported hosts and malformed references are rejected.
@@ -741,7 +741,7 @@ A mark dims while GitHub cannot be read again, and its tooltip says when it was 
 
 ### Pull request groups
 
-The PRs tool (`docs/UI_BEHAVIOR.md`, The PRs tool and the PR card) lists pull requests in groups the core decides, in `herdr-core/src/agent_state/work/board.rs`, from GitHub values the five-minute read carries and from facts only Hide holds: the link record's sessions and the agents' own state.
+The PR list (`docs/UI_BEHAVIOR.md`, The PR list and the PR card) lists pull requests in groups the core decides, in `herdr-core/src/agent_state/work/board.rs`, from GitHub values the five-minute read carries and from facts only Hide holds: the link record's sessions and the agents' own state.
 A pull request body's headings and a repository's own scripts decide nothing, so the same rules hold in every repository, and Hide AI never changes a group or a reason.
 The result is the `prs` board of each project's `agent_scope`: rows (group, fold, reason, agents, the pane a reason is about, the checkouts it is the work of, its issue), the groups with their numbers in draw order, and the count of `needs_you` rows that are not folded.
 
