@@ -101,6 +101,17 @@ it("opens the current flow and folds a past one to its result, which a click ope
   } finally { await unmount(); }
 });
 
+it("folds the flow a new goal follows while the record stays open (B3)", async () => {
+  const { container, showTrail, unmount } = await mount({ ...BASE, flows: [BASE.flows[0]!] });
+  try {
+    expect(flowOf(container, "flow-1").querySelectorAll("[data-record-request]")).toHaveLength(1);
+    await act(async () => useShellStore.setState({ sessionRecord: { session: SESSION, loading: false, failure: null, record: BASE } }));
+    await showTrail();
+    expect(flowOf(container, "flow-1").querySelector("[data-record-request]")).toBeNull();
+    expect(flowOf(container, "flow-2").querySelectorAll("[data-record-request]")).toHaveLength(2);
+  } finally { await unmount(); }
+});
+
 it("draws a request as its summary and opens the words as sent in place, or cuts unsummarized words at 120 characters (B5)", async () => {
   const long = `${"긴 요청 ".repeat(40)}\n끝`;
   const record = { ...BASE, flows: [flow("flow-1", "Only", AT, [request(1, "Please write the record with every section", { summary: "Write the record" }), request(2, long)])] };

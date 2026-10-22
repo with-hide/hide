@@ -399,15 +399,17 @@ function Flows({ record, locator }: { record: RecordValue; locator?: RequestLoca
   const { t } = useInterfaceTranslation();
   const current = record.flows.at(-1)?.id ?? null;
   const located = locator ? record.flows.find((flow) => flow.requests.some((request) => request.offset === locator.request_offset))?.id ?? null : null;
-  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set([current, located].filter((id): id is string => id !== null)));
-  useEffect(() => { if (located) setOpen((ids) => new Set([...ids, located])); }, [located]);
-  const toggle = (id: string) => setOpen((ids) => { const next = new Set(ids); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  // Only a click overrides the default; a new current flow opens and the one it follows folds.
+  const [toggled, setToggled] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  useEffect(() => { if (located) setToggled((ids) => { const next = new Map(ids); next.delete(located); return next; }); }, [located, locator?.query]);
+  const isOpen = (id: string) => toggled.get(id) ?? (id === current || id === located);
+  const toggle = (id: string) => setToggled((ids) => new Map(ids).set(id, !isOpen(id)));
   return <section className="mt-lg min-w-0" data-record-flows={record.flows.length}>
     <LocatorNotes locator={locator} located={located !== null} />
     {!record.flows.length ? <p className="text-micro text-muted-foreground">{t("sessionWork.empty")}</p> : null}
     <ol className="min-w-0">
       {record.flows.map((flow) => {
-        const expanded = open.has(flow.id) || (flow.id === current && !open.size);
+        const expanded = isOpen(flow.id);
         const isCurrent = flow.id === current;
         return <li key={flow.id} className="min-w-0 border-b border-border last:border-b-0" data-record-flow={flow.id} data-current={isCurrent ? "true" : undefined}>
           <button type="button" className={cn(ROW, "flex w-full items-start gap-xs py-sm hover:bg-accent")} aria-expanded={expanded} onClick={() => toggle(flow.id)} data-record-flow-toggle={flow.id}>
@@ -564,15 +566,14 @@ function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue
 }
 
 /**
- * An open missed item (PRD overview-device-tasks B43-B46; PRD
- * record-card-readability D-07, B12-B14): one warning line, the task it came
- * from or the descendant that found it quiet after it, `백로그로 · 무시` at its
+ * An open problem or follow-up (PRD overview-device-tasks B43-B46; PRD
+ * session-record-goal-flow D-13): one warning line with `백로그로 · 무시` at its
  * end. `백로그로` makes the item at once in the project the session works in
- * and shows `만드는 중` meanwhile; the line then leaves, as one dismissed does,
- * since what is handled is no longer the record's. A failure keeps the line
- * with its reason and a retry that converges on one item.
+ * and shows `만드는 중` meanwhile; the line then leaves, as one dismissed does.
+ * A failure keeps the line with its reason and a retry that converges on one
+ * item.
  */
-function MissedLine({ missed, session, cwd, note, actions, className }: { missed: MissedWork; session: WorkSession; cwd: string | null; note: string | null; actions: Actions; className?: string }) {
+function MissedLine({ missed, session, cwd, actions, className }: { missed: MissedWork; session: WorkSession; cwd: string | null; actions: Actions; className?: string }) {
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((state) => state.rest);
   const agents = useShellStore((state) => state.agents);
@@ -595,7 +596,7 @@ function MissedLine({ missed, session, cwd, note, actions, className }: { missed
       {missed.kind === "problem" ? <TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <LightbulbIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
       {t(`sessionWork.kind.${missed.kind}`)}
     </span>
-    <span className="min-w-0 flex-1 basis-1/2 whitespace-normal text-foreground [overflow-wrap:anywhere]" title={missed.text}>{missed.text}{note ? <span className="text-muted-foreground" data-missed-note="true"> · {note}</span> : null}</span>
+    <span className="min-w-0 flex-1 basis-1/2 whitespace-normal text-foreground [overflow-wrap:anywhere]" title={missed.text}>{missed.text}</span>
     {making ? <span className="flex shrink-0 items-center gap-xxs text-micro text-muted-foreground" data-missed-making="true"><LoaderCircleIcon aria-hidden="true" className="size-(--size-icon-sm) animate-spin" />{t("backlog.creating")}</span> : failed ? <span role="status" className="flex shrink-0 flex-wrap items-center gap-xs text-micro text-destructive" data-missed-failed={failed.failure ?? "refused"}>
       <span>{t(`backlog.failure.${failed.failure ?? "refused"}`)}</span>
       {failed.retry ? <Button size="sm" variant="ghost" className={small} disabled={!connected} onClick={() => actions.retryBacklog(failed.intent)}>{t("common.retry")}</Button>
@@ -615,7 +616,7 @@ function MissedLine({ missed, session, cwd, note, actions, className }: { missed
 export function MissedRow({ missed, record, actions }: { missed: MissedWork; record: Pick<RecordValue, "session" | "title" | "cwd">; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   return <li className="min-w-0 py-xs">
-    <MissedLine missed={missed} session={record.session} cwd={record.cwd} note={null} actions={actions} className={LANE} />
+    <MissedLine missed={missed} session={record.session} cwd={record.cwd} actions={actions} className={LANE} />
     <button type="button" className={cn(ROW, "mt-xxs block w-full truncate text-micro text-muted-foreground", LANE)} title={record.title} onClick={() => actions.openSessionRecord(record.session)}>{record.title} · {t(`sessionWork.kind.${missed.kind}`)}</button>
   </li>;
 }
