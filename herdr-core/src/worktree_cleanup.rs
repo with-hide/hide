@@ -1,5 +1,6 @@
 //! Reviewed cleanup of a project's disk: the build caches and dependencies a
-//! tool makes again, and clean linked worktrees merged into main. A
+//! tool makes again, and clean linked worktrees merged into the repository's
+//! default branch (`worktrees::merged`, the judgment the sidebar shares). A
 //! worktree whose only panes are an agent that finished or a shell is chosen
 //! like any other, and the confirmation closes those panes before it removes.
 //! All inspection and filesystem effects run on the existing action-worker
@@ -17,7 +18,7 @@ use hide_node_link::git::GitCommand;
 use hide_node_link::protocol::Call;
 use hide_node_link::worktrees::Registered;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -93,6 +94,8 @@ pub struct CleanupSnapshot {
     pub workspace_id: String,
     pub repository_root: String,
     pub phase: String,
+    /// The local head of the default branch the review judged merges
+    /// against; a confirmation refuses when it moved.
     pub main_head: Option<String>,
     pub rows: Vec<CleanupRow>,
     pub message: Option<String>,
@@ -218,6 +221,22 @@ pub(crate) struct ReviewInput {
     pub folders: HashMap<PathBuf, Vec<LayerFolder>>,
     /// Each worktree's measured allocated bytes, for the result's totals.
     pub bytes: HashMap<PathBuf, u64>,
+    pub merge: MergeBasis,
+}
+
+/// What a worktree's merge is judged against (PRD git-freshness D-06,
+/// D-07), copied under the lock with the rest of the input.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MergeBasis {
+    /// The repository's default branch as the worktree reader resolved it:
+    /// the chosen base, GitHub's default, or `origin/HEAD`. `None` when
+    /// none is known, and then nothing can be proven merged.
+    pub base: Option<String>,
+    /// The head commits of the pull requests GitHub merged into `base`,
+    /// from the pull request list the sidebar reads too. `None` when this
+    /// core holds no list for the project (a node's), which is then asked
+    /// of GitHub one branch at a time.
+    pub heads: Option<BTreeSet<String>>,
 }
 
 /// Where a cleanup runs: the machine whose disk holds the project, through
@@ -602,29 +621,32 @@ fn ref_commit(node: &dyn NodeLink, root: &Path, name: &str) -> Option<String> {
     .ok()
 }
 
-/// A worktree is merged when its HEAD is in a main commit, or when GitHub
-/// answers that a pull request into `main` merged exactly this HEAD.
-/// A squash or rebase merge leaves the head out of main's history, so GitHub's
-/// answer is the only proof then; it needs no merge commit in any local ref.
+/// Whether the worktree at `head` is merged, by the judgment the sidebar
+/// shares (`worktrees::merged`): its HEAD is in a commit `bases` names (the
+/// default branch, locally or as last fetched), or GitHub merged a pull
+/// request into that branch at exactly this HEAD. A squash or rebase merge
+/// leaves the head out of the branch's history, so GitHub's answer is the
+/// only proof then; it needs no merge commit in any local ref.
 fn verified_merge(
     node: &dyn NodeLink,
     root: &Path,
-    mains: &[String],
+    (base, bases): (&str, &[String]),
     branch: &str,
     head: &str,
-    merged_proofs: &mut impl FnMut(&str) -> Result<Vec<github::MergedPullRequestProof>, String>,
+    merged_heads: &mut impl FnMut(&str) -> Result<BTreeSet<String>, String>,
 ) -> Result<(), Exclusion> {
-    for main in mains {
+    let mut in_base = false;
+    for commit in bases {
         let count = git(
             node,
             root,
             GitCommand::CountCommits {
-                base: main.clone(),
+                base: commit.clone(),
                 head: head.to_owned(),
             },
         )?;
         match count.trim().parse::<u64>() {
-            Ok(0) => return Ok(()),
+            Ok(0) => in_base = true,
             Err(_) => {
                 return Err(Exclusion::new(
                     "merge_unverified",
@@ -634,16 +656,19 @@ fn verified_merge(
             Ok(_) => {}
         }
     }
-    let proofs = merged_proofs(branch)?;
-    if proofs
-        .iter()
-        .any(|proof| proof.base_ref == "main" && proof.head_oid == head)
-    {
+    let heads = if in_base {
+        None
+    } else {
+        Some(merged_heads(branch)?)
+    };
+    if crate::worktrees::merged(Some(in_base), Some(head), heads.as_ref()) == Some(true) {
         return Ok(());
     }
     Err(Exclusion::new(
         "not_merged",
-        "Not merged into main: HEAD is in neither local main nor origin/main, and no pull request merged into main exactly matches it",
+        format!(
+            "Not merged into {base}: HEAD is in neither local {base} nor origin/{base}, and no pull request merged into {base} exactly matches it"
+        ),
     ))
 }
 
@@ -657,15 +682,34 @@ fn inspect(
     panes: Result<PanePaths, String>,
     usage: &Usage,
     only: Option<&[String]>,
+    merge: &MergeBasis,
 ) -> Result<CleanupSnapshot, String> {
     let node = context.node.as_ref();
-    inspect_with_merge_proofs(node, root, current, panes, usage, only, |branch| {
+    let base = merge.base.as_deref();
+    inspect_with_merge_proofs(node, root, current, panes, usage, only, base, |branch| {
+        if let Some(heads) = &merge.heads {
+            return Ok(heads.clone());
+        }
         let github = context
             .github
             .as_ref()
             .map_err(|why| format!("GitHub merge proof is unavailable: {why}"))?;
-        github::merged_pull_request_proofs(github.node.as_ref(), &github.place, branch)
+        let base = base.expect("a merge is judged only against a known base");
+        Ok(heads_into(
+            github::merged_pull_request_proofs(github.node.as_ref(), &github.place, branch)?,
+            base,
+        ))
     })
+}
+
+/// The heads of the pull requests that merged into `base`; one merged into
+/// a stacked parent branch proves nothing about `base`.
+fn heads_into(proofs: Vec<github::MergedPullRequestProof>, base: &str) -> BTreeSet<String> {
+    proofs
+        .into_iter()
+        .filter(|proof| proof.base_ref == base)
+        .map(|proof| proof.head_oid)
+        .collect()
 }
 
 fn inspect_with_merge_proofs(
@@ -675,16 +719,17 @@ fn inspect_with_merge_proofs(
     panes: Result<PanePaths, String>,
     usage: &Usage,
     only: Option<&[String]>,
-    mut merged_proofs: impl FnMut(&str) -> Result<Vec<github::MergedPullRequestProof>, String>,
+    base: Option<&str>,
+    mut merged_heads: impl FnMut(&str) -> Result<BTreeSet<String>, String>,
 ) -> Result<CleanupSnapshot, String> {
     let mut rows = listed(node, root)?;
-    // Review never fetches, and a local main that nothing keeps current is one
-    // of two answers, not the only one: the remote-tracking copy of the last
-    // fetch is the other.
-    let local_main = ref_commit(node, root, "refs/heads/main");
+    // Review never fetches, and a local base that nothing keeps current is
+    // one of two answers, not the only one: the remote-tracking copy of the
+    // last fetch is the other.
+    let local_main = base.and_then(|base| ref_commit(node, root, &format!("refs/heads/{base}")));
     let mains: Vec<String> = [
         local_main.clone(),
-        ref_commit(node, root, "refs/remotes/origin/main"),
+        base.and_then(|base| ref_commit(node, root, &format!("refs/remotes/origin/{base}"))),
     ]
     .into_iter()
     .flatten()
@@ -747,10 +792,18 @@ fn inspect_with_merge_proofs(
                     "A live pane that is not this checkout's own stands in it. Close or move it, then review again.",
                 ));
             }
+            let Some(base) = base else {
+                return Err(Exclusion::new(
+                    "main_unavailable",
+                    "The repository's default branch is unknown. Choose a base branch in Project Settings, then review again.",
+                ));
+            };
             if mains.is_empty() {
                 return Err(Exclusion::new(
                     "main_unavailable",
-                    "Neither local main nor origin/main exists, so no base can establish eligibility.",
+                    format!(
+                        "Neither local {base} nor origin/{base} exists, so no base can establish eligibility."
+                    ),
                 ));
             }
             let head = row
@@ -776,10 +829,10 @@ fn inspect_with_merge_proofs(
             verified_merge(
                 node,
                 root,
-                &mains,
+                (base, &mains),
                 row.branch.as_deref().expect("branch checked above"),
                 head,
-                &mut merged_proofs,
+                &mut merged_heads,
             )?;
             // Removing the worktree deletes its ignored folders too, and a
             // repository cloned into one is lost with it.
@@ -890,7 +943,7 @@ fn confirm(
                         "State changed. {} Review again before removing.",
                         now.exclusion
                             .as_deref()
-                            .unwrap_or("The reviewed branch or main HEAD moved.")
+                            .unwrap_or("The reviewed branch or the default branch's HEAD moved.")
                     ),
                 ));
             }
@@ -1097,6 +1150,7 @@ pub fn spawn_review(context: CleanupPlace, id: u64, input: ReviewInput) -> Resul
                 panes,
                 &usage,
                 None,
+                &input.merge,
             ) {
                 Ok(value) => CleanupSnapshot {
                     id,
@@ -1580,6 +1634,7 @@ pub fn spawn_confirm(
                     pane_paths(&context),
                     &usage,
                     Some(&[path.to_owned()]),
+                    &input.merge,
                 )
             };
             let confirmed = confirm(
@@ -1773,7 +1828,27 @@ mod tests {
                 usage,
                 &Usage::default(),
                 None,
-                |_| Ok(Vec::new()),
+                Some("main"),
+                |_| Ok(BTreeSet::new()),
+            )
+            .unwrap()
+        }
+        /// A review judged against `base` as the repository's default
+        /// branch, with GitHub's merged pull requests `proofs`.
+        fn review_against(
+            &self,
+            base: Option<&str>,
+            proofs: Vec<github::MergedPullRequestProof>,
+        ) -> CleanupSnapshot {
+            inspect_with_merge_proofs(
+                &node(),
+                &self.main,
+                Some(&self.main),
+                Ok(Vec::new()),
+                &Usage::default(),
+                None,
+                base,
+                |_| Ok(heads_into(proofs.clone(), base.unwrap())),
             )
             .unwrap()
         }
@@ -1789,7 +1864,8 @@ mod tests {
                 Ok(Vec::new()),
                 &Usage::default(),
                 None,
-                |_| Ok(proofs.clone()),
+                Some("main"),
+                |_| Ok(heads_into(proofs.clone(), "main")),
             )
             .unwrap()
         }
@@ -2142,6 +2218,46 @@ mod tests {
     }
 
     #[test]
+    fn a_repository_whose_default_branch_is_not_main_is_judged_against_that_branch() {
+        let f = Fixture::new();
+        let landed = f.add("landed");
+        let unlanded = f.add("unlanded");
+        let squashed = f.add("squashed");
+        commit(&landed, "Landed on trunk");
+        commit(&unlanded, "Never landed");
+        commit(&squashed, "Squashed into trunk");
+        git(&f.main, &["merge", "--ff-only", "landed"]).unwrap();
+        git(&f.main, &["branch", "-m", "main", "trunk"]).unwrap();
+        let proofs = vec![
+            proof(&head_of(&squashed), "trunk"),
+            proof(&head_of(&unlanded), "main"),
+        ];
+
+        let review = f.review_against(Some("trunk"), proofs.clone());
+        assert_eq!(code_of(&review, &landed), None);
+        assert_eq!(code_of(&review, &squashed), None);
+        // A pull request into a branch that is not the default proves nothing.
+        assert_eq!(code_of(&review, &unlanded), Some("not_merged"));
+        assert_eq!(review.main_head, Some(head_of(&f.main)));
+
+        // With no default branch known, nothing is judged merged, not even
+        // a worktree GitHub answered for.
+        let unknown = inspect_with_merge_proofs(
+            &node(),
+            &f.main,
+            Some(&f.main),
+            Ok(Vec::new()),
+            &Usage::default(),
+            None,
+            None,
+            |_| Ok(heads_into(proofs.clone(), "trunk")),
+        )
+        .unwrap();
+        assert_eq!(code_of(&unknown, &landed), Some("main_unavailable"));
+        assert_eq!(code_of(&unknown, &squashed), Some("main_unavailable"));
+    }
+
+    #[test]
     fn a_squash_merge_is_proved_by_a_main_pull_request_with_exactly_this_head() {
         let f = Fixture::new();
         let squashed = f.add("squashed");
@@ -2165,6 +2281,7 @@ mod tests {
             Ok(Vec::new()),
             &Usage::default(),
             None,
+            Some("main"),
             |_| Err("GitHub merge proof is unavailable".into()),
         )
         .unwrap();
@@ -2536,11 +2653,17 @@ mod tests {
             ("p-shell".to_owned(), finished.join("src")),
             ("p-elsewhere".to_owned(), stranger.join("src")),
         ]);
-        let review =
-            inspect_with_merge_proofs(&node(), &f.main, Some(&f.main), panes, &usage, None, |_| {
-                Ok(Vec::new())
-            })
-            .unwrap();
+        let review = inspect_with_merge_proofs(
+            &node(),
+            &f.main,
+            Some(&f.main),
+            panes,
+            &usage,
+            None,
+            Some("main"),
+            |_| Ok(BTreeSet::new()),
+        )
+        .unwrap();
         let row = |path: &Path| {
             review
                 .rows
@@ -2707,7 +2830,8 @@ mod tests {
             Ok(Vec::new()),
             &Usage::of(in_use, &[]),
             None,
-            |_| Ok(Vec::new()),
+            Some("main"),
+            |_| Ok(BTreeSet::new()),
         )
         .unwrap();
         let row = |path: &Path| {

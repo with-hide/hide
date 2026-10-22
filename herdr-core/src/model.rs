@@ -5426,6 +5426,12 @@ pub struct WorktreeSnapshot {
     pub last_commit_subject: Option<String>,
     pub last_commit_unix_seconds: Option<u64>,
     pub nested: bool,
+    /// Git's half of `merged`: HEAD is in the repository's default branch.
+    /// Core only, kept so each projection judges `merged` again from both
+    /// halves (`worktrees::merged`).
+    #[serde(skip)]
+    pub in_base: Option<bool>,
+    /// Whether the work is merged (`worktrees::merged`).
     pub merged: Option<bool>,
     pub upstream_state: String,
     /// Commits the upstream has that this branch does not, as of the last

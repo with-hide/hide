@@ -22,11 +22,8 @@ use hide_platform::process::OwnedChild;
 
 use crate::error::{ErrorCode, HostError, HostResult};
 
-/// The most one `git` invocation may take. A repository that cannot answer in
-/// this time reports its status unavailable rather than holding every other
-/// project's answer behind it; a status over evicted iCloud files ran for
-/// minutes before this bound existed.
-pub const GIT_DEADLINE: Duration = Duration::from_secs(15);
+/// The most one `git` invocation may take ([`crate::git_run::DEADLINE`]).
+pub use crate::git_run::DEADLINE as GIT_DEADLINE;
 
 /// The most of a repository read one worktree's measurement may take, its
 /// ignored-folder scan included, so one slow worktree leaves the others of
@@ -171,13 +168,15 @@ fn checkout_status(status: &str) -> Result<hide_node_link::worktrees::CheckoutGi
 
 /// Reads the repository that holds `path`: its main worktree, default
 /// branch, local branches and every listed worktree. `bases` names a branch's
-/// pull request base; `base_override` is the operator's chosen base. With
+/// pull request base; `base_override` is the operator's chosen base and
+/// `remote_default` the default branch GitHub names. With
 /// `reuse_unchanged`, a worktree whose inputs did not move since `measured`
 /// last saw it keeps that measurement.
 pub fn read(
     path: &Path,
     bases: &BTreeMap<String, String>,
     base_override: Option<&str>,
+    remote_default: Option<&str>,
     measured: &Measured,
     reuse_unchanged: bool,
 ) -> Option<RepositoryWorktrees> {
@@ -197,7 +196,7 @@ pub fn read(
         &root,
         root_path,
         bases,
-        base_override,
+        (base_override, remote_default),
         measured,
         reuse_unchanged,
         until,
@@ -210,7 +209,7 @@ pub fn read_project(
     root: &Path,
     root_path: String,
     bases: &BTreeMap<String, String>,
-    base_override: Option<&str>,
+    (base_override, remote_default): (Option<&str>, Option<&str>),
     measured: &Measured,
     reuse_unchanged: bool,
 ) -> RepositoryWorktrees {
@@ -218,7 +217,7 @@ pub fn read_project(
         root,
         root_path,
         bases,
-        base_override,
+        (base_override, remote_default),
         measured,
         reuse_unchanged,
         Instant::now() + WORKTREES_READ_TIME,
@@ -227,16 +226,24 @@ pub fn read_project(
 
 /// The read's discovery and metadata share its measurement's absolute end;
 /// entering with a known main worktree does not renew that time.
+///
+/// The repository's default branch is the one GitHub names when this clone
+/// can resolve it, else what `origin/HEAD` names (PRD git-freshness D-07);
+/// the operator's chosen base, when it resolves, is measured against instead.
 fn read_project_until(
     root: &Path,
     root_path: String,
     bases: &BTreeMap<String, String>,
-    base_override: Option<&str>,
+    (base_override, remote_default): (Option<&str>, Option<&str>),
     measured: &Measured,
     reuse_unchanged: bool,
     until: Instant,
 ) -> RepositoryWorktrees {
-    let default_branch = default_branch(root, until);
+    let remote_default =
+        remote_default.filter(|branch| resolvable_base(root, branch, until).is_some());
+    let default_branch = remote_default
+        .map(str::to_owned)
+        .or_else(|| default_branch(root, until));
     let refs = Refs::read(root, until);
     let branches = refs.as_ref().map(Refs::branches).unwrap_or_default();
     let valid_override = base_override.filter(|base| resolvable_base(root, base, until).is_some());
@@ -254,6 +261,8 @@ fn read_project_until(
         });
     let base_source = if valid_override.is_some() {
         "specified"
+    } else if remote_default.is_some() {
+        "github"
     } else if default_branch.is_some() {
         "origin_head"
     } else {
@@ -502,7 +511,7 @@ type Kept = BTreeMap<PathBuf, (Inputs, WorktreeFacts)>;
 
 /// The shape of a repository's file; a file of another version, or one that
 /// does not read, is taken as nothing kept.
-const KEPT_FILE_VERSION: u32 = 1;
+const KEPT_FILE_VERSION: u32 = 2;
 /// The largest repository file read back: some thousands of worktrees' facts.
 const KEPT_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -722,8 +731,10 @@ struct Inputs {
     listed: ListedWorktree,
     index: Option<(u64, SystemTime)>,
     base: Option<String>,
+    /// The repository base `merged` is measured against.
+    default_base: Option<String>,
     upstream: Option<String>,
-    commits: [Option<String>; 3],
+    commits: [Option<String>; 5],
 }
 
 impl Inputs {
@@ -736,10 +747,17 @@ impl Inputs {
             .branch
             .as_deref()
             .and_then(|branch| refs.upstream(&format!("refs/heads/{branch}")));
+        let default_base = bases.default_branch.map(str::to_owned);
         let commits = [
             base.as_deref()
                 .and_then(|base| refs.commit(&format!("refs/heads/{base}"))),
             base.as_deref()
+                .and_then(|base| refs.commit(&format!("refs/remotes/origin/{base}"))),
+            default_base
+                .as_deref()
+                .and_then(|base| refs.commit(&format!("refs/heads/{base}"))),
+            default_base
+                .as_deref()
                 .and_then(|base| refs.commit(&format!("refs/remotes/origin/{base}"))),
             upstream
                 .as_deref()
@@ -749,6 +767,7 @@ impl Inputs {
             listed: listed.clone(),
             index,
             base,
+            default_base,
             upstream,
             commits,
         }
@@ -900,8 +919,11 @@ fn describe_within(listed: ListedWorktree, bases: &Bases<'_>, until: Instant) ->
         .map(|result| record_failure(result, &mut unavailable_reason, (0, 0)))
         .unwrap_or((0, 0));
 
-    let merged = base_branch
-        .as_deref()
+    // Merged means in the repository's base, the one judgment the sidebar
+    // and the cleanup review share (PRD git-freshness D-06); a stacked pull
+    // request's parent branch is what `ahead` counts against, not this.
+    let merged = bases
+        .default_branch
         .and_then(|base| merged_into(&listed.path, base, until));
     let (upstream_state, unpushed, behind_upstream) = record_failure(
         upstream(&listed.path, listed.branch.as_deref(), until),
@@ -1143,12 +1165,10 @@ fn merged_into(path: &Path, base: &str, until: Instant) -> Option<bool> {
         if left.is_zero() {
             return None;
         }
-        let output = output_within(
-            hide_platform::programs::command("git")
-                .arg("-C")
-                .arg(path)
-                .args(["merge-base", "--is-ancestor", "HEAD", &candidate]),
+        let output = crate::git_run::output(
+            crate::git_run::at(path).args(["merge-base", "--is-ancestor", "HEAD", &candidate]),
             left.min(GIT_DEADLINE),
+            None,
         )
         .ok()??;
         match output.status.code() {
@@ -1331,16 +1351,8 @@ fn git_within_limit(
     {
         calls.push((cwd.to_owned(), arguments.first().unwrap_or(&"").to_string()));
     }
-    let output = output_limited(
-        hide_platform::programs::command("git")
-            .arg("--no-optional-locks")
-            .arg("-C")
-            .arg(cwd)
-            .args(arguments),
-        deadline,
-        limit,
-    )
-    .map_err(|error| format!("git could not be run: {error}"))?;
+    let output = crate::git_run::output(crate::git_run::at(cwd).args(arguments), deadline, limit)
+        .map_err(|error| format!("git could not be run: {error}"))?;
     let Some(output) = output else {
         return Err(format!(
             "git {} did not finish within {} s",
@@ -1610,7 +1622,7 @@ trait WithinDeadline {
 
 impl WithinDeadline for Command {
     fn output_within_deadline(&mut self) -> Result<std::process::Output, String> {
-        output_within(self, GIT_DEADLINE)
+        crate::git_run::output(self, GIT_DEADLINE, None)
             .map_err(|error| format!("git could not be run: {error}"))?
             .ok_or_else(|| {
                 format!(
@@ -1637,7 +1649,7 @@ pub fn output_within(
 }
 
 #[allow(clippy::disallowed_methods)] // a bounded production wait
-fn output_limited(
+pub(crate) fn output_limited(
     command: &mut Command,
     deadline: Duration,
     limit: Option<u64>,
@@ -1711,7 +1723,7 @@ fn output_limited(
     if limit.is_some_and(|limit| stdout.len() as u64 > limit || stderr.len() as u64 > limit) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "Git header read exceeded its output limit",
+            "Git answered more than its output limit",
         ));
     }
     Ok(Some(std::process::Output {
@@ -1739,10 +1751,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
     if branch.starts_with('-') {
         return Err(invalid());
     }
-    let checked = hide_platform::programs::command("git")
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(repository_root)
+    let checked = crate::git_run::at(repository_root)
         .args(["check-ref-format", "--branch", branch])
         .output_within_deadline()
         .map_err(io_error)?;
@@ -1750,10 +1759,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
         return Err(invalid());
     }
     let reference = format!("refs/heads/{branch}");
-    let exists = hide_platform::programs::command("git")
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(repository_root)
+    let exists = crate::git_run::at(repository_root)
         .args(["show-ref", "--verify", "--quiet", &reference])
         .output_within_deadline()
         .map_err(io_error)?;
@@ -1774,10 +1780,7 @@ pub fn check_new_branch(repository_root: &Path, branch: &str) -> HostResult<()> 
     }
     // Ask Git itself for the branch-exists diagnostic. This command is
     // side-effect free because the branch was proven to exist above.
-    let refusal = hide_platform::programs::command("git")
-        .arg("--no-optional-locks")
-        .arg("-C")
-        .arg(repository_root)
+    let refusal = crate::git_run::at(repository_root)
         .args(["branch", "--", branch])
         .output_within_deadline()
         .map_err(io_error)?;

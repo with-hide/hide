@@ -3932,6 +3932,7 @@ mod window_reads_tests {
                 root_path: std::path::PathBuf::from("/a"),
                 bases: Default::default(),
                 base_override: None,
+                remote_default: None,
                 generation: 0,
             }],
             generation: 0,

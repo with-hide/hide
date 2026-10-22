@@ -27,6 +27,7 @@ fn a_public_read_spends_one_deadline_on_discovery_metadata_and_measurement() {
             Path::new(&root),
             &Default::default(),
             None,
+            None,
             &hide_host::worktrees::Measured::default(),
             false,
         )
@@ -169,6 +170,7 @@ fn a_locked_worktree_is_named_with_its_reason_and_manual_unlock_action_before_re
     let facts = hide_host::worktrees::read(
         &root,
         &Default::default(),
+        None,
         None,
         &hide_host::worktrees::Measured::default(),
         false,
@@ -645,4 +647,76 @@ fn draining_waits_only_for_the_entries_it_was_given() {
     assert_eq!(left, 0);
     assert!(!ours.exists());
     assert!(theirs.exists(), "an entry nobody named stays");
+}
+
+/// The repository's default branch is the one GitHub names when this clone
+/// has it, else `origin/HEAD`'s; `merged` is measured against that default,
+/// not against a branch's pull request base (PRD git-freshness D-06, D-07).
+#[test]
+fn the_default_branch_github_names_wins_over_origin_head_and_decides_merged() {
+    let repository = repository();
+    let root = repository.path();
+    git(root, &["branch", "develop"]);
+    git(root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(
+        root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    let linked_folder = tempfile::tempdir().unwrap();
+    let linked = linked_folder.path().join("feature");
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            linked.to_str().unwrap(),
+            "main",
+        ],
+    );
+    git(&linked, &["commit", "-q", "--allow-empty", "-m", "feature"]);
+    git(root, &["branch", "-f", "develop", "feature"]);
+    let read = |remote_default: Option<&str>| {
+        let bases = std::collections::BTreeMap::from([("feature".to_owned(), "main".to_owned())]);
+        let facts = hide_host::worktrees::read(
+            root,
+            &bases,
+            None,
+            remote_default,
+            &hide_host::worktrees::Measured::default(),
+            false,
+        )
+        .unwrap();
+        let feature = facts
+            .worktrees
+            .iter()
+            .find(|worktree| worktree.branch.as_deref() == Some("feature"))
+            .cloned()
+            .unwrap();
+        (facts, feature)
+    };
+
+    let (facts, feature) = read(Some("develop"));
+    assert_eq!(facts.default_branch.as_deref(), Some("develop"));
+    assert_eq!(facts.base_source, "github");
+    // Merged into the default branch even though its pull request's base
+    // (main) does not hold it; `ahead` still counts against that base.
+    assert_eq!(feature.merged, Some(true));
+    assert_eq!(feature.base_branch.as_deref(), Some("main"));
+    assert_eq!(feature.ahead, 1);
+
+    let (facts, feature) = read(None);
+    assert_eq!(facts.default_branch.as_deref(), Some("main"));
+    assert_eq!(facts.base_source, "origin_head");
+    assert_eq!(feature.merged, Some(false));
+
+    // A GitHub default this clone cannot resolve is not taken.
+    let (facts, _) = read(Some("release"));
+    assert_eq!(facts.default_branch.as_deref(), Some("main"));
 }

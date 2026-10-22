@@ -409,7 +409,8 @@ pub enum Call {
     },
     /// The worktrees of the repository that holds `path`
     /// (`hide_host::worktrees::read`), measured against `bases` or the
-    /// operator's `base_override`. `null` for a folder that is not a
+    /// operator's `base_override`, with `remote_default` the default branch
+    /// GitHub names, preferred over `origin/HEAD`. `null` for a folder that is not a
     /// repository. With `reuse_unchanged`, a worktree whose HEAD, index and
     /// base refs did not move since the node last measured it keeps that
     /// measurement; without it every worktree is measured again.
@@ -417,6 +418,8 @@ pub enum Call {
         path: String,
         bases: std::collections::BTreeMap<String, String>,
         base_override: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote_default: Option<String>,
         #[serde(default)]
         reuse_unchanged: bool,
     },

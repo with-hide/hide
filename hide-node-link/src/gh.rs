@@ -452,7 +452,7 @@ pub fn is_number(argument: &str) -> bool {
 /// update, each conditioned on the head commit the operator was shown.
 /// What a project's GitHub read asks of its repository: its name, the id a
 /// rename keeps, and whether it is public (`공개`, PRD overview-device-tasks D-35).
-pub const REPOSITORY_FIELDS: &str = "nameWithOwner,id,visibility";
+pub const REPOSITORY_FIELDS: &str = "nameWithOwner,id,visibility,defaultBranchRef";
 
 pub fn allowed(arguments: &[&str]) -> bool {
     arguments == ["auth", "status"]

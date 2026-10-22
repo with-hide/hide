@@ -1022,11 +1022,13 @@ pub fn handle_with_progress(
             path,
             bases,
             base_override,
+            remote_default,
             reuse_unchanged,
         } => to_value(worktrees::read(
             &absolute(&path)?,
             &bases,
             base_override.as_deref(),
+            remote_default.as_deref(),
             &env.worktrees,
             reuse_unchanged,
         )),

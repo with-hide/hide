@@ -432,6 +432,10 @@ impl Runtime {
                     &workspace.path,
                 )
                 .map(str::to_owned),
+                remote_default: self
+                    .github
+                    .project(&workspace.path)
+                    .and_then(|project| project.issues.default_branch.clone()),
                 bases: self
                     .github
                     .project(&workspace.path)
@@ -605,6 +609,21 @@ impl Runtime {
                     project
                 }),
         };
+        // The pull request list the sidebar judges merges from, for this
+        // machine's project; a node's has none here (`MergeBasis::heads`).
+        let base = listed
+            .as_ref()
+            .and_then(|project| project.base_branch.clone());
+        let merge = live::cleanup::MergeBasis {
+            heads: match node {
+                None => crate::worktrees::merged_heads(
+                    self.github.project(&workspace.path),
+                    base.as_deref(),
+                ),
+                Some(_) => None,
+            },
+            base,
+        };
         let worktrees = listed.iter().flat_map(|project| &project.worktrees);
         let current = match node {
             None => self
@@ -632,6 +651,7 @@ impl Runtime {
                     Some((PathBuf::from(&worktree.path), worktree.disk.total_bytes?))
                 })
                 .collect(),
+            merge,
         };
         Some((node.map(str::to_owned), input))
     }
@@ -926,7 +946,14 @@ impl Runtime {
                 })
                 .unwrap_or_default();
             project.pull_request_window = crate::github::PULL_REQUEST_LIMIT.into();
+            let merged_heads =
+                crate::worktrees::merged_heads(github_project, project.base_branch.as_deref());
             for worktree in &mut project.worktrees {
+                worktree.merged = crate::worktrees::merged(
+                    worktree.in_base,
+                    worktree.head_sha.as_deref(),
+                    merged_heads.as_ref(),
+                );
                 let panes = pane_rows.get(&worktree.path);
                 worktree.pane_count = panes.map_or(0, HashSet::len);
                 worktree.agent_line = worktree_agent_line(

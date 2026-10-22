@@ -824,6 +824,9 @@ fn ask_repositories(
                 path: root.clone(),
                 bases: Default::default(),
                 base_override: bases.get(root).cloned().flatten(),
+                // This core reads no pull requests of a device's repository,
+                // so its default is the device's `origin/HEAD`.
+                remote_default: None,
                 reuse_unchanged: false,
             },
             WORKTREES_TIMEOUT,

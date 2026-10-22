@@ -10,8 +10,8 @@
 //! or failed clone leaves no half-written folder under the target's name; the
 //! staging folder is removed on every exit path.
 //!
-//! No prompt can hold the run: Git is told never to ask on a terminal
-//! (`GIT_TERMINAL_PROMPT=0`) and `ssh` runs in batch mode, and a run whose
+//! No prompt can hold the run: Git starts through the node's one
+//! non-interactive launcher (`git_run`), and a run whose
 //! Git has printed nothing for [`STALL_LIMIT`] is ended as stalled, whatever
 //! the transport. A URL can carry credentials, so the URL itself is never in
 //! a message this module writes; callers log [`CloneSource::host`].
@@ -49,11 +49,6 @@ const LINE_CAP: usize = 400;
 /// `file` is a local repository, which is how the tests clone.
 const ALLOWED_PROTOCOLS: &str = "https:ssh:file";
 
-/// `ssh` never asks for a password or a host key, and a connection that stops
-/// answering is dropped by `ssh` itself.
-const SSH_COMMAND: &str =
-    "ssh -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4";
-
 /// Clones `source` into `parent/<name>` and answers the new folder. `cancel`
 /// is asked every [`POLL`]; answering true ends the run as cancelled.
 /// `progress` hears each change of stage or percent.
@@ -78,15 +73,12 @@ pub fn clone_repository(
     // killed mid-clone) has this process's id only by reuse; it is ours to
     // replace.
     staging.remove();
-    let mut command = hide_platform::programs::command("git");
+    let mut command = crate::git_run::command();
     command
         .args(["clone", "--progress", "--"])
         .arg(source.url())
         .arg(&staging.0)
         .current_dir(parent)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "never")
-        .env("GIT_SSH_COMMAND", SSH_COMMAND)
         .env("GIT_ALLOW_PROTOCOL", ALLOWED_PROTOCOLS)
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
