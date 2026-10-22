@@ -63,7 +63,7 @@ function savedViewFacts(read: SavedRead, fixture: string): unknown {
   const hash = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
   const metadata = { bytes: read.bytes.length, sha256: hash(read.bytes) };
   try {
-    const saved = JSON.parse(read.bytes.toString("utf8")) as { schema_version: number; workspaces: { path: string; open: boolean; documents: boolean; tool: string | null; pinned: boolean; layout: SavedLayout; agent_layout: SavedLayout }[] };
+    const saved = JSON.parse(read.bytes.toString("utf8")) as { schema_version: number; workspaces: { path: string; open: boolean; documents: boolean; tool: string | null; pinned: boolean; view_layout: SavedLayout; agent_view_layout: SavedLayout }[] };
     if (!Number.isInteger(saved.schema_version) || !Array.isArray(saved.workspaces)) throw new TypeError();
     const views = saved.workspaces.filter((view) => view.path.replaceAll("\\", "/") === fixture.replaceAll("\\", "/"));
     if (views.length !== 1) return { ...metadata, status: "workspace_match_error", schema_version: saved.schema_version, matches: views.length };
@@ -94,7 +94,7 @@ function savedViewFacts(read: SavedRead, fixture: string): unknown {
       const active_basename = activeArea?.displays.find((display) => display.id === activeArea.active)?.basename ?? null;
       return { active_area: identity(value.active_area), active_basename, display_count: areas.reduce((count, area) => count + area.displays.length, 0), areas };
     };
-    return { ...metadata, status: "read", schema_version: saved.schema_version, open: view.open, documents: view.documents, tool: view.tool, pinned: view.pinned, views: layout(view.layout), agents: layout(view.agent_layout) };
+    return { ...metadata, status: "read", schema_version: saved.schema_version, open: view.open, documents: view.documents, tool: view.tool, pinned: view.pinned, views: layout(view.view_layout), agents: layout(view.agent_layout) };
   } catch (error) {
     return { ...metadata, status: error instanceof SyntaxError ? "parse_error" : "shape_error" };
   }
@@ -140,8 +140,9 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await screenshot(page, "right-lane-documents-wide");
 
     // A tool opens beside the documents at a width of its own: the wide
-    // document leaves Memory at the default, and the tool's × leaves the
-    // documents at their width (B14, B17).
+    // document leaves Memory at the default, the column divider trades width
+    // between the two, and the tool's × leaves the documents at the width
+    // that trade left them (B14, B17).
     await railTool(page, "memory").click();
     await expect(page.locator("[data-lane-header]")).toContainText("Memory");
     await expect(screen(page)).toHaveAttribute("data-lane-shows", "memory");
@@ -162,7 +163,7 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     expect(await widened()).toBe(laneWide);
     await page.locator('[data-lane-tool-close="memory"]').click();
     await expect(screen(page)).toHaveAttribute("data-lane-shows", "none");
-    await expect.poll(widened).toBe(wide);
+    await expect.poll(widened).toBe(wide - 60);
     await expect(pane(page, lane.herdr.panes[0]!)).toBeVisible();
     expect(resizes(lane)).toBe(before);
 

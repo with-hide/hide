@@ -698,7 +698,7 @@ test("a drag or a tab menu begun on one Workspace ends when another client moves
     await choose(page, "fixture");
     await expect.poll(() => shape(page)).toBe("@(a.txt >c.txt)");
     await showDocuments(page);
-    const betaLayout = () => JSON.stringify(storedWorkspace(stack.daemon, betaRoot)?.layout ?? null);
+    const betaLayout = () => JSON.stringify(storedWorkspace(stack.daemon, betaRoot)?.view_layout ?? null);
     await expect.poll(betaLayout).toContain("b2.txt");
     const stored = betaLayout();
     const changes = () => viewEvents(stack).filter((event) => event.payload.action !== "focus" && event.payload.action !== "focus_area").length;
@@ -1163,7 +1163,7 @@ test("a checkout holds at most thirty-two views: opening one more closes its vie
   }
 });
 
-type StoredWorkspace = { device_id: string; path: string; open: boolean; documents: boolean; tool: string | null; pinned: boolean; document_width?: number; explorer_width?: number; layout: unknown };
+type StoredWorkspace = { device_id: string; path: string; open: boolean; documents: boolean; tool: string | null; pinned: boolean; document_width?: number; explorer_width?: number; view_layout: unknown };
 
 /** This Workspace's entry in `workspace-views.json`, without the clock stamps a focus writes. */
 function storedWorkspace(daemon: Daemon, root: string): StoredWorkspace | null {
@@ -1194,7 +1194,7 @@ test("a window too narrow to dock opens the pinned lane over the agents with one
     await expect(divider).toHaveAttribute("aria-valuenow", "45");
     const workspace = page.locator("[data-workspace-screen]");
     await expect(workspace).toHaveAttribute("data-lane-view", "documents");
-    await expect.poll(() => (storedWorkspace(stack.daemon, stack.root)?.layout as { root?: { split?: { ratio?: number } } } | undefined)?.root?.split?.ratio).toBeCloseTo(0.45);
+    await expect.poll(() => (storedWorkspace(stack.daemon, stack.root)?.view_layout as { root?: { split?: { ratio?: number } } } | undefined)?.root?.split?.ratio).toBeCloseTo(0.45);
     const sentBefore = stack.events.filter((event) => event.kind === "workspace_view").length;
     const sidebar = (await boxOf(page.locator("[data-lane-row]"))).x;
 
@@ -1297,7 +1297,7 @@ test("a restart brings the View areas back as they were, and a file gone meanwhi
     expect(before).toBe("(a.txt >c.txt*) | (>b.txt) | @(d.txt >e.txt)");
     await expect.poll(() => storedWorkspace(stack.daemon, stack.root)).toMatchObject({ open: true, documents: true, tool: "explorer", pinned: true });
     await expect
-      .poll(() => JSON.stringify(storedWorkspace(stack.daemon, stack.root)?.layout))
+      .poll(() => JSON.stringify(storedWorkspace(stack.daemon, stack.root)?.view_layout))
       .toMatch(/"ratio":0\.45.*"ratio":0\.55/);
     const panes = herdrIds(stack.herdr);
     await screenshot(page, "s7-restore-before");
@@ -1415,9 +1415,9 @@ test("a broken or unknown Views file is kept aside for Main and a fresh layout, 
     await screenshot(page, "s7-recover-migrated");
     await tab(page, "a.txt").click();
     await expect.poll(() => {
-      const stored = JSON.parse(fs.readFileSync(viewsFile(stack.daemon), "utf8")) as { schema_version: number; workspaces: { path: string; layout?: { root?: { area?: { displays?: { path: string; preview: boolean }[] } } } }[] };
+      const stored = JSON.parse(fs.readFileSync(viewsFile(stack.daemon), "utf8")) as { schema_version: number; workspaces: { path: string; view_layout?: { root?: { area?: { displays?: { path: string; preview: boolean }[] } } } }[] };
       const entry = stored.workspaces.find((candidate) => candidate.path === stack.root);
-      return { version: stored.schema_version, displays: entry?.layout?.root?.area?.displays?.map((display) => `${path.basename(display.path)}${display.preview ? "*" : ""}`) };
+      return { version: stored.schema_version, displays: entry?.view_layout?.root?.area?.displays?.map((display) => `${path.basename(display.path)}${display.preview ? "*" : ""}`) };
     }).toEqual({ version: 3, displays: ["a.txt", "b.txt", "c.txt*"] });
     expectFrontWorkspaceOnEveryViewEvent(stack);
   } finally {

@@ -35,7 +35,7 @@ test("close follows the keyboard and the lane never renders an empty surface", a
     await expect(screen).toHaveAttribute("data-lane-view", "none");
     await expect(page.locator("[data-explorer-tree]")).toBeFocused();
     await expect(screen).toHaveAttribute("data-lane-mode", "overlay");
-    await expect(page.locator('[data-lane-frame] [data-view-area]:not([data-lane-hidden])')).toHaveCount(0);
+    await expect(page.locator("[data-lane-frame] [data-view-area]")).toHaveCount(0);
     await screenshot(page, "close-view-explorer-alone");
 
     // The tool column owns the keyboard: no View or terminal close is allowed (B16).

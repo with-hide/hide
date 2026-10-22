@@ -69,8 +69,8 @@ async function unfold(card: Locator, section: "files"): Promise<void> {
 
 test("the PRs tool groups by whose move it is and says why on each row", async ({ page }) => {
   await openWork(page, async ({ work }) => {
-    // The rail is Memory · PRs | Files · Changes, PRs pressed (B23).
-    await expect(page.locator("[data-lane-tool]")).toHaveCount(4);
+    // The rail is the documents button, then Memory · PRs | Explorer · Changes, PRs pressed (B23; PRD lane-two-columns B2).
+    await expect(page.locator("[data-lane-tool]")).toHaveCount(5);
     await expect(page.locator('[data-lane-tool="prs"]')).toHaveAttribute("aria-pressed", "true");
     // The PRs icon carries the number of its Needs You rows: the three Needs You PRs (B29).
     await expect(page.locator('[data-lane-tool="prs"] [data-lane-prs-count]')).toHaveText("3");
@@ -255,10 +255,11 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
     expect(sent.get("pr_merge")).toBe(1);
     expect(last.get("pr_merge")).toMatchObject({ pr_number: 31, head: head(gh.state, 31) });
     expect(writes(gh.state)).toEqual([["pr", "merge", "31", "--merge", "--match-head-commit", head(gh.state, 31)]]);
-    // The merged pull request's card draws no Merge, and the rail's PRs icon
-    // brings the list back with it out of Needs You.
+    // The merged pull request's card draws no Merge, and the list, still in
+    // the tool column beside the card (PRD lane-two-columns B9), has it out
+    // of Needs You.
     await expect(card.locator("[data-pr-card-merge]")).toHaveCount(0);
-    await page.locator('[data-lane-tool="prs"]').click();
+    await expect(card).toBeVisible();
     await expect(work.locator('[data-pr-group="needs_you"] [data-pr]').first()).toBeVisible();
     await expect(work.locator('[data-pr-group="needs_you"] [data-pr="31"]')).toHaveCount(0);
     await work.locator('[data-pr-group="merged"] [data-pr-focus="group"]').click();
