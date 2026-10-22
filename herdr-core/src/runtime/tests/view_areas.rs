@@ -4,6 +4,7 @@ use super::workspace_view::{
 use super::*;
 use crate::model::{ViewDisplaySnapshot, ViewDisplayState, ViewLayoutSnapshot, ViewNodeSnapshot};
 use crate::workspace_control::Action;
+use crate::workspace_views::Tool;
 
 // PRD S7: a Workspace's View areas hold displays of documents; where an open
 // lands, what the operator's layout actions do, how a display follows its
@@ -1144,7 +1145,7 @@ fn closing_the_last_display_of_a_dirty_document_saves_it_first() {
         );
         // The lane waits on the save with the view it shows.
         let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-        assert_eq!(view.tool, Some(crate::workspace_views::Tool::Files));
+        assert!(view.open && view.documents);
         runtime.dispatch_json(&explorer_event(
             "file_conflict",
             serde_json::json!({"tab_id": tab_id, "action": "keep_editing"}),
@@ -1158,16 +1159,12 @@ fn closing_the_last_display_of_a_dirty_document_saves_it_first() {
     let mut runtime = shared.lock().unwrap();
     let emptied = tree(&mut runtime);
     assert_eq!(emptied.display_count, 0);
-    // B10: the last area stays, empty; with the tree off, the lane closes
-    // once the save has landed and keeps Files to reopen on (PRD right-lane
-    // B12).
+    // B10: the last area stays, empty; the viewing column closes once the
+    // save has landed, and the lane with it, there being no tool column
+    // (PRD lane-two-columns B12).
     assert!(matches!(emptied.root, ViewNodeSnapshot::Area(_)));
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-    assert!(!view.tree);
-    assert_eq!(
-        (view.tool, view.last_tool),
-        (None, Some(crate::workspace_views::Tool::Files))
-    );
+    assert_eq!((view.documents, view.tool), (false, None));
 }
 
 /// B5: a draft in one display keeps every display of that document open.
@@ -1423,7 +1420,7 @@ fn a_restart_restores_the_view_tree_and_marks_a_missing_file_unavailable() {
     );
     layout(
         &mut runtime,
-        serde_json::json!({"tool": "changes", "pinned": true, "tree": true}),
+        serde_json::json!({"tool": "changes", "pinned": true, "explorer_width": 300}),
     );
     let before = tree(&mut runtime);
     drop(runtime);
@@ -1475,8 +1472,13 @@ fn a_restart_restores_the_view_tree_and_marks_a_missing_file_unavailable() {
     );
     let view = restarted.snapshot.workspace_view.clone().unwrap();
     assert_eq!(
-        (view.tool, view.pinned, view.tree),
-        (Some(crate::workspace_views::Tool::Changes), true, true)
+        (view.documents, view.tool, view.pinned, view.explorer_width),
+        (
+            true,
+            Some(crate::workspace_views::Tool::Changes),
+            true,
+            Some(300)
+        )
     );
     assert_eq!(active_label(&restarted).as_deref(), Some("a.md"));
 
@@ -1660,7 +1662,7 @@ fn a_schema_1_views_file_migrates_into_one_area() {
     );
     let written: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
-    assert_eq!(written["schema_version"], 3);
+    assert_eq!(written["schema_version"], 4);
 }
 
 /// Contract 3.1, B19: the documents on screen ride their own section, each
@@ -1770,8 +1772,11 @@ fn the_changes_read_takes_every_diff_on_screen() {
             .collect::<Vec<_>>()
     );
 
-    layout(&mut runtime, serde_json::json!({"tool": null}));
-    assert!(diffs(&mut runtime).is_empty());
+    layout(&mut runtime, serde_json::json!({"open": false}));
+    assert!(
+        diffs(&mut runtime).is_empty(),
+        "a closed lane reads no diff"
+    );
 }
 
 /// B4, B10: Open to the side with no view open has nothing to stand beside,
@@ -2077,10 +2082,15 @@ fn a_pull_request_card_opens_in_the_detail_slot_and_never_as_a_view() {
         runtime.snapshot.ui_state.detail.items,
         vec![item(42), item(43)]
     );
-    layout(&mut runtime, serde_json::json!({"tool": "files"}));
+    layout(&mut runtime, serde_json::json!({"tool": "changes"}));
+    assert!(
+        runtime.snapshot.ui_state.detail.shown,
+        "a tool called draws in the tool column and leaves the slot in front (lane-two-columns B9)"
+    );
+    layout(&mut runtime, serde_json::json!({"documents": true}));
     assert!(
         !runtime.snapshot.ui_state.detail.shown,
-        "a tool called hides the slot and keeps what it holds"
+        "the documents brought in front hide the slot and keep what it holds"
     );
     assert_eq!(runtime.snapshot.ui_state.detail.items.len(), 2);
     assert!(runtime.dispatch_json(&explorer_event(
@@ -2089,8 +2099,8 @@ fn a_pull_request_card_opens_in_the_detail_slot_and_never_as_a_view() {
     )));
     assert!(runtime.dispatch_json(&explorer_event("detail_back", serde_json::json!({}))));
     assert_eq!(runtime.snapshot.ui_state.detail.items, vec![item(42)]);
-    // A changed file opened from the card shows in the checkout's Files, and the
-    // card keeps its rail slot to come back to (B49).
+    // A changed file opened from the card shows as a document in front of
+    // the card, which keeps its rail slot to come back to (B49).
     open(
         &mut runtime,
         &checkout_id,
@@ -2098,10 +2108,7 @@ fn a_pull_request_card_opens_in_the_detail_slot_and_never_as_a_view() {
         false,
         false,
     );
-    assert_eq!(
-        runtime.snapshot.workspace_view.as_ref().unwrap().tool,
-        Some(crate::workspace_views::Tool::Files)
-    );
+    assert!(runtime.snapshot.workspace_view.as_ref().unwrap().documents);
     assert!(!runtime.snapshot.ui_state.detail.shown);
     assert_eq!(runtime.snapshot.ui_state.detail.items, vec![item(42)]);
     // The slot is the window's: an open in a Workspace behind the one in
@@ -2112,7 +2119,7 @@ fn a_pull_request_card_opens_in_the_detail_slot_and_never_as_a_view() {
     )));
     runtime.apply_area_intent_to(
         &("local".to_owned(), "/elsewhere".to_owned()),
-        AreaIntent::Files,
+        AreaIntent::Documents,
     );
     assert!(runtime.snapshot.ui_state.detail.shown);
     assert!(runtime.dispatch_json(&explorer_event("detail_close", serde_json::json!({}))));
@@ -2126,6 +2133,204 @@ fn a_pull_request_card_opens_in_the_detail_slot_and_never_as_a_view() {
         Some("pr_open.unknown_pull_request")
     );
     assert!(runtime.snapshot.ui_state.detail.items.is_empty());
+}
+
+/// PRD lane-two-columns B15, B22: a lane closed whole keeps the 보기 slot
+/// shown, so ⌘E brings the card back, beside its tool or alone; and the
+/// rail's 보기 button opens a closed lane while the slot is already shown,
+/// as after a checkout change into a lane that never opened.
+#[test]
+fn closing_the_lane_whole_keeps_the_card_and_the_slot_button_opens_a_closed_lane() {
+    let (mut runtime, _checkout_id, _directory) = views_runtime("lane-close-card");
+    layout(&mut runtime, serde_json::json!({"tool": null}));
+    let pull: crate::model::PullRequestSnapshot = serde_json::from_value(serde_json::json!({
+        "number":42,"title":"Ship","url":"https://github.com/acme/app/pull/42",
+        "head_branch":"feature-42","base_branch":"main","badge":"open","checks":"passing",
+        "is_draft":false,"closing_issues":[]
+    }))
+    .unwrap();
+    runtime.snapshot.navigator.workspaces[0].pull_requests = vec![pull];
+    assert!(runtime.dispatch_json(&explorer_event(
+        "pr_open",
+        serde_json::json!({"workspace_id": "workspace:order", "pr_number": 42}),
+    )));
+    let lane = |runtime: &Runtime| {
+        let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+        (
+            view.open,
+            view.documents,
+            view.tool,
+            runtime.snapshot.ui_state.detail.shown,
+        )
+    };
+    // The card beside Changes: ⌘E closes both and brings both back.
+    layout(&mut runtime, serde_json::json!({"tool": "changes"}));
+    assert_eq!(lane(&runtime), (true, false, Some(Tool::Changes), true));
+    layout(&mut runtime, serde_json::json!({"open": false}));
+    assert_eq!(lane(&runtime), (false, false, Some(Tool::Changes), true));
+    layout(&mut runtime, serde_json::json!({"open": true}));
+    assert_eq!(lane(&runtime), (true, false, Some(Tool::Changes), true));
+    // The card alone: no column of the Workspace's own, and the reopen
+    // draws the slot rather than choosing the Explorer.
+    layout(&mut runtime, serde_json::json!({"tool": null}));
+    layout(&mut runtime, serde_json::json!({"open": false}));
+    assert_eq!(lane(&runtime), (false, false, None, true));
+    layout(&mut runtime, serde_json::json!({"open": true}));
+    assert_eq!(lane(&runtime), (true, false, None, true));
+    // The slot shown in a closed lane: the button opens the lane (B22).
+    layout(&mut runtime, serde_json::json!({"open": false}));
+    let calls = runtime
+        .snapshot
+        .workspace_view
+        .as_ref()
+        .unwrap()
+        .lane_called;
+    assert!(runtime.dispatch_json(&explorer_event(
+        "detail_show",
+        serde_json::json!({"shown": true})
+    )));
+    assert_eq!(lane(&runtime), (true, false, None, true));
+    let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+    assert!(
+        view.lane_called > calls,
+        "the button is a call that shows the lane"
+    );
+    assert_eq!(view.lane_called_side, crate::model::LaneCallSide::View);
+    // The documents brought in front still hide the slot (B10).
+    layout(&mut runtime, serde_json::json!({"documents": true}));
+    assert!(!runtime.snapshot.ui_state.detail.shown);
+}
+
+/// PRD lane-two-columns B9, B19: with the lane already open on a tool, a
+/// card opened, the rail's button on a shown slot and ← are each a call
+/// the viewing column's, so a stacked lane draws the slot over the tool
+/// instead of leaving it behind.
+#[test]
+fn every_way_the_slot_comes_forward_is_a_viewing_column_call() {
+    use crate::model::LaneCallSide;
+    let (mut runtime, _checkout_id, _directory) = views_runtime("lane-slot-forward");
+    let pulls: Vec<crate::model::PullRequestSnapshot> = [42, 43]
+        .into_iter()
+        .map(|number| {
+            serde_json::from_value(serde_json::json!({
+                "number":number,"title":"Ship","url":format!("https://github.com/acme/app/pull/{number}"),
+                "head_branch":format!("feature-{number}"),"base_branch":"main","badge":"open","checks":"passing",
+                "is_draft":false,"closing_issues":[]
+            }))
+            .unwrap()
+        })
+        .collect();
+    runtime.snapshot.navigator.workspaces[0].pull_requests = pulls;
+    let called = |runtime: &Runtime| {
+        let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+        (
+            view.open,
+            view.tool,
+            view.lane_called,
+            view.lane_called_side,
+        )
+    };
+    layout(&mut runtime, serde_json::json!({"tool": "prs"}));
+    let (_, _, tool_call, _) = called(&runtime);
+    for (step, event, payload) in [
+        (
+            "a card",
+            "pr_open",
+            serde_json::json!({"workspace_id": "workspace:order", "pr_number": 42}),
+        ),
+        (
+            "a second card",
+            "pr_open",
+            serde_json::json!({"workspace_id": "workspace:order", "pr_number": 43}),
+        ),
+        (
+            "the button on a shown slot",
+            "detail_show",
+            serde_json::json!({"shown": true}),
+        ),
+        ("←", "detail_back", serde_json::json!({})),
+    ] {
+        let before = called(&runtime).2;
+        assert!(
+            runtime.dispatch_json(&explorer_event(event, payload)),
+            "{step}"
+        );
+        let (open, tool, after, side) = called(&runtime);
+        assert!(
+            after > before,
+            "{step} is a call with the lane already open"
+        );
+        assert_eq!(
+            (open, tool, side),
+            (true, Some(Tool::Prs), LaneCallSide::View),
+            "{step}"
+        );
+        assert!(runtime.snapshot.ui_state.detail.shown, "{step}");
+    }
+    assert!(called(&runtime).2 > tool_call);
+}
+
+/// PRD lane-two-columns B8, B19: a call records which column it brought
+/// forward, so a reveal into the Explorer the tool column already shows is
+/// read as the tool column's, not guessed from a tool that did not change.
+#[test]
+fn a_lane_call_records_the_column_it_brought_forward() {
+    let (mut runtime, checkout_id, directory) = views_runtime("lane-call-side");
+    files(&directory, &["notes.md"]);
+    let side = |runtime: &Runtime| {
+        let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+        (view.lane_called, view.lane_called_side)
+    };
+    use crate::model::LaneCallSide;
+    layout(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    let (first, tool_side) = side(&runtime);
+    assert_eq!(tool_side, LaneCallSide::Tool);
+    open(
+        &mut runtime,
+        &checkout_id,
+        &directory.join("notes.md"),
+        false,
+        false,
+    );
+    let (second, view_side) = side(&runtime);
+    assert!(second > first);
+    assert_eq!(
+        view_side,
+        LaneCallSide::View,
+        "an open is the viewing column's"
+    );
+    layout(
+        &mut runtime,
+        serde_json::json!({"reveal": directory.join("notes.md").to_string_lossy()}),
+    );
+    let (third, reveal_side) = side(&runtime);
+    assert!(
+        third > second,
+        "a reveal into the shown Explorer is still a call"
+    );
+    assert_eq!(reveal_side, LaneCallSide::Tool, "and the tool column's");
+    layout(&mut runtime, serde_json::json!({"documents": true}));
+    assert_eq!(side(&runtime).1, LaneCallSide::View);
+    // A folder a terminal link names shows in the Explorer the tool column
+    // already holds: the tool column's call again (B8).
+    std::fs::create_dir_all(directory.join("docs")).expect("fixture folder");
+    runtime.dispatch_json(&reveal_event(
+        "workspace:order",
+        &checkout_id,
+        &directory.join("docs"),
+        true,
+    ));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    let (fourth, folder_side) = side(&runtime);
+    assert!(fourth > third, "a folder link is a call");
+    assert_eq!(folder_side, LaneCallSide::Tool, "and the tool column's");
+    layout(&mut runtime, serde_json::json!({"open": false}));
+    layout(&mut runtime, serde_json::json!({"open": true}));
+    assert_eq!(
+        side(&runtime).1,
+        LaneCallSide::View,
+        "⌘E brings the viewing column forward"
+    );
 }
 
 /// A page's own new tab (a `target=_blank` link, an image a page wraps in
@@ -2262,7 +2467,7 @@ fn a_page_opens_in_the_workspace_of_the_pane_that_asked_and_once_per_address() {
     );
     assert!(page.load > 0);
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-    assert_eq!(view.tool, Some(crate::workspace_views::Tool::Files));
+    assert!(view.open && view.documents);
 
     // The front Workspace, named by nothing, shows the page again.
     assert!(browser_open(
@@ -2357,10 +2562,7 @@ fn a_browser_open_reveals_its_checkout_only_when_asked() {
         .try_into()
         .expect("the revealed page");
     assert_eq!(page.url.as_deref(), Some(url));
-    assert_eq!(
-        runtime.snapshot.workspace_view.as_ref().unwrap().tool,
-        Some(crate::workspace_views::Tool::Files)
-    );
+    assert!(runtime.snapshot.workspace_view.as_ref().unwrap().documents);
 
     let before = runtime.snapshot.navigator.focused_checkout_id.clone();
     assert!(browser_open(
@@ -2572,11 +2774,7 @@ fn a_checkout_focus_naming_a_display_brings_it_forward_on_that_display() {
         .clone()
         .expect("a front Workspace");
     assert_eq!(view.path, directory.to_string_lossy());
-    assert_eq!(
-        view.tool,
-        Some(crate::workspace_views::Tool::Files),
-        "the files lane opens again"
-    );
+    assert!(view.open && view.documents, "the documents open again");
     let (_, active, _) = areas(&view.layout).remove(0);
     assert_eq!(active.as_deref(), Some(a.as_str()));
     drop(other);
@@ -2664,7 +2862,7 @@ fn a_reveal_calls_the_lane_of_its_own_checkout() {
         let mut numbered: Vec<_> = store
             .lane_called
             .iter()
-            .map(|((_, path), number)| (path.clone(), *number))
+            .map(|((_, path), (number, _))| (path.clone(), *number))
             .collect();
         numbered.sort();
         (store.lane_calls, numbered)
@@ -2683,9 +2881,9 @@ fn a_reveal_calls_the_lane_of_its_own_checkout() {
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(view.path, other.to_string_lossy());
     assert_eq!(
-        (view.tool, view.tree),
-        (Some(crate::workspace_views::Tool::Files), false),
-        "the reveal opens the files lane there and leaves the tree off (B16)"
+        (view.open, view.documents, view.tool),
+        (true, true, None),
+        "the reveal shows the document there and opens no tool (B16, lane-two-columns B6)"
     );
     assert_eq!(
         view.lane_called,
@@ -2775,10 +2973,7 @@ fn a_file_of_another_checkout_opens_in_the_views_in_front_and_moves_no_checkout(
     assert_eq!(front_view(&mut runtime), front);
     assert_eq!(labels(&mut runtime), vec![vec!["notes.md", "shot.md"]]);
     assert_eq!(active_label(&runtime).as_deref(), Some("shot.md"));
-    assert_eq!(
-        runtime.snapshot.workspace_view.as_ref().unwrap().tool,
-        Some(crate::workspace_views::Tool::Files)
-    );
+    assert!(runtime.snapshot.workspace_view.as_ref().unwrap().documents);
     assert_eq!(runtime.snapshot.ui_state.selected_path, selected);
     let tab = runtime
         .snapshot

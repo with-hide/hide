@@ -17,12 +17,12 @@ import { startHerdr } from "./herdr-fixture";
 import { startHided } from "./hided-fixture";
 import { fakeGh, git, head, moveHead, skewCardHead, writes, type ExtraQuery } from "./work-prs-fixture";
 import { chord } from "./chords";
-import { chooseTheme, countSent, screenshot, showProjectRow, showTool } from "./wire";
+import { chooseTheme, countSent, registerFolder, screenshot, showProjectRow, showTool, setLanePinned } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
 /** A project on a private Herdr and hided with the fake `gh`, the PRs tool open. */
-async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>> }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean } = {}): Promise<void> {
+async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: string }; work: Locator; sent: Map<string, number>; last: Map<string, Record<string, unknown>>; daemon: { origin: string; token: string; home: string } }) => Promise<void>, options: { failing?: ExtraQuery[]; teamAsk?: boolean } = {}): Promise<void> {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const herdr = await startHerdr();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
@@ -50,7 +50,7 @@ async function openWork(page: Page, fn: (stack: { gh: { bin: string; state: stri
     await showTool(page, "prs");
     const work = page.locator('aside[data-lane="prs"]');
     await expect(work.locator("[data-pr-group]").first()).toBeVisible({ timeout: 30_000 });
-    await fn({ gh, work, sent, last });
+    await fn({ gh, work, sent, last, daemon });
   } finally {
     daemon?.stop();
     herdr.stop();
@@ -69,8 +69,8 @@ async function unfold(card: Locator, section: "files"): Promise<void> {
 
 test("the PRs tool groups by whose move it is and says why on each row", async ({ page }) => {
   await openWork(page, async ({ work }) => {
-    // The rail is Memory · PRs | Files · Changes, PRs pressed (B23).
-    await expect(page.locator("[data-lane-tool]")).toHaveCount(4);
+    // The rail is the documents button, then Memory · PRs | Explorer · Changes, PRs pressed (B23; PRD lane-two-columns B2).
+    await expect(page.locator("[data-lane-tool]")).toHaveCount(5);
     await expect(page.locator('[data-lane-tool="prs"]')).toHaveAttribute("aria-pressed", "true");
     // The PRs icon carries the number of its Needs You rows: the three Needs You PRs (B29).
     await expect(page.locator('[data-lane-tool="prs"] [data-lane-prs-count]')).toHaveText("3");
@@ -218,7 +218,7 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
     // The rail's slot button draws the card's PR mark in its state and stands
     // apart from the tools by one rule, so it is not read as a second PRs (B46).
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? "divider"));
-    expect(rail).toEqual(["detail", "divider", "memory", "prs", "divider", "files", "changes"]);
+    expect(rail).toEqual(["detail", "documents", "divider", "memory", "prs", "divider", "explorer", "changes"]);
     await expect(page.locator('[data-lane-tool="detail"] [data-detail-mark]')).toHaveAttribute("data-detail-mark", "mergeable");
     await expect(card.locator('[data-pr-card-reason="merge"]')).toBeVisible();
     // Issue linking lives in the menu and hands focus to its picker.
@@ -255,14 +255,84 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
     expect(sent.get("pr_merge")).toBe(1);
     expect(last.get("pr_merge")).toMatchObject({ pr_number: 31, head: head(gh.state, 31) });
     expect(writes(gh.state)).toEqual([["pr", "merge", "31", "--merge", "--match-head-commit", head(gh.state, 31)]]);
-    // The merged pull request's card draws no Merge, and the rail's PRs icon
-    // brings the list back with it out of Needs You.
+    // The merged pull request's card draws no Merge, and the list, still in
+    // the tool column beside the card (PRD lane-two-columns B9), has it out
+    // of Needs You.
     await expect(card.locator("[data-pr-card-merge]")).toHaveCount(0);
-    await page.locator('[data-lane-tool="prs"]').click();
+    await expect(card).toBeVisible();
     await expect(work.locator('[data-pr-group="needs_you"] [data-pr]').first()).toBeVisible();
     await expect(work.locator('[data-pr-group="needs_you"] [data-pr="31"]')).toHaveCount(0);
     await work.locator('[data-pr-group="merged"] [data-pr-focus="group"]').click();
     await expect(work.locator('[data-pr-group="merged"] [data-pr="31"]')).toHaveCount(1);
+  });
+});
+
+test("the lane chord brings the card back with its tool and alone, and the slot button opens another checkout's closed lane (lane-two-columns B15, B22)", async ({ page }) => {
+  await openWork(page, async ({ work, daemon }) => {
+    const screen = page.locator("[data-workspace-screen]");
+    const slot = page.locator('[data-lane-tool="detail"]');
+    await work.locator('[data-pr-row="31"]').click();
+    const card = cardOf(page, 31);
+    await expect(card).toBeVisible({ timeout: 30_000 });
+    await expect(screen).toHaveAttribute("data-lane-shows", "prs");
+
+    // Closed whole beside the PRs tool, the chord brings both back (B15).
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(screen).toHaveAttribute("data-lane-mode", "closed");
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(card).toBeVisible();
+    await expect(screen).toHaveAttribute("data-lane-shows", "prs");
+
+    // The card alone, its tool column folded by the PRs icon, comes back alone.
+    await page.locator('[data-lane-tool="prs"]').click();
+    await expect(screen).toHaveAttribute("data-lane-shows", "none");
+    await expect(card).toBeVisible();
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(screen).toHaveAttribute("data-lane-mode", "closed");
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(card).toBeVisible();
+    await expect(screen).toHaveAttribute("data-lane-shows", "none");
+
+    // A checkout whose lane was never opened: the window's slot still holds
+    // the card, and its button opens that checkout's lane on it (B22).
+    const other = path.join(daemon.home, "projects", "other");
+    fs.mkdirSync(other, { recursive: true });
+    fs.writeFileSync(path.join(other, "README.md"), "# other\n");
+    await registerFolder(page, daemon, other);
+    await expect(page.locator("[data-project]")).toHaveCount(2, { timeout: 20_000 });
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "other" }).locator("[data-checkout]").first())).click();
+    await expect(screen).toHaveAttribute("data-lane-mode", "closed");
+    await expect(slot).toHaveAttribute("aria-pressed", "false");
+    await slot.click();
+    await expect(card).toBeVisible();
+    await expect(slot).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+test("in a stacked lane with the PRs tool in front, a row brings its card forward over the tool (lane-two-columns B9, B19)", async ({ page }) => {
+  await openWork(page, async ({ work }) => {
+    const screen = page.locator("[data-workspace-screen]");
+    // A document in the viewing column and the PRs tool, pinned, in a body
+    // with room for one column only: the lane stacks with the tool in front.
+    await showTool(page, "explorer");
+    await page.locator('[data-explorer-row$="/README.md"]').dblclick();
+    await expect(screen).toHaveAttribute("data-lane-view", "documents");
+    await showTool(page, "prs");
+    await setLanePinned(page, true);
+    await page.setViewportSize({ width: 1100, height: 1000 });
+    await expect(screen).toHaveAttribute("data-lane-stacked", "true");
+    await expect(screen).toHaveAttribute("data-lane-shows", "prs");
+    await expect(screen).toHaveAttribute("data-lane-view", "none");
+    await work.locator('[data-pr-row="31"]').click();
+    await expect(cardOf(page, 31)).toBeVisible({ timeout: 30_000 });
+    await expect(screen).toHaveAttribute("data-lane-view", "detail");
+    await expect(screen).toHaveAttribute("data-lane-shows", "none");
+    // The PRs icon brings the tool back in front, and the slot button the card.
+    await showTool(page, "prs");
+    await expect(screen).toHaveAttribute("data-lane-view", "none");
+    await page.locator('[data-lane-tool="detail"]').click();
+    await expect(cardOf(page, 31)).toBeVisible();
+    await expect(screen).toHaveAttribute("data-lane-view", "detail");
   });
 });
 
@@ -300,9 +370,7 @@ test("a branch update on a pull request that moved is refused, looked at again, 
 test("the list and the card read without sideways scrolling in each language and both themes", async ({ page }) => {
   await openWork(page, async ({ work }) => {
     // The lane opens unpinned, over the agents; a pinned one would dock and redraw under the keys.
-    // The pin is in the tool's head, so it is read before the card takes the slot, whose head has none.
-    if ((await page.locator("[data-lane-pin]").getAttribute("data-lane-pin")) !== "off") await page.locator("[data-lane-pin]").click();
-    await expect(page.locator("[data-lane-pin]")).toHaveAttribute("data-lane-pin", "off");
+    await setLanePinned(page, false);
     await work.locator('[data-pr-row="33"]').click();
     const review = cardOf(page, 33);
     await expect(review).toBeVisible({ timeout: 30_000 });

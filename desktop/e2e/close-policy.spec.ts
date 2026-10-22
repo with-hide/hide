@@ -57,8 +57,9 @@ test("Command W closes the keyboard's display or pane, never its tab", async () 
     await page.keyboard.press("Meta+KeyW");
     await expect(editor).toHaveCount(0);
     await expect(page.locator("[data-pane-view]")).toHaveCount(2);
-    // The last view closed leaves the tree filling the lane (PRD right-lane B12).
-    await expect(page.locator('[data-lane-tree="only"] [data-explorer]')).toBeVisible();
+    // The last view closed leaves the Explorer alone in its column (PRD lane-two-columns B12).
+    await expect(page.locator('[data-lane="explorer"] [data-explorer]')).toBeVisible();
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "none");
     capture("native-close-view-tree");
     await page.locator('[data-explorer-row$="/notes.md"]').focus();
     await page.keyboard.press("Meta+KeyW");

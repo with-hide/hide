@@ -124,7 +124,7 @@ export type CommandId =
   | "toggle_lane"
   | "toggle_sidebar_lens"
   | LaneToolCommandId
-  | "toggle_file_tree"
+  | "toggle_lane_documents"
   | "keep_open"
   | "find_in_pane"
   | "save_file"
@@ -167,22 +167,22 @@ export type AreaCommandId = (typeof AREA_COMMANDS)[number];
  * One command per rail icon (PRD lane-last-tool-chords; PRD sidebar-task-lens
  * D-19, D-29): the lane opens on that tool, or closes when it already shows
  * it, as pressing the icon does. Each tool's chord is a letter of its name
- * (⇧⌘L Memory, ⇧⌘R PRs, ⇧⌘G Changes), Alt+Shift with the same letter
- * elsewhere; Files has none of its own because ⇧⌘E opens it with its tree.
- * In a browser tab Chrome keeps ⇧⌘R (reload), so PRs moves to ⌥⇧R.
+ * (⇧⌘L Memory, ⇧⌘R PRs, ⇧⌘E Explorer, ⇧⌘G Changes), Alt+Shift with the
+ * same letter elsewhere (PRD lane-two-columns D-08). In a browser tab Chrome
+ * keeps ⇧⌘R (reload), so PRs moves to ⌥⇧R.
  */
 export type LaneToolCommandId = `toggle_lane_${Tool}`;
 export const LANE_TOOL_COMMANDS: readonly LaneToolCommandId[] = TOOLS.map((tool): LaneToolCommandId => `toggle_lane_${tool}`);
 const LANE_TOOL_TITLES: Record<LaneToolCommandId, string> = {
   toggle_lane_memory: "Toggle Memory tool",
   toggle_lane_prs: "Toggle PRs tool",
-  toggle_lane_files: "Toggle Files tool",
+  toggle_lane_explorer: "Toggle Explorer tool",
   toggle_lane_changes: "Toggle Changes tool",
 };
 const LANE_TOOL_CHORDS: Record<LaneToolCommandId, { browser: Chord | null; electron: Chord | null; moved: boolean }> = {
   toggle_lane_memory: { browser: { code: "KeyL", meta: true, shift: true }, electron: { code: "KeyL", meta: true, shift: true }, moved: false },
   toggle_lane_prs: { browser: { code: "KeyR", alt: true, shift: true }, electron: { code: "KeyR", meta: true, shift: true }, moved: true },
-  toggle_lane_files: { browser: null, electron: null, moved: false },
+  toggle_lane_explorer: { browser: { code: "KeyE", meta: true, shift: true }, electron: { code: "KeyE", meta: true, shift: true }, moved: false },
   toggle_lane_changes: { browser: { code: "KeyG", meta: true, shift: true }, electron: { code: "KeyG", meta: true, shift: true }, moved: false },
 };
 
@@ -274,7 +274,8 @@ export const REGISTRY: readonly Command[] = [
   { id: "toggle_device_rail", title: "Toggle device rail", group: "Panels", browser: null, electron: null, moved: false },
   { id: "toggle_lane", title: "Toggle right lane", group: "Panels", browser: { code: "KeyE", meta: true }, electron: { code: "KeyE", meta: true }, moved: false },
   ...LANE_TOOL_COMMANDS.map((id): Command => ({ id, title: LANE_TOOL_TITLES[id], group: "Panels", ...LANE_TOOL_CHORDS[id] })),
-  { id: "toggle_file_tree", title: "Toggle File Tree", group: "Panels", browser: { code: "KeyE", meta: true, shift: true }, electron: { code: "KeyE", meta: true, shift: true }, moved: false },
+  // The documents button has no chord until one is bound: an open brings the documents in front.
+  { id: "toggle_lane_documents", title: "Toggle documents", group: "Panels", browser: null, electron: null, moved: false },
   { id: "find_in_pane", title: "Find in pane", group: "Panes", browser: { code: "KeyF", meta: true }, electron: { code: "KeyF", meta: true }, moved: false },
   { id: "save_file", title: "Save file", group: "Panes", browser: { code: "KeyS", meta: true }, electron: { code: "KeyS", meta: true }, moved: false },
   { id: "keep_open", title: "Keep open", group: "Panes", browser: { code: "KeyK", meta: true, shift: true }, electron: { code: "KeyK", meta: true, shift: true }, moved: false },
@@ -680,14 +681,14 @@ export type EffectiveRegistry = { registry: readonly Command[]; diagnostic: stri
  * says why. Collisions are judged on the whole set, so two commands that
  * trade chords are one valid set.
  */
-/** Stored commands that no longer exist: ignored with a diagnostic, never a reason to drop the rest of the set (`sidebar_agents`, PRD overview-device-tasks D-16). */
-const RETIRED_KEYS: readonly string[] = ["toggle_sidebar_view", "project_home", "sidebar_agents", "toggle_lane_work"];
+/** Stored commands that no longer exist: ignored with a diagnostic, never a reason to drop the rest of the set (`sidebar_agents`, PRD overview-device-tasks D-16; `toggle_file_tree` and `toggle_lane_files`, PRD lane-two-columns D-03, D-10). */
+const RETIRED_KEYS: readonly string[] = ["toggle_sidebar_view", "project_home", "sidebar_agents", "toggle_lane_work", "toggle_file_tree", "toggle_lane_files"];
 
 export function effectiveRegistry(stored: Record<string, string> | null | undefined, host: HostKind, system: KeySystem): EffectiveRegistry {
   const which = host === "electron" ? "pane" : "browser";
   const defaults = systemRegistry(system);
   const retired = Object.keys(stored ?? {}).some((key) => RETIRED_KEYS.includes(key));
-  const diagnostic = retired ? "Stored project_home, toggle_sidebar_view, sidebar_agents or toggle_lane_work shortcut is retired and was ignored." : null;
+  const diagnostic = retired ? "Stored project_home, toggle_sidebar_view, sidebar_agents, toggle_lane_work, toggle_file_tree or toggle_lane_files shortcut is retired and was ignored." : null;
   const entries = Object.entries(stored ?? {}).filter(([key]) => !RETIRED_KEYS.includes(key) && !(host === "electron" && MACOS_ONLY_KEYS.includes(key)));
   if (entries.length === 0) return { registry: defaults, diagnostic };
   let registry: Command[] = [...defaults];

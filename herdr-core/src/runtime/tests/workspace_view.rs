@@ -68,15 +68,20 @@ pub(super) fn layout(runtime: &mut Runtime, payload: serde_json::Value) {
     assert_eq!(runtime.snapshot.status.last_error, None);
 }
 
-/// The front Workspace's lane: its tool, pin and tree.
-fn lane(runtime: &Runtime) -> (Option<Tool>, bool, bool) {
+/// The front Workspace's lane: open, documents, tool and pin (PRD
+/// lane-two-columns B1).
+fn lane(runtime: &Runtime) -> (bool, bool, Option<Tool>, bool) {
     let view = runtime
         .snapshot
         .workspace_view
         .as_ref()
         .expect("a front Workspace");
-    (view.tool, view.pinned, view.tree)
+    (view.open, view.documents, view.tool, view.pinned)
 }
+
+const CLOSED: (bool, bool, Option<Tool>, bool) = (false, false, None, false);
+/// The documents alone, in a lane an open called.
+const DOCUMENTS: (bool, bool, Option<Tool>, bool) = (true, true, None, false);
 
 /// The front Workspace's last lane call number.
 fn called(runtime: &Runtime) -> u64 {
@@ -480,21 +485,21 @@ fn a_terminal_tab_choice_keeps_the_workspace_document_only_with_separate_areas()
     }
 }
 
-/// PRD right-lane B1, B15, B16: a new Workspace shows Agent Views alone; an
-/// explicit file open opens the lane on the files tool, numbers that call
-/// and lands the file in it; a session update, and an agent or tab chosen
-/// from anywhere, move no lane state the core keeps; a tab not shown before
-/// sees the checkout's one list.
+/// PRD right-lane B1, B15, B16; lane-two-columns B6: a new Workspace shows
+/// Agent Views alone; an explicit file open shows the documents in the
+/// viewing column, opens no tool, numbers that call and lands the file; a
+/// session update, and an agent or tab chosen from anywhere, move no lane
+/// state the core keeps; a tab not shown before sees the checkout's one list.
 #[test]
-fn a_file_open_opens_the_files_lane_and_an_agent_choice_moves_no_lane_state() {
+fn a_file_open_shows_the_documents_and_an_agent_choice_moves_no_lane_state() {
     let (runtime, checkout_id, directory) = strip_checkout("area-intent");
     let mut runtime = with_new_views(runtime, "area-intent");
     with_tabs(&mut runtime, &directory);
-    assert_eq!(lane(&runtime), (None, false, false), "Agent Views alone");
+    assert_eq!(lane(&runtime), CLOSED, "Agent Views alone");
     assert_eq!(called(&runtime), 0);
 
     open(&mut runtime, &checkout_id, &directory.join("notes.md"));
-    assert_eq!(lane(&runtime), (Some(Tool::Files), false, false));
+    assert_eq!(lane(&runtime), DOCUMENTS);
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert!(
         view.lane_called > 0 && view.lane_called == view.lane_calls,
@@ -512,14 +517,14 @@ fn a_file_open_opens_the_files_lane_and_an_agent_choice_moves_no_lane_state() {
     )));
     assert_eq!(
         (lane(&runtime), called(&runtime)),
-        ((Some(Tool::Files), false, false), opened),
+        (DOCUMENTS, opened),
         "a session update is not a request"
     );
     runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2"));
     assert_eq!(runtime.snapshot.status.last_error, None);
     assert_eq!(
         (lane(&runtime), called(&runtime)),
-        ((Some(Tool::Files), false, false), opened),
+        (DOCUMENTS, opened),
         "an agent choice moves no lane state and calls nothing"
     );
     assert_eq!(
@@ -529,7 +534,7 @@ fn a_file_open_opens_the_files_lane_and_an_agent_choice_moves_no_lane_state() {
     );
     layout(&mut runtime, serde_json::json!({"pinned": true}));
     runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1"));
-    assert_eq!(lane(&runtime), (Some(Tool::Files), true, false));
+    assert_eq!(lane(&runtime), (true, true, None, true));
 }
 
 /// PRD sidebar-task-lens B26: the PRs tool's checkout filter is the
@@ -554,7 +559,7 @@ fn the_prs_checkout_filter_is_stored_and_an_unknown_tool_is_refused() {
         &mut runtime,
         serde_json::json!({"tool": "prs", "prs_only_checkout": true}),
     );
-    assert_eq!(lane(&runtime).0, Some(Tool::Prs));
+    assert_eq!(lane(&runtime).2, Some(Tool::Prs));
     assert!(prs(&runtime).only_checkout);
 
     runtime.dispatch_json(&explorer_event(
@@ -563,17 +568,19 @@ fn the_prs_checkout_filter_is_stored_and_an_unknown_tool_is_refused() {
     ));
     assert!(runtime.snapshot.status.last_error.is_some());
     assert_eq!(
-        lane(&runtime).0,
+        lane(&runtime).2,
         Some(Tool::Prs),
         "a refused call changes nothing, the tool included"
     );
 }
 
-/// PRD right-lane D-12, B2, B5, B7, B11, B20: every lane field ends at the
-/// value sent, so a repeat changes nothing and reports no change; a tool
-/// sent again is still a call, so a page shows a lane it had hidden; closing
-/// keeps the pin, the View tree and the file tree; and the widths are stored
-/// per Workspace within the core's bound.
+/// PRD right-lane D-12, B2, B5, B7, B11, B20; lane-two-columns B14, B15,
+/// B17: every lane field ends at the value sent, so a repeat changes
+/// nothing and reports no change; a tool sent again is still a call, so a
+/// page shows a lane it had hidden; a tool's close leaves the documents;
+/// closing the lane keeps both columns, the pin and the View tree, and the
+/// reopen brings them back; and the four widths are stored per Workspace
+/// within the core's bound.
 #[test]
 fn each_lane_field_ends_at_its_sent_value_and_a_repeat_converges() {
     let (runtime, checkout_id, directory) = strip_checkout("lane-fields");
@@ -583,17 +590,17 @@ fn each_lane_field_ends_at_its_sent_value_and_a_repeat_converges() {
     open(&mut runtime, &checkout_id, &directory.join("notes.md"));
     layout(
         &mut runtime,
-        serde_json::json!({"pinned": true, "tree": true}),
+        serde_json::json!({"pinned": true, "tool": "explorer"}),
     );
-    assert_eq!(lane(&runtime), (Some(Tool::Files), true, true));
+    assert_eq!(lane(&runtime), (true, true, Some(Tool::Explorer), true));
     assert!(!runtime.dispatch_json(&explorer_event(
         "workspace_view",
-        serde_json::json!({"pinned": true, "tree": true})
+        serde_json::json!({"pinned": true})
     )));
 
     let before = called(&runtime);
     layout(&mut runtime, serde_json::json!({"tool": "prs"}));
-    assert_eq!(lane(&runtime), (Some(Tool::Prs), true, true));
+    assert_eq!(lane(&runtime), (true, true, Some(Tool::Prs), true));
     assert_eq!(called(&runtime), before + 1);
     // The same tool again changes nothing stored but is a call the page
     // shows, so it reports a change.
@@ -606,10 +613,17 @@ fn each_lane_field_ends_at_its_sent_value_and_a_repeat_converges() {
     layout(&mut runtime, serde_json::json!({"tool": null}));
     assert_eq!(
         lane(&runtime),
-        (None, true, true),
-        "closing keeps the pin and the tree (B11)"
+        (true, true, None, true),
+        "a tool's close leaves the documents (B14)"
     );
-    assert_eq!(called(&runtime), before + 2, "a close is no call");
+    layout(&mut runtime, serde_json::json!({"tool": "memory"}));
+    layout(&mut runtime, serde_json::json!({"open": false}));
+    assert_eq!(
+        lane(&runtime),
+        (false, true, Some(Tool::Memory), true),
+        "closing the lane keeps both columns and the pin (B15)"
+    );
+    assert_eq!(called(&runtime), before + 3, "a close is no call");
     assert_eq!(
         runtime
             .snapshot
@@ -623,153 +637,189 @@ fn each_lane_field_ends_at_its_sent_value_and_a_repeat_converges() {
     );
     assert!(!runtime.dispatch_json(&explorer_event(
         "workspace_view",
-        serde_json::json!({"tool": null})
+        serde_json::json!({"open": false})
     )));
-    layout(&mut runtime, serde_json::json!({"tool": "files"}));
-    assert_eq!(lane(&runtime), (Some(Tool::Files), true, true));
+    layout(&mut runtime, serde_json::json!({"open": true}));
+    assert_eq!(
+        lane(&runtime),
+        (true, true, Some(Tool::Memory), true),
+        "the reopen brings both columns back"
+    );
     assert_eq!(active_label(&runtime).as_deref(), Some("notes.md"));
+    layout(&mut runtime, serde_json::json!({"documents": false}));
+    assert_eq!(lane(&runtime), (true, false, Some(Tool::Memory), true));
 
     layout(
         &mut runtime,
-        serde_json::json!({"lane_width": 700, "tree_width": 300}),
+        serde_json::json!({"document_width": 700, "explorer_width": 300}),
     );
-    layout(&mut runtime, serde_json::json!({"tree_width": 99_999}));
-    // The other tools keep a width of their own, so a wide document leaves
-    // them as they were.
-    layout(&mut runtime, serde_json::json!({"panel_width": 440}));
+    layout(&mut runtime, serde_json::json!({"explorer_width": 99_999}));
+    // Every column keeps a width of its own, so a wide document leaves the
+    // others as they were.
+    layout(
+        &mut runtime,
+        serde_json::json!({"panel_width": 440, "detail_width": 380}),
+    );
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(
-        (view.lane_width, view.panel_width, view.tree_width),
+        (
+            view.document_width,
+            view.detail_width,
+            view.explorer_width,
+            view.panel_width
+        ),
         (
             Some(700),
-            Some(440),
-            Some(crate::workspace_views::MAX_WIDTH)
+            Some(380),
+            Some(crate::workspace_views::MAX_WIDTH),
+            Some(440)
         )
     );
     let (saved, _) = crate::workspace_views::load(&state, 0);
     let saved = saved.get(&view.device_id, &view.path).unwrap();
     assert_eq!(
         (
+            saved.open,
+            saved.documents,
             saved.tool,
             saved.pinned,
-            saved.tree,
-            saved.lane_width,
+            saved.document_width,
             saved.panel_width
         ),
-        (Some(Tool::Files), true, true, Some(700), Some(440))
+        (true, false, Some(Tool::Memory), true, Some(700), Some(440))
     );
     let written = std::fs::read_to_string(&state).unwrap();
-    for retired in ["\"views\"", "\"tools\"", "views_width", "lane_called"] {
+    for retired in [
+        "\"views\"",
+        "\"tools\"",
+        "views_width",
+        "lane_called",
+        "last_tool",
+        "\"tree\"",
+        "lane_width",
+    ] {
         assert!(!written.contains(retired), "{retired} is not written");
     }
 }
 
-/// A closed lane remembers the tool it last showed, however it was closed or
-/// reopened, and a Workspace that never showed one opens on Files; the tool
-/// survives a restart.
+/// PRD lane-two-columns B15: a closed lane comes back in the shape it had,
+/// however it was closed; a lane that never had a column opens on the
+/// documents when the Workspace has some and on the Explorer when it has
+/// none; the shape survives a restart.
 #[test]
-fn a_closed_lane_keeps_the_tool_it_last_showed_across_a_restart() {
-    let (runtime, _checkout_id, directory) = strip_checkout("lane-last-tool");
+fn a_closed_lane_comes_back_in_the_shape_it_had_across_a_restart() {
+    let (runtime, checkout_id, directory) = strip_checkout("lane-last-tool");
     let (_views, state) = views_path("lane-last-tool");
     let mut runtime = with_views(runtime, &state);
     with_tabs(&mut runtime, &directory);
-    let last = |runtime: &Runtime| {
-        runtime
-            .snapshot
-            .workspace_view
-            .as_ref()
-            .expect("a front Workspace")
-            .last_tool
-    };
-    assert_eq!(last(&runtime), None, "a lane that never showed a tool");
+    assert_eq!(lane(&runtime), CLOSED, "a lane that never opened");
+
+    layout(&mut runtime, serde_json::json!({"open": true}));
+    assert_eq!(
+        lane(&runtime),
+        (true, false, Some(Tool::Explorer), false),
+        "with no document the Explorer is what there is to show"
+    );
+    layout(&mut runtime, serde_json::json!({"tool": null}));
+    assert_eq!(lane(&runtime), (true, false, None, false));
+    open(&mut runtime, &checkout_id, &directory.join("notes.md"));
+    layout(&mut runtime, serde_json::json!({"documents": false}));
+    layout(&mut runtime, serde_json::json!({"open": true}));
+    assert_eq!(
+        lane(&runtime),
+        DOCUMENTS,
+        "with a document and no column, the documents come back"
+    );
 
     layout(&mut runtime, serde_json::json!({"tool": "memory"}));
-    assert_eq!(last(&runtime), Some(Tool::Memory));
-    layout(&mut runtime, serde_json::json!({"tool": null}));
-    assert_eq!(lane(&runtime).0, None);
-    assert_eq!(last(&runtime), Some(Tool::Memory), "a close keeps it");
-
+    layout(&mut runtime, serde_json::json!({"open": false}));
+    assert_eq!(lane(&runtime), (false, true, Some(Tool::Memory), false));
     layout(&mut runtime, serde_json::json!({"tool": "changes"}));
-    layout(&mut runtime, serde_json::json!({"tool": null}));
-    assert_eq!(last(&runtime), Some(Tool::Changes), "the latest wins");
+    assert_eq!(
+        lane(&runtime),
+        (true, true, Some(Tool::Changes), false),
+        "a tool called while closed opens the lane with the documents back"
+    );
+    layout(&mut runtime, serde_json::json!({"open": false}));
 
     let (saved, _) = crate::workspace_views::load(&state, 0);
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     let saved = saved.get(&view.device_id, &view.path).unwrap();
-    assert_eq!((saved.tool, saved.last_tool), (None, Some(Tool::Changes)));
+    assert_eq!(
+        (saved.open, saved.documents, saved.tool),
+        (false, true, Some(Tool::Changes))
+    );
 }
 
-/// PRD right-lane B12: the files lane opened with no view opens nothing in
-/// it (the shell draws the tree alone); a file picked there opens beside the
-/// tree, which stays on; and with the tree turned off, closing the last view
-/// closes the lane, keeping Files to reopen on.
+/// PRD lane-two-columns B5, B12: the Explorer opens with no view and opens
+/// nothing (no document, no New tab page); a file picked there opens beside
+/// it; closing the last view closes the viewing column and leaves the
+/// Explorer; without a tool column the lane closes with the last view.
 #[test]
-fn the_files_lane_opens_with_no_view_and_closes_with_its_last_view_when_the_tree_is_off() {
+fn the_explorer_opens_with_no_view_and_the_last_view_closes_the_viewing_column() {
     let (runtime, checkout_id, directory) = strip_checkout("views-empty");
     let mut runtime = with_new_views(runtime, "views-empty");
-    layout(&mut runtime, serde_json::json!({"tool": "files"}));
+    layout(&mut runtime, serde_json::json!({"tool": "explorer"}));
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-    assert_eq!(view.tool, Some(Tool::Files));
+    assert_eq!(view.tool, Some(Tool::Explorer));
     assert_eq!(view.layout.display_count, 0, "no New tab page is opened");
     assert!(!runtime.new_tab_visible());
     assert!(
         runtime.snapshot.ui_state.right_panel_visible
             && runtime.snapshot.ui_state.right_panel_section == RightPanelSection::Explorer,
-        "the tree alone is the files tool's content"
+        "the Explorer is read while its column shows"
     );
 
     open(&mut runtime, &checkout_id, &directory.join("notes.md"));
-    assert_eq!(lane(&runtime), (Some(Tool::Files), false, true));
-    assert!(
-        runtime.snapshot.ui_state.right_panel_visible,
-        "the file opens beside the tree it was picked from"
+    assert_eq!(lane(&runtime), (true, true, Some(Tool::Explorer), false));
+    close_only_display(&mut runtime);
+    let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+    assert_eq!(
+        (
+            view.open,
+            view.documents,
+            view.tool,
+            view.layout.display_count
+        ),
+        (true, false, Some(Tool::Explorer), 0),
+        "the Explorer stays"
     );
-    layout(&mut runtime, serde_json::json!({"tree": false}));
+    assert!(runtime.snapshot.ui_state.right_panel_visible);
+
+    layout(&mut runtime, serde_json::json!({"tool": null}));
+    open(&mut runtime, &checkout_id, &directory.join("notes.md"));
+    assert_eq!(lane(&runtime), DOCUMENTS);
     assert!(
         !runtime.snapshot.ui_state.right_panel_visible,
-        "a document with the tree off draws no tree"
+        "a document alone reads no tree"
     );
     close_only_display(&mut runtime);
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(
-        (view.tool, view.last_tool, view.layout.display_count),
-        (None, Some(Tool::Files), 0)
+        (view.documents, view.tool, view.layout.display_count),
+        (false, None, 0),
+        "no column is left, so the lane closes"
     );
     assert!(!runtime.snapshot.ui_state.right_panel_visible);
 }
 
-/// PRD right-lane B12, B16: only a file opened while the files tool shows the
-/// tree alone keeps the tree; opened from a closed lane or another tool, the
-/// files tool opens with the tree as it was, the file read before or not.
+/// PRD lane-two-columns B6, B7: a file, diff or page opened leaves the tool
+/// column as it is, whatever it shows: from a closed lane the documents open
+/// alone, and beside Changes the list stays.
 #[test]
-fn a_file_opened_from_a_closed_lane_or_another_tool_leaves_the_tree_off() {
-    let (runtime, checkout_id, directory) = strip_checkout("tree-stays-off");
-    let mut runtime = with_new_views(runtime, "tree-stays-off");
+fn an_open_leaves_the_tool_column_as_it_is() {
+    let (runtime, checkout_id, directory) = strip_checkout("tool-stays");
+    let mut runtime = with_new_views(runtime, "tool-stays");
     open(&mut runtime, &checkout_id, &directory.join("notes.md"));
-    assert_eq!(
-        lane(&runtime),
-        (Some(Tool::Files), false, false),
-        "from a closed lane"
-    );
+    assert_eq!(lane(&runtime), DOCUMENTS, "from a closed lane");
     close_only_display(&mut runtime);
     layout(&mut runtime, serde_json::json!({"tool": "changes"}));
     open(&mut runtime, &checkout_id, &directory.join("notes.md"));
     assert_eq!(
         lane(&runtime),
-        (Some(Tool::Files), false, false),
-        "from another tool, the file read before"
+        (true, true, Some(Tool::Changes), false),
+        "beside Changes, the file read before"
     );
-}
-
-/// PRD right-lane B11, B12: an open asked while the files tool shows the tree
-/// alone keeps the tree beside what it opens, a page as much as a file, and
-/// a refused open moves nothing.
-#[test]
-fn an_open_asked_from_the_lone_tree_keeps_the_tree_whatever_it_opens() {
-    let (runtime, checkout_id, directory) = strip_checkout("lone-tree");
-    let mut runtime = with_new_views(runtime, "lone-tree");
-    layout(&mut runtime, serde_json::json!({"tool": "files"}));
-    assert_eq!(lane(&runtime), (Some(Tool::Files), false, false));
     let page = |url: &str| {
         explorer_event(
             "browser_open",
@@ -779,45 +829,40 @@ fn an_open_asked_from_the_lone_tree_keeps_the_tree_whatever_it_opens() {
             }),
         )
     };
+    layout(
+        &mut runtime,
+        serde_json::json!({"tool": "memory", "documents": false}),
+    );
     runtime.dispatch_json(&page("not an address"));
     assert!(runtime.snapshot.status.last_error.is_some());
-    assert_eq!(lane(&runtime), (Some(Tool::Files), false, false), "refused");
+    assert_eq!(
+        lane(&runtime),
+        (true, false, Some(Tool::Memory), false),
+        "refused"
+    );
     runtime.dispatch_json(&page("https://example.test/page"));
     assert_eq!(runtime.snapshot.status.last_error, None);
-    assert_eq!(lane(&runtime), (Some(Tool::Files), false, true));
-
-    // A terminal link's file, once it settles in this Workspace.
-    close_only_display(&mut runtime);
-    layout(&mut runtime, serde_json::json!({"tree": false}));
-    runtime.dispatch_json(&explorer_event(
-        "reveal_path",
-        serde_json::json!({
-            "path": directory.join("notes.md"), "workspace_id": runtime.snapshot.navigator.focused_workspace_id,
-            "checkout_id": checkout_id, "is_directory": false,
-        }),
-    ));
-    assert_eq!(runtime.snapshot.status.last_error, None);
-    assert_eq!(lane(&runtime), (Some(Tool::Files), false, true), "a link");
+    assert_eq!(lane(&runtime), (true, true, Some(Tool::Memory), false));
 }
 
-/// PRD right-lane B16, D-13: a reveal opens the files tool with its tree,
-/// opens nothing and is a call; a terminal link's file opens the files tool
-/// and leaves the tree as it was; a linked folder opens the files tool with
-/// its tree on, where the folder shows. Each is a lane call.
+/// PRD right-lane B16, D-13; lane-two-columns B6, B8: a reveal shows the
+/// Explorer in the tool column, opens nothing and leaves the viewing column;
+/// a terminal link's file shows the documents and leaves the tool column; a
+/// linked folder shows the Explorer. Each is a lane call.
 #[test]
-fn a_reveal_or_a_linked_folder_opens_the_files_tool_with_its_tree() {
+fn a_reveal_or_a_linked_folder_shows_the_explorer_and_a_linked_file_the_documents() {
     let (runtime, _checkout_id, directory) = strip_checkout("tool-opens");
     let mut runtime = with_new_views(runtime, "tool-opens");
     assert!(!runtime.snapshot.ui_state.right_panel_visible);
 
     layout(&mut runtime, serde_json::json!({"tool": "changes"}));
-    assert_eq!(lane(&runtime), (Some(Tool::Changes), false, false));
+    assert_eq!(lane(&runtime), (true, false, Some(Tool::Changes), false));
     let before = called(&runtime);
     layout(
         &mut runtime,
         serde_json::json!({"reveal": directory.join("notes.md").to_string_lossy()}),
     );
-    assert_eq!(lane(&runtime), (Some(Tool::Files), false, true));
+    assert_eq!(lane(&runtime), (true, false, Some(Tool::Explorer), false));
     assert_eq!(called(&runtime), before + 1);
     assert_eq!(
         runtime
@@ -831,10 +876,7 @@ fn a_reveal_or_a_linked_folder_opens_the_files_tool_with_its_tree() {
         "a reveal opens nothing"
     );
 
-    layout(
-        &mut runtime,
-        serde_json::json!({"tool": null, "tree": false}),
-    );
+    layout(&mut runtime, serde_json::json!({"tool": "memory"}));
     let checkout_id = runtime
         .snapshot
         .navigator
@@ -851,12 +893,12 @@ fn a_reveal_or_a_linked_folder_opens_the_files_tool_with_its_tree() {
     assert_eq!(runtime.snapshot.status.last_error, None);
     assert_eq!(
         lane(&runtime),
-        (Some(Tool::Files), false, false),
-        "a linked file leaves the tree off"
+        (true, true, Some(Tool::Memory), false),
+        "a linked file shows the documents and leaves the tool"
     );
-    assert_eq!(called(&runtime), before + 2);
+    assert_eq!(called(&runtime), before + 3);
 
-    layout(&mut runtime, serde_json::json!({"tool": null}));
+    layout(&mut runtime, serde_json::json!({"open": false}));
     let folder = directory.join("docs");
     std::fs::create_dir_all(&folder).unwrap();
     runtime.dispatch_json(&explorer_event(
@@ -869,16 +911,17 @@ fn a_reveal_or_a_linked_folder_opens_the_files_tool_with_its_tree() {
     assert_eq!(runtime.snapshot.status.last_error, None);
     assert_eq!(
         lane(&runtime),
-        (Some(Tool::Files), false, true),
-        "a linked folder shows in the tree"
+        (true, true, Some(Tool::Explorer), false),
+        "a linked folder shows in the Explorer, the documents back beside it"
     );
-    assert_eq!(called(&runtime), before + 3);
+    assert_eq!(called(&runtime), before + 4);
 }
 
-/// PRD right-lane D-01, A5: the lane is the Workspace's, and the one global
-/// panel every existing reader gates on follows it: the files tool reads the
-/// Explorer only while its tree is drawn, and a closed lane reads nothing;
-/// a value no lane has, the retired `explorer` included, is refused.
+/// PRD right-lane D-01, A5; lane-two-columns B5: the lane is the
+/// Workspace's, and the one global panel every existing reader gates on
+/// follows its tool column: the Explorer is read only while its column
+/// shows, the documents alone and a closed lane read nothing; a value no
+/// column has, the retired `files` included, is refused.
 #[test]
 fn the_lane_drives_the_panel_the_readers_gate_on() {
     let (runtime, checkout_id, directory) = strip_checkout("tools");
@@ -895,19 +938,19 @@ fn the_lane_drives_the_panel_the_readers_gate_on() {
     assert_eq!(panel(&runtime), (true, RightPanelSection::AgentSessions));
     layout(&mut runtime, serde_json::json!({"tool": "memory"}));
     assert_eq!(panel(&runtime), (true, RightPanelSection::Memory));
-
-    open(&mut runtime, &checkout_id, &directory.join("notes.md"));
-    assert!(
-        !panel(&runtime).0,
-        "a document without its tree reads no tree"
-    );
-    layout(&mut runtime, serde_json::json!({"tree": true}));
+    layout(&mut runtime, serde_json::json!({"tool": "explorer"}));
     assert_eq!(panel(&runtime), (true, RightPanelSection::Explorer));
 
     layout(&mut runtime, serde_json::json!({"tool": null}));
+    open(&mut runtime, &checkout_id, &directory.join("notes.md"));
+    assert!(!panel(&runtime).0, "a document alone reads no tree");
+    layout(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    assert_eq!(panel(&runtime), (true, RightPanelSection::Explorer));
+
+    layout(&mut runtime, serde_json::json!({"open": false}));
     assert!(!panel(&runtime).0);
 
-    for refused in ["terminal", "explorer"] {
+    for refused in ["terminal", "files", "work"] {
         runtime.dispatch_json(&explorer_event(
             "workspace_view",
             serde_json::json!({"tool": refused}),
@@ -921,7 +964,7 @@ fn the_lane_drives_the_panel_the_readers_gate_on() {
                 .map(|error| error.kind.as_str()),
             Some("workspace_view.unknown_tool")
         );
-        assert_eq!(lane(&runtime).0, None);
+        assert_eq!(lane(&runtime), (false, true, Some(Tool::Explorer), false));
     }
 }
 
@@ -1092,7 +1135,7 @@ fn returning_to_a_workspace_without_agent_tabs_keeps_its_active_view_tab() {
 /// `workspace_view`, and a path outside the Workspace is refused without
 /// showing anything.
 #[test]
-fn a_reveal_shows_the_tree_and_unfolds_the_folders_in_one_event() {
+fn a_reveal_shows_the_explorer_and_unfolds_the_folders_in_one_event() {
     let (runtime, _checkout_id, directory) = strip_checkout("reveal");
     let mut runtime = with_new_views(runtime, "reveal");
     let root = directory.to_string_lossy().into_owned();
@@ -1102,7 +1145,7 @@ fn a_reveal_shows_the_tree_and_unfolds_the_folders_in_one_event() {
         serde_json::json!({"reveal": "/elsewhere/a.txt"}),
     ));
     assert!(runtime.snapshot.status.last_error.is_some());
-    assert_eq!(lane(&runtime), (None, false, false));
+    assert_eq!(lane(&runtime), CLOSED);
     runtime.dispatch_json(&explorer_event(
         "workspace_view",
         serde_json::json!({"reveal": format!("{root}/../elsewhere/a.txt")}),
@@ -1117,14 +1160,14 @@ fn a_reveal_shows_the_tree_and_unfolds_the_folders_in_one_event() {
         Some("workspace_view.reveal_outside"),
         "a path that climbs out of the Workspace is refused, not unfolded"
     );
-    assert_eq!(lane(&runtime), (None, false, false));
+    assert_eq!(lane(&runtime), CLOSED);
     assert_eq!(called(&runtime), 0);
 
     layout(
         &mut runtime,
         serde_json::json!({"reveal": format!("{root}/src/deep/a.rs")}),
     );
-    assert_eq!(lane(&runtime), (Some(Tool::Files), false, true));
+    assert_eq!(lane(&runtime), (true, false, Some(Tool::Explorer), false));
     let expanded = &runtime.snapshot.ui_state.expanded_paths;
     assert!(expanded.contains(&format!("{root}/src")));
     assert!(expanded.contains(&format!("{root}/src/deep")));
@@ -1345,13 +1388,13 @@ fn removing_a_device_forgets_its_workspace_views() {
             host_consent: None,
         });
     let store = runtime.workspace_views.as_mut().unwrap();
-    store.views.entry("studio", "/srv/app").tool = Some(Tool::Files);
+    store.views.entry("studio", "/srv/app").tool = Some(Tool::Explorer);
     store
         .views
         .entry(crate::node::TEST_NODE, &directory.to_string_lossy());
     runtime.apply_area_intent_to(
         &("studio".to_owned(), "/srv/app".to_owned()),
-        AreaIntent::Files,
+        AreaIntent::Documents,
     );
 
     assert!(runtime.dispatch_json(&explorer_event(
@@ -1384,7 +1427,7 @@ fn workspace_lane_calls_forget_evicted_workspaces() {
     let mut runtime = with_new_views(runtime, "lane-calls-cap");
     for index in 0..=crate::workspace_views::MAX_WORKSPACES {
         let key = ("studio".to_owned(), format!("/srv/workspace-{index}"));
-        runtime.apply_area_intent_to(&key, AreaIntent::Files);
+        runtime.apply_area_intent_to(&key, AreaIntent::Documents);
     }
     let store = runtime.workspace_views.as_ref().unwrap();
     assert!(store.lane_called.len() <= crate::workspace_views::MAX_WORKSPACES);
@@ -1398,18 +1441,21 @@ fn workspace_lane_calls_forget_evicted_workspaces() {
         "studio".to_owned(),
         format!("/srv/workspace-{}", crate::workspace_views::MAX_WORKSPACES),
     );
-    assert_eq!(store.lane_called.get(&last), Some(&store.lane_calls));
+    assert_eq!(
+        store.lane_called.get(&last),
+        Some(&(store.lane_calls, crate::model::LaneCallSide::View))
+    );
 }
 
-/// PRD right-lane B12: closing the last view, a file's or a page's, pinned
-/// or not, keeps the lane on the files tool when the operator turned the
-/// tree on, and otherwise closes it with Files kept to reopen on; either
-/// way the pin and the tree stay, with that state saved.
+/// PRD lane-two-columns B12: closing the last view, a page or a file,
+/// pinned or not, closes the viewing column; with a tool column the lane
+/// stays on it, without one the lane has nothing left and closes; either
+/// way the pin stays, with that state saved.
 #[test]
-fn closing_the_last_view_closes_the_lane_unless_the_tree_is_on() {
+fn closing_the_last_view_closes_the_viewing_column_and_the_lane_without_a_tool() {
     for pinned in [true, false] {
         for browser in [true, false] {
-            for tree in [true, false] {
+            for tool in [Some(Tool::Explorer), None] {
                 let (runtime, checkout_id, directory) = strip_checkout("last-view-lane");
                 let (_views, state) = views_path("last-view-lane");
                 let mut runtime = with_views(runtime, &state);
@@ -1424,39 +1470,38 @@ fn closing_the_last_view_closes_the_lane_unless_the_tree_is_on() {
                 }
                 layout(
                     &mut runtime,
-                    serde_json::json!({"pinned": pinned, "tree": tree}),
+                    serde_json::json!({"pinned": pinned, "tool": tool.map(|_| "explorer")}),
                 );
-                assert_eq!(lane(&runtime), (Some(Tool::Files), pinned, tree));
+                assert_eq!(lane(&runtime), (true, true, tool, pinned));
                 close_only_display(&mut runtime);
-                let stays = tree.then_some(Tool::Files);
                 let view = runtime.snapshot.workspace_view.as_ref().unwrap();
                 assert_eq!(
-                    (view.layout.display_count, view.tool, view.last_tool),
-                    (0, stays, Some(Tool::Files)),
-                    "pinned {pinned}, page {browser}, tree {tree}"
+                    (view.layout.display_count, view.documents, view.tool),
+                    (0, false, tool),
+                    "pinned {pinned}, page {browser}, tool {tool:?}"
                 );
-                assert_eq!(lane(&runtime), (stays, pinned, tree));
+                assert_eq!(lane(&runtime), (true, false, tool, pinned));
                 let (saved, _) = crate::workspace_views::load(&state, 0);
                 let saved = saved.get(&view.device_id, &view.path).unwrap();
                 assert_eq!(
-                    (saved.tool, saved.pinned, saved.tree),
-                    (stays, pinned, tree)
+                    (saved.documents, saved.tool, saved.pinned),
+                    (false, tool, pinned)
                 );
             }
         }
     }
 }
 
-/// PRD right-lane B12: only the last view closing closes the lane; a close
-/// that leaves another view keeps it on the files tool.
+/// PRD right-lane B12: only the last view closing closes the viewing
+/// column; a close that leaves another view keeps the documents.
 #[test]
-fn a_close_that_leaves_a_view_keeps_the_lane_open() {
+fn a_close_that_leaves_a_view_keeps_the_documents() {
     let (runtime, checkout_id, directory) = strip_checkout("one-of-two-views");
     let mut runtime = with_new_views(runtime, "one-of-two-views");
     std::fs::write(directory.join("other.md"), "# Other\n").expect("fixture");
     open(&mut runtime, &checkout_id, &directory.join("notes.md"));
     open(&mut runtime, &checkout_id, &directory.join("other.md"));
-    assert_eq!(lane(&runtime), (Some(Tool::Files), false, false));
+    assert_eq!(lane(&runtime), DOCUMENTS);
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(view.layout.display_count, 2);
     let workspace = serde_json::json!({"device_id": view.device_id, "path": view.path});
@@ -1469,12 +1514,9 @@ fn a_close_that_leaves_a_view_keeps_the_lane_open() {
         serde_json::json!({"workspace": workspace, "action": "close", "display_id": first}),
     ));
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-    assert_eq!(
-        (view.tool, view.layout.display_count),
-        (Some(Tool::Files), 1)
-    );
+    assert_eq!((view.documents, view.layout.display_count), (true, 1));
     close_only_display(&mut runtime);
-    assert_eq!(lane(&runtime), (None, false, false));
+    assert_eq!(lane(&runtime), (true, false, None, false));
 }
 
 /// B20: width acknowledgements identify the accepted intent, including a
@@ -1490,7 +1532,7 @@ fn workspace_width_requests_are_bounded_ephemeral_and_confirm_exact_intents() {
     with_tabs(&mut runtime, &directory);
     layout(
         &mut runtime,
-        serde_json::json!({"lane_width": 672, "width_request_id": "divider:first"}),
+        serde_json::json!({"document_width": 672, "width_request_id": "divider:first"}),
     );
     assert_eq!(
         runtime
@@ -1504,22 +1546,22 @@ fn workspace_width_requests_are_bounded_ephemeral_and_confirm_exact_intents() {
     );
     layout(
         &mut runtime,
-        serde_json::json!({"lane_width": 704, "width_request_id": "divider:second"}),
+        serde_json::json!({"document_width": 704, "width_request_id": "divider:second"}),
     );
     let published = runtime.snapshot.workspace_view.as_ref().unwrap();
-    assert_eq!(published.lane_width, Some(704));
+    assert_eq!(published.document_width, Some(704));
     assert_eq!(
         published.width_request_id.as_deref(),
         Some("divider:second")
     );
     assert!(!runtime.dispatch_json(&explorer_event(
         "workspace_view",
-        serde_json::json!({"lane_width": 704, "width_request_id": "divider:second"})
+        serde_json::json!({"document_width": 704, "width_request_id": "divider:second"})
     )));
     let saved = std::fs::read_to_string(&state).unwrap();
     assert!(runtime.dispatch_json(&explorer_event(
         "workspace_view",
-        serde_json::json!({"lane_width": 704, "width_request_id": "divider:third"})
+        serde_json::json!({"document_width": 704, "width_request_id": "divider:third"})
     )));
     assert_eq!(
         runtime
@@ -1554,7 +1596,7 @@ fn workspace_width_requests_are_bounded_ephemeral_and_confirm_exact_intents() {
         (published.panel_width, published.width_request_id.as_deref()),
         (Some(448), Some("divider:panel"))
     );
-    layout(&mut runtime, serde_json::json!({"lane_width": 650}));
+    layout(&mut runtime, serde_json::json!({"document_width": 650}));
     assert_eq!(
         runtime
             .snapshot
@@ -1567,14 +1609,19 @@ fn workspace_width_requests_are_bounded_ephemeral_and_confirm_exact_intents() {
     for invalid in [String::new(), "x".repeat(129)] {
         assert!(runtime.dispatch_json(&explorer_event(
             "workspace_view",
-            serde_json::json!({"lane_width": 720, "width_request_id": invalid})
+            serde_json::json!({"document_width": 720, "width_request_id": invalid})
         )));
         assert_eq!(
             runtime.snapshot.status.last_error.as_ref().unwrap().kind,
             "workspace_view.invalid_width_request"
         );
         assert_eq!(
-            runtime.snapshot.workspace_view.as_ref().unwrap().lane_width,
+            runtime
+                .snapshot
+                .workspace_view
+                .as_ref()
+                .unwrap()
+                .document_width,
             Some(650)
         );
     }
@@ -1582,7 +1629,10 @@ fn workspace_width_requests_are_bounded_ephemeral_and_confirm_exact_intents() {
     let key = (published.device_id.clone(), published.path.clone());
     drop(runtime);
     let (reloaded, _) = crate::workspace_views::load(&state, 0);
-    assert_eq!(reloaded.get(&key.0, &key.1).unwrap().lane_width, Some(650));
+    assert_eq!(
+        reloaded.get(&key.0, &key.1).unwrap().document_width,
+        Some(650)
+    );
     std::fs::remove_dir_all(state.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(directory).unwrap();
 }

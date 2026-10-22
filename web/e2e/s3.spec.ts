@@ -13,7 +13,7 @@ import zlib from "node:zlib";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, enterWorkspace, screenshot, showExplorer, showProjectRow, showTool } from "./wire";
+import { countSent, enterWorkspace, screenshot, showDocuments, showExplorer, showProjectRow } from "./wire";
 import { chord, mod } from "./chords";
 import { dumpOnFailure } from "./failure-dump";
 import { onDisk, quietFor } from "./wait";
@@ -152,7 +152,7 @@ async function openCheckout(
     await row.click();
     await expect(row).toHaveAttribute("aria-current", "true");
     await showExplorer(page);
-    await expect(page.locator("[data-lane-tree] [data-explorer]")).toBeVisible();
+    await expect(page.locator('[data-lane="explorer"] [data-explorer]')).toBeVisible();
     await expect(page.locator(`[data-explorer-row="${repo}/src"]`)).toBeVisible();
 
     // Expand src and open the file into the preview tab.
@@ -1274,9 +1274,9 @@ test("⌘P opens a file by name and ⌘K switches checkout", { tag: "@platform" 
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "closed");
 
     // ⌘P: hided indexes the checkout, ranks the typed name and opens it in the
-    // preview tab (B12). The open brings the files tool back with the tree
-    // the close left on, and it shows the row revealed (PRD right-lane B11,
-    // B16).
+    // preview tab (B12). The open brings the lane back with the Explorer the
+    // close left in its column, and it shows the row revealed (PRD
+    // lane-two-columns B7, B15).
     await page.keyboard.press(chord("open_file"));
     const input = page.locator('[data-palette="Open file"] [data-palette-input]');
     await expect(input).toBeVisible();
@@ -1287,7 +1287,7 @@ test("⌘P opens a file by name and ⌘K switches checkout", { tag: "@platform" 
     await row.click();
     await expect(page.locator("[data-palette-input]")).toHaveCount(0);
     await expect(page.locator('[data-tab-kind="file"]').filter({ hasText: "main.ts" })).toHaveCount(1);
-    await expect(page.locator("[data-lane-tree] [data-explorer]")).toBeVisible();
+    await expect(page.locator('[data-lane="explorer"] [data-explorer]')).toBeVisible();
     await expect(page.locator(`[data-explorer-row="${repo}/src/main.ts"]`)).toHaveAttribute("data-selected", "true", { timeout: 10_000 });
     expect(sent.get("file_index") ?? 0).toBeGreaterThanOrEqual(1);
 
@@ -1871,7 +1871,7 @@ test("a save refused at the daemon's boundary keeps the draft unsaved, across a 
 
     await page.reload();
     await expect(content).toContainText("answer = 55", { timeout: 20_000 });
-    await showTool(page, "files");
+    await showDocuments(page);
     await expect(page.locator('[data-editor-dirty="true"]')).toBeVisible();
     expect(fs.readFileSync(file, "utf8")).toBe(original);
 

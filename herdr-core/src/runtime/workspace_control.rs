@@ -385,20 +385,16 @@ impl Runtime {
                 .caller_stays_behind(&key, pane_id)
                 .then(|| self.keep_front(&key));
             // An open the operator is looking at calls the lane as a click
-            // does (PRD right-lane B17), and keeps a tree that showed alone.
+            // does (PRD right-lane B17).
             let calls_lane = kept.is_none()
                 && self.front_workspace_key().as_ref() == Some(&key)
                 && lane_call(&action);
-            let lone_tree = calls_lane && self.front_lone_tree().as_ref() == Some(&key);
             let mut applied =
                 self.apply_workspace_action(&key, &context, request_id, &action, material);
             if let Ok(done) = &mut applied {
                 self.stamp_control_opener(&key, pane_id, &action, &done.view_id);
                 if calls_lane {
-                    self.apply_area_intent_to(&key, AreaIntent::Files);
-                    if lone_tree {
-                        self.keep_lone_tree(&key);
-                    }
+                    self.apply_area_intent_to(&key, AreaIntent::Documents);
                     // A view already in front still calls the lane, which
                     // the page sees only if the change is announced.
                     done.changed = true;

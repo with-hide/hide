@@ -19,7 +19,7 @@ test("close follows the keyboard and the lane never renders an empty surface", a
     await showExplorer(page);
     const panes = page.locator("[data-pane-view]");
     const screen = page.locator("[data-workspace-screen]");
-    const tree = page.locator("[data-lane-tree]");
+    const tree = page.locator('[data-lane="explorer"]');
     const file = page.locator('[data-explorer-row$="/notes.md"]');
     await file.click();
     const editor = page.locator("[data-editor-body] .cm-content");
@@ -27,28 +27,27 @@ test("close follows the keyboard and the lane never renders an empty surface", a
     await editor.click();
     await screenshot(page, "close-view-before");
     // Browser column: Alt W; Electron uses the same command with Command W.
-    // Closing the last view keeps the lane up, the tree filling it (PRD right-lane B12).
+    // Closing the last view closes the viewing column and leaves the Explorer in its column (PRD lane-two-columns B12).
     await page.keyboard.press(chord("close_tab"));
     await expect(editor).toHaveCount(0);
     await expect(panes).toHaveCount(2);
-    await expect(tree).toHaveAttribute("data-lane-tree", "only");
+    await expect(tree).toBeVisible();
+    await expect(screen).toHaveAttribute("data-lane-view", "none");
     await expect(page.locator("[data-explorer-tree]")).toBeFocused();
-    await expect(page.locator("[data-lane-header] [data-lane-tree-toggle]")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.locator("[data-lane-header] [data-lane-tree-toggle]")).toBeDisabled();
     await expect(screen).toHaveAttribute("data-lane-mode", "overlay");
     await expect(page.locator("[data-lane-frame] [data-view-area]")).toHaveCount(0);
-    await screenshot(page, "close-view-tree-only");
+    await screenshot(page, "close-view-explorer-alone");
 
-    // The tree owns the keyboard: no View or terminal close is allowed.
+    // The tool column owns the keyboard: no View or terminal close is allowed (B16).
     await file.focus();
     await page.keyboard.press(chord("close_tab"));
     await expect(panes).toHaveCount(2);
     await expect(tree).toBeVisible();
     await file.click();
     await expect(editor).toBeVisible();
-    await page.keyboard.press(chord("toggle_file_tree"));
+    await page.keyboard.press(chord("toggle_lane_explorer"));
     await expect(tree).toHaveCount(0);
-    // ⌘E closes the lane and brings it back with its view (B2, B20).
+    // ⌘E closes the lane and brings it back with its view (B2, B20; lane-two-columns B15).
     await page.keyboard.press(chord("toggle_lane"));
     await expect(screen).toHaveAttribute("data-lane-mode", "closed");
     await page.keyboard.press(chord("toggle_lane"));
@@ -56,7 +55,7 @@ test("close follows the keyboard and the lane never renders an empty surface", a
     await expect(tree).toHaveCount(0);
 
     // An unfocused rail control has no closable owner.
-    await page.locator('[data-lane-tool="files"]').focus();
+    await page.locator('[data-lane-tool="documents"]').focus();
     await page.keyboard.press(chord("close_tab"));
     await expect(panes).toHaveCount(2);
     await expect(editor).toBeVisible();

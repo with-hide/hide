@@ -2665,12 +2665,6 @@ impl Runtime {
             .separate_view_areas()
             .then(|| AreaIntent::of(&event))
             .flatten();
-        // An open asked while the front files tool shows the tree alone
-        // keeps the tree beside what it opens, whichever route it takes and
-        // however late its view lands (B11, B12).
-        let lone_tree = (self.separate_view_areas() && AreaIntent::opens_view(&event))
-            .then(|| self.front_lone_tree())
-            .flatten();
         // A keystroke in a document is as frequent as terminal input and
         // moves no area either: its first edit keeps its own displays open,
         // and the next snapshot read's sync publishes that.
@@ -2706,12 +2700,6 @@ impl Runtime {
                 // The call is numbered even when nothing else moved (an
                 // open of the view already shown), and the shell must hear it.
                 changed = true;
-            }
-            if let Some(key) = lone_tree
-                && self.snapshot.status.last_error.is_none()
-                && self.front_workspace_key().as_ref() == Some(&key)
-            {
-                changed |= self.keep_lone_tree(&key);
             }
             if chooses_workspace && self.snapshot.status.last_error.is_none() {
                 self.mark_front_chosen();

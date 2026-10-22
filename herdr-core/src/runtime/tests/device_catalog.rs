@@ -1545,8 +1545,8 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
     ));
     let views = tempfile::tempdir().unwrap();
     let mut store = WorkspaceViewStore::open(views.path().join("views.json"), Default::default()).0;
-    store.views.entry(TARGET, &t.main).tool = Some(crate::workspace_views::Tool::Files);
-    store.views.entry(TARGET, &t.linked).tool = Some(crate::workspace_views::Tool::Files);
+    store.views.entry(TARGET, &t.main).show_documents();
+    store.views.entry(TARGET, &t.linked).show_documents();
     runtime.workspace_views = Some(store);
     runtime.reconcile_node_agent_topology(TARGET);
 
@@ -1573,16 +1573,10 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
             .views
             .get(TARGET, path)
             .unwrap()
-            .tool
+            .shows_documents()
     };
-    assert_eq!(
-        panel(&runtime, &t.linked),
-        Some(crate::workspace_views::Tool::Files)
-    );
-    assert_eq!(
-        panel(&runtime, &t.main),
-        Some(crate::workspace_views::Tool::Files)
-    );
+    assert!(panel(&runtime, &t.linked));
+    assert!(panel(&runtime, &t.main));
 
     // Group-tabs B28: explicit navigation chooses the core checkout now,
     // independently of the device Herdr focus that may arrive later.

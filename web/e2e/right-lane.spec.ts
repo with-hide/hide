@@ -7,11 +7,12 @@ import { runInPane, startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { quietFor } from "./wait";
-import { countSent, enterWorkspace, screenshot, showTool } from "./wire";
+import { countSent, enterWorkspace, screenshot, setLanePinned, showTool } from "./wire";
 
-// PRD right-lane: one lane beside or over Agent Views, a rail of four tools,
-// one pin, the file tree as a column of the files tool. Each test starts one
-// stack and asserts one contract.
+// PRD right-lane and PRD lane-two-columns: one lane beside or over Agent
+// Views, two columns (the documents or the 보기 slot, and one tool), a rail
+// of the viewing column's buttons over four tools, one pin. Each test starts
+// one stack and asserts one contract.
 
 const screen = (page: Page) => page.locator("[data-workspace-screen]");
 const railTool = (page: Page, tool: string) => page.locator(`[data-lane-tool="${tool}"]`);
@@ -62,12 +63,12 @@ function savedViewFacts(read: SavedRead, fixture: string): unknown {
   const hash = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
   const metadata = { bytes: read.bytes.length, sha256: hash(read.bytes) };
   try {
-    const saved = JSON.parse(read.bytes.toString("utf8")) as { schema_version: number; workspaces: { path: string; tool: string | null; pinned: boolean; view_layout: SavedLayout; agent_layout: SavedLayout }[] };
+    const saved = JSON.parse(read.bytes.toString("utf8")) as { schema_version: number; workspaces: { path: string; open: boolean; documents: boolean; tool: string | null; pinned: boolean; view_layout: SavedLayout; agent_view_layout: SavedLayout }[] };
     if (!Number.isInteger(saved.schema_version) || !Array.isArray(saved.workspaces)) throw new TypeError();
     const views = saved.workspaces.filter((view) => view.path.replaceAll("\\", "/") === fixture.replaceAll("\\", "/"));
     if (views.length !== 1) return { ...metadata, status: "workspace_match_error", schema_version: saved.schema_version, matches: views.length };
     const view = views[0]!;
-    if (typeof view.pinned !== "boolean" || ![null, "files", "work", "memory", "changes"].includes(view.tool)) throw new TypeError();
+    if (typeof view.pinned !== "boolean" || typeof view.open !== "boolean" || typeof view.documents !== "boolean" || ![null, "explorer", "prs", "memory", "changes"].includes(view.tool)) throw new TypeError();
     const layout = (value: SavedLayout) => {
       const areas: { id: string; active: string | null; displays: { id: string; basename?: string; kind?: string }[] }[] = [];
       const identity = (id: string) => { if (typeof id !== "string") throw new TypeError(); return hash(id); };
@@ -93,32 +94,34 @@ function savedViewFacts(read: SavedRead, fixture: string): unknown {
       const active_basename = activeArea?.displays.find((display) => display.id === activeArea.active)?.basename ?? null;
       return { active_area: identity(value.active_area), active_basename, display_count: areas.reduce((count, area) => count + area.displays.length, 0), areas };
     };
-    return { ...metadata, status: "read", schema_version: saved.schema_version, tool: view.tool, pinned: view.pinned, views: layout(view.view_layout), agents: layout(view.agent_layout) };
+    return { ...metadata, status: "read", schema_version: saved.schema_version, open: view.open, documents: view.documents, tool: view.tool, pinned: view.pinned, views: layout(view.view_layout), agents: layout(view.agent_layout) };
   } catch (error) {
     return { ...metadata, status: error instanceof SyntaxError ? "parse_error" : "shape_error" };
   }
 }
 
-test("an opened file comes up over Agent Views without resizing a terminal, stays through a terminal click, and Escape puts it away with its document (B1, B3, B4, B16) @platform", async ({ page }) => {
+test("an opened file comes up over Agent Views without resizing a terminal, stays through a terminal click, and Escape puts it away with its document (PRD right-lane B1, B3, B4, B16; lane-two-columns B6, B11, B17, B20) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const lane = await startLane(page, "lane-overlay");
   try {
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
-    await expect(page.locator("[data-lane-tool]")).toHaveCount(4);
-    await expect(railTool(page, "files")).toHaveAttribute("aria-pressed", "false");
+    await expect(page.locator("[data-lane-tool]")).toHaveCount(5);
+    await expect(railTool(page, "documents")).toBeDisabled();
     await expect(pane(page, lane.herdr.panes[0]!)).toBeVisible();
     await quietFor(page, 500, "the first fit has landed before the lane opens");
     const before = resizes(lane);
 
     await openFile(lane, lane.herdr.panes[0]!, "a.md");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
+    await expect(screen(page)).toHaveAttribute("data-lane-shows", "none");
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
-    await expect(railTool(page, "files")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.locator("[data-lane-header] [data-lane-tree-toggle]")).toBeVisible();
+    await expect(railTool(page, "documents")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("[data-lane-header]")).toHaveCount(0);
     await screenshot(page, "right-lane-overlay");
 
-    // The divider at the overlay's left edge widens the lane by what it is
-    // dragged, lands once on release, and resizes no terminal (B6).
+    // The divider at the overlay's left edge widens the documents by what it
+    // is dragged, lands once on release, and resizes no terminal (B17).
     const laneBox = (await page.locator('[data-lane-frame="overlay"]').boundingBox())!;
     const grip = page.locator('[data-lane-frame="overlay"] [data-lane-divider="lane"]');
     await expect(grip).toHaveAttribute("aria-valuenow", String(Math.round(laneBox.width)));
@@ -134,29 +137,38 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await expect.poll(async () => Math.abs((await widened()) - (laneBox.width + 120))).toBeLessThanOrEqual(1);
     await expect(grip).toHaveAttribute("aria-valuenow", String(await widened()));
     const wide = await widened();
-    await screenshot(page, "right-lane-files-wide");
+    await screenshot(page, "right-lane-documents-wide");
 
-    // Every other tool keeps a width of its own: the wide document leaves
-    // Memory at the default, and Files comes back at its width (B6).
+    // A tool opens beside the documents at a width of its own: the wide
+    // document leaves Memory at the default, the column divider trades width
+    // between the two, and the tool's × leaves the documents at the width
+    // that trade left them (B14, B17).
     await railTool(page, "memory").click();
     await expect(page.locator("[data-lane-header]")).toContainText("Memory");
-    await expect.poll(widened).toBe(Math.round(laneBox.width));
-    await screenshot(page, "right-lane-memory-own-width");
-    // Memory's divider moves Memory's width alone.
-    const memoryGrip = (await grip.boundingBox())!;
-    await page.mouse.move(memoryGrip.x + memoryGrip.width / 2, memoryGrip.y + 200);
+    await expect(screen(page)).toHaveAttribute("data-lane-shows", "memory");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
+    const memory = () => page.locator('[data-lane-column="tool"]').boundingBox().then((box) => Math.round(box!.width));
+    await expect.poll(memory).toBe(400);
+    expect(Math.abs((await documentArea(page).boundingBox())!.width - wide)).toBeLessThanOrEqual(1);
+    await screenshot(page, "right-lane-memory-beside");
+    // The divider between the columns trades width between them; the lane keeps its own.
+    const laneWide = await widened();
+    const columnGrip = page.locator('[data-lane-divider="column"]');
+    const columnBox = (await columnGrip.boundingBox())!;
+    await page.mouse.move(columnBox.x + columnBox.width / 2, columnBox.y + 200);
     await page.mouse.down();
-    await page.mouse.move(memoryGrip.x + memoryGrip.width / 2 - 60, memoryGrip.y + 200, { steps: 6 });
+    await page.mouse.move(columnBox.x + columnBox.width / 2 - 60, columnBox.y + 200, { steps: 6 });
     await page.mouse.up();
-    await expect.poll(async () => Math.abs((await widened()) - (laneBox.width + 60))).toBeLessThanOrEqual(1);
-    await railTool(page, "files").click();
-    await expect(page.locator("[data-lane-header] [data-lane-tree-toggle]")).toBeVisible();
-    await expect.poll(widened).toBe(wide);
+    await expect.poll(memory).toBe(460);
+    expect(await widened()).toBe(laneWide);
+    await page.locator('[data-lane-tool-close="memory"]').click();
+    await expect(screen(page)).toHaveAttribute("data-lane-shows", "none");
+    await expect.poll(widened).toBe(wide - 60);
     await expect(pane(page, lane.herdr.panes[0]!)).toBeVisible();
     expect(resizes(lane)).toBe(before);
 
     // A terminal click takes the keyboard and leaves the unpinned lane up:
-    // only the operator takes it down (B4).
+    // only the operator takes it down (PRD right-lane B4).
     await pane(page, lane.herdr.panes[0]!).click();
     await expect(pane(page, lane.herdr.panes[0]!).locator(".xterm-helper-textarea")).toBeFocused();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
@@ -172,38 +184,36 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     expect(resizes(lane)).toBe(before);
 
     // Escape on the rail puts it away too.
-    await railTool(page, "files").click();
+    await railTool(page, "documents").click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
     await page.keyboard.press("Escape");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "hidden");
 
-    // The rail's icon on the tool it shows closes the lane.
-    await railTool(page, "files").click();
+    // The rail's documents button, pressed while they show, folds them; with
+    // no tool column the lane has nothing left and closes (B11, B12).
+    await railTool(page, "documents").click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
-    await railTool(page, "files").click();
+    await railTool(page, "documents").click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
+    await expect(page.locator('[data-lane-badge="1"]')).toBeVisible();
+    await railTool(page, "documents").click();
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
+    await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
   } finally {
     lane.daemon.stop();
     lane.herdr.stop();
   }
 });
 
-test("the rail draws one divider between the Project's tools and the checkout's, and Files starts with Explorer while other headers keep their scope icons (D-37, B54, tab-file-toolbar D-02/D-03)", async ({ page }) => {
+test("the rail draws the viewing column's buttons over a rule and one divider between the Project's tools and the checkout's, and every tool column's header keeps its scope icon (D-37, B2, B3, B54)", async ({ page }) => {
   test.setTimeout(120_000);
   const lane = await startLane(page, "lane-scope");
   try {
-    // One short rule where the Project's tools end and the checkout's begin.
-    const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? "divider"));
-    expect(rail).toEqual(["memory", "prs", "divider", "files", "changes"]);
-    // PRD tab-file-toolbar D-02/D-03: only Files omits its title/scope.
-    await showTool(page, "files");
-    const filesHeader = page.locator("[data-lane-header]");
-    await expect(filesHeader.locator("[data-lane-scope], svg.lucide-git-branch")).toHaveCount(0);
-    await expect(filesHeader).toHaveText("Explorer");
-    await expect(filesHeader.getByRole("button").first()).toHaveAttribute("data-lane-tree-toggle");
-    await expect(filesHeader.getByRole("button")).toHaveCount(4);
-    // Other tools still read `name · scope`, with decoration only.
-    for (const [tool, name, icon] of [["memory", "Memory", "folder"], ["prs", "PRs", "folder"], ["changes", "Changes", "git-branch"]] as const) {
+    // The documents' button, a rule, then one short rule where the Project's tools end and the checkout's begin.
+    const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? `divider:${node.getAttribute("data-tool-rail-divider")}`));
+    expect(rail).toEqual(["documents", "divider:view", "memory", "prs", "divider:true", "explorer", "changes"]);
+    // Every tool reads `name · scope`, with decoration only, and closes with one ×.
+    for (const [tool, name, icon] of [["memory", "Memory", "folder"], ["prs", "PRs", "folder"], ["explorer", "Explorer", "git-branch"], ["changes", "Changes", "git-branch"]] as const) {
       await showTool(page, tool);
       const header = page.locator("[data-lane-header]");
       const scope = header.locator("[data-lane-scope]");
@@ -211,6 +221,8 @@ test("the rail draws one divider between the Project's tools and the checkout's,
       await expect(scope.locator("svg.lucide-folder, svg.lucide-git-branch")).toHaveCount(1);
       const text = (await scope.textContent())!.replace(/\s+/g, " ").trim();
       expect(text, tool).toMatch(new RegExp(`^${name} · \\S`));
+      await expect(header.getByRole("button")).toHaveCount(1);
+      await expect(header.locator(`[data-lane-tool-close="${tool}"]`)).toBeVisible();
     }
   } finally {
     lane.daemon.stop();
@@ -218,7 +230,7 @@ test("the rail draws one divider between the Project's tools and the checkout's,
   }
 });
 
-test("the pin docks the lane once, keeps it through a terminal click, a tool and an Agent tab, and a restart brings it back docked (B5, B7, B15, B22, B24) @platform", async ({ page }) => {
+test("the pin docks the lane once, keeps it through a terminal click, a tool and an Agent tab, and a restart brings it back docked (PRD right-lane B5, B7, B15, B22, B24; lane-two-columns B21, B23) @platform", async ({ page }) => {
   test.setTimeout(150_000);
   const lane = await startLane(page, "lane-pin");
   try {
@@ -228,9 +240,8 @@ test("the pin docks the lane once, keeps it through a terminal click, a tool and
     const before = resizes(lane);
     const agents = await page.locator("[data-agent-area]").boundingBox();
 
-    await page.locator("[data-lane-pin]").click();
+    await setLanePinned(page, true);
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
-    await expect(page.locator("[data-lane-pin]")).toHaveAttribute("aria-pressed", "true");
     // One fit per attached terminal, the background tab's included.
     const attached = await page.locator("[data-pane-view]").count();
     await expect.poll(() => resizes(lane)).toBe(before + attached);
@@ -242,13 +253,15 @@ test("the pin docks the lane once, keeps it through a terminal click, a tool and
 
     await pane(page, lane.herdr.panes[0]!).click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
+    // A tool opens beside the documents and fits each terminal once more (B21).
     await railTool(page, "prs").click();
     await expect(page.locator("[data-lane]")).toHaveAttribute("data-lane", "prs");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
+    await expect.poll(() => resizes(lane)).toBe(before + 2 * attached);
 
     // Another Agent tab keeps the lane and adds its View to the checkout's
     // one list; returning to the first Agent keeps the View just selected.
-    await railTool(page, "files").click();
     const tab = (id: string) => page.locator(`[data-agent-tab-bar] [data-tab="${id}"]`);
     await tab(lane.second.tab).click();
     await openFile(lane, lane.second.pane, "b.md");
@@ -262,7 +275,7 @@ test("the pin docks the lane once, keeps it through a terminal click, a tool and
     // prove the asynchronous save the next process will restore has landed.
     const fixture = path.join(lane.herdr.root, "fixture");
     const stored = () => savedViewFacts(readSavedViews(lane.daemon.stateDir), fixture);
-    await expect.poll(stored).toMatchObject({ status: "read", tool: "files", pinned: true, views: { display_count: 2, active_basename: "b.md" } });
+    await expect.poll(stored).toMatchObject({ status: "read", open: true, documents: true, tool: "prs", pinned: true, views: { display_count: 2, active_basename: "b.md" } });
     const savedBeforeExit = readSavedViews(lane.daemon.stateDir);
     let savedAfterExit: SavedRead | undefined;
     try {
@@ -275,94 +288,110 @@ test("the pin docks the lane once, keeps it through a terminal click, a tool and
     await page.goto("about:blank");
     await page.goto(`${lane.daemon.origin}/?probe=1#token=${lane.daemon.token}`);
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
+    await expect(screen(page)).toHaveAttribute("data-lane-shows", "prs");
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
 
-    // Unpinned, the lane goes back over Agent Views, and a restart brings it
-    // back there: the operator never took it down.
-    await page.locator("[data-lane-pin]").click();
+    // Unpinned, the lane goes back over Agent Views with both columns, and a
+    // restart brings it back there: the operator never took it down.
+    await setLanePinned(page, false);
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
-    await expect.poll(stored).toMatchObject({ status: "read", tool: "files", pinned: false, views: { display_count: 2, active_basename: "b.md" } });
+    await expect.poll(stored).toMatchObject({ status: "read", open: true, documents: true, tool: "prs", pinned: false, views: { display_count: 2, active_basename: "b.md" } });
     lane.daemon = await lane.daemon.restart();
     await page.goto("about:blank");
     await page.goto(`${lane.daemon.origin}/?probe=1#token=${lane.daemon.token}`);
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
-    await expect(railTool(page, "files")).toHaveAttribute("aria-pressed", "true");
+    await expect(railTool(page, "documents")).toHaveAttribute("aria-pressed", "true");
+    await expect(railTool(page, "prs")).toHaveAttribute("aria-pressed", "true");
   } finally {
     lane.daemon.stop();
     lane.herdr.stop();
   }
 });
 
-test("closing the last view with the tree off closes the lane, hands the keyboard to the pane, and the lane chord brings Files back (B12)", async ({ page }) => {
+test("closing the last view closes the lane when no tool shows, hands the keyboard to the pane, and the lane chord brings the Explorer back (B12, B15)", async ({ page }) => {
   test.setTimeout(120_000);
   const lane = await startLane(page, "lane-last-view");
   try {
     await openFile(lane, lane.herdr.panes[0]!, "a.md");
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
-    await expect(page.locator("[data-lane-tree-toggle]")).toHaveAttribute("aria-pressed", "false");
+    await expect(screen(page)).toHaveAttribute("data-lane-shows", "none");
 
     await documentArea(page).locator(".cm-content").click();
     await page.keyboard.press(chord("close_tab"));
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
-    await expect(page.locator("[data-lane-tree]")).toHaveCount(0);
+    await expect(page.locator('[data-lane="explorer"]')).toHaveCount(0);
     await expect(pane(page, lane.herdr.panes[0]!).locator(".xterm-helper-textarea")).toBeFocused();
+    await expect(railTool(page, "documents")).toBeDisabled();
+    await railTool(page, "documents").hover();
+    await expect(page.locator('[role="tooltip"]')).toHaveText(/No open document/);
 
+    // A lane with no column and no document comes back on the Explorer.
     await page.keyboard.press(chord("toggle_lane"));
-    await expect(screen(page)).toHaveAttribute("data-lane-shows", "files");
-    await expect(page.locator('[data-lane-tree="only"]')).toBeVisible();
+    await expect(screen(page)).toHaveAttribute("data-lane-shows", "explorer");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
+    await expect(page.locator('[data-lane="explorer"] [data-explorer]')).toBeVisible();
   } finally {
     lane.daemon.stop();
     lane.herdr.stop();
   }
 });
 
-test("the tree opens beside the document without narrowing it, stays through a tool switch, and fills the lane once the last view closes (B9-B12) @platform", async ({ page }) => {
+test("the Explorer opens beside the document without narrowing it, stays through a tool switch and the last view closing, and its chord closes the column alone (B4, B5, B7, B8, B12, B14) @platform", async ({ page }) => {
   test.setTimeout(120_000);
-  const lane = await startLane(page, "lane-tree");
+  const lane = await startLane(page, "lane-explorer");
   try {
     await openFile(lane, lane.herdr.panes[0]!, "a.md");
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
     const width = (await documentArea(page).boundingBox())!.width;
-    const toggle = page.locator("[data-lane-tree-toggle]");
-    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await expect(railTool(page, "explorer")).toHaveAttribute("aria-pressed", "false");
 
-    await toggle.click();
-    await expect(page.locator('[data-lane-tree="beside"]')).toBeVisible();
-    await expect(page.locator("[data-lane-tree-toggle]")).toHaveAttribute("aria-pressed", "true");
+    await railTool(page, "explorer").click();
+    await expect(page.locator('[data-lane="explorer"] [data-explorer]')).toBeVisible();
+    await expect(railTool(page, "explorer")).toHaveAttribute("aria-pressed", "true");
+    await expect(railTool(page, "documents")).toHaveAttribute("aria-pressed", "true");
+    await expect(railTool(page, "documents").locator("[data-lane-badge]")).toHaveText("1");
     expect(Math.abs((await documentArea(page).boundingBox())!.width - width)).toBeLessThanOrEqual(1);
-    await screenshot(page, "right-lane-tree");
+    // The Explorer has nothing of its own to turn off: no toggle, no hint about a tree alone (B5).
+    await expect(page.locator("[data-lane-tree-toggle], [data-lane-tree-footer]")).toHaveCount(0);
+    await screenshot(page, "right-lane-explorer");
 
+    // Another tool replaces the Explorer in the tool column; the documents stay.
     await railTool(page, "changes").click();
-    await railTool(page, "files").click();
-    await expect(page.locator('[data-lane-tree="beside"]')).toBeVisible();
+    await expect(screen(page)).toHaveAttribute("data-lane-shows", "changes");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
+    await railTool(page, "explorer").click();
+    await expect(page.locator('[data-lane="explorer"] [data-explorer]')).toBeVisible();
 
-    // The last view closed leaves the lane on the files tool, the tree alone.
+    // The last view closed closes the viewing column; the Explorer stays (B12).
     await page.getByRole("button", { name: "Close view a.md" }).click();
-    await expect(page.locator('[data-lane-tree="only"]')).toBeVisible();
-    await expect(page.locator("[data-lane-tree-hint]")).toBeVisible();
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
+    await expect(screen(page)).toHaveAttribute("data-lane-shows", "explorer");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
-    await screenshot(page, "right-lane-tree-only");
-    // The chord has nothing to turn off while the tree is all the lane shows.
-    const views = lane.sent.get("workspace_view") ?? 0;
-    await page.keyboard.press(chord("toggle_file_tree"));
-    await quietFor(page, 300, "the chord sent nothing");
-    expect(lane.sent.get("workspace_view") ?? 0).toBe(views);
+    await expect(railTool(page, "documents")).toBeDisabled();
+    await screenshot(page, "right-lane-explorer-alone");
 
-    // Picking a file opens it beside the same tree; the chord turns it off.
-    await page.locator("[data-lane-tree]").evaluate((tree) => { (tree as HTMLElement).dataset.probe = "kept"; });
+    // Picking a file opens it beside the same Explorer (B6); the chord
+    // closes the Explorer column alone, the document staying (B14).
+    await page.locator('[data-lane="explorer"]').evaluate((column) => { (column as HTMLElement).dataset.probe = "kept"; });
     await page.locator('[data-explorer-row$="/b.md"]').dblclick();
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
-    await expect(page.locator('[data-lane-tree="beside"][data-probe="kept"]')).toBeVisible();
+    await expect(page.locator('[data-lane="explorer"][data-probe="kept"]')).toBeVisible();
     await page.locator('[data-lane-frame] [data-view-area="true"] .cm-content').click();
-    await page.keyboard.press(chord("toggle_file_tree"));
-    await expect(page.locator("[data-lane-tree]")).toHaveCount(0);
+    await page.keyboard.press(chord("toggle_lane_explorer"));
+    await expect(page.locator('[data-lane="explorer"]')).toHaveCount(0);
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
+    await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
+    // The chord opens it again beside the document.
+    await page.keyboard.press(chord("toggle_lane_explorer"));
+    await expect(page.locator('[data-lane="explorer"] [data-explorer]')).toBeVisible();
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
   } finally {
     lane.daemon.stop();
     lane.herdr.stop();
   }
 });
 
-test("expand takes the whole body and returns on Escape without resizing a terminal (B8) @platform", async ({ page }) => {
+test("expand takes the whole body and returns on Escape without resizing a terminal (PRD right-lane B8; lane-two-columns B15) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const lane = await startLane(page, "lane-expand");
   try {
@@ -370,7 +399,8 @@ test("expand takes the whole body and returns on Escape without resizing a termi
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
     await quietFor(page, 500, "the overlay has settled");
     const before = resizes(lane);
-    await page.locator("[data-lane-expand]").click();
+    await page.locator("[data-lane-more]").click();
+    await page.locator('[data-lane-menu-item="expand"]').click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "expanded");
     const row = (await page.locator("[data-lane-row]").boundingBox())!;
     expect(Math.abs((await page.locator("[data-lane-frame]").boundingBox())!.width - row.width)).toBeLessThanOrEqual(1);
@@ -397,11 +427,12 @@ test("the rail shows icons alone and names each tool in its hint in four languag
   const lane = await startLane(page, "lane-rail");
   try {
     await openFile(lane, lane.herdr.panes[0]!, "a.md");
-    await expect(railTool(page, "files")).toHaveAttribute("aria-pressed", "true");
+    await expect(railTool(page, "documents")).toHaveAttribute("aria-pressed", "true");
     const rail = page.locator("[data-tool-rail]");
-    // The rail draws no text of its own: a tool's name is its accessible name
-    // and the hint that opens on hover, with the tool's scope and chord.
-    await expect(rail).toHaveText("");
+    // The rail draws no text of its own but the documents count: a tool's name
+    // is its accessible name and the hint that opens on hover, with the tool's
+    // scope and chord.
+    await expect(rail).toHaveText("1");
     for (const [language, theme] of [
       ["en", "light"],
       ["ko", "dark"],
@@ -427,13 +458,14 @@ test("the rail shows icons alone and names each tool in its hint in four languag
     }
 
     // The keyboard reaches the rail; each tool says whether it shows.
-    await railTool(page, "files").focus();
+    await railTool(page, "explorer").focus();
     await page.keyboard.press("Tab");
     await expect(railTool(page, "changes")).toBeFocused();
     await expect(railTool(page, "changes")).toHaveAttribute("aria-pressed", "false");
     await page.keyboard.press("Enter");
     await expect(railTool(page, "changes")).toHaveAttribute("aria-pressed", "true");
-    await expect(railTool(page, "files")).toHaveAttribute("aria-pressed", "false");
+    await expect(railTool(page, "explorer")).toHaveAttribute("aria-pressed", "false");
+    await expect(railTool(page, "documents")).toHaveAttribute("aria-pressed", "true");
   } finally {
     lane.daemon.stop();
     lane.herdr.stop();

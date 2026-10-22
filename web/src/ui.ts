@@ -13,12 +13,18 @@ import type { NumberedFamily } from "./shortcuts";
 import type { ViewFocusRequest, ViewWorkspace } from "./viewLayout";
 import type { KeyboardOwner } from "./viewFocus";
 import type { BrowserDevice } from "./browserDevice";
-import { NO_CALLS_SEEN, type CallsSeen, type LaneMode, type LaneTool } from "./workspace";
+import { NO_CALLS_SEEN, type CallsSeen, type LaneMode, type LaneSide, type LaneView } from "./workspace";
+import type { Tool } from "./laneTools";
 
 export type { ViewFocusRequest } from "./viewLayout";
 
-/** What the Workspace screen draws of the lane now, which the rail, the chords and the close shortcut read. */
-export type DrawnLane = { mode: LaneMode; tool: LaneTool | null };
+/**
+ * What the Workspace screen draws of the lane now, which the rail, the
+ * chords and the close shortcut read: what the viewing column shows and the
+ * tool column's tool, each `none`/null while that column is not drawn, a
+ * stacked lane's back column included (PRD lane-two-columns B19).
+ */
+export type DrawnLane = { mode: LaneMode; view: LaneView; tool: Tool | null; stacked: boolean };
 
 /**
  * A close the operator is being asked about. The sheet holds only what is
@@ -221,6 +227,8 @@ type UiStore = {
   laneShown: boolean;
   /** Whether the lane takes the whole body (D-04); never sent. */
   laneExpanded: boolean;
+  /** The column in front while a narrow pinned lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
+  stackFront: LaneSide;
   /** What the page has read of the core's lane calls (`laneCalls.ts`). */
   laneCallsSeen: CallsSeen;
   /**
@@ -319,6 +327,7 @@ type UiStore = {
   /** A terminal click, Escape or an agent chosen: an unpinned lane is put away and an expanded one returns. */
   putLaneAway: () => void;
   setLaneExpanded: (expanded: boolean) => void;
+  setStackFront: (side: LaneSide) => void;
   setDrawnLane: (drawn: DrawnLane) => void;
   setExplorerDraft: (draft: ExplorerDraft | null) => void;
   setPendingTrash: (trash: PendingTrash | null) => void;
@@ -381,10 +390,11 @@ export const useUiStore = create<UiStore>((set, get) => ({
   viewFocusRequest: null,
   laneShown: true,
   laneExpanded: false,
+  stackFront: "view",
   laneCallsSeen: NO_CALLS_SEEN,
   pageWiden: null,
   browserDevices: {},
-  drawnLane: { mode: "closed", tool: null },
+  drawnLane: { mode: "closed", view: "none", tool: null, stacked: false },
   explorerDraft: null,
   pendingTrash: null,
   explorerClipboard: null,
@@ -455,9 +465,12 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setLaneExpanded: (laneExpanded) => {
     if (get().laneExpanded !== laneExpanded) set({ laneExpanded });
   },
+  setStackFront: (stackFront) => {
+    if (get().stackFront !== stackFront) set({ stackFront });
+  },
   setDrawnLane: (drawn) => {
     const current = get().drawnLane;
-    if (current.mode !== drawn.mode || current.tool !== drawn.tool) set({ drawnLane: drawn });
+    if (current.mode !== drawn.mode || current.view !== drawn.view || current.tool !== drawn.tool || current.stacked !== drawn.stacked) set({ drawnLane: drawn });
   },
   setExplorerDraft: (explorerDraft) => set({ explorerDraft }),
   setPendingTrash: (pendingTrash) => set({ pendingTrash }),

@@ -136,7 +136,7 @@ describe("a terminal link to a file of this window's own checkout", () => {
 
 describe("input after a confirmed View close", () => {
   const workspace = { device_id: "local", path: "/repo" };
-  const frame = (ids: string[], selected: string) => ({ ...workspace, tool: "files", tree: true, layout: { active_area: "a1", display_count: ids.length, root: { area: { id: "a1", active: selected, displays: ids.map((id) => ({ id, kind: "browser", state: "open", label: id, url: "", tab_id: null })) } } } });
+  const frame = (ids: string[], selected: string) => ({ ...workspace, open: true, documents: true, tool: "explorer", layout: { active_area: "a1", display_count: ids.length, root: { area: { id: "a1", active: selected, displays: ids.map((id) => ({ id, kind: "browser", state: "open", label: id, url: "", tab_id: null })) } } } });
   const setup = async () => {
     vi.stubGlobal("CSS", { escape: (value: string) => value });
     const { installKeyboardOwner } = await import("./viewFocus");
@@ -200,7 +200,7 @@ describe("input after a confirmed View close", () => {
     header.dataset.browserToolbar = "";
     header.innerHTML = "<input />";
     content.parentElement!.append(header);
-    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { tool: "files", mode: "pinned" } as never });
+    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
     noteDrawnViews({ workspace, layout: frame(["d1", "d2"], "d1").layout } as never);
     try {
       header.querySelector("input")!.focus();
@@ -220,7 +220,7 @@ describe("input after a confirmed View close", () => {
     let command: (id: string) => void = () => {};
     const previousHost = window.hideHost;
     Object.assign(window, { hideHost: { kind: "electron", platform: "darwin", onCommand: (listener: typeof command) => { command = listener; return () => {}; }, reportBindings: vi.fn(), reportLanguage: vi.fn() } });
-    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { tool: "files", mode: "pinned" } as never });
+    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
     useShellStore.setState({ editor: { active_tab_id: "d1" } as never });
     noteDrawnViews({ workspace, layout: frame(["d1", "d2"], "d1").layout, geometry: { areas: [{ id: "a1" }] } } as never);
     const stopKeyboard = installKeyboard(actions);

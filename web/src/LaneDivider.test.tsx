@@ -6,12 +6,12 @@ import type { Actions } from "./actions";
 import { LaneDivider } from "./LaneDivider";
 import type { LaneFrame, LaneSizes } from "./workspace";
 
-// The lane's divider keys (PRD right-lane B6, B20) against the two widths the
-// lane keeps: Files' and the one the other tools share (docs/UI_BEHAVIOR.md,
-// The right lane).
+// The lane's divider keys (PRD right-lane B6, B20; lane-two-columns B17)
+// against the widths the lane keeps: the documents' and the one Memory, PRs
+// and Changes share (docs/UI_BEHAVIOR.md, The right lane).
 
-const sizes: LaneSizes = { agentMin: 480, laneMin: 360, laneIdeal: 520, lanePage: 900, treeMin: 180, treeIdeal: 240, divider: 8 };
-const files: LaneFrame = { mode: "overlay", field: "lane_width", agents: 1600, width: 520, document: 520, tree: null, treeOnly: false, narrowPin: false };
+const sizes: LaneSizes = { agentMin: 480, viewMin: 360, viewIdeal: 520, lanePage: 900, explorerMin: 180, explorerIdeal: 240, panelMin: 360, panelIdeal: 400, divider: 8 };
+const documents: LaneFrame = { mode: "overlay", agents: 1600, width: 520, view: { field: "document_width", width: 520, min: 360 }, tool: null, stacked: false, narrowPin: false };
 
 let unmount: (() => void) | null = null;
 afterEach(() => {
@@ -36,13 +36,13 @@ function mount() {
   return { render, press, sent };
 }
 
-it("lands a key pressed after the lane turns from Files to another tool in that tool's width, not on Files' unconfirmed step", () => {
+it("lands a key pressed after the documents give way to a tool alone in that tool's width, not on the documents' unconfirmed step", () => {
   const divider = mount();
-  divider.render(files);
+  divider.render(documents);
   divider.press();
-  expect(divider.sent).toEqual([{ lane_width: 552, width_request_id: expect.any(String) }]);
-  // Memory at the same width, before the core confirmed the first step.
-  divider.render({ ...files, field: "panel_width" });
+  expect(divider.sent).toEqual([{ document_width: 552, width_request_id: expect.any(String) }]);
+  // Memory alone at the same width, before the core confirmed the first step.
+  divider.render({ ...documents, view: null, tool: { field: "panel_width", width: 520, min: 360 } });
   divider.press();
   expect(divider.sent[1]).toEqual({ panel_width: 552, width_request_id: expect.any(String) });
 });

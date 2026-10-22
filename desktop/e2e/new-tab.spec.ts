@@ -2,7 +2,7 @@ import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { startHerdr } from "../../web/e2e/herdr-fixture";
-import { enterWorkspace, showExplorer } from "../../web/e2e/wire";
+import { enterWorkspace, pinState, setLanePinned, showExplorer } from "../../web/e2e/wire";
 import { fitWindow, isolate, launch, NEEDS_FOCUS, test } from "./fixture";
 
 const TITLE = "New tab page";
@@ -90,11 +90,12 @@ test("Command T and Command W from a native page act on its View area, and after
     await page.locator('[data-explorer-row$="/page.html"]').click({ button: "right" });
     await page.locator('[data-explorer-menu] [data-menu-item="open-browser"]').click();
     await expect(page.locator("[data-browser-slot]")).toBeVisible();
-    // Too narrow to dock, the pinned lane opens over the agents and stays
-    // through a terminal click (PRD right-lane B19).
-    await page.locator('[data-lane-pin="off"]').click();
-    await expect(page.locator("[data-lane-pin]")).toHaveAttribute("data-lane-pin", "narrow");
-    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
+    // The page and the Explorer fit at their minimums beside 480px of
+    // agents, so the pin docks both columns, and the lane stays through a
+    // terminal click (PRD lane-two-columns B19).
+    await setLanePinned(page, true);
+    expect(await pinState(page)).toBe("on");
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
 
     // Command T: the page's area gets the View strip's New tab.
     await terminal(herdr.panes[0]);
@@ -131,13 +132,13 @@ test("Command T and Command W from a native page act on its View area, and after
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "closed");
     await expect(page.locator(`[data-terminal-host="${herdr.panes[0]}"] textarea`)).toBeFocused();
     await menuClick(app, "toggle_lane");
-    await expect(page.locator('[data-lane="files"]')).toBeVisible();
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
     await menuClick(app, "toggle_lane");
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "closed");
     await menuClick(app, "close_tab");
     await expect(page.locator(`[data-pane-view="${herdr.panes[0]}"]`)).toHaveCount(0, { timeout: 15_000 });
     await expect(panes).toHaveCount(1);
-    await page.locator('[data-lane-tool="files"]').click();
+    await page.locator('[data-lane-tool="documents"]').click();
     await expect(viewTabs.filter({ hasText: TITLE })).toHaveCount(1);
 
     // A click back into a terminal is the operator's move: Command T is an agent tab again.

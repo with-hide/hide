@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { continueFixtureTranscript, setFixtureLifecycle, startHerdr } from "../../web/e2e/herdr-fixture";
 import { FIRST_GOAL, NEXT_GOAL, nextWork, seedFirstWork, workFixture, workRepositoryReady } from "../../web/e2e/session-work-fixture";
 import { chord } from "../../web/e2e/chords";
-import { enterWorkspace, openTaskFolds, showTool, taskRow } from "../../web/e2e/wire";
+import { enterWorkspace, openTaskFolds, setLanePinned, showExplorer, taskRow } from "../../web/e2e/wire";
 import { fitWindow, isolate, launchShell, REPO, test } from "./fixture";
 import { captureElectronWindow } from "./electron-window";
 
@@ -33,8 +33,8 @@ test("@platform session records by goal flow, ended work and search render in bo
     await workRepositoryReady(run.env.HIDE_STATE_DIR!);
     await enterWorkspace(page, "fixture");
     // The lane pinned, so the 보기 slot stays docked through the sheets below (PRD right-lane B5).
-    await showTool(page, "files");
-    await page.locator('[data-lane-pin="off"]').click();
+    await showExplorer(page);
+    await setLanePinned(page, true);
     const first = Date.now();
     github.clock(first, first);
     const { session, child } = seedFirstWork(herdr, first);
@@ -46,10 +46,10 @@ test("@platform session records by goal flow, ended work and search render in bo
     const record = page.locator('aside[data-lane="detail"][data-detail="record"] [data-session-record="lane"]');
     await expect(record.locator("[data-record-flow]")).toHaveCount(1, { timeout: 45_000 });
     await expectRecordPrs(record, child, 2);
-    // The rail keeps a fifth button for the slot: pressed while the lane draws it, kept when a tool is called, and pressing it comes back (B46).
+    // The rail keeps a button for the slot: pressed while the viewing column draws it, folding it when pressed then, and pressing it again comes back (B46; PRD lane-two-columns B11).
     const slotButton = page.locator('[data-lane-tool="detail"][data-detail-slot="record"]');
     await expect(slotButton).toHaveAttribute("aria-pressed", "true");
-    await page.locator('[data-lane-tool="files"]').click();
+    await slotButton.click();
     await expect(record).toHaveCount(0);
     await expect(slotButton).toHaveAttribute("aria-pressed", "false");
     await slotButton.click();

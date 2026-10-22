@@ -98,7 +98,7 @@ import {
   type ViewMenuId,
   type ViewWorkspace,
 } from "./viewLayout";
-import { workspaceViewOf, type LaneTool, type Tool } from "./workspace";
+import { workspaceViewOf, type LaneView, type Tool } from "./workspace";
 
 /** The `device_id` an event carries: none for the core's own node, which the core takes as the default. */
 function deviceField(device: string, node: string): { device_id?: string } {
@@ -120,9 +120,9 @@ export function laneCalled(event: Parameters<DispatchFn>[0]): boolean {
   const payload = event.payload;
   switch (event.kind) {
     case "workspace_view":
-      return typeof payload.tool === "string" || payload.reveal !== undefined;
+      return typeof payload.tool === "string" || payload.reveal !== undefined || payload.documents === true || payload.open === true;
     case "reveal_path":
-      // A folder a terminal link names shows in the files tool's tree.
+      // A folder a terminal link names shows in the Explorer.
       return payload.is_directory === true;
     default:
       return false;
@@ -131,7 +131,12 @@ export function laneCalled(event: Parameters<DispatchFn>[0]): boolean {
 
 export function createActions(send: DispatchFn) {
   const dispatch: DispatchFn = (event) => {
-    if (laneCalled(event)) useUiStore.getState().showLane();
+    if (laneCalled(event)) {
+      useUiStore.getState().showLane();
+      // A stacked lane draws the column the call is for (PRD lane-two-columns B19).
+      const tool = event.kind === "workspace_view" && (typeof event.payload.tool === "string" || event.payload.reveal !== undefined);
+      useUiStore.getState().setStackFront(tool || event.kind === "reveal_path" ? "tool" : "view");
+    }
     return send(event);
   };
   const rest = () => useShellStore.getState().rest;
@@ -372,91 +377,112 @@ export function createActions(send: DispatchFn) {
   };
 
   /**
-   * The front Workspace's lane (PRD right-lane D-11, D-12): one
-   * `workspace_view` event naming only what changes, each field the value it
-   * should end at, so the same event sent twice lands where it did once. The
-   * core keeps the lane per Workspace, so another Workspace is never touched.
+   * The front Workspace's lane (PRD right-lane D-11, D-12; lane-two-columns
+   * D-01): one `workspace_view` event naming only what changes, each field
+   * the value it should end at, so the same event sent twice lands where it
+   * did once. The core keeps the lane per Workspace, so another Workspace is
+   * never touched.
    */
-  const setWorkspaceView = (patch: { tool?: Tool | null; pinned?: boolean; tree?: boolean; prs_only_checkout?: boolean; lane_width?: number; panel_width?: number; tree_width?: number; width_request_id?: string; reveal?: string }) => {
+  const setWorkspaceView = (patch: { open?: boolean; documents?: boolean; tool?: Tool | null; pinned?: boolean; prs_only_checkout?: boolean; document_width?: number; detail_width?: number; explorer_width?: number; panel_width?: number; width_request_id?: string; reveal?: string }) => {
     if (!workspaceViewOf(rest())) return diagnostic("workspace_view: no Workspace in front");
     return dispatch({ schema_version: 2, kind: "workspace_view", payload: patch });
   };
 
-  /** Whether the lane is on screen now with this tool, as the Workspace screen draws it. */
-  const laneUpWith = (tool: LaneTool) => {
-    const drawn = ui().drawnLane;
-    return drawn.tool === tool && drawn.mode !== "closed" && drawn.mode !== "hidden";
+  /** Whether the lane is on screen now, as the Workspace screen draws it. */
+  const laneUp = () => {
+    const { mode } = ui().drawnLane;
+    return mode !== "closed" && mode !== "hidden";
   };
 
-  /** Whether the lane draws the 보기 slot rather than a tool (PRD sidebar-task-lens D-50). */
+  /** Whether the tool column draws `tool` now, a stacked lane's back column not counted. */
+  const toolUp = (tool: Tool) => laneUp() && ui().drawnLane.tool === tool;
+
+  /** Whether the viewing column draws `view` now. */
+  const viewUp = (view: LaneView) => laneUp() && ui().drawnLane.view === view;
+
+  /** Whether the core says the 보기 slot stands in front of the documents (PRD sidebar-task-lens D-50). */
   const detailShown = () => {
     const detail = rest()?.ui_state?.detail;
     return Boolean(detail?.shown && detail.items.length > 0);
   };
 
   /**
-   * Opens the lane on one tool (B2, B16): an unpinned lane comes up, and
-   * nothing is sent when it already holds the tool. A lane drawing the 보기
-   * slot turns to the tool, the slot staying on the rail (sidebar-task-lens B46).
+   * Shows one tool in the tool column (B3, B14): an unpinned lane comes up,
+   * a stacked lane draws the tool, and nothing is sent when the column
+   * already holds it. The viewing column is left as it is.
    */
   const showTool = (tool: Tool) => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
     ui().showLane();
-    if (view.tool !== tool || detailShown()) setWorkspaceView({ tool });
+    ui().setStackFront("tool");
+    if (view.tool !== tool || !view.open) setWorkspaceView({ tool });
   };
 
-  /** Puts `item` in the 보기 slot in front (B14, B15): the Workspace, its Agent tab and the keyboard stay. */
+  /** Puts `item` in the 보기 slot in front (PRD sidebar-task-lens B14, B15; lane-two-columns B9): the Workspace, its Agent tab and the keyboard stay. */
   const openDetail = (item: import("./snapshot").DetailItem) => {
     if (!workspaceViewOf(rest())) return diagnostic("detail_open: no Workspace in front");
     ui().showLane();
+    ui().setStackFront("view");
     dispatch({ schema_version: 2, kind: "detail_open", payload: { item } });
   };
 
   /** Whether a Workspace is in front to draw the lane, rather than Home (B17). */
   const workspaceInFront = () => ui().screen?.kind === "workspace" && Boolean(frontCheckout(rest()) && workspaceViewOf(rest()));
 
-  /** Closes the lane (B2, B7): the close button, or a tool's rail icon or chord while it shows. */
+  /** Closes the lane (B15): ⌘E and the path's menu; both columns keep their shape for the reopen. */
   const closeLane = () => {
     ui().putLaneAway();
-    setWorkspaceView({ tool: null });
+    setWorkspaceView({ open: false });
   };
 
-  /** A rail icon (B2, B20): the tool showing closes the lane, otherwise the lane opens on it. */
-  const toggleTool = (tool: Tool) => (laneUpWith(tool) ? closeLane() : showTool(tool));
+  /** The tool column's ×, a pressed tool icon or its chord (B14): the tool column alone closes; the documents stay. */
+  const closeTool = () => setWorkspaceView({ tool: null });
+
+  /** A rail icon or its chord (B14): the tool it shows closes the tool column, otherwise the column shows it. */
+  const toggleTool = (tool: Tool) => (toolUp(tool) ? closeTool() : showTool(tool));
+
   /**
-   * ⌘E and the path's menu (B20): the lane closes while it shows, and
-   * otherwise comes back on the tool it last showed, Files for a Workspace
-   * whose lane never showed one. Files coming back with a view takes the
-   * keyboard into its active area, so typing and ⌘W act on the document the
-   * operator brought back rather than on the terminal behind it.
+   * Brings the documents in front of the viewing column (B6, B11): an
+   * unpinned lane comes up, a stacked lane draws them, and the keyboard goes
+   * into the active area, so typing and ⌘W act on the document the operator
+   * brought back rather than on the terminal behind it.
    */
-  const toggleLane = () => {
-    const { mode } = ui().drawnLane;
-    if (mode !== "closed" && mode !== "hidden") return closeLane();
+  const showDocuments = () => {
     const view = workspaceViewOf(rest());
-    const tool = view?.last_tool ?? "files";
-    showTool(tool);
-    if (tool === "files" && view?.layout && (view.layout.display_count ?? 0) > 0) {
+    if (!view) return diagnostic("workspace_view: no Workspace in front");
+    ui().showLane();
+    ui().setStackFront("view");
+    if (!view.open || !view.documents || detailShown()) setWorkspaceView({ documents: true });
+    if (view.layout && (view.layout.display_count ?? 0) > 0) {
       followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
     }
   };
 
-  /**
-   * The tree button or ⌘⇧E (B9, B11): with the files tool on screen the tree
-   * turns on or off; otherwise the lane opens on the files tool with its tree.
-   */
-  const toggleFileTree = () => {
+  /** The rail's documents button or its command (B2, B11): the documents fold while they show, else they come in front; with no document nothing happens but a diagnostic. */
+  const toggleDocuments = () => {
     const view = workspaceViewOf(rest());
-    if (!view) return diagnostic("toggle file tree: no Workspace in front");
-    if (!laneUpWith("files")) {
-      ui().showLane();
-      return setWorkspaceView({ tool: "files", tree: true });
+    if (!view) return diagnostic("workspace_view: no Workspace in front");
+    if (viewUp("documents")) return setWorkspaceView({ documents: false });
+    if ((view.layout?.display_count ?? 0) === 0) return diagnostic("toggle documents: no document is open");
+    showDocuments();
+  };
+
+  /**
+   * ⌘E and the path's menu (B15): the lane closes while it shows, and
+   * otherwise comes back in the shape it had, the documents when it had no
+   * column and there are some, else the Explorer. Documents coming back take
+   * the keyboard into their active area.
+   */
+  const toggleLane = () => {
+    if (laneUp()) return closeLane();
+    const view = workspaceViewOf(rest());
+    if (!view) return diagnostic("workspace_view: no Workspace in front");
+    setWorkspaceView({ open: true });
+    const documents = view.layout && (view.layout.display_count ?? 0) > 0 && (view.documents || view.tool === null);
+    if (documents && view.layout) {
+      followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
     }
-    // With no view the tree fills the lane whatever is stored, so a press
-    // there would only flip a setting the operator cannot see (B12).
-    if ((view.layout?.display_count ?? 0) === 0) return diagnostic("toggle file tree: the tree fills a lane with no view");
-    setWorkspaceView({ tree: !view.tree });
   };
 
   /** The pin (B5): pinned, the lane docks; unpinned, it stays up over Agent Views until the operator closes it or puts it away with Escape. */
@@ -837,7 +863,7 @@ export function createActions(send: DispatchFn) {
             if (content) content.focus({ preventScroll: true });
             else ui().setViewFocusRequest({ workspace, areaId: area.id, revision });
           }
-        } else if (current.tool === "files" && current.tree) {
+        } else if (current.open && current.tool === "explorer") {
           screen?.querySelector<HTMLElement>("[data-explorer-tree]")?.focus({ preventScroll: true });
         } else {
           const pane = useShellStore.getState().focusedPaneId;
@@ -912,7 +938,7 @@ export function createActions(send: DispatchFn) {
     bridge.openInEditor(path);
   };
 
-  /** Shows the files tool's tree with a file's row unfolded and selected; nothing is opened (B16). */
+  /** Shows the Explorer with a file's row unfolded and selected; nothing is opened and the viewing column stays (lane-two-columns B8). */
   const revealInExplorer = (path: string) => {
     setWorkspaceView({ reveal: path });
     ui().setExplorerSelection(path);
@@ -1721,13 +1747,13 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "detail_close", payload: {} });
     },
 
-    /** The rail's 보기 slot (B46): the lane draws the slot again, or, pressed while it does, closes. */
+    /** The rail's 보기 button (lane-two-columns B11): the viewing column draws the slot again, or, pressed while it does, folds. */
     toggleDetail() {
-      if (detailShown() && laneUpWith("detail")) {
-        if (!workspaceViewOf(rest())?.tool) ui().putLaneAway();
+      if (detailShown() && viewUp("detail")) {
         return dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: false } });
       }
       ui().showLane();
+      ui().setStackFront("view");
       dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: true } });
     },
 
@@ -2224,9 +2250,9 @@ export function createActions(send: DispatchFn) {
       const target = closeShortcutPolicy({
         owner,
         workspace: ui().screen?.kind === "workspace" ? checkout?.id ?? null : null,
-        displayId: ui().drawnLane.tool === "files" && ui().drawnLane.mode !== "closed" && ui().drawnLane.mode !== "hidden" ? area?.active ?? null : null,
+        displayId: viewUp("documents") ? area?.active ?? null : null,
         paneIds: tab?.panes.map((pane) => pane.id) ?? [],
-        detailShown: ui().screen?.kind === "workspace" && !ui().overviewOpen && laneUpWith("detail"),
+        detailShown: ui().screen?.kind === "workspace" && !ui().overviewOpen && viewUp("detail"),
       });
       if (target.kind === "detail") return this.detailClose();
       if (target.kind === "view") return closeView(target.id);
@@ -2555,7 +2581,7 @@ export function createActions(send: DispatchFn) {
      */
     togglePaneRecord(session: import("./snapshot").WorkSession) {
       const top = rest()?.ui_state?.detail?.items.at(-1);
-      if (top?.kind === "record" && workKey(top.session) === workKey(session) && laneUpWith("detail")) return this.toggleDetail();
+      if (top?.kind === "record" && workKey(top.session) === workKey(session) && viewUp("detail")) return this.toggleDetail();
       this.openSessionRecord(session);
     },
     searchSessionWork(query: string, options?: import("./snapshot").SessionSearchOptions) {
@@ -2632,7 +2658,9 @@ export function createActions(send: DispatchFn) {
     },
 
     toggleTool,
-    toggleFileTree,
+    closeTool,
+    toggleDocuments,
+    showDocuments,
     closeLane,
     setLanePinned,
 
@@ -2948,9 +2976,9 @@ export function createActions(send: DispatchFn) {
     keepViewOpen,
 
     focusView,
-    /** A View an agent opened, chosen from its pane's `N views` (B8): the lane shows the files tool and the View comes forward. */
+    /** A View an agent opened, chosen from its pane's `N views` (B8): the documents come in front and the View forward. */
     revealView(displayId: string) {
-      showTool("files");
+      showDocuments();
       focusView(displayId, true);
     },
     focusViewArea,

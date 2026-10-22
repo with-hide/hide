@@ -145,15 +145,16 @@ function deviceViews(views: boolean): WorkspaceView {
   return {
     device_id: "studio",
     path: "/home/remote/app",
-    tool: views ? "files" : null,
-    last_tool: views ? "files" : null,
+    open: views,
+    documents: views,
+    tool: null,
     prs: { only_checkout: false },
     pinned: true,
-    tree: false,
-    lane_width: null,
+    document_width: null,
+    detail_width: null,
+    explorer_width: null,
     panel_width: null,
-    tree_width: null,
-    lane_called: 0, lane_calls: 0,
+    lane_called: 0, lane_calls: 0, lane_called_side: "view",
     layout: { root: { area: { id: "a1", active: "d2", displays: [notes] } }, active_area: "a1", limits: { areas: 6, depth: 3, displays: 64 }, display_count: 1 },
   };
 }
@@ -278,7 +279,7 @@ describe("commands with an SSH device selected", () => {
       useUiStore.setState({ notice: null, pendingClose: null });
       seed({ ...rest("studio", state), workspace_view: deviceViews(true) });
       const { sent, actions } = recorder();
-      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", tool: "files" } });
+      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
       noteKeyboardOwner({ kind: "view", workspace: frontCheckout(useShellStore.getState().rest)!.id, areaId: "a1" });
       actions.closeFocused();
       expect(sent).toHaveLength(1);

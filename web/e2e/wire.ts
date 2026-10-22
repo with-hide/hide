@@ -87,19 +87,48 @@ export async function screenshot(page: Page, name: string): Promise<unknown> {
   return page.screenshot({ path: path.join(dir, `${name}.png`) });
 }
 
-export type LaneTool = "memory" | "prs" | "files" | "changes";
+export type LaneTool = "memory" | "prs" | "explorer" | "changes";
 
 /**
- * Shows one tool in the right lane: its rail icon opens the lane on that
- * tool, or puts the lane back up when it holds it hidden (PRD right-lane
- * B1, B2). A press on the tool the lane already shows would close it, so a
- * pressed icon is left alone.
+ * Shows one tool in the lane's tool column: its rail icon opens the column
+ * on that tool, or puts the lane back up when it holds it hidden (PRD
+ * lane-two-columns B3, B14). A press on the tool the column already shows
+ * would close the column, so a pressed icon is left alone.
  */
 export async function showTool(page: Page, tool: LaneTool): Promise<void> {
   const icon = page.locator(`[data-lane-tool="${tool}"]`);
   if ((await icon.getAttribute("aria-pressed")) !== "true") await icon.click();
   await expect(icon).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(`aside[data-lane="${tool}"]`)).toBeVisible();
+}
+
+/** Brings the checkout's documents in front of the viewing column from the rail (B2, B11); a pressed button is left alone, since a press would fold them. */
+export async function showDocuments(page: Page): Promise<void> {
+  const button = page.locator('[data-lane-tool="documents"]');
+  if ((await button.getAttribute("aria-pressed")) !== "true") await button.click();
+  await expect(button).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
+}
+
+/** The pin's state as the rail's `…` menu shows it: `off`, `on` or `narrow` (PRD lane-two-columns B15, B19). */
+export async function pinState(page: Page): Promise<string | null> {
+  await page.locator("[data-lane-more]").click();
+  const state = await page.locator('[data-lane-menu-item="pin"]').getAttribute("data-lane-pin");
+  await page.keyboard.press("Escape");
+  await expect(page.locator('[role="menu"]')).toHaveCount(0);
+  return state;
+}
+
+/** Pins or unpins the lane from the rail's `…` menu (B15). */
+export async function setLanePinned(page: Page, pinned: boolean): Promise<void> {
+  await page.locator("[data-lane-more]").click();
+  const item = page.locator('[data-lane-menu-item="pin"]');
+  const on = (await item.getAttribute("data-lane-pin")) !== "off";
+  if (on === pinned) await page.keyboard.press("Escape");
+  else await item.click();
+  await expect(page.locator('[role="menu"]')).toHaveCount(0);
+  // A pinned lane docks, or stays over the agents where docking has no room (B19).
+  await expect.poll(() => pinState(page)).toMatch(pinned ? /^(on|narrow)$/ : /^off$/);
 }
 
 /** Turns the sidebar to its 태스크 list (PRD sidebar-task-lens B1) and waits for the core's task scope. */
@@ -130,6 +159,13 @@ export async function taskRow(page: Page, pane: string, goal: string): Promise<L
   await openTaskFolds(page);
   await expect(row).toContainText(goal, { timeout: 45_000 });
   return row;
+}
+
+/** Expands the lane over the agents, or brings it back, from the rail's `…` menu (PRD lane-two-columns B20). */
+export async function chooseExpand(page: Page): Promise<void> {
+  await page.locator("[data-lane-more]").click();
+  await page.locator('[data-lane-menu-item="expand"]').click();
+  await expect(page.locator('[role="menu"]')).toHaveCount(0);
 }
 
 /** Shows or hides the right lane from the Workspace path's menu (B20). */
@@ -163,15 +199,10 @@ export async function bindChordlessCommand(page: Page, id: string, keys: string)
   await expect.poll(() => before.evaluate((node) => node === document.activeElement)).toBe(true);
 }
 
-/** Shows the files tool with its file tree, beside the documents or filling the lane (B9, B12). */
+/** Shows the Explorer in the tool column, beside the documents or alone (PRD lane-two-columns B4, B5). */
 export async function showExplorer(page: Page): Promise<void> {
-  await showTool(page, "files");
-  const tree = page.locator("[data-lane-tree]");
-  if ((await tree.count()) === 0) {
-    await page.locator("[data-lane-more]").click();
-    await page.locator('[data-lane-menu-item="tree"]').click();
-  }
-  await expect(tree.locator("[data-explorer]")).toBeVisible();
+  await showTool(page, "explorer");
+  await expect(page.locator('[data-lane="explorer"] [data-explorer]')).toBeVisible();
 }
 
 /**
