@@ -176,6 +176,7 @@ pub(crate) fn spawn_worker(
     // The archive's sessions reach retention once the worker is there.
     guard.resend_archive_retention();
     guard.restore_pending_backlog();
+    guard.restore_plans();
     Ok(worker)
 }
 

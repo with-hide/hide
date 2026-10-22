@@ -24,7 +24,7 @@ use std::time::Duration;
 #[path = "ledger_store.rs"]
 mod ledger;
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 const SCHEMA: &str = "
 CREATE TABLE projects(key TEXT PRIMARY KEY, device TEXT NOT NULL, root TEXT NOT NULL,
@@ -1219,6 +1219,7 @@ impl LinkStore {
                 "ledger_outputs",
                 "ledger_issue_attempts",
                 "ledger_session_origins",
+                "ledger_plans",
             ] {
                 tx.execute(
                     &format!("DELETE FROM {table} WHERE device=?1 AND agent=?2 AND id=?3"),
@@ -2142,9 +2143,10 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
             ""
         };
         let flows = if version < 7 { ledger::FLOW_SCHEMA } else { "" };
+        let plans = if version < 8 { ledger::PLAN_SCHEMA } else { "" };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} {plans} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");

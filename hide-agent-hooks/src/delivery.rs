@@ -137,6 +137,10 @@ pub fn valid_session(id: &str) -> bool {
 pub struct Intake {
     pub context: String,
     pub ids: Vec<String>,
+    /// The pane's plan summary a prompt's pull carries (PRD hide-plan
+    /// D-30); absent from a tool event's pull and from an older daemon.
+    #[serde(default)]
+    pub plan_context: Option<crate::plan_record::PlanContext>,
 }
 
 #[derive(Debug)]
@@ -167,7 +171,32 @@ pub fn pull(deadline: Instant, prompt: &Prompt) -> Result<Option<Intake>, Failur
         arguments.extend(["--session", session]);
     }
     let answer = run_cli(&arguments, pull_deadline)?;
-    intake(answer)
+    let intake = intake(answer)?;
+    Ok(intake.and_then(|intake| keep_plan(intake, prompt.session.as_deref())))
+}
+
+/// Keeps the pull's plan summary in the pane's record for the pre-tool
+/// hook, and adds its line to what the agent reads (PRD hide-plan D-14,
+/// D-30). Outside a Herdr pane, or without the session, nothing is kept.
+fn keep_plan(mut intake: Intake, session: Option<&str>) -> Option<Intake> {
+    if let Some(plan) = intake.plan_context.take() {
+        let pane = std::env::var("HERDR_PANE_ID")
+            .ok()
+            .filter(|pane| !pane.is_empty());
+        if let (Some(pane), Some(session), Ok(home)) =
+            (pane, session, hide_platform::host::home_dir())
+            && crate::plan_record::write(&home, &pane, session, &plan).is_err()
+        {
+            diagnose(&home, "plan_record");
+        }
+        if let Some(hint) = crate::plan_record::hint(&plan, crate::spawn_guard::now_ms()) {
+            if !intake.context.is_empty() && !intake.context.ends_with('\n') {
+                intake.context.push('\n');
+            }
+            intake.context.push_str(&hint);
+        }
+    }
+    (!intake.ids.is_empty() || !intake.context.is_empty()).then_some(intake)
 }
 
 /// The letters due while the agent works, asked at one of its tool events
@@ -199,7 +228,7 @@ fn intake(answer: serde_json::Value) -> Result<Option<Intake>, Failure> {
         return Err("format".into());
     }
     // A count-only answer carries a context line and nothing to confirm.
-    if intake.ids.is_empty() && intake.context.is_empty() {
+    if intake.ids.is_empty() && intake.context.is_empty() && intake.plan_context.is_none() {
         Ok(None)
     } else {
         Ok(Some(intake))
@@ -339,7 +368,7 @@ struct Diagnostics {
 /// `guardrails_words`: a shell call named more words than are checked;
 /// `guardrails_failed`: the hook failed or ran out of time before it judged a
 /// call).
-const CAUSES: [&str; 24] = [
+const CAUSES: [&str; 25] = [
     "session_conflict",
     "cli",
     "deadline",
@@ -364,6 +393,7 @@ const CAUSES: [&str; 24] = [
     "guardrails",
     "guardrails_words",
     "guardrails_failed",
+    "plan_record",
 ];
 
 /// Fixed causes ([`CAUSES`]), private storage and a nonblocking cross-process lock.

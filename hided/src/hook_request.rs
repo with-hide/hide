@@ -99,7 +99,19 @@ pub(crate) fn answer(
                 point: *point,
             },
             None,
-        ),
+        )
+        .map(|mut result| {
+            // The prompt's pull also carries the pane's plan summary, which
+            // the hook keeps for its hint and its refusals (PRD hide-plan
+            // D-30): no request of its own, and none at a tool event.
+            if *point == hide_node_link::panes::PullPoint::Prompt
+                && let Some(context) = core.plan_context(&cap.context.device_id, &cap.pane_id)
+                && let Value::Object(fields) = &mut result
+            {
+                fields.insert("plan_context".to_owned(), json!(context));
+            }
+            result
+        }),
         HookCommand::Memory {
             event,
             runtime,

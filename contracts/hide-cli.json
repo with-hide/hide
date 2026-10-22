@@ -1198,6 +1198,21 @@
             ],
             "type": "object"
         },
+        "plan": {
+            "properties": {
+                "plan": {
+                    "type": "object"
+                },
+                "session": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "session",
+                "plan"
+            ],
+            "type": "object"
+        },
         "ps": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -2940,9 +2955,151 @@
             "options": [],
             "repeats_at_most": null,
             "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "plan set",
+            "options": [
+                {
+                    "conflicts": [
+                        "--json"
+                    ],
+                    "name": "--file",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--file"
+                    ],
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "json"
+                    }
+                },
+                {
+                    "name": "--ask",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--reason",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "plan_invalid",
+                "plan_order_refused",
+                "plan_too_large",
+                "plan_full",
+                "plan_unavailable",
+                "plan_session_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [
+                {
+                    "name": "key",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "plan node",
+            "options": [
+                {
+                    "name": "--status",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "planned",
+                            "working",
+                            "done",
+                            "dropped"
+                        ]
+                    }
+                },
+                {
+                    "name": "--line",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "plan_missing",
+                "plan_node_unknown",
+                "plan_order_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "plan approve",
+            "options": [],
+            "refusals": [
+                "plan_missing",
+                "plan_not_yours",
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "plan drop",
+            "options": [],
+            "refusals": [
+                "plan_not_yours",
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "plan"
+            ],
+            "arguments": [],
+            "command": "plan show",
+            "options": [],
+            "refusals": [
+                "plan_agent_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
         }
     ],
-    "digest": "sha256:e24be4e805b7bc1903522a5114329c808667e0bce8b25bed5df8cfa5218ca833",
+    "digest": "sha256:52478c42f9c3733a6f60730d442dc199f716d2cc39dcfdd7f03556b311bbad7a",
     "envelopes": {
         "agent": {
             "answer": "value",
@@ -2955,6 +3112,11 @@
             "ok": "ok"
         },
         "mission": {
+            "answer": "result",
+            "code": "reason",
+            "ok": "ok"
+        },
+        "plan": {
             "answer": "result",
             "code": "reason",
             "ok": "ok"
@@ -2979,7 +3141,7 @@
     "value_types": {
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",
-        "json": "a JSON document of the shape hide mission help shows",
+        "json": "a JSON document of the shape hide mission help or hide plan help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
         "one_of": "one of the listed values",
         "session": "non-empty, at most 4096 bytes, no control characters, does not start with -",

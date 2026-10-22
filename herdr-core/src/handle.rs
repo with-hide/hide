@@ -528,6 +528,39 @@ impl Core {
         Ok(answer)
     }
 
+    /// Runs a `hide plan` command (PRD hide-plan D-27): one change under the
+    /// lock, saved by the link worker.
+    pub fn plan_command(
+        &self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+        command: crate::plans::PlanCommand,
+    ) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "plan.command") {
+            return Err("plan_unavailable".into());
+        }
+        let (answer, changed) =
+            lock_recover(&self.runtime).plan_command(device, caller, expected, command)?;
+        if changed {
+            notify_change(self);
+        }
+        Ok(answer)
+    }
+
+    /// The plan and mission summary the prompt hook keeps for `caller`'s
+    /// pane (PRD hide-plan D-30); none for a caller in no pane.
+    pub fn plan_context(
+        &self,
+        device: &str,
+        caller: &str,
+    ) -> Option<hide_agent_hooks::plan_record::PlanContext> {
+        if !check_owner_thread(self, "plan.context") {
+            return None;
+        }
+        lock_recover(&self.runtime).plan_context(device, caller)
+    }
+
     /// `hide agent catalog`: the agents, models and efforts of `machine`, or
     /// of the caller's own `device` (PRD software-factory-conductor D-35).
     pub fn agent_catalog(

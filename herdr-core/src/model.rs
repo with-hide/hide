@@ -81,6 +81,8 @@ pub struct Snapshot {
     /// Each Conductor's mission as its map draws it (PRD
     /// software-factory-conductor D-14).
     pub missions: crate::runtime::missions::MissionsSnapshot,
+    /// Each pane's session's own plan (PRD hide-plan D-10).
+    pub plans: crate::runtime::plans::PlansSnapshot,
     pub navigator: NavigatorSnapshot,
     pub overlay: OverlaySnapshot,
     pub tab: TabSnapshot,
@@ -6246,6 +6248,7 @@ impl Snapshot {
             delivery_watches: Vec::new(),
             overview_graph: OverviewGraphSnapshot::default(),
             missions: Default::default(),
+            plans: Default::default(),
             navigator: NavigatorSnapshot {
                 agent_scope: Default::default(),
                 root_path: None,

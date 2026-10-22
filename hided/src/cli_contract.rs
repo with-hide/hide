@@ -18,7 +18,9 @@ use serde_json::{Map, Value, json};
 pub const FORMAT: u32 = 1;
 
 /// The topics whose every command is in the table.
-const TOPICS: &[&str] = &["agent", "ps", "request", "inbox", "watch", "mission"];
+const TOPICS: &[&str] = &[
+    "agent", "ps", "request", "inbox", "watch", "mission", "plan",
+];
 
 /// What a value must be for the command's parser to take it.
 #[derive(Clone, Copy)]
@@ -524,6 +526,85 @@ pub const COMMANDS: &[Spec] = &[
     ),
     spec(&["mission", "list"], &[], &[], &["mission_list"]),
     spec(&["mission", "settings"], &[], &[], &["mission_settings"]),
+    Spec {
+        words: &["plan", "set"],
+        arguments: &[],
+        repeats: None,
+        options: &[
+            Opt {
+                name: "--file",
+                value: Some(Text),
+                required: false,
+                requires: &[],
+                conflicts: &["--json"],
+            },
+            Opt {
+                name: "--json",
+                value: Some(Json),
+                required: false,
+                requires: &[],
+                conflicts: &["--file"],
+            },
+            // `--ask [why]`: the reason may follow as the next word.
+            switch("--ask"),
+            optional("--reason", Text),
+        ],
+        rest: None,
+        answers: &["plan"],
+        refusals: &[
+            "plan_invalid",
+            "plan_order_refused",
+            "plan_too_large",
+            "plan_full",
+            "plan_unavailable",
+            "plan_session_unknown",
+        ],
+    },
+    Spec {
+        words: &["plan", "node"],
+        arguments: &[Arg {
+            name: "key",
+            value: Key,
+        }],
+        repeats: None,
+        options: &[
+            optional(
+                "--status",
+                OneOf(&["planned", "working", "done", "dropped"]),
+            ),
+            optional("--line", Text),
+        ],
+        rest: None,
+        answers: &["plan"],
+        refusals: &["plan_missing", "plan_node_unknown", "plan_order_refused"],
+    },
+    Spec {
+        words: &["plan", "approve"],
+        arguments: &[],
+        repeats: None,
+        options: &[],
+        rest: None,
+        answers: &["plan"],
+        refusals: &["plan_missing", "plan_not_yours", "plan_agent_unknown"],
+    },
+    Spec {
+        words: &["plan", "drop"],
+        arguments: &[],
+        repeats: None,
+        options: &[],
+        rest: None,
+        answers: &["plan"],
+        refusals: &["plan_not_yours", "plan_agent_unknown"],
+    },
+    Spec {
+        words: &["plan", "show"],
+        arguments: &[],
+        repeats: None,
+        options: &[],
+        rest: None,
+        answers: &["plan"],
+        refusals: &["plan_agent_unknown"],
+    },
 ];
 
 /// The command `args` (the words after `hide`) name, by its longest words.
@@ -621,7 +702,7 @@ fn body() -> Value {
             "body": format!("not blank, at most {BODY_LIMIT} bytes"),
             "approval": "not blank, at most 256 bytes, no control characters",
             "unsigned": "a decimal integer from 0 to 18446744073709551615",
-            "json": "a JSON document of the shape hide mission help shows",
+            "json": "a JSON document of the shape hide mission help or hide plan help shows",
             "one_of": "one of the listed values",
         },
         // Where each topic's printed line carries the answer and, when the
@@ -633,6 +714,7 @@ fn body() -> Value {
             "inbox": {"ok": "ok", "answer": "result", "code": "reason"},
             "watch": {"ok": "ok", "answer": "result", "code": "reason"},
             "mission": {"ok": "ok", "answer": "result", "code": "reason"},
+            "plan": {"ok": "ok", "answer": "result", "code": "reason"},
         },
         "answers": answers(),
     })
@@ -657,6 +739,9 @@ fn answers() -> Value {
     map.insert("mission_planned".into(), shape(&["mission", "overlaps"]));
     map.insert("mission_list".into(), shape(&["items"]));
     map.insert("mission_settings".into(), shape(&["settings"]));
+    // The plan's own record and, for the caller's own plan, the summary its
+    // hook keeps (`contracts/delivery-envelope.json`, `plan_context`).
+    map.insert("plan".into(), shape(&["session", "plan"]));
     map.insert(
         "agent_catalog".into(),
         shape(&["machine", "installed_known", "items"]),
@@ -787,6 +872,7 @@ mod tests {
             Ok(CommandKind::Delivery(_)
                 | CommandKind::AgentSpawnBriefFile { .. }
                 | CommandKind::Mission(_)
+                | CommandKind::Plan(_)
                 | CommandKind::AgentCatalog { .. }
                 | CommandKind::Ps(_))
         )

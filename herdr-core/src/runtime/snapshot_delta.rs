@@ -93,6 +93,8 @@ impl Runtime {
         // A mission's map follows its workers, its Conductor's pane and its
         // pull requests; the section is sent again only when it moved.
         self.refresh_missions();
+        // A pane's plan follows its session and the plan book.
+        self.refresh_plans();
         self.note_snapshot_sent();
         if self.delta.usage_edit != self.usage_edit {
             self.delta.revision += 1;

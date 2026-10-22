@@ -168,6 +168,8 @@ impl BacklogTarget {
 #[derive(Clone, Debug)]
 pub enum LedgerCall {
     Record(SessionIdentity),
+    /// Every saved plan, read once when the worker starts (PRD hide-plan).
+    Plans,
     /// Display-only history. Never contains a turn, wait or control proof.
     Metadata(SessionIdentity),
     /// Returns only after the existing writer commits the display update.
@@ -254,9 +256,10 @@ pub enum LedgerAnswer {
         made: Vec<String>,
     },
     Made(bool),
+    Plans(Vec<crate::plans::Plan>),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionIdentity {
     pub device_id: String,
@@ -492,6 +495,12 @@ pub enum FlowChange {
 
 #[derive(Clone, Debug)]
 pub enum LedgerUpdate {
+    /// A session's plan as the core holds it now, or `None` when it went
+    /// (PRD hide-plan D-30).
+    Plan {
+        session: SessionIdentity,
+        plan: Option<Box<crate::plans::Plan>>,
+    },
     /// A native-proven label, including the compatibility import. Older
     /// observations cannot replace a newer saved label.
     Metadata {
@@ -631,6 +640,10 @@ pub struct SessionRecord {
     /// Non-PR outputs of this session and its descendants, newest first,
     /// each once (B22).
     pub artifacts: Vec<String>,
+    /// The session's own plan, kept after the session ends (PRD hide-plan
+    /// B9, B21).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<Box<crate::plans::Plan>>,
     pub children: Vec<SessionRecord>,
     /// Every missed line, for the ledger's own context and the backlog; the
     /// screen reads `asks`.
@@ -663,7 +676,8 @@ pub struct SessionWorkSummary {
 impl LedgerUpdate {
     pub fn session(&self) -> &SessionIdentity {
         match self {
-            Self::Unjudged { session, .. }
+            Self::Plan { session, .. }
+            | Self::Unjudged { session, .. }
             | Self::ExcludeRequests { session, .. }
             | Self::Title { session, .. }
             | Self::Metadata { session, .. }

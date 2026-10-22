@@ -86,6 +86,7 @@ mod operator_focus;
 mod overview_graph;
 mod pane_geometry;
 pub(super) mod pane_move;
+mod plans;
 #[path = "tests/project_settings.rs"]
 mod project_settings;
 #[path = "tests/projects.rs"]

@@ -1356,6 +1356,12 @@ fn refusal_answer(reason: String, next_action: &'static str) -> (String, String)
             code.to_owned(),
             format!("{next_action}; {name} conducts it now"),
         ),
+        // A plan's refusal names the step or the field to fix (PRD hide-plan
+        // B1, B2).
+        (
+            code @ ("plan_invalid" | "plan_order_refused" | "plan_too_large" | "plan_node_unknown"),
+            Some(detail),
+        ) => (code.to_owned(), format!("{next_action} ({detail})")),
         (code, Some("")) => (
             code.to_owned(),
             "No other device is connected; connect one in Settings > Devices, then retry"
@@ -1395,6 +1401,8 @@ enum ScopedRequest {
     MemoryHook(herdr_core::memory_hook::Ask),
     /// `hide mission`: a Conductor's mission record, the core's own.
     Mission(herdr_core::missions::MissionCommand),
+    /// `hide plan`: the caller's session's own plan, the core's record.
+    Plan(herdr_core::plans::PlanCommand),
     /// `hide agent catalog`: what a machine's agents take, read from the
     /// core's own reports.
     AgentCatalog(Option<String>),
@@ -1416,6 +1424,7 @@ impl ScopedRequest {
                 | Self::Memory(..)
                 | Self::MemoryHook(..)
                 | Self::Mission(..)
+                | Self::Plan(..)
                 | Self::AgentCatalog(..)
                 | Self::Ps { .. }
         )
@@ -1517,6 +1526,12 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(herdr_core::missions::MissionCommand::valid)
                         .map(ScopedRequest::Mission),
+                        Some("plan") => serde_json::from_value::<herdr_core::plans::PlanCommand>(
+                            value["command"].clone(),
+                        )
+                        .ok()
+                        .filter(herdr_core::plans::PlanCommand::valid)
+                        .map(ScopedRequest::Plan),
                         Some("agent_catalog") => match value.get("machine") {
                             None | Some(Value::Null) => Some(ScopedRequest::AgentCatalog(None)),
                             Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => {
@@ -1538,6 +1553,7 @@ async fn scoped_client_loop(
                     if command.is_none()
                         || (value["type"] != "delivery"
                             && value["type"] != "mission"
+                            && value["type"] != "plan"
                             && text.len() > 16 * 1024)
                         || request_id.is_empty()
                         || request_id.len() > 64
@@ -1643,6 +1659,15 @@ async fn scoped_client_loop(
                                     core.mission(&cap.context.device_id, &cap.pane_id, &cap.context, command)
                                         .map_err(|code| {
                                             let next = herdr_core::missions::next_action(
+                                                herdr_core::coordination::split_refusal(&code).0,
+                                            );
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::Plan(command) => {
+                                    core.plan(&cap.context.device_id, &cap.pane_id, &cap.context, command)
+                                        .map_err(|code| {
+                                            let next = herdr_core::plans::next_action(
                                                 herdr_core::coordination::split_refusal(&code).0,
                                             );
                                             (code, next)

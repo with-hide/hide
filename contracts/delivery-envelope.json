@@ -1,19 +1,317 @@
 {
   "description": "The current Hide letter header emitted by mailbox::pull and read by hide-session::envelope_sender. These independent examples bind both boundaries. Attribution reads only the first nonempty line, including a batch containing several letters.",
   "examples": [
-    { "first_line": "Hide letter letter-1 from ci-lead (claude) [request]", "id": "letter-1", "sender": "ci-lead", "sender_kind": "claude", "kind": "request" },
-    { "first_line": "Hide letter letter-1 from build reviewer (codex) [block]", "id": "letter-1", "sender": "build reviewer", "sender_kind": "codex", "kind": "block" },
-    { "first_line": "Hide letter letter-1 from CI (nightly) (opencode) [report]", "id": "letter-1", "sender": "CI (nightly)", "sender_kind": "opencode", "kind": "report" },
-    { "first_line": "Hide letter letter-1 from 배포 담당 (claude) [reply]", "id": "letter-1", "sender": "배포 담당", "sender_kind": "claude", "kind": "reply" },
-    { "first_line": "Hide letter letter-1 from observer (codex) [watch]", "id": "letter-1", "sender": "observer", "sender_kind": "codex", "kind": "watch" },
-    { "first_line": "Hide letter letter-1 from operator (operator) [report]", "id": "letter-1", "sender": "operator", "sender_kind": "operator", "kind": "report", "operator": true }
+    {
+      "first_line": "Hide letter letter-1 from ci-lead (claude) [request]",
+      "id": "letter-1",
+      "sender": "ci-lead",
+      "sender_kind": "claude",
+      "kind": "request"
+    },
+    {
+      "first_line": "Hide letter letter-1 from build reviewer (codex) [block]",
+      "id": "letter-1",
+      "sender": "build reviewer",
+      "sender_kind": "codex",
+      "kind": "block"
+    },
+    {
+      "first_line": "Hide letter letter-1 from CI (nightly) (opencode) [report]",
+      "id": "letter-1",
+      "sender": "CI (nightly)",
+      "sender_kind": "opencode",
+      "kind": "report"
+    },
+    {
+      "first_line": "Hide letter letter-1 from 배포 담당 (claude) [reply]",
+      "id": "letter-1",
+      "sender": "배포 담당",
+      "sender_kind": "claude",
+      "kind": "reply"
+    },
+    {
+      "first_line": "Hide letter letter-1 from observer (codex) [watch]",
+      "id": "letter-1",
+      "sender": "observer",
+      "sender_kind": "codex",
+      "kind": "watch"
+    },
+    {
+      "first_line": "Hide letter letter-1 from operator (operator) [report]",
+      "id": "letter-1",
+      "sender": "operator",
+      "sender_kind": "operator",
+      "kind": "report",
+      "operator": true
+    }
   ],
   "batch": {
     "letters": [
-      { "sender": "ci-lead", "sender_kind": "claude", "kind": "request", "body": "CI 다시 봐줘" },
-      { "sender": "release-owner", "sender_kind": "codex", "kind": "report", "body": "검증 완료" }
+      {
+        "sender": "ci-lead",
+        "sender_kind": "claude",
+        "kind": "request",
+        "body": "CI 다시 봐줘"
+      },
+      {
+        "sender": "release-owner",
+        "sender_kind": "codex",
+        "kind": "report",
+        "body": "검증 완료"
+      }
     ],
     "context": "\nHide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘\nFull letter: hide request show letter-1\n\nHide letter letter-2 from release-owner (codex) [report]\n검증 완료\nFull letter: hide request show letter-2\n",
     "sender": "ci-lead"
+  },
+  "plan_context": {
+    "description": "The pane's plan summary (PRD hide-plan D-30): the core adds it to a prompt's letter pull as plan_context and to each hide plan answer as context, and the hook keeps it in the pane's record. These examples bind the core that makes it from a plan, the hook's prompt line and the pre-tool refusals read from the record alone. Fields are fixed: the plan's review, current and next step, count and update time; the mission node and scope a worker works on; the counts of a mission a Conductor runs.",
+    "examples": [
+      {
+        "name": "proposed plan",
+        "steps": [
+          {
+            "key": "spec",
+            "title": "Spec",
+            "depends_on": [],
+            "status": "done"
+          },
+          {
+            "key": "core",
+            "title": "Core events",
+            "depends_on": [
+              "spec"
+            ],
+            "status": "working"
+          },
+          {
+            "key": "web",
+            "title": "Web map",
+            "depends_on": [
+              "spec"
+            ],
+            "status": "planned"
+          },
+          {
+            "key": "docs",
+            "title": "Docs",
+            "depends_on": [
+              "spec"
+            ],
+            "status": "dropped"
+          },
+          {
+            "key": "pr",
+            "title": "Open the PR",
+            "depends_on": [
+              "core",
+              "web"
+            ],
+            "status": "planned"
+          }
+        ],
+        "ask": true,
+        "updated_at_unix_ms": 1000,
+        "now_unix_ms": 301000,
+        "context": {
+          "plan": {
+            "review": "proposed",
+            "current": {
+              "key": "core",
+              "title": "Core events"
+            },
+            "next": {
+              "key": "web",
+              "title": "Web map"
+            },
+            "done": 1,
+            "total": 4,
+            "finished": false,
+            "updated_at_unix_ms": 1000
+          },
+          "mission": null,
+          "conductor": null
+        },
+        "hint": "계획: 지금 Core events (1/4) · 다음 Web map · 5분 전 갱신\n계획 검토 기다림: 운영자가 대화에서 답하기 전에는 파일 쓰기, git commit, git push가 막힌다. 승인하면 hide plan approve, 고치라면 고쳐서 hide plan set --ask, 하지 말라면 hide plan drop.",
+        "commands": [
+          {
+            "tool": "shell",
+            "input": "git commit -m wip",
+            "refused": "plan_proposed"
+          },
+          {
+            "tool": "write",
+            "input": "src/lib.rs",
+            "refused": "plan_proposed"
+          },
+          {
+            "tool": "shell",
+            "input": "git status",
+            "refused": null
+          },
+          {
+            "tool": "shell",
+            "input": "rg plan src",
+            "refused": null
+          }
+        ]
+      },
+      {
+        "name": "approved plan not updated for 31 minutes",
+        "steps": [
+          {
+            "key": "spec",
+            "title": "Spec",
+            "depends_on": [],
+            "status": "done"
+          },
+          {
+            "key": "core",
+            "title": "Core events",
+            "depends_on": [
+              "spec"
+            ],
+            "status": "working"
+          },
+          {
+            "key": "web",
+            "title": "Web map",
+            "depends_on": [
+              "spec"
+            ],
+            "status": "planned"
+          },
+          {
+            "key": "docs",
+            "title": "Docs",
+            "depends_on": [
+              "spec"
+            ],
+            "status": "dropped"
+          },
+          {
+            "key": "pr",
+            "title": "Open the PR",
+            "depends_on": [
+              "core",
+              "web"
+            ],
+            "status": "planned"
+          }
+        ],
+        "ask": false,
+        "updated_at_unix_ms": 1000,
+        "now_unix_ms": 1861000,
+        "context": {
+          "plan": {
+            "review": "approved",
+            "current": {
+              "key": "core",
+              "title": "Core events"
+            },
+            "next": {
+              "key": "web",
+              "title": "Web map"
+            },
+            "done": 1,
+            "total": 4,
+            "finished": false,
+            "updated_at_unix_ms": 1000
+          },
+          "mission": null,
+          "conductor": null
+        },
+        "hint": "계획: 지금 Core events (1/4) · 다음 Web map · 31분 전 갱신\n끝낸 단계는 `hide plan node core --status done`, 하는 단계는 `--status working`으로 갱신한다.",
+        "commands": [
+          {
+            "tool": "shell",
+            "input": "git commit -m wip && git push",
+            "refused": null
+          },
+          {
+            "tool": "shell",
+            "input": "git push --force-with-lease",
+            "refused": "history_rewrite"
+          },
+          {
+            "tool": "shell",
+            "input": "git rebase origin/main",
+            "refused": "history_rewrite"
+          }
+        ]
+      },
+      {
+        "name": "mission worker without a plan",
+        "now_unix_ms": 0,
+        "context": {
+          "plan": null,
+          "mission": {
+            "mission": "mission-3",
+            "node": "core",
+            "scope": "pr",
+            "range": "PR까지, 머지는 운영자"
+          },
+          "conductor": null
+        },
+        "hint": "미션 mission-3 · 노드 core · 범위 PR까지, 머지는 운영자 · 머지 금지 · 에이전트 띄우기 금지",
+        "commands": [
+          {
+            "tool": "shell",
+            "input": "gh pr merge 12 --squash",
+            "refused": "mission_merge"
+          },
+          {
+            "tool": "shell",
+            "input": "gh pr view 12",
+            "refused": null
+          }
+        ]
+      },
+      {
+        "name": "Conductor",
+        "now_unix_ms": 0,
+        "context": {
+          "plan": null,
+          "mission": null,
+          "conductor": {
+            "mission": "mission-3",
+            "done": 2,
+            "nodes": 5,
+            "working": 2,
+            "letters": 1,
+            "decision": true
+          }
+        },
+        "hint": "미션 2/5 · 일하는 중 2 · 편지 1통 · 결정 기다림 있음",
+        "commands": [
+          {
+            "tool": "shell",
+            "input": "gh pr merge 12",
+            "refused": null
+          }
+        ]
+      },
+      {
+        "name": "no plan and no mission",
+        "now_unix_ms": 0,
+        "context": {
+          "plan": null,
+          "mission": null,
+          "conductor": null
+        },
+        "hint": null,
+        "commands": [
+          {
+            "tool": "shell",
+            "input": "git push -f",
+            "refused": "history_rewrite"
+          },
+          {
+            "tool": "write",
+            "input": "a.txt",
+            "refused": null
+          }
+        ]
+      }
+    ]
   }
 }

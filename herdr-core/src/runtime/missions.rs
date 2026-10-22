@@ -114,6 +114,9 @@ pub struct NodeView {
     pub criteria: Option<String>,
     pub started_at_unix_ms: Option<u64>,
     pub finished_at_unix_ms: Option<u64>,
+    /// The worker's own plan (PRD hide-plan D-17, D-18): the value its pane's
+    /// chip and map draw, for the card's fourth line and the node's detail.
+    pub plan: Option<super::plans::PlanView>,
 }
 
 /// A spawn admitted as one of a mission's workers: its cap is checked in
@@ -158,6 +161,8 @@ pub(crate) struct MissionRuntime {
 #[derive(Default)]
 struct ViewsMadeFrom {
     book_edit: u64,
+    /// The plans' edit, since a node draws its worker's plan.
+    plans_edit: u64,
     github_edit: u64,
     /// Held weakly, so the ledger it names is never kept alive by it and its
     /// address is never another ledger's.
@@ -1313,6 +1318,7 @@ impl Runtime {
                     criteria: node.criteria.clone(),
                     started_at_unix_ms: node.started_at_unix_ms,
                     finished_at_unix_ms: node.finished_at_unix_ms,
+                    plan: record.and_then(|record| self.worker_plan(&record.machine, &record.pane)),
                 }
             })
             .collect();
@@ -1410,6 +1416,7 @@ impl Runtime {
         };
         let closed_kept = before.made
             && before.book_edit == self.missions.book_edit
+            && before.plans_edit == self.plans.edit
             && before.github_edit == self.missions.github_edit
             && before.stale == stale;
         if closed_kept
@@ -1458,6 +1465,7 @@ impl Runtime {
         }
         self.missions.views = ViewsMadeFrom {
             book_edit: self.missions.book_edit,
+            plans_edit: self.plans.edit,
             github_edit: self.missions.github_edit,
             ledger: ledger.as_ref().map(Arc::downgrade),
             present,

@@ -846,6 +846,14 @@ fn guard_refusal(
     {
         return Some(reason);
     }
+    // A plan waiting for review, a mission's scope and Hide's own history
+    // rule, judged from the pane's record alone: no call to the daemon
+    // (PRD hide-plan D-15, D-30).
+    if let (Some(home), Some(pane)) = (&home, &pane)
+        && let Some(reason) = plan_refusal(home, pane, runtime_id, dialect, payload, truncated)
+    {
+        return Some(reason);
+    }
     // Outside a Herdr pane there is nothing to redirect.
     let pane = pane?;
     // Every shell call comes through here: this one search decides the rest.
@@ -876,6 +884,25 @@ fn guard_refusal(
     // when the log cannot be written.
     guard::record_refusal(&home, runtime_id, &pane, &launch);
     Some(guard::refusal_reason(&delegation, &handoff))
+}
+
+/// The refusal the pane's plan record names for this call, logged like
+/// the guardrails' refusals. A pane with no record, or a record of another
+/// session than the call's, refuses nothing.
+fn plan_refusal(
+    home: &std::path::Path,
+    pane: &str,
+    runtime_id: &str,
+    dialect: HookDialect,
+    payload: &[u8],
+    truncated: bool,
+) -> Option<String> {
+    let session = basic::session(payload, truncated, dialect).ok().flatten();
+    let context = hide_agent_hooks::plan_record::read(home, pane, session.as_deref())?;
+    let call = hide_agent_hooks::guardrails::payload::read_hook(payload, truncated, dialect)?;
+    let refused = hide_agent_hooks::plan_record::refusal(&context, &call.action)?;
+    hide_agent_hooks::plan_record::record_refusal(home, runtime_id, pane, refused);
+    Some(refused.reason().to_owned())
 }
 
 fn run_prompt_hook(arguments: &[String], deadline: Instant) {

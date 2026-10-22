@@ -21,6 +21,7 @@ mod lossless_install;
 mod opencode_helper;
 mod opencode_plugin;
 mod pi_extension;
+mod plan_record;
 mod programs;
 mod session_start_probes;
 mod spawn_guard;

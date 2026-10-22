@@ -2819,3 +2819,57 @@ fn a_two_line_english_summary_is_kept() {
         Some(summary.as_str())
     );
 }
+
+/// PRD hide-plan D-30: a version 7 record opens with the plan table, keeps
+/// a session's plan beside its record, and deletes it with the session.
+#[test]
+fn a_version_7_record_keeps_a_plan_beside_its_session_until_the_session_goes() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("links.sqlite3");
+    let (store, _) = LinkStore::open(&path).unwrap();
+    store
+        .connection
+        .execute_batch(
+            "DROP TABLE ledger_plans; PRAGMA user_version=7;
+             INSERT INTO sessions(device,agent,id,cwd,started_at) VALUES('device-a','codex','session-a','/repo',1000);",
+        )
+        .unwrap();
+    drop(store);
+    let (mut store, _) = LinkStore::open(&path).unwrap();
+    let plan = crate::plans::Plan {
+        session: session(),
+        steps: vec![crate::plans::Step {
+            key: "core".into(),
+            title: "Core events".into(),
+            depends_on: Vec::new(),
+            status: crate::plans::StepStatus::Working,
+            line: Some("events land".into()),
+            output: None,
+            changed: false,
+            change: None,
+        }],
+        review: crate::plans::Review::Proposed,
+        ask: Some("scope moved".into()),
+        created_at_unix_ms: 1_000,
+        updated_at_unix_ms: 2_000,
+    };
+    store
+        .apply_ledger_update(&LedgerUpdate::Plan {
+            session: session(),
+            plan: Some(Box::new(plan.clone())),
+        })
+        .unwrap();
+    assert_eq!(store.ledger_plans().unwrap(), [plan.clone()]);
+    assert_eq!(
+        store.ledger_record(&session()).unwrap().plan.as_deref(),
+        Some(&plan)
+    );
+    store
+        .remove_sessions(&[super::super::SessionKey {
+            device: session().device_id,
+            agent: session().agent,
+            id: session().session_id,
+        }])
+        .unwrap();
+    assert!(store.ledger_plans().unwrap().is_empty());
+}
