@@ -18,7 +18,7 @@ import { familyPulls, PR_LOOK, type SessionPull } from "./prMark";
 import { CheckoutCardHint, pullRequestOpenExternal } from "./components/pr-card";
 import { DeviceRail } from "./components/device-rail";
 import { frontDeviceId, frontTitle, railShown, readsHere, sidebarBody } from "./devices";
-import { badgeWords } from "./agentRow";
+import { asksOperator, badgeWords } from "./agentRow";
 import { Badge } from "./components/ui/badge";
 import { cn } from "./lib/utils";
 import { agentNumber, sidebarAgentNumbers } from "./numbering";
@@ -1132,7 +1132,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
   const sleeping = useSleepingCheckout(checkout.path, workspace.device_id);
   const emptyTabs = useEmptyNamedTabs(checkout, workspace.device_id, agentRows, context.agents);
   const { foldable, open, purpose, secondLine, raisedFrom } = checkoutDisclosure(checkout, agentRows, view, context, t, sleeping.length + emptyTabs, hideAi);
-  const visibleRows = open ? agentRows : agentRows.filter((row) => row.depth === 0 && row.agent.state.needs_you);
+  const visibleRows = open ? agentRows : agentRows.filter((row) => row.depth === 0 && asksOperator(row.agent));
   const marks = checkout.agent_summary?.marks;
   return (
     <li
@@ -1241,7 +1241,7 @@ const FolderRowView = memo(function FolderRowView({
   const { foldable, purpose, raisedFrom } = disclosure;
   const open = asleep ? projectExpanded(workspace) : disclosure.open;
   const secondLine = asleep ? !open && checkoutHasSecondLine(view, purpose, raisedFrom) : disclosure.secondLine;
-  const visibleRows = open ? agentRows : agentRows.filter((row) => row.depth === 0 && row.agent.state.needs_you);
+  const visibleRows = open ? agentRows : agentRows.filter((row) => row.depth === 0 && asksOperator(row.agent));
   return (
     <li data-project={workspace.id} data-checkout-open={open ? "true" : undefined} className={cn(inset, !first && (open ? BLOCK_GAP : "mt-xs"))}>
       <EntryContextMenu
@@ -1549,11 +1549,10 @@ function CollectionRows({ checkout, deviceId, collection, inset, guideColumn, gu
 const TAB_LINE = "calc(var(--size-sidebar-line) + var(--spacing-xxs))";
 
 /**
- * A tab is a segment of its checkout's agent list, not a level (docs/UI_BEHAVIOR.md, Sidebar hierarchy): a tab holding two or more agents,
- * or one the operator named, draws a hairline guide centered under the glyph of the row it hangs from (its group's briefcase, or the checkout's kind glyph when no group header is drawn) spanning the segment's rows, and opens with one quiet line inside the
+ * A tab is a segment of its checkout's agent list, not a level (docs/UI_BEHAVIOR.md, Sidebar hierarchy): every tab, whatever it holds or is named,
+ * draws a hairline guide centered under the glyph of the row it hangs from (its group's briefcase, or the checkout's kind glyph when no group header is drawn) spanning the segment's rows, and opens with one quiet line inside the
  * guide, the tab glyph on the status-mark column and its name (the manual one, else `Tab N`) on the title column, so it reads as part of
- * the checkout rather than beside it. The line opens the real tab, and the hint says its name and agent count, or only its name with no agent. An unnamed single-agent
- * tab draws nothing: its row alone is the segment, and the gap between segments is the tab boundary.
+ * the checkout rather than beside it. The line opens the real tab, and the hint says its name and agent count, or only its name with no agent.
  */
 function TabSegmentHead({ group, checkout, deviceId, inset, glyphColumn, glyphSize = "var(--size-checkout-icon)", context }: { group: SidebarTabGroup; checkout: Checkout; deviceId: string; inset: string; glyphColumn: string; glyphSize?: string; context: TreeContext }) {
   const { t } = useInterfaceTranslation();

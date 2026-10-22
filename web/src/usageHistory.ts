@@ -90,17 +90,6 @@ export function usageDays(range: UsageRange): UsageDay[] {
   });
 }
 
-/** Hide AI's part of one day as a reader draws it: the core's amount, or why there is none. */
-export type HideAiReading =
-  | { state: "before" | "none" }
-  | { state: "counted"; amount: UsageAmount; unknown: number; basisPoints: number };
-
-/** `since` is the first day the core counted Hide AI on; nothing earlier is, and nothing at all means no call yet. */
-export function hideAiReading(day: UsageDay, since: string | null): HideAiReading {
-  if (day.hide_ai) return { state: "counted", amount: day.hide_ai.amount, unknown: day.hide_ai.unknown_calls, basisPoints: day.hide_ai.share_basis_points };
-  return { state: since && day.date < since ? "before" : "none" };
-}
-
 /** Hide AI's days summed the way sessions are; unknown calls stay a count beside the amount. */
 export function sumHideAiDays(days: readonly UsageDay[]): { amount: UsageAmount; unknown: number } {
   const counted = days.flatMap((day) => day.hide_ai ? [{ ...day, amount: day.hide_ai.amount }] : []);

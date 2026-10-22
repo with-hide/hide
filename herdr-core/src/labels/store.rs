@@ -138,7 +138,15 @@ pub(crate) struct PaneRecord {
     /// written before it was kept reads it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) recent_turns: Vec<RecentTurn>,
+    /// The offsets of the newest requests an analysis summarized, at most
+    /// [`SUMMARIZED_KEPT`], so a ledger context that has not caught up
+    /// with the write does not have them summarized again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) summarized: Vec<u64>,
 }
+
+/// Summarized request offsets a record keeps.
+pub(crate) const SUMMARIZED_KEPT: usize = 64;
 
 /// One turn the label analysis summarized, by the offset of the message that
 /// began it.
@@ -230,6 +238,7 @@ impl PaneRecord {
         self.end = None;
         self.facts = SessionFacts::default();
         self.recent_turns.clear();
+        self.summarized.clear();
         self.reset_analysis();
     }
 
@@ -242,6 +251,19 @@ impl PaneRecord {
         self.facts.forget_offsets();
         // Offsets of a rewritten conversation name other messages.
         self.recent_turns.clear();
+        self.summarized.clear();
+    }
+
+    /// Notes requests an analysis summarized, keeping the newest.
+    pub(crate) fn note_summarized(&mut self, offsets: impl IntoIterator<Item = u64>) {
+        for offset in offsets {
+            if !self.summarized.contains(&offset) {
+                self.summarized.push(offset);
+            }
+        }
+        self.summarized.sort_unstable();
+        let over = self.summarized.len().saturating_sub(SUMMARIZED_KEPT);
+        self.summarized.drain(..over);
     }
 
     /// Keeps a judgment of the turn begun at `offset`: its request summary,

@@ -2,7 +2,7 @@ import type { BoardRow } from "./projectBoard";
 import type { AgentRow, Checkout, Tab } from "./snapshot";
 import type { AgentGroup } from "./agentLayout";
 
-/** One tab's segment of a checkout's agent list; `glyph` is set when its tab holds two or more recognized agents or the operator named it. */
+/** One tab's segment of a checkout's agent list; `glyph` is set for every real tab, which draws its guide and tab line whatever it holds or is named. */
 export type SidebarTabGroup = { tab: Tab | null; rows: BoardRow[]; count: number; glyph: boolean };
 
 /** One collection of a checkout's agent tree: the core's own group, its drawn tab segments and its draft ids. */
@@ -29,7 +29,7 @@ export function sidebarTabGroups(checkout: Checkout, device: string, rows: reado
     const members = byTab.get(tab) ?? [];
     if (!members.length && !(tab !== null && namedOnStrip(tab))) return [];
     const count = tab ? new Set(tab.panes.filter((pane) => agentPanes.has(pane.id)).map((pane) => pane.id)).size : 0;
-    const glyph = tab !== null && tab.id !== null && tab.sidebar !== undefined && (count >= 2 || tab.sidebar.manual_name !== null);
+    const glyph = tab !== null && tab.id !== null && tab.sidebar !== undefined;
     return [{ tab, rows: members, count, glyph }];
   });
 }

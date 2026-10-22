@@ -7,7 +7,7 @@ import { deviceScope } from "./agentScope";
 // list, its task rows (PRD sidebar-task-lens). A tenth item has no number,
 // and a number with nothing at it selects nothing.
 
-import type { TreeRow } from "./agentRow";
+import { asksOperator, type TreeRow } from "./agentRow";
 import { frontDeviceId, railDeviceIds } from "./devices";
 import { deviceListedAgents } from "./navigation";
 import { agentsByPane, allAgents as everyPaneAgent } from "./paneAgents";
@@ -69,7 +69,7 @@ function sidebarAgentOrder(state: { rest: SnapshotRest | null; agents: AgentRow[
     const ordered = value.agent_groups && !collapsed.includes(value.id) ? sidebarNamedGroups(value, grouped).filter(({ group }) => !groupClosed.has(groupFoldKey(workspace.device_id, value.id, group.id))).flatMap(({ segments }) => segments) : grouped;
     for (const row of ordered.flatMap((group) => group.rows)) {
       // Digits number the roots; an opened root's children and grandchildren take none.
-      if (row.depth === 0 && (!collapsed.includes(value.id) || row.agent.state.needs_you)) append(row.agent, value.id);
+      if (row.depth === 0 && (!collapsed.includes(value.id) || asksOperator(row.agent))) append(row.agent, value.id);
     }
   };
   for (const row of projects) {

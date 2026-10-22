@@ -180,7 +180,7 @@ export type UserTurnFact = {
 };
 
 /** How the label read a turn's end (`LabelEnd`). */
-export type LabelEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished";
+export type LabelEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
 
 /** What a row asks of the operator now (`RequestVerb`), in the order the request view draws its groups. */
 export type RequestVerb = "answer" | "blocked" | "fix" | "review" | "stopped" | "result" | "working" | "waiting" | "idle";
@@ -596,7 +596,7 @@ export type BacklogOrigin = {
   session: WorkSession | null;
   session_title: string | null;
   missed_text: string | null;
-  task_name: string | null;
+  flow_name: string | null;
   request: string | null;
   answer: string | null;
 };
@@ -2043,39 +2043,39 @@ export type LinkSummaries = {
   }>;
   /** Session files are still being read for the first time. */
   filling: boolean;
-  /** Each live pane session's tasks and children; a session with no task is absent. */
-  progress?: WorkProgress[];
 };
 
 /** Native identity retained by the link record, including ended sessions. */
 export type WorkSession = { device_id: string; agent: string; session_id: string };
-export type WorkRequest = { offset: number; at_unix_ms: number; text: string; author: "operator" | "parent"; task_ids: string[]; chapter_id: string | null; judged: boolean };
-export type WorkEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished";
-/** `unjudged`: the session's newest turn went unjudged and the task is not done, so `end` is an earlier turn's (PRD task-continuation D-09). */
-export type WorkTask = { id: string; chapter_id: string; name: string; at_unix_ms: number; last_at_unix_ms: number; end: WorkEnd; done: boolean; unjudged: boolean };
-export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean };
-export type WorkOutput = { kind: "pr" | "issue"; repository: string; number: number; title: string; url: string; state: string; stale: boolean; last_read_at_unix_ms: number | null; created_at_unix_ms: number; task_id: string | null; source: WorkSession; source_name: string };
+/**
+ * One message the session was sent (PRD session-record-goal-flow D-18): its
+ * words with attachment paths counted in `images` and a `/goal` command's
+ * name in `goal_command`; a letter names its sender and is not counted as a
+ * request; `count` is the same words sent again within a minute.
+ */
+export type WorkRequest = { offset: number; at_unix_ms: number; text: string; author: "operator" | "parent"; images: number; summary: string | null; answers: string | null; letter_from: string | null; count: number; repeats?: number[]; goal_command: boolean };
+export type WorkEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
+export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up" | "ask"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean };
+export type WorkOutput = { kind: "pr" | "issue"; repository: string; number: number; title: string; url: string; state: string; stale: boolean; last_read_at_unix_ms: number | null; created_at_unix_ms: number; source: WorkSession; source_name: string };
+export type TurnOutcome = { end: WorkEnd; line: string; at_unix_ms: number };
+/** The last turn not stopped by a usage limit, and that limit's line when the newest turn was one (D-10). */
+export type RecordStatus = TurnOutcome & { limited: string | null };
+/** One goal flow, oldest first in the record; the last is the current one (D-03, D-05, D-11). */
+export type WorkFlow = { id: string; name: string; at_unix_ms: number; requests: WorkRequest[]; request_count: number; result: TurnOutcome | null };
+/** Pull requests of this session (`child` null) or of one direct child's whole subtree (D-14). */
+export type PrGroup = { child: WorkSession | null; name: string; outputs: WorkOutput[] };
 export type SessionRecord = {
-  session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; state: string | null; last_end: WorkEnd | null;
-  cwd: string | null; path: string | null; started_at_unix_ms: number | null; ended_at_unix_ms: number | null;
-  chapters: { id: string; goal: string; at_unix_ms: number }[]; tasks: WorkTask[]; requests: WorkRequest[]; missed: MissedWork[]; outputs: WorkOutput[]; children: SessionRecord[];
-  /** How its direct children stand; absent without children. */
-  child_progress?: ChildProgress | null;
-  /** For a child, the task group of the parent's turn that spawned it (PRD task-continuation B7); null when that turn held no task. */
-  spawn_task?: string | null;
+  session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; state: string | null;
+  cwd: string | null; project?: string | null; repository?: string | null; path: string | null; started_at_unix_ms: number | null; ended_at_unix_ms: number | null;
+  status: RecordStatus | null; asks: MissedWork[]; flows: WorkFlow[]; omitted_requests: number;
+  outputs: WorkOutput[]; pr_groups: PrGroup[]; artifacts: string[]; children: SessionRecord[];
 };
-/** One direct child as its parent counts it (`contracts/snapshot-wire-enums.json`: `child_work`): a resting child's report or merged pull requests, else its own tasks, else its last END; `unjudged` has no judgment that says, or a newest turn that went unjudged. */
-export type ChildWork = "done" | "working" | "other" | "unjudged";
-/** One segment per direct child; `done` is null while any child is unjudged, never a false zero. */
-export type ChildProgress = { children: ChildWork[]; done: number | null };
-/** A live pane's chip and checklist: its tasks first asked first, their pull requests and its children. */
-export type WorkProgress = { session: WorkSession; done: number; total: number; tasks: WorkTask[]; outputs: WorkOutput[]; children: ChildProgress | null };
 export type SessionWorkSummary = { session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; cwd: string | null; ended_at_unix_ms: number | null; open_missed: number; subtree_open_missed: number; missed: MissedWork[] };
 export type SessionRecordSection = { session: WorkSession | null; loading: boolean; failure: string | null; record: SessionRecord | null };
 export type SessionSearchStatus = "current" | "working" | "done" | "needs_you" | "archived" | "retained";
 export type SessionSearchCursor = { at_unix_ms: number; device_id: string; agent: string; session_id: string };
-export type SessionSearchOptions = { request_id?: string | null; device_id?: string | null; project_root?: string | null; agent?: string | null; since_unix_ms?: number | null; until_unix_ms?: number | null; status?: SessionSearchStatus | null; include_titles?: boolean; include_tasks?: boolean; cursor?: SessionSearchCursor | null };
-export type SessionSearchMatch = { kind: "request" | "title" | "task"; text: string; at_unix_ms: number; request_offset: number | null };
+export type SessionSearchOptions = { request_id?: string | null; device_id?: string | null; project_root?: string | null; agent?: string | null; since_unix_ms?: number | null; until_unix_ms?: number | null; status?: SessionSearchStatus | null; include_titles?: boolean; include_flows?: boolean; cursor?: SessionSearchCursor | null };
+export type SessionSearchMatch = { kind: "request" | "title" | "flow"; text: string; at_unix_ms: number; request_offset: number | null };
 export type SessionSearchHit = { session: WorkSession; title: string; matched: string; at_unix_ms: number; cwd: string | null; project_root?: string | null; status?: SessionSearchStatus; matches?: SessionSearchMatch[]; match_count?: number; request_count?: number };
 export type SessionWorkSearch = { query: string; options?: SessionSearchOptions; loading: boolean; failure: string | null; results: SessionSearchHit[]; next_cursor?: SessionSearchCursor | null };
 

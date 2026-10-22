@@ -84,7 +84,7 @@
   "server-picker.spec.ts › native fixture refuses shared runtime state before launch": 0.0,
   "server-picker.spec.ts › server picker in a background native window": 9.1,
   "session-labels.spec.ts › a label belongs to its session: never shown for another, restored for its own": 34.8,
-  "session-work-ledger.spec.ts › @platform session work records, missed lines, ended work and search render in both themes in a narrow native lane": 60.0,
+  "session-work-ledger.spec.ts › @platform session records by goal flow, ended work and search render in both themes in a narrow native lane": 60.0,
   "session-workflow.spec.ts › the 태스크 list and raised-child pane bands preserve native terminal geometry in both themes": 17.1,
   "sidebar-tab-groups.spec.ts › sidebar tab segments use the candidate window's real tab": 14.3,
   "tab-names.spec.ts › native tab composition and Korean inline naming": 16.3,

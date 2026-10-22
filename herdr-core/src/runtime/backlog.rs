@@ -1221,7 +1221,7 @@ impl Runtime {
             session: None,
             session_title: None,
             missed_text: None,
-            task_name: None,
+            flow_name: None,
             request: None,
             answer: None,
         };
@@ -1509,7 +1509,7 @@ fn read_origin(
         session: None,
         session_title: None,
         missed_text: None,
-        task_name: None,
+        flow_name: None,
         request: None,
         answer: None,
     };
@@ -1531,14 +1531,27 @@ fn read_origin(
             .clone()
             .unwrap_or_else(|| record.title.clone()),
     );
-    let request = record
-        .requests
-        .iter()
-        .find(|request| request.offset == origin.missed.turn_offset);
-    slot.task_name = request
-        .and_then(|request| request.task_ids.first())
-        .and_then(|id| record.tasks.iter().find(|task| &task.id == id))
-        .map(|task| task.name.clone());
+    // The flow the missed line came from is the one open when its turn
+    // began (PRD session-record-goal-flow B31).
+    let flow = record.flows.iter().find(|flow| {
+        flow.requests
+            .iter()
+            .any(|request| request.holds(origin.missed.turn_offset))
+    });
+    let request = flow.and_then(|flow| {
+        flow.requests
+            .iter()
+            .find(|request| request.holds(origin.missed.turn_offset))
+    });
+    slot.flow_name = flow
+        .or_else(|| {
+            record
+                .flows
+                .iter()
+                .rfind(|flow| flow.at_unix_ms <= origin.missed.at_unix_ms)
+        })
+        .map(|flow| flow.name.clone())
+        .filter(|name| !name.is_empty());
     slot.request = request.map(|request| request.text.clone());
     // The answer is the session's own words, read where the session runs.
     let (Some(witness), Some(cwd), Some(node)) = (

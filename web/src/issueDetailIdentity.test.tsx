@@ -44,7 +44,7 @@ const answer = (workspace: Workspace, body: string): IssueDetail => ({
 });
 const origin = (workspace: Workspace, request: string, response: string): BacklogOrigin => ({
   workspace_id: workspace.id, device_id: workspace.device_id, task_key: key, phase: "ready",
-  session: null, session_title: null, missed_text: null, task_name: null, request, answer: response,
+  session: null, session_title: null, missed_text: null, flow_name: null, request, answer: response,
 });
 const background = {
   enabled: true, provider: "claude", chosen: true, fallback: [], refusal: null, unavailable_reason: null,

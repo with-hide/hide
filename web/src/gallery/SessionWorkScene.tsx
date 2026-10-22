@@ -9,56 +9,69 @@ import { Palette } from "../Palette";
 import { SlotSessionRecord } from "../SessionRecord";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
-import type { MissedWork, SessionRecord as RecordValue, WorkOutput, WorkRequest, WorkSession, WorkTask } from "../snapshot";
+import type { MissedWork, SessionRecord as RecordValue, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 
-const AT = new Date(2026, 9, 18, 17, 5).getTime();
+const AT = new Date(2026, 9, 22, 11, 4).getTime();
+const MIN = 60_000;
 const SESSION: WorkSession = { device_id: "local", agent: "claude", session_id: "record-example" };
 const CHILD_SESSION: WorkSession = { ...SESSION, agent: "claude", session_id: "child-example" };
-const task = (id: string, chapter: string, name: string, end: WorkTask["end"], done: boolean, at: number): WorkTask => ({ id, chapter_id: chapter, name, end, done, at_unix_ms: at, last_at_unix_ms: at + 1000, unjudged: false });
-const request = (offset: number, text: string, task_ids: string[], patch: Partial<WorkRequest> = {}): WorkRequest => ({ offset, text, at_unix_ms: AT + offset * 60_000, author: "operator", task_ids, chapter_id: "chapter-1", judged: true, ...patch });
-const missed = (id: string, text: string, turn_offset: number, status: MissedWork["status"]): MissedWork => ({ id, kind: "follow_up", text, status, at_unix_ms: AT, turn_offset, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
-const pr = (number: number, title: string, state: string, source: WorkSession, sourceName: string, task_id: string | null): WorkOutput => ({ kind: "pr", repository: "example/hide", number, title, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT + number, task_id, source, source_name: sourceName });
-// Invented content matching the user-approved PR/session cards.
+const request = (offset: number, minutes: number, text: string, patch: Partial<WorkRequest> = {}): WorkRequest => ({ offset, text, at_unix_ms: AT + minutes * MIN, author: "operator", images: 0, summary: null, answers: null, letter_from: null, count: 1, goal_command: false, ...patch });
+const ask = (id: string, text: string): MissedWork => ({ id, kind: "ask", text, status: "open", at_unix_ms: AT + 230 * MIN, turn_offset: 9, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
+const pr = (number: number, title: string, state: string, source: WorkSession, sourceName: string): WorkOutput => ({ kind: "pr", repository: "example/hide", number, title, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT + number, source, source_name: sourceName });
+const flow = (id: string, name: string, minutes: number, requests: WorkRequest[], result: WorkFlow["result"]): WorkFlow => ({ id, name, at_unix_ms: AT + minutes * MIN, requests, request_count: requests.filter((one) => !one.letter_from).length, result });
+const empty = { status: null, asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] } satisfies Partial<RecordValue>;
+// Invented content matching the user-approved record design.
 const CHILDREN = [
-  ["agent-journey 브리프 실행 및 검증 결과물", "claude", [1372, 1371, 1369, 1368, 1333, 1326, 1370, 1361, 1360, 1357, 1356, 1354, 1335, 1340]],
-  ["agent-folder-trust 브리프 작업 수행", "claude", [1306]],
-  ["agy CI 쿼터 브리프 수행 결과물", "codex", [1312, 1309]],
-  ["데스크톱 E2E 마친 브리프 이행 결과", "opencode", [1324, 1315]],
-  ["agy 가용성 probe 실행 결과 보고서", "claude", [1331]],
+  ["기록 화면 조사", "claude", "done", []],
+  ["원장·라벨 조사", "codex", "done", []],
+  ["기록 화면 구현", "claude", "working", [[1544, "pending"], [1541, "merged"]]],
 ] as const;
-const children: RecordValue[] = CHILDREN.map(([title, agent, numbers], i) => {
+const children: RecordValue[] = CHILDREN.map(([title, agent, end, prs], i) => {
   const session = { ...CHILD_SESSION, agent, session_id: `child-${i}` };
-  return { session, title, fallback_title: agent, native_title: title, manual_title: null, state: "idle", last_end: i ? "done" : "waiting", cwd: "/work/hide", path: null, started_at_unix_ms: AT + 2, ended_at_unix_ms: null, chapters: [], tasks: [task("child-task", "chapter-1", "에이전트별·OS별 E2E 검증", i ? "done" : "waiting", i > 0, AT)], requests: [request(1, "에이전트별·OS별 E2E 검증을 진행하고 결과를 정리해줘.", ["child-task"], { author: "parent" })], missed: i === 0 ? [missed("child-problem", "Windows 저장 시 백신·색인 잠금에 대한 재시도 장치 추가", 1, "open"), { ...missed("child-suggestion", "실패한 검증을 다시 실행할 명령 함께 표시", 1, "open"), kind: "problem" }] : [], outputs: numbers.map((number, n) => pr(number, "에이전트별·OS별 검증 결과 정리", i === 0 && n < 5 ? "pending" : "merged", session, title, "child-task")), children: [] };
+  const outputs = prs.map(([number, state]) => pr(number, `${title} 결과`, state, session, title));
+  return {
+    ...empty, session, title, fallback_title: agent, native_title: title, manual_title: null, state: end === "working" ? "working" : "idle", cwd: "/work/hide", path: null, started_at_unix_ms: AT + 200 * MIN, ended_at_unix_ms: null,
+    status: { end, line: end === "done" ? "조사 결과를 편지로 보냄" : "기록 화면 구현 중", at_unix_ms: AT + 240 * MIN, limited: null },
+    flows: [flow(`child-flow-${i}`, title, 200, [request(1, 200, `${title}을 맡아 결과를 편지로 보내줘.`, { author: "parent", summary: `${title} 맡김` })], null)],
+    outputs, pr_groups: outputs.length ? [{ child: null, name: title, outputs }] : [],
+  };
 });
 const BASE: RecordValue = {
-  session: SESSION, title: "릴리스 스킬과 로컬 검증 체계", fallback_title: "Claude Code", native_title: "릴리스 스킬과 로컬 검증 체계", manual_title: null, state: "working", last_end: "working", cwd: "/work/hide", path: null, started_at_unix_ms: AT, ended_at_unix_ms: null,
-  chapters: [{ id: "chapter-1", goal: "릴리스 스킬과 로컬 검증 체계", at_unix_ms: AT }],
-  tasks: [task("task-1", "chapter-1", "릴리스 절차를 스킬로 정리", "done", true, AT), task("task-2", "chapter-1", "Mac에서 로컬 검증", "working", false, AT + 120_000)],
-  requests: [request(1, "릴리스 절차를 재사용할 수 있는 스킬로 정리해줘.", ["task-1"]), request(2, "이 Mac에서 검증하고, 결과와 남은 작업을 정리해줘.", ["task-2"]), request(3, "진행 상황과 확인이 필요한 점을 알려줘.", [])],
-  missed: [{ ...missed("missed-1", "릴리스 검증 실패 시 멈춘 단계를 알기 어려움", 2, "open"), kind: "problem" }, missed("missed-2", "검증 결과에 OS·에이전트별 통과 여부 표시", 2, "open"), missed("missed-3", "실패한 검증을 다시 실행할 명령 함께 표시", 2, "open")],
-  outputs: [pr(1365, "릴리스 스킬과 로컬 검증 체계", "merged", SESSION, "릴리스 스킬과 로컬 검증 체계", "task-1"), ...children.flatMap((child) => child.outputs)],
-  children,
+  ...empty,
+  session: SESSION, title: "세션 기록 재설계 PRD", fallback_title: "Claude Code", native_title: "세션 기록 재설계", manual_title: null, state: "idle", cwd: "/work/hide", path: null, started_at_unix_ms: AT, ended_at_unix_ms: null,
+  status: { end: "question", line: "PRD 승인할지 골라주세요", at_unix_ms: AT + 240 * MIN, limited: null },
+  asks: [ask("ask-1", "PRD 승인 여부"), ask("ask-2", "\"설치 안 됨\" 표시를 넣을지")],
+  flows: [
+    flow("flow-1", "pane 카드 정리", 0, [request(1, 0, "pane 맨 위 이름에 마우스를 올리면 계속 팝오버가 나와서 불편해", { summary: "pane 이름 hover 팝오버 없애기" }), request(2, 8, "두 번째 줄은 지금 상태만 보이게 해줘", { summary: "두 번째 줄은 지금 상태만" }), request(3, 21, "1번 ㅇㅇ 2번은 그럼 어떻게 바뀌는 거야?", { summary: "1번 안 채택, 2번 안이 어떻게 바뀌는지 질문", answers: "두 안 중 고르기" }), request(4, 30, "머지해~", { summary: "PR 머지" })], { end: "done", line: "PR 1533 머지, 제목 hover 카드 제거", at_unix_ms: AT + 40 * MIN }),
+    flow("flow-2", "요청한 작업 체크리스트 분석", 46, [request(5, 46, "요청한 작업이 너무 믿음이 안 가. 세션 10개쯤 보고 뭐가 문제인지 봐줘", { summary: "체크리스트 신뢰 문제를 세션 10개로 분석" }), request(6, 80, "케이스별로 정리해줘", { summary: "케이스별 정리" })], { end: "done", line: "세션 11개 검증, 수정안 정리", at_unix_ms: AT + 160 * MIN }),
+    flow("flow-3", "세션 기록 재설계 PRD", 230, [
+      request(7, 217, "케이스별로 시각화해서 보여줘", { summary: "케이스별로 시각화해 보여달라" }),
+      request(8, 227, "수정안이 뭔지 설명해줘", { summary: "수정안이 무엇인지 설명해 달라" }),
+      request(9, 230, "ㅇㅇ PRD 써줘", { summary: "PRD 쓰기", answers: "PRD로 갈지" }),
+      request(10, 238, "🦉 letter from record-research", { letter_from: "기록 화면 조사" }),
+      request(11, 266, "바뀌는 것 목업으로 정리해줘", { summary: "바뀌는 것 목업으로 정리", count: 2 }),
+      request(12, 267, "이거 봐줘", { summary: "이 화면 확인", images: 1 }),
+    ], null),
+  ],
+  artifacts: ["session-record-goal-flow PRD", "record-revised-cases.html"],
 };
+BASE.outputs = [pr(1533, "pane 카드 정리", "merged", SESSION, BASE.title), ...children.flatMap((child) => child.outputs)];
+BASE.pr_groups = [{ child: null, name: BASE.title, outputs: [BASE.outputs[0]!] }, ...children.filter((child) => child.outputs.length).map((child) => ({ child: child.session, name: child.title, outputs: child.outputs }))];
+BASE.children = children;
 
 /** The scene's record for a `case`: the default, or one that shows a state the record draws. */
 function recordFor(base: RecordValue, kind: string | null): RecordValue {
   const record = structuredClone(base);
-  if (kind === "open-missed") record.missed.push(missed("missed-3", "재측정 전 설치본 버전 확인 안 됨", 2, "open"), missed("missed-4", "이슈 생성 실패 뒤 재시도 검증", 99, "open"));
-  if (kind === "now") {
-    record.state = "working";
-    record.requests.push(request(7, "설치하고 재측정해줘", [], { judged: false }));
-  }
-  if (kind === "goals") {
-    record.chapters.push({ id: "chapter-2", goal: "세션 검색과 놓친 일 정리", at_unix_ms: AT + 240_000 });
-    record.tasks.push(task("task-4", "chapter-2", "⌘K 세션 검색", "unfinished", false, AT + 260_000));
-    record.outputs.push(pr(1122, "Session search in the palette", "ci_failed", SESSION, "성능 최적화 리뷰와 서비스 개선안", "task-4"));
-    record.requests.push(request(8, "세션 검색을 연결하고 좁은 칸에서도 읽기 좋게 해줘", ["task-4"], { chapter_id: "chapter-2" }));
-  }
-  if (kind === "delegated") record.requests = record.requests.map((one) => ({ ...one, author: "parent" as const }));
-  if (kind === "empty") { record.outputs = []; record.tasks = []; record.requests = []; record.missed = []; record.children = []; }
+  if (kind === "limited") record.status = { end: "question", line: "릴리스 리허설만 남음", at_unix_ms: AT + 240 * MIN, limited: "한도 소진 · 10-22 13:00 풀림" };
+  if (kind === "all-limited") record.status = { end: "blocked", line: "사용 한도 도달", at_unix_ms: AT + 240 * MIN, limited: "사용 한도 도달" };
+  if (kind === "goal") record.flows.at(-1)!.requests.unshift(request(13, 229, "출시 전 검수 리포트 정리", { goal_command: true, summary: "출시 전 검수 리포트 정리" }));
+  if (kind === "legacy") record.flows = record.flows.map((one) => ({ ...one, requests: one.requests.map((row) => ({ ...row, summary: null, answers: null })), result: one.result ? { ...one.result, line: "" } : null }));
+  if (kind === "omitted") record.omitted_requests = 37;
+  if (kind === "delegated") record.flows = record.flows.map((one) => ({ ...one, requests: one.requests.map((row) => ({ ...row, author: "parent" as const })) }));
+  if (kind === "empty") Object.assign(record, { ...empty, status: null });
   return record;
 }
 
@@ -78,18 +91,19 @@ export function SessionWorkScene({ params }: { params: URLSearchParams }) {
     base.rest.navigator!.focused_workspace_id = project.id;
     base.rest.navigator!.focused_checkout_id = project.checkouts[0]!.id;
     base.agents = [legacyAgentRow({ ...base.agents.find((row) => row.pane_id === "a1")!, pane_id: "a1", agent_kind: "claude", session_id: SESSION.session_id, identity_label: record.title!, group: "working", mark: "going", activity: "working", status_code: "working", detail: "Mac 로컬 검증 결과와 남은 항목을 정리하고 있어요.", message: "Mac 로컬 검증 결과와 남은 항목을 정리하고 있어요.", changed_at_unix_ms: Date.now() - 60_000 })];
-    if (state === "off" || state === "pending" || state === "question") {
-      record.title = "";
-      record.tasks = [];
-      record.missed = [];
-      record.requests = [request(1, state === "question" ? "이 프로젝트 구조가 어떻게 되어 있어?" : "이 Mac에서 검증하고 결과를 정리해줘.", [], { judged: state === "question" })];
+    // A stopped pane, so the record's last real turn is the state on top (B10).
+    if (params.get("case")?.endsWith("limited")) base.agents = base.agents.map((row) => legacyAgentRow({ ...row, status_code: "done", mark: "done", group: "idle", activity: "stopped" }));
+    if (state === "off") {
+      // Summaries off: the record keeps no flow names, results or summaries (B28).
+      record.asks = [];
+      record.artifacts = [];
+      record.flows = record.flows.map((one) => ({ ...one, requests: one.requests.map((row) => ({ ...row, summary: null, answers: null })) }));
     }
     if (state.startsWith("restore")) {
       record.path = state === "restore-missing" ? null : "/fixture/conversation.jsonl";
       record.ended_at_unix_ms = AT;
       record.state = "idle";
-      record.tasks = []; record.missed = []; record.children = [];
-      record.requests = Array.from({length:6}, (_,i) => request(i, ["이전 진행 내용을 확인해줘", "구현 결과를 정리해줘", "원격 환경의 구현 계획을 검토하고 변경 사항을 요약해줘.", "날짜와 시간을 확인해줘.", "새 pane에서 같은 대화를 이어갈 수 있게 해줘.", "긴 한국어 요청과 mixed English text의 줄바꿈을 좁은 화면에서도 확인해줘."][i]!, [], {at_unix_ms: AT + (i < 3 ? 0 : 86_400_000) + i * 60_000}));
+      record.asks = []; record.children = [];
       base.agents = state === "restore-live" ? base.agents.map(row => legacyAgentRow({...row,status_code:"done",mark:"done",group:"idle",activity:"stopped"})) : [];
     }
     return { base, record, project };
@@ -103,7 +117,7 @@ export function SessionWorkScene({ params }: { params: URLSearchParams }) {
     return true;
   }), [fixture, state]);
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: fixture.base.rest, agents: fixture.base.agents, connection: "live", linkSummaries: { filling:false, projects:{[fixture.project.id]:{work:[{session:SESSION,title:fixture.record.title,fallback_title:fixture.record.fallback_title,native_title:fixture.record.native_title,manual_title:null,cwd:fixture.record.cwd,ended_at_unix_ms:AT,open_missed:fixture.record.missed.filter((item)=>item.status==="open").length,subtree_open_missed:0,missed:fixture.record.missed}]}} }, sessionRecord: { session: SESSION, loading: state === "loading", failure: state === "failed" ? "fixture_read_failed" : null, record: state === "loading" || state === "failed" ? null : fixture.record } });
+    useShellStore.setState({ rest: fixture.base.rest, agents: fixture.base.agents, connection: "live", linkSummaries: { filling:false, projects:{[fixture.project.id]:{work:[{session:SESSION,title:fixture.record.title,fallback_title:fixture.record.fallback_title,native_title:fixture.record.native_title,manual_title:null,cwd:fixture.record.cwd,ended_at_unix_ms:AT,open_missed:0,subtree_open_missed:0,missed:[]}]}} }, sessionRecord: { session: SESSION, loading: state === "loading", failure: state === "failed" ? "fixture_read_failed" : null, record: state === "loading" || state === "failed" ? null : fixture.record } });
     useUiStore.setState({ screen: { kind: "workspace" }, overlay: state === "search" ? "search" : "none" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");

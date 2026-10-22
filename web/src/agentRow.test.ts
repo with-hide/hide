@@ -1,7 +1,7 @@
 import { sectionTree, sectionCount, directChildren, unfoldedRows } from "../test/legacyRowTree";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { describe, expect, it } from "vitest";
-import { badgeParts, badgeWords, branchChip, forkLabel, lineParts, lineText, markWords, rowAccessibleName, rowDimmed, lineShownAtRest, lineTone, markTone, rowLine, sidebarLine, treeLine } from "./agentRow";
+import { asksOperator, badgeParts, badgeWords, branchChip, forkLabel, lineParts, lineText, markWords, rowAccessibleName, rowDimmed, lineShownAtRest, lineTone, markTone, rowLine, sidebarLine, treeLine } from "./agentRow";
 import { createInterfaceI18n } from "./i18n/instance";
 import type { AgentRow } from "./snapshot";
 
@@ -268,5 +268,14 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     const gone = row("g", { activity: "stopped", mark: "unread", status_code: "stopped", detail: "CI 끝나기를 기다림" });
     gone.state = { ...gone.state, line: { text: "", mode: "vanished", tone: { kind: "subtle", read: false } } };
     expect(lineText(t, gone, sidebarLine(gone)!)).toBe("멈춤 · 기다리던 작업이 사라짐");
+  });
+});
+
+describe("asksOperator", () => {
+  it("is false for a resolved session even when it ended on a question, so a folded checkout and the digits leave it out", () => {
+    const asking = row("asks", { group: "needs_you" });
+    expect(asksOperator(asking)).toBe(true);
+    expect(asksOperator({ ...asking, resolved: { at_unix_ms: 1, source: "operator" } })).toBe(false);
+    expect(asksOperator(row("works"))).toBe(false);
   });
 });

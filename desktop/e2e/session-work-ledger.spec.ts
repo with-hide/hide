@@ -3,49 +3,21 @@
 import { expect, type ElectronApplication, type Locator } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { continueFixtureTranscript, setFixtureLifecycle, startHerdr } from "../../web/e2e/herdr-fixture";
-import { FIRST_GOAL, MISSED, NEXT_GOAL, nextWork, seedFirstWork, workFixture, workRepositoryReady } from "../../web/e2e/session-work-fixture";
+import { FIRST_GOAL, NEXT_GOAL, nextWork, seedFirstWork, workFixture, workRepositoryReady } from "../../web/e2e/session-work-fixture";
 import { chord } from "../../web/e2e/chords";
 import { enterWorkspace, openTaskFolds, setLanePinned, showExplorer, taskRow } from "../../web/e2e/wire";
 import { fitWindow, isolate, launchShell, REPO, test } from "./fixture";
 import { captureElectronWindow } from "./electron-window";
 
-/** The approved record separates the session's PRs from a child's expandable record. */
-async function expectRecordOutputs(record: Locator, child: string, own: number) {
-  await record.getByRole("tab", { name: /^PR/ }).click();
-  await expect(record.locator('[data-record-output="pr"]')).toHaveCount(own, { timeout: 45_000 });
-  const row = record.locator(`[data-record-child="${child}"]`);
-  await row.locator(":scope > button").click();
-  await row.getByRole("tab", { name: /^PR/ }).click();
-  await expect(row.locator('[data-record-output="pr"]')).toHaveCount(1, { timeout: 45_000 });
-  await expect(record.locator('[data-record-output="pr"]')).toHaveCount(own + 1);
-  await row.locator(":scope > button").click();
+/** This session's PRs and the child's, each in its own group; the settled ones open from their fold (PRD session-record-goal-flow B18, B19). */
+async function expectRecordPrs(record: Locator, child: string, total: number) {
+  await expect(record.locator(`[data-record-prs="${total}"]`)).toBeVisible({ timeout: 45_000 });
+  const fold = record.locator("[data-record-settled]");
+  if (await fold.count()) await fold.click();
+  await expect(record.locator(`[data-record-pr-group="${child}"] [data-record-pr-row="34"]`)).toBeVisible();
 }
 
-/** The record, its request-history tab, then the pane's checklist through the app menu's chord. */
-async function captureRecordAndTaskList(app: ElectronApplication, pane: string, theme: string, facts: Record<string, unknown>) {
-  const page = await app.firstWindow();
-  const record = page.locator('aside[data-lane="detail"][data-detail="record"] [data-session-record="lane"]');
-  await captureElectronWindow(app, `record-tasks-children-${theme}`, facts);
-  await record.getByRole("tab", { name: /^(Request history|요청 기록)/ }).click();
-  await record.locator("[data-record-words]").scrollIntoViewIfNeeded();
-  await expect(record.locator("[data-record-request]").first()).toBeVisible();
-  await captureElectronWindow(app, `record-words-${theme}`, facts);
-  await page.locator(`[data-pane-view="${pane}"] .xterm-helper-textarea`).focus();
-  await page.keyboard.press(chord("toggle_task_list", "electron"));
-  const list = page.locator(`[data-pane-task-list="${pane}"]`);
-  await expect(list.locator("[data-task-list-name]")).toHaveCount(3);
-  await captureElectronWindow(app, `pane-task-list-${theme}`, facts);
-  await page.keyboard.press(chord("toggle_task_list", "electron"));
-  await expect(list).toHaveCount(0);
-}
-
-/** Agent summaries off keeps no tasks, so the pane head draws no chip (PRD task-split-checklist B9). */
-async function captureSummariesOff(app: ElectronApplication, pane: string, theme: string, facts: Record<string, unknown>) {
-  await expect((await app.firstWindow()).locator(`[data-pane-task-chip="${pane}"]`)).toHaveCount(0);
-  await captureElectronWindow(app, `record-summaries-off-${theme}`, facts);
-}
-
-test("@platform session work records, missed lines, ended work and search render in both themes in a narrow native lane", async () => {
+test("@platform session records by goal flow, ended work and search render in both themes in a narrow native lane", async () => {
   test.setTimeout(240_000);
   const herdr = await startHerdr();
   const github = workFixture(herdr);
@@ -72,8 +44,8 @@ test("@platform session work records, missed lines, ended work and search render
     await page.locator(`[data-task-record="${herdr.panes[0]}"]`).click();
     // The record opens in the lane's 보기 slot (PRD sidebar-task-lens B15).
     const record = page.locator('aside[data-lane="detail"][data-detail="record"] [data-session-record="lane"]');
-    await expect(record.locator('[data-record-work]').first().locator('[data-record-task]')).toHaveCount(1, { timeout: 45_000 });
-    await expectRecordOutputs(record, child, 1);
+    await expect(record.locator("[data-record-flow]")).toHaveCount(1, { timeout: 45_000 });
+    await expectRecordPrs(record, child, 2);
     // The rail keeps a button for the slot: pressed while the viewing column draws it, folding it when pressed then, and pressing it again comes back (B46; PRD lane-two-columns B11).
     const slotButton = page.locator('[data-lane-tool="detail"][data-detail-slot="record"]');
     await expect(slotButton).toHaveAttribute("aria-pressed", "true");
@@ -92,9 +64,10 @@ test("@platform session work records, missed lines, ended work and search render
     await setFixtureLifecycle(herdr, herdr.panes[0], "working");
     await expect(root).toContainText(NEXT_GOAL, { timeout: 45_000 });
     await setFixtureLifecycle(herdr, herdr.panes[0], "idle");
-    // The parent's three tasks, the second request's two deliverables one each; the child's is in its own record, behind its row (B20).
-    await expect(record.locator('[data-record-task]')).toHaveCount(3, { timeout: 45_000 });
-    await expectRecordOutputs(record, child, 2);
+    // The new goal opens a second flow, the agent's question waits on top, and the child's PR stays in its group (B3, B11, B18).
+    await expect(record.locator("[data-record-flow]")).toHaveCount(2, { timeout: 45_000 });
+    await expect(record.locator("[data-record-ask]")).toHaveCount(1, { timeout: 45_000 });
+    await expectRecordPrs(record, child, 3);
     // The child is a row of the parent's record (B20); the capture keeps the parent in front.
     await expect(record.locator(`[data-record-child="${child}"]`)).toBeVisible();
     const fixtureIdentity = { head: execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf8" }).trim(), home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: herdr.socket, daemon: run.daemonPid(), parent: herdr.panes[0], child, provider: "scripted", github: "scripted" };
@@ -106,12 +79,14 @@ test("@platform session work records, missed lines, ended work and search render
       await page.locator('[data-language-option="ko"]').click();
       await page.keyboard.press("Escape");
       const facts = { ...fixtureIdentity, theme, tools: await page.locator("[data-lane-frame]").boundingBox() };
-      await captureRecordAndTaskList(app, herdr.panes[0], theme, facts);
-      await record.getByRole("tab", { name: /^(Findings|발견사항)/ }).click();
-      const missed = record.locator('[data-record-missed] [data-missed-work]', { hasText: MISSED });
-      // An open line in its own section offers 백로그로 and 무시, with no drafted form (PRD overview-device-tasks B43; PRD record-card-readability B12).
-      await expect(missed.locator("[data-missed-backlog-add]")).toBeVisible();
-      await captureElectronWindow(app, `record-missed-open-${theme}`, facts);
+      await captureElectronWindow(app, `record-flows-children-${theme}`, facts);
+      // A past flow opens to its requests on a click (B13).
+      await record.locator("[data-record-flow-toggle]").first().click();
+      await expect(record.locator("[data-record-flow]").first().locator("[data-record-request]").first()).toBeVisible();
+      await captureElectronWindow(app, `record-flow-opened-${theme}`, facts);
+      await record.locator("[data-record-flow-toggle]").first().click();
+      // The pane head carries no task chip (B1).
+      await expect(page.locator("[data-pane-task-chip]")).toHaveCount(0);
       await page.keyboard.press(chord("search", "electron"));
       await page.locator('[data-palette-input]').fill(NEXT_GOAL);
       await expect(page.locator('[data-palette-group="sessions"]')).toContainText(NEXT_GOAL, { timeout: 30_000 });
@@ -124,14 +99,13 @@ test("@platform session work records, missed lines, ended work and search render
       await page.locator('[data-settings-tab="hideAi"]').click();
       await page.locator('[data-ai-agent-summary="true"]').click();
       await page.keyboard.press("Escape");
-      await expect(record.locator('[data-record-task]')).toHaveCount(0);
-      // The parent's two requests; the child's is in its own record, behind its row.
-      await record.getByRole("tab", { name: /^(Request history|요청 기록)/ }).click();
-      await expect(record.locator('[data-record-request]')).toHaveCount(2);
+      // Summaries off: the parent's two requests as sent, no flow (B28); the child's are in its own record, behind its row.
+      await expect(record.locator("[data-record-flow]")).toHaveCount(0);
+      await expect(record.locator("[data-record-raw-requests] [data-record-request]")).toHaveCount(2);
       await expect(record.getByRole('heading', { level: 2 })).toContainText('Claude');
       await expect(record.locator('[data-record-child]')).toContainText('Claude');
-      await expectRecordOutputs(record, child, 2);
-      await captureSummariesOff(app, herdr.panes[0], theme, facts);
+      await expectRecordPrs(record, child, 3);
+      await captureElectronWindow(app, `record-summaries-off-${theme}`, facts);
       await page.locator('[data-open-settings]').click();
       await page.locator('[data-settings-tab="hideAi"]').click();
       await page.locator('[data-ai-agent-summary="false"]').click();

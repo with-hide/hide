@@ -5,19 +5,34 @@ use crate::labels::analysis::LabelEnd;
 use serde::{Deserialize, Serialize};
 
 pub const REQUEST_LIMIT: usize = 2_000;
-pub const TASK_LIMIT: usize = 200;
+/// Goal flows one session keeps; the oldest goes first past it (PRD
+/// session-record-goal-flow B30).
+pub const FLOW_LIMIT: usize = 200;
+/// Pull request sightings one session keeps.
+pub const SIGHTING_LIMIT: usize = 200;
 pub const MISSED_LIMIT: usize = 200;
 pub const NEW_MISSED_LIMIT: usize = 3;
 pub const MISSED_CHARS: usize = 80;
-/// Task groups one END may continue: a request's tasks form one group, so a
-/// split request counts once.
-pub const CONTINUED_TASK_LIMIT: usize = 2;
-/// How many finished requests the END judgment is shown beside the open tasks, newest first,
-/// each with all its tasks, so a request that asks for one of them again can continue it.
-pub const FINISHED_TASKS_IN_CONTEXT: usize = 3;
-/// Tasks one request can make: one per independent deliverable, the extras
-/// bundled into the last name (PRD task-split-checklist D-01, D-02).
-pub const NEW_TASK_LIMIT: usize = 6;
+/// The longest request summary kept: two lines of the widest language's
+/// line (B8), the one cap the label's schema, its parser and the ledger share.
+pub const SUMMARY_CHARS: usize = 160;
+/// Requests one analysis summarizes, oldest first; the rest wait for the
+/// next one (B34).
+pub const SUMMARY_BATCH: usize = 8;
+/// Requests owed a summary that a context carries, oldest first.
+pub const OWED_IN_CONTEXT: usize = 16;
+/// Non-PR outputs one turn may name (D-16).
+pub const ARTIFACTS_PER_TURN: usize = 3;
+/// Non-PR outputs a record shows, newest first.
+pub const ARTIFACT_LIMIT: usize = 24;
+/// The session's recorded artifacts an END analysis reads, so it names the
+/// same output the same way (B22).
+pub const ARTIFACTS_IN_CONTEXT: usize = 12;
+/// The longest artifact name kept, in characters.
+pub const ARTIFACT_CHARS: usize = 80;
+/// Two identical messages from one sender this close together read as one
+/// line with a count (D-18).
+pub const REPEAT_WINDOW_MS: u64 = 60_000;
 pub const LEDGER_QUEUE_LIMIT: usize = 512;
 pub const SEARCH_LIMIT: usize = 50;
 pub const LEDGER_RPC_LIMIT: usize = 16;
@@ -262,23 +277,82 @@ pub struct SessionMetadata {
     pub analysed_end: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkAuthor {
+    #[default]
     Operator,
     Parent,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// One message a session was sent, as its record keeps it. A letter (a
+/// Hide envelope, or the doorbell's `🦉` line) names its sender and is no
+/// request of the operator's (D-18, D-19).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecordedRequest {
     pub offset: u64,
     pub at_unix_ms: u64,
+    /// The words as the record shows them: an attachment's path is counted
+    /// in `images` instead, and a `/goal` command's name in `goal_command`.
     pub text: String,
     pub author: WorkAuthor,
-    pub task_ids: Vec<String>,
-    pub chapter_id: Option<String>,
-    pub judged: bool,
+    #[serde(default)]
+    pub images: u32,
+    /// The label's one-line summary; absent until an analysis gave one.
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// For a reply to the agent's question, which question it answers.
+    #[serde(default)]
+    pub answers: Option<String>,
+    #[serde(default)]
+    pub letter_from: Option<String>,
+    /// The same words sent again within [`REPEAT_WINDOW_MS`], this one
+    /// included; 1 for one message.
+    #[serde(default = "one")]
+    pub count: u32,
+    /// The offsets of the later copies merged into this line, so a History
+    /// hit or a missed line on one of them finds it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repeats: Vec<u64>,
+    #[serde(default)]
+    pub goal_command: bool,
+}
+
+impl RecordedRequest {
+    /// Whether this line is the message at `offset`, or one merged into it.
+    pub fn holds(&self, offset: u64) -> bool {
+        self.offset == offset || self.repeats.contains(&offset)
+    }
+}
+
+fn one() -> u32 {
+    1
+}
+
+/// A quoted or bare path to an image the operator attached, or Claude
+/// Code's placeholder for a pasted one.
+static ATTACHMENT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(
+        r#"(?i)"[^"\n]*\.(?:png|jpe?g|gif|webp|heic|bmp|tiff?)"|'[^'\n]*\.(?:png|jpe?g|gif|webp|heic|bmp|tiff?)'|(?:~|/)[^\s"']*\.(?:png|jpe?g|gif|webp|heic|bmp|tiff?)\b|\[Image #\d+\]"#,
+    )
+    .expect("valid attachment expression")
+});
+
+/// `text` without the attachments in it, and how many there were (D-18,
+/// B25): the record and the label show a count, never a path.
+pub fn without_attachments(text: &str) -> (String, u32) {
+    let found = ATTACHMENT.find_iter(text).count() as u32;
+    if found == 0 {
+        return (text.to_owned(), 0);
+    }
+    let kept = ATTACHMENT
+        .replace_all(text, " ")
+        .split(' ')
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (kept.trim().to_owned(), found)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,38 +362,59 @@ pub struct WorkChapter {
     pub at_unix_ms: u64,
 }
 
-/// The group a task belongs to. The tasks one request made share its id
-/// `task-<offset>`: the first carries it, the rest are `task-<offset>.<n>`.
-/// A task written before requests split is a group of one.
-pub fn task_group(id: &str) -> &str {
-    id.split_once('.').map_or(id, |(group, _)| group)
+/// How a turn ended and its one line.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TurnOutcome {
+    pub end: LabelEnd,
+    pub line: String,
+    pub at_unix_ms: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkTask {
+/// The record's top state (D-10): the last turn that was not stopped by a
+/// usage limit, and the limit's line when the newest turn was.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RecordStatus {
+    pub end: LabelEnd,
+    pub line: String,
+    pub at_unix_ms: u64,
+    pub limited: Option<String>,
+}
+
+/// One goal flow (D-03, D-05): the requests sent while it was open, placed
+/// by time, and for a past flow the result of its turns (D-11).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct WorkFlow {
     pub id: String,
-    pub chapter_id: String,
     pub name: String,
     pub at_unix_ms: u64,
-    pub last_at_unix_ms: u64,
-    pub end: LabelEnd,
-    pub done: bool,
-    /// The session's newest turn went unjudged and the task is not done:
-    /// its END is an earlier turn's, so no word is drawn for it (PRD
-    /// task-continuation D-09).
-    #[serde(default)]
-    pub unjudged: bool,
+    /// Oldest first, letters included.
+    pub requests: Vec<RecordedRequest>,
+    /// The lines that are requests: letters do not count.
+    pub request_count: usize,
+    pub result: Option<TurnOutcome>,
+}
+
+/// The pull requests of this session or of one direct child's subtree (D-14).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PrGroup {
+    /// `None` for this session's own.
+    pub child: Option<SessionIdentity>,
+    pub name: String,
+    pub outputs: Vec<WorkOutput>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MissedKind {
     /// Read only from records `context_label.v9` wrote; v10 no longer asks
-    /// for it, because the task verdict, the pull request and CI already
-    /// carry an assigned task's own remainder.
+    /// for it, because the pull request and CI already carry an assigned
+    /// task's own remainder.
     Leftover,
     Problem,
     FollowUp,
+    /// A question or decision the agent put to the operator that waits for
+    /// an answer (D-12): the record's `나를 기다리는 것`, never the backlog's.
+    Ask,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -367,18 +462,12 @@ pub struct ResolvedMissedWork {
     pub issue_number: Option<u64>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum TaskDecision {
-    /// One name per independent deliverable of the request, in its order.
-    New {
-        names: Vec<String>,
-    },
-    Continue {
-        ids: Vec<String>,
-    },
-    #[default]
-    None,
+/// A request's summary from one analysis, keyed by the request's offset.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequestSummary {
+    pub offset: u64,
+    pub summary: String,
+    pub answers: Option<String>,
 }
 
 /// The extra judgment travels with the existing turn-end answer, never in
@@ -386,10 +475,19 @@ pub enum TaskDecision {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TurnJudgment {
-    pub task: TaskDecision,
     pub missed: Vec<NewMissedWork>,
     pub resolved: Vec<ResolvedMissedWork>,
-    pub output_task_id: Option<String>,
+    /// What the turn made besides a pull request: a board, a document, an
+    /// issue, a release (D-16).
+    #[serde(default)]
+    pub artifacts: Vec<String>,
+}
+
+/// Whether a goal starts a flow or renames the current one (D-09).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlowChange {
+    New,
+    Rename,
 }
 
 #[derive(Clone, Debug)]
@@ -434,6 +532,12 @@ pub enum LedgerUpdate {
         session: SessionIdentity,
         goal: String,
         at_unix_ms: u64,
+        change: FlowChange,
+    },
+    /// Summaries one analysis gave, at either boundary (D-06).
+    Summaries {
+        session: SessionIdentity,
+        summaries: Vec<RequestSummary>,
     },
     TurnEnd {
         session: SessionIdentity,
@@ -444,11 +548,11 @@ pub enum LedgerUpdate {
         started_at_unix_ms: u64,
         at_unix_ms: u64,
         end: LabelEnd,
+        line: String,
         work_author: bool,
-        /// The sender's name when a report, progress or block letter woke
-        /// the turn: the ledger records the turn against the task that
-        /// spawned that descendant (D-02), never one the model picks.
-        letter: Option<String>,
+        /// Whoever the session's asks wait on spoke in this turn: the
+        /// operator, or for a delegated session its parent (B12).
+        asks_answered: bool,
         turn_witness: Option<String>,
         judgment: TurnJudgment,
     },
@@ -459,13 +563,27 @@ pub enum LedgerUpdate {
     },
 }
 
+/// A request that waits for its summary, with the words the ledger keeps.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OwedRequest {
+    pub offset: u64,
+    pub at_unix_ms: u64,
+    pub text: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct LedgerContext {
     pub parent_name: Option<String>,
-    pub open_tasks: Vec<WorkTask>,
-    /// The done tasks of the newest [`FINISHED_TASKS_IN_CONTEXT`] groups, last worked first.
-    pub finished_tasks: Vec<WorkTask>,
     pub open_missed: Vec<MissedWork>,
+    /// The oldest requests still owed a summary, at most
+    /// [`OWED_IN_CONTEXT`] (B34).
+    pub owed: Vec<OwedRequest>,
+    /// The newest request offset the ledger holds: a message past it is not
+    /// recorded yet, so it is owed a summary too.
+    pub newest_offset: Option<u64>,
+    /// This session's recorded artifacts, newest first, each once, at most
+    /// [`ARTIFACTS_IN_CONTEXT`].
+    pub artifacts: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -479,7 +597,6 @@ pub struct WorkOutput {
     pub stale: bool,
     pub last_read_at_unix_ms: Option<u64>,
     pub created_at_unix_ms: u64,
-    pub task_id: Option<String>,
     pub source: SessionIdentity,
     pub source_name: String,
 }
@@ -492,195 +609,33 @@ pub struct SessionRecord {
     pub native_title: Option<String>,
     pub manual_title: Option<String>,
     pub state: Option<String>,
-    pub last_end: Option<LabelEnd>,
     pub cwd: Option<String>,
     pub project: Option<String>,
     pub repository: Option<String>,
     pub path: Option<String>,
     pub started_at_unix_ms: Option<u64>,
     pub ended_at_unix_ms: Option<u64>,
-    pub chapters: Vec<WorkChapter>,
-    pub tasks: Vec<WorkTask>,
-    pub requests: Vec<RecordedRequest>,
-    pub missed: Vec<MissedWork>,
+    /// The last substantive turn and a limit's badge (D-10, B10).
+    pub status: Option<RecordStatus>,
+    /// Questions and decisions waiting on the operator (D-12).
+    pub asks: Vec<MissedWork>,
+    /// Oldest first; the last is the current flow (D-03).
+    pub flows: Vec<WorkFlow>,
+    /// Requests the cap dropped from this session (B30).
+    pub omitted_requests: u64,
+    /// This session's and every descendant's outputs, newest first.
     pub outputs: Vec<WorkOutput>,
+    /// The pull requests among `outputs`: this session's first, then one
+    /// group per direct child holding its whole subtree's (B18).
+    pub pr_groups: Vec<PrGroup>,
+    /// Non-PR outputs of this session and its descendants, newest first,
+    /// each once (B22).
+    pub artifacts: Vec<String>,
     pub children: Vec<SessionRecord>,
-    /// How its direct children stand; absent without children.
-    pub child_progress: Option<ChildProgress>,
-    /// For a child, the task group of the parent's turn that spawned it;
-    /// its outputs belong there and so does the child (B7).
-    pub spawn_task: Option<String>,
-}
-
-/// How one direct child stands for its parent's `맡긴 일` (PRD
-/// task-split-checklist D-04, task-continuation D-08, D-09).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChildWork {
-    Done,
-    Working,
-    Other,
-    /// No judgment says how it stands: none was ever made, or its newest
-    /// turn went unjudged.
-    Unjudged,
-}
-
-/// One segment per direct child, in the record's order. `done` is absent
-/// while any child is unjudged, so a missing judgment never reads as not done.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct ChildProgress {
-    pub children: Vec<ChildWork>,
-    pub done: Option<usize>,
-}
-
-/// What the ledger reads about a child beside its record.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ChildFacts {
-    /// It sent its parent a report letter and started no turn after it.
-    pub reported_idle: bool,
-    /// Its newest turn went unjudged.
-    pub latest_unjudged: bool,
-    /// A pane runs its session now.
-    pub live: bool,
-}
-
-impl ChildFacts {
-    /// Whether the child holds the task that spawned it open (PRD
-    /// task-continuation D-05, B23): it works in a live pane on a judged
-    /// newest turn. A resting child, one whose newest turn went unjudged and
-    /// one no pane runs any more, whatever state it was last read in, hold
-    /// nothing.
-    pub fn holds_task(self, child: &SessionRecord) -> bool {
-        self.live && !self.latest_unjudged && child.state.as_deref() == Some("working")
-    }
-}
-
-impl ChildWork {
-    pub fn of(child: &SessionRecord, facts: ChildFacts) -> Self {
-        // A child at work is not done, whatever an earlier turn finished: its
-        // new request has no END yet (B8). Its state is what the label worker
-        // last read from its live pane. One never judged stays unjudged.
-        let judged = !child.tasks.is_empty() || child.last_end.is_some();
-        let working = child.state.as_deref() == Some("working");
-        if judged && working {
-            return Self::Working;
-        }
-        // Facts finish a resting child before any judgment does: its report
-        // to the parent, or merged pull requests with none still open.
-        let prs = child.outputs.iter().filter(|output| output.kind == "pr");
-        let merged = prs.clone().any(|output| output.state == "merged");
-        let open = prs.clone().any(|output| pr_open(&output.state));
-        if !working && (facts.reported_idle || (merged && !open)) {
-            return Self::Done;
-        }
-        if !child.tasks.is_empty() && child.tasks.iter().all(|task| task.done) {
-            return Self::Done;
-        }
-        if facts.latest_unjudged {
-            return Self::Unjudged;
-        }
-        if !child.tasks.is_empty() {
-            return if child
-                .tasks
-                .iter()
-                .any(|task| matches!(task.end, LabelEnd::Working | LabelEnd::Waiting))
-            {
-                Self::Working
-            } else {
-                Self::Other
-            };
-        }
-        match child.last_end {
-            None => Self::Unjudged,
-            Some(LabelEnd::Done) => Self::Done,
-            Some(LabelEnd::Working | LabelEnd::Waiting) => Self::Working,
-            Some(_) => Self::Other,
-        }
-    }
-}
-
-impl ChildProgress {
-    pub fn of(children: Vec<ChildWork>) -> Option<Self> {
-        if children.is_empty() {
-            return None;
-        }
-        let done = (!children.contains(&ChildWork::Unjudged)).then(|| {
-            children
-                .iter()
-                .filter(|child| **child == ChildWork::Done)
-                .count()
-        });
-        Some(Self { children, done })
-    }
-}
-
-/// A pull request still in play: neither merged nor closed unmerged.
-pub fn pr_open(state: &str) -> bool {
-    state != "merged" && state != "closed"
-}
-
-/// Whether a task group is finished (PRD task-continuation D-05, D-06): with
-/// a merged pull request and none still open, unless its last END says work
-/// is left or blocked or a child it spawned is still at work (B23); with no
-/// pull request that counts (a closed unmerged one does not), only when its
-/// last END is Done.
-pub fn task_done<'a>(
-    end: LabelEnd,
-    prs: impl Iterator<Item = &'a WorkOutput>,
-    child_working: bool,
-) -> bool {
-    let (mut merged, mut open) = (false, false);
-    for pr in prs {
-        merged |= pr.state == "merged";
-        open |= pr_open(&pr.state);
-    }
-    if open {
-        return false;
-    }
-    if merged {
-        return !child_working && !matches!(end, LabelEnd::Unfinished | LabelEnd::Blocked);
-    }
-    end == LabelEnd::Done
-}
-
-/// What a live pane's chip and checklist popover draw: its session's tasks
-/// with the pull requests assigned to them, the count of finished tasks, and
-/// its direct children's progress. Only a session with a task has one.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct WorkProgress {
-    pub session: SessionIdentity,
-    pub done: usize,
-    pub total: usize,
-    /// First asked first.
-    pub tasks: Vec<WorkTask>,
-    /// The pull requests assigned to a task, as the record holds them.
-    pub outputs: Vec<WorkOutput>,
-    pub children: Option<ChildProgress>,
-}
-
-impl WorkProgress {
-    pub fn of(record: &SessionRecord) -> Option<Self> {
-        if record.tasks.is_empty() {
-            return None;
-        }
-        let mut tasks = record.tasks.clone();
-        // The record lists newest first; a request's tasks keep their order.
-        tasks.sort_by_key(|task| task.at_unix_ms);
-        let outputs = record
-            .outputs
-            .iter()
-            .filter(|output| output.kind == "pr" && output.task_id.is_some())
-            .cloned()
-            .collect();
-        Some(Self {
-            session: record.session.clone(),
-            done: tasks.iter().filter(|task| task.done).count(),
-            total: tasks.len(),
-            tasks,
-            outputs,
-            children: record.child_progress.clone(),
-        })
-    }
+    /// Every missed line, for the ledger's own context and the backlog; the
+    /// screen reads `asks`.
+    #[serde(skip)]
+    pub missed: Vec<MissedWork>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -714,6 +669,7 @@ impl LedgerUpdate {
             | Self::Metadata { session, .. }
             | Self::Requests { session, .. }
             | Self::Chapter { session, .. }
+            | Self::Summaries { session, .. }
             | Self::TurnEnd { session, .. }
             | Self::MissedStatus { session, .. } => session,
         }
@@ -764,7 +720,7 @@ pub struct SessionSearchOptions {
     pub until_unix_ms: Option<u64>,
     pub status: Option<SessionSearchStatus>,
     pub include_titles: bool,
-    pub include_tasks: bool,
+    pub include_flows: bool,
     pub cursor: Option<SessionSearchCursor>,
 }
 

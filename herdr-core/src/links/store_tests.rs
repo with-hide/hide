@@ -1247,10 +1247,7 @@ fn direct_observation_retention_and_count_cap_preserve_exact_session_and_server_
     use crate::model::GraphParty;
     let connection = Connection::open_in_memory().unwrap();
     migrate(&connection).unwrap_or_else(|_| panic!("fixture migration failed"));
-    let mut store = LinkStore {
-        connection,
-        lineage: None,
-    };
+    let mut store = LinkStore { connection };
     let fact = DirectFact {
         source_server: "device-local/server-one/session-named".into(),
         call_key: "call".into(),
@@ -1316,6 +1313,10 @@ fn direct_observation_schema_migrates_existing_v4_without_recreating_retention_a
     let state = tempfile::tempdir().unwrap();
     let path = state.path().join("links.sqlite3");
     let (store, _) = LinkStore::open(&path).unwrap();
+    store
+        .connection
+        .execute_batch(ledger::UNDO_FLOW_SCHEMA)
+        .unwrap();
     store.connection.execute_batch("DROP TABLE direct_observations;
         ALTER TABLE ledger_titles DROP COLUMN goal;
         ALTER TABLE ledger_titles DROP COLUMN summary;

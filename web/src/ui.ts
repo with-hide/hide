@@ -272,8 +272,6 @@ type UiStore = {
   notice: Notice | null;
   /** The management dialog a sidebar menu opened, or null. */
   workspaceDialog: WorkspaceDialog | null;
-  /** The pane whose task checklist is pinned open by its chip or ⇧⌘U (PRD task-split-checklist D-06). */
-  taskListPane: string | null;
   /**
    * The task and removal this page started, so their later answers (an agent
    * start after the creation dialog closed, a removal that finished after its
@@ -353,7 +351,6 @@ type UiStore = {
   setCycle: (cycle: Cycle | null) => void;
   setNotice: (notice: Notice | null) => void;
   setWorkspaceDialog: (dialog: WorkspaceDialog | null) => void;
-  setTaskListPane: (paneId: string | null) => void;
   setWatchedTask: (id: number | null) => void;
   setFocusWhenListed: (paneId: string | null) => void;
   setOpening: (opening: Opening | null) => void;
@@ -414,7 +411,6 @@ export const useUiStore = create<UiStore>((set, get) => ({
   cycle: null,
   notice: null,
   workspaceDialog: null,
-  taskListPane: null,
   watchedTask: null,
   focusWhenListed: null,
   opening: null,
@@ -497,7 +493,6 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setCycle: (cycle) => set({ cycle }),
   setNotice: (notice) => set({ notice }),
   setWorkspaceDialog: (workspaceDialog) => set({ workspaceDialog }),
-  setTaskListPane: (taskListPane) => set({ taskListPane }),
   setWatchedTask: (watchedTask) => set({ watchedTask }),
   setFocusWhenListed: (focusWhenListed) => set({ focusWhenListed }),
   setOpening: (opening) => set({ opening }),

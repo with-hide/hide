@@ -43,7 +43,7 @@ const QUESTION = "긴 한국어 요청을 읽은 뒤 질문 표시가 흐려지�
 const sentTotal = (sent: Map<string, number>) => [...sent.values()].reduce((sum, count) => sum + count, 0);
 const resolved = (daemon: Daemon, pane: string) => () => Boolean(JSON.parse(fs.readFileSync(path.join(daemon.stateDir, "core-state.json"), "utf8")).resolved_sessions?.[pane]);
 
-/** The 프로젝트 tree, where a resolved agent leaves the sidebar. */
+/** The 프로젝트 tree, where a resolved agent with a live pane stays under its tab, dimmed. */
 async function showProjects(page: Page) {
   await page.locator('[data-sidebar-lens-option="projects"]').click();
   await expect(page.locator('[data-sidebar-lens="projects"]')).toBeVisible();
@@ -123,14 +123,16 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await page.locator(`[data-task-menu="${stopped}"] [data-menu-item="resolve"]`).click();
     await expect.poll(resolved(daemon, stopped)).toBe(true);
     await expect(row(stopped)).toHaveAttribute("data-task-state", "resting");
-    // B3: a restart keeps the 태스크 list, and the resolution keeps the agent out of the 프로젝트 tree.
+    // B3: a restart keeps the 태스크 list, and the resolution keeps the agent in the 프로젝트 tree, dimmed (sidebar-every-tab-line B3).
     daemon = await daemon.restart();
     await page.goto("about:blank");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator('[data-sidebar-lens="tasks"]')).toBeVisible();
     await showProjects(page);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${parent}"]`).first()).toBeVisible();
-    await expect(page.locator(`nav[data-sidebar] [data-pane="${stopped}"]`)).toHaveCount(0);
+    // Its worktree has no unresolved agent, so it stands in the `No agents` fold, where the resolved row is dimmed under its tab.
+    await page.locator("nav[data-sidebar] [data-empty-worktrees]").click();
+    await expect(page.locator(`nav[data-sidebar] [data-pane="${stopped}"]`).first()).toHaveClass(/opacity-\(--opacity-dimmed\)/);
     await showTasks(page);
     await openTaskFolds(page);
     await row(stopped).locator('[data-task-focus="row"]').click();
@@ -144,6 +146,7 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     }
     await showProjects(page);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${stopped}"]`).first()).toBeVisible();
+    await expect(page.locator(`nav[data-sidebar] [data-pane="${stopped}"]`).first()).not.toHaveClass(/opacity-\(--opacity-dimmed\)/);
     // The approved Overview exposes work, projects, mixed backlog, retained history and account usage.
     await page.keyboard.press(chord("overview"));
     const modal = page.getByRole("dialog", { name: "Overview", exact: true });

@@ -256,7 +256,14 @@ impl LabelOverlay {
             if let Some(summary) = &label.summary {
                 let working = agent.agent_status.as_deref() == Some("working");
                 let asking = summary.end == Some(LabelEnd::Question);
-                let blocked = summary.end == Some(LabelEnd::Blocked);
+                // A pane draws a provider's refusal as the block it is for
+                // the operator now; only the session record tells the two
+                // apart (PRD session-record-goal-flow B9).
+                let as_pane = |end: LabelEnd| match end {
+                    LabelEnd::Limited => LabelEnd::Blocked,
+                    end => end,
+                };
+                let blocked = summary.end.map(as_pane) == Some(LabelEnd::Blocked);
                 let line = (!summary.line.trim().is_empty()).then(|| summary.line.clone());
                 // The sidebar's two lines keep their meaning: the line is the
                 // reply asked for when the turn ended on a question, and the
@@ -268,9 +275,12 @@ impl LabelOverlay {
                     question: asking && !working,
                     blocked: blocked && !working,
                 });
-                facts.end = summary.end;
+                facts.end = summary.end.map(as_pane);
                 facts.line = line;
                 facts.recent_turns.clone_from(&summary.recent_turns);
+                for turn in &mut facts.recent_turns {
+                    turn.end = turn.end.map(as_pane);
+                }
             }
             agent.facts = Some(facts);
         }

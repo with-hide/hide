@@ -194,7 +194,6 @@ fn restart_with_a_different_hook_never_projects_the_old_record() {
 struct QuietLinks;
 impl crate::links::worker::Sink for QuietLinks {
     fn summaries(&self, _: std::collections::BTreeMap<String, crate::links::ProjectLinkSummary>) {}
-    fn progress(&self, _: Vec<crate::links::ledger::WorkProgress>) {}
     fn panel(&self, _: u64, _: Result<crate::links::worker::PanelAnswer, String>) {}
     fn filling(&self, _: bool) {}
     fn devices(&self) -> Vec<(String, Arc<dyn crate::node_access::NodeLink>)> {

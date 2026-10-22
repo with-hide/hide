@@ -106,17 +106,17 @@ process.stderr.write("unsupported fixture gh arguments\\n");process.exit(1);
 export function seedFirstWork(herdr: HerdrFixture, at: number, goal = FIRST_GOAL) {
   const session = labelAgent(herdr, herdr.panes[0], {
     task: goal, at, cwd: path.join(herdr.root,"fixture"), end: "done", toolOutputs: ["https://github.com/acme/repo/pull/31", "https://github.com/acme/repo/issues/41"],
-    work: { task: { kind: "new", names: ["기록 화면 구현"] }, missed: [{ kind: "follow_up", text: MISSED }], resolved: [], output_task_id: null },
+    request: "기록 화면 구현 요청", work: { missed: [{ kind: "follow_up", text: MISSED }], resolved: [], artifacts: ["세션 기록 화면 시안"] },
   });
   const child = labelAgent(herdr, herdr.panes[1], {
     task: CHILD_GOAL, at: at + 200, cwd: path.join(herdr.root,"fixture"), end: "done", toolOutputs: ["https://github.com/acme/repo/pull/34"],
-    work: { task: { kind: "new", names: ["자식 연결 검증"] }, missed: [], resolved: [], output_task_id: null },
+    work: { missed: [], resolved: [], artifacts: [] },
   });
   declareParent(herdr, herdr.panes[1], herdr.panes[0]);
   return { session, child };
 }
 
 export function nextWork(at: number): FixtureLabel {
-  return { task: NEXT_GOAL, at, end: "unfinished", toolOutputs: ["https://github.com/acme/repo/pull/32"],
-    work: { task: { kind: "new", names: ["이슈와 검색 검증", "좁은 열 줄바꿈 확인"] }, missed: [{ kind: "problem", text: "다른 저장소의 이슈 템플릿이 비어 있어 따로 고쳐야 합니다" }], resolved: [], output_task_id: null } };
+  return { task: NEXT_GOAL, at, end: "unfinished", request: "이슈와 검색 검증 요청", toolOutputs: ["https://github.com/acme/repo/pull/32"],
+    work: { missed: [{ kind: "problem", text: "다른 저장소의 이슈 템플릿이 비어 있어 따로 고쳐야 합니다" }, { kind: "ask", text: "좁은 열 줄바꿈 기준을 정해 주세요" }], resolved: [], artifacts: [] } };
 }
