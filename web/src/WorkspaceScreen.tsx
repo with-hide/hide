@@ -164,18 +164,22 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   // A lane that goes out of sight with the keyboard inside it, or documents
   // the 보기 slot or a fold replaces with the keyboard in them, hands the
   // keyboard to the pane the core has focused, as after a closing sheet, so
-  // no focus is reported for it (PRD right-lane B4, B23; lane-two-columns B12).
+  // no focus is reported for it (PRD right-lane B4, B23; lane-two-columns
+  // B11). Documents that closed with their last view are not a fold: the
+  // close's own follow-up hands the keyboard to the Explorer left in the
+  // tool column, or to the pane (B12, `followViewClose`).
   const documentsUp = up && drawnView === "documents";
+  const displays = view?.layout?.display_count ?? 0;
   const shownBefore = useRef({ up, documentsUp });
   useEffect(() => {
     const before = shownBefore.current;
     shownBefore.current = { up, documentsUp };
     const owner = keyboardOwner();
-    const lost = (before.up && !up && (owner.kind === "view" || owner.kind === "tool" || owner.kind === "detail")) || (before.documentsUp && !documentsUp && owner.kind === "view");
+    const lost = (before.up && !up && (owner.kind === "view" || owner.kind === "tool" || owner.kind === "detail")) || (before.documentsUp && !documentsUp && displays > 0 && owner.kind === "view");
     if (!lost) return;
     const paneId = useShellStore.getState().focusedPaneId;
     if (paneId) focusTerminal(paneId);
-  }, [up, documentsUp]);
+  }, [up, documentsUp, displays]);
   if (!checkout || !view) return null;
   return (
     <section

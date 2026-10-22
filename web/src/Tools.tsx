@@ -233,13 +233,13 @@ export function Lane({ view, frame, documents, sizes, checkout, actions }: { vie
       {frame.view !== null ? (
         <div className={cn("relative flex min-h-0 min-w-0 flex-col", both ? "shrink-0" : "flex-1")} style={both ? { width: frame.view.width } : undefined} data-lane-column="view">
           {shows === "detail" ? <DetailPanel actions={actions} /> : null}
-          <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col bg-card", shows === "documents" ? undefined : "absolute inset-y-0 right-0")} style={shows === "documents" ? undefined : { width: documents.view?.width ?? frame.view.width }} inert={shows !== "documents"} data-lane-hidden={shows === "documents" ? undefined : "true"} role="region" aria-label={t("panes.lane.documents")} data-view-area="true">
+          <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col bg-card", shows === "documents" ? undefined : "absolute inset-y-0 right-0")} style={shows === "documents" ? undefined : { width: documents.view?.width ?? frame.view.width }} inert={shows !== "documents"} data-lane-hidden={shows === "documents" ? undefined : "true"} role="region" aria-label={t("panes.lane.documents")} data-view-area={shows === "documents" ? "true" : undefined}>
             <ViewAreas actions={actions} />
           </div>
         </div>
       ) : (
         // No viewing column: the documents are still laid out, out of sight, at their own width.
-        <div className="absolute inset-y-0 right-0 flex min-h-0 min-w-0 flex-col" style={{ width: documents.view?.width ?? frame.width }} inert data-lane-hidden="true" data-view-area="true">
+        <div className="absolute inset-y-0 right-0 flex min-h-0 min-w-0 flex-col" style={{ width: documents.view?.width ?? frame.width }} inert data-lane-hidden="true">
           <ViewAreas actions={actions} />
         </div>
       )}
