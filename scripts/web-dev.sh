@@ -59,9 +59,20 @@ while (($# > 0)); do
     shift
 done
 
-case "$(uname -s)" in
-    Darwin) system=macos ;;
-    Linux) system=linux ;;
+# The pinned Herdr exists for these two (contracts/herdr-bundle.json).
+case "$(uname -s)/$(uname -m)" in
+    Darwin/arm64)
+        system=macos
+        platform=macos-aarch64
+        ;;
+    Linux/x86_64)
+        system=linux
+        platform=linux-x86_64
+        ;;
+    Darwin/* | Linux/*)
+        echo "error: no pinned Herdr for $(uname -s) $(uname -m); hide runs on Apple Silicon Macs and Linux x64 (docs/INSTALL.md, Requirements)" >&2
+        exit 2
+        ;;
     *)
         echo "error: web-dev.sh runs on macOS and Linux; on Windows install the package (docs/INSTALL.md)" >&2
         exit 2
@@ -78,16 +89,7 @@ for program in pnpm cargo zsh jq; do
     }
 done
 
-# A Herdr pane carries the socket, identity and binary of the Herdr that
-# opened it, and a shell inside hide carries the daemon's variables; a build
-# started with them would attach to that Herdr and that daemon instead of
-# its own. The desktop app is launched the same way (AGENTS.md, The
-# installed app is the operator's).
-for name in $(compgen -e); do
-    case "$name" in HERDR_* | HIDE_*) unset "$name" ;; esac
-done
-
-# 1. Build.
+# 1. Build, with your own home and caches (the toolchain, the Herdr cache).
 if ((build)); then
     [[ -d web/node_modules ]] || pnpm install --frozen-lockfile
     pnpm --dir web build
@@ -99,7 +101,18 @@ for program in hided hide hide-agent-hooks; do
         exit 1
     }
 done
-herdr=$(zsh scripts/fetch-herdr-runtime.sh)
+herdr=$(zsh scripts/fetch-herdr-runtime.sh --platform "$platform")
+
+# A Herdr pane carries the socket, identity and binary of the Herdr that
+# opened it, and a shell inside hide carries the daemon's variables; a build
+# started with them would attach to that Herdr and that daemon instead of
+# its own. The desktop app is launched the same way (AGENTS.md, The
+# installed app is the operator's). The XDG folders go with them below, once
+# the home is chosen: an isolated home with your XDG_STATE_HOME would still
+# be your state folder.
+for name in $(compgen -e); do
+    case "$name" in HERDR_* | HIDE_*) unset "$name" ;; esac
+done
 
 # 2. Choose the home and place the build.
 if ((into_home)); then
@@ -117,6 +130,7 @@ else
     home=$checkout/.hide-web-dev/home
     mkdir -p "$home"
     chmod 700 "$checkout/.hide-web-dev" "$home"
+    unset XDG_STATE_HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME
 fi
 
 # The SHA-256 of a file, or of stdin with no argument.
@@ -142,9 +156,12 @@ install -m 755 "$herdr" "$root/herdr/$herdr_version/herdr"
 ln -sfn "$herdr_version" "$root/herdr/current"
 herdr=$root/herdr/current/herdr
 
-# 3. The Herdr server. An isolated home gets its own socket, kept short
-# because a Unix socket path holds about a hundred bytes; your own home uses
+# 3. The Herdr server. An isolated home gets its own socket under /tmp, not
+# under the checkout, because a Unix socket path holds about a hundred
+# bytes and a worktree's path can use most of them; your own home uses
 # Herdr's default socket, so a Herdr you already run is reused as it is.
+# The server outlives this script and the daemon; `herdr server stop` with
+# the same HERDR_SOCKET_PATH ends it.
 if ((into_home)); then
     socket=""
 else
@@ -162,18 +179,33 @@ herdr_running() {
 if ! herdr_running; then
     mkdir -p "$home/.hide/web-dev"
     nohup "$herdr" server > "$home/.hide/web-dev/herdr-server.log" 2>&1 &
+    server_pid=$!
     for _ in $(seq 1 50); do
         herdr_running && break
         sleep 0.2
     done
     herdr_running || {
-        echo "error: herdr server did not answer; see $home/.hide/web-dev/herdr-server.log" >&2
+        kill "$server_pid" 2> /dev/null || true
+        echo "error: herdr server did not answer in 10 s; see $home/.hide/web-dev/herdr-server.log" >&2
         exit 1
     }
 fi
 
-# 4. The daemon and the address.
-answer=$("$place/hide" connect)
+# 4. The daemon and the address. `hide connect` attaches to the daemon the
+# state folder names when it is this build, starts one when there is none,
+# and refuses one of another build: the daemon of the build before an edit,
+# alive for ten idle minutes after its tab closed. That one is stopped and
+# the connection made again.
+connect() {
+    answer=$("$place/hide" connect) || true
+    [[ "$(printf '%s' "$answer" | jq -r '.ok // false')" == true ]]
+}
+if ! connect; then
+    if [[ "$(printf '%s' "$answer" | jq -r '.reason // empty')" == other_build ]]; then
+        "$place/hide" stop
+        connect || true
+    fi
+fi
 url=$(printf '%s' "$answer" | jq -r '.url // empty')
 if [[ -z "$url" ]]; then
     echo "error: hide connect did not answer with an address: $answer" >&2
