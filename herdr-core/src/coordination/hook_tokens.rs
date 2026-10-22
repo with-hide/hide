@@ -350,7 +350,12 @@ fn restore(home: &std::path::Path, connector: &dyn ApiConnector, ask: &Ask) -> O
         if let Err(error) = request_with_connector(
             connector,
             "pane.report_metadata",
-            hide_agent_hooks::report::report_params(&ask.pane, report.0, counts),
+            hide_agent_hooks::report::report_params(
+                &ask.pane,
+                report.0,
+                counts,
+                ask.session.as_deref(),
+            ),
             REPORT_TIMEOUT,
         ) {
             return Outcome::Failed(format!("pane.report_metadata: {error}"));
@@ -390,7 +395,7 @@ fn finish(
         && let Err(error) = request_with_connector(
             connector,
             "pane.report_metadata",
-            hide_agent_hooks::report::report_params(&ask.pane, version, Counts::Clear),
+            hide_agent_hooks::report::report_params(&ask.pane, version, Counts::Clear, None),
             REPORT_TIMEOUT,
         )
     {
@@ -535,15 +540,16 @@ mod tests {
                 working: 1,
                 done: 1,
             }),
+            Some("session-a"),
         )
     }
 
     fn version_only(pane: &str) -> Value {
-        hide_agent_hooks::report::report_params(pane, HOOK_VERSION, Counts::Leave)
+        hide_agent_hooks::report::report_params(pane, HOOK_VERSION, Counts::Leave, None)
     }
 
     fn cleared(pane: &str) -> Value {
-        hide_agent_hooks::report::report_params(pane, HOOK_VERSION, Counts::Clear)
+        hide_agent_hooks::report::report_params(pane, HOOK_VERSION, Counts::Clear, None)
     }
 
     /// The tokens Herdr ends up holding for `pane`: every report merged in
@@ -609,6 +615,11 @@ mod tests {
                 ("hide_hooks", &HOOK_VERSION.to_string()),
                 ("hide_sub_working", "1"),
                 ("hide_sub_done", "1"),
+                // SHA-256 of the fixture's native session, "session-a".
+                (
+                    "hide_sub_session",
+                    "fa57a52dbf08190218529730a3e99db6946c6c29220fb6e0551e21598b0b05db",
+                ),
             ])
         );
     }

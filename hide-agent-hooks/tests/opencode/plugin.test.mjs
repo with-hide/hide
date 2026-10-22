@@ -442,7 +442,7 @@ test("child sessions move the pane's subagent counts, and a background child sta
   running.ses_child = { type: "busy" };
   await hooks.event({ event: { type: "session.status", properties: { sessionID: "ses_root", status: { type: "idle" } } } });
   await sleep(200);
-  assert.deepEqual(calls().filter((c) => c.operation === "subagents").at(-1).input, { working: 1, done: 0 });
+  assert.deepEqual(calls().filter((c) => c.operation === "subagents").at(-1).input, { working: 1, done: 0, session_id: "ses_root" });
 
   await hooks.event({ event: sample("session.status.idle") });
   await until("subagents", 1, (input) => input.working === 0 && input.done === 1);
@@ -470,14 +470,14 @@ test("past its session limit the plugin forgets finished children, keeps a runni
   // The turn ends: the event settles once its report is sent, so the last report is the state now.
   await hooks.event({ event: { type: "session.status", properties: { sessionID: "ses_root", status: { type: "idle" } } } });
   const reports = calls().filter((call) => call.operation === "subagents");
-  assert.deepEqual(reports.at(-1).input, { working: 1, done: 510 });
+  assert.deepEqual(reports.at(-1).input, { working: 1, done: 510, session_id: "ses_root" });
   // A burst of changes costs a few reports, not one per change.
   assert.ok(reports.length < 50, `${reports.length} reports`);
 
   // A subagent started now is still counted.
   await hooks.event({ event: child("ses_new") });
   await hooks.event({ event: status("ses_new", "busy") });
-  assert.deepEqual(calls().filter((call) => call.operation === "subagents").at(-1).input, { working: 2, done: 509 });
+  assert.deepEqual(calls().filter((call) => call.operation === "subagents").at(-1).input, { working: 2, done: 509, session_id: "ses_root" });
 
   // The root's guidance was given once; its next prompt is not its first.
   const next = await prompt(hooks);

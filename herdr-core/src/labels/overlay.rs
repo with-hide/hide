@@ -49,8 +49,7 @@ struct ProvenLabel {
     /// the Herdr state it was read under.
     turn: Option<(u64, Option<Waiting>)>,
     user_turn: Option<(u64, hide_session::turns::UserTurnFact)>,
-    /// The expiries of the background tasks the session read proves alive,
-    /// with the Herdr state it was read under.
+    /// Internal executions with the Herdr state the session read proved.
     wake: Option<(u64, WakeRead)>,
     /// The Herdr state whose turn end the session read still owes.
     turn_end_owed: Option<u64>,
@@ -239,17 +238,25 @@ impl LabelOverlay {
             facts.user_turn = label.user_turn.as_ref().and_then(|(seq, fact)| {
                 (agent.state_change_seq == Some(*seq)).then(|| fact.clone())
             });
-            if let Some((_, read)) = label
-                .wake
-                .as_ref()
-                .filter(|(seq, _)| agent.state_change_seq == Some(*seq))
-            {
-                let live = read
-                    .expiries
-                    .iter()
-                    .filter(|expiry| expiry.is_none_or(|at| at > now));
-                facts.wake_devices = u32::try_from(live.count()).unwrap_or(u32::MAX);
-                facts.wake_vanished = read.vanished;
+            if let Some((seq, read)) = &label.wake {
+                use hide_agent_adapter::work::{WorkRead, WorkSource, WorkState};
+                if agent.state_change_seq == Some(*seq) {
+                    facts.executions = read.executions.clone();
+                    if let WorkRead::Current { value, .. } = &mut facts.executions {
+                        for record in &mut value.records {
+                            if record.state == WorkState::Running
+                                && record.expires_at_unix_ms.is_some_and(|at| at <= now)
+                            {
+                                record.state = WorkState::Expired;
+                            }
+                        }
+                    }
+                    facts.wake_vanished = read.vanished;
+                } else {
+                    facts.executions = WorkRead::Stale {
+                        source: WorkSource::Session,
+                    };
+                }
             }
             facts.turn_end_unread =
                 agent.state_change_seq.is_some() && label.turn_end_owed == agent.state_change_seq;
@@ -320,7 +327,7 @@ fn row_facts(facts: &SessionFacts) -> RowFacts {
         recent_turns: Vec::new(),
         awaiting_operator: false,
         user_turn: None,
-        wake_devices: 0,
+        executions: Default::default(),
         turn_end_unread: false,
         wake_vanished: false,
     }

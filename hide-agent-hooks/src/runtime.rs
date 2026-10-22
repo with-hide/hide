@@ -185,6 +185,10 @@ pub const WORKING_TOKEN: &str = "hide_sub_working";
 /// The count of subagents this pane's session has finished.
 pub const DONE_TOKEN: &str = "hide_sub_done";
 
+/// SHA-256 of the native session value that owns the reported counts.
+/// A digest fits Herdr's 80-character metadata value limit even for a session path.
+pub const SESSION_TOKEN: &str = "hide_sub_session";
+
 /// The count of subagents this pane's session reports as blocked.
 ///
 /// No shipped adapter observes it, so it is never written today. The reader

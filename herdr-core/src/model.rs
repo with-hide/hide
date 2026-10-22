@@ -2431,6 +2431,9 @@ pub struct PaneChildrenSnapshot {
     pub representative: Option<AgentChipSnapshot>,
     /// In-process subagents, summarised and never added to the chip count.
     pub subagents: SubagentCountsSnapshot,
+    /// Counts and native executions are separate observations with explicit
+    /// support and freshness. Neither creates registered agent descendants.
+    pub internal_work: hide_agent_adapter::work::InternalWork,
 }
 
 /// One agent in a line of them: a pane header chip, a breadcrumb step's
@@ -6970,6 +6973,67 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "user_turn_kind", &user_turns);
         checked.insert("user_turn_kind");
+
+        use hide_agent_adapter::work::{WorkKind, WorkRead, WorkSource, WorkState};
+        let work_kinds = [WorkKind::Subagent, WorkKind::Background];
+        for kind in work_kinds {
+            match kind {
+                WorkKind::Subagent | WorkKind::Background => {}
+            }
+        }
+        assert_wire(&contract, "internal_work_kind", &work_kinds);
+        checked.insert("internal_work_kind");
+
+        let work_states = [
+            WorkState::Running,
+            WorkState::Ended,
+            WorkState::Stopped,
+            WorkState::Expired,
+        ];
+        for state in work_states {
+            match state {
+                WorkState::Running | WorkState::Ended | WorkState::Stopped | WorkState::Expired => {
+                }
+            }
+        }
+        assert_wire(&contract, "internal_work_state", &work_states);
+        checked.insert("internal_work_state");
+
+        let work_sources = [WorkSource::Hooks, WorkSource::Session];
+        for source in work_sources {
+            match source {
+                WorkSource::Hooks | WorkSource::Session => {}
+            }
+        }
+        assert_wire(&contract, "internal_work_source", &work_sources);
+        checked.insert("internal_work_source");
+
+        let work_reads = [
+            WorkRead::Unsupported,
+            WorkRead::Unknown,
+            WorkRead::Current {
+                source: WorkSource::Session,
+                value: (),
+            },
+            WorkRead::Stale {
+                source: WorkSource::Session,
+            },
+            WorkRead::Lost {
+                source: WorkSource::Session,
+            },
+        ];
+        let work_read_states = work_reads.map(|read| {
+            match &read {
+                WorkRead::Unsupported
+                | WorkRead::Unknown
+                | WorkRead::Current { .. }
+                | WorkRead::Stale { .. }
+                | WorkRead::Lost { .. } => {}
+            }
+            serde_json::to_value(read).unwrap()["state"].clone()
+        });
+        assert_wire(&contract, "internal_work_read_state", &work_read_states);
+        checked.insert("internal_work_read_state");
 
         let statuses = [
             ChangedFileStatus::Modified,

@@ -5177,7 +5177,14 @@ fn a_turn_end_is_not_a_stop_until_its_session_read_lands() {
     );
     settle(&mut worker, &woken);
     assert_eq!(activity_shown(&worker, &done), "stopped");
-    assert_eq!(shown_facts(&worker, &done).unwrap().wake_devices, 1);
+    let facts = shown_facts(&worker, &done).unwrap();
+    let work = facts.executions.current().unwrap();
+    assert_eq!(work.records.len(), 1);
+    assert_eq!(work.records[0].id, "bg1");
+    assert_eq!(
+        work.records[0].state,
+        hide_agent_adapter::work::WorkState::Running
+    );
 }
 
 /// Takes the worker's results until it settles and says whether any of them
@@ -5251,7 +5258,11 @@ fn a_read_that_finds_no_task_releases_the_turn_end_and_publishes_it() {
         "the release reaches the projection"
     );
     assert_eq!(activity_shown(&worker, &done), "stopped");
-    assert_eq!(shown_facts(&worker, &done).unwrap().wake_devices, 0);
+    assert_eq!(
+        shown_facts(&worker, &done).unwrap().executions,
+        hide_agent_adapter::work::WorkRead::Unknown,
+        "without the process boundary, no executions are proven"
+    );
 }
 
 #[test]

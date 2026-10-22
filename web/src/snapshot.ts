@@ -296,7 +296,28 @@ export type PaneChildren = {
   chips: AgentChip[];
   /** Whether Hide hears this pane's session; absent for an agent with no connection to judge. */
   connection?: PaneConnection | null;
+  internal_work?: InternalWork;
 };
+
+/** Internal executions belong to this native session, separately from registered agent lineage. */
+export type InternalWork = {
+  subagents: WorkRead<{ working: number | null; done: number | null }>;
+  executions: WorkRead<{
+    records: {
+      id: string;
+      kind: "subagent" | "background" | null;
+      name: string | null;
+      state: "running" | "ended" | "stopped" | "expired";
+      expires_at_unix_ms: number | null;
+    }[];
+    history_truncated: boolean;
+  }>;
+};
+
+export type WorkRead<T> =
+  | { state: "unsupported" | "unknown" }
+  | { state: "current"; source: "hooks" | "session"; value: T }
+  | { state: "stale" | "lost"; source: "hooks" | "session" };
 
 /** Why a session is not connected: `codex_shared_server`, `started_before_hide`, or `setup_needed` (fix it in Settings, no Reopen). */
 export type PaneConnectionReason = "codex_shared_server" | "started_before_hide" | "setup_needed";

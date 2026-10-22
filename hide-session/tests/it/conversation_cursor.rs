@@ -469,6 +469,7 @@ fn a_scan_checkpointed_before_the_wake_reader_is_reread_from_its_record_start() 
     fs::write(&path, &complete).unwrap();
     let called = TurnMark::Wake(vec![WakeMark::Call {
         call: "toolu_long".into(),
+        name: None,
     }]);
     for older_scan in [false, true] {
         let mut checkpoint = checkpoint.clone();
@@ -524,7 +525,7 @@ fn a_result_longer_than_a_poll_budget_still_loses_the_devices_of_its_open_call()
         tracker.fold(*offset, mark);
     }
     assert_eq!(tracker.wake_loss(), Some(WakeLoss::Lost));
-    assert!(tracker.wake_expiries().is_empty());
+    assert!(tracker.work_records(0).is_empty());
 
     // The same session with a short result of that call loses nothing, so the
     // loss above is the long result's.
@@ -546,7 +547,7 @@ fn a_result_longer_than_a_poll_budget_still_loses_the_devices_of_its_open_call()
         tracker.fold(*offset, mark);
     }
     assert_eq!(tracker.wake_loss(), None);
-    assert_eq!(tracker.wake_expiries().len(), 1);
+    assert_eq!(tracker.work_records(0).len(), 1);
 }
 
 const CLAUDE_COMMANDS: &str = include_str!("../fixtures/claude-commands.jsonl");

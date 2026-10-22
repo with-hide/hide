@@ -45,16 +45,16 @@ function publishCounts(state, api, force) {
     if (status.busy) working += 1;
     else if (status.ran) done += 1;
   }
-  const key = `${working}/${done}`;
+  const key = `${state.root}/${working}/${done}`;
   if (!force && key === state.published) return state.counting ?? Promise.resolve();
   // Only a report Herdr took counts as published: a failed one is sent again with the next change, prompt or rest.
   state.published = key;
-  state.nextCount = { working, done, key };
+  state.nextCount = { working, done, session: state.root, key };
   state.counting ??= (async () => {
     while (state.nextCount) {
       const next = state.nextCount;
       state.nextCount = null;
-      const answer = await helper(state, "subagents", { working: next.working, done: next.done }, COUNT_BUDGET_MS, state.pane);
+      const answer = await helper(state, "subagents", { working: next.working, done: next.done, session_id: next.session }, COUNT_BUDGET_MS, state.pane);
       if (answer?.reported !== true && state.published === next.key) state.published = null;
     }
     state.counting = null;

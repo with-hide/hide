@@ -1865,9 +1865,10 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
             working: Some(2),
             done: Some(1),
             blocked: None,
+            session_digest: None,
         },
     );
-    runtime.ingest_remote_session(TARGET, Ok(raw));
+    runtime.ingest_remote_session(TARGET, Ok(raw.clone()));
     let children = |runtime: &Runtime| {
         runtime.snapshot.status.remote[0]
             .session
@@ -1949,6 +1950,39 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
     assert_eq!(
         (after.subagents.working, after.subagents.done),
         (Some(2), Some(1))
+    );
+    assert_eq!(
+        after.internal_work.subagents,
+        hide_agent_adapter::work::WorkRead::Unknown,
+        "a device's ownerless counts do not become current"
+    );
+    raw.pane_hook_tokens
+        .get_mut(&pane_id)
+        .unwrap()
+        .session_digest = Some(
+        crate::sidebar::fixture_lineage_session()
+            .as_bytes()
+            .try_into()
+            .unwrap(),
+    );
+    runtime.ingest_remote_session(TARGET, Ok(raw.clone()));
+    assert_eq!(
+        children(&runtime).internal_work.subagents.current(),
+        Some(&hide_agent_adapter::work::WorkTotals {
+            working: Some(2),
+            done: Some(1)
+        }),
+        "device projection accepts the same session proof as local projection"
+    );
+    raw.pane_hook_tokens
+        .get_mut(&pane_id)
+        .unwrap()
+        .session_digest = Some([b'0'; 64]);
+    runtime.ingest_remote_session(TARGET, Ok(raw));
+    assert_eq!(
+        children(&runtime).internal_work.subagents,
+        hide_agent_adapter::work::WorkRead::Unknown,
+        "a reused device pane does not inherit another session's totals"
     );
 
     // A consent from an older build asks again, but does not unsay the hook

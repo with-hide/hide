@@ -396,16 +396,28 @@ fn subagent_counts_are_stored_as_sent_and_a_failed_report_is_recorded() {
         &std::fs::read(machine.home.join(".hide/agent-hooks/panes/w1_p1.json")).unwrap(),
     )
     .unwrap();
-    // The counts as sent, and who stored them: the hook version, the agent
-    // and no session (the plugin's totals name none), which is what a restore
-    // pairs a file with a pane by after Herdr loses the tokens.
+    // Older callers that omit the session keep their numbers without proof.
     assert_eq!(
         stored,
-        json!({"working": 2, "done": 1, "version": hide_agent_hooks::HOOK_VERSION, "agent": "opencode", "session": null})
+        json!({"working": 2, "done": 1, "version": hide_agent_hooks::HOOK_VERSION, "agent": "opencode", "session": null, "unowned": false})
     );
     let failure = hide_agent_hooks::report::last_failure(&machine.home).unwrap();
     assert_eq!(failure.pane_id, PANE);
     assert_eq!(failure.event, "subagent count");
+    machine.run(
+        "subagents",
+        &json!({"working": 0, "done": 0, "session_id": "ses_root"}),
+        true,
+    );
+    assert_eq!(
+        hide_agent_hooks::counters::restore_of(&machine.home, PANE).unwrap(),
+        hide_agent_hooks::counters::Restore::Report(hide_agent_hooks::counters::Restorable {
+            counters: hide_agent_hooks::counters::PaneCounters::default(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            agent: "opencode".into(),
+            session: Some("ses_root".into()),
+        })
+    );
 }
 
 #[test]

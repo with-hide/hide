@@ -1112,8 +1112,14 @@ fn report_count(
     if applied.as_ref().is_ok_and(|applied| applied.foreign) {
         return;
     }
-    let mut outcome = match (applied.map(|applied| applied.counters), &socket_path) {
-        (Ok(counters), Ok(path)) => report_latest(home, path, &pane_id, counters),
+    let mut outcome = match (applied, &socket_path) {
+        (Ok(applied), Ok(path)) => report::report_latest(
+            home,
+            path,
+            &pane_id,
+            applied.counters,
+            applied.session.as_deref(),
+        ),
         (Err(error), _) => Err(hide_herdr_client::ApiError::Transport(format!(
             "the pane's count could not be changed: {error}"
         ))),
@@ -1129,25 +1135,6 @@ fn report_count(
     // show (engineering rule 10).
     let socket_path = socket_path.unwrap_or_default();
     let _ = report::record_outcome(home, &pane_id, event.name(), &socket_path, &outcome);
-}
-
-/// Reports `counters` and, when another event of the pane changed the record
-/// while this report was on its way, the record as it is now: two events
-/// that report in the other order than they counted would otherwise leave
-/// Herdr with the older count until the pane's next event.
-fn report_latest(
-    home: &std::path::Path,
-    socket_path: &std::path::Path,
-    pane_id: &str,
-    counters: counters::PaneCounters,
-) -> Result<(), hide_herdr_client::ApiError> {
-    report::report(socket_path, pane_id, counters)?;
-    // Only a record actually read can be newer; one that cannot be read now
-    // is left to the event that is writing it, which reports it itself.
-    match counters::read_settled(home, pane_id) {
-        Ok(now) if now != counters => report::report(socket_path, pane_id, now),
-        _ => Ok(()),
-    }
 }
 
 fn memory_output_before_deadline(

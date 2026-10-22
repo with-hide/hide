@@ -1041,7 +1041,10 @@ impl LargeRecord {
             Some(Record::Assistant) => scan
                 .wake_calls
                 .iter()
-                .map(|call| WakeMark::Call { call: call.clone() })
+                .map(|call| WakeMark::Call {
+                    call: call.clone(),
+                    name: None,
+                })
                 .collect(),
             Some(Record::User) => scan
                 .tools

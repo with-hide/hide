@@ -428,8 +428,11 @@ pub fn project_pane_children(
     status_of: &dyn Fn(hide_agent_adapter::HookDialect) -> Option<hide_agent_hooks::HookStatus>,
 ) -> Option<crate::model::PaneChildrenSnapshot> {
     let agent = agents.iter().find(|agent| agent.pane_id == pane_id)?;
-    let dialect =
-        hide_agent_adapter::adapter(&agent.agent_kind).and_then(|row| row.subagent_counts);
+    use hide_agent_adapter::work::{
+        InternalWork, WorkKind, WorkRead, WorkSource, WorkSupport, WorkTotals,
+    };
+    let adapter = hide_agent_adapter::adapter(&agent.agent_kind);
+    let dialect = adapter.and_then(|row| row.subagent_counts);
     let status = dialect.and_then(status_of);
     let instrumentation = hide_agent_hooks::diagnosis::instrumentation(
         hide_agent_hooks::diagnosis::PaneObservation {
@@ -474,6 +477,38 @@ pub fn project_pane_children(
             working: instrumentation.working,
             done: instrumentation.done,
             blocked: instrumentation.blocked,
+        },
+        internal_work: InternalWork {
+            subagents: if dialect.is_none() {
+                WorkRead::Unsupported
+            } else if tokens.session_digest.as_ref().is_some_and(|owner| {
+                agent
+                    .lineage_session
+                    .as_ref()
+                    .is_some_and(|session| owner.as_slice() == session.as_bytes())
+            }) && (instrumentation.working.is_some() || instrumentation.done.is_some())
+            {
+                WorkRead::Current {
+                    source: WorkSource::Hooks,
+                    value: WorkTotals {
+                        working: instrumentation.working,
+                        done: instrumentation.done,
+                    },
+                }
+            } else {
+                WorkRead::Unknown
+            },
+            executions: if adapter.is_some_and(|row| {
+                row.work_support(WorkKind::Background) != WorkSupport::Unsupported
+            }) {
+                agent
+                    .row_facts
+                    .as_ref()
+                    .map(|facts| facts.executions.clone())
+                    .unwrap_or_default()
+            } else {
+                WorkRead::Unsupported
+            },
         },
     })
 }

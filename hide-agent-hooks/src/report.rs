@@ -26,7 +26,7 @@ use serde_json::json;
 
 use crate::counters::PaneCounters;
 use crate::runtime::{
-    DONE_TOKEN, HOOK_SOURCE_NAME, HOOK_VERSION, INSTRUMENTED_TOKEN, WORKING_TOKEN,
+    DONE_TOKEN, HOOK_SOURCE_NAME, HOOK_VERSION, INSTRUMENTED_TOKEN, SESSION_TOKEN, WORKING_TOKEN,
 };
 
 /// How long one report may hold the agent's hook slot. A hook runs inside
@@ -93,7 +93,12 @@ pub enum Counts {
 /// hook version the report speaks for: the running helper's own, or the one
 /// a pane's file recorded when hided puts the tokens back after Herdr lost
 /// them (`counters::restore_of`).
-pub fn report_params(pane_id: &str, version: u32, counts: Counts) -> serde_json::Value {
+pub fn report_params(
+    pane_id: &str,
+    version: u32,
+    counts: Counts,
+    session: Option<&str>,
+) -> serde_json::Value {
     let mut tokens = serde_json::Map::new();
     tokens.insert(INSTRUMENTED_TOKEN.to_owned(), json!(version.to_string()));
     match counts {
@@ -103,11 +108,16 @@ pub fn report_params(pane_id: &str, version: u32, counts: Counts) -> serde_json:
                 json!(counters.working.to_string()),
             );
             tokens.insert(DONE_TOKEN.to_owned(), json!(counters.done.to_string()));
+            tokens.insert(
+                SESSION_TOKEN.to_owned(),
+                json!(session.and_then(session_digest)),
+            );
         }
         Counts::Leave => {}
         Counts::Clear => {
             tokens.insert(WORKING_TOKEN.to_owned(), serde_json::Value::Null);
             tokens.insert(DONE_TOKEN.to_owned(), serde_json::Value::Null);
+            tokens.insert(SESSION_TOKEN.to_owned(), serde_json::Value::Null);
         }
     }
     json!({
@@ -118,14 +128,51 @@ pub fn report_params(pane_id: &str, version: u32, counts: Counts) -> serde_json:
 }
 
 /// Reports one pane's counts to the Herdr behind `socket_path`.
-pub fn report(socket_path: &Path, pane_id: &str, counters: PaneCounters) -> Result<(), ApiError> {
+pub fn report(
+    socket_path: &Path,
+    pane_id: &str,
+    counters: PaneCounters,
+    session: Option<&str>,
+) -> Result<(), ApiError> {
     request_with_timeout(
         socket_path,
         "pane.report_metadata",
-        report_params(pane_id, HOOK_VERSION, Counts::Set(counters)),
+        report_params(pane_id, HOOK_VERSION, Counts::Set(counters), session),
         REPORT_TIMEOUT,
     )
     .map(|_| ())
+}
+
+/// Publishes the counts with their observation owner, then repairs an
+/// out-of-order report with one bounded reread of the same record.
+/// A session change matters even when both sessions reported zero.
+pub fn report_latest(
+    home: &Path,
+    socket_path: &Path,
+    pane_id: &str,
+    counters: PaneCounters,
+    session: Option<&str>,
+) -> Result<(), ApiError> {
+    report(socket_path, pane_id, counters, session)?;
+    // A writer reports its own update; an unreadable record is not newer proof.
+    match crate::counters::read_settled(home, pane_id) {
+        Ok((now, owner)) if now != counters || owner.as_deref() != session => {
+            report(socket_path, pane_id, now, owner.as_deref())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The same native-session identity used by the core's pane lineage.
+/// Hash the exact value, including a path's spelling, rather than a display name.
+pub fn session_digest(session: &str) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    crate::delivery::valid_session(session).then(|| {
+        Sha256::digest(session.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    })
 }
 
 /// The session Herdr reports for the agent in a pane, or none when it reports
@@ -263,6 +310,7 @@ mod tests {
             "w7B:pM",
             HOOK_VERSION - 1,
             Counts::Set(PaneCounters::default()),
+            Some("session-a"),
         );
         assert_eq!(
             params["tokens"]["hide_hooks"],
@@ -289,7 +337,7 @@ mod tests {
 
     #[test]
     fn a_report_without_counts_names_only_the_version() {
-        let params = report_params("w7B:pM", HOOK_VERSION, Counts::Leave);
+        let params = report_params("w7B:pM", HOOK_VERSION, Counts::Leave, None);
         assert_eq!(
             params["tokens"],
             json!({"hide_hooks": HOOK_VERSION.to_string()})
@@ -298,15 +346,15 @@ mod tests {
 
     #[test]
     fn a_report_can_clear_the_counts_with_null() {
-        let params = report_params("w7B:pM", HOOK_VERSION, Counts::Clear);
+        let params = report_params("w7B:pM", HOOK_VERSION, Counts::Clear, None);
         assert_eq!(
             params["tokens"],
-            json!({"hide_hooks": HOOK_VERSION.to_string(), "hide_sub_working": null, "hide_sub_done": null})
+            json!({"hide_hooks": HOOK_VERSION.to_string(), "hide_sub_working": null, "hide_sub_done": null, "hide_sub_session": null})
         );
     }
 
     #[test]
-    fn the_report_names_the_pane_the_source_and_all_three_tokens() {
+    fn the_report_names_the_pane_the_source_and_the_counts_owner() {
         let params = report_params(
             "w7B:pM",
             HOOK_VERSION,
@@ -314,6 +362,7 @@ mod tests {
                 working: 2,
                 done: 5,
             }),
+            Some("abc"),
         );
         assert_eq!(params["pane_id"], "w7B:pM");
         assert_eq!(params["source"], "hide-subagents");
@@ -322,8 +371,97 @@ mod tests {
             json!({
                 "hide_hooks": HOOK_VERSION.to_string(),
                 "hide_sub_working": "2",
-                "hide_sub_done": "5"
+                "hide_sub_done": "5",
+                "hide_sub_session": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
             })
+        );
+    }
+
+    #[test]
+    fn ownerless_totals_remove_the_previous_owner_instead_of_leaving_its_proof() {
+        for session in [None, Some("-invalid"), Some("")] {
+            let params = report_params(
+                "w1:p1",
+                HOOK_VERSION,
+                Counts::Set(PaneCounters::default()),
+                session,
+            );
+            assert_eq!(params["tokens"][SESSION_TOKEN], serde_json::Value::Null);
+            assert_eq!(params["tokens"][WORKING_TOKEN], "0");
+        }
+    }
+
+    #[test]
+    fn an_out_of_order_zero_report_republishes_the_new_sessions_owner() {
+        use crate::counters::{Reporter, store};
+        let home = tempfile::tempdir().unwrap();
+        let short_root = if cfg!(unix) {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let socket_root = tempfile::Builder::new()
+            .prefix("hah-owner-")
+            .tempdir_in(short_root)
+            .unwrap();
+        let socket = socket_root.path().join("herdr.sock");
+        let listener = LocalListener::bind(&socket).unwrap();
+        let closer = listener.closer();
+        let record_home = home.path().to_owned();
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            while let Ok(mut stream) = listener.accept() {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut line = String::new();
+                BufReader::new(&mut stream).read_line(&mut line).unwrap();
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                // B settles while A's equally empty report is in flight.
+                if requests.is_empty() {
+                    store(
+                        &record_home,
+                        "w1:p1",
+                        PaneCounters::default(),
+                        Reporter {
+                            agent: Some("opencode"),
+                            session: Some("session-b"),
+                        },
+                    )
+                    .unwrap();
+                }
+                writeln!(
+                    stream,
+                    "{}",
+                    json!({"id": request["id"], "result": {"type": "ok"}})
+                )
+                .unwrap();
+                requests.push(request);
+            }
+            requests
+        });
+        let outcome = report_latest(
+            home.path(),
+            &socket,
+            "w1:p1",
+            PaneCounters::default(),
+            Some("session-a"),
+        );
+        closer.close();
+        let requests = server.join().unwrap();
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(
+            requests.len(),
+            2,
+            "equal numbers do not hide a changed owner"
+        );
+        assert_eq!(
+            requests[0]["params"]["tokens"][SESSION_TOKEN],
+            session_digest("session-a").unwrap()
+        );
+        assert_eq!(
+            requests[1]["params"]["tokens"][SESSION_TOKEN],
+            session_digest("session-b").unwrap()
         );
     }
 
@@ -338,7 +476,7 @@ mod tests {
             "metadata source may contain only ASCII letters, digits, colon, dot, underscore, and hyphen"
         );
         // `PaneReportMetadataParams.tokens` in contracts/herdr-api.schema.json.
-        for name in [INSTRUMENTED_TOKEN, WORKING_TOKEN, DONE_TOKEN] {
+        for name in [INSTRUMENTED_TOKEN, WORKING_TOKEN, DONE_TOKEN, SESSION_TOKEN] {
             assert!(
                 (1..=32).contains(&name.len())
                     && name
@@ -391,6 +529,7 @@ mod tests {
                 working: 1,
                 done: 0,
             },
+            Some("abc"),
         );
         assert!(outcome.is_ok(), "{outcome:?}");
         let request = server.join().expect("fake server joins");
@@ -400,7 +539,7 @@ mod tests {
             json!({
                 "pane_id": "w1:p1",
                 "source": "hide-subagents",
-                "tokens": {"hide_hooks": HOOK_VERSION.to_string(), "hide_sub_working": "1", "hide_sub_done": "0"}
+                "tokens": {"hide_hooks": HOOK_VERSION.to_string(), "hide_sub_working": "1", "hide_sub_done": "0", "hide_sub_session": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}
             })
         );
 
@@ -435,7 +574,7 @@ mod tests {
         let socket = short_root
             .join(format!("hide-agent-hooks-absent-{}", std::process::id()))
             .join("absent.sock");
-        let outcome = report(&socket, "w1:p1", PaneCounters::default());
+        let outcome = report(&socket, "w1:p1", PaneCounters::default(), None);
         assert!(
             matches!(outcome, Err(ApiError::NotRunning(_))),
             "{outcome:?}"

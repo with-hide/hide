@@ -370,6 +370,7 @@ mod tests {
             working: count,
             done: None,
             blocked: None,
+            session_digest: None,
         };
         let tokens = BTreeMap::from([
             ("a".to_owned(), working(Some(2))),

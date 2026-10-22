@@ -28,13 +28,7 @@ const FINISHED_LIMIT: usize = 256;
 /// `blocked` is deliberately absent rather than zero: neither shipped runtime
 /// reports a blocked subagent, and drawing a zero would claim knowledge the
 /// adapter does not have (PRD B32, D-53).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PaneCounters {
-    #[serde(default)]
-    pub working: u32,
-    #[serde(default)]
-    pub done: u32,
-}
+pub use hide_agent_adapter::work::WorkCounts as PaneCounters;
 
 /// What the file of one pane holds: the counts, and who reported them.
 ///
@@ -68,13 +62,27 @@ struct Record {
     agent: Option<String>,
     #[serde(default)]
     session: Option<String>,
+    /// Legacy totals adopted without evidence of their original session.
+    /// Keep their numbers for older readers, but never publish owner proof.
+    #[serde(default = "unproven_legacy_totals")]
+    unowned: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     running: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     finished: Vec<String>,
 }
 
+// An older helper drops fields it does not know when rewriting a record.
+// Missing proof must therefore stay unknown even after such a round trip.
+fn unproven_legacy_totals() -> bool {
+    true
+}
+
 impl Record {
+    fn observed_session(&self) -> Option<String> {
+        (!self.unowned).then(|| self.session.clone()).flatten()
+    }
+
     fn counters(&self) -> PaneCounters {
         PaneCounters {
             working: self
@@ -273,10 +281,12 @@ fn valid_subagent(id: &str) -> bool {
 }
 
 /// What a change did to the pane's file.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Applied {
     /// The pane's counts after the change.
     pub counters: PaneCounters,
+    /// Native session owning these exact counts, read under the same lock.
+    pub session: Option<String>,
     /// The event came from a session that is not the pane's agent session as
     /// Herdr reports it, so the file was left as it was.
     pub foreign: bool,
@@ -285,8 +295,8 @@ pub struct Applied {
 /// The pane's record as the last finished change left it, read under the
 /// shared side of the lock, so a change being written is never read half
 /// way; a record that cannot be read fails rather than answering zeros.
-pub fn read_settled(home: &Path, pane_id: &str) -> io::Result<PaneCounters> {
-    read_record(home, pane_id).map(|record| record.counters())
+pub fn read_settled(home: &Path, pane_id: &str) -> io::Result<(PaneCounters, Option<String>)> {
+    read_record(home, pane_id).map(|record| (record.counters(), record.observed_session()))
 }
 
 /// What a pane's last report said, read under the shared side of the lock
@@ -298,7 +308,7 @@ pub fn restore_of(home: &Path, pane_id: &str) -> io::Result<Restore> {
                 counters: record.counters(),
                 version: *version,
                 agent: agent.clone(),
-                session: record.session.clone(),
+                session: record.observed_session(),
             }),
             _ => Restore::Unpairable,
         }),
@@ -314,7 +324,11 @@ fn read_record(home: &Path, pane_id: &str) -> io::Result<Record> {
 }
 
 pub fn read(home: &Path, pane_id: &str) -> PaneCounters {
-    read_lenient(&record_path(home, pane_id)).counters()
+    read_optional(&record_path(home, pane_id))
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        .counters()
 }
 
 /// Applies one [`Change`] under the pane's lock and returns the new counts,
@@ -369,6 +383,7 @@ pub fn change_for_pane(
             Ok(record) if record.names(who) => {
                 return Ok(Applied {
                     counters: record.counters(),
+                    session: record.observed_session(),
                     foreign: false,
                 });
             }
@@ -385,15 +400,18 @@ pub fn change_for_pane(
         };
         return Ok(Applied {
             counters,
+            session: None,
             foreign: true,
         });
     }
     let held = hold(home, hide_platform::fs::lock::Mode::Exclusive)?;
-    let mut record = read_lenient(&path);
+    let previous = read_optional(&path)?;
+    let existed = previous.is_some();
+    let mut record = previous.unwrap_or_default();
     // A record belongs to one session: the first event of another one, that
     // the pane's agent now is, starts it over. A record that names no session
-    // or agent (an older helper's, or a runtime's that reads none) is taken
-    // over by the first one that does, with its counts.
+    // or agent (an older helper's, or a runtime's that reads none) keeps its
+    // legacy numbers, without claiming they belong to the newly named session.
     let new_session = who.session.is_some()
         && (record
             .session
@@ -405,6 +423,8 @@ pub fn change_for_pane(
                 .is_some_and(|agent| Some(agent) != who.agent));
     if new_session {
         record = Record::default();
+    } else if existed && record.session.is_none() && who.session.is_some() {
+        record.unowned = true;
     }
     let kept_session = record.session.clone();
     let kept_agent = record.agent.clone();
@@ -471,10 +491,13 @@ pub fn change_for_pane(
         _ => who.session.map(str::to_owned),
     };
     let counters = record.counters();
-    write_record(&path, record, who, session)?;
+    record.session = session.clone();
+    let observed_session = record.observed_session();
+    write_record(&path, record, who, session.clone())?;
     drop(held);
     Ok(Applied {
         counters,
+        session: observed_session,
         foreign: false,
     })
 }
@@ -520,13 +543,16 @@ pub fn store(
     Ok(())
 }
 
-/// The file as it is, or an empty record for one that is missing or cannot be
-/// read: the next write replaces it whole, under the lock the caller holds.
-fn read_lenient(path: &Path) -> Record {
-    fs::read(path)
-        .ok()
-        .and_then(|raw| serde_json::from_slice(&raw).ok())
-        .unwrap_or_default()
+/// Only a missing file establishes a fresh baseline. A read or parse failure
+/// cannot prove zero counts and must leave the previous file untouched.
+fn read_optional(path: &Path) -> io::Result<Option<Record>> {
+    match fs::read(path) {
+        Ok(raw) => serde_json::from_slice(&raw)
+            .map(Some)
+            .map_err(io::Error::from),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// Writes a record in place, private to the account, under a held lock.
@@ -773,16 +799,86 @@ mod tests {
             // The counts are still read the way they always were.
             assert_eq!(
                 read_settled(&root, pane).unwrap(),
-                PaneCounters {
-                    working: 2,
-                    done: 4
-                }
+                (
+                    PaneCounters {
+                        working: 2,
+                        done: 4
+                    },
+                    None
+                )
             );
         }
         change(&root, pane, Change::None, WHO).unwrap();
         assert_eq!(
             restore_of(&root, pane).unwrap(),
-            restorable(2, 4, Some("session-a"))
+            restorable(2, 4, None),
+            "B3: ownerless historical counts stay unproven after adoption"
+        );
+        for change in [
+            Change::None,
+            Change::SessionStarted,
+            Change::Settled { running: 2 },
+        ] {
+            let applied = change_for_pane(&root, pane, change, WHO, || None).unwrap();
+            assert_eq!(
+                applied.counters,
+                PaneCounters {
+                    working: 2,
+                    done: 4
+                }
+            );
+            assert_eq!(
+                applied.session, None,
+                "resume and partial totals prove no owner"
+            );
+            assert_eq!(restore_of(&root, pane).unwrap(), restorable(2, 4, None));
+        }
+        let next = Reporter {
+            session: Some("session-b"),
+            ..WHO
+        };
+        let replaced = change_for_pane(&root, pane, Change::SessionStarted, next, || None).unwrap();
+        assert_eq!(replaced.counters, PaneCounters::default());
+        assert_eq!(replaced.session.as_deref(), Some("session-b"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_older_helper_rewrite_cannot_turn_unproven_totals_into_owned_counts() {
+        let root = home("restore-old-owner");
+        let pane = "w7B:pM";
+        fs::create_dir_all(state_directory(&root)).unwrap();
+        fs::write(
+            record_path(&root, pane),
+            serde_json::to_vec(&serde_json::json!({
+                "working": 2, "done": 4, "version": HOOK_VERSION,
+                "agent": "claude-code", "session": "session-a"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let same = change_for_pane(&root, pane, Change::None, WHO, || None).unwrap();
+        assert_eq!(same.session, None);
+        assert_eq!(
+            read_settled(&root, pane).unwrap(),
+            (
+                PaneCounters {
+                    working: 2,
+                    done: 4
+                },
+                None
+            )
+        );
+        store(&root, pane, PaneCounters::default(), WHO).unwrap();
+        assert_eq!(
+            restore_of(&root, pane).unwrap(),
+            restorable(0, 0, Some("session-a"))
+        );
+        let stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(record_path(&root, pane)).unwrap()).unwrap();
+        assert_eq!(
+            stored["unowned"], false,
+            "new full totals keep explicit proof on disk"
         );
         fs::remove_dir_all(&root).unwrap();
     }
@@ -797,6 +893,19 @@ mod tests {
             restore_of(&root, pane).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+        for change in [
+            Change::None,
+            Change::Stopped(Some("running-child")),
+            Change::SessionStarted,
+        ] {
+            assert_eq!(
+                change_for_pane(&root, pane, change, WHO, || None)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidData
+            );
+            assert_eq!(fs::read(record_path(&root, pane)).unwrap(), b"not a record");
+        }
         fs::remove_dir_all(&root).unwrap();
     }
 

@@ -8,6 +8,7 @@ pub mod composer;
 mod declarations;
 mod journey;
 pub mod usage;
+pub mod work;
 pub use declarations::ADAPTERS;
 pub use journey::{JourneyAdapter, JourneyCells, JourneyLetter, JourneyWake, journey_contract};
 mod web;
