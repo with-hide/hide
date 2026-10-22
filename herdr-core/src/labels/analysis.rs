@@ -605,6 +605,25 @@ pub(crate) fn turn_key(events: &[LabelEvent]) -> Option<u64> {
         .map(hash_event)
 }
 
+/// This turn's events: those after the request of the last judged turn end
+/// (`judged`, a [`turn_key`]), so a letter that lands while the agent works
+/// does not hide the operator's request before it; from the last human event
+/// when that request is unknown or no longer in the window.
+pub(crate) fn this_turn(events: &[LabelEvent], judged: Option<u64>) -> &[LabelEvent] {
+    let after_judged = judged.and_then(|key| {
+        events
+            .iter()
+            .rposition(|event| event.kind == LabelEventKind::Human && hash_event(event) == key)
+            .map(|index| index + 1)
+    });
+    let start = after_judged.or_else(|| {
+        events
+            .iter()
+            .rposition(|event| event.kind == LabelEventKind::Human)
+    });
+    start.map_or(&[], |start| &events[start..])
+}
+
 /// The last human event that fed task analysis. Unlike the byte cursor it is
 /// about the semantic input boundary, and survives a restart.
 pub(crate) fn task_input_cursor(events: &[LabelEvent]) -> Option<u64> {

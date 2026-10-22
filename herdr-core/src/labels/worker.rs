@@ -1964,10 +1964,12 @@ impl LabelWorker {
         let facts = &record.facts;
         let operator =
             |event: &LabelEvent| event.sender.is_none() && facts.feeds_analysis(event.offset);
-        let operator_turn = events
+        // A letter that lands while the agent works does not take the turn
+        // from the operator's request before it (B14, B15).
+        let turn_events = super::analysis::this_turn(events, record.analysis_turn_end);
+        let operator_turn = turn_events
             .iter()
-            .rfind(|event| event.kind == LabelEventKind::Human)
-            .is_some_and(operator);
+            .any(|event| event.kind == LabelEventKind::Human && operator(event));
         let ledger_session = record.native_session_id.as_ref().map(|id| SessionIdentity {
             device_id: self
                 .target
@@ -2145,12 +2147,10 @@ impl LabelWorker {
             .map(|turn| turn.witness());
         // Only Claude Code and Codex have the command; the same words typed
         // to another agent are an ordinary request (B15).
-        let goal_command = operator_turn
-            && goal_command_agent(pane.agent.as_str())
-            && events
-                .iter()
-                .rfind(|event| event.kind == LabelEventKind::Human)
-                .is_some_and(|event| goal_command(&event.text));
+        let goal_command = goal_command_agent(pane.agent.as_str())
+            && turn_events.iter().any(|event| {
+                event.kind == LabelEventKind::Human && operator(event) && goal_command(&event.text)
+            });
         if phase == AnalysisPhase::TurnEnd {
             context.push_str(&super::analysis::work_context(&ledger));
         }

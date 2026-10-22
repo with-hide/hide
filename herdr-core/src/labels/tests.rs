@@ -3441,6 +3441,38 @@ fn a_turn_end_that_reads_a_new_deliverable_opens_a_flow() {
     assert_eq!(task(shown(&worker, &idle)).as_deref(), Some("요청 보기 PRD 작성"));
 }
 
+/// B15: a letter that lands while the agent works does not hide the
+/// operator's `/goal` before it; the turn end still opens its flow.
+#[test]
+fn a_goal_command_followed_by_a_letter_in_the_same_turn_still_opens_a_flow() {
+    let harness = Harness::new();
+    let (mut worker, woken, _) = harness.worker(harness.store());
+    let mut turns = vec![("user", "요청 보기 목업 그려줘"), ("assistant", "목업을 그렸어요")];
+    let path = harness.session("a", "native-a", &turns);
+    harness.input.record("w1:p1", turn_at(0) - 300, false);
+    harness.backend.answer("요청 보기 목업 그리기", "done", "");
+    observe(&mut worker, &agent(&path, "idle", 1));
+    settle(&mut worker, &woken);
+
+    turns.extend([
+        ("user", "/goal 요청 보기 구현"),
+        ("assistant", "구현을 시작했어요"),
+        ("user", "Hide letter letter-1 from impl-a (claude) [report]\n끝났어요"),
+        ("assistant", "구현을 마쳤어요"),
+    ]);
+    harness.session("a", "native-a", &turns);
+    harness.input.record("w1:p1", turn_at(2) - 300, false);
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "요청 보기 구현", "goal_update": "keep",
+        "line": "구현 마침", "end": "done",
+        "work": {"missed": [], "resolved": [], "artifacts": []},
+    }));
+    let idle = agent(&path, "idle", 3);
+    observe(&mut worker, &idle);
+    settle(&mut worker, &woken);
+    assert_eq!(task(shown(&worker, &idle)).as_deref(), Some("요청 보기 구현"));
+}
+
 /// B3, D-06: a block lasts until the agent runs again; a working state ends it
 /// and its cause, and a wrongly judged block goes the same way.
 #[test]
