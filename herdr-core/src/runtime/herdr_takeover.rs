@@ -34,13 +34,15 @@ pub(super) struct Takeover {
     /// The connection state the last look was asked for.
     seen_state: Option<String>,
     /// The wizard was closed with the move unanswered (B9): it does not open
-    /// again on its own until the server moves or Hide starts again.
+    /// again on its own until the server moves or is gone, or Hide starts
+    /// again.
     closed_unanswered: bool,
     /// The server the last look offered something for.
     offered_server: Option<Server>,
     /// The server the desktop host's restart could not stop: its restart
-    /// step stays on that failure, with Not now, while it is the one that
-    /// answers (D-29).
+    /// step stays on that failure, with Not now, while a server of that pid
+    /// (where the system names one) and version answers, until a look finds
+    /// none (D-29).
     stop_failed: Option<Server>,
 }
 
@@ -151,8 +153,12 @@ impl Runtime {
         let current = self.snapshot.status.herdr_takeover.clone();
         let next = match &look {
             Look::Nothing | Look::Unreadable { .. } => {
-                self.herdr_takeover.offered_server = None;
-                self.herdr_takeover.stop_failed = None;
+                // Only a server that is gone takes a restart's stop failure
+                // with it; one that did not answer in time may still be there.
+                if matches!(look, Look::Nothing) {
+                    self.herdr_takeover.offered_server = None;
+                    self.herdr_takeover.stop_failed = None;
+                }
                 // A move's step the operator has not read yet stays.
                 current.filter(|shown| shown.stage == "moved")
             }
@@ -190,6 +196,10 @@ impl Runtime {
             crate::diagnostic!(look_record(&look));
         }
         let mut changed = self.show_herdr_takeover(next);
+        if matches!(look, Look::Nothing) {
+            // The server was restarted or stopped away.
+            changed |= self.ask_the_unanswered_agent_question();
+        }
         if std::mem::take(&mut self.herdr_takeover.look_again) {
             self.look_at_herdr_server();
         }
@@ -323,17 +333,7 @@ impl Runtime {
                     path_herdr_behind: Some(behind),
                     ..shown
                 });
-                let mut changed = self.show_herdr_takeover(next);
-                // The agent question the wizard left unanswered is asked now.
-                if std::mem::take(&mut self.herdr_takeover.closed_unanswered)
-                    && self.snapshot.ui_state.agent_onboarding
-                        == Some(crate::model::AgentOnboarding::Pending)
-                    && self.open_first_run()
-                {
-                    self.persist_ui_state();
-                    changed = true;
-                }
-                changed
+                self.show_herdr_takeover(next) | self.ask_the_unanswered_agent_question()
             }
             Moved::Failed { cause, .. } => self.show_herdr_takeover(Some(HerdrTakeoverSnapshot {
                 stage: "failed".into(),
@@ -346,6 +346,20 @@ impl Runtime {
         self.look_at_herdr_server();
         changed |= self.settle_first_run_herdr();
         changed
+    }
+
+    /// The wizard closed with the move or restart unanswered opens again on
+    /// the agent question it left, once that server has moved or is gone.
+    fn ask_the_unanswered_agent_question(&mut self) -> bool {
+        if std::mem::take(&mut self.herdr_takeover.closed_unanswered)
+            && self.snapshot.ui_state.agent_onboarding
+                == Some(crate::model::AgentOnboarding::Pending)
+            && self.open_first_run()
+        {
+            self.persist_ui_state();
+            return true;
+        }
+        false
     }
 
     /// Whether the first-run wizard has a Herdr step to show or wait for:

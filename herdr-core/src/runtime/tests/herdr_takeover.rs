@@ -269,6 +269,17 @@ fn a_restart_that_could_not_stop_the_server_lets_the_wizard_close() {
         "Overview still offers it"
     );
 
+    runtime.ingest_herdr_look(Look::Unreadable {
+        stage: "timeout".into(),
+        detail: "a slow server".into(),
+    });
+    runtime.ingest_herdr_look(offer(OfferKind::Restart, "0.8.2", OLD_PROTOCOL));
+    assert_eq!(
+        takeover(&runtime)["failure"],
+        "stop_failed",
+        "a look that did not answer in time does not say the server is gone"
+    );
+
     runtime.ingest_herdr_look(Look::Offer(Offer {
         server_pid: Some(77),
         ..match offer(OfferKind::Restart, "0.8.2", OLD_PROTOCOL) {
@@ -278,6 +289,12 @@ fn a_restart_that_could_not_stop_the_server_lets_the_wizard_close() {
     }));
     assert_eq!(takeover(&runtime)["stage"], "offered");
     assert_eq!(takeover(&runtime)["failure"], serde_json::Value::Null);
+    assert_eq!(step(&runtime), None, "the closed wizard stays closed");
+
+    // A restart from Overview leaves no server to offer for: the agent
+    // question the wizard left is asked now.
+    runtime.ingest_herdr_look(Look::Nothing);
+    assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
 }
 
 /// D-29: only a restart can fail to stop; a move's failure is the core's own.
