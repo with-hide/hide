@@ -276,7 +276,7 @@ export function overviewWorld(now: number): OverviewWorld {
   const child = (pane: string, title: string): SessionRecord => ({
     ...blank,
     session: { device_id: "local", agent: pane === "h-a1c1" ? "codex" : "claude", session_id: `session-${pane}` }, title, fallback_title: "Agent", native_title: title, manual_title: null, state: pane === "h-a1c1" ? "working" : "idle",
-    status: pane === "h-a1c1" ? null : { end: "done", line: `${title} 끝`, at_unix_ms: now - 10 * MINUTE, limited: null },
+    status: pane === "h-a1c1" ? null : { end: "done", line: `${title} 끝`, at_unix_ms: now - 10 * MINUTE, limited: null, settled: null },
     cwd: "/work/hide.worktrees/feat/sidebar-readable", path: null, started_at_unix_ms: now - 40 * MINUTE, ended_at_unix_ms: null,
     flows: [{ id: "c", name: title, at_unix_ms: now - 40 * MINUTE, requests: [], request_count: 0, result: null }],
   });
@@ -285,7 +285,7 @@ export function overviewWorld(now: number): OverviewWorld {
     ...blank,
     session: recordSession, title: "사이드바 가독성 개선", fallback_title: "Claude", native_title: "사이드바 가독성 개선", manual_title: null, state: "working",
     cwd: "/work/hide.worktrees/feat/sidebar-readable", path: null, started_at_unix_ms: now - 70 * MINUTE, ended_at_unix_ms: null,
-    status: { end: "working", line: "한글 가독성 확인 중", at_unix_ms: now - 4 * MINUTE, limited: null },
+    status: { end: "working", line: "한글 가독성 확인 중", at_unix_ms: now - 4 * MINUTE, limited: null, settled: null },
     asks: [{ id: "ask-1", kind: "ask", text: "시간 열을 좁은 폭에서 숨길지", status: "open", at_unix_ms: now - 6 * MINUTE, turn_offset: 2, issue_repository: null, issue_number: null, backlog_key: null, creating: false }],
     flows: [{
       id: "chapter-1", name: "좁은 사이드바에서도 긴 제목이 읽히게", at_unix_ms: now - 70 * MINUTE, result: null,

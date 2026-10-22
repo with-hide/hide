@@ -755,7 +755,7 @@ The operator answers in the conversation: the agent runs `approve` when the oper
 `approve` and `drop` naming another agent are refused `plan_not_yours`, while `show` of another agent reads its plan; a name or id that matches no running registration is `plan_agent_unknown`.
 While the saved plans have not been read back yet the answer is `plan_unavailable` and the read starts again; a session Hide cannot name yet is `plan_session_unknown`.
 
-The core keeps the plans beside each session's record in the link store (`ledger_plans` in `links.sqlite3`, schema 8), written by the link worker off the lock and read back once when the worker starts; a plan goes with its session when the session is deleted or pruned.
+The core keeps the plans beside each session's record in the link store (`ledger_plans` in `links.sqlite3`, schema 9), written by the link worker off the lock and read back once when the worker starts; a plan goes with its session when the session is deleted or pruned.
 The book holds at most 128 plans: a new session's plan takes the place of the one updated longest ago whose session runs in no pane (`plans.evicted`), and with every one of them on screen it is refused `plan_full`.
 A finished plan stays in the session's record, and the record's view carries it as the map draws it.
 

@@ -24,7 +24,7 @@ use std::time::Duration;
 #[path = "ledger_store.rs"]
 mod ledger;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 const SCHEMA: &str = "
 CREATE TABLE projects(key TEXT PRIMARY KEY, device TEXT NOT NULL, root TEXT NOT NULL,
@@ -2143,10 +2143,15 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
             ""
         };
         let flows = if version < 7 { ledger::FLOW_SCHEMA } else { "" };
-        let plans = if version < 8 { ledger::PLAN_SCHEMA } else { "" };
+        let closed_flows = if version < 8 {
+            ledger::CLOSED_FLOW_SCHEMA
+        } else {
+            ""
+        };
+        let plans = if version < 9 { ledger::PLAN_SCHEMA } else { "" };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} {plans} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} {closed_flows} {plans} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");

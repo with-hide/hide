@@ -24,7 +24,7 @@ import { useSessionResume } from "./useSessionResume";
 import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
-import type { AgentRow, Checkout, MissedWork, PlanView, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
+import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
 import { PlanGraph } from "./PlanGraph";
 import { planCount, planOfSession, planWorkLine } from "./plans";
 import { statusText } from "./agentStatus";
@@ -215,12 +215,14 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
   const status = summaries ? record.status : null;
   const recorded = status && (live === "ended" || (live === "blocked" && status.limited !== null)) ? status : null;
   const kind = recorded ? (recorded.end === "question" ? "question" : recorded.end === "blocked" || recorded.end === "limited" ? "blocked" : recorded.end === "working" ? "working" : "ended") : live;
-  const since = recorded ? recorded.at_unix_ms : kind === "ended" ? record.ended_at_unix_ms ?? agent?.changed_at_unix_ms ?? null : agent?.changed_at_unix_ms ?? null;
-  const word = recorded ? t(`requests.end.${recorded.end}`) : kind === "working" ? t("agents.status.working") : kind === "question" ? t("agents.status.question") : kind === "blocked" ? t("agents.status.error") : agent && agent.status_code !== "done" ? statusText(t, agent.status_code) : t("sessionWork.done");
+  // The current flow's pull requests, all settled after that turn, stand for its line (fact-status B2).
+  const settled = recorded?.settled ?? null;
+  const since = settled ? settled.at_unix_ms : recorded ? recorded.at_unix_ms : kind === "ended" ? record.ended_at_unix_ms ?? agent?.changed_at_unix_ms ?? null : agent?.changed_at_unix_ms ?? null;
+  const word = settled ? t(settled.state === "merged" ? "record.merged" : "record.closed") : recorded ? t(`requests.end.${recorded.end}`) : kind === "working" ? t("agents.status.working") : kind === "question" ? t("agents.status.question") : kind === "blocked" ? t("agents.status.error") : agent && agent.status_code !== "done" ? statusText(t, agent.status_code) : t("sessionWork.done");
   // While it works on a plan, the line is its step, as on the pane's second row (B7).
   const livePlan = useShellStore((s) => planOfSession(s.rest, record.session)) ?? record.plan ?? null;
-  const step = kind === "working" && livePlan ? planWorkLine(livePlan) : null;
-  const said = recorded ? recorded.line || null : kind === "question" ? question ?? agent?.state.ask?.what ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
+  const step = kind === "working" && !settled && livePlan ? planWorkLine(livePlan) : null;
+  const said = settled ? settledPrs(t, settled) : recorded ? recorded.line || null : kind === "question" ? question ?? agent?.state.ask?.what ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
   const pane = agent?.pane_id ?? null;
   const button = pane === null ? <RestoreSession record={record} checkout={checkout} actions={actions} /> : kind === "question" ? (
     <Button size="sm" onClick={() => actions.openAgent(pane)} data-record-now-button="answer"><CircleHelpIcon aria-hidden="true" />{t("links.answer")}</Button>
@@ -415,6 +417,34 @@ function EndMark({ end }: { end: WorkEnd }) {
   return <span className={cn("shrink-0 text-micro font-medium", tone)} data-record-end={end}>{t(`requests.end.${end}`)}</span>;
 }
 
+/** `#n` for one pull request, `PR n개` for several (fact-status B1). */
+function settledPrs(t: ReturnType<typeof useInterfaceTranslation>["t"], settled: PrSettlement): string {
+  return settled.numbers.length === 1 ? `#${settled.numbers[0]}` : t("record.prCount", { count: settled.numbers.length });
+}
+
+/**
+ * A past flow's result (fact-status B1-B5): Hide's PR fact with its time, a
+ * question or wait it moved on from, the line its closing label gave, or the
+ * end of its last turn.
+ */
+function FlowResultLine({ result }: { result: FlowResult }) {
+  const { t } = useInterfaceTranslation();
+  const line = (text: string) => text ? <span className="min-w-0 truncate text-micro text-subtle-foreground" title={text}>{text}</span> : null;
+  return <span className="mt-xxs flex min-w-0 items-baseline gap-xs" data-record-flow-result={result.kind}>
+    {result.kind === "settled" ? <>
+      <span className={cn("shrink-0 text-micro font-medium", result.state === "merged" ? "text-pr-merged" : "text-pr-closed")} data-record-end={result.state}>{t(result.state === "merged" ? "record.merged" : "record.closed")}</span>
+      <span className="min-w-0 truncate text-micro text-subtle-foreground">{settledPrs(t, result)}</span>
+      <RequestTime at={result.at_unix_ms} />
+    </> : result.kind === "moved_on" ? <>
+      <span className="shrink-0 text-micro font-medium text-muted-foreground" data-record-end="moved_on">{t("record.movedOn")}</span>
+      {line(result.line)}
+    </> : result.kind === "closing" ? line(result.line) : <>
+      <EndMark end={result.end} />
+      {line(result.line)}
+    </>}
+  </span>;
+}
+
 /**
  * The goal flows (D-03, B3, B13): each with its name, when it began and how
  * many requests it holds. The current one is open; a past one is folded to
@@ -444,10 +474,7 @@ function Flows({ record, locator }: { record: RecordValue; locator?: RequestLoca
               <span className="mt-xxs flex min-w-0 flex-wrap items-center gap-x-xs text-micro text-muted-foreground">
                 <RequestTime at={flow.at_unix_ms} /><span>·</span><span>{isCurrent ? t("record.flowNow") : t("record.flowRequests", { count: flow.request_count })}</span>
               </span>
-              {!isCurrent && flow.result ? <span className="mt-xxs flex min-w-0 items-baseline gap-xs" data-record-flow-result="true">
-                <EndMark end={flow.result.end} />
-                {flow.result.line ? <span className="min-w-0 truncate text-micro text-subtle-foreground" title={flow.result.line}>{flow.result.line}</span> : null}
-              </span> : null}
+              {!isCurrent && flow.result ? <FlowResultLine result={flow.result} /> : null}
             </span>
           </button>
           {expanded ? <ol className={cn("min-w-0 pb-sm", LANE)} data-record-flow-requests={flow.requests.length}>
@@ -595,15 +622,17 @@ function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue
       const held = live ? null : archivedMemberOf(rest, child.session);
       const away = held ? held.row.members[held.index]!.resume : null;
       const end = summaries ? child.status?.end ?? null : null;
-      const done = live ? live.status_code === "done" : !away && end === "done";
-      const state = away && away !== "resumed" ? archivedWord(t, away) : live ? statusText(t, live.status_code) : end ? t(`requests.end.${end}`) : t("common.unavailable");
+      // A stopped child's pull requests that settled after its last turn stand for it, as on the parent's top state (fact-status B2).
+      const settled = !live && !away && summaries ? child.status?.settled ?? null : null;
+      const done = live ? live.status_code === "done" : !away && (settled ? settled.state === "merged" : end === "done");
+      const state = away && away !== "resumed" ? archivedWord(t, away) : live ? statusText(t, live.status_code) : settled ? t(settled.state === "merged" ? "record.merged" : "record.closed") : end ? t(`requests.end.${end}`) : t("common.unavailable");
       const title = recordTitle(child, summaries);
       const prs = child.pr_groups.reduce((count, group) => count + group.outputs.length, 0);
       const branch = live ? branchChip(live) : child.cwd && child.cwd !== parent.cwd ? folderName(child.cwd) : null;
       const device = child.session.device_id !== parent.session.device_id ? machineName(rest?.navigator?.devices, child.session.device_id, t) : null;
       return <li key={key} className="min-w-0 border-b border-border last:border-b-0" data-record-child={child.session.session_id}>
         <button type="button" className={cn(ROW, "flex w-full items-start gap-sm py-sm hover:bg-accent")} aria-expanded={expanded === key} title={[branch, device].filter(Boolean).join(" · ")} onClick={() => setExpanded(expanded === key ? null : key)}>
-          {done ? <CheckIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-success" /> : live ? <StatusMark mark={live.mark} className={cn("mt-xs shrink-0", markTone(live))} /> : end === "waiting" ? <Clock3Icon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" /> : <SquareIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" />}
+          {done ? <CheckIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-success" /> : live ? <StatusMark mark={live.mark} className={cn("mt-xs shrink-0", markTone(live))} /> : end === "waiting" && !settled ? <Clock3Icon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" /> : <SquareIcon aria-hidden="true" className="mt-xs size-(--size-agent-mark) shrink-0 text-muted-foreground" />}
           <span className="min-w-0 flex-1"><span className={cn("block truncate text-caption font-medium", done && "text-subtle-foreground")} title={title}>{title}</span><span className="mt-xs flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xxs text-micro text-muted-foreground"><AgentMark kind={child.session.agent} />{agentProductName(child.session.agent)} · <span data-record-child-state="true">{state}</span>{prs ? <span>· {t("recordCard.prs")} {prs}</span> : null}</span></span>
           <ChevronRightIcon aria-hidden="true" className={cn("mt-xs size-(--size-icon-sm) shrink-0 text-muted-foreground", expanded === key && "rotate-90")} />
         </button>

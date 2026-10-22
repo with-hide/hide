@@ -2101,10 +2101,24 @@ export type WorkEnd = "working" | "question" | "blocked" | "done" | "waiting" | 
 export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up" | "ask"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean };
 export type WorkOutput = { kind: "pr" | "issue"; repository: string; number: number; title: string; url: string; state: string; stale: boolean; last_read_at_unix_ms: number | null; created_at_unix_ms: number; source: WorkSession; source_name: string };
 export type TurnOutcome = { end: WorkEnd; line: string; at_unix_ms: number };
-/** The last turn not stopped by a usage limit, and that limit's line when the newest turn was one (D-10). */
-export type RecordStatus = TurnOutcome & { limited: string | null };
+/** Every pull request a flow made, merged or closed, from Hide's stored PR facts (PRD session-record-fact-status D-01). */
+export type PrSettlement = { state: "merged" | "closed"; numbers: number[]; at_unix_ms: number };
+/**
+ * The last turn not stopped by a usage limit, and that limit's line when the newest turn was one (D-10);
+ * `settled` stands for the line once the current flow's pull requests all settled after it (fact-status B2).
+ */
+export type RecordStatus = TurnOutcome & { limited: string | null; settled: PrSettlement | null };
+/**
+ * A flow's result (fact-status D-01, D-02, D-04): its last turn, the line the label that closed it gave,
+ * a question or wait it moved on from, or its pull requests once all settled after its line.
+ */
+export type FlowResult =
+  | ({ kind: "turn" } & TurnOutcome)
+  | { kind: "closing"; line: string; at_unix_ms: number }
+  | { kind: "moved_on"; line: string; at_unix_ms: number }
+  | ({ kind: "settled" } & PrSettlement);
 /** One goal flow, oldest first in the record; the last is the current one (D-03, D-05, D-11). */
-export type WorkFlow = { id: string; name: string; at_unix_ms: number; requests: WorkRequest[]; request_count: number; result: TurnOutcome | null };
+export type WorkFlow = { id: string; name: string; at_unix_ms: number; requests: WorkRequest[]; request_count: number; result: FlowResult | null };
 /** Pull requests of this session (`child` null) or of one direct child's whole subtree (D-14). */
 export type PrGroup = { child: WorkSession | null; name: string; outputs: WorkOutput[] };
 export type SessionRecord = {

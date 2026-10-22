@@ -85,9 +85,12 @@ test("@platform a native session's record groups its requests by goal flow and k
     await root.hover();
     await page.locator(`[data-task-record="${herdr.panes[0]}"]`).click();
     // A new goal opens a second flow; the first folds to its result and the current one is open (B3, B13, B14).
+    // Its own and its child's pull requests merged after its last line, so once the link store holds their merge
+    // times Hide's fact stands for its result (fact-status B1).
     await expect(flows).toHaveCount(2, { timeout: 45_000 });
     await expect(flows.last().locator("[data-record-flow-name]")).toHaveText(NEXT_GOAL);
-    await expect(flows.first().locator('[data-record-flow-result] [data-record-end="done"]')).toBeVisible();
+    await expect.poll(() => mergedPullRequests(daemon!.stateDir), { message: "the link store holds both merge times", timeout: 45_000 }).toEqual([31, 34]);
+    await expect(flows.first().locator('[data-record-flow-result="settled"] [data-record-end="merged"]')).toBeVisible({ timeout: 45_000 });
     await expect(flows.first().locator("[data-record-request]")).toHaveCount(0);
     await expect(flows.last().locator("[data-record-request]")).toContainText(["이슈와 검색 검증 요청"], { timeout: 45_000 });
     // The open PR with failed CI shows; the settled ones stay one fold.
@@ -286,6 +289,14 @@ function createdIn(contexts: string): (string | null)[] {
     .filter((call) => call.args[0] === "issue" && call.args[1] === "create").map((call) => call.repository);
 }
 
+/** The fixture pull requests whose merge time the link store holds. */
+function mergedPullRequests(stateDir: string): number[] {
+  const db = new DatabaseSync(path.join(stateDir, "links.sqlite3"), { readOnly: true });
+  try {
+    return db.prepare("SELECT number FROM prs WHERE merged_at IS NOT NULL ORDER BY number").all().map((row) => Number(row.number));
+  } finally { db.close(); }
+}
+
 /**
  * The open missed line of `pane`'s session, once its 태스크 row says `goal`, in
  * the Overview backlog's missed group, where problems and follow-ups live
@@ -387,13 +398,14 @@ test("@platform a migrated session with an unknown original repository can retai
       .toEqual({ session: identity, goal: FIRST_GOAL, end: "done" });
     // Emulate the version 2 store while this owned daemon is stopped,
     // removing every later table and column, including display metadata
-    // (version 6) and the goal flows (version 7, whose task table and
-    // columns come back first). A v2 version number with later columns is
-    // not a v2 store.
+    // (version 6), the goal flows (version 7, whose task table and
+    // columns come back first) and the closed flow's line (version 8). A v2
+    // version number with later columns is not a v2 store.
     daemon = await daemon.restart((stateDir) => {
       const db = new DatabaseSync(path.join(stateDir, "links.sqlite3"));
       try {
         db.exec(`
+          ALTER TABLE ledger_chapters DROP COLUMN closed_result;
           CREATE TABLE ledger_tasks(device TEXT NOT NULL, agent TEXT NOT NULL, id TEXT NOT NULL,
            task TEXT NOT NULL, chapter TEXT NOT NULL, name TEXT NOT NULL, at INTEGER NOT NULL,
            last_at INTEGER NOT NULL, end TEXT NOT NULL, PRIMARY KEY(device,agent,id,task));

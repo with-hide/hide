@@ -76,6 +76,10 @@ pub(crate) struct Analysis {
     pub(crate) line: String,
     pub(crate) end: LabelEnd,
     pub(crate) work: Option<crate::links::ledger::TurnJudgment>,
+    /// With a `replace`, the result of the flow it closes in one line
+    /// (PRD session-record-fact-status D-02): the record shows it in place
+    /// of that flow's last stopped turn.
+    pub(crate) closed_result: Option<String>,
 }
 
 /// One request's summary as a provider gave it, keyed by the id the

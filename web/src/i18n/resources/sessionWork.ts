@@ -74,6 +74,10 @@ const words = {
   "record.allMerged": ["all merged", "전부 머지됨", "すべてマージ済み", "全部已合并"],
   "record.omitted": ["{{count}} older requests are not shown", "오래된 요청 {{count}}개는 보이지 않음", "古い依頼 {{count}}件は表示されません", "更早的 {{count}} 条请求未显示"],
   "record.limited": ["Usage limit", "한도", "上限", "额度"],
+  "record.merged": ["Merged", "머지됨", "マージ済み", "已合并"],
+  "record.closed": ["Closed", "닫힘", "クローズ", "已关闭"],
+  "record.movedOn": ["Moved on", "넘어감", "別の作業へ", "已转向"],
+  "record.prCount": ["{{count}} PRs", "PR {{count}}개", "PR {{count}}件", "{{count}} 个 PR"],
   "sessionWork.draftNote": ["Draft from this turn and the issue template; you can edit it", "그 턴 대화와 이슈 템플릿에서 쓴 초안 · 고칠 수 있음", "このターンとテンプレートから作成・編集できます", "根据本轮对话和议题模板起草，可编辑"],
 } as const;
 
