@@ -1000,11 +1000,12 @@ Each request may carry a one-line summary and, for a reply to the agent's questi
 The label summarizes every request the ledger holds without one and recorded after summaries came on (the migration's `summaries_owed_since`), oldest first and at most eight per analysis, always including the turn's own request, with the agent message before each so a reply such as `1번` is resolved, a question stays a question and every ask in one message is kept (B6, B8, B34).
 A summary that the provider gave empty is not stored; a request with no summary shows its first 120 characters (B5).
 A Hide letter is recorded with its sender in `letter_from` and is no request: an envelope by its header, and the doorbell's `🦉` line by the record Hide keeps when it types it into the pane (`OperatorInput::record_bell`, judged in the same window as an operator submit), so it is neither counted, summarized nor the pane's last request (D-18, D-19, B24).
+Two or more letters in a row are drawn as one dim line with their count and senders, which opens to each letter's own line, so a lead's reports do not bury the operator's requests (`requestRuns`).
 A letter pasted by hand is the operator's.
 The same words, images, author and sender sent again within 60 seconds of the last are one request with a count (B23), and an attachment's path, quoted or bare, or Claude Code's `[Image #n]`, is counted in `images` and taken out of the words (B25); both are read at record time.
 Requests are capped at 2,000 per session, the oldest dropped first, and the record says how many it dropped (`omitted_requests`, B30).
 
-Every judged turn keeps its end and its line (`ledger_turns.line`) and up to three outputs other than pull requests (`artifacts`, each at most 80 characters).
+Every judged turn keeps its end and its line (`ledger_turns.line`) and up to three outputs other than pull requests (`artifacts`, each at most 80 characters); an END reads the session's twelve newest recorded artifacts, so it names only what the turn newly made and keeps an existing output's name (`LedgerContext::artifacts`).
 The label reads a turn its agent's own provider refused, a usage, rate or weekly limit, exhausted credit or an API error printed in place of an answer, as `limited`, never `blocked`, which stays a stop the work itself caused (D-10, B9).
 The top status is the newest turn that is not `limited`, with the newest turn's line as `limited` when it is one; with every turn limited the status is `blocked` with that line (B10).
 A pane draws `limited` as `blocked`, its line the cause, in its second row and turn card; only the record tells them apart.
@@ -1012,7 +1013,7 @@ A past flow's result is its last `done` turn's line, else its last turn that is 
 A child's status in its parent's record is that child's own top status (B26).
 
 A missed line is a durable Open, Resolved, Issue or Dismissed record of one of three kinds: a problem the agent found outside its work, a separate follow-up it proposed, or an ask, a question or decision it put to the operator and that no later turn answered (D-12).
-An ask is shown in the record's `나를 기다리는 것`, is resolved by the turn whose end reads the operator's answer, and can be dismissed and reopened; problems and follow-ups leave the record and stay the Overview backlog's missed work, which never counts an ask (D-13, B31).
+An ask is shown in the record's `나를 기다리는 것` and can be dismissed and reopened; the operator's next request answers it: when a turn that request began is recorded, every ask from before it is resolved, and the label lists again only a question that still waits, so an answer such as `ㅇㅇ` closes it without the label naming it, and a turn a letter woke that repeats an open ask adds no second line (B12); problems and follow-ups leave the record and stay the Overview backlog's missed work, which never counts an ask (D-13, B31).
 Records written before `context_label.v10` may still hold a `leftover` item.
 
 A pull request is a session's output when the link reader saw it printed around GitHub's creation time, or when the label judged that the session made it (`created_prs`, recorded as a `pr` sighting), which finds the ones the reader's window missed (D-14, B21).

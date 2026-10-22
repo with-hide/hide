@@ -2596,3 +2596,93 @@ fn a_goal_command_is_marked_only_in_the_agents_that_have_it() {
     assert!(!shown.goal_command);
     assert_eq!(shown.text, "/goal 출시 전 검수");
 }
+
+/// B12: the operator's reply closes what was asked before it, a turn a
+/// letter woke adds an open question once, and a question still waiting
+/// after the reply is the one the judgment lists again.
+#[test]
+fn the_operators_reply_closes_earlier_asks_and_a_repeated_ask_is_one_line() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    let ask = |text: &str| NewMissedWork {
+        kind: MissedKind::Ask,
+        text: text.into(),
+    };
+    let asks = |store: &LinkStore| {
+        store
+            .ledger_record(&session())
+            .unwrap()
+            .asks
+            .iter()
+            .map(|ask| ask.text.clone())
+            .collect::<Vec<_>>()
+    };
+    request(&mut store, 1, "인터뷰 해줘");
+    chapter(&mut store);
+    end(
+        &mut store,
+        1,
+        TurnJudgment {
+            missed: vec![ask("Q1 범위를 정해 주세요"), ask("PRD로 넘어갈까요?")],
+            ..Default::default()
+        },
+    );
+    store
+        .apply_ledger_update(&LedgerUpdate::TurnEnd {
+            session: session(),
+            offset: 2,
+            started_at_unix_ms: 2_000,
+            at_unix_ms: 2_500,
+            end: LabelEnd::Question,
+            work_author: false,
+            line: String::new(),
+            turn_witness: None,
+            judgment: TurnJudgment {
+                missed: vec![ask("Q1 범위를 정해 주세요")],
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    assert_eq!(asks(&store), ["Q1 범위를 정해 주세요", "PRD로 넘어갈까요?"]);
+    request(&mut store, 3, "Q1은 전체로");
+    end(
+        &mut store,
+        3,
+        TurnJudgment {
+            missed: vec![ask("PRD로 넘어갈까요?")],
+            ..Default::default()
+        },
+    );
+    assert_eq!(asks(&store), ["PRD로 넘어갈까요?"]);
+}
+
+/// B22: an END reads the session's recorded outputs, newest first, so the
+/// same board keeps its name.
+#[test]
+fn a_ledger_context_carries_the_recorded_artifacts_newest_first() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "보드 그려줘");
+    chapter(&mut store);
+    end(
+        &mut store,
+        1,
+        TurnJudgment {
+            artifacts: vec!["Overview 보드".into()],
+            ..Default::default()
+        },
+    );
+    request(&mut store, 2, "PRD 써줘");
+    end(
+        &mut store,
+        2,
+        TurnJudgment {
+            artifacts: vec!["Overview PRD".into(), "Overview 보드".into()],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        store.ledger_context(&session()).unwrap().artifacts,
+        ["Overview PRD", "Overview 보드"]
+    );
+}

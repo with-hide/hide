@@ -22,6 +22,9 @@ pub const OWED_IN_CONTEXT: usize = 16;
 pub const ARTIFACTS_PER_TURN: usize = 3;
 /// Non-PR outputs a record shows, newest first.
 pub const ARTIFACT_LIMIT: usize = 24;
+/// The session's recorded artifacts an END analysis reads, so it names the
+/// same output the same way (B22).
+pub const ARTIFACTS_IN_CONTEXT: usize = 12;
 /// The longest artifact name kept, in characters.
 pub const ARTIFACT_CHARS: usize = 80;
 /// Two identical messages from one sender this close together read as one
@@ -572,6 +575,9 @@ pub struct LedgerContext {
     /// The newest request offset the ledger holds: a message past it is not
     /// recorded yet, so it is owed a summary too.
     pub newest_offset: Option<u64>,
+    /// This session's recorded artifacts, newest first, each once, at most
+    /// [`ARTIFACTS_IN_CONTEXT`].
+    pub artifacts: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

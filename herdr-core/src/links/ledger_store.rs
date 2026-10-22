@@ -1163,9 +1163,49 @@ impl LinkStore {
                     ],
                 )
                 .map_err(failed)?;
+                // The operator's reply answers what was asked before it (B12):
+                // an ask the agent still waits on is listed again by this turn.
+                if *work_author {
+                    tx.execute(
+                        "UPDATE ledger_missed SET status=?4,resolved_turn_offset=?5 \
+                        WHERE device=?1 AND agent=?2 AND id=?3 AND kind=?6 AND status=?7 AND turn_offset<?5",
+                        params![
+                            session.device_id,
+                            session.agent,
+                            session.session_id,
+                            encoded(&MissedStatus::Resolved)?,
+                            *offset as i64,
+                            encoded(&MissedKind::Ask)?,
+                            encoded(&MissedStatus::Open)?
+                        ],
+                    )
+                    .map_err(failed)?;
+                }
                 for (index, missed) in judgment.missed.iter().enumerate() {
                     if missed.text.trim().is_empty() || missed.text.chars().count() > MISSED_CHARS {
                         return Err("ledger_missed_invalid".to_owned());
+                    }
+                    // A turn a letter woke repeats the question still open: one line.
+                    if missed.kind == MissedKind::Ask
+                        && tx
+                            .query_row(
+                                "SELECT 1 FROM ledger_missed WHERE device=?1 AND agent=?2 AND id=?3 \
+                                AND kind=?4 AND status=?5 AND trim(text)=?6 LIMIT 1",
+                                params![
+                                    session.device_id,
+                                    session.agent,
+                                    session.session_id,
+                                    encoded(&MissedKind::Ask)?,
+                                    encoded(&MissedStatus::Open)?,
+                                    missed.text.trim()
+                                ],
+                                |_| Ok(()),
+                            )
+                            .optional()
+                            .map_err(failed)?
+                            .is_some()
+                    {
+                        continue;
                     }
                     tx.execute("INSERT INTO ledger_missed(device,agent,id,missed,kind,text,status,at,turn_offset,turn_witness) \
                         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
@@ -1624,7 +1664,42 @@ impl LinkStore {
                 .collect(),
             owed,
             newest_offset,
+            artifacts: self.recorded_artifacts(session)?,
         })
+    }
+
+    fn recorded_artifacts(&self, session: &SessionIdentity) -> Result<Vec<String>, String> {
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT artifacts FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 \
+                 AND artifacts!='[]' ORDER BY end_at DESC LIMIT ?4",
+            )
+            .map_err(failed)?;
+        let rows = statement
+            .query_map(
+                params![
+                    session.device_id,
+                    session.agent,
+                    session.session_id,
+                    ARTIFACTS_IN_CONTEXT as i64
+                ],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(failed)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(failed)?;
+        let mut seen = BTreeSet::new();
+        let mut artifacts = Vec::new();
+        for row in rows {
+            for artifact in decoded::<Vec<String>>(row)? {
+                if seen.insert(artifact.clone()) {
+                    artifacts.push(artifact);
+                }
+            }
+        }
+        artifacts.truncate(ARTIFACTS_IN_CONTEXT);
+        Ok(artifacts)
     }
 
     /// Closed issues also need creation facts; feed sightings to the existing
