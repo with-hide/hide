@@ -507,7 +507,7 @@ The browser display's toolbar and its loading, load failed, and plain browser ta
 
 ### Agent panes and the Agents explorer
 
-A pane header is a quiet identity row: the ancestor path, the status mark, the agent's logo, title, the fork mark, the letters-waiting pill, the task chip, the PR mark, the limited-integration icon, and the retained overflow, zoom and close controls at the right end.
+A pane header is a quiet identity row: the ancestor path, the status mark, the agent's logo, title, the fork mark, the letters-waiting pill, the PR mark, the limited-integration icon, and the retained overflow, zoom and close controls at the right end.
 An agent pane's header also holds `개요에서 보기`, a graph icon before zoom whose tooltip and accessible name say the same, drawn only while the header is pointed at or holds the keyboard, and keeping its place while hidden so the title and chips never move; a shell pane has none (PRD pane-open-in-overview B1-B3).
 It opens the Overview on Work with the pane's session chosen, as a click on it there would, and the pane menu offers the same item first among the agent's own actions, with no shortcut (B11).
 Dragging the title or unused space in the first header row moves that pane after the pointer crosses the ordinary drag threshold; a short title click still opens its record.
@@ -522,10 +522,8 @@ The operation keeps the running terminal, conversation and responsibility relati
 Related tabs cannot start another geometry operation while the move is pending, while other tabs and terminal input remain available.
 A definitive failure offers Retry locally; an uncertain result offers a status check and exposes the confirmed live placement before another move can be tried.
 
-The task chip (PRD task-split-checklist D-05, D-06) is a checklist icon and `<done>/<tasks>` in figures, drawn from the pane session's first task (`0/1`) and never for a session with no task, whatever children it has, a plain shell, or with Agent summaries off; it carries no child count, and the second row with the child badge does not move it.
-The pointer on the chip or the keyboard's focus on it opens the checklist below the header, which never covers the header it belongs to and stays inside the window at narrow widths: `시킨 일 <done>/<total>`, each task's checkbox, name (Korean wrapping between words) and right-hand word with a split request's PR marks once on its first task; right under the tasks this pane session's own `지금` box, the record's state box part with its words, `지금 · 질문 <line>` edged and written in the warning colour behind `!` while it asks or is blocked and `지금 · 작업 중 <line>` quiet otherwise, drawn only while the agent has a current line; then `맡긴 일 N · 끝남 k` in one line (`맡긴 일 N` while a child has no judgment, nothing without children), never a child's words and never a bar; and `기록 열기` with the chord, which opens the session record on the same task list (PRD record-card-readability D-08, B15); the task marks are the record's checkboxes, and nothing turns in the list.
-Leaving the chip and the list, or blurring the chip, closes it; a press on the chip or Show task list (⇧⌘U, Alt+Shift+U on Windows and Linux, remappable) pins the focused pane's list, and a second press, the chord again or Esc closes it; Esc on a pinned list stops there, so an agent CLI in the focused terminal is not interrupted, and opening the list never takes the keyboard from the terminal (`web/src/PaneTaskChip.tsx`).
-The chip, the list and the record follow the ledger in the same snapshot burst, and a chip whose count did not change is not redrawn.
+An agent pane's head carries no task chip, no checklist popover and no chord for one (PRD session-record-goal-flow D-01, B1); the PR, letter and branch marks in the same place stay, and the session record holds the whole record.
+A turn the agent's provider refused for a usage limit or an API error ends as the label's `한도`, and the second row and the turn card draw it as `막힘` with its line as the cause (B9); only the session record tells the two apart.
 A plain shell keeps its terminal mark.
 On an agent pane whose session Hide knows, the status mark, the logo and the title are one button: under the pointer or focus they light together and open nothing, since a card under the head kept rising in the way of the terminal (the turn card opens from the request on the second row, and the record shows the whole title), and a press shows that session's record in the lane's 보기 slot ([The 보기 slot](#the-보기-slot)), opening the lane when it is closed or put away, while the keyboard and the input cursor stay in the pane's terminal (PRD overview-device-tasks B22, sidebar-task-lens B15); the Overview's `lane에서 보기` lands the same way.
 A press while the lane already draws that record turns the lane back to its tool, and the fork mark and the PR mark keep their own presses outside the button (B23).
@@ -1056,7 +1054,7 @@ The core hands the web a source-neutral task (the id the source shows, URL, titl
 A GitHub project can therefore keep Local issues beside its GitHub issues.
 
 Above the projects, while the device has open missed work and Hide AI's summaries are on, one folded line `놓친 일 N ›` in the warning colour gathers it (PRD sidebar-task-lens D-52, B52).
-It opens in place to every open missed item of the device's sessions, live or ended, newest first: the missed sentence with `백로그로 · 무시` as in a record, and under it the session's title and the item's kind, which open that session's record in the panel.
+It opens in place to every open missed item of the device's sessions, live or ended, newest first: the missed sentence with `백로그로 · 무시`, and under it the session's title and the item's kind, which open that session's record in the panel; the questions an agent asked the operator are not missed work and stay in that session's `나를 기다리는 것` (PRD session-record-goal-flow D-12, D-13).
 With no open missed item, or with summaries off, the line is not drawn.
 
 백로그 has one section per project, the projects with a task that needs the operator first, then the most recently active (B25).
@@ -1077,7 +1075,7 @@ Memo flags belong to the memo's device and path/number; GitHub flags remain shar
 When one source cannot be read, its last known rows and failure remain beside the other source's usable rows; an unreadable source is never an empty successful result.
 On a device the core dials every section is the one line `이 기기의 <project>는 이슈를 읽지 않는다`, with no input and no `▷ 시작` (B36).
 
-A row opens the item in wide detail: its title, `#N` or `L-N`, its source, when it was made, its labels, `어디서 왔나` for an item from missed work (the session's title, the assigned work it came from and the missed sentence, which open that session's record), `▷ 시작`, `GitHub에서 열기` for a GitHub issue, and `되돌리기` while it is not started and Hide made it: every memo, and a GitHub issue made by the quick add, the backlog's input or `백로그로`; an issue someone else made never offers it (B31).
+A row opens the item in wide detail: its title, `#N` or `L-N`, its source, when it was made, its labels, `어디서 왔나` for an item from missed work (the session's title, the goal flow it came from and the missed sentence, which open that session's record; PRD session-record-goal-flow B31), `▷ 시작`, `GitHub에서 열기` for a GitHub issue, and `되돌리기` while it is not started and Hide made it: every memo, and a GitHub issue made by the quick add, the backlog's input or `백로그로`; an issue someone else made never offers it (B31).
 The wide detail renders the real body as sanitized Markdown with actual metadata and comments, retaining loading, stale and failed states.
 Comments load fifty at a time up to two hundred, with each comment bounded to four thousand characters; truncation remains visible.
 `되돌리기` deletes a memo or closes a GitHub issue and the row leaves the backlog; a missed line it came from opens again with `백로그로 · 무시`, and a close that fails leaves why and `다시 시도` in the panel with the row in place (B32).
@@ -1135,7 +1133,7 @@ Back returns to all projects; opening a checkout closes Overview and uses the ex
 
 Web owners are `web/src/OverviewHistory.tsx`, `web/src/overviewHistoryState.ts` and `web/src/RequestHighlight.tsx`; the source is the existing session-work ledger.
 History initially searches original retained operator requests, including requests saved while summaries were Off or failed.
-Generated titles and task summaries are an explicit additional search scope; no raw copied-transcript index is restored.
+Generated titles and goal flow names are an explicit additional search scope, and a flow name match opens that session's record (PRD session-record-goal-flow B32); no raw copied-transcript index is restored.
 Project scope means the immutable original project recorded for the session, never its current checkout, branch or guessed title.
 Device, original project, agent, status and time filters apply before a fifty-result page is selected.
 The query is literal text of at most two hundred characters; each session shows at most two matching snippets and names further matches.
@@ -1267,29 +1265,31 @@ A missing conversation path, unsupported agent, disconnected device or missing c
 A restore in flight shows `복구하는 중…` and accepts no second click; a failed start shows an inline reason with Retry, and a successful start focuses the resumed pane.
 The record remains open until the resumed pane is confirmed; a timeout or an unknown launch result offers `시작 결과 확인`, which checks the original request instead of starting another pane, and Retry after a confirmed failure keeps that request's identity and destination.
 Archived sessions keep their existing tree-aware `이어가기` action.
-`요청한 작업` follows, with the completed count over the total only when judged tasks exist.
-Tasks stay first-asked first, using the existing checkbox and task verdict; working and completed tasks also name their state.
-Each task shows the full original request and its timestamp underneath, rather than hiding the request in a tooltip.
-The latest request without a task remains readable, including while it has not been judged, when it is a question, and with summaries Off; none of these invents a task or a `0/0` count.
-The live agent's latest reported line follows as `지금`; native session identity, device and agent product together select that live agent.
-Immediately below are `PR`, `발견사항` and `요청 기록` tabs, with counts for this session alone.
-The findings tab opens first when this session has an open finding, otherwise PR opens first.
-PR results are rows with a state mark, number and wrapping title, with merged and closed results folded under their completed count; issues saved as outputs appear in the same results list.
-The results tab is named `PR · 이슈` when it includes issues.
-Every output opens the existing PR card or issue action.
-Findings distinguish problems with a warning triangle and suggestions with a lightbulb, using the stored kind rather than inferring it from the sentence.
-Only this session's open findings appear here; a child's findings remain in that child's expanded details.
-Each finding offers `백로그 추가` and `넘기기`, retaining the public-repository notice, repository identity checks, retry policy and idempotent creation contract.
-Creating replaces the controls with progress; a failure keeps the reason and retry, and a handled item leaves the open list.
-A device whose core keeps no backlog offers only `넘기기`.
-The latest raw request shows its local `YYYY-MM-DD HH:mm` timestamp.
-Request history groups visible requests under local `YYYY-MM-DD` date headings, keeping `HH:mm` at each row.
-Request history keeps the full saved text, author (`나`, the parent title or `부모`) and timestamp, oldest first, with the newest four shown and earlier requests behind `이전 N턴`.
-`함께 진행한 세션` is a separate flat list, five initially with a way to show more, rather than being nested under an inferred parent task.
-Each row shows status, agent logo and product name, wrapping title and its own PR and open-finding counts; a large result set never becomes a horizontal strip of marks.
-Pressing a child expands its tasks and tabs in place, one child at a time, while the current session stays on screen.
+While the agent neither works nor asks, the status row reads the record's last real turn: its end word and line, with a turn its provider refused for a usage limit or an API error (`한도`) skipped and its line shown as a small badge beside the word, such as `한도 소진 · 10-22 13:00 풀림`; when every turn hit the limit the word is `막힘` with the badge (PRD session-record-goal-flow D-10, B10).
+A pane at work or asking is the state now, and a pane drawing a limit as a block defers to the record's word and badge.
+There is no `요청한 작업` checklist, no checkbox and no tab row (D-01, B2); below the status come, in this order, `나를 기다리는 것`, the goal flows, the PRs and outputs, and `함께 진행한 세션`.
+`나를 기다리는 것` lists the questions and decisions the agent asked the operator and that no later turn answered, one line each with `넘기기`; a line put away keeps its place with `되돌리기` until the record is read again, an answer the next turn reads removes it, and with none open the section is absent (D-12, B11, B12).
+The goal flows follow in the order the goal changed, each with its name, when it began and its request count (`지금` for the current one); the current flow is open, and a past flow is folded to its result, the line of its last `끝` turn with the `끝` word, else its last real turn's end word and line, and opens on a click (D-03, D-11, B3, B13).
+A flow boundary is the label's turn-end reading first: a change in what the agent makes (a board, then an interview or a PRD, then a PR) opens a flow without any `/goal`, and the same work said more clearly renames the current flow within the turn, in every agent alike (D-09, B14, B16).
+In an agent that has `/goal` (Claude Code, Codex), the operator's `/goal` confirms a new flow at that request, named from the goal, and the request line carries a `/goal` mark (B15).
+A goal that names a pane or agent id is refused and the flow keeps its name; a session with no goal yet takes its first request's summary as the name (B17).
+An open flow lists every request sent while it was open, in time order, judged or not, placed by its time rather than by any stored flow number (D-05, B4).
+A request line is its time and the label's one-line summary; a click opens the words as sent in place, and a request with no summary yet shows its first 120 characters on one line with `…` (D-06, B5).
+A reply to the agent's question begins with `↩` and the question it answers, and the summary keeps a question a question, every ask a request held, and a reference such as `1번` resolved (D-07, B7, B8).
+A Hide letter, from an envelope or the `🦉` line Hide typed, is a dim line with its sender and an envelope mark, and is not counted as a request; the same words sent again within a minute are one line with `×n`, and an attached image's path becomes `이미지 n장` (D-18, B23-B25).
+When the record has dropped its oldest requests past its cap, `오래된 요청 n개는 보이지 않음` closes the flows (B30).
+`PR` lists this session's pull requests, then one group per direct child, under that child's name, holding the pull requests of the child and all its descendants (D-14, B18).
+Open and failing pull requests show as rows with a state mark, number and title; merged and closed ones fold into one `끝난 PR n개` line that opens them all, and the head reads `전부 머지됨` when every pull request merged (B19).
+Every output opens the existing PR card or issue action, and a GitHub value that cannot be refreshed stays dimmed with its last-read time.
+`결과물` lists, once each, the outputs other than pull requests (a board, a document, an issue, a release) this session and its descendants made, and is absent with none (D-16, B22).
+`함께 진행한 세션` is a flat list, five initially with a way to show more.
+Each row shows its state now, from its live pane, else from its last real turn, the agent logo and product name, the name of the work it was given (never an envelope's words), and its PR count (B20, B26).
+Pressing a child expands its flows and pull requests in place, one child at a time, while the current session stays on screen.
 An explicit `기록 열기` opens that child's record as the next slot item with the existing back action; a live child also offers its terminal action.
-With summaries Off, the same structure keeps native/manual title, native status, raw requests, outputs and child sessions, while hiding task judgments and findings.
+A History hit opens the flow holding the request, with its words shown and the query marked; a request the record no longer keeps says so (B32).
+With summaries Off, the record is the native or manual title, native status, every request in time order as sent with `AI 요약 꺼짐` said once, the pull requests and the child sessions, with no flow names, results, summaries or `나를 기다리는 것` (D-20, B28).
+A record written before flows keeps its stored goals as flows, its requests with no summary as their first words and its past flows' results as their end words only (B27).
+The problems and follow-ups a turn found leave the record and stay in the Overview backlog's missed group ([백로그](#백로그)).
 Loading, failure, retry, disconnection, archive and resume continue to use their existing runtime policies.
 At narrow widths and the largest interface text, all sections and controls wrap within the lane; no session section introduces horizontal scrolling.
 An archived session's record keeps every part above, and its `지금` box reads `보관됨 · <경과>` and the last line the agent wrote, with `이어가기` as its one button; while it resumes the button reads `이어가는 중…`, a member that could not resume adds its reason in the failed colour, `상태 확인` stands in its place while Hide cannot say, and a device that is not connected dims the box and holds the button (PRD session-archive B19-B24, B34).
@@ -2175,9 +2175,9 @@ Its own wide layout is a list on the left and the highlighted row's detail on th
 
 ### What a query finds
 
-A nonempty query also searches saved session goals, assigned task names and original requests in a separate `세션` group, including ended sessions within Copied history.
+A nonempty query also searches saved session goals, goal flow names and original requests in a separate `세션` group, including ended sessions within Copied history.
 Enter on that group opens the record in Tools; the existing Agents group still opens the live agent.
-With summaries Off it searches saved raw requests only, without generated goal or task matches.
+With summaries Off it searches saved raw requests only, without generated goal or flow matches.
 The core's bounded local record search runs independently of other groups, drops an answer for an older query and makes no GitHub request while typing.
 The session group carries its current loading or failure state; a successful search with no session matches draws no group, preserving the palette's existing no-match state when no other kind matches.
 The creator-session action in an output panel opens the same record.
@@ -2739,7 +2739,6 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Split right | `⌘D` | `Ctrl+Shift+D` | `⌘D` | `Ctrl+Shift+D` |
 | Split down | `⇧⌘D` | `Alt+Shift+D` | `⇧⌘D` | `Alt+Shift+D` |
 | Zoom pane | `⇧⌘↩` | `Alt+Shift+Enter` | `⇧⌘↩` | `Alt+Shift+Enter` |
-| Show task list | `⇧⌘U` | `Alt+Shift+U` | `⇧⌘U` | `Alt+Shift+U` |
 | Close pane | `⇧⌘W` | `Alt+Shift+W` | `⌥⇧W` | `Alt+Shift+W` |
 | Larger text (exception) | `⌘=` | `Ctrl+=` | `⌘=` | `Ctrl+=` |
 | Smaller text (exception) | `⌘-` | `Ctrl+-` | `⌘-` | `Ctrl+-` |
