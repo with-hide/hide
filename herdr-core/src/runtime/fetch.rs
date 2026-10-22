@@ -234,7 +234,7 @@ impl Runtime {
                 ))
             }
             Ok(FetchOutcome::Skipped {
-                reason: FetchSkip::NoOrigin,
+                reason: FetchSkip::NoOrigin | FetchSkip::NoTrackingRefs,
             }) => None,
             Ok(FetchOutcome::Failed { failure, reason }) => Some((failure, reason)),
             Err(reason) => Some((FetchFailure::Other, reason)),

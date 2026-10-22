@@ -79,6 +79,9 @@ pub enum FetchOutcome {
 pub enum FetchSkip {
     /// The repository has no `origin` remote.
     NoOrigin,
+    /// None of `origin`'s fetch refspecs writes under `refs/remotes/origin/`
+    /// (a mirror that fetches into local branches), so nothing is fetched.
+    NoTrackingRefs,
     /// Another Git (the operator's own fetch) held a ref lock.
     Busy,
 }

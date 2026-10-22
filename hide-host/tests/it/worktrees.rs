@@ -813,7 +813,7 @@ fn a_background_fetch_brings_incoming_commits_and_prunes_without_touching_the_br
         output(ours.path(), &["rev-parse", "HEAD"]).trim(),
         local_head
     );
-    assert_eq!(after.unpushed_commits, [local_head]);
+    assert_eq!(after.unpushed_commits, std::slice::from_ref(&local_head));
     git(ours.path(), &["checkout", "-q", "topic"]);
     assert_eq!(
         hide_host::worktrees::checkout_git(ours.path())
@@ -833,6 +833,49 @@ fn a_background_fetch_brings_incoming_commits_and_prunes_without_touching_the_br
             reason: FetchSkip::NoOrigin
         }
     );
+
+    // A refspec that writes local branches (a mirror's) is never applied:
+    // beside the usual one, the local-only branch survives the prune and
+    // `main` keeps its local commit; alone, nothing is fetched.
+    git(ours.path(), &["checkout", "-q", "--detach"]);
+    git(ours.path(), &["branch", "-q", "local-only", "main"]);
+    git(
+        ours.path(),
+        &[
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/heads/*",
+        ],
+    );
+    let branch = |name: &str| {
+        output(ours.path(), &["rev-parse", &format!("refs/heads/{name}")])
+            .trim()
+            .to_owned()
+    };
+    assert_eq!(
+        hide_host::worktrees::fetch_remote(ours.path()),
+        FetchOutcome::Fetched
+    );
+    assert_eq!(branch("main"), local_head);
+    assert_eq!(branch("local-only"), local_head);
+    git(
+        ours.path(),
+        &[
+            "config",
+            "--unset",
+            "remote.origin.fetch",
+            r"^\+refs/heads/\*:refs/remotes/origin/\*$",
+        ],
+    );
+    assert_eq!(
+        hide_host::worktrees::fetch_remote(ours.path()),
+        FetchOutcome::Skipped {
+            reason: FetchSkip::NoTrackingRefs
+        }
+    );
+    assert_eq!(branch("main"), local_head);
+    assert_eq!(branch("local-only"), local_head);
 }
 
 /// A remote that cannot be reached fails at once as offline, with nothing

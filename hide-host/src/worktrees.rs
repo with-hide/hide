@@ -177,8 +177,10 @@ fn commit_records(
 /// D-01): every branch's remote-tracking ref moves to the remote's, refs the
 /// remote deleted are pruned, no tag is fetched and `FETCH_HEAD`, the time
 /// an operator's own fetch is read by, is not written. Local branches and
-/// the working tree are never touched. Nothing can prompt (`git_run`), and
-/// the run ends within [`FETCH_TIME`].
+/// the working tree are never touched: only the configured refspecs that
+/// write under `refs/remotes/origin/` are passed, and `--refmap=` keeps any
+/// other one (a mirror's `refs/heads/*:refs/heads/*`) from being applied.
+/// Nothing can prompt (`git_run`), and the run ends within [`FETCH_TIME`].
 pub fn fetch_remote(path: &Path) -> FetchOutcome {
     use hide_node_link::worktrees::{FetchFailure, FetchSkip};
     let Some(repository) = hide_project::git::discover(path) else {
@@ -201,6 +203,20 @@ pub fn fetch_remote(path: &Path) -> FetchOutcome {
             };
         }
     }
+    let refspecs = match tracking_refspecs(path) {
+        Ok(refspecs) if refspecs.iter().any(|refspec| !refspec.starts_with('^')) => refspecs,
+        Ok(_) => {
+            return FetchOutcome::Skipped {
+                reason: FetchSkip::NoTrackingRefs,
+            };
+        }
+        Err(reason) => {
+            return FetchOutcome::Failed {
+                failure: FetchFailure::Other,
+                reason,
+            };
+        }
+    };
     let mut command = crate::git_run::remote(path);
     // Nothing the fetch starts outlives it or reaches past origin: no
     // automatic gc or maintenance left running, no submodule fetched.
@@ -220,7 +236,8 @@ pub fn fetch_remote(path: &Path) -> FetchOutcome {
     if crate::git_run::version().is_none_or(|version| version >= (2, 29)) {
         command.arg("--no-write-fetch-head");
     }
-    let output = crate::git_run::output(command.arg("origin"), FETCH_TIME, Some(64 * 1024));
+    command.args(["--refmap=", "origin"]).args(&refspecs);
+    let output = crate::git_run::output(&mut command, FETCH_TIME, Some(64 * 1024));
     match output {
         Ok(Some(output)) if output.status.success() => FetchOutcome::Fetched,
         Ok(Some(output)) => fetch_failure(
@@ -239,6 +256,38 @@ pub fn fetch_remote(path: &Path) -> FetchOutcome {
             reason: format!("git fetch could not be run: {error}"),
         },
     }
+}
+
+/// `origin`'s configured fetch refspecs that only write remote-tracking refs
+/// (`refs/remotes/origin/...`), with its negative ones; a refspec that would
+/// write a local branch, a tag or anything else is left out.
+fn tracking_refspecs(path: &Path) -> Result<Vec<String>, String> {
+    let output = crate::git_run::output(
+        crate::git_run::at(path).args(["config", "--get-all", "remote.origin.fetch"]),
+        crate::git_run::DEADLINE,
+        Some(64 * 1024),
+    )
+    .map_err(|error| format!("git config could not be run: {error}"))?
+    .ok_or("git config did not answer in time")?;
+    // Exit 1 is "no such key": a remote with no fetch refspec fetches nothing.
+    if !output.status.success() && output.status.code() != Some(1) {
+        return Err(format!(
+            "git config stopped with status {:?}",
+            output.status.code()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|refspec| {
+            refspec.starts_with('^')
+                || refspec
+                    .trim_start_matches('+')
+                    .split_once(':')
+                    .is_some_and(|(_, destination)| destination.starts_with("refs/remotes/origin/"))
+        })
+        .map(str::to_owned)
+        .collect())
 }
 
 /// Git's words for a failed fetch, read in the C locale. A ref lock another
