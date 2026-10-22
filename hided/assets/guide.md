@@ -34,6 +34,7 @@ hide inbox
 
 ```
 hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>]
+hide ps [--all] [--here] [--json]
 hide agent list
 hide agent show <id|here>
 hide agent catalog [--machine <device id>]
@@ -41,6 +42,7 @@ hide agent catalog [--machine <device id>]
 
 {session_rules}
 
+- See current panes and agents with `hide ps`: one tree of the live panes and the agents in them; `--here` keeps this project, `--all` adds ended registrations, `--json` gives the flat list.
 - `hide agent list` shows the agents Hide knows, with their machine; `hide agent show here` is your own registration: your id, parent, origin, machine and the watch on you.
 - `hide agent catalog` lists the agents installed here, their models, efforts and usage, so you can choose `--kind`, `--model` and `--effort`.
 - A child of yours belongs to you: answer its letters, and tell the operator only what they have to decide.

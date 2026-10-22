@@ -25,4 +25,9 @@ mod tests {
         let guide = text();
         assert_eq!(guide.matches(hide_agent_hooks::PURPOSE_CONTEXT).count(), 1);
     }
+
+    #[test]
+    fn the_guide_spells_hide_ps_as_the_command_parses_it() {
+        assert!(TEXT.contains(crate::ps_cli::USAGE));
+    }
 }
