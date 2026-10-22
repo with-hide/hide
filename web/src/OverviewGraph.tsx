@@ -18,7 +18,7 @@ import { frontDeviceId } from "./devices";
 import { Input } from "./components/ui/input";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
 import { GRAPH_CHOICES_DEFAULTS, graphActivity, graphProjectIdOf, graphProjectKey, graphSessionId, graphSessionIdOf, graphSessionKey, overviewGraphModel, overviewGraphTeam, sameGraphScope, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
-import { useGraphTheme, useOverviewGraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
+import { projectDropPlaces, useGraphTheme, useOverviewGraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
 import { ClusterGraphNode, GlowGraphNode, GraphLine, GraphStateCounts, hasGraphLine, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, TeamGraphNode, type ClusterNode, type GlowNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type TeamNode } from "./overviewGraphNodes";
 import type { BoardProject } from "./projectBoard";
 import { sessionOfAgentOn } from "./sessionWork";
@@ -68,8 +68,8 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
     anchors: new Map(choices.project_places.filter((place) => sameGraphScope(place.scope, scope)).map((place) => [graphProjectIdOf(place.key), { x: place.x, y: place.y }])),
     pins: new Map(choices.session_places.filter((place) => sameGraphScope(place.scope, scope)).map((place) => [graphSessionIdOf(place.key), { x: place.x, y: place.y }])),
   }), [choices.project_places, choices.session_places, scope]);
-  const setFocus = (value: GraphFocus) => actions.changeOverviewGraph({ kind: "focus", focus: value, include_resting: includeResting });
-  const setIncludeResting = (value: boolean) => actions.changeOverviewGraph({ kind: "focus", focus, include_resting: value });
+  const setFocus = (value: GraphFocus) => actions.changeOverviewGraph({ kind: "focus", focus: value });
+  const setIncludeResting = (value: boolean) => actions.changeOverviewGraph({ kind: "focus", include_resting: value });
   // Freeze the core-confirmed entry identity, including native session and graph digest.
   // A later pane reuse cannot become the entry selection.
   const [entry] = useState(() => {
@@ -138,12 +138,19 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   const toggleTeam = useCallback((root: string) => { const session = sessionKeyOf(root); if (session) actions.changeOverviewGraph({ kind: "team_folded", session, folded: !teamFolded(root) }); }, [actions, sessionKeyOf, teamFolded]);
   const toggleFoldProject = useCallback((id: string) => { const project = projectKeyOf(id); if (project) actions.changeOverviewGraph({ kind: "project_folded", project, folded: !foldedProjects.has(id) }); }, [actions, projectKeyOf, foldedProjects]);
   const foldAll = () => actions.changeOverviewGraph({ kind: "fold_all", projects: model.projects.map((group) => graphProjectKey(group.project.workspace)) });
+  const revealing = useRef<string | null>(null);
+  useEffect(() => { if (revealing.current && !hiddenProjects.has(revealing.current)) revealing.current = null; }, [hiddenProjects]);
+  const hiddenNow = useCallback((project: string) => hiddenProjects.has(project) && revealing.current !== project, [hiddenProjects]);
   const chooseSession = useCallback((id: string, target?: HTMLElement) => {
     const row = model.allAgents.find((row) => row.id === id);
     // A session outside the graph budget has a deterministic route back to a graph.
     // Scope navigation is explicit user selection and does not move the existing map.
     if (row && !model.projects.some((group) => group.id === row.projectId)) { revealProjectSession(row); return; }
-    if (row && hiddenProjects.has(row.projectId)) actions.changeOverviewGraph({ kind: "project_hidden", project: graphProjectKey(row.project), hidden: false });
+    if (row && hiddenProjects.has(row.projectId)) {
+      // The core shows the project again on its next answer; until then its chosen session stays chosen.
+      revealing.current = row.projectId;
+      actions.changeOverviewGraph({ kind: "project_hidden", project: graphProjectKey(row.project), hidden: false });
+    }
     rememberOpener(target); setHighlightedSession(id); setSelection(id);
   }, [rememberOpener, model.allAgents, model.projects, revealProjectSession, hiddenProjects, actions]);
   const returnFocus = useReturnFocus(selection !== null, { target: () => opener.current, within: () => host.current?.querySelector<HTMLElement>(".og-details") ?? null });
@@ -154,11 +161,11 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   useEscapeLayer(selection !== null, close);
   // A resting team member is chosen from the team list even while it is not drawn.
   const agent = selection ? model.allAgents.find((row) => row.id === selection) : undefined;
-  useEffect(() => { if (selection && (!agent || hiddenProjects.has(agent.projectId))) close(); }, [selection, agent, hiddenProjects, close]);
+  useEffect(() => { if (selection && (!agent || hiddenNow(agent.projectId))) close(); }, [selection, agent, hiddenNow, close]);
   useEffect(() => {
     const row = model.allAgents.find((row) => row.id === highlightedSession);
-    if (highlightedSession && (!row || highlightedSession === entry?.id && !current || row && hiddenProjects.has(row.projectId))) setHighlightedSession(null);
-  }, [highlightedSession, model.agents, model.allAgents, entry?.id, current, hiddenProjects]);
+    if (highlightedSession && (!row || highlightedSession === entry?.id && !current || row && hiddenNow(row.projectId))) setHighlightedSession(null);
+  }, [highlightedSession, model.agents, model.allAgents, entry?.id, current, hiddenNow]);
   const toggleProject = useCallback((id: string) => { const project = projectKeyOf(id); if (project) actions.changeOverviewGraph({ kind: "project_hidden", project, hidden: !hiddenProjects.has(id) }); }, [actions, projectKeyOf, hiddenProjects]);
   const openRecord = onOpenRecord ?? actions.openSessionRecord;
   const activeSession = selection ?? highlightedSession;
@@ -328,10 +335,10 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
     } else if (projectDrag.current) {
       const id = projectDrag.current.project;
       map?.dropProject(id);
-      const anchor = map?.anchorOf(id);
+      const dropped = map ? projectDropPlaces(map, id, remembered, layout.scale) : null;
       const project = projectKeyOf(id);
-      const sessions = (map?.pinsIn(id) ?? []).flatMap(({ id: pinned, at }) => { const key = sessionKeyOf(pinned); return key ? [{ key, ...unscaled(at) }] : []; });
-      if (anchor && project) actions.changeOverviewGraph({ kind: "place", scope, projects: [{ key: project, ...unscaled(anchor) }], sessions });
+      const sessions = (dropped?.pins ?? []).flatMap(({ id: pinned, at }) => { const key = sessionKeyOf(pinned); return key ? [{ key, ...at }] : []; });
+      if (dropped && project) actions.changeOverviewGraph({ kind: "place", scope, projects: [{ key: project, ...dropped.anchor }], sessions });
     }
     projectDrag.current = null;
     setMoved((value) => value + 1);
@@ -340,7 +347,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
   const unfoldAll = () => actions.changeOverviewGraph({
     kind: "unfold_all",
     projects: model.projects.map((group) => graphProjectKey(group.project.workspace)),
-    teams: [...new Set([...points].flatMap(([id, point]) => point.team !== id ? [point.team] : []))].flatMap((root) => { const key = sessionKeyOf(root); return key ? [key] : []; }),
+    teams: [...new Set([...[...points].flatMap(([id, point]) => point.team !== id ? [point.team] : []), ...model.quietBranches.keys()])].flatMap((root) => { const key = sessionKeyOf(root); return key ? [key] : []; }),
   });
   const resetLayout = () => { layout.reset(); cameraInitialized.current = false; actions.changeOverviewGraph({ kind: "reset_places", scope }); };
   const showList = mode === "list" || layout.phase === "failed" || !size;

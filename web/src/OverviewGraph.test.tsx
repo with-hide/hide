@@ -195,9 +195,18 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
     expect(column().querySelector('[data-graph-project-row="alpha"]')?.getAttribute("data-hidden")).toBe("true");
     await act(async () => eye().click());
     expect(events.at(-1)).toMatchObject({ kind: "overview_graph_change", payload: { change: { kind: "project_hidden", hidden: false } } });
+    // Choosing a hidden project's waiting root shows the project again and keeps the choice open across the core's answer.
+    const sent = events.length;
+    await act(async () => column().querySelector<HTMLButtonElement>('[data-graph-ask="r"] .og-ask-who')!.click());
+    expect(events.slice(sent).filter((event) => event.kind === "overview_graph_change")).toEqual([{ schema_version: 2, kind: "overview_graph_change", payload: { change: { kind: "project_hidden", project: { device_id: "local", workspace_id: "alpha" }, hidden: false } } }]);
+    expect(preview()?.querySelector(".og-details-head")?.textContent).toContain("배포 확인");
+    await answer({});
+    expect(preview()?.querySelector(".og-details-head")?.textContent).toContain("배포 확인");
+    await act(async () => useUiStore.getState().escapeLayers.at(-1)!());
     // B6: a filter is one event, and the one the core holds is the one shown after reopening.
     await act(async () => container.querySelector<HTMLButtonElement>('[data-focus="turn"]')!.click());
-    expect(events.at(-1)).toMatchObject({ payload: { change: { kind: "focus", focus: "turn", include_resting: false } } });
+    expect(events.at(-1)).toMatchObject({ payload: { change: { kind: "focus", focus: "turn" } } });
+    expect(events.at(-1)?.payload).not.toHaveProperty("change.include_resting");
     await answer({ focus: "turn" });
     expect(container.querySelector('[data-focus="turn"]')?.getAttribute("aria-pressed")).toBe("true");
   } finally { await act(async () => reactRoot.unmount()); }

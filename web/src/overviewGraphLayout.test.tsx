@@ -6,7 +6,8 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OverviewGraphModel } from "./overviewGraphModel";
-import { useOverviewGraphLayout, type GraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
+import { projectDropPlaces, useOverviewGraphLayout, type GraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
+import { ForceMap } from "./overviewMapLayout";
 
 const TOKENS = { gap: 8, "root-width": 160, "root-height": 120, "root-orb": 48, "child-width": 120, "child-height": 96, "child-orb": 32 };
 const model = {
@@ -78,4 +79,13 @@ it("does not place the reset scope's old places again before the core forgets th
   await act(async () => afterReset.render(<Probe places={nothing} />));
   expect(layout!.map!.positions()).toEqual(fresh);
   await act(async () => afterReset.unmount());
+});
+
+it("a project drop carries only the pins the core still remembers, at scale one", () => {
+  const input = { projects: ["p"], sessions: [{ id: "s1", projectId: "p", parent: null, radius: 80 }, { id: "s2", projectId: "p", parent: null, radius: 80 }], operator: 40 };
+  // This window pinned both; another window's Reset layout made the core forget s2.
+  const map = new ForceMap({ ...input, remembered: { anchors: new Map([["p", { x: 300, y: 0 }]]), pins: new Map([["s1", { x: 200, y: 100 }], ["s2", { x: 400, y: 100 }]]) } });
+  const dropped = projectDropPlaces(map, "p", { anchors: new Map(), pins: new Map([["s1", { x: 1, y: 1 }]]) }, 2);
+  expect(dropped).toEqual({ anchor: { x: 150, y: 0 }, pins: [{ id: "s1", at: { x: 100, y: 50 } }] });
+  expect(projectDropPlaces(map, "missing", nothing, 1)).toBeNull();
 });

@@ -1,11 +1,11 @@
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
 import { scopeAgents, type LensAgent } from "./overviewLens";
 import type { BoardProject } from "./projectBoard";
-import type { AgentRow, GraphProjectKey, GraphScope, GraphSessionKey, OverviewGraphChoices, OverviewGraphMetadata, OverviewGraphParty } from "./snapshot";
+import type { AgentRow, GraphProjectKey, OverviewGraphFocus, GraphScope, GraphSessionKey, OverviewGraphChoices, OverviewGraphMetadata, OverviewGraphParty } from "./snapshot";
 
 export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null };
 export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; roots: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null };
-export type GraphFocus = "all" | "turn" | "working" | "results";
+export type GraphFocus = OverviewGraphFocus;
 export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; pinned?: readonly string[]; selected?: string | null };
 export type GraphActivity = Exclude<GraphFocus, "all"> | "unknown" | "idle" | "resting";
 export const GRAPH_FOCUS_DEFAULTS: GraphFocusOptions = { focus: "all", includeResting: false };

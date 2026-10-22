@@ -1258,7 +1258,6 @@ export type DetailSlot = { items: DetailItem[]; shown: boolean };
 
 /** Which sessions the Overview map lights (`contracts/snapshot-wire-enums.json`: `overview_graph_focus`). */
 export type OverviewGraphFocus = "all" | "turn" | "working" | "results";
-export const OVERVIEW_GRAPH_FOCUSES: readonly OverviewGraphFocus[] = ["all", "turn", "working", "results"];
 export type GraphProjectKey = { device_id: string; workspace_id: string };
 /** A session by machine, Herdr pane and session digest (or native id), so a reused pane is never taken for it. */
 export type GraphSessionKey = { device_id: string; pane_id: string; session: string | null };
@@ -1279,7 +1278,8 @@ export type OverviewGraphChoices = {
 };
 /** One operator action on the map, sent as one `overview_graph_change` event (D-10). */
 export type OverviewGraphChange =
-  | { kind: "focus"; focus: OverviewGraphFocus; include_resting: boolean }
+  /** A field left out keeps its value. */
+  | { kind: "focus"; focus?: OverviewGraphFocus; include_resting?: boolean }
   | { kind: "project_hidden"; project: GraphProjectKey; hidden: boolean }
   | { kind: "project_folded"; project: GraphProjectKey; folded: boolean }
   | { kind: "fold_all"; projects: GraphProjectKey[] }

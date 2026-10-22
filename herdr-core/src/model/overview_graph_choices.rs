@@ -108,10 +108,14 @@ pub struct GraphDrop<K> {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OverviewGraphChange {
-    /// A filter button, the resting-sessions box, or Show all sessions.
+    /// A filter button, the resting-sessions box, or Show all sessions; a
+    /// field left out keeps its value, so two quick actions never undo each
+    /// other.
     Focus {
-        focus: OverviewGraphFocus,
-        include_resting: bool,
+        #[serde(default)]
+        focus: Option<OverviewGraphFocus>,
+        #[serde(default)]
+        include_resting: Option<bool>,
     },
     ProjectHidden {
         project: GraphProjectKey,
@@ -164,8 +168,12 @@ impl OverviewGraphChoices {
                 focus,
                 include_resting,
             } => {
-                self.focus = focus;
-                self.include_resting = include_resting;
+                if let Some(focus) = focus {
+                    self.focus = focus;
+                }
+                if let Some(include_resting) = include_resting {
+                    self.include_resting = include_resting;
+                }
             }
             OverviewGraphChange::ProjectHidden { project, hidden } => {
                 forgotten += set_member(&mut self.hidden_projects, project, hidden);
@@ -274,6 +282,17 @@ impl OverviewGraphChoices {
             project_places: readable(stored.project_places, &mut skipped, place_valid),
             session_places: readable(stored.session_places, &mut skipped, place_valid),
         };
+        // A record named twice (a hand edit, or two ids a core move made one)
+        // keeps its most recent copy.
+        skipped += dedupe(&mut choices.hidden_projects, |key| key.clone());
+        skipped += dedupe(&mut choices.folded_projects, |key| key.clone());
+        skipped += dedupe(&mut choices.team_folds, |fold| fold.session.clone());
+        skipped += dedupe(&mut choices.project_places, |place| {
+            (place.scope.clone(), place.key.clone())
+        });
+        skipped += dedupe(&mut choices.session_places, |place| {
+            (place.scope.clone(), place.key.clone())
+        });
         // A hand-edited store over the cap keeps its most recent records.
         for overflow in [
             trim(&mut choices.hidden_projects),
@@ -305,6 +324,21 @@ fn readable<T: serde::de::DeserializeOwned>(
         .collect()
 }
 
+/// Keeps the last record of each identity, in order; how many went.
+fn dedupe<T, I: PartialEq>(list: &mut Vec<T>, identity: impl Fn(&T) -> I) -> usize {
+    let before = list.len();
+    let mut kept: Vec<T> = Vec::with_capacity(before);
+    for record in std::mem::take(list).into_iter().rev() {
+        let id = identity(&record);
+        if !kept.iter().any(|held| identity(held) == id) {
+            kept.push(record);
+        }
+    }
+    kept.reverse();
+    *list = kept;
+    before - list.len()
+}
+
 /// Past the cap the least recently changed records go; how many went.
 fn trim<T>(list: &mut Vec<T>) -> usize {
     let over = list.len().saturating_sub(OVERVIEW_GRAPH_LIST_LIMIT);
@@ -326,8 +360,8 @@ fn set_member(list: &mut Vec<GraphProjectKey>, key: GraphProjectKey, member: boo
             list.push(key);
             trim(list)
         }
-        (Some(index), false) => {
-            list.remove(index);
+        (Some(_), false) => {
+            list.retain(|held| *held != key);
             0
         }
         (None, false) => 0,
@@ -483,8 +517,8 @@ mod tests {
         assert!(
             !choices
                 .apply(OverviewGraphChange::Focus {
-                    focus: OverviewGraphFocus::All,
-                    include_resting: false
+                    focus: Some(OverviewGraphFocus::All),
+                    include_resting: Some(false)
                 })
                 .unwrap()
                 .changed
@@ -651,5 +685,36 @@ mod tests {
             OverviewGraphChoices::read_stored(json!({"focus": "later"})).unwrap();
         assert_eq!((defaults, skipped), (OverviewGraphChoices::default(), 1));
         assert!(OverviewGraphChoices::read_stored(json!(["not", "an", "object"])).is_err());
+    }
+
+    #[test]
+    fn a_filter_and_the_sleeping_box_changed_back_to_back_both_stay() {
+        let mut choices = OverviewGraphChoices::default();
+        choices
+            .apply(change(json!({"kind": "focus", "focus": "working"})))
+            .unwrap();
+        choices
+            .apply(change(json!({"kind": "focus", "include_resting": true})))
+            .unwrap();
+        assert_eq!(choices.focus, OverviewGraphFocus::Working);
+        assert!(choices.include_resting);
+    }
+
+    #[test]
+    fn a_record_named_twice_loads_once_and_showing_it_again_clears_it() {
+        let (mut choices, skipped) = OverviewGraphChoices::read_stored(json!({
+            "hidden_projects": [project("a"), project("b"), project("a")],
+        }))
+        .unwrap();
+        assert_eq!(skipped, 1);
+        assert_eq!(choices.hidden_projects, vec![project("b"), project("a")]);
+        choices.hidden_projects.push(project("b"));
+        choices
+            .apply(OverviewGraphChange::ProjectHidden {
+                project: project("b"),
+                hidden: false,
+            })
+            .unwrap();
+        assert_eq!(choices.hidden_projects, vec![project("a")]);
     }
 }

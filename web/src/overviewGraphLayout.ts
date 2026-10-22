@@ -24,6 +24,18 @@ const NOTHING_REMEMBERED: RememberedPlaces = { anchors: new Map(), pins: new Map
 const isEmpty = (places: RememberedPlaces) => places.anchors.size === 0 && places.pins.size === 0;
 const scaled = (places: ReadonlyMap<string, Point>, scale: number) => new Map([...places].map(([id, point]) => [id, { x: point.x * scale, y: point.y * scale }]));
 
+/**
+ * One project drop as the core keeps it, at interface scale one: the project's
+ * anchor, and the pinned sessions it carried that the core still remembers. A
+ * pin the core forgot (another window's Reset layout) stays forgotten.
+ */
+export function projectDropPlaces(map: ForceMap, project: string, remembered: RememberedPlaces, scale: number): { anchor: Point; pins: { id: string; at: Point }[] } | null {
+  const anchor = map.anchorOf(project);
+  if (!anchor) return null;
+  const unscaled = (point: Point) => ({ x: point.x / scale, y: point.y / scale });
+  return { anchor: unscaled(anchor), pins: map.pinsIn(project).filter(({ id }) => remembered.pins.has(id)).map(({ id, at }) => ({ id, at: unscaled(at) })) };
+}
+
 /** Geometry comes from the same numeric authority as the rest of Overview. */
 function dimensions(element: HTMLElement, scale: number): Dimensions {
   const style = getComputedStyle(element);

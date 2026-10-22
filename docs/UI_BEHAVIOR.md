@@ -995,7 +995,8 @@ Direct input never creates inbox items, watches, lineage, read marks, letter not
 Letters and direct inputs share one newest-2,000-record graph budget; no letter subject or body reaches the graph or its panel.
 
 With nothing chosen, the side column lists each project with a search box, its session count, its nonzero My turn, In progress and Unread counts in their colours, and nothing else: no Fold or Hide words (PRD overview-graph-remembered D-02).
-Pointing at a row or moving the keyboard into it shows an eye at its end, whose tooltip and accessible name are `<project> 그래프에서 숨기기`; pressing it takes the project off the map.
+Pointing at a row or moving the keyboard into it shows an eye at its end, whose tooltip and accessible name are `<project> 그래프에서 숨기기`, and a touch screen, which has no pointer, always shows it; pressing it takes the project off the map.
+Choosing a session of a hidden project, from Waiting on you or the session list, shows the project again and opens that session.
 Choosing a project's name moves the camera to that project's sessions; a project outside the graph budget opens its project scope instead.
 Hiding removes that project's sessions, name, glow, outlines and lines from the map without moving any other circle; its row stays, dimmed, keeps its counts, and shows a crossed-out eye without pointing, named `<project> 그래프에 다시 보이기` and pressed, which returns the sessions to the same places (B9).
 A hidden row's name is not a button that moves the camera, because there is nothing on the map to move to; the eye of a project outside the graph budget is disabled (B11).
