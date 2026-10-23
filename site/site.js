@@ -1,5 +1,5 @@
-// Page motion: one-time reveals, the owls' loops, the hero peek's and the section owls', and the stages' tabs.
-// Under reduced motion the reveals show at once, every owl holds its still frame and the tabs never turn by themselves.
+// Page motion: one-time reveals and the owls' loops, the hero peek's and the closing owl's.
+// Under reduced motion the reveals show at once and every owl holds its still frame.
 
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -45,69 +45,6 @@ function mountMotion() {
   owls.forEach(sync);
 }
 
-// A stage's tabs: one window each. With motion allowed they hand over every few seconds while the stage is on
-// screen and the tab is visible; the first press, click or key, leaves the choice to the visitor for good.
-const TAB_MS = 7000;
-
-function mountTabs(stage) {
-  const tabs = [...stage.querySelectorAll('[role="tab"]')];
-  const caption = stage.querySelector("figcaption");
-  let index = 0;
-  let timer = null;
-  let manual = reduceMotion;
-  let inView = false;
-
-  function select(next, focus) {
-    index = (next + tabs.length) % tabs.length;
-    tabs.forEach((tab, at) => {
-      const on = at === index;
-      tab.setAttribute("aria-selected", String(on));
-      tab.tabIndex = on ? 0 : -1;
-      document.getElementById(tab.getAttribute("aria-controls")).hidden = !on;
-    });
-    const panel = document.getElementById(tabs[index].getAttribute("aria-controls"));
-    caption.textContent = panel.dataset.caption;
-    if (focus) tabs[index].focus();
-    schedule();
-  }
-
-  // The fill under the selected tab restarts with each hand-over, so it is drawn again from zero.
-  function schedule() {
-    clearTimeout(timer);
-    const running = !manual && inView && !document.hidden;
-    stage.classList.remove("auto");
-    void stage.offsetWidth;
-    stage.classList.toggle("auto", !manual);
-    stage.classList.toggle("paused", !running);
-    if (running) timer = setTimeout(() => select(index + 1, false), TAB_MS);
-  }
-
-  function take() {
-    manual = true;
-    clearTimeout(timer);
-    stage.classList.remove("auto", "paused");
-  }
-
-  stage.style.setProperty("--tab-ms", `${TAB_MS}ms`);
-  tabs.forEach((tab, at) => tab.addEventListener("click", () => { take(); select(at, false); }));
-  stage.querySelector('[role="tablist"]').addEventListener("keydown", event => {
-    const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
-    const jump = { Home: 0, End: tabs.length - 1 }[event.key];
-    if (step === undefined && jump === undefined) return;
-    event.preventDefault();
-    take();
-    select(jump ?? index + step, true);
-  });
-  if ("IntersectionObserver" in window) {
-    new IntersectionObserver(entries => {
-      inView = entries[0].isIntersecting;
-      schedule();
-    }, { threshold: 0.35 }).observe(stage);
-  }
-  document.addEventListener("visibilitychange", schedule);
-  select(0, false);
-}
-
 // A link to a folded answer opens it.
 function openLinkedAnswer() {
   const target = location.hash ? document.getElementById(location.hash.slice(1)) : null;
@@ -116,6 +53,5 @@ function openLinkedAnswer() {
 
 mountReveals();
 mountMotion();
-document.querySelectorAll(".stage").forEach(stage => { if (stage.querySelector('[role="tablist"]')) mountTabs(stage); });
 openLinkedAnswer();
 window.addEventListener("hashchange", openLinkedAnswer);

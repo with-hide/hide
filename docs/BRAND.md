@@ -70,10 +70,10 @@ Each takes part in one clear action that belongs to what it is doing, and under 
 | Pose | Where | Scene | Motion |
 | --- | --- | --- | --- |
 | `owl-peek` | around the hero window | `owl-agents` traced into vector parts, peeking out from behind the window's edges | pops out at an edge, glances at the work there and ducks back, the same loop every time |
-| `owl-ai` | beside the attention pillar | reading an open book | reads along the lines of each page, lifts the corner with its wing and turns the page, its head and body following the page across |
-| `owl-agents` | beside the hand-off pillar | at ease among four terminals | the terminals clear and type in again one after another, clockwise, and the owl turns its head and leans toward each in turn |
-| `owl-devices` | beside the core pillar | waving beside a laptop, the always-on core and a phone | a light runs along the dots from the laptop through the core to the phone and back, each device flashing as it arrives, and the owl's head follows it |
-| `owl-factory` | in the Software Factory section | in a hard hat beside a conveyor | the conveyor steps one box on (the last box rolls off, the next gets its check, a new box is set down) and the owl turns to watch the box go |
+| `owl-ai` | over the Hide AI section | reading an open book | reads along the lines of each page, lifts the corner with its wing and turns the page, its head and body following the page across |
+| `owl-agents` | over the multi-agent section | at ease among four terminals | the terminals clear and type in again one after another, clockwise, and the owl turns its head and leans toward each in turn |
+| `owl-devices` | beside the every-machine section | waving beside a laptop, the always-on core and a phone | a light runs along the dots from the laptop through the core to the phone and back, each device flashing as it arrives, and the owl's head follows it |
+| `owl-factory` | beside the Software Factory line under pricing | in a hard hat beside a conveyor | the conveyor steps one box on (the last box rolls off, the next gets its check, a new box is set down) and the owl turns to watch the box go |
 | `owl-rest` | at the close | asleep in the crescent moon | breathes in and out, and a small Z drifts up on each breath out |
 
 A pose keeps work in view rather than reacting to it: the face keeps its expression whatever a pane shows, the owl follows its own prop on a fixed schedule, and nothing in a loop answers what an agent did.

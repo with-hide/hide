@@ -1,7 +1,14 @@
-// The page's one moving picture: the Overview map's recording, over the still that reduced motion
-// and a page without script show. It plays only while it is on screen and the tab is visible.
+// The page's moving parts: the Hide AI switch, which flips by itself until the visitor presses it, and the
+// Overview map's recording over its still. Under reduced motion, and without script, the switch rests on
+// and the map shows its still; each plays only while it is on screen and the tab is visible.
 
 (() => {
+  const ai = document.querySelector(".ai-switch");
+  const toggle = ai?.querySelector(".toggle");
+  let pressed = false;
+  const flip = (on) => { ai.dataset.on = String(on); toggle.setAttribute("aria-checked", String(on)); };
+  toggle?.addEventListener("click", () => { pressed = true; flip(ai.dataset.on !== "true"); });
+
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
   /** Runs `start` while `element` is on screen and the tab visible; `start` returns the function that stops it. */
@@ -20,6 +27,16 @@
     }
     document.addEventListener("visibilitychange", sync);
     sync();
+  }
+
+  // ---- Hide AI: off, then on, every few seconds, until the first press. ----
+  if (ai) {
+    whileSeen(ai, () => {
+      if (pressed) return () => {};
+      flip(false);
+      const timer = setInterval(() => { if (pressed) clearInterval(timer); else flip(ai.dataset.on !== "true"); }, 2600);
+      return () => { clearInterval(timer); if (!pressed) flip(true); };
+    });
   }
 
   // ---- The team: the Overview map's recording plays over its still, in the visitor's color scheme. ----
