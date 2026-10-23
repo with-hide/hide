@@ -284,7 +284,7 @@ export function installKeyboard(actions: Actions): () => void {
         // else it zooms the focused terminal pane.
         const owner = keyboardCommandOwner();
         const lane = ui().drawnLane.mode;
-        if ((owner.kind === "view" || owner.kind === "tool" || owner.kind === "detail") && lane !== "closed" && lane !== "hidden") return ui().setLaneExpanded(!ui().laneExpanded);
+        if ((owner.kind === "view" || owner.kind === "tool" || owner.kind === "detail") && lane !== "closed") return ui().setLaneExpanded(!ui().laneExpanded);
         return actions.toggleZoom();
       }
       case "toggle_plan":

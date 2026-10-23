@@ -146,5 +146,4 @@ export const SCREEN_WORLD: PracticeWorld<ScreenModel> = {
   },
   panes: (model) => model.panes.map((pane) => pane.id),
   screen: (model, paneId) => paneScreen(model.panes.find((pane) => pane.id === paneId)!),
-  lane: false,
 };
