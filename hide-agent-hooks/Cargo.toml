@@ -27,6 +27,8 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["preserve_order", "raw_value"] }
 # Hashes the OpenCode plugin's body, so an edit by the operator is told from Hide's own text.
 sha2 = "=0.10.9"
+# Edits Grok's folder trust (`trusted_folders.toml`) keeping the rest of the file.
+toml_edit = "=0.25.17"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(unix)'.dependencies]
