@@ -6,10 +6,12 @@
 // words and agent kinds a visitor reads are English and match the page. No
 // name here is a person, a machine or a path of anyone's.
 
-import type { PrBoard } from "../agentScope";
-import type { AgentRow, Checkout, Device, MemoryRow, ProjectMemory, PullRequest, SnapshotRest, Workspace } from "../snapshot";
+import type { PrBoard, TaskCardScope } from "../agentScope";
+import type { NodeUsage } from "../generated/hided-ws";
+import type { AgentRow, Checkout, Device, PullRequest, SidebarLens, SnapshotRest, Workspace } from "../snapshot";
 import type { MobileState } from "../mobileSettings";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
+import { overviewWorld, type OverviewWorld } from "./overviewSceneData";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 
 /** A pull request or issue reference as the page writes it. */
@@ -112,8 +114,8 @@ function renameProject(project: Workspace): Workspace {
 export function landingSidebar(nowMs: number, expanded: string[], width: number): { rest: SnapshotRest; agents: AgentRow[] } {
   const base = sidebarScene("reference", { ...REFERENCE_FOLDS, expandedAgents: expanded }, nowMs);
   const navigator = base.rest.navigator!;
-  // The one worktree name the core's frozen tiers and states carry is reworded where it sits.
-  const reworded = <T,>(value: T): T => JSON.parse(JSON.stringify(value).replaceAll('"feat/ui"', '"feat/export-csv"'));
+  // The one worktree name the core's frozen tiers and states carry is reworded where it sits, and the project's folder is the billing-app's.
+  const reworded = <T,>(value: T): T => JSON.parse(JSON.stringify(value).replaceAll('"feat/ui"', '"feat/export-csv"').replace(/\/work\/hide(?=["./])/g, "/work/billing-app"));
   const rest: SnapshotRest = reworded({
     ...base.rest,
     navigator: {
@@ -192,11 +194,10 @@ export const HERO_PANES = ["a1", "a3"] as const;
 /**
  * The hero: the attention shot's window with the billing-app main checkout in
  * front, its lead and the agent asking to merge side by side, and the Project
- * tool pinned beside them. The agents shot is the same window with the lead's
- * children unfolded in the tree (`expanded`), and the memory shot shows the
- * Project tool's 기억 tab.
+ * tool pinned beside them with the project's 현황. The tasks and prs shots are
+ * the same window with the sidebar on another list (`lens`).
  */
-export function landingWorkspace(nowMs: number, width: number, expanded: string[] = []): { rest: SnapshotRest; agents: AgentRow[] } {
+export function landingWorkspace(nowMs: number, width: number, expanded: string[] = [], lens: SidebarLens = "projects"): { rest: SnapshotRest; agents: AgentRow[] } {
   const scene = landingSidebar(nowMs, expanded, width);
   const navigator = scene.rest.navigator!;
   const project = navigator.workspaces!.find((row) => row.id === "hide")!;
@@ -225,10 +226,14 @@ export function landingWorkspace(nowMs: number, width: number, expanded: string[
   const github = { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: nowMs - 60_000, unavailable_reason: null };
   // A pane's header reads the title its agent row carries.
   const titled = { ...tab, panes: tab.panes.map((pane) => ({ ...pane, identity_label: scene.agents.find((row) => row.pane_id === pane.id)?.identity_label ?? pane.identity_label })) };
-  const front: Workspace = { ...project, is_git: true, pull_requests: pulls, agent_scope: { ...project.agent_scope, prs }, checkouts: project.checkouts.map((checkout) => (checkout === main ? { ...checkout, github, tabs: [titled] } : checkout)) };
+  const status = { ...HERO_STATUS, git: { ...HERO_STATUS.git, dots: project.checkouts.slice(0, 6).map((checkout, index) => ({ checkout_id: checkout.id, state: HERO_DOTS[index % HERO_DOTS.length]! })) } };
+  const front: Workspace = { ...project, is_git: true, pull_requests: pulls, agent_scope: { ...project.agent_scope, prs, status }, checkouts: project.checkouts.map((checkout) => (checkout === main ? { ...checkout, github, tabs: [titled] } : checkout)) };
+  const workspaces = navigator.workspaces!.map((row) => (row === project ? front : row));
+  const devices = navigator.devices?.map((device, index) => (index === 0 ? { ...device, agent_scope: { ...device.agent_scope, tasks: landingTasks(scene.agents, workspaces, nowMs) } } : device));
   const rest: SnapshotRest = {
     ...scene.rest,
-    navigator: { ...navigator, focused_workspace_id: project.id, focused_checkout_id: main.id, workspaces: navigator.workspaces!.map((row) => (row === project ? front : row)) },
+    ui_state: { ...scene.rest.ui_state!, sidebar_lens: lens },
+    navigator: { ...navigator, devices, focused_workspace_id: project.id, focused_checkout_id: main.id, workspaces },
     pane_layouts: [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: HERO_PANES[1], zoomed: false, root: { type: "split", direction: "right", ratio: 0.5, first: { type: "pane", pane_id: HERO_PANES[0] }, second: { type: "pane", pane_id: HERO_PANES[1] } } }],
     workspace_view: {
       agent_layout: { root: { area: { id: "g1", active: tab.id, displays: [{ id: tab.id! }] } }, active_area: "g1", canvases: {}, limits: { areas: 4, depth: 3, displays: 64 }, display_count: 1 },
@@ -243,33 +248,99 @@ export function landingWorkspace(nowMs: number, width: number, expanded: string[
 const MINUTE = 60_000;
 const DAY = 1440 * MINUTE;
 
-/**
- * The memory shot's cards: what the story's sessions decided about the
- * billing-app, in the kinds and states the core gives them. One rule is asked
- * about for the docs, an agent is writing another into them, and one already
- * lives in the repository's CONTRIBUTING.md.
- */
-export function landingMemory(nowMs: number, workspaceId: string): ProjectMemory {
-  const card = (number: number, title: string, kind: MemoryRow["kind"], given: number, pulled: number, human: number, ago: number, promotion: MemoryRow["promotion"] = null): MemoryRow => ({
-    number, title, kind, provided_session_count: given, pull_count: pulled, human_source_count: human, updated_at_unix_ms: nowMs - ago, verifying: false, promotion,
+/** The billing-app's 현황 as the core would derive it for the story: two pull requests to merge, and the worktrees' marks. */
+const HERO_STATUS = {
+  todo: [{ kind: "pr" as const, number: 431 }, { kind: "pr" as const, number: 436 }, { kind: "ask" as const, pane_id: "q1" }],
+  todo_total: 3,
+  todo_agents: 1,
+  prs: { open: 4, mergeable: 2, failed: 1, review: 0, checking: 1 },
+  git: { worktrees: 7, behind: 0, changed: 2, unpushed: 1, removable: 1 },
+};
+const HERO_DOTS = ["clean", "changed", "changed", "unpushed", "clean", "removable"] as const;
+
+/** Which state each of the story's lineage roots is in on the 태스크 list, and how far its pull request got. */
+const TASK_STATES: Record<string, { state: TaskCardScope["state"]; stage?: TaskCardScope["stage"] }> = {
+  a3: { state: "needs_you", stage: 3 },
+  q1: { state: "needs_you", stage: 1 },
+  a1: { state: "waiting", stage: 2 },
+  q2: { state: "done", stage: 2 },
+  e1: { state: "working", stage: 1 },
+  a2: { state: "working" },
+  tn1: { state: "resting" },
+};
+
+/** The device's tasks as the core lists them: each of the story's lineage roots with everything it started, in the checkouts it works in. */
+export function landingTasks(agents: AgentRow[], workspaces: Workspace[], nowMs: number): { cards: TaskCardScope[]; needs_you: number; recency: string } {
+  const where = new Map(workspaces.flatMap((project) => project.checkouts.flatMap((checkout) => checkout.tabs.flatMap((tab) => tab.panes.map((pane) => [pane.id, checkout.id] as const)))));
+  const descendants = (pane: string): string[] => agents.filter((row) => row.lineage_parent_pane_id === pane).flatMap((row) => [row.pane_id, ...descendants(row.pane_id)]);
+  const cards = Object.entries(TASK_STATES).flatMap(([root, { state, stage }], index) => {
+    const checkout = where.get(root);
+    if (!checkout) return [];
+    const members = [root, ...descendants(root)];
+    const checkouts = [...new Set(members.map((pane) => where.get(pane)).filter((id): id is string => id !== undefined))];
+    return [{ root, state, members, checkouts, recency: new Date(nowMs - index * 4 * MINUTE).toISOString(), ...(stage ? { stage } : {}) }];
   });
-  const rows = [
-    card(13, "Use pnpm, never npm", "rule", 6, 4, 2, 40 * MINUTE),
-    card(14, "Exports stay in UTC; the invoice PDF shows local time", "decision", 4, 2, 1, 2 * 60 * MINUTE),
-    card(16, "An empty invoice list exports a header row, not an empty file", "decision", 2, 1, 1, 25 * MINUTE),
-    card(11, "Above 10,000 rows the export times out; page it", "lesson", 3, 2, 1, DAY),
-    card(10, "Release notes wait for a person to read them", "rule", 5, 3, 2, 2 * DAY, { state: "running", agent: { name: "memory-promote-m10", pane_id: "w1:p9" }, pr_number: null, target_path: null, github_failure: null }),
-    card(9, "Run the export tests before opening a pull request", "rule", 8, 6, 2, 3 * DAY, { state: "merged", agent: null, pr_number: 474, target_path: "CONTRIBUTING.md", github_failure: null }),
-    card(7, "Invoices live in the billing schema, not public", "fact", 7, 5, 0, 4 * DAY),
-  ];
+  return { cards, needs_you: cards.filter((card) => card.state === "needs_you").length, recency: cards[0]?.recency ?? "" };
+}
+
+/** The billing-app's last seven days at API prices, for the Project tool's cost tile. */
+export function landingUsage(nowMs: number): NodeUsage {
+  const amounts = [6.1, 9.4, 4.2, 11.8, 8.3, 13.6, 7.9];
+  const days = amounts.map((usd, index) => ({ date: new Date(nowMs - (6 - index) * DAY).toISOString().slice(0, 10), micro_usd: Math.round(usd * 1_000_000) }));
+  const total = days.reduce((sum, day) => sum + day.micro_usd, 0);
+  const share = (part: number) => Math.round(total * part);
   return {
-    workspace_id: workspaceId, unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0, evicted_through_unix_ms: null,
-    rows,
-    questions: [{ kind: "promote", number: 13, title: rows[0]!.title, human_session_count: 2, pulled_session_count: 4 }],
-    analysis: "idle", consent_required: false, usable_cards: rows.length, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null,
-    expanded: null,
-    search: null,
+    node: "local", agents: [], history: null,
+    projects: [{
+      workspace_id: "hide", micro_usd: total, days,
+      models: [{ agent: "claude", model: "model-a", micro_usd: share(0.58) }, { agent: "codex", model: "model-c", micro_usd: share(0.34) }, { agent: "opencode", model: null, micro_usd: share(0.08) }],
+      sessions: [{ agent: "claude", session_id: "session-a1", micro_usd: share(0.31) }],
+      agents: [{ agent: "claude", micro_usd: share(0.58) }, { agent: "codex", micro_usd: share(0.34) }, { agent: "opencode", micro_usd: share(0.08) }],
+      unpriced_agents: [], partial: false, waiting: false, stale: false, limited: false,
+    }],
   };
+}
+
+/** The Overview's agents in the page's words: who they are, what they ask and what they are doing now, by pane id. */
+const MAP_WORDS: Record<string, { title: string; now?: string; ask?: string; kind?: string }> = {
+  "h-a3": { title: `Approve ${ref(431)} and ${ref(436)}?`, ask: "Both pass their checks. Merge them into main?" },
+  "h-a1": { title: "Split the invoice export in three", now: "Waiting on 3 workers" },
+  "h-a1c1": { title: "Export invoices as CSV", now: "Writing the rows" },
+  "h-a1c2": { title: `Check ${ref(431)} and ${ref(436)}` },
+  "h-a1c3": { title: "Sort the export by date", now: "Running the tests" },
+  "h-a1c4": { title: "Pick the CSV column order" },
+  "h-a1g1": { title: "Add a test for sorted output", now: "Writing the test", kind: "opencode" },
+  "h-e1": { title: "Task detail API", now: "Wiring the detail route" },
+  "h-q2": { title: "Search the invoices", now: "Pull request merged" },
+  "h-r1": { title: "Draft the release notes", now: "Draft done" },
+  "h-r2": { title: "Update the dependencies", now: "List done" },
+  "b-1": { title: "Retry failed payments", ask: "Run the migration on the production database?" },
+  "b-2": { title: "Verify webhook signatures", now: "Fixing the failing check" },
+  "s-1": { title: "Polish the pricing page", now: "Three drafts done" },
+};
+const MAP_PROJECTS: Record<string, string> = { hide: "billing-app", "billing-api": "payments-api", site: "docs-site", "team-notes": "notes" };
+
+/** The Overview's work graph over the page's story: the reference world with every word a visitor reads in English. */
+export function landingMap(nowMs: number): OverviewWorld {
+  const world = overviewWorld(nowMs);
+  for (const row of world.agents) {
+    const words = MAP_WORDS[row.pane_id];
+    if (!words) continue;
+    row.identity_label = words.title;
+    if (words.kind) row.agent_kind = words.kind;
+    if (words.now && row.state.line) row.state = { ...row.state, line: { ...row.state.line, text: words.now } };
+    if (words.ask && row.state.ask) row.state = { ...row.state, ask: { ...row.state.ask, what: words.ask } };
+  }
+  const titles = new Map(world.agents.map((row) => [row.pane_id, row.identity_label]));
+  const navigator = world.rest.navigator!;
+  navigator.workspaces = navigator.workspaces!.map((project) => ({
+    ...project,
+    label: MAP_PROJECTS[project.id] ?? project.label,
+    checkouts: project.checkouts.map((checkout) => ({ ...checkout, tabs: checkout.tabs.map((tab) => ({ ...tab, panes: tab.panes.map((pane) => ({ ...pane, identity_label: titles.get(pane.id) ?? pane.identity_label })) })) })),
+  }));
+  world.rest.ui_state = { ...world.rest.ui_state!, interface_language: "en", agent_logo_mode: "shown", workspace_registrations: world.rest.ui_state!.workspace_registrations?.map((row) => ({ ...row, label: MAP_PROJECTS[row.id] ?? row.label })) };
+  world.rest.issue_work = { ...world.rest.issue_work!, backlog: [] };
+  return world;
 }
 
 const CLAUDE = "\x1b[38;2;215;119;87m";
