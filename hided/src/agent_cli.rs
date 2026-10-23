@@ -3,7 +3,7 @@
 use crate::env::{self, Env};
 use herdr_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
+pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
 pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
@@ -89,8 +89,11 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                     "end" => ["--actor"].as_slice(),
                     _ => &[],
                 };
-                if !allowed.contains(&flag) || flags.contains_key(flag) {
-                    return Err(format!("Unknown or repeated flag: {flag}"));
+                if flags.contains_key(flag) {
+                    return Err(format!("{flag} is given twice"));
+                }
+                if !allowed.contains(&flag) {
+                    return Err(format!("unknown flag for hide agent {verb}: {flag}"));
                 }
                 let value = args
                     .next()
@@ -112,7 +115,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
     let mut take = |name: &str| {
         flags
             .remove(name)
-            .ok_or_else(|| format!("Required flag: {name}"))
+            .ok_or_else(|| format!("{name} is required"))
     };
     let command = match verb {
         "register" => {
@@ -260,7 +263,7 @@ pub fn run(env: &Env, command: Delivery) -> Result<(), String> {
             let message = if code == "request_timeout" {
                 "The request may still be running; run the same command again to get its result"
             } else {
-                code.as_str()
+                crate::cli::request_next_action(&code)
             };
             println!(
                 "{}",

@@ -550,6 +550,8 @@ Without `--parent`, the work is handed off to the operator: the agent is an inde
 Both modes create a separate tab, in an existing checkout or a new worktree, without changing the current screen or keyboard focus.
 The no-focus request applies to opening the checkout's owner workspace as well as creating its tab; interactive workspace and tab creation keep their focus behavior.
 `hide agent spawn --help` explains the modes without contacting a daemon; the removed `--no-watch` flag is refused before any effects.
+Every other `hide` command ending in `--help` or `-h` prints that command's usage to stdout and exits 0; a wrong command prints one line that says what is wrong (`hide device needs a subcommand`, `unknown flag for hide ps: --x`, `--body is required and cannot be blank`), then that command's usage under `usage:`.
+A command that could not reach the core prints the same next step for a code whichever topic ran it (`request_next_action`), and its stderr line stays the bare code, which the spawn guard reads.
 
 Every `AgentView` includes `origin`, the spawner id for either mode and null for ordinary roots.
 Delegation derives origin from parent; handoff stores origin separately, and it grants no parent, subtree-close or end authority.
@@ -696,7 +698,7 @@ A row reads: the pane id on its machine, the agent's name and registration id, i
 A Conductor is named as one only while its pane runs the Conductor's session (the map's `present`), and a worker by its registration; when the mission record could not be read, the answer's `missions_unreadable` is true and the tree ends with a line that says so, rather than drawing no mission as if there were none.
 The state is the row's mark as every surface draws it ([status-model.md: The mark](status-model.md#the-mark)): `turn`, `going`, `waiting`, `done`, `unread`, `quiet`, `unknown` or `asleep`, and `disconnected` for every agent on a device that does not answer.
 A device's projects carry `@ <device>` on their line; its panes are the last ones Hide had from it while it does not answer.
-After the tree, `not in a pane` lists the live registrations no pane on screen holds (a sleeping agent, an older registration of a pane that now runs another session), and `--all` adds `ended`, the ended registrations.
+After the tree, `Agents not in a pane` lists the live registrations no pane on screen holds (a sleeping agent, an older registration of a pane that now runs another session), and `--all` adds `Ended agents`, the ended registrations.
 `--here` keeps every pane of the project of the pane it runs in, with its agents' delegated agents wherever they live (a pane of the project whose parent lives in another project is drawn in its own tab), and is refused `here_unavailable` from a caller with no pane in a project Hide shows.
 `--json` prints the same answer as one line in the `agent` envelope, `{"ok":true,"value":{"panes":[…],"agents":[…],"missions_unreadable":false}}`, flat rather than nested: each pane carries its machine, project, checkout, tab, `you`, and its agent with `parent_machine` and `parent_pane` for the nesting; its schema is the contract's `ps` answer.
 The tree uses box-drawing characters on every system: Rust writes UTF-8 to a pipe and UTF-16 to a Windows console, so no console Hide supports needs a fallback.

@@ -80,7 +80,10 @@ pub fn run(env: &Env, cli: &DeviceCli) -> Result<(), String> {
             let message = answer["next_action"].as_str().unwrap_or(&code).to_owned();
             (code, message)
         }
-        Err(code) => (code.clone(), code),
+        Err(code) => {
+            let message = crate::cli::request_next_action(&code).to_owned();
+            (code, message)
+        }
     };
     println!(
         "{}",
@@ -117,7 +120,9 @@ fn device_line(device: &Value) -> String {
     let text = |key: &str| device[key].as_str().unwrap_or_default();
     let helper = &device["helper"];
     let helper_state = match (helper["consent"].as_str(), helper["state"].as_str()) {
-        (Some("none" | "outdated"), _) => "waits for Allow and install in Settings › Devices",
+        (Some("none" | "outdated"), _) => {
+            "not allowed - choose Allow and install in Settings > Devices"
+        }
         (_, Some(state)) => state,
         _ => "unknown",
     };
@@ -178,7 +183,7 @@ mod tests {
         }));
         assert_eq!(
             line,
-            "studio  Studio  ssh studio  unavailable  helper waits for Allow and install in Settings › Devices\n"
+            "studio  Studio  ssh studio  unavailable  helper not allowed - choose Allow and install in Settings > Devices\n"
         );
     }
 }

@@ -474,9 +474,9 @@ A pane with no record, and a record of another session than the call's, gives ne
 
 The prompt hook adds the record's lines to the session context, at most three:
 
-- the plan's, `계획: 지금 <step> (n/m) · 다음 <step> · <N분 전 갱신>`, with the review's rule after it while the plan waits for review, or, when it was not updated for 30 minutes, the `hide plan node <key> --status done` command; a finished plan has none;
-- a mission worker's, `미션 <id> · 노드 <key> · 범위 <criteria or title> · 머지 금지 · 에이전트 띄우기 금지`, without `머지 금지` for a mission that goes through the merge;
-- a Conductor's, `미션 <done>/<nodes> · 일하는 중 <n> · 편지 <n>통 · 결정 기다림 <있음/없음>`.
+- the plan's, `Plan: now <step> (n/m) · next <step> · updated <N> min ago`, with the review's rule after it while the plan waits for review, or, when it was not updated for 30 minutes, the `hide plan node <key> --status done` command; a finished plan has none;
+- a mission worker's, `Mission <id> · node <key> · range <criteria or title> · no merging · no starting agents`, without `no merging` for a mission that goes through the merge;
+- a Conductor's, `Mission <done>/<nodes> · working <n> · letters <n> · decision waiting: <yes/no>`.
 
 The pre-tool hook reads only the record, after the project guardrails and before the spawn guard, and never asks the daemon; a tool call refused here is logged in the spawn guard's log as `plan.refused` with the rule, the runtime and the pane, never the command.
 It refuses three things and lets everything else run, reading and searching included:

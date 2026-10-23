@@ -154,9 +154,9 @@ pub fn read(home: &Path, pane_id: &str, session: Option<&str>) -> Option<PlanCon
 fn elapsed(since: u64, now: u64) -> String {
     let minutes = now.saturating_sub(since) / 60_000;
     match minutes {
-        0 => "방금 갱신".to_owned(),
-        1..=59 => format!("{minutes}분 전 갱신"),
-        _ => format!("{}시간 전 갱신", minutes / 60),
+        0 => "updated just now".to_owned(),
+        1..=59 => format!("updated {minutes} min ago"),
+        _ => format!("updated {} h ago", minutes / 60),
     }
 }
 
@@ -168,20 +168,20 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
     let mut lines = Vec::new();
     if let Some(plan) = context.plan.as_ref().filter(|plan| !plan.finished) {
         let mut line = format!(
-            "계획: 지금 {}",
+            "Plan: now {}",
             plan.current
                 .as_ref()
                 .map_or("-", |step| step.title.as_str())
         );
         line.push_str(&format!(" ({}/{})", plan.done, plan.total));
         if let Some(next) = &plan.next {
-            line.push_str(&format!(" · 다음 {}", next.title));
+            line.push_str(&format!(" · next {}", next.title));
         }
         line.push_str(&format!(" · {}", elapsed(plan.updated_at_unix_ms, now)));
         lines.push(line);
         if context.proposed() {
             lines.push(
-                "계획 검토 기다림: 운영자가 대화에서 답하기 전에는 파일 쓰기, git commit, git push가 막힌다. 승인하면 hide plan approve, 고치라면 파일 대신 hide plan set --json '<계획>' --ask로 다시 올리고, 하지 말라면 hide plan drop.".to_owned(),
+                "The plan waits for the operator's review: writing files, git commit and git push are blocked until the operator answers in the conversation. If they approve, run hide plan approve; if they ask for changes, send the revised plan with hide plan set --json '<plan>' --ask rather than a file; if they say not to, run hide plan drop.".to_owned(),
             );
         } else if now.saturating_sub(plan.updated_at_unix_ms) > STALE_AFTER_MS {
             let key = plan
@@ -189,33 +189,29 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
                 .as_ref()
                 .map_or("<key>", |step| step.key.as_str());
             lines.push(format!(
-                "끝낸 단계는 `hide plan node {key} --status done`, 하는 단계는 `--status working`으로 갱신한다."
+                "Mark a finished step with `hide plan node {key} --status done` and the step you are on with `--status working`."
             ));
         }
     }
     if let Some(work) = &context.mission {
         let mut line = format!(
-            "미션 {} · 노드 {} · 범위 {}",
+            "Mission {} · node {} · range {}",
             work.mission, work.node, work.range
         );
         if work.scope == "pr" {
-            line.push_str(" · 머지 금지");
+            line.push_str(" · no merging");
         }
-        line.push_str(" · 에이전트 띄우기 금지");
+        line.push_str(" · no starting agents");
         lines.push(line);
     }
     if let Some(conductor) = &context.conductor {
         lines.push(format!(
-            "미션 {}/{} · 일하는 중 {} · 편지 {}통 · 결정 기다림 {}",
+            "Mission {}/{} · working {} · letters {} · decision waiting: {}",
             conductor.done,
             conductor.nodes,
             conductor.working,
             conductor.letters,
-            if conductor.decision {
-                "있음"
-            } else {
-                "없음"
-            }
+            if conductor.decision { "yes" } else { "no" }
         ));
     }
     (!lines.is_empty()).then(|| lines.join("\n"))
@@ -246,7 +242,7 @@ impl Refused {
     pub fn reason(self) -> &'static str {
         match self {
             Self::ProposedPlan => {
-                "Not run: 계획 검토 기다림 · 운영자가 답한 뒤 hide plan approve. Reading and looking around still run; write, commit and push wait for the operator's answer. A revised plan goes up with hide plan set --json '<plan>' --ask."
+                "Not run: the plan is waiting for the operator's review (run hide plan approve once they answer). Reading and looking around still run; write, commit and push wait for the operator's answer. A revised plan goes up with hide plan set --json '<plan>' --ask."
             }
             Self::MissionMerge => {
                 "Not run: this mission goes up to pull requests, so its workers do not merge. Report the pull request to the Conductor; the operator merges."
@@ -445,7 +441,7 @@ mod tests {
                 mission: "m1".into(),
                 node: "core".into(),
                 scope: scope.into(),
-                range: "PR까지".into(),
+                range: "up to the PR".into(),
             }),
             ..PlanContext::default()
         };
@@ -468,12 +464,12 @@ mod tests {
         };
         assert_eq!(
             hint(&fresh, 5 * 60_000).unwrap(),
-            "계획: 지금 Core events (1/4) · 다음 Web map · 5분 전 갱신"
+            "Plan: now Core events (1/4) · next Web map · updated 5 min ago"
         );
         let stale = hint(&fresh, 31 * 60_000).unwrap();
         assert!(
             stale.ends_with(
-                "`hide plan node core --status done`, 하는 단계는 `--status working`으로 갱신한다."
+                "`hide plan node core --status done` and the step you are on with `--status working`."
             ),
             "{stale}"
         );

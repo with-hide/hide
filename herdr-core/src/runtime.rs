@@ -2029,7 +2029,7 @@ impl Runtime {
                     ),
                     persistence::UnrecognizedField::ConductorSettings => (
                         "ui_state.conductor_settings_unknown",
-                        "The stored Settings › Conductor was not recognized; the defaults were used",
+                        "The stored Settings > Conductor was not recognized; the defaults were used",
                     ),
                 })
                 .collect(),
