@@ -187,7 +187,7 @@ const ko = {
   "settings.notSaved": "저장하지 못했어요: {{reason}}",
   "settings.terminalText": "터미널 글자",
   "settings.terminalFontSize": "터미널 글자 크기",
-  "settings.terminalTextDescription": "터미널 하나만 바꾸려면 그 터미널에서 {{larger}}, {{smaller}}를 누르세요. 편집기 글자도 문서에서 같은 키로 바꿔요.",
+  "settings.terminalTextDescription": "터미널 하나만 바꾸려면 그 터미널에서 {{larger}}, {{smaller}} 키를 누르세요. 편집기 글자도 문서에서 같은 키로 바꿔요.",
   "settings.interfaceFontSize": "인터페이스 글자 크기",
   "settings.fontPoints": "{{size}} pt",
   "settings.idleAgents": "쉬고 있는 에이전트",
