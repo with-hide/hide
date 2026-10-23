@@ -3149,3 +3149,246 @@ fn a_linked_file_of_another_checkout_comes_back_after_a_restart() {
     focus_checkout(&mut restarted, "workspace:other", &other_checkout);
     assert!(labels(&mut restarted).concat().is_empty());
 }
+
+// PRD outside-path-in-hide: a file outside every checkout that the operator
+// clicked in the desktop window shows as an external display. The core holds
+// the desktop host's grant id, the file's name and its viewer, never a path,
+// and never stores it.
+
+const GRANT_A: &str = "0123456789abcdef0123456789abcdef";
+const GRANT_B: &str = "fedcba9876543210fedcba9876543210";
+
+fn external_open(runtime: &mut Runtime, payload: serde_json::Value) -> bool {
+    runtime.dispatch_json(&explorer_event("external_open", payload))
+}
+
+fn external_displays(runtime: &mut Runtime) -> Vec<ViewDisplaySnapshot> {
+    areas(&tree(runtime))
+        .into_iter()
+        .flat_map(|(_, _, displays)| displays)
+        .filter(|display| display.kind == crate::view_layout::DisplayKind::External)
+        .collect()
+}
+
+/// B1, B10, B12, B22: a granted file opens as one tab named by its file in
+/// the Workspace in front, holding no path; the same grant again focuses that
+/// tab and asks for a new read. The log of the open names the grant, its
+/// kind and the outcome, and nothing of the file.
+#[test]
+fn an_outside_file_opens_once_per_grant_and_its_log_names_no_file() {
+    let (mut runtime, checkout_id, directory) = views_runtime("external-open");
+    layout(&mut runtime, serde_json::json!({"tool": null}));
+    files(&directory, &["a.md"]);
+    open(
+        &mut runtime,
+        &checkout_id,
+        &directory.join("a.md"),
+        false,
+        false,
+    );
+    let workspace = serde_json::json!({"device_id": crate::node::TEST_NODE, "path": directory.to_string_lossy()});
+    let (opened, records) = crate::diagnostics::capture(|| {
+        external_open(
+            &mut runtime,
+            serde_json::json!({"grant": GRANT_A, "name": "shot.png", "kind": "image", "workspace": workspace, "request_id": "x1"}),
+        )
+    });
+    assert!(opened);
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert!(receipt(&runtime, "x1").ok);
+    let [shown] = external_displays(&mut runtime)
+        .try_into()
+        .expect("one outside file");
+    assert_eq!(
+        (
+            shown.label.as_str(),
+            shown.path.as_str(),
+            shown.url.as_deref(),
+            shown.state,
+            shown.tab_id.as_deref()
+        ),
+        ("shot.png", "", None, ViewDisplayState::Open, None)
+    );
+    let file = shown.external.clone().expect("its grant");
+    assert_eq!(
+        (file.grant.as_str(), file.kind),
+        (GRANT_A, crate::view_layout::ExternalKind::Image)
+    );
+    let [record] = records
+        .iter()
+        .filter(|record| record["kind"] == "external.open")
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("one open record");
+    assert_eq!(
+        record,
+        &serde_json::json!({"component": "view_areas", "kind": "external.open", "grant": GRANT_A, "file_kind": "image", "outcome": "placed"})
+    );
+    assert!(
+        !records
+            .iter()
+            .any(|record| record.to_string().contains("shot.png")),
+        "{records:?}"
+    );
+    assert_eq!(runtime.snapshot.external_grants, vec![GRANT_A.to_owned()]);
+    assert!(
+        runtime.snapshot.browser_views.is_empty(),
+        "an image is not a page"
+    );
+    // Pages are listed for the checkouts of a live Herdr.
+    runtime.snapshot.status.herdr.state = "connected".to_owned();
+    assert!(external_open(
+        &mut runtime,
+        serde_json::json!({"grant": GRANT_B, "name": "preview.html", "kind": "html", "workspace": workspace}),
+    ));
+    let page = external_displays(&mut runtime)
+        .into_iter()
+        .find(|display| display.label == "preview.html")
+        .expect("the HTML file");
+    assert_eq!(
+        runtime
+            .snapshot
+            .browser_views
+            .iter()
+            .map(|row| row.view_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![page.id.as_str()],
+        "an HTML file is a page the host keeps alive while hidden"
+    );
+    assert!(act(
+        &mut runtime,
+        serde_json::json!({"action": "close", "display_id": page.id})
+    ));
+
+    // The checkout's own file comes forward again; a second click on the same
+    // outside file brings its one tab back and reads it again.
+    let a = display(&mut runtime, 0, "a.md");
+    assert!(act(
+        &mut runtime,
+        serde_json::json!({"action": "focus", "display_id": a})
+    ));
+    assert!(external_open(
+        &mut runtime,
+        serde_json::json!({"grant": GRANT_A, "name": "shot.png", "kind": "image", "workspace": workspace}),
+    ));
+    let [again] = external_displays(&mut runtime)
+        .try_into()
+        .expect("still one tab");
+    assert_eq!(again.id, shown.id);
+    assert!(again.load > shown.load, "a second click reads it again");
+    assert_eq!(
+        areas(&tree(&mut runtime))[0].1.as_deref(),
+        Some(shown.id.as_str())
+    );
+    assert_eq!(labels(&mut runtime), vec![vec!["a.md", "shot.png"]]);
+}
+
+/// A grant that is not the host's shape, or a name that is a path, is
+/// refused and opens nothing.
+#[test]
+fn an_outside_file_needs_a_host_grant_and_a_plain_name() {
+    let (mut runtime, _, directory) = views_runtime("external-refused");
+    let workspace = serde_json::json!({"device_id": crate::node::TEST_NODE, "path": directory.to_string_lossy()});
+    for (grant, name) in [
+        ("not-a-grant", "a.txt"),
+        (GRANT_A, "/tmp/a.txt"),
+        (GRANT_A, ""),
+    ] {
+        assert!(external_open(
+            &mut runtime,
+            serde_json::json!({"grant": grant, "name": name, "kind": "text", "workspace": workspace}),
+        ));
+        assert_eq!(
+            runtime
+                .snapshot
+                .status
+                .last_error
+                .as_ref()
+                .map(|error| error.kind.as_str()),
+            Some("external.open_refused"),
+            "{grant} {name}"
+        );
+        assert!(external_displays(&mut runtime).is_empty());
+    }
+}
+
+/// B3, B14, B15: an outside HTML file is a page the host keeps alive; the
+/// grants list names every outside tab, so closing one ends its grant; the
+/// stored file never carries one, and a restart shows none.
+#[test]
+fn an_outside_file_is_never_stored_and_a_close_ends_its_grant() {
+    let (runtime, _, directory) = strip_checkout("external-restart");
+    let (_views, state) = views_path("external-restart");
+    let mut runtime = with_views(runtime, &state);
+    let workspace = serde_json::json!({"device_id": crate::node::TEST_NODE, "path": directory.to_string_lossy()});
+    for (grant, name, kind) in [
+        (GRANT_A, "preview.html", "html"),
+        (GRANT_B, "notes.txt", "text"),
+    ] {
+        assert!(external_open(
+            &mut runtime,
+            serde_json::json!({"grant": grant, "name": name, "kind": kind, "workspace": workspace}),
+        ));
+    }
+    let shown = external_displays(&mut runtime);
+    assert_eq!(shown.len(), 2);
+    let mut grants = runtime.snapshot.external_grants.clone();
+    grants.sort();
+    assert_eq!(grants, vec![GRANT_A.to_owned(), GRANT_B.to_owned()]);
+    let stored = std::fs::read_to_string(&state).expect("the views file");
+    assert!(
+        !stored.contains(GRANT_A)
+            && !stored.contains("notes.txt")
+            && !stored.contains("\"external\""),
+        "{stored}"
+    );
+
+    assert!(act(
+        &mut runtime,
+        serde_json::json!({"action": "close", "display_id": shown[1].id})
+    ));
+    assert_eq!(runtime.snapshot.external_grants, vec![GRANT_A.to_owned()]);
+    drop(runtime);
+
+    let (restarted, _) = tab_order_runtime(&directory.to_string_lossy());
+    let mut restarted = with_views(restarted, &state);
+    assert!(external_displays(&mut restarted).is_empty());
+    assert!(restarted.snapshot.external_grants.is_empty());
+}
+
+/// D-07: the desktop host's grants when its window attaches. A tab whose
+/// grant the host no longer holds goes, in every Workspace; the rest stay.
+#[test]
+fn a_tab_whose_grant_the_host_lost_goes_when_the_host_says_so() {
+    let (mut runtime, _, directory) = views_runtime("external-grants");
+    let workspace = serde_json::json!({"device_id": crate::node::TEST_NODE, "path": directory.to_string_lossy()});
+    for (grant, name) in [(GRANT_A, "a.png"), (GRANT_B, "b.png")] {
+        assert!(external_open(
+            &mut runtime,
+            serde_json::json!({"grant": grant, "name": name, "kind": "image", "workspace": workspace}),
+        ));
+    }
+    assert!(
+        !runtime.dispatch_json(&explorer_event(
+            "external_grants",
+            serde_json::json!({"live": [GRANT_A, GRANT_B]}),
+        )),
+        "both grants live: nothing changes"
+    );
+    assert!(runtime.dispatch_json(&explorer_event(
+        "external_grants",
+        serde_json::json!({"live": [GRANT_B]}),
+    )));
+    assert_eq!(
+        external_displays(&mut runtime)
+            .iter()
+            .map(|display| display.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["b.png"]
+    );
+    assert!(runtime.dispatch_json(&explorer_event(
+        "external_grants",
+        serde_json::json!({"live": []})
+    )));
+    assert!(external_displays(&mut runtime).is_empty());
+}

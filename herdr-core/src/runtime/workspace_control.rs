@@ -874,7 +874,11 @@ impl Runtime {
                             DisplayKind::File => "file",
                             DisplayKind::Diff => "diff",
                             DisplayKind::Browser => "browser",
+                            DisplayKind::External => "external",
                         },
+                        // An outside file's path stays in the operator's
+                        // window; an agent reads that a View is there and
+                        // nothing of the file (PRD outside-path-in-hide D-09).
                         target: display.url.as_ref().unwrap_or(&display.path).clone(),
                         selected: area.active.as_deref() == Some(display.id.as_str()),
                         active_area: layout.active_area().id == area.id,

@@ -5,6 +5,8 @@ import { REGISTRY, type Command } from "../../../web/src/shortcuts";
 import { BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { browserPartition } from "./browserSync";
+import { session } from "electron";
+import { ExternalFiles, UNNAMED_GRANT_GRACE_MS, externalPartition } from "./externalFiles";
 import type { HostLog } from "./log";
 
 const english = initializeInterfaceI18n("en").getFixedT(null, "translation");
@@ -21,7 +23,7 @@ describe("native browser load generations", () => {
     try {
       let answer!: (route: ResolvedPage) => void;
       const resolve = vi.fn(() => new Promise<ResolvedPage>((done) => { answer = done; }));
-      const subject = new BrowserViews({ event: vi.fn() } as unknown as HostLog, () => true, resolve, vi.fn(), vi.fn(), () => english);
+      const subject = new BrowserViews({ event: vi.fn() } as unknown as HostLog, () => true, resolve, vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()));
       const workspace = "local\u0000/checkout";
       const requested = "file:///var/checkout/manual.html";
       const canonical = "file:///private/var/checkout/manual.html";
@@ -55,7 +57,7 @@ describe("native browser load generations", () => {
 
 describe("native browser CDP inventory", () => {
   it("stops notifying a CDP owner that leaves while it is told a page became ineligible", () => {
-    const subject = new BrowserViews({ event: vi.fn() } as unknown as HostLog, () => true, vi.fn(), vi.fn(), vi.fn(), () => english);
+    const subject = new BrowserViews({ event: vi.fn() } as unknown as HostLog, () => true, vi.fn(), vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()));
     const told: unknown[] = [];
     // The gateway closes its session on the first retirement, and with it its observation.
     const stop = subject.observeCdp((retirement) => { told.push(retirement); stop(); });
@@ -68,11 +70,37 @@ describe("native browser CDP inventory", () => {
   });
 });
 
+describe("outside file page sessions", () => {
+  it("clears a released slot's storage and cache before handing it out again, and configures its session once (PRD outside-path-in-hide B4)", async () => {
+    let now = 0;
+    const externals = new ExternalFiles(vi.fn(), () => now);
+    const subject = new BrowserViews({ event: vi.fn() } as unknown as HostLog, () => true, vi.fn(), vi.fn(), vi.fn(), () => english, externals);
+    let cleared!: () => void;
+    const pageSession = { clearStorageData: vi.fn(() => new Promise<void>((done) => { cleared = done; })), clearCache: vi.fn(() => Promise.resolve()) };
+    Object.assign(session, { fromPartition: vi.fn(() => pageSession) });
+    const first = externals.grant("/outside/a/index.html", "html")!;
+    (Reflect.get(subject, "configuredSessions") as Set<string>).add(externalPartition(0));
+    now += UNNAMED_GRANT_GRACE_MS;
+    Reflect.get(subject, "keepGrants").call(subject, new Set());
+    expect(pageSession.clearStorageData).toHaveBeenCalledOnce();
+    expect(pageSession.clearCache).toHaveBeenCalledOnce();
+    // Its handlers stay, so the next page in the slot adds none.
+    expect((Reflect.get(subject, "configuredSessions") as Set<string>).has(externalPartition(0))).toBe(true);
+    // Until the clear lands the slot is not handed out again.
+    const second = externals.grant("/outside/b/index.html", "html")!;
+    expect(externals.partition(second.id)).toBe(externalPartition(1));
+    cleared();
+    await new Promise((done) => setImmediate(done));
+    expect(externals.partition(externals.grant("/outside/c/index.html", "html")!.id)).toBe(externalPartition(0));
+    expect(externals.partition(first.id)).toBeNull();
+  });
+});
+
 function candidate() {
   const send = vi.fn();
   const shellFocus = vi.fn();
   let windowFocused = true;
-  const subject = new BrowserViews({ event: vi.fn() } as unknown as HostLog, () => true, vi.fn(), vi.fn(), vi.fn(), () => english);
+  const subject = new BrowserViews({ event: vi.fn() } as unknown as HostLog, () => true, vi.fn(), vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()));
   const shellContents = Object.assign(new EventEmitter(), { isDestroyed: () => false, send, focus: shellFocus });
   const window = Object.assign(new EventEmitter(), { isFocused: () => windowFocused, webContents: shellContents });
   subject.attach(window as never);

@@ -678,6 +678,15 @@ fn settle(
         view.detail_width = view.detail_width.map(clamp_width);
         view.explorer_width = view.explorer_width.map(clamp_width);
         view.panel_width = view.panel_width.map(clamp_width);
+        // No build writes an outside file's tab; one in the file has no grant
+        // behind it.
+        let external = view.layout.remove_external(|_| false);
+        if external > 0 {
+            repairs.push(format!(
+                "{} on {}: {external} outside-file views had no grant",
+                view.path, view.device_id
+            ));
+        }
         for note in view
             .layout
             .repair()
@@ -714,9 +723,30 @@ pub fn save(path: &Path, views: &WorkspaceViews) -> Result<(), String> {
         .ok_or_else(|| "Workspace view state path has no parent directory".to_owned())?;
     hide_platform::fs::private::create_dir_all(parent)
         .map_err(|_| "Workspace view state directory could not be prepared".to_owned())?;
+    // An outside file's tab lives as long as the desktop host's grant, which
+    // ends with the app: it is never written (PRD outside-path-in-hide D-07).
+    let kept: Vec<WorkspaceView>;
+    let workspaces = if views.workspaces.iter().any(|view| {
+        view.layout
+            .displays()
+            .any(|display| display.kind == crate::view_layout::DisplayKind::External)
+    }) {
+        kept = views
+            .workspaces
+            .iter()
+            .cloned()
+            .map(|mut view| {
+                view.layout.remove_external(|_| false);
+                view
+            })
+            .collect();
+        &kept[..]
+    } else {
+        &views.workspaces[..]
+    };
     let stored = StoredWorkspaceViews {
         schema_version: SCHEMA_VERSION,
-        workspaces: &views.workspaces,
+        workspaces,
     };
     let bytes = serde_json::to_vec_pretty(&stored)
         .map_err(|_| "Workspace view state could not be encoded".to_owned())?;
