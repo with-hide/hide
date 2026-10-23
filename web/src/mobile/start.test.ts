@@ -39,7 +39,7 @@ describe("selectionOf", () => {
   it("names the core's machine as its system does, in the phone's language", () => {
     const home = catalog.targets[0]!;
     expect(targetText(english, home, "windows x86_64")).toBe("This PC · Home");
-    expect(targetText(korean, home, "windows x86_64")).toBe("내 PC · 홈");
+    expect(targetText(korean, home, "windows x86_64")).toBe("이 PC · 홈");
     expect(targetText(korean, home, "linux x86_64")).toBe("이 컴퓨터 · 홈");
     // A registered device keeps the name it was registered under.
     expect(targetText(korean, catalog.targets[2]!, "windows x86_64")).toBe("mini · 홈");
