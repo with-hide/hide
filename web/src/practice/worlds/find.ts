@@ -87,6 +87,12 @@ function loginMatch(query: string): string | null {
   return said ? said[1] : LOGIN_TITLE.toLowerCase().includes(wanted) ? LOGIN_TITLE : null;
 }
 
+/** Whether `query` is whole words of one of `texts`, as a learner types a word they remember rather than its first letters. */
+function wholeWords(query: string, texts: readonly string[]): boolean {
+  const words = new RegExp(`(^|\\W)${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|\\W)`);
+  return texts.some((text) => words.test(text.toLowerCase()));
+}
+
 /**
  * Whether ⌘K's last query finds yesterday's session by whole words of it,
  * whichever ones the learner typed: `clock` does, and so does `login`, but not
@@ -94,9 +100,13 @@ function loginMatch(query: string): string | null {
  */
 export const findsLogin = (model: FindModel) => {
   const wanted = model.query?.trim().toLowerCase();
-  if (!wanted || loginMatch(wanted) === null) return false;
-  const words = new RegExp(`(^|\\W)${wanted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|\\W)`);
-  return [LOGIN_TITLE, ...LOGIN_REQUESTS.map(([, text]) => text)].some((text) => words.test(text.toLowerCase()));
+  return !!wanted && loginMatch(wanted) !== null && wholeWords(wanted, [LOGIN_TITLE, ...LOGIN_REQUESTS.map(([, text]) => text)]);
+};
+
+/** Whether ⌘K's last query lists the pull request, as the shell lists one: by its number, with or without `#`, or by whole words of its title. */
+export const findsPr = (model: FindModel) => {
+  const wanted = model.query?.trim().toLowerCase();
+  return !!wanted && (wanted === `#${PR_NUMBER}` || wanted === String(PR_NUMBER) || wholeWords(wanted, [PR_TITLE]));
 };
 
 /** ⌘K's session search: the words of yesterday's session match a query its title or requests hold. */

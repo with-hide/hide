@@ -2,7 +2,7 @@
 // of it, opening the pull request it made, and keeping a task to look at again.
 
 import { chapter } from "../chapter";
-import { FIND_WORLD, findsLogin, LOGIN_SESSION, PR_NUMBER, PR_ROW, shownDetail, type FindModel } from "../worlds/find";
+import { FIND_WORLD, findsLogin, findsPr, LOGIN_SESSION, PR_NUMBER, shownDetail, type FindModel } from "../worlds/find";
 
 const FIELD = "[data-palette-input]";
 const LOGIN = { type: { input: FIELD, text: "login" } };
@@ -23,8 +23,8 @@ export default chapter<FindModel>({
     { id: "type", quest: true, target: "[data-palette]", side: "left", command: "search", gesture: LOGIN, done: findsLogin },
     { id: "pick", target: "[data-palette]", side: "left", command: "search", gesture: LOGIN, done: (model) => { const top = shownDetail(model); return top?.kind === "record" && top.session.session_id === LOGIN_SESSION.session_id; } },
     { id: "record", target: '[data-lane="detail"]', side: "left" },
-    // The shell filters ⌘K's pull requests itself, so the step is done once it lists this one, by number or by title.
-    { id: "pr", quest: true, target: "[data-agent-area]", side: "inside", command: "search", gesture: PR, shown: PR_ROW },
+    // By number or by a word of its title, as ⌘K lists a pull request.
+    { id: "pr", quest: true, target: "[data-agent-area]", side: "inside", command: "search", gesture: PR, done: findsPr },
     { id: "prPick", target: "[data-palette]", side: "left", command: "search", gesture: PR, done: (model) => { const top = shownDetail(model); return top?.kind === "pull_request" && top.number === PR_NUMBER; } },
     { id: "card", target: '[data-lane="detail"]', side: "left" },
     { id: "star", quest: true, target: '[data-task-row="copy"]', side: "right", gesture: { menu: { at: '[data-task-row="copy"]', path: ['[data-menu-item="revisit"]'] } }, done: (model) => model.starred.includes("copy") },
