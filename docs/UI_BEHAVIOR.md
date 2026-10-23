@@ -92,6 +92,7 @@ Memory is a tool of its own beside the Project tool, not a tab inside it, so wha
 A second short rule between Memory and Explorer marks where the Project's tools end and the checkout's begin (PRD work-tab-pr-lens D-37); it is derived from each tool's scope, so a tool of the other scope moves it.
 A rail button is drawn pressed, with a primary bar at the rail's edge, while its column shows it: a tool icon while the tool column shows that tool, the documents or 보기 button while the viewing column draws it.
 Pressing a tool icon opens the tool column on that tool, or swaps the tool it shows; pressing the pressed one closes the tool column, and the viewing column stays (B14).
+A closed lane that a tool icon, an open, a reveal or the 보기 slot opens shows that one column alone, the other closed, whatever the lane held when ⌘E closed it; only ⌘E brings back both columns (operator decision 2026-10-23, replacing the mockup's reopen of the other column).
 Pressing the documents or 보기 button brings it to the front of the viewing column; pressed while it is in front, it folds the viewing column, and pressing it again brings the same content back (B11).
 The Project icon is a briefcase and the Explorer icon an open folder, so neither repeats the Overview's dashboard mark or the other's folder.
 The Project icon carries a warning-coloured number counting its project's 할 일, no number at 0, its hint ending in it, such as `할 일 2`; worktrees to remove, memory to move into documents and bots' pull requests are never in it (B38).

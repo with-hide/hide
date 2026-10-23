@@ -418,7 +418,8 @@ export function createActions(send: DispatchFn) {
   /**
    * Shows one tool in the tool column (B3, B14): an unpinned lane comes up,
    * a stacked lane draws the tool, and nothing is sent when the column
-   * already holds it. The viewing column is left as it is.
+   * already holds it. An open lane's viewing column is left as it is; a
+   * closed one the core opens on the tool alone (B15).
    */
   const showTool = (tool: Tool) => {
     const view = workspaceViewOf(rest());

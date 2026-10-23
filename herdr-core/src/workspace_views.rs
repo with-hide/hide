@@ -300,13 +300,30 @@ impl WorkspaceView {
         self.device_id == device_id && self.path == path
     }
 
-    /// Opens the lane on a tool: the tool column shows it, and a closed
-    /// lane opens with its viewing column back as it was (B14, lane-two-
-    /// columns mockup: opening something in a closed lane brings the other
-    /// column back as it was before the close).
-    pub fn show_tool(&mut self, tool: Tool) {
-        self.tool = Some(tool);
+    /// Opens a closed lane on the column a call brings forward, the other
+    /// column closed: a tool pressed, a file opened or the 보기 slot called
+    /// into a lane ⌘E closed shows that alone, and only ⌘E's `open: true`
+    /// brings back the columns it closed with (B15; operator decision
+    /// 2026-10-23, replacing the mockup's reopen of the other column).
+    /// Whether the lane was closed.
+    pub fn open_on(&mut self, side: crate::model::LaneCallSide) -> bool {
+        if self.open {
+            return false;
+        }
         self.open = true;
+        match side {
+            crate::model::LaneCallSide::View => self.tool = None,
+            crate::model::LaneCallSide::Tool => self.documents = false,
+        }
+        true
+    }
+
+    /// Shows a tool in the tool column (B14), a closed lane opening on it
+    /// alone (`open_on`). Whether the lane was closed.
+    pub fn show_tool(&mut self, tool: Tool) -> bool {
+        let opened = self.open_on(crate::model::LaneCallSide::Tool);
+        self.tool = Some(tool);
+        opened
     }
 
     /// Closes the tool column alone (B14); the viewing column stays.
@@ -314,11 +331,11 @@ impl WorkspaceView {
         self.tool = None;
     }
 
-    /// Shows the documents in the viewing column and opens a closed lane
-    /// (B6, B11).
+    /// Shows the documents in the viewing column (B6, B11), a closed lane
+    /// opening on them alone (`open_on`).
     pub fn show_documents(&mut self) {
+        self.open_on(crate::model::LaneCallSide::View);
         self.documents = true;
-        self.open = true;
     }
 
     /// Whether anything of the Workspace's own is drawn while the lane is
@@ -814,8 +831,9 @@ mod tests {
     }
 
     /// B5, B12, B14, B15: the documents count as a column only with a view to
-    /// show, a tool closes alone, and a close keeps both columns' shape for
-    /// the reopen.
+    /// show, a tool closes alone, a close keeps both columns' shape for ⌘E's
+    /// reopen, and a tool or the documents called into a closed lane open
+    /// their own column alone (operator decision 2026-10-23).
     #[test]
     fn the_columns_open_close_and_keep_their_shape_through_a_close() {
         let mut view = WorkspaceView::new("local", "/repo");
@@ -836,11 +854,35 @@ mod tests {
         view.open = false;
         assert_eq!(lane(&view), (false, true, Some(Tool::Project), false));
         assert!(!view.shows_explorer(), "a closed lane draws no tool");
-        view.show_tool(Tool::Project);
+        view.open = true;
         assert_eq!(
             lane(&view),
             (true, true, Some(Tool::Project), false),
-            "the reopen brings the documents back beside the tool"
+            "⌘E's reopen brings both columns back"
+        );
+        view.open = false;
+        assert!(
+            view.show_tool(Tool::Memory),
+            "the tool opened a closed lane"
+        );
+        assert_eq!(
+            lane(&view),
+            (true, false, Some(Tool::Memory), false),
+            "a tool opens a closed lane on itself alone"
+        );
+        assert!(!view.show_tool(Tool::Changes), "the lane was already open");
+        view.show_documents();
+        assert_eq!(
+            lane(&view),
+            (true, true, Some(Tool::Changes), false),
+            "the documents join an open lane beside its tool"
+        );
+        view.open = false;
+        view.show_documents();
+        assert_eq!(
+            lane(&view),
+            (true, true, None, false),
+            "the documents open a closed lane on themselves alone"
         );
     }
 

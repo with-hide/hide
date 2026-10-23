@@ -225,9 +225,9 @@ impl Runtime {
 
     /// The one way the slot comes forward, whatever opened it (a card, a
     /// record, the map, ← or the rail's button): the front Workspace's lane
-    /// opens when it was closed, its columns as they were (lane-two-columns
-    /// B15), and the call is numbered as the viewing column's, so a stacked
-    /// lane draws the slot over its tool (B9, B19).
+    /// opens when it was closed, on the viewing column alone (`open_on`),
+    /// and the call is numbered as the viewing column's, so a stacked lane
+    /// draws the slot over its tool (B9, B19).
     fn call_front_lane(&mut self) {
         let Some(key) = self.front_workspace_key() else {
             return;
@@ -236,8 +236,7 @@ impl Runtime {
             return;
         };
         let entry = store.views.entry(&key.0, &key.1);
-        let was_closed = !entry.open;
-        entry.open = true;
+        let was_closed = entry.open_on(crate::model::LaneCallSide::View);
         store.call_lane(&key, crate::model::LaneCallSide::View);
         if was_closed {
             self.persist_workspace_views();

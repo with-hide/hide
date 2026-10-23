@@ -677,15 +677,28 @@ impl Runtime {
     pub(super) fn show_project_memory_at(&mut self, key: &WorkspaceKey, workspace: String) {
         if let Some(store) = self.workspace_views.as_mut() {
             let entry = store.views.entry(&key.0, &key.1);
-            let before = (entry.open, entry.tool);
-            entry.show_tool(Tool::Memory);
-            let changed = before != (entry.open, entry.tool);
+            let before = (entry.open, entry.documents, entry.tool);
+            let opened = entry.show_tool(Tool::Memory);
+            let changed = before != (entry.open, entry.documents, entry.tool);
             store.call_lane(key, LaneCallSide::Tool);
             if changed {
                 self.persist_workspace_views();
             }
+            if opened {
+                self.leave_detail_at(key);
+            }
         }
         self.open_project_memory(Some(workspace));
+    }
+
+    /// A tool opened `key`'s closed lane on itself alone (`open_on`), so the
+    /// window's 보기 slot, which ⌘E's close left shown, stops being drawn
+    /// there and stays on the rail to come back to. The slot is the
+    /// window's, so only the lane in front gives way.
+    fn leave_detail_at(&mut self, key: &WorkspaceKey) {
+        if self.front_workspace_key().as_ref() == Some(key) {
+            self.leave_detail();
+        }
     }
 
     /// The device refused the request, or its answer was lost: a later move
@@ -714,10 +727,13 @@ impl Runtime {
         };
         let entry = store.views.entry(&key.0, &key.1);
         let before = (entry.open, entry.documents, entry.tool);
-        match intent {
-            AreaIntent::Documents => entry.show_documents(),
+        let tool_opened = match intent {
+            AreaIntent::Documents => {
+                entry.show_documents();
+                false
+            }
             AreaIntent::Explorer => entry.show_tool(Tool::Explorer),
-        }
+        };
         let changed = before != (entry.open, entry.documents, entry.tool);
         store.call_lane(
             key,
@@ -734,8 +750,8 @@ impl Runtime {
         // sidebar-task-lens B49, lane-two-columns B10). The slot is the
         // window's, so only the lane in front gives way: an open in a
         // Workspace behind it leaves the card or record the operator reads.
-        if intent == AreaIntent::Documents && self.front_workspace_key().as_ref() == Some(key) {
-            self.leave_detail();
+        if intent == AreaIntent::Documents || tool_opened {
+            self.leave_detail_at(key);
         }
     }
 
@@ -801,8 +817,10 @@ impl Runtime {
         let store = self.workspace_views.as_mut().expect("checked above");
         let entry = store.views.entry(&key.0, &key.1);
         let before = entry.clone();
+        // Whether a tool opened the closed lane on itself alone (`open_on`).
+        let mut tool_opened = false;
         match tool {
-            Some(Some(tool)) => entry.show_tool(tool),
+            Some(Some(tool)) => tool_opened = entry.show_tool(tool),
             Some(None) => entry.close_tool(),
             None => {}
         }
@@ -816,7 +834,7 @@ impl Runtime {
         }
         // A reveal is the Explorer's: the tool column shows it.
         if payload.reveal.is_some() {
-            entry.show_tool(Tool::Explorer);
+            tool_opened |= entry.show_tool(Tool::Explorer);
         }
         match payload.open {
             Some(false) => entry.open = false,
@@ -864,8 +882,9 @@ impl Runtime {
         }
         // The documents brought in front stand before the 보기 slot, which
         // stays on the rail (B10, B11); a lane closed whole keeps the slot
-        // shown, so ⌘E brings it back (B15).
-        let leaves_detail = payload.documents == Some(true);
+        // shown, so ⌘E brings it back (B15), and a tool that opens it
+        // instead stands alone (`leave_detail_at`).
+        let leaves_detail = payload.documents == Some(true) || tool_opened;
         let width_request_changed = if payload.document_width.is_some()
             || payload.detail_width.is_some()
             || payload.explorer_width.is_some()
