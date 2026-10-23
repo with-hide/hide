@@ -49,7 +49,7 @@ function resting(row: AgentRow): AgentRow {
   const state: AgentState = {
     ...row.state,
     working: false, chip_tone: { kind: "subtle", read: true }, mark_tone: { kind: "subtle", read: true },
-    bucket: "resting", attention_rank: 4, search_tone: "muted", subtree: "quiet", link: "idle", link_rank: 2, verb: "idle", tree_rank: 4,
+    bucket: "resting", attention_rank: 4, search_tone: "muted", subtree: "quiet", link: "idle", link_rank: 2, verb: "idle", tree_rank: 3,
     session: { group: "idle", line: null, unfinished: false },
   };
   return { ...row, state, group: "seen", mark: "quiet", status_code: "idle", activity: "idle", emphasized: false };
@@ -66,7 +66,7 @@ function reviewing(row: AgentRow, subject: AskSubject, since: number): AgentRow 
     ...row.state,
     attention: true, needs_you: true, title_emphasized: true, asking: true, working: false,
     chip_tone: tone("warning"), mark_tone: tone("warning"), bucket: "turn", attention_rank: 1, link_rank: 0, search_tone: "attention", subtree: "waiting", link: "question",
-    verb: "answer", tree_rank: 0, request_since: since,
+    verb: "answer", request_todo: true, tree_rank: 0, request_since: since,
     session: { group: "needs_you", line: null, unfinished: false },
     ask: { verb: "answer", what: null, more: 0, subject },
     line: { text: "", mode: "request", tone: tone("warning"), subject },
