@@ -36,6 +36,12 @@ export type PracticeStep<M = unknown> = {
   gesture?: { click: true } | { drag: PracticeDrag } | { type: PracticeTyping } | { menu: PracticeMenu };
   /** Done when the world says so; a step without it is a look, done when the learner presses on. */
   done?: (model: M) => boolean;
+  /**
+   * Done once this selector is on screen: a card, a popover or a page the
+   * shell opens with no core event, so the world cannot say so. Once done it
+   * stays done, however the learner closes it afterwards.
+   */
+  shown?: string;
 };
 
 export type PracticeChapter<M = unknown> = {

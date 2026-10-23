@@ -7,7 +7,7 @@ import { compile } from 'json-schema-to-typescript';
 // frames that cross the socket. A snapshot section the contract declares is a
 // $def no frame references, so each one the web reads is named here and
 // emitted beside the root, with the $defs it refers to.
-const SNAPSHOT_DEFS = ['usageSnapshot', 'usagePreferences', 'usagePinSetPayload', 'usageHiddenSetPayload', 'uiStateUsageHints', 'focusCheckoutPayload', 'interfaceLanguageSetPayload', 'agentLogoMode', 'agentLogoModeSetPayload', 'colorThemeSetPayload', 'terminalFrame', 'agentNotice', 'desktopNoticesPayload'];
+const SNAPSHOT_DEFS = ['usageSnapshot', 'usagePreferences', 'usagePinSetPayload', 'usageHiddenSetPayload', 'uiStateUsageHints', 'focusCheckoutPayload', 'interfaceLanguageSetPayload', 'agentLogoMode', 'agentLogoModeSetPayload', 'paneTurnRowMode', 'paneTurnRowModeSetPayload', 'colorThemeSetPayload', 'terminalFrame', 'agentNotice', 'desktopNoticesPayload'];
 
 const root = path.resolve(process.cwd(), '..');
 const schema = JSON.parse(fs.readFileSync(path.join(root, 'contracts/hided-ws.schema.json'), 'utf8'));

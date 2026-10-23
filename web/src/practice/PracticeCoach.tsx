@@ -248,6 +248,9 @@ type Props = {
 /** How long the coach waits before playing the next step it replays, so the learner sees where they are going. */
 const REPLAY_MS = 120;
 
+/** Whether a step waits for something to happen, rather than being a look the learner presses on from. */
+const acts = (step: PracticeStep) => !!(step.done || step.shown);
+
 export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, onRestart, onHub }: Props) {
   const { t } = useInterfaceTranslation();
   const say = (key: string, values?: Record<string, unknown>) => t(key as MessageKey, values as never) as string;
@@ -291,6 +294,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     let frame = requestAnimationFrame(function follow() {
       const marked = rectOf(step.target);
       setRing((before) => (same(before, marked) ? before : marked));
+      if (step.shown && rectOf(step.shown)) setIndex((value) => (value === index ? value + 1 : value));
       setZones((before) => {
         const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
         return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
@@ -304,7 +308,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
       frame = requestAnimationFrame(follow);
     });
     return () => cancelAnimationFrame(frame);
-  }, [chapter.world.examples, step]);
+  }, [chapter.world.examples, index, step]);
 
   const advance = useCallback(() => {
     if (!last) return setIndex((value) => value + 1);
@@ -325,13 +329,13 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
 
   const perform = useCallback(() => {
     if (playing.current === step) return;
-    if (!step.done) return advance();
+    if (!acts(step)) return advance();
     // A field the step types into is opened first by the step's command: ⌘K, then the words.
     if (step.gesture && "type" in step.gesture && "input" in step.gesture.type && !document.querySelector(step.gesture.type.input) && step.command) return pressCommand(step.command);
     if (step.gesture && "type" in step.gesture) return play(typeInto(step.gesture.type));
     if (step.gesture && "menu" in step.gesture) return play(chooseFromMenu(step.gesture.menu, setHand));
     if (step.gesture && "drag" in step.gesture) return dragPane(step.gesture.drag, setHand);
-    if (step.gesture && "click" in step.gesture) return document.querySelector<HTMLElement>(step.target ?? "")?.click();
+    if (step.gesture && "click" in step.gesture) return pressTarget(step.target);
     if (pressed) return pressTarget(step.target);
     if (step.command) pressCommand(step.command);
   }, [advance, play, pressed, step]);
@@ -342,7 +346,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     return () => window.clearTimeout(timer);
   }, [index, perform, resume]);
 
-  const back = index > 0 && !step.done && !chapter.steps[index - 1]!.done;
+  const back = index > 0 && !acts(step) && !acts(chapter.steps[index - 1]!);
 
   // ⏎ and → perform the step, ← goes back over a look; every other key reaches the shell untouched,
   // and while a palette the shell opened is up, every key is the palette's.
@@ -352,7 +356,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
       // A step that types into the palette's field keeps ⏎: the palette's own ⏎ would open its first row.
       const typesInPalette = step.gesture && "type" in step.gesture && "input" in step.gesture.type;
       if (useUiStore.getState().overlay !== "none" && !(typesInPalette && event.key === "Enter")) return;
-      if (event.key === "Enter" || (event.key === "ArrowRight" && !step.done)) {
+      if (event.key === "Enter" || (event.key === "ArrowRight" && !acts(step))) {
         event.preventDefault();
         event.stopPropagation();
         perform();
@@ -373,7 +377,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     : step.gesture && "drag" in step.gesture ? say("practice.via.drag")
     : step.gesture && "type" in step.gesture ? say("input" in step.gesture.type ? "practice.via.typeField" : "practice.via.type")
     : step.gesture && "menu" in step.gesture ? say("practice.via.menu") : null;
-  const go = last ? (next ? say("practice.toChapter", { number: next.number }) : say("practice.toHub")) : step.done ? say("practice.try") : say("practice.next");
+  const go = last ? (next ? say("practice.toChapter", { number: next.number }) : say("practice.toHub")) : acts(step) ? say("practice.try") : say("practice.next");
   const place = besidePalette(bubblePlace(ring, step.side, size), palette ? paletteBox : null, size);
   const title = say(`practice.${chapter.id}.title`);
 
