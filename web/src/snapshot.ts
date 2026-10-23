@@ -443,6 +443,7 @@ export type Issue = {
 };
 
 /** The issue a checkout is linked to and where the link came from (`IssueLinkSnapshot`). */
+/** `source` is where the link came from, as a code (`manual`, `pane_token`, `branch_setting`, `pr_body`, `branch_name`). */
 export type IssueLink = { issue: Issue; source: string };
 
 /** A project's open issues, capped by the core (`ProjectIssuesSnapshot`). */
