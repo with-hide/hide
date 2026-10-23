@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     AgentLogoMode, ColorTheme, DetailSlot, DeviceRegistration, OverviewGraphChoices,
-    PaneCompletion, PaneReadRecord, PetOriginSnapshot, RightPanelSection, SidebarLens, TaskView,
+    PaneCompletion, PaneReadRecord, PetOriginSnapshot, RightPanelSection, SidebarLens, SidebarProject, TaskView,
     ThemePreference, UiStateSnapshot, WorkspaceRegistration, default_accent_hex, default_font_size,
     default_pane_text_scale, default_panel_visible, default_sidebar_width,
 };
@@ -76,6 +76,9 @@ struct StoredUiState {
     sidebar_lens: Option<String>,
     #[serde(default)]
     task_view: Option<String>,
+    /// Kept as JSON so a value this build cannot read loads as every project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sidebar_project: Option<serde_json::Value>,
     /// Kept as JSON so a slot this build cannot read loads empty instead of
     /// making the whole store unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -270,8 +273,9 @@ pub enum UnrecognizedField {
     ColorTheme,
     /// The agent logo mode; hidden was used.
     AgentLogoMode,
-    /// The sidebar's lens or the 태스크 view option; the projects, grouped
-    /// by state, was used.
+    /// The sidebar's lens, the 태스크 view option or the project its lists
+    /// are narrowed to; the projects, grouped by state, every project, was
+    /// used.
     SidebarLens,
     /// The lane's 보기 slot; it loaded empty.
     Detail,
@@ -438,6 +442,11 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             TaskView::default()
         }),
     };
+    let sidebar_project = stored.sidebar_project.and_then(|value| {
+        serde_json::from_value::<SidebarProject>(value)
+            .map_err(|_| unrecognized.push(UnrecognizedField::SidebarLens))
+            .ok()
+    });
     let detail = match stored.detail {
         None => DetailSlot::default(),
         Some(value) => serde_json::from_value::<DetailSlot>(value)
@@ -503,6 +512,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             sessions_expanded_agent_pane_ids: stored.sessions_expanded_agent_pane_ids,
             sidebar_lens,
             task_view,
+            sidebar_project,
             detail,
             overview_graph,
             selected_path: stored.selected_path,
@@ -676,6 +686,9 @@ pub fn save(
         sessions_expanded_agent_pane_ids: state.sessions_expanded_agent_pane_ids.clone(),
         sidebar_lens: Some(state.sidebar_lens.as_str().to_owned()),
         task_view: Some(state.task_view.as_str().to_owned()),
+        sidebar_project: state.sidebar_project.as_ref().map(|project| {
+            serde_json::to_value(project).expect("the sidebar's project serializes")
+        }),
         detail: (state.detail != DetailSlot::default())
             .then(|| serde_json::to_value(&state.detail).expect("the 보기 slot serializes")),
         overview_graph: Some(
@@ -1483,6 +1496,10 @@ mod tests {
         let mut state = UiStateSnapshot {
             sidebar_lens: SidebarLens::Tasks,
             task_view: TaskView::Project,
+            sidebar_project: Some(SidebarProject {
+                device_id: "mini".to_owned(),
+                workspace_id: "remote:mini:project:p".to_owned(),
+            }),
             sessions_expanded_agent_pane_ids: vec!["w1:p1".to_owned()],
             ..UiStateSnapshot::default()
         };
@@ -1495,6 +1512,7 @@ mod tests {
         assert_eq!(disposition, LoadDisposition::Loaded);
         assert_eq!(restored.sidebar_lens, SidebarLens::Tasks);
         assert_eq!(restored.task_view, TaskView::Project);
+        assert_eq!(restored.sidebar_project, state.sidebar_project);
         assert_eq!(restored.sessions_expanded_agent_pane_ids, ["w1:p1"]);
         assert_eq!(restored.detail, state.detail);
 
@@ -1503,6 +1521,7 @@ mod tests {
         assert_eq!(older_disposition, LoadDisposition::Loaded);
         assert_eq!(older_state.sidebar_lens, SidebarLens::Projects);
         assert_eq!(older_state.task_view, TaskView::Status);
+        assert_eq!(older_state.sidebar_project, None);
         assert_eq!(older_state.detail, DetailSlot::default());
 
         let unknown = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,

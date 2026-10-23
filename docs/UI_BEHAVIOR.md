@@ -819,7 +819,7 @@ The page keeps the tab chosen; ⇧⌘L and a Memory link elsewhere open the tool
 Each tile says where it goes at its top right, `사이드바` or `보기`, and `닫기 ✕` while the viewing column shows what it opened, which a second press folds (B32).
 A tile's number is a quiet bar until the core has answered, and a 0 is drawn as 0; nothing the system did not make is drawn (B33).
 
-- 세션: the live sessions and a bar of 기다림, 일함, 대기 and 쉼; pressing it turns the sidebar to 태스크, narrowed to the project behind a `<project>만` chip whose `✕` lifts it (B27).
+- 세션: the live sessions and a bar of 기다림, 일함, 대기 and 쉼; pressing it turns the sidebar to 태스크, narrowed to the project by the lists' project chip, whose `✕` lifts it (B27).
   While Hide AI's summaries are on and the project has open missed work, `놓친 일 N` in the warning colour sits in its corner, and pressing it opens the Overview's backlog for the project with its 놓친 일 group unfolded; it is never counted in 할 일 or on the rail (B28).
 - PR: the open pull requests and a bar of 머지 가능, 실패, 리뷰 and 검사 중; pressing it turns the sidebar to the PR list, narrowed to the project (B29).
   A project with no GitHub remote reads `GitHub 원격 없음` alone, and after a failed read a ⚠ stands beside the number with the last read's age.
@@ -1233,7 +1233,10 @@ Under the sidebar's head (search ⌘K, Overview ⇧⌘O), right above the list, 
 A window starts on 프로젝트, and then the last list and view option chosen stay, through a restart too (B3).
 
 The list follows the rail's front device, every project of it at once, and turns with the rail (B19).
-Its first line reads `태스크 N`, the open tasks, with a `상태별 | 프로젝트별` option at its right (B4, B6).
+Its first line reads the project chip, then `태스크 N`, the open tasks, with a `상태별 | 프로젝트별` option at its right (B4, B6).
+The project chip is one choice the 태스크 and PR lists share and the core keeps through a restart (`ui_state.sidebar_project`): `모든 프로젝트 ▾` shows every project of the device, and a chosen project shows its name and `✕`, which shows every project again.
+Its menu lists the device's projects, each with its `내 차례 N` in the warning colour and its open tasks and pull requests counted together, a zero not drawn; `지금 보는 프로젝트` first chooses the project of the Workspace in front, and a 현황 tile's 세션 or PR sets the same choice.
+While a project is chosen, its rows leave out the project's name, and the 내 차례 of the device's other projects stands after the chip as `+N` in the warning colour, which shows every project again when pressed; ⇧⌘R opens the PR list on every project.
 상태별 groups the tasks as `내 차례`, `읽을 것`, `다시 볼 것`, `일하는 중` and `대기` (`Needs You`, `Unread`, `Revisit`, `Working`, `Waiting`), in that order, each head with its count, 내 차례 in the warning colour, empty groups not drawn, and every row naming its project before its second line (status-marks D-22, B32; PRD revisit-group D-01).
 다시 볼 것 holds a question or approval the operator read and has not answered, which keeps its own mark and `질문 · …` line, and a quiet task the operator starred, which wears a ★ in its mark's slot (PRD revisit-group B2, B6); a starred task that asks, finishes or works stands in that group with a small ★ after its title, a read block stays in 내 차례, and nothing in 다시 볼 것 sends a notification, a push or a badge count (B3, B4, B7, B18).
 내 차례 holds the questions, approvals and blocks; a block is a task whose root agent errored (the core's `demand == "error"`), not a failed CI, and its line reads `막힘 · <cause>` in the warning colour.
@@ -1379,12 +1382,12 @@ Web owners: `web/src/SessionRecord.tsx`, `web/src/DetailPanel.tsx`, and `web/e2e
 ### The PR list and the PR card
 
 The sidebar's PR list replaces the lane's PRs tool (PRD lane-two-columns D-20, B41); ⇧⌘R and the switch's `PR` open it, and the sidebar keeps it through a restart.
-Its first line reads `PR N`, then ⚠ while the last GitHub read failed or left a question unanswered, and, while a 현황 tile narrowed it, the `<project>만` chip whose `✕` shows every project again.
+Its first line reads the project chip the 태스크 list shares ([The sidebar's 태스크 list](#the-sidebars-태스크-list)), `PR N`, then ⚠ while the last GitHub read failed or left a question unanswered.
 A lane saved on the PRs or Memory tool opens with no tool column, the rest of its lane and its View layout as they were (D-10).
 A project with no GitHub remote reads `GitHub 원격 없음` alone.
 
 The PR list lists the pull requests of the rail's device that concern the operator: their own, those their Hide sessions made or worked on, those asked of them or of their team for review, and bots'.
-Every row names its project, and a project on a connected device lists like the rest with the device's name on its rows.
+Every row names its project unless the project chip chose one, and a project on a connected device lists like the rest with the device's name on its rows.
 The core decides the group, the reason and the order (`herdr-core/src/agent_state/work/board.rs`; the rules are `docs/status-model.md`, Pull request groups); the web draws them, and every pull request is in the first group it fits.
 
 The groups, in order, are `Needs You`, `Agent is working`, `Blocked · no agent`, `Waiting`, `Drafts`, `Bots` and `Merging · merged`; the last four start folded, a group with no row is not drawn, and `Needs You` carries the review asks of a team as one folded line, `팀 리뷰 요청 N`, which opens to rows `리뷰 · <팀>에 요청 · N시간째`.

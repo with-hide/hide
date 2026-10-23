@@ -1751,8 +1751,7 @@ export function createActions(send: DispatchFn) {
      * request (`이슈 없는 PR N`). The whole device's list, the sidebar shown.
      */
     openSidebarPrs() {
-      ui().setSidebarProject(null);
-      this.setSidebarLens("prs", !rest()?.ui_state?.left_sidebar_visible);
+      this.setSidebarProject(null, "prs");
     },
 
     /**
@@ -1760,8 +1759,16 @@ export function createActions(send: DispatchFn) {
      * or PR list, narrowed to the project until the chip's ✕.
      */
     showProjectInSidebar(lens: "tasks" | "prs", deviceId: string, projectId: string) {
-      ui().setSidebarProject({ deviceId, projectId });
-      this.setSidebarLens(lens, !rest()?.ui_state?.left_sidebar_visible);
+      this.setSidebarProject({ device_id: deviceId, workspace_id: projectId }, lens);
+    },
+
+    /**
+     * The project both of the sidebar's lists show, or every project; with
+     * `lens`, the sidebar turns to that list and shows itself in the same event.
+     */
+    setSidebarProject(project: import("./snapshot").SidebarProject | null, lens?: import("./snapshot").SidebarLens) {
+      const show = lens !== undefined && !rest()?.ui_state?.left_sidebar_visible;
+      dispatch({ schema_version: 2, kind: "sidebar_project_set", payload: { project, ...(lens ? { lens } : {}), ...(show ? { show } : {}) } });
     },
 
     /**

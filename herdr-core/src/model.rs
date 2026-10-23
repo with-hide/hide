@@ -3611,6 +3611,15 @@ impl TaskView {
     }
 }
 
+/// The project the sidebar's 태스크 and PR lists are narrowed to: one
+/// registered project on one machine, kept until the operator lifts it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidebarProject {
+    pub device_id: String,
+    pub workspace_id: String,
+}
+
 /// The most items the 보기 slot's ← steps back through; past it the oldest
 /// goes first (PRD sidebar-task-lens B47).
 pub const DETAIL_HISTORY_LIMIT: usize = 20;
@@ -3766,6 +3775,10 @@ pub struct UiStateSnapshot {
     /// How the 태스크 list groups its tasks (D-11), kept like the lens.
     #[serde(default)]
     pub task_view: TaskView,
+    /// The one project both of the sidebar's 태스크 and PR lists show, or
+    /// every project; kept like the lens.
+    #[serde(default)]
+    pub sidebar_project: Option<SidebarProject>,
     /// The lane's 보기 slot (D-50): a pull request's card or a session's
     /// record, one per window and no checkout's or Agent tab's, so it stays
     /// when either changes.
@@ -4639,6 +4652,7 @@ impl Default for UiStateSnapshot {
             sessions_expanded_agent_pane_ids: Vec::new(),
             sidebar_lens: SidebarLens::default(),
             task_view: TaskView::default(),
+            sidebar_project: None,
             detail: DetailSlot::default(),
             overview_graph: OverviewGraphChoices::default(),
             selected_path: None,

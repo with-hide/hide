@@ -72,7 +72,7 @@ describe("the Project tool", () => {
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
       useShellStore.setState({ connection: "live", rest, memory: { project }, usage });
-      useUiStore.setState({ screen: { kind: "workspace" }, laneShown: true, projectTab: "status", sidebarProject: null, drawnLane: { mode: "docked", view: rest.ui_state?.detail?.shown ? "detail" : "none", tool: "project", stacked: false } });
+      useUiStore.setState({ screen: { kind: "workspace" }, laneShown: true, projectTab: "status", drawnLane: { mode: "docked", view: rest.ui_state?.detail?.shown ? "detail" : "none", tool: "project", stacked: false } });
       root.render(<TooltipProvider><ToolRail actions={actions} /><ProjectTool actions={actions} /></TooltipProvider>);
     });
     return actions;
@@ -116,17 +116,15 @@ describe("the Project tool", () => {
     expect(container.querySelector('[data-project-todo-beyond-to="tasks"]')?.textContent).toContain("10");
     expect(container.querySelector('[data-project-todo-beyond-to="prs"]')?.textContent).toContain("59");
     await press('[data-project-todo-beyond-to="prs"]');
-    expect(sent("sidebar_lens_set").at(-1)).toEqual({ lens: "prs" });
+    expect(sent("sidebar_project_set").at(-1)).toEqual({ project: { device_id: "local", workspace_id: "p" }, lens: "prs" });
     await press('[data-project-todo-beyond-to="tasks"]');
-    expect(sent("sidebar_lens_set").at(-1)).toEqual({ lens: "tasks" });
-    expect(useUiStore.getState().sidebarProject).toEqual({ deviceId: "local", projectId: "p" });
+    expect(sent("sidebar_project_set").at(-1)).toEqual({ project: { device_id: "local", workspace_id: "p" }, lens: "tasks" });
   });
 
   it("sends the sessions and PRs tiles to the sidebar narrowed to the project (B27, B29)", async () => {
     await render(snapshot(status()));
     await press('[data-project-tile-press="sessions"]');
-    expect(sent("sidebar_lens_set").at(-1)).toEqual({ lens: "tasks" });
-    expect(useUiStore.getState().sidebarProject).toEqual({ deviceId: "local", projectId: "p" });
+    expect(sent("sidebar_project_set").at(-1)).toEqual({ project: { device_id: "local", workspace_id: "p" }, lens: "tasks" });
   });
 
   it("opens the worktree table in the viewing column and folds it when pressed again (B30, B32)", async () => {

@@ -22,7 +22,7 @@ import { Keycap } from "./components/ui/keycap";
 import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/entry-menu";
 import { PartsMark } from "./components/pr-mark";
 import { archivedProject, archivedRows, archiveOffer } from "./archive";
-import { SidebarProjectChip, useSidebarProject } from "./SidebarPrs";
+import { SidebarProjectFilter, useSidebarProject } from "./SidebarProjectFilter";
 import { prMarkParts } from "./prMark";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected, frontDeviceId } from "./devices";
@@ -86,9 +86,9 @@ export function TaskLens({ actions }: { actions: Actions }) {
   const rest = useShellStore((s) => s.rest);
   const localAgents = useShellStore((s) => s.agents);
   const deviceId = frontDeviceId(rest);
-  // A 현황 tile narrows the list to its project, read from that project's own scope (PRD lane-two-columns B27).
+  // The project chip, or a 현황 tile, narrows the list to a project, read from that project's own scope (PRD lane-two-columns B27).
   const filter = useSidebarProject(deviceId);
-  const scope = filter ? (catalogWorkspaces(rest).find((row) => row.id === filter.projectId && row.device_id === deviceId)?.agent_scope ?? null) : deviceScope(rest, deviceId);
+  const scope = filter ? (catalogWorkspaces(rest).find((row) => row.id === filter.workspace_id && row.device_id === deviceId)?.agent_scope ?? null) : deviceScope(rest, deviceId);
   const view: TaskView = rest?.ui_state?.task_view ?? "status";
   const folds = rest?.ui_state?.sessions_expanded_agent_pane_ids ?? NO_FOLDS;
   const connected = deviceConnected(rest, deviceId);
@@ -100,7 +100,7 @@ export function TaskLens({ actions }: { actions: Actions }) {
   const projects = useMemo(() => catalogWorkspaces(rest), [rest]);
   const archived = useMemo(() => {
     const rows = archivedRows(rest, deviceId);
-    return filter ? rows.filter((row) => archivedProject(row, catalogWorkspaces(rest))?.id === filter.projectId) : rows;
+    return filter ? rows.filter((row) => archivedProject(row, catalogWorkspaces(rest))?.id === filter.workspace_id) : rows;
   }, [rest, deviceId, filter]);
   const list = useMemo(() => taskList(scope?.tasks, byPane, projects, view, archived), [scope?.tasks, byPane, projects, view, archived]);
   const noProject = rest !== null && projects.every((project) => project.is_home || project.device_id !== deviceId);
@@ -108,8 +108,8 @@ export function TaskLens({ actions }: { actions: Actions }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-lens={view}>
       <div className="flex shrink-0 items-center gap-xs px-md py-xs text-micro text-muted-foreground">
+        <SidebarProjectFilter deviceId={deviceId} actions={actions} />
         <span className="min-w-0 flex-1 truncate" data-task-count={scope ? list.total : undefined}>{scope ? t("taskLens.count", { count: list.total }) : t("taskLens.countLoading")}</span>
-        {filter ? <SidebarProjectChip filter={filter} /> : null}
         <ViewSwitch view={view} actions={actions} />
       </div>
       {unresponsive ? (
@@ -119,7 +119,7 @@ export function TaskLens({ actions }: { actions: Actions }) {
         </p>
       ) : null}
       {rest === null || !scope ? <TaskSkeleton /> : noProject ? <NoProject actions={actions} /> : list.total === 0 && list.groups.length === 0 && list.resting.length === 0 && list.cleanup.length === 0 && list.archived.length === 0 ? <NoTasks actions={actions} /> : (
-        <TaskGroups list={list} view={view} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={!connected} actions={actions} />
+        <TaskGroups list={list} view={view} showProject={view === "status" && !filter} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={!connected} actions={actions} />
       )}
     </div>
   );
@@ -179,8 +179,8 @@ function NoProject({ actions }: { actions: Actions }) {
   );
 }
 
-const TaskGroups = memo(function TaskGroups({ list, view, byPane, agents, folds, focusedPane, disabled, actions }: {
-  list: ReturnType<typeof taskList>; view: TaskView; byPane: ReadonlyMap<string, AgentRow>; agents: readonly AgentRow[]; folds: string[]; focusedPane: string | null; disabled: boolean; actions: Actions;
+const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, agents, folds, focusedPane, disabled, actions }: {
+  list: ReturnType<typeof taskList>; view: TaskView; showProject: boolean; byPane: ReadonlyMap<string, AgentRow>; agents: readonly AgentRow[]; folds: string[]; focusedPane: string | null; disabled: boolean; actions: Actions;
 }) {
   const { t } = useInterfaceTranslation();
   const [shownAll, setShownAll] = useState<ReadonlySet<string>>(NO_PANES);
@@ -228,9 +228,9 @@ const TaskGroups = memo(function TaskGroups({ list, view, byPane, agents, folds,
   }, [selected]);
   const showAll = (parent: string) => setShownAll((before) => new Set(before).add(parent));
   const rows = (trees: ReturnType<typeof treesOf>) => trees.map(({ entry, lines }) => (
-    <TaskTree key={entry.card.root} entry={entry} lines={lines} byPane={byPane} opened={opened} selected={selected} number={numbers ? numberOf(numbers, entry.agent.pane_id) : null} showProject={view === "status"} disabled={disabled} actions={actions} onShowAll={showAll} />
+    <TaskTree key={entry.card.root} entry={entry} lines={lines} byPane={byPane} opened={opened} selected={selected} number={numbers ? numberOf(numbers, entry.agent.pane_id) : null} showProject={showProject} disabled={disabled} actions={actions} onShowAll={showAll} />
   ));
-  const archivedList = (entries: ArchivedEntry[]) => entries.map((entry) => <ArchivedRow key={entry.row.id} entry={entry} showProject={view === "status"} disabled={disabled} actions={actions} />);
+  const archivedList = (entries: ArchivedEntry[]) => entries.map((entry) => <ArchivedRow key={entry.row.id} entry={entry} showProject={showProject} disabled={disabled} actions={actions} />);
   return (
     <div ref={scroller} className={cn("min-h-0 flex-1 overflow-y-auto px-sm pb-md", disabled && "opacity-(--opacity-disabled)")} data-task-list="true" onKeyDown={moveFocus}>
       {sections.map(({ group, bands, resting, cleanup, archived }) => (
@@ -248,7 +248,7 @@ const TaskGroups = memo(function TaskGroups({ list, view, byPane, agents, folds,
       {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
     </div>
   );
-}, (before, after) => before.list === after.list && before.view === after.view && before.byPane === after.byPane && before.folds === after.folds && before.focusedPane === after.focusedPane && before.disabled === after.disabled && before.actions === after.actions);
+}, (before, after) => before.list === after.list && before.view === after.view && before.showProject === after.showProject && before.byPane === after.byPane && before.folds === after.folds && before.focusedPane === after.focusedPane && before.disabled === after.disabled && before.actions === after.actions);
 
 function groupName(group: TaskGroup, t: ReturnType<typeof useInterfaceTranslation>["t"]): string {
   return group.project?.label ?? (group.state ? t(`taskLens.group.${group.state}`) : "");
