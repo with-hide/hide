@@ -8,6 +8,7 @@ import type { MessageKey } from "./i18n/catalogs";
 import { folderName, sameIssue } from "./linkPanel";
 import type { Checkout, LinkIssueSource, LinkPanel, Task, Workspace } from "./snapshot";
 import { TaskGlyph } from "./issueMarks";
+import { issueSourceName } from "./settings";
 import { useUiStore } from "./ui";
 import type { Actions } from "./actions";
 
@@ -131,7 +132,7 @@ export function IssuePicker({ number, project, open, onOpenChange, children }: {
           <CommandInput placeholder={t("prList.searchIssues")} autoFocus />
           <CommandList>
             <CommandEmpty>{t("board.empty")}</CommandEmpty>
-            <CommandGroup heading={project.tasks?.source?.label ?? t("issue.label")}>
+            <CommandGroup heading={project.tasks?.source ? issueSourceName(project.tasks.source, t) : t("issue.label")}>
               {issues.map((task) => (
                 <CommandItem key={task.key} value={`${task.id ?? ""} ${task.title} ${task.key}`} onSelect={() => choose({ kind: "pr_link", workspaceId: project.id, prNumber: number, issueKey: task.key })} data-pr-link-choice={task.key}>
                   <TaskGlyph task={task} />
