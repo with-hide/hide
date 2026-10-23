@@ -29,6 +29,9 @@ export type DeskModel = {
 /** Where a desk sits: its project, and the branch of the project's main checkout. */
 export type PracticePlace = { project: string; label: string; branch: string };
 
+/** One project on the practice screen: its place and the desk on its main checkout. */
+export type PracticeDesk = { place: PracticePlace; model: DeskModel };
+
 /** Every practice project's folder is under this invented root. */
 const ROOT = "/work";
 
@@ -248,15 +251,16 @@ const tree = (ids: string[]) => {
   return { rows, visible_rows: rows, shown: ids, more: 0, needs_you: false, turn_kind: null };
 };
 
-/** The core's scope for working agents that are all roots in the desk's checkout. */
-function rootScope(ids: string[], place: PracticePlace): AgentScope {
+/** The core's scope for working agents that are all roots, each in its desk's checkout. */
+function rootScope(members: { pane_id: string; place: PracticePlace }[]): AgentScope {
+  const ids = members.map((member) => member.pane_id);
   const refs = ids.map((pane_id) => ({ pane_id, occurrence: 0 }));
   return {
     overview_needs_you: 0,
     has_working: ids.length > 0,
     relations: {},
     listed: ids.map((pane_id, index) => ({ pane_id, device_id: "local", device_label: null, remote: false, index })),
-    places: Object.fromEntries(ids.map((id) => [id, { project_id: place.project, checkout_id: checkoutId(place), kind: "checkout" as const }])),
+    places: Object.fromEntries(members.map(({ pane_id, place }) => [pane_id, { project_id: place.project, checkout_id: checkoutId(place), kind: "checkout" as const }])),
     places_live: true,
     closes: {},
     raised: [],
@@ -273,7 +277,7 @@ function rootScope(ids: string[], place: PracticePlace): AgentScope {
     descendants: {},
     children: {},
     sections: [],
-    members: ids.map((pane_id) => ({ pane_id, project_id: place.project, checkout_id: checkoutId(place) })),
+    members: members.map(({ pane_id, place }) => ({ pane_id, project_id: place.project, checkout_id: checkoutId(place) })),
     buckets: { turn: 0, working: ids.length, delegating: 0, resting: 0 },
     turns: { question: 0, approval: 0, error: 0, done: 0 },
     folded: {},
@@ -350,12 +354,29 @@ function project(place: PracticePlace, checkouts: Checkout[], scope: AgentScope)
   };
 }
 
-/** The snapshot the core would send for a desk in front, on this machine with the left sidebar on its Projects list. */
-export function deskSnapshot(model: DeskModel, place: PracticePlace, nowMs: number): WorldSnapshot {
-  const agents = model.panes.flatMap((pane) => (pane.agent ? [pane.agent] : []));
-  const scope = rootScope(agents.map((row) => row.pane_id), place);
-  const main = deskCheckout(model, place, scope, agents, nowMs);
-  const front = project(place, [main], scope);
+const agentsOf = (model: DeskModel) => model.panes.flatMap((pane) => (pane.agent ? [pane.agent] : []));
+
+/** A desk as the core lists it: its project, holding its main checkout. */
+function deskProject({ place, model }: PracticeDesk, nowMs: number): Workspace {
+  const agents = agentsOf(model);
+  const scope = rootScope(agents.map((row) => ({ pane_id: row.pane_id, place })));
+  return project(place, [deskCheckout(model, place, scope, agents, nowMs)], scope);
+}
+
+/**
+ * The snapshot the core would send for `desks`, listed in that order, with
+ * `front` the project in front, on this machine with the left sidebar on its
+ * Projects list. Pane ids are unique across the desks, as Herdr's are.
+ */
+export function deskSnapshot(desks: readonly PracticeDesk[], front: string, nowMs: number): WorldSnapshot {
+  const shownDesk = desks.find((desk) => desk.place.project === front);
+  if (!shownDesk) throw new Error(`Practice project ${front} has no desk`);
+  const model = shownDesk.model;
+  const agents = desks.flatMap((desk) => agentsOf(desk.model));
+  const scope = rootScope(desks.flatMap(({ place, model: one }) => agentsOf(one).map((row) => ({ pane_id: row.pane_id, place }))));
+  const workspaces = desks.map((desk) => deskProject(desk, nowMs));
+  const frontProject = workspaces.find((row) => row.id === front)!;
+  const main = frontProject.checkouts[0]!;
   const shown = model.groups.find((row) => row.id === model.selectedGroup)?.tabs ?? [];
   const groupFront = shown.includes(model.activeTab) ? model.activeTab : (shown[0] ?? null);
   const agentLayout: AgentLayout = {
@@ -368,9 +389,9 @@ export function deskSnapshot(model: DeskModel, place: PracticePlace, nowMs: numb
     navigator: {
       agent_scope: scope,
       devices: [{ agent_scope: scope, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: agents.length, test: null }],
-      workspaces: [front],
+      workspaces,
       agents,
-      focused_workspace_id: front.id,
+      focused_workspace_id: front,
       focused_checkout_id: main.id,
       focused_device_id: "local",
       sleeping_sessions: [],
@@ -381,14 +402,14 @@ export function deskSnapshot(model: DeskModel, place: PracticePlace, nowMs: numb
       left_sidebar_visible: true,
       collapsed_workspace_ids: [],
       session_collapsed_checkout_ids: [],
-      workspace_registrations: [{ id: front.id, label: place.label, path: front.path, device_id: "local", pinned: false }],
+      workspace_registrations: workspaces.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false })),
       sidebar_lens: "projects",
       sidebar_width: 280,
       device_rail_visible: false,
     },
     focused: { pane_id: focused },
-    status: { async_operations: model.operations },
-    pane_layouts: model.tabs.map((tab) => ({ workspace_id: front.id, tab_id: tab.id, focused_pane_id: tab.focused, zoomed: tab.zoomed, root: tab.root })),
+    status: { async_operations: desks.flatMap((desk) => desk.model.operations) },
+    pane_layouts: desks.flatMap((desk) => desk.model.tabs.map((tab) => ({ workspace_id: desk.place.project, tab_id: tab.id, focused_pane_id: tab.focused, zoomed: tab.zoomed, root: tab.root }))),
     workspace_view: {
       device_id: "local", path: main.path, open: false, documents: false, tool: null, pinned: false,
       document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",

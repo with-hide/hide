@@ -29,7 +29,7 @@ function paneScreen(pane: PracticePane): string {
 export const SCREEN_WORLD: PracticeWorld<DeskModel> = {
   initial,
   apply: applyDesk,
-  snapshot: (model, nowMs) => deskSnapshot(model, PLACE, nowMs),
+  snapshot: (model, nowMs) => deskSnapshot([{ place: PLACE, model }], PLACE.project, nowMs),
   panes: (model) => model.panes.map((pane) => pane.id),
   screen: (model, paneId) => paneScreen(model.panes.find((pane) => pane.id === paneId)!),
   lane: false,

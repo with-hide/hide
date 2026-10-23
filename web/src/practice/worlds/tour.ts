@@ -11,8 +11,10 @@ import type { PracticeWorld, WorldSnapshot } from "../world";
 
 export type TourModel = { lens: SidebarLens; seen: SidebarLens[] };
 
-/** A time in the data file: milliseconds, seconds or an ISO date, that long before now. */
-type Ago = { $msAgo?: number; $sAgo?: number; $isoAgo?: number };
+/** A time in the data file: milliseconds, seconds or an ISO time that long before now, or a date that many days before today. */
+type Ago = { $msAgo?: number; $sAgo?: number; $isoAgo?: number; $daysAgo?: number };
+
+const DAY_MS = 86_400_000;
 
 /** The data file's values with each time placed that long before `nowMs`. */
 function dated(value: unknown, nowMs: number): unknown {
@@ -22,6 +24,7 @@ function dated(value: unknown, nowMs: number): unknown {
   if (ago.$msAgo !== undefined) return nowMs - ago.$msAgo;
   if (ago.$sAgo !== undefined) return nowMs / 1000 - ago.$sAgo;
   if (ago.$isoAgo !== undefined) return new Date(nowMs - ago.$isoAgo).toISOString();
+  if (ago.$daysAgo !== undefined) return new Date(nowMs - ago.$daysAgo * DAY_MS).toISOString().slice(0, 10);
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, dated(item, nowMs)]));
 }
 
