@@ -22,7 +22,14 @@ export function useMeasuredPaths(
     if (!box) return;
     const measure = () => {
       const origin = box.getBoundingClientRect();
-      const at = (attribute: string, id: string) => box.querySelector(`[${attribute}="${CSS.escape(id)}"]`)?.getBoundingClientRect() ?? null;
+      // A board drawn shrunk (the mission map fitted to its slot) measures on screen at that scale; the
+      // paths are drawn inside the shrunk board, so each rect is read back at the board's own size.
+      const scale = box.offsetWidth > 0 ? origin.width / box.offsetWidth : 1;
+      const local = (rect: DOMRect) => (scale === 1 || !Number.isFinite(scale) ? rect : new DOMRect(origin.left + (rect.left - origin.left) / scale, origin.top + (rect.top - origin.top) / scale, rect.width / scale, rect.height / scale));
+      const at = (attribute: string, id: string) => {
+        const rect = box.querySelector(`[${attribute}="${CSS.escape(id)}"]`)?.getBoundingClientRect();
+        return rect ? local(rect) : null;
+      };
       const next = compute(origin, at);
       setPaths((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
     };

@@ -40,7 +40,10 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
             if (!from || !to) return [];
             if (down) {
               const local = (rect: DOMRect): Box => ({ left: rect.left - origin.left, right: rect.right - origin.left, top: rect.top - origin.top, bottom: rect.bottom - origin.top });
-              const cards = [...(box.current?.querySelectorAll<HTMLElement>("[data-dependency-node]") ?? [])].map((card) => local(card.getBoundingClientRect()));
+              const cards = values.flatMap((value) => {
+                const card = at("data-dependency-node", idOf(value));
+                return card ? [local(card)] : [];
+              });
               const gap = parseFloat(getComputedStyle(box.current!).getPropertyValue(gaps.nodes)) / 2 || 0;
               return [{ id: `${edge.from}>${edge.to}`, d: downPathAround(local(from), local(to), cards, gap) }];
             }
