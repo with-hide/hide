@@ -245,7 +245,7 @@ export function overviewWorld(now: number): OverviewWorld {
   const rest: SnapshotRest = {
     overview_graph: {
       available: true, limit: 2000, retained_count: 12, truncated: false, retention_ms: 86_400_000,
-      sessions: agents.map((row) => ({ device_id: "local", pane_id: row.pane_id, session_digest: `fixture-${row.pane_id}`, launch_model: row.agent_kind === "codex" ? "model-c" : "model-a" })),
+      sessions: agents.map((row) => ({ device_id: "local", pane_id: row.pane_id, session_digest: `fixture-${row.pane_id}`, launch_model: row.agent_kind === "codex" ? "model-c" : "model-a", launch_effort: row.agent_kind === "codex" ? "medium" : "high" })),
       letters: Array.from({ length: 12 }, (_, i) => ({ id: `fixture-letter-${i}`, sender: { device_id: "local", pane_id: i % 2 ? "h-a1c1" : "b-1", session: i % 2 ? "fixture-h-a1c1" : "fixture-b-1" }, recipient: { device_id: "local", pane_id: i % 2 ? "h-a1" : "h-a3", session: i % 2 ? "fixture-h-a1" : "fixture-h-a3" }, kind: i % 3 ? "progress" : "request", at_unix_ms: now - i * MINUTE })),
       // Herdr input with no letter between two teams draws the dotted direct-only line.
       direct_inputs: Array.from({ length: 3 }, (_, i) => ({ id: `fixture-direct-${i}`, sender: { device_id: "local", pane_id: "h-e1", session: "fixture-h-e1" }, recipient: { device_id: "local", pane_id: "s-1", session: "fixture-s-1" }, at_unix_ms: now - (i + 2) * MINUTE })),
@@ -342,6 +342,6 @@ export function overviewFocusWorld(now: number, content: string): OverviewWorld 
     agents.splice(0);
     for (const project of world.rest.navigator!.workspaces!) { project.agent_scope = scopeWith([]); for (const checkout of project.checkouts) checkout.agent_scope = scopeWith([]); }
   }
-  world.rest.overview_graph!.sessions = agents.map((row) => ({ device_id: "local", pane_id: row.pane_id, session_digest: `fixture-${row.pane_id}`, launch_model: row.agent_kind === "codex" ? "model-c" : "model-a" }));
+  world.rest.overview_graph!.sessions = agents.map((row) => ({ device_id: "local", pane_id: row.pane_id, session_digest: `fixture-${row.pane_id}`, launch_model: row.agent_kind === "codex" ? "model-c" : "model-a", launch_effort: row.agent_kind === "codex" ? "medium" : "high" }));
   return world;
 }

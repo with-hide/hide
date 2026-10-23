@@ -89,7 +89,7 @@ describe("the numbers and words", () => {
     expect(workerWords({ ...planned, status: "review" }, "sonnet", "auto")).toBe("sonnet·high");
     expect(workerWords({ ...planned, status: "working" }, null, "auto")).toBe("opus·high");
     const m = mission("m", { device_id: "mac" });
-    const rest = { overview_graph: { sessions: [{ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model: "sonnet" }, { device_id: "mini", pane_id: "p9", session_digest: "e", launch_model: "haiku" }] } } as unknown as SnapshotRest;
+    const rest = { overview_graph: { sessions: [{ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model: "sonnet", launch_effort: null }, { device_id: "mini", pane_id: "p9", session_digest: "e", launch_model: "haiku", launch_effort: null }] } } as unknown as SnapshotRest;
     expect(launchModelOf(rest, m, node("a", { pane_id: "p9" }))).toBe("sonnet");
     expect(launchModelOf(rest, m, node("a", { pane_id: "p9", machine: "mini" }))).toBe("haiku");
     expect(launchModelOf(rest, m, node("a", { pane_id: "p8" }))).toBeNull();

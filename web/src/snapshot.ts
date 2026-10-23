@@ -2286,7 +2286,7 @@ export type OverviewGraphMetadata = {
   retention_ms: number;
   letters: OverviewGraphLetter[];
   direct_inputs?: { id: string; sender: OverviewGraphParty; recipient: OverviewGraphParty; at_unix_ms: number }[];
-  sessions: { device_id: string; pane_id: string; session_digest: string; launch_model: string | null }[];
+  sessions: { device_id: string; pane_id: string; session_digest: string; launch_model: string | null; launch_effort: string | null }[];
 };
 
 export type SnapshotRest = {

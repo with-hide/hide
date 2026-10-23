@@ -17,9 +17,9 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { frontDeviceId } from "./devices";
 import { Input } from "./components/ui/input";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
-import { GRAPH_CHOICES_DEFAULTS, graphActivity, graphProjectIdOf, graphProjectKey, graphSessionId, graphSessionIdOf, graphSessionKey, overviewGraphModel, overviewGraphTeam, sameGraphScope, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
+import { checkoutChip, GRAPH_CHOICES_DEFAULTS, graphActivity, graphProjectIdOf, graphProjectKey, graphSessionId, graphSessionIdOf, graphSessionKey, overviewGraphModel, overviewGraphTeam, sameGraphScope, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
 import { projectDropPlaces, useGraphTheme, useOverviewGraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
-import { ClusterGraphNode, GlowGraphNode, GraphLine, GraphStateCounts, hasGraphLine, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, TeamGraphNode, type ClusterNode, type ExchangeBadge, type GlowNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type TeamNode } from "./overviewGraphNodes";
+import { ClusterGraphNode, GlowGraphNode, GraphLine, GraphStateCounts, hasGraphLine, launchWords, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, TeamGraphNode, type ClusterNode, type ExchangeBadge, type GlowNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type TeamNode } from "./overviewGraphNodes";
 import type { BoardProject } from "./projectBoard";
 import { sessionOfAgentOn } from "./sessionWork";
 import type { GraphScope, OverviewGraphChoices, WorkSession } from "./snapshot";
@@ -297,7 +297,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
         // The layout owns these fixed dimensions. Retaining them also preserves React Flow's
         // measured handle bounds when hover/focus replaces a controlled node object.
         const measured = { width: shape.width, height: shape.height };
-        sessions.push({ id: row.id, type: "session", position: { x: point.x - shape.width / 2, y: point.y - shape.orb / 2 }, ...measured, measured, selected: activeSession === row.id, data: { row, root, context: model.context.has(row.id), muted: selection !== null && !related, highlighted: pointedRelated.has(row.id), current: current?.id === row.id, team, highlight, choose: chooseSession }, dragHandle: ".og-session-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 });
+        sessions.push({ id: row.id, type: "session", position: { x: point.x - shape.width / 2, y: point.y - shape.orb / 2 }, ...measured, measured, selected: activeSession === row.id, data: { row, root, branch: checkoutChip(row, agentsById.get(model.parents.get(row.id) ?? "")), context: model.context.has(row.id), muted: selection !== null && !related, highlighted: pointedRelated.has(row.id), current: current?.id === row.id, team, highlight, choose: chooseSession }, dragHandle: ".og-session-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 });
       }
     }
     // The chosen team's dashed outline goes round its circles and words.
@@ -475,11 +475,12 @@ function SessionPreview({ row, model, actions, openRecord, close, choose }: { ro
   const rows = new Map(model.allAgents.map((one) => [one.id, one]));
   const talks = model.communication.filter((pair) => pair.source === row.id || pair.target === row.id).map((pair) => exchange(pair, row.id)).filter((talk) => rows.has(talk.other));
   const ask = row.agent.state.ask;
+  const launch = launchWords(row);
   return <aside className="og-details overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:shadow-lg" aria-label={t("overviewGraph.preview")} data-graph-preview="true">
     <div className="og-details-head"><strong><AgentMark kind={row.agent.agent_kind} /><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong><Hint label={t("overviewGraph.close")}><Button variant="ghost" size="icon-sm" onClick={close}><XIcon /></Button></Hint></div>
     <p className="og-detail-status"><StatusMark mark={row.agent.mark} />{markWords(t, row.agent)}</p>
     <p className="og-context">{row.project.label} · {row.checkout.branch ?? row.checkout.label}{row.device ? ` · ${row.device}` : ""}</p>
-    <p className="og-context">{agentProductName(row.agent.agent_kind)}{row.launchModel ? ` · ${t("overviewGraph.launchModel", { model: row.launchModel })}` : ""}</p>
+    <p className="og-context">{agentProductName(row.agent.agent_kind)}{launch ? ` · ${t("overviewGraph.launchModel", { model: launch })}` : ""}</p>
     {!ask && hasGraphLine(row.agent) ? <div className="og-now"><b>{t("overviewGraph.now")}</b><GraphLine agent={row.agent} /></div> : null}
     {ask ? <div className="og-ask"><small>{t("overviewGraph.asks")}</small><p>{askWhat(t, ask.verb, ask.what, ask.subject)}</p></div> : null}
     <div className="og-details-actions"><Button variant="outline" size="sm" onClick={() => actions.openAgent(row.agent.pane_id)}>{t("overviewGraph.openSession")}</Button>{session ? <Button variant="secondary" size="sm" onClick={() => openRecord(session)}>{t("overviewGraph.openRecord")}</Button> : null}</div>

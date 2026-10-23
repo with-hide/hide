@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
-import { graphProjectId, overviewGraphModel, overviewGraphTeam, overviewProjectGraphCounts } from "./overviewGraphModel";
+import { checkoutChip, graphProjectId, overviewGraphModel, overviewGraphTeam, overviewProjectGraphCounts } from "./overviewGraphModel";
 import type { BoardProject } from "./projectBoard";
 import type { AgentRow, Checkout, OverviewGraphMetadata, OverviewGraphParty, Workspace } from "./snapshot";
 
@@ -19,7 +19,7 @@ function project(id: string, agents: AgentRow[], device = "local"): BoardProject
 const party = (pane: string, session = `digest-${pane}`, device = "local"): OverviewGraphParty => ({ device_id: device, pane_id: pane, session });
 const letter = (id: string, sender: OverviewGraphParty, recipient: OverviewGraphParty, kind = "request", at = 10) => ({ id, sender, recipient, kind, at_unix_ms: at });
 function metadata(parties: OverviewGraphParty[], letters: OverviewGraphMetadata["letters"] = []): OverviewGraphMetadata {
-  return { available: true, limit: 2000, retained_count: letters.length, truncated: false, retention_ms: 86400000, letters, sessions: parties.map((row) => ({ device_id: row.device_id, pane_id: row.pane_id, session_digest: row.session, launch_model: null })) };
+  return { available: true, limit: 2000, retained_count: letters.length, truncated: false, retention_ms: 86400000, letters, sessions: parties.map((row) => ({ device_id: row.device_id, pane_id: row.pane_id, session_digest: row.session, launch_model: null, launch_effort: null })) };
 }
 type Model = ReturnType<typeof overviewGraphModel>;
 const pane = (model: Model, id: string) => model.allAgents.find((row) => row.id === id)!.agent.pane_id;
@@ -291,5 +291,24 @@ describe("Overview focus", () => {
     expect(graph.visible).toHaveLength(2);
     expect(graph.quietBranches.size).toBe(0);
     expect(new Set(graph.allAgents.map((row) => graph.teams.get(row.id))).size).toBe(1);
+  });
+});
+
+describe("the branch chip on the map", () => {
+  type Row = Parameters<typeof checkoutChip>[0];
+  const at = (id: string, branch: string | null, isWorktree: boolean, deviceId = "local") => ({ deviceId, checkout: { id, branch, label: id.split(":")[1]!, is_worktree: isWorktree } }) as unknown as Row;
+  const main = at("hide:main", "main", false);
+  const fix = at("hide:fix", "fix/lane-pin", true);
+
+  it("names a worktree once per team, on the top session working there", () => {
+    expect(checkoutChip(main, undefined)).toBeNull();
+    expect(checkoutChip(fix, undefined)).toBe("fix/lane-pin");
+    expect(checkoutChip(fix, main)).toBe("fix/lane-pin");
+    expect(checkoutChip(at("hide:fix", "fix/lane-pin", true), fix)).toBeNull();
+    expect(checkoutChip(at("hide:fix", "fix/lane-pin", true, "mini"), fix)).toBe("fix/lane-pin");
+  });
+
+  it("names a detached worktree by its folder", () => {
+    expect(checkoutChip(at("hide:probe", null, true), main)).toBe("probe");
   });
 });
