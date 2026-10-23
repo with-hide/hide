@@ -353,7 +353,7 @@ Claude Code and Codex share one deny envelope, `hookSpecificOutput.permissionDec
 
 Each refusal appends one JSON line (pane id, agent kind, shape, runtime; never the command text, and the same file holds the `daemon.unreachable` lines) to `~/.hide/agent-hooks/spawn-guard.log` (private, capped at 256 KiB with one rotation) and echoes it on standard error, where a hook run by hand shows it.
 The per-call cost is what an ordinary shell call pays: the payload is read within 0.5 seconds and a byte test for `herdr` over the whole payload runs before anything is parsed or spawned, so a call whose payload does not mention `herdr` (its working directory and transcript path included) costs one process start and the [project guardrails](#project-guardrails)' policy read; a path containing `herdr` pays one JSON parse and the lexer as well (numbers in [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#the-spawn-guard-hook-on-a-shell-call)).
-`hide-agent-hooks/tests/it/spawn_guard.rs` runs the helper beside a stand-in `hide` for each outcome above, and `src/spawn_guard.rs` holds the parser's table tests.
+`hide-agent-hooks/tests/it/spawn_guard.rs` runs the helper beside a stand-in `hide` for each outcome above, and `src/spawn_guard.rs` holds the parser's table tests; the parser itself is `hide-shell`.
 
 ## Folder trust for the worktrees Hide makes
 
@@ -485,7 +485,7 @@ It refuses three things and lets everything else run, reading and searching incl
 - `gh pr merge` by a worker of a mission that goes up to pull requests (`mission_merge`);
 - `git push` with `--force`, `--force-with-lease`, a short flag holding `f` or a `+` refspec, and `git rebase` other than `--abort` or `--quit`, in any pane with a record (`history_rewrite`).
 
-The shell words are read the way the spawn guard reads them (`spawn_guard::shell_line`), each command of a line on its own, so `cd repo && git commit` is seen; a write a script or `bash -c` makes is not, as the guardrails say of theirs.
+The shell words are read the way the spawn guard reads them (`hide_shell::shell_line`), each command of a line on its own, so `cd repo && git commit` is seen; a write a script or `bash -c` makes is not, as the guardrails say of theirs.
 OpenCode's plugin and the Pi and omp extension send a file tool to the helper only while a project guardrail is on, so on those agents the write refusal of a plan under review holds only then; their shell calls reach the helper and are refused the same way ([INSTALL.md](INSTALL.md#what-each-system-supports)).
 `tests/it/plan_record.rs` runs the compiled hook beside a stand-in `hide` that records every call: the prompt hook's one letter pull writes the record, and the pre-tool hook then refuses a write and a commit and lets `git status` and a read run with no further call.
 

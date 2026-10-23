@@ -9,8 +9,8 @@
 use super::{
     CREATED_AFTER_MS, CREATED_BEFORE_MS, DAY_MS, FileState, IssueSource, LinkedIssue, LinkedParent,
     LinkedSession, OPEN_EXCEPTION_MS, PANEL_SESSION_LIMIT, PaneFact, ParentFact, ProjectFacts,
-    ProjectLinkSummary, SESSION_PR_LIMIT, STORE_PAGE_LIMIT, SUMMARY_SESSION_LIMIT, SessionPrChip,
-    SessionRole, WorktreeFact, within,
+    ProjectLinkSummary, SESSION_NAMED_LIMIT, SESSION_PR_LIMIT, STORE_PAGE_LIMIT,
+    SUMMARY_SESSION_LIMIT, SessionPrChip, SessionRole, WorktreeFact, within,
 };
 use crate::links::ledger::SessionIdentity;
 use hide_session::ConversationCheckpoint;
@@ -26,7 +26,7 @@ use std::time::Duration;
 #[path = "ledger_store.rs"]
 mod ledger;
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 const SCHEMA: &str = "
 CREATE TABLE projects(key TEXT PRIMARY KEY, device TEXT NOT NULL, root TEXT NOT NULL,
@@ -775,6 +775,11 @@ impl LinkStore {
                 [device, path],
             )
             .map_err(failed)?;
+            tx.execute(
+                "DELETE FROM session_named_prs WHERE device=?1 AND file=?2",
+                [device, path],
+            )
+            .map_err(failed)?;
         }
         let seen_session = previous.as_ref().and_then(|row| row.session.clone());
         let previous = previous.filter(|_| continuing);
@@ -937,6 +942,7 @@ impl LinkStore {
                     held += 1;
                 }
             }
+            apply_named(&tx, device, agent, id, path, facts, before.as_ref())?;
             link_continuations(&tx, device)?;
         }
         let checkpoint = answer
@@ -1215,6 +1221,7 @@ impl LinkStore {
                 "sessions",
                 "session_branches",
                 "session_prs",
+                "session_named_prs",
                 "session_parents",
                 "ledger_requests",
                 "ledger_excluded",
@@ -1299,8 +1306,9 @@ impl LinkStore {
     }
 
     /// The folders a project's sessions work in, each on its device: its
-    /// root and the worktrees recorded for it, and where a session that
-    /// printed one of its pull requests worked, on any device. The last keeps
+    /// root and the worktrees recorded for it, and where a session that made
+    /// one of its pull requests worked, on any device; an address a session
+    /// only printed, or a pull request it only named, teaches nothing. The last keeps
     /// a removed worktree's sessions in the project after its checkout is
     /// gone, and joins a device's sessions to the project its repository is
     /// registered as here (D-21). A learned folder that holds a registered
@@ -1316,11 +1324,16 @@ impl LinkStore {
                     "SELECT DISTINCT s.device, s.cwd FROM session_prs sp JOIN sessions s \
                      ON s.device=sp.device AND s.agent=sp.agent AND s.id=sp.id \
                      LEFT JOIN repo_names r ON r.name=sp.repo_name \
-                     WHERE COALESCE(r.repo, sp.repo_name)=?1 AND s.cwd IS NOT NULL",
+                     JOIN prs p ON p.repo=COALESCE(r.repo, sp.repo_name) AND p.number=sp.number \
+                     WHERE p.repo=?1 AND s.cwd IS NOT NULL AND p.created_at IS NOT NULL \
+                     AND sp.at>=p.created_at-?2 AND sp.at<=p.created_at+?3",
                 )
                 .map_err(failed)?;
             let learned: Vec<DevicePath> = statement
-                .query_map([repo], |row| Ok((row.get(0)?, row.get(1)?)))
+                .query_map(
+                    params![repo, CREATED_BEFORE_MS as i64, CREATED_AFTER_MS as i64],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
                 .and_then(Iterator::collect)
                 .map_err(failed)?;
             if !learned.is_empty() {
@@ -1493,12 +1506,25 @@ impl LinkStore {
                 }
             }
         }
+        // An address a tool printed is the session's making of the pull
+        // request when GitHub made it then, and nothing else: a listing, a
+        // browser's tabs or a log prints addresses of work it never touched.
+        let created: BTreeSet<SessionKey> = printed
+            .iter()
+            .filter(|(_, (at, _))| {
+                pr.created_at.is_some_and(|created| {
+                    *at + CREATED_BEFORE_MS >= created && *at <= created + CREATED_AFTER_MS
+                })
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        let named = self.named_sessions(project, pr, &names)?;
         let start = self.window_start(pr)?;
         let end = pr.end().unwrap_or(u64::MAX);
         let mut paths = self.project_paths(project)?;
-        if !printed.is_empty() {
+        if !created.is_empty() {
             let fences = self.fences(project)?;
-            for key in printed.keys() {
+            for key in &created {
                 if let Some(cwd) = self.session(key)?.and_then(|session| session.cwd) {
                     let place = (key.device.clone(), cwd);
                     if fences.admit(&place) {
@@ -1552,8 +1578,9 @@ impl LinkStore {
             }
         }
         let mut members: Vec<Member> = Vec::new();
-        let keys = printed
-            .keys()
+        let keys = created
+            .iter()
+            .chain(named.keys())
             .chain(worked.keys())
             .cloned()
             .collect::<BTreeSet<_>>();
@@ -1564,15 +1591,11 @@ impl LinkStore {
             if session.interactive == Some(false) {
                 continue;
             }
-            let created = pr.created_at.is_some_and(|created| {
-                printed.get(&key).is_some_and(|(at, _)| {
-                    *at + CREATED_BEFORE_MS >= created && *at <= created + CREATED_AFTER_MS
-                })
-            });
-            if !printed.contains_key(&key) && !session.inside(&paths) {
+            let made = created.contains(&key);
+            if !made && !named.contains_key(&key) && !session.inside(&paths) {
                 continue;
             }
-            let (role, request) = if created {
+            let (role, request) = if made {
                 (
                     SessionRole::Created,
                     printed.get(&key).and_then(|(_, request)| request.clone()),
@@ -1581,12 +1604,90 @@ impl LinkStore {
                 let branch_request = worked
                     .get(&key)
                     .and_then(|work| work.request.clone().map(|(_, text)| text));
-                let printed_request = printed.get(&key).and_then(|(_, request)| request.clone());
-                (SessionRole::Worked, branch_request.or(printed_request))
+                let named_request = named.get(&key).and_then(|(_, request)| request.clone());
+                (SessionRole::Worked, branch_request.or(named_request))
             };
             members.push((session, role, request, worked.contains_key(&key)));
         }
         self.lines(members, pr.number, local)
+    }
+
+    /// The sessions whose tool calls named `pr` (`hide_session::NamedPr`),
+    /// each with its first call's time and the request before it: by the
+    /// pull request's repository (`names`), or by its number alone from a
+    /// folder that is `project`'s, the deepest registered place holding it
+    /// on the session's device being this project's.
+    fn named_sessions(
+        &self,
+        project: &ProjectRow,
+        pr: &PrRow,
+        names: &[String],
+    ) -> Result<BTreeMap<SessionKey, (u64, Option<String>)>, String> {
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT n.device, n.agent, n.id, n.repo_name, n.folder, n.at, n.request, s.cwd \
+                 FROM session_named_prs n LEFT JOIN sessions s \
+                 ON s.device=n.device AND s.agent=n.agent AND s.id=n.id WHERE n.number=?1",
+            )
+            .map_err(failed)?;
+        let rows: Vec<NamedRow> = statement
+            .query_map(params![pr.number as i64], |row| {
+                Ok(NamedRow {
+                    key: SessionKey {
+                        device: row.get(0)?,
+                        agent: row.get(1)?,
+                        id: row.get(2)?,
+                    },
+                    repo_name: row.get(3)?,
+                    folder: row.get(4)?,
+                    at: row.get::<_, i64>(5)? as u64,
+                    request: row.get(6)?,
+                    cwd: row.get(7)?,
+                })
+            })
+            .and_then(Iterator::collect)
+            .map_err(failed)?;
+        let mut places: Option<Vec<(String, DevicePath)>> = None;
+        let mut named: BTreeMap<SessionKey, (u64, Option<String>)> = BTreeMap::new();
+        for row in rows {
+            let admitted = if row.repo_name.is_empty() {
+                let place = Some(row.folder)
+                    .filter(|folder| !folder.is_empty())
+                    .or(row.cwd);
+                let Some(place) = place else {
+                    continue;
+                };
+                let places = match places.as_ref() {
+                    Some(places) => places,
+                    None => places.insert(self.registered_places()?),
+                };
+                deepest_owner(places, &row.key.device, &place) == Some(project.key.as_str())
+            } else {
+                names.contains(&row.repo_name)
+            };
+            if !admitted {
+                continue;
+            }
+            let entry = named
+                .entry(row.key)
+                .or_insert((row.at, row.request.clone()));
+            if row.at < entry.0 {
+                *entry = (row.at, row.request);
+            }
+        }
+        Ok(named)
+    }
+
+    /// Every project's registered places, each with its project's key.
+    fn registered_places(&self) -> Result<Vec<(String, DevicePath)>, String> {
+        let mut places = Vec::new();
+        for project in self.projects()? {
+            for place in self.registered_paths(&project)? {
+                places.push((project.key.clone(), place));
+            }
+        }
+        Ok(places)
     }
 
     /// Joins sessions that continue one another into one line each (B17),
@@ -1863,7 +1964,7 @@ impl LinkStore {
     }
 
     /// The pull requests of a project that any session could be linked to:
-    /// printed by one, or on a branch one worked on.
+    /// printed or named by one, or on a branch one worked on.
     fn candidate_prs(&self, project: &str) -> Result<Vec<PrRow>, String> {
         let mut statement = self
             .connection
@@ -1871,7 +1972,9 @@ impl LinkStore {
                 "SELECT {PR_COLUMNS_P} FROM prs p WHERE p.project=?1 AND (\
                  EXISTS(SELECT 1 FROM session_branches b WHERE b.branch=p.branch) OR \
                  EXISTS(SELECT 1 FROM session_prs s LEFT JOIN repo_names r ON r.name=s.repo_name \
-                 WHERE s.number=p.number AND COALESCE(r.repo, s.repo_name)=p.repo)) \
+                 WHERE s.number=p.number AND COALESCE(r.repo, s.repo_name)=p.repo) OR \
+                 EXISTS(SELECT 1 FROM session_named_prs n LEFT JOIN repo_names r ON r.name=n.repo_name \
+                 WHERE n.number=p.number AND (n.repo_name='' OR COALESCE(r.repo, n.repo_name)=p.repo))) \
                  ORDER BY p.number"
             ))
             .map_err(failed)?;
@@ -2108,6 +2211,28 @@ fn deepest_checkout<'a>(checkouts: &'a [WorktreeFact], cwd: &str) -> Option<&'a 
         .max_by_key(|checkout| checkout.path.trim_end_matches('/').len())
 }
 
+/// The pull requests a session's tool calls named (`hide_session::NamedPr`):
+/// `repo_name` is empty for a number named alone, which belongs to the
+/// project whose folder `folder` (empty: the session's own) lies in.
+/// Version 10; a store a test rolled back to an earlier version may still
+/// hold it.
+const NAMED_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS session_named_prs(device TEXT NOT NULL, agent TEXT NOT NULL, id TEXT NOT NULL,
+    file TEXT NOT NULL, repo_name TEXT NOT NULL, number INTEGER NOT NULL, folder TEXT NOT NULL,
+    at INTEGER NOT NULL, request TEXT, PRIMARY KEY(device, agent, id, repo_name, number, folder));
+CREATE INDEX IF NOT EXISTS session_named_prs_number ON session_named_prs(number);
+";
+
+/// A record older than version 10 kept no named pull requests: every file it
+/// read is read again from its start, and the last 90 days are listed again,
+/// on this machine and each device, so the sessions in them get theirs. A
+/// read from the start replaces what the file said before (B37), and the
+/// first fill stays done, so nothing on screen waits for it.
+const NAMED_REREAD: &str = "
+UPDATE cursors SET checkpoint=NULL, stamp='';
+DELETE FROM meta WHERE key='listed_at' OR key LIKE 'listed_at:%';
+";
+
 /// The project ids a node conversion or a core move gave new ids, so the
 /// old session search file's `policy`, which is never written (D-20), still
 /// names each project's Copied history days. Version 4.
@@ -2157,9 +2282,15 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
             ""
         };
         let plans = if version < 9 { ledger::PLAN_SCHEMA } else { "" };
+        let named = if version < 10 { NAMED_SCHEMA } else { "" };
+        let reread = if (1..10).contains(&version) {
+            NAMED_REREAD
+        } else {
+            ""
+        };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} {closed_flows} {plans} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} {closed_flows} {plans} {named} {reread} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");
@@ -2167,6 +2298,81 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
             })?;
     }
     name_read_files(connection)
+}
+
+/// The pull requests a read's tool calls named, joined to session `id`. The
+/// earliest call stands, with the request before it.
+fn apply_named(
+    tx: &Transaction<'_>,
+    device: &str,
+    agent: &str,
+    id: &str,
+    path: &str,
+    facts: &hide_session::links::LinkFacts,
+    before: Option<&String>,
+) -> Result<(), String> {
+    if facts.named_capped > 0 {
+        crate::diagnostic!(serde_json::json!({
+            "component": "links", "kind": "read.named_capped",
+            "device_id": device, "agent": agent, "session_id": id,
+            "dropped": facts.named_capped,
+        }));
+    }
+    let mut held: i64 = tx
+        .query_row(
+            "SELECT count(*) FROM session_named_prs WHERE device=?1 AND agent=?2 AND id=?3",
+            [device, agent, id],
+            |row| row.get(0),
+        )
+        .map_err(failed)?;
+    for mark in &facts.named {
+        let repo_name = mark
+            .pr
+            .repository
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        let folder = mark.pr.folder.as_deref().unwrap_or_default();
+        let known = tx
+            .query_row(
+                "SELECT 1 FROM session_named_prs WHERE device=?1 AND agent=?2 AND id=?3 \
+                 AND repo_name=?4 AND number=?5 AND folder=?6",
+                params![device, agent, id, repo_name, mark.pr.number as i64, folder],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(failed)?
+            .is_some();
+        if !known && held >= SESSION_NAMED_LIMIT as i64 {
+            crate::diagnostic!(serde_json::json!({
+                "component": "links", "kind": "session.named_limit",
+                "device_id": device, "agent": agent, "session_id": id,
+            }));
+            break;
+        }
+        tx.execute(
+            "INSERT INTO session_named_prs VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) \
+             ON CONFLICT(device,agent,id,repo_name,number,folder) DO UPDATE SET \
+             request=CASE WHEN excluded.at < at THEN excluded.request ELSE request END, \
+             at=MIN(at, excluded.at)",
+            params![
+                device,
+                agent,
+                id,
+                path,
+                repo_name,
+                mark.pr.number as i64,
+                folder,
+                mark.at_unix_ms as i64,
+                mark.request.as_ref().or(before),
+            ],
+        )
+        .map_err(failed)?;
+        if !known {
+            held += 1;
+        }
+    }
+    Ok(())
 }
 
 /// The record's key for a repository GitHub named: its id when GitHub gave
@@ -2590,6 +2796,30 @@ impl SessionRow {
                 .any(|(device, path)| *device == self.key.device && within(cwd, path))
         })
     }
+}
+
+/// One `session_named_prs` row with its session's folder.
+struct NamedRow {
+    key: SessionKey,
+    repo_name: String,
+    folder: String,
+    at: u64,
+    request: Option<String>,
+    cwd: Option<String>,
+}
+
+/// The project whose registered place holding `place` on `device` is the
+/// deepest, so a folder inside a project nested in another is the inner one's.
+fn deepest_owner<'a>(
+    places: &'a [(String, DevicePath)],
+    device: &str,
+    place: &str,
+) -> Option<&'a str> {
+    places
+        .iter()
+        .filter(|(_, (at, path))| at == device && within(place, path))
+        .max_by_key(|(_, (_, path))| path.trim_end_matches('/').len())
+        .map(|(key, _)| key.as_str())
 }
 
 /// What keeps a learned place (a folder a session printed this project's
