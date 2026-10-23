@@ -190,10 +190,14 @@ function edgeLookOf(edge: GraphEdge, mission: Mission, stacked: ReadonlySet<stri
   if (stacked.has(`${edge.from}>${edge.to}`)) return { tone: "text-pr-merged", dashed: true };
   const from = mission.nodes.find((node) => node.key === edge.from);
   if (from && (from.status === "working" || from.status === "review")) return { tone: "text-agent-working" };
-  return { tone: "text-border" };
+  // A line still ahead stays bright on the popover, as the plan's small map draws it.
+  return { tone: "text-muted-foreground" };
 }
 
 const FACE = "flex w-(--size-plan-node-compact) min-w-0 items-center gap-xs rounded-md border border-border bg-card px-xs py-xxs text-left";
+/** A card still waiting: dashed in the colour the plan's waiting steps use, which reads on the popover. */
+const PENDING = "border-dashed border-muted-foreground bg-transparent";
+const pending = (node: MissionNode) => node.status === "planned" || node.blocked !== null;
 
 function MiniFace({ mission, card }: { mission: Mission; card: MiniCard }) {
   const { t } = useInterfaceTranslation();
@@ -201,7 +205,7 @@ function MiniFace({ mission, card }: { mission: Mission; card: MiniCard }) {
   if (card.kind === "report") return <ReportFace mission={mission} />;
   const titles = card.nodes.map((node) => node.title).join(", ");
   return (
-    <span data-dependency-node={card.key} data-mission-mini-more={card.nodes.length} className={FACE} title={titles} aria-label={`${t("mission.mini.more", { count: card.nodes.length })}: ${titles}`}>
+    <span data-dependency-node={card.key} data-mission-mini-more={card.nodes.length} className={cn(FACE, card.nodes.every(pending) && PENDING)} title={titles} aria-label={`${t("mission.mini.more", { count: card.nodes.length })}: ${titles}`}>
       <span className="min-w-0 flex-1 truncate">{t("mission.mini.more", { count: card.nodes.length })}</span>
     </span>
   );
@@ -211,14 +215,13 @@ function MiniFace({ mission, card }: { mission: Mission; card: MiniCard }) {
 function NodeFace({ node }: { node: MissionNode }) {
   const { t } = useInterfaceTranslation();
   const row = useWorkerRow(node);
-  const pending = node.status === "planned" || node.blocked !== null;
   const live = node.status === "working" || node.status === "review";
   return (
     <span
       data-dependency-node={node.key}
       data-mission-mini-node={node.key}
       data-node-status={node.status}
-      className={cn(FACE, pending && "border-dashed bg-transparent", live && "border-agent-working", node.status === "failed" && "border-destructive")}
+      className={cn(FACE, pending(node) && PENDING, live && "border-agent-working", node.status === "failed" && "border-destructive")}
     >
       <StatusMark mark={nodeMark(node, row?.mark ?? null)} label={t(`mission.status.${node.status}`)} />
       <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
@@ -231,7 +234,7 @@ function ReportFace({ mission }: { mission: Mission }) {
   const { t } = useInterfaceTranslation();
   const done = mission.status === "done" || mission.status === "merge_wait";
   return (
-    <span data-dependency-node={MINI_REPORT} data-mission-mini-report={mission.status} className={cn(FACE, "justify-center text-muted-foreground", done ? "" : "border-dashed bg-transparent")}>
+    <span data-dependency-node={MINI_REPORT} data-mission-mini-report={mission.status} className={cn(FACE, "justify-center text-muted-foreground", !done && PENDING)}>
       <span className="truncate">{t("mission.report")}</span>
     </span>
   );
