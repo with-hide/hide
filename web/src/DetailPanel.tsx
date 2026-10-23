@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, CoinsIcon, ExternalLinkIcon, FileTextIcon, FolderGit2Icon, GitPullRequestIcon, ListChecksIcon, WaypointsIcon, XIcon } from "lucide-react";
+import { ArrowLeftIcon, CoinsIcon, ExternalLinkIcon, FileTextIcon, FolderGit2Icon, GitPullRequestIcon, ListChecksIcon, SettingsIcon, WaypointsIcon, XIcon } from "lucide-react";
 import { cn } from "./lib/utils";
 import { PR_LOOK } from "./prMark";
 import type { Actions } from "./actions";
@@ -114,6 +114,13 @@ export function DetailPanel({ actions }: { actions: Actions }) {
           <Hint label={t("detail.github")}>
             <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("detail.github")} onClick={() => actions.openLink(url, true)} data-detail-github="true">
               <ExternalLinkIcon />
+            </Button>
+          </Hint>
+        ) : null}
+        {item.kind === "mission" ? (
+          <Hint label={t("mission.settings")}>
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("mission.settings")} onClick={() => actions.openSettings("conductor")} data-detail-conductor-settings="true">
+              <SettingsIcon />
             </Button>
           </Hint>
         ) : null}

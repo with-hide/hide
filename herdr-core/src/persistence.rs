@@ -9,10 +9,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     AgentLogoMode, ColorTheme, DetailSlot, DeviceRegistration, OverviewGraphChoices,
-    PaneCompletion, PaneReadRecord, PetOriginSnapshot, RightPanelSection, SidebarLens,
-    SidebarProject, TaskView, ThemePreference, UiStateSnapshot, WorkspaceRegistration,
-    default_accent_hex, default_font_size, default_pane_text_scale, default_panel_visible,
-    default_sidebar_width, default_terminal_font_size,
+    PRACTICE_CHAPTER_LIMIT, PRACTICE_STEP_LIMIT, PaneCompletion, PaneReadRecord, PaneTurnRowMode,
+    PetOriginSnapshot, PracticeProgress, RightPanelSection, SidebarLens, SidebarProject, TaskView,
+    ThemePreference, UiStateSnapshot, WorkspaceRegistration, default_accent_hex, default_font_size,
+    default_pane_text_scale, default_panel_visible, default_sidebar_width,
+    default_terminal_font_size, practice_chapter_id_valid,
 };
 
 const UI_STATE_SCHEMA_VERSION: u32 = 1;
@@ -80,6 +81,10 @@ struct StoredUiState {
     /// Kept as JSON so a value this build cannot read loads as every project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sidebar_project: Option<serde_json::Value>,
+    /// Kept as JSON and read chapter by chapter (`read_practice`), so a
+    /// chapter this build cannot read is dropped and the rest still load.
+    #[serde(default)]
+    practice: Option<serde_json::Value>,
     /// Kept as JSON so a slot this build cannot read loads empty instead of
     /// making the whole store unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -134,6 +139,10 @@ struct StoredUiState {
     /// loads as hidden.
     #[serde(default)]
     agent_logo_mode: Option<String>,
+    /// `one_line`, `two_lines` or `off`; a store written before the mode
+    /// existed loads as one line.
+    #[serde(default)]
+    pane_turn_row_mode: Option<String>,
     /// Kept as text for the same reason as `theme`; absent in a store written
     /// before the color theme existed, which loads as Hide (D-04).
     #[serde(default)]
@@ -278,11 +287,15 @@ pub enum UnrecognizedField {
     ColorTheme,
     /// The agent logo mode; hidden was used.
     AgentLogoMode,
+    /// The pane turn row mode; one line was used.
+    PaneTurnRowMode,
     /// The sidebar's lens or the 태스크 view option; the projects, grouped
     /// by state, was used.
     SidebarLens,
     /// The project the sidebar's lists are narrowed to; every project was used.
     SidebarProject,
+    /// Practice-mode progress; the chapters that read loaded.
+    Practice,
     /// The lane's 보기 slot; it loaded empty.
     Detail,
     /// Records of the Overview map's choices; the ones that read loaded.
@@ -397,6 +410,32 @@ pub(crate) fn unreadable(path: &Path) -> Option<String> {
     }
 }
 
+/// Reads the stored practice progress chapter by chapter and returns it with
+/// how many entries were dropped: one that is not a chapter id with a
+/// readable progress, a step past the limit, or past the chapter limit.
+fn read_practice(value: serde_json::Value) -> (BTreeMap<String, PracticeProgress>, usize) {
+    let serde_json::Value::Object(entries) = value else {
+        return (BTreeMap::new(), 1);
+    };
+    let mut practice = BTreeMap::new();
+    let mut dropped = 0;
+    for (chapter, entry) in entries {
+        let progress = serde_json::from_value::<PracticeProgress>(entry)
+            .ok()
+            .filter(|progress| progress.step <= PRACTICE_STEP_LIMIT);
+        match progress {
+            Some(progress)
+                if practice_chapter_id_valid(&chapter)
+                    && practice.len() < PRACTICE_CHAPTER_LIMIT =>
+            {
+                practice.insert(chapter, progress);
+            }
+            _ => dropped += 1,
+        }
+    }
+    (practice, dropped)
+}
+
 fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition) {
     let Ok(stored) = serde_json::from_slice::<StoredUiState>(bytes) else {
         return (
@@ -434,6 +473,13 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             AgentLogoMode::Hidden
         }),
     };
+    let pane_turn_row_mode = match stored.pane_turn_row_mode.as_deref() {
+        None => PaneTurnRowMode::OneLine,
+        Some(value) => PaneTurnRowMode::parse(value).unwrap_or_else(|| {
+            unrecognized.push(UnrecognizedField::PaneTurnRowMode);
+            PaneTurnRowMode::OneLine
+        }),
+    };
     let sidebar_lens = match stored.sidebar_lens.as_deref() {
         None => SidebarLens::default(),
         Some(value) => SidebarLens::parse(value).unwrap_or_else(|| {
@@ -453,6 +499,16 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             .map_err(|_| unrecognized.push(UnrecognizedField::SidebarProject))
             .ok()
     });
+    let practice = match stored.practice {
+        None => BTreeMap::new(),
+        Some(value) => {
+            let (practice, dropped) = read_practice(value);
+            if dropped > 0 {
+                unrecognized.push(UnrecognizedField::Practice);
+            }
+            practice
+        }
+    };
     let detail = match stored.detail {
         None => DetailSlot::default(),
         Some(value) => serde_json::from_value::<DetailSlot>(value)
@@ -519,6 +575,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             sidebar_lens,
             task_view,
             sidebar_project,
+            practice,
             detail,
             overview_graph,
             selected_path: stored.selected_path,
@@ -538,6 +595,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             accent_hex: stored.accent_hex,
             theme,
             agent_logo_mode,
+            pane_turn_row_mode,
             color_theme,
             interface_language: stored.interface_language,
             usage: stored.usage.restored(),
@@ -696,6 +754,9 @@ pub fn save(
         sidebar_project: state.sidebar_project.as_ref().map(|project| {
             serde_json::to_value(project).expect("the sidebar's project serializes")
         }),
+        practice: Some(
+            serde_json::to_value(&state.practice).expect("practice progress serializes"),
+        ),
         detail: (state.detail != DetailSlot::default())
             .then(|| serde_json::to_value(&state.detail).expect("the 보기 slot serializes")),
         overview_graph: Some(
@@ -719,6 +780,7 @@ pub fn save(
         accent_hex: state.accent_hex.clone(),
         theme: Some(state.theme.as_str().to_owned()),
         agent_logo_mode: Some(state.agent_logo_mode.as_str().to_owned()),
+        pane_turn_row_mode: Some(state.pane_turn_row_mode.as_str().to_owned()),
         color_theme: Some(state.color_theme.as_str().to_owned()),
         interface_language: state.interface_language.clone(),
         usage: state.usage.clone(),
@@ -1544,6 +1606,86 @@ mod tests {
         );
         assert_eq!(unknown_state.sidebar_lens, SidebarLens::Projects);
         assert_eq!(unknown_state.detail, DetailSlot::default());
+    }
+
+    /// Practice-mode progress survives a relaunch; a store written before it
+    /// loads empty, and an entry this build cannot read is dropped while the
+    /// rest of the store, and the other chapters, still load.
+    #[test]
+    fn practice_progress_survives_a_relaunch_and_a_bad_entry_is_dropped() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("state.json");
+        let mut state = UiStateSnapshot {
+            task_view: TaskView::Project,
+            ..UiStateSnapshot::default()
+        };
+        state.practice.insert(
+            "first-agent".to_owned(),
+            PracticeProgress {
+                version: 2,
+                step: 5,
+                finished: false,
+            },
+        );
+        state.practice.insert(
+            "tour".to_owned(),
+            PracticeProgress {
+                version: 1,
+                step: 255,
+                finished: true,
+            },
+        );
+        save(&path, &state, &PaneTerminalSizes::new()).expect("persist the progress");
+        let (restored, _sizes, disposition) = load(&path);
+        assert_eq!(disposition, LoadDisposition::Loaded);
+        assert_eq!(restored.practice, state.practice);
+
+        let older = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null}"#;
+        let (older_state, _sizes, older_disposition) = decode(older);
+        assert_eq!(older_disposition, LoadDisposition::Loaded);
+        assert!(older_state.practice.is_empty());
+
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        stored["practice"]["broken"] = serde_json::json!({"version": "two"});
+        stored["practice"]["Bad Id"] =
+            serde_json::json!({"version": 1, "step": 0, "finished": false});
+        stored["practice"]["far"] =
+            serde_json::json!({"version": 1, "step": 256, "finished": false});
+        stored["practice"]["extra"] =
+            serde_json::json!({"version": 1, "step": 0, "finished": false, "later": 1});
+        let (partial, _sizes, disposition) = decode(&serde_json::to_vec(&stored).unwrap());
+        assert_eq!(
+            disposition,
+            LoadDisposition::Unrecognized(vec![UnrecognizedField::Practice])
+        );
+        assert_eq!(partial.practice, state.practice);
+        assert_eq!(partial.task_view, TaskView::Project);
+
+        stored["practice"] = serde_json::json!(["not", "a", "map"]);
+        let (unreadable, _sizes, disposition) = decode(&serde_json::to_vec(&stored).unwrap());
+        assert_eq!(
+            disposition,
+            LoadDisposition::Unrecognized(vec![UnrecognizedField::Practice])
+        );
+        assert!(unreadable.practice.is_empty());
+        assert_eq!(unreadable.task_view, TaskView::Project);
+
+        let many: serde_json::Map<String, serde_json::Value> = (0..65)
+            .map(|index| {
+                (
+                    format!("c{index:02}"),
+                    serde_json::json!({"version": 1, "step": 0, "finished": false}),
+                )
+            })
+            .collect();
+        stored["practice"] = serde_json::Value::Object(many);
+        let (capped, _sizes, disposition) = decode(&serde_json::to_vec(&stored).unwrap());
+        assert_eq!(
+            disposition,
+            LoadDisposition::Unrecognized(vec![UnrecognizedField::Practice])
+        );
+        assert_eq!(capped.practice.len(), PRACTICE_CHAPTER_LIMIT);
     }
 
     /// Settings › Conductor survives a relaunch, and a value this build

@@ -177,7 +177,7 @@ The core answers from the caller's own observation: the letters whose wait is ov
 The plugin and the extension ask at every tool result of the pane's root session, so a `--now` letter goes at the next result (B6), and skip only the results that come while letters they handed over wait for their receipt; Grok's and Cursor's hook runs per tool call and adds one CLI call there, and agy's per model call after the first.
 Each handover the core answers is counted on the letter (`Letter.tool_handovers`), and after three without a receipt the letter is not handed over at a tool again: it waits for the next prompt or `hide inbox`, as a letter does after its three bells (`mailbox::TOOL_HANDOVERS`, D-11).
 [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#letters-at-a-tool-event) owns the cost per tool call and how it is measured, and [agent-hooks.md](agent-hooks.md) each script's and hook's part.
-The pending retry, the oldest-first order with `외 N통`, the three bell attempts, the three tool handovers above and the 60-minute deadline are the whole of it; a letter a working agent never reaches a gap for is belled or handed over once it rests, as before.
+The pending retry, the oldest-first order with the count of letters waiting, the three bell attempts, the three tool handovers above and the 60-minute deadline are the whole of it; a letter a working agent never reaches a gap for is belled or handed over once it rests, as before.
 The verdict's reasons are `working`, `blocked`, `awaiting_operator`, `session_unread`, `draft`, `quiet_period`, `kind_not_belled`, `session_changed`, `pane_unavailable`, `status_not_at_rest` and `core_pending` (a core on a move's copy types into no pane until the move's link commits it, [ARCHITECTURE.md](ARCHITECTURE.md#moving-the-core)).
 Between the verdict and the input the doorbell asks Herdr again and checks its own memory last, and each refusal there has its own reason: `launch_pending` and `not_ready` (Herdr's readiness), `identity_changed` (Herdr's agent in the pane has another name, kind or native session), `sequence_moved` (Herdr's status or state sequence moved), `input_after_verdict` (hide routed input to the pane) and `letter_changed` (the letter was confirmed, cancelled, expired or reserved meanwhile).
 A letter refused there is tried again in the same pane episode after 5 seconds, then 10, 20, 40 and 80, then every two minutes, because readiness and the letter are facts the pane episode does not carry; a change of the pane's status, sequence, input or session tries it at once.
@@ -248,14 +248,27 @@ A swallowed bell moves no observed state, so `Rung` prevents another ring in tha
 
 ### The bell line
 
-The doorbell submits one line through Herdr's `agent.prompt`: `🦉 <writer> <kind>: <the letter's first line>`, followed by ` · 외 N통` when N more letters wait for the same recipient, and ` · hide inbox` for a Codex or Grok recipient (the adapter's `bell_names_inbox` declaration):
+The doorbell submits one line through Herdr's `agent.prompt`: `🦉 <writer> <kind>: <the letter's first line>`, followed by how many more letters wait for the same recipient when there are any, and ` · hide inbox` for a Codex or Grok recipient (the adapter's `bell_names_inbox` declaration):
 
 ```
-🦉 label-end-fix 보고: label end 수정 PR #881을 열었습니다
+🦉 label-end-fix report: label end fix opened PR #881
 🦉 hierarchy-pen-scratch 보고: Pen 시안이 준비됐습니다 · 외 1통
 ```
 
-The kind reads 요청 for a request, 막힘 for a block, 보고 for a report, 진행 for a progress letter, 답장 for a reply and 감시 for a watch warning.
+The kind and the count are worded in the operator's interface language, the one Hide AI writes in (`Runtime::interface_language`: the language chosen in Settings, else this machine's primary language read once at launch, else English), which the doorbell reads with the recipient's connector under the runtime's lock from state the runtime holds, with no I/O.
+
+| Kind | en | ko | zh-CN | ja |
+| --- | --- | --- | --- | --- |
+| request | request | 요청 | 请求 | 依頼 |
+| block | blocked | 막힘 | 受阻 | ブロック |
+| report | report | 보고 | 报告 | 報告 |
+| progress | progress | 진행 | 进展 | 進捗 |
+| reply | reply | 답장 | 回复 | 返信 |
+| watch warning | watch | 감시 | 监视 | 監視 |
+| N more waiting | ` · and N more` | ` · 외 N통` | ` · 另有 N 封` | ` · ほか N 通` |
+
+A kind this build does not know reads as a letter (letter, 편지, 信, 手紙).
+Nothing reads the words back: a letter's turn is recognized by the whole line its ledger kept when it rang ([Recognizing the bell](#recognizing-the-bell)), so a change of language between the ring and the turn changes nothing.
 The writer is the name the sender registered under (`hide agent register`, `hide agent spawn --name`), else the title Hide's screens give it while its pane still hosts that session, else its runtime's name, such as Codex; never a pane id and never its registration id, which belong to the letter's envelope ([Names](#names-on-the-wire-and-on-screen)).
 A watch warning is named by the agent it watches, and its first line says for how long nothing moved, that the agent stopped with a question, or that it is blocked at a prompt ([Watch activity and completion](#watch-activity-and-completion)).
 Both are looked up in memory when the bell rings, on the doorbell's thread, never on the session-sync thread.
@@ -537,7 +550,7 @@ A longer session is refused `session_too_long` when the record is made, never as
 An empty session or one holding a control character is refused `invalid_registration` by the same rule (`coordination::kept_session`).
 A build before this one reads a session past 256 bytes as a damaged ledger, so going back to it after such a registration answers every delivery and agent command `ledger_unavailable` until this build or a later one runs again.
 A caller with no such record is refused `participant_ended` when its record ended, `participant_session_changed` when its pane's live record belongs to another session (the pane's agent session changed), `ambiguous_participant` when two live records match, and `participant_unavailable` otherwise; a remote participant on a pane of the same name is never the local caller.
-`hide agent spawn` requires `--name`, `--intent`, `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--path`, `--model`, `--effort`, `--brief <text>` or `--brief-file <path>`, and native arguments after `--`.
+`hide agent spawn` requires `--name`, `--intent`, `--kind`, `--repo` and `--branch`, with optional `--parent`, `--machine`, `--beside`, `--path`, `--model`, `--effort`, `--brief <text>` or `--brief-file <path>`, and native arguments after `--`.
 The brief is the child's first prompt: once Herdr reports the started agent ready for input (up to 30 s, `BRIEF_READY_WAIT`), the spawn submits it through `agent.prompt`, the one submission path the doorbell uses too, and only then waits for the child's session, so an agent that reports its session at its first turn (Codex, OpenCode 2) reports it on that turn and binds at once instead of waiting.
 When the child binds, the same text is recorded as a letter under the spawn's intent, kind `request`, delivered and hook-confirmed, so `hide inbox`, the ledger and a later wake carry what the child was started on, and a letter the parent sends under that intent afterwards is this one.
 The brief is part of the intent like `args` (another brief under the same intent is `intent_conflict`), the ledger marks it submitted (`briefed`) so the same command again never submits it twice, a blank brief or one past a letter's body limit (16 KiB) is `invalid_brief` before anything is made, and an agent that takes no input within the wait, or a submission Herdr refuses, is `brief_not_submitted` with nothing typed, where the same command submits it on the next try without starting the agent again.
@@ -548,6 +561,13 @@ Choose responsibility when creating the agent; it cannot be transferred afterwar
 With `--parent here` or the caller's own id, the agent is delegated: its parent owns the work, lineage is written immediately and an automatic watch starts.
 Without `--parent`, the work is handed off to the operator: the agent is an independent root, has no lineage edge to the spawner and starts no automatic watch.
 Both modes create a separate tab, in an existing checkout or a new worktree, without changing the current screen or keyboard focus.
+With `--beside` the child opens in the caller's own tab instead: its pane is split right of the caller's (`pane.split`, `focus: false`, the parameters Fork agent to the side uses), drawn at once on this machine's screen and replaced by Herdr's layout when it arrives (a runtime that cannot draw it logs `beside.draw_skipped` and the spawn goes on), and the rest of the start (the agent, its brief, its session and the child record) is the tab path's.
+Placement is independent of responsibility, so `--parent here --beside` makes a supervised child beside its parent and `--beside` alone an operator-owned root there; the spawn record keeps `beside`, and delegated-child relocation leaves such a child in its caller's tab across restarts ([ARCHITECTURE.md](ARCHITECTURE.md)).
+It is only for the caller's own checkout on the caller's own device, and everything else is refused before anything is registered, reserved or created, with the next action to run the command again without `--beside`: `beside_other_checkout` when `--repo` and `--branch` (and `--path`) name no existing worktree or another one than the caller's, so a new worktree or another branch never opens beside; `beside_other_machine` when `--machine` names another device, whose Herdr cannot hold a pane in the caller's tab; and `beside_needs_agent_pane` for a code-owned caller with no pane of its own (a shell that is no agent pane is refused earlier, as every agent command is, with `agent_pane_required`); a caller's worktree that is gone by the time the pane is made is `beside_other_checkout` too, since a spawn beside never makes a worktree.
+An agent on a connected device that spawns with `--beside` and no `--machine` gets its child beside it on that device's screen.
+The split is labelled with a reserved pane label (`hide-spawn:v1:<spawn id>`, never shown as a name) before anything else, so the same command after a reply was lost finds that pane and makes no second one, and the label is cleared once the spawn record names the pane; a retry of a spawn whose pane is recorded, or that completed, is not asked about the checkout again; a split Herdr refuses, or a caller pane that is gone, fails the spawn with `beside_pane_unavailable`, opens no tab in its place, and logs `spawn` `beside.split_failed` with the spawn and pane ids; a split that cannot be labelled is closed.
+A split whose own reply is lost before the label is written leaves a bare shell pane beside the caller that a retry does not find; the retry makes its own pane.
+`--beside` is part of the intent, so the same intent with or without it is `intent_conflict`.
 The no-focus request applies to opening the checkout's owner workspace as well as creating its tab; interactive workspace and tab creation keep their focus behavior.
 `hide agent spawn --help` explains the modes without contacting a daemon; the removed `--no-watch` flag is refused before any effects.
 Every other `hide` command ending in `--help` or `-h` prints that command's usage to stdout and exits 0; a wrong command prints one line that says what is wrong (`hide device needs a subcommand`, `unknown flag for hide ps: --x`, `--body is required and cannot be blank`), then that command's usage under `usage:`.

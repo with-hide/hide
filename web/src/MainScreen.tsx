@@ -21,6 +21,7 @@ import { requireInterfaceLanguage } from "./i18n/locale";
 import { useShellStore } from "./store";
 import { MAIN_VIEWS, useUiStore, type MainView } from "./ui";
 import { hostBridge } from "./host";
+import { openPractice } from "./practice/channel";
 import { commandLabel } from "./shortcutLabels";
 import { everyAgent } from "./overviewTasks";
 import { backlogTally } from "./overviewBacklog";
@@ -203,7 +204,8 @@ function DeviceUnanswered({ device, availability, actions }: { device: Device; a
  * The Home with no project (PRD first-run-onboarding D-16, B27; PRD
  * sidebar-task-lens B42): the next step in one sentence with Add project and
  * its chord; a browser tab has no chord for it (Chrome keeps ⇧⌘N), so the
- * button stands alone there.
+ * button stands alone there. Below it, the practice window, for an operator
+ * who wants to try Hide before handing it a project.
  */
 function NoProjectView({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -220,6 +222,9 @@ function NoProjectView({ actions }: { actions: Actions }) {
         </Button>
         {chord ? <Kbd aria-hidden="true">{chord}</Kbd> : null}
       </span>
+      <Button variant="ghost" size="sm" onClick={openPractice} data-main-empty-home-action="practice">
+        {t("firstRun.home.practice")}
+      </Button>
     </div>
   );
 }

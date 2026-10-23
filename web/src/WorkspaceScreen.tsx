@@ -1,5 +1,5 @@
 import { ServerIcon } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { EntryContextMenu, type MenuEntry } from "./components/entry-menu";
 import { Button } from "./components/ui/button";
@@ -38,10 +38,9 @@ import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutG
 // sends one event per operator choice.
 //
 // An unpinned lane is drawn over Agent Views, which keeps its width, so
-// opening and closing it resizes no terminal (B20); a terminal click,
-// Escape or an agent chosen puts it away, mounted out of sight so its
-// documents, scroll and pages are as they were when it comes back (PRD
-// right-lane B4). A pinned lane docks and Agent Views gives up its width,
+// opening and closing it resizes no terminal (B20); a terminal click or an
+// agent chosen leaves it up, and ⌘E or Escape closes it (PRD right-lane B4;
+// operator decision 2026-10-23). A pinned lane docks and Agent Views gives up its width,
 // so the pin, a column opening or closing and a divider landing resize the
 // agents' terminals once (B21); a drag moves only a guide until it lands.
 // The rail is always there, so nothing the lane does changes Agent Views'
@@ -54,7 +53,6 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const checkout = useShellStore((s) => frontCheckout(s.rest));
   const view = useShellStore((s) => workspaceViewOf(s.rest));
-  const shown = useUiStore((s) => s.laneShown);
   const expanded = useUiStore((s) => s.laneExpanded);
   const stackFront = useUiStore((s) => s.stackFront);
   const [body, setBody] = useState<HTMLElement | null>(null);
@@ -87,7 +85,6 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     detailWidth: view?.detail_width ?? null,
     explorerWidth: view?.explorer_width ?? null,
     panelWidth: view?.panel_width ?? null,
-    shown,
     expanded,
     front: stackFront,
     body: width,
@@ -151,7 +148,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   useLayoutEffect(() => {
     if (closed) useUiStore.getState().setLaneExpanded(false);
   }, [closed]);
-  // A lane put away or shown moves no element the page observes, so the
+  // A lane opened or closed moves no element the page observes, so the
   // native pages in it are placed again in the same frame (PRD right-lane B21).
   useLayoutEffect(() => noteShellLayer(), [frame.mode, drawnView, drawnTool]);
   // Agent Views under an expanded lane keeps its size and takes no keyboard,
@@ -172,15 +169,19 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const documentsUp = up && drawnView === "documents";
   const displays = view?.layout?.display_count ?? 0;
   const shownBefore = useRef({ up, documentsUp });
-  useEffect(() => {
+  useLayoutEffect(() => {
     const before = shownBefore.current;
     shownBefore.current = { up, documentsUp };
     const owner = keyboardOwner();
     const lost = (before.up && !up && (owner.kind === "view" || owner.kind === "tool" || owner.kind === "detail")) || (before.documentsUp && !documentsUp && displays > 0 && owner.kind === "view");
-    if (!lost) return;
+    if (!lost || owner.workspace !== checkoutId) return;
     const paneId = useShellStore.getState().focusedPaneId;
+    // A native page can report its focus after a menu command ran. The
+    // shell's textarea can already be active, so focus() then emits no DOM
+    // event. Retire the hidden owner with the drawing, independently of it.
+    noteKeyboardOwner(paneId && checkoutId ? { kind: "pane", workspace: checkoutId, paneId } : { kind: "none" });
     if (paneId) focusTerminal(paneId);
-  }, [up, documentsUp, displays]);
+  }, [up, documentsUp, displays, checkoutId]);
   if (!checkout || !view) return null;
   return (
     <section
@@ -193,7 +194,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       data-lane-stacked={frame.stacked ? "true" : undefined}
     >
       <LaneRow view={view} frame={frame} documents={documents} width={width} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} />
-      <div className="contents" onKeyDown={(event) => laneEscape(event, frame, view.pinned)}>
+      <div className="contents" onKeyDown={(event) => laneEscape(event, frame, view.pinned, actions)}>
         <ToolRail actions={actions} />
       </div>
     </section>
@@ -202,16 +203,16 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
 
 /**
  * Escape in the lane or on its rail, once nothing inside answered (a menu, a
- * filter, a document's find), returns an expanded lane, or puts an unpinned
- * one away and gives the keyboard to the focused pane; Escape in a terminal
- * stays the program's (B4, B8).
+ * filter, a document's find), returns an expanded lane, or closes an
+ * unpinned one as ⌘E does and gives the keyboard to the focused pane, so a
+ * tool or an open afterwards brings its own column alone (B4, B8, B15;
+ * operator decision 2026-10-23); Escape in a terminal stays the program's.
  */
-function laneEscape(event: React.KeyboardEvent<HTMLElement>, frame: LaneFrame, pinned: boolean): void {
+function laneEscape(event: React.KeyboardEvent<HTMLElement>, frame: LaneFrame, pinned: boolean, actions: Actions): void {
   if (event.key !== "Escape" || event.defaultPrevented) return;
-  const ui = useUiStore.getState();
-  if (frame.mode === "expanded") ui.setLaneExpanded(false);
+  if (frame.mode === "expanded") useUiStore.getState().setLaneExpanded(false);
   else if (frame.mode === "overlay" && !pinned) {
-    ui.putLaneAway();
+    actions.closeLane();
     const paneId = useShellStore.getState().focusedPaneId;
     if (paneId) focusTerminal(paneId);
   } else return;
@@ -238,8 +239,8 @@ function useWidth(element: HTMLElement | null): number {
 
 /**
  * The body left of the rail: Agent Views, and the lane. The lane is always
- * placed over the body's right edge, so moving between over, beside,
- * expanded and put away never mounts it again; a docked lane, and an
+ * placed over the body's right edge, so moving between over, beside and
+ * expanded never mounts it again; a docked lane, and an
  * expanded one that was docked, keep their width beside Agent Views with a
  * divider and an empty slot under the lane, so Agent Views keeps the width
  * it has (B8).
@@ -249,10 +250,9 @@ function LaneRow({ view, frame, documents, width, body, setBody, sizes, actions,
   const [guide, setGuide] = useState<number | null>(null);
   // The width Agent Views gives up: a docked lane's, kept while it is expanded.
   const slot = frame.agents > 0 && frame.agents < width ? width - frame.agents - sizes.divider : 0;
-  const up = laneUp(frame.mode);
   // A terminal click leaves the lane where it is, pinned or not: only the
-  // operator closes it, or puts an unpinned one away with Escape (B4).
-  const escape = (event: React.KeyboardEvent<HTMLElement>) => laneEscape(event, frame, view.pinned);
+  // operator closes it, with ⌘E, or Escape for an unpinned one (B4).
+  const escape = (event: React.KeyboardEvent<HTMLElement>) => laneEscape(event, frame, view.pinned, actions);
   const placed = frame.mode === "expanded" ? "inset-0 z-20" : "inset-y-0 right-0 z-20";
   const raised = frame.mode === "overlay" || frame.mode === "expanded" ? "border-l border-border shadow-lg" : "";
   return (
@@ -273,10 +273,8 @@ function LaneRow({ view, frame, documents, width, body, setBody, sizes, actions,
         <div
           className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", placed, raised)}
           style={frame.mode === "expanded" ? undefined : { width: frame.width }}
-          inert={!up}
           onKeyDown={escape}
           data-lane-frame={frame.mode}
-          data-lane-hidden={up ? undefined : "true"}
         >
           {/* A lane over the agents is sized from its own left edge; nothing beside it moves (B6). */}
           {frame.mode === "overlay" ? (

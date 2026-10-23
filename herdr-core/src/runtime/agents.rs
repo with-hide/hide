@@ -285,17 +285,31 @@ impl Runtime {
     }
 
     pub(super) fn request_remote_control(&mut self, payload: RemoteControlPayload) -> bool {
-        self.request_remote_control_inner(payload, false)
+        self.request_remote_control_inner(payload, false, FailureReport::Notice);
+        true
     }
 
     pub(super) fn request_remote_terminal(&mut self, payload: RemoteControlPayload) -> bool {
-        self.request_remote_control_inner(payload, true)
+        self.send_remote_terminal(payload, FailureReport::Notice);
+        true
     }
 
+    /// Asks for a terminal tab on a device and says whether the request went
+    /// to it; a refusal before that is reported as `report` says.
+    pub(super) fn send_remote_terminal(
+        &mut self,
+        payload: RemoteControlPayload,
+        report: FailureReport,
+    ) -> bool {
+        self.request_remote_control_inner(payload, true, report)
+    }
+
+    /// Whether the request was handed to the device's worker.
     fn request_remote_control_inner(
         &mut self,
         payload: RemoteControlPayload,
         terminal_intent: bool,
+        report: FailureReport,
     ) -> bool {
         let target_id = payload.target_id;
         let request_id = payload.request_id;
@@ -315,8 +329,8 @@ impl Runtime {
                         $retryable,
                     );
                 }
-                self.set_error($kind, message, $retryable);
-                return true;
+                self.report_remote_failure(report, &target_id, $kind, message, $retryable);
+                return false;
             }};
         }
         if target_id.trim().is_empty() || request_id.trim().is_empty() {
@@ -335,7 +349,7 @@ impl Runtime {
                 "remote.control.duplicate_ignored",
                 format!("Ignored duplicate remote request {request_id} for {target_id}"),
             );
-            return true;
+            return false;
         }
         if let Some(pane_id) = pane_focus_target.as_deref() {
             self.snapshot.status.pane_focus_request = Some(PaneFocusRequestSnapshot {
@@ -390,7 +404,7 @@ impl Runtime {
             }
             self.remote_control_requests
                 .push_back((target_id, request_id));
-            return true;
+            return false;
         }
         let Some(context) = self.remote_controls.get(&target_id).cloned() else {
             fail_request!(
@@ -473,14 +487,14 @@ impl Runtime {
                             && self.failed_terminal_id(&agent.pane_id).is_none())
                 });
             if status_unknown {
-                self.set_error(
+                self.report_remote_failure(report, &target_id,
                     "remote.control.close_status_unknown",
                     format!(
                         "Pane {pane_id} on {target_id} has an unknown activity status; refresh status before closing"
                     ),
                     true,
                 );
-                return true;
+                return false;
             }
             let needs_confirmation =
                 matches!(&payload.request, RemoteControlRequest::ClosePane { .. })
@@ -490,14 +504,14 @@ impl Runtime {
                                 && self.failed_terminal_id(&agent.pane_id).is_none())
                     });
             if needs_confirmation && !payload.request.confirmed() {
-                self.set_error(
+                self.report_remote_failure(report, &target_id,
                     "remote.control.close_confirmation_required",
                     format!(
                         "Pane {pane_id} on {target_id} is working or needs attention; remote close requires confirmed=true"
                     ),
                     false,
                 );
-                return true;
+                return false;
             }
             if matches!(
                 &payload.request,
@@ -510,7 +524,7 @@ impl Runtime {
                         "Pane {pane_id} on {target_id} is its tab's only pane; zoom was not sent"
                     ),
                 );
-                return true;
+                return false;
             }
         }
 
@@ -590,14 +604,16 @@ impl Runtime {
                 let Some((project, checkout)) =
                     remote_checkout(&session, &workspace_id, checkout_id.as_deref())
                 else {
-                    self.set_error(
+                    self.report_remote_failure(
+                        report,
+                        &target_id,
                         "remote.control.workspace_not_found",
                         format!(
                             "Workspace {workspace_id} does not belong to remote target {target_id}"
                         ),
                         false,
                     );
-                    return true;
+                    return false;
                 };
                 // Opening a checkout brings its most recent tab forward from
                 // whichever Herdr workspace holds it; only a checkout with no
@@ -615,8 +631,8 @@ impl Runtime {
                         workspace_id: owner.clone(),
                     },
                     (None, None) if checkout.unconfirmed => {
-                        self.refuse_unconfirmed_owner(&target_id, checkout);
-                        return true;
+                        self.refuse_unconfirmed_owner(report, &target_id, checkout);
+                        return false;
                     }
                     (None, None) => RemoteControlAction::OpenOwner {
                         owner: super::projects::owner_open(
@@ -641,20 +657,24 @@ impl Runtime {
                         })
                     });
                 if !exists {
-                    self.set_error(
+                    self.report_remote_failure(
+                        report,
+                        &target_id,
                         "remote.control.tab_not_found",
                         format!("Tab {tab_id} does not belong to remote target {target_id}"),
                         false,
                     );
-                    return true;
+                    return false;
                 }
                 let Some(source_id) = remote_tab_source_id(&target_id, &tab_id) else {
-                    self.set_error(
+                    self.report_remote_failure(
+                        report,
+                        &target_id,
                         "remote.control.invalid_tab_scope",
                         format!("Tab {tab_id} is not scoped to remote target {target_id}"),
                         false,
                     );
-                    return true;
+                    return false;
                 };
                 RemoteControlAction::FocusTab {
                     tab_id: source_id.to_owned(),
@@ -670,22 +690,26 @@ impl Runtime {
                 let Some((project, checkout)) =
                     remote_checkout(&session, &workspace_id, checkout_id.as_deref())
                 else {
-                    self.set_error(
+                    self.report_remote_failure(
+                        report,
+                        &target_id,
                         "remote.control.workspace_not_found",
                         format!(
                             "Workspace {workspace_id} does not belong to remote target {target_id}"
                         ),
                         false,
                     );
-                    return true;
+                    return false;
                 };
                 if cwd.trim().is_empty() || label.trim().is_empty() {
-                    self.set_error(
+                    self.report_remote_failure(
+                        report,
+                        &target_id,
                         "remote.control.invalid_tab",
                         "Remote tab creation requires non-empty cwd and label",
                         false,
                     );
-                    return true;
+                    return false;
                 }
                 let key = (target_id.clone(), checkout.path.clone());
                 let area_id = area_id.or_else(|| {
@@ -696,12 +720,14 @@ impl Runtime {
                     self.agent_layout_of(&key)
                         .is_none_or(|layout| layout.tree.area(id).is_none())
                 }) {
-                    self.set_error(
+                    self.report_remote_failure(
+                        report,
+                        &target_id,
                         "agent_layout.unknown_area",
                         "The Agent area is no longer available",
                         false,
                     );
-                    return true;
+                    return false;
                 }
                 let group_id = self
                     .workspace_views
@@ -712,8 +738,8 @@ impl Runtime {
                 // A new tab goes to the checkout's owner on the device, opened
                 // first when none is (D-07, D-10).
                 if checkout.owner_workspace_id.is_none() && checkout.unconfirmed {
-                    self.refuse_unconfirmed_owner(&target_id, checkout);
-                    return true;
+                    self.refuse_unconfirmed_owner(report, &target_id, checkout);
+                    return false;
                 }
                 match super::projects::tab_host(project, checkout, &target_id, &self.node) {
                     TabHost::Workspace(owner) => RemoteControlAction::CreateTab {
@@ -742,12 +768,14 @@ impl Runtime {
                     .flat_map(|checkout| checkout.tabs.iter())
                     .find(|tab| tab.id.as_deref() == Some(tab_id.as_str()));
                 let Some(tab) = tab else {
-                    self.set_error(
+                    self.report_remote_failure(
+                        report,
+                        &target_id,
                         "remote.control.tab_not_found",
                         format!("Tab {tab_id} does not belong to remote target {target_id}"),
                         false,
                     );
-                    return true;
+                    return false;
                 };
                 let pane_ids = tab
                     .panes
@@ -760,14 +788,14 @@ impl Runtime {
                             && self.failed_terminal_id(&agent.pane_id).is_none())
                 });
                 if status_unknown {
-                    self.set_error(
+                    self.report_remote_failure(report, &target_id,
                         "remote.control.close_status_unknown",
                         format!(
                             "Tab {tab_id} on {target_id} has a pane whose activity status is unknown; refresh status before closing"
                         ),
                         true,
                     );
-                    return true;
+                    return false;
                 }
                 let needs_confirmation = session.agents.iter().any(|agent| {
                     pane_ids.contains(agent.pane_id.as_str())
@@ -775,22 +803,24 @@ impl Runtime {
                             && self.failed_terminal_id(&agent.pane_id).is_none())
                 });
                 if needs_confirmation && !confirmed {
-                    self.set_error(
+                    self.report_remote_failure(report, &target_id,
                         "remote.control.close_confirmation_required",
                         format!(
                             "Tab {tab_id} on {target_id} contains an agent that is working or needs attention; remote close requires confirmed=true"
                         ),
                         false,
                     );
-                    return true;
+                    return false;
                 }
                 let Some(source_id) = remote_tab_source_id(&target_id, &tab_id) else {
-                    self.set_error(
+                    self.report_remote_failure(
+                        report,
+                        &target_id,
                         "remote.control.invalid_tab_scope",
                         format!("Tab {tab_id} is not scoped to remote target {target_id}"),
                         false,
                     );
-                    return true;
+                    return false;
                 };
                 RemoteControlAction::CloseTab {
                     tab_id: source_id.to_owned(),
@@ -807,8 +837,12 @@ impl Runtime {
                     cwd, admission_id, ..
                 } => {
                     let key = (target_id.clone(), cwd.clone());
-                    let Some(id) = self.reserve_agent_creation(&key) else {
-                        return true;
+                    let id = match self.try_reserve_agent_creation(&key) {
+                        Ok(id) => id,
+                        Err((kind, message)) => {
+                            self.report_remote_failure(report, &target_id, kind, message, false);
+                            return false;
+                        }
                     };
                     *admission_id = Some(id);
                     Some((key, id))
@@ -846,7 +880,7 @@ impl Runtime {
                     key.1
                 ),
             );
-            return true;
+            return false;
         }
         let remote_operation_key = if let Some(descriptor) = remote_mutation {
             self.remote_operations.retain(|_, operation| {
@@ -979,8 +1013,8 @@ impl Runtime {
                     ),
             },
         ) {
-            if let Some((operation_target, operation_request)) = remote_operation_key.as_ref() {
-                self.fail_remote_operation(operation_target, operation_request, message.clone());
+            if let Some(key) = remote_operation_key.as_ref() {
+                self.fail_remote_operation_reported(report, key, message.clone(), false);
             }
             if let Some(key) = creation_key {
                 self.remote_tab_creations_in_flight.remove(&key);
@@ -997,9 +1031,15 @@ impl Runtime {
                 );
             }
             if remote_operation_key.is_none() {
-                self.set_error("remote.control.worker_failed", message, true);
+                self.report_remote_failure(
+                    report,
+                    &target_id,
+                    "remote.control.worker_failed",
+                    message,
+                    true,
+                );
             }
-            return true;
+            return false;
         }
         if chooses_focus {
             self.supersede_start_navigation();
@@ -1850,10 +1890,15 @@ impl Runtime {
         let now = unix_milliseconds();
         let mut requests = Vec::new();
         let mut settled = Vec::new();
+        // Read from the ledger only once a delegated child reaches the check.
+        let mut beside = None;
         for agent in &self.snapshot.navigator.agents {
             if !agent.delegated
                 || crate::agent_hooks::is_remote_pane(&agent.pane_id)
                 || self.manually_placed_pane(&agent.pane_id)
+                || beside
+                    .get_or_insert_with(|| self.beside_spawned_panes())
+                    .contains(agent.pane_id.as_str())
             {
                 continue;
             }
@@ -1913,6 +1958,35 @@ impl Runtime {
             }
         }
         true
+    }
+
+    /// The panes of this machine's live agents that a spawn opened beside
+    /// its caller (`hide agent spawn --beside`), which stay in the caller's
+    /// tab. Keyed by the spawn's child record, so a restarted Hide or Herdr
+    /// that rebinds the child to its pane keeps it there too.
+    fn beside_spawned_panes(&self) -> std::collections::HashSet<&str> {
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return Default::default();
+        };
+        let children: std::collections::HashSet<&str> = ledger
+            .spawns
+            .iter()
+            .filter(|spawn| spawn.beside && spawn.machine.is_none())
+            .filter_map(|spawn| spawn.child.as_deref())
+            .collect();
+        if children.is_empty() {
+            return Default::default();
+        }
+        ledger
+            .agents
+            .iter()
+            .filter(|agent| {
+                !agent.ended
+                    && agent.machine == self.node.as_str()
+                    && children.contains(agent.id.as_str())
+            })
+            .map(|agent| agent.pane.as_str())
+            .collect()
     }
 
     /// The operator's provider choice once the settings file has been read.
@@ -3057,6 +3131,7 @@ impl Runtime {
         elapsed_ms: u128,
         connection_generation: Option<u64>,
     ) -> bool {
+        let report = self.registration_terminal_report(target_id, request_id);
         // A device's tab move is held per checkout like this machine's, and
         // its own record already names the connection that carried it.
         if let RemoteControlAction::RenameTab { request_id, .. } = &action {
@@ -3146,7 +3221,12 @@ impl Runtime {
             let message =
                 "Remote result arrived after its deadline; no mutation was resent".to_owned();
             self.drop_pending_choice(target_id, request_id);
-            self.mark_remote_operation_unknown(&remote_operation_key, message.clone());
+            self.fail_remote_operation_reported(
+                report,
+                &remote_operation_key,
+                message.clone(),
+                true,
+            );
             if is_pane_focus {
                 self.finish_pane_focus_request_by_id(request_id, "failed", Some(message), true);
             }
@@ -3216,10 +3296,11 @@ impl Runtime {
             Ok(RemoteControlOutcome::TabsOrdered { .. }) => {
                 self.drop_pending_choice(target_id, request_id);
                 if tracked_remote_operation {
-                    self.fail_remote_operation(
-                        target_id,
-                        request_id,
+                    self.fail_remote_operation_reported(
+                        report,
+                        &remote_operation_key,
                         format!("{action_kind} returned a tab-order outcome"),
+                        false,
                     );
                 }
                 if is_pane_focus {
@@ -3233,7 +3314,9 @@ impl Runtime {
                     );
                 }
                 if !tracked_remote_operation {
-                    self.set_error(
+                    self.report_remote_failure(
+                        report,
+                        target_id,
                         "remote.control.failed",
                         format!("{action_kind} for {target_id} returned a tab order remotely"),
                         false,
@@ -3243,16 +3326,19 @@ impl Runtime {
             Err(error) => {
                 let message = error.message().to_owned();
                 if tracked_remote_operation {
-                    if error.is_ambiguous() {
-                        self.mark_remote_operation_unknown(
-                            &remote_operation_key,
+                    let ambiguous = error.is_ambiguous();
+                    self.fail_remote_operation_reported(
+                        report,
+                        &remote_operation_key,
+                        if ambiguous {
                             format!(
                                 "{message}; no mutation was resent and a fresh topology is required"
-                            ),
-                        );
-                    } else {
-                        self.fail_remote_operation(target_id, request_id, message.clone());
-                    }
+                            )
+                        } else {
+                            message.clone()
+                        },
+                        ambiguous,
+                    );
                 }
                 if is_pane_focus {
                     self.finish_pane_focus_request_by_id(
@@ -3263,7 +3349,9 @@ impl Runtime {
                     );
                 }
                 if !tracked_remote_operation {
-                    self.set_error(
+                    self.report_remote_failure(
+                        report,
+                        target_id,
                         "remote.control.failed",
                         format!("{action_kind} for {target_id} failed: {message}"),
                         true,
@@ -3585,8 +3673,15 @@ impl Runtime {
     /// which owner it gets (a bound worktree workspace or a marked one) is
     /// unknown; nothing is opened on a guess, and the device's catalog notice
     /// says why it is unconfirmed.
-    fn refuse_unconfirmed_owner(&mut self, target_id: &str, checkout: &CheckoutSnapshot) {
-        self.set_error(
+    fn refuse_unconfirmed_owner(
+        &mut self,
+        report: FailureReport,
+        target_id: &str,
+        checkout: &CheckoutSnapshot,
+    ) {
+        self.report_remote_failure(
+            report,
+            target_id,
             "remote.control.checkout_unconfirmed",
             format!(
                 "{} on {target_id} is not confirmed yet; no tab was opened",
@@ -3595,6 +3690,58 @@ impl Runtime {
             true,
         );
     }
+
+    /// Tells a remote request's failure to whoever `report` names.
+    fn report_remote_failure(
+        &mut self,
+        report: FailureReport,
+        target_id: &str,
+        kind: &str,
+        message: impl Into<String>,
+        retryable: bool,
+    ) {
+        match report {
+            FailureReport::Notice => self.set_error(kind, message, retryable),
+            FailureReport::Log { kind: logged } => {
+                self.push_diagnostic(logged, format!("{target_id} ({kind}): {}", message.into()))
+            }
+        }
+    }
+
+    /// Ends a remote operation that failed (`ambiguous`: whose effect is
+    /// unknown). One the operator asked for stays shown, to retry or to
+    /// check; one the core made on its own is dropped and logged.
+    fn fail_remote_operation_reported(
+        &mut self,
+        report: FailureReport,
+        key: &(String, String),
+        message: String,
+        ambiguous: bool,
+    ) {
+        match report {
+            FailureReport::Notice if ambiguous => {
+                self.mark_remote_operation_unknown(key, message);
+            }
+            FailureReport::Notice => self.fail_remote_operation(&key.0, &key.1, message),
+            FailureReport::Log { .. } => {
+                if let Some(operation) = self.remote_operations.remove(key) {
+                    self.sync_async_operations();
+                    self.report_remote_failure(report, &key.0, &operation.kind, message, true);
+                }
+            }
+        }
+    }
+}
+
+/// Who is told when a remote request fails. A request the operator made
+/// tells them (`last_error`, and a failed operation to retry); one the core
+/// makes on its own, such as a device project's first terminal, tells the
+/// diagnostic log under `kind` and leaves nothing on screen (design
+/// principle 13).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FailureReport {
+    Notice,
+    Log { kind: &'static str },
 }
 
 /// The checkout a device row names: the named checkout of that project, or

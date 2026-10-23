@@ -154,7 +154,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
 
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, mobile: fixture.mobile, usage: fixture.usage ? { nodes: [fixture.usage] } : null, memory: { project: fixture.memory }, connection: "live", linkPanel: fixture.linkPanel, sessionRecord: fixture.sessionRecord, ...(fixture.editor ? { editor: fixture.editor, documents: fixture.documents } : {}) });
-    useUiStore.setState({ screen: { kind: workspace ? "workspace" : "main" }, overviewOpen: false, laneShown: workspace, stackFront: "view", ...(shot === "map" ? { mainView: "work" as const } : shot === "projects" ? { mainView: "projects" as const } : {}) });
+    useUiStore.setState({ screen: { kind: workspace ? "workspace" : "main" }, overviewOpen: false, stackFront: "view", ...(shot === "map" ? { mainView: "work" as const } : shot === "projects" ? { mainView: "projects" as const } : {}) });
     const root = document.documentElement;
     root.classList.toggle("dark", theme === "dark");
     root.classList.toggle("light", theme === "light");

@@ -1289,6 +1289,9 @@ pub struct Runtime {
     /// answer from an older connection cannot settle a newer request.
     remote_connection_generations: HashMap<String, u64>,
     remote_tab_creations_in_flight: HashSet<(String, String, String, RemoteTabCreationIdentity)>,
+    /// The terminals device projects' registrations open on their own,
+    /// waiting for the folder's confirmation or for the device's answer.
+    registration_terminals: VecDeque<device_catalog::RegistrationTerminal>,
     /// Every node's terminals (PRD core-host-node-terminal): the core tells
     /// them which panes attach and hears their state back; keys and output
     /// never pass here.
@@ -2011,6 +2014,10 @@ impl Runtime {
                         "ui_state.agent_logo_mode_unknown",
                         "The stored agent logo mode was not recognized; hidden was used",
                     ),
+                    persistence::UnrecognizedField::PaneTurnRowMode => (
+                        "ui_state.pane_turn_row_mode_unknown",
+                        "The stored pane turn row mode was not recognized; one line was used",
+                    ),
                     persistence::UnrecognizedField::SidebarLens => (
                         "ui_state.sidebar_lens_unknown",
                         "The stored sidebar lens or task view was not recognized; the projects, by state, were used",
@@ -2018,6 +2025,10 @@ impl Runtime {
                     persistence::UnrecognizedField::SidebarProject => (
                         "ui_state.sidebar_project_unknown",
                         "The stored sidebar project was not recognized; every project was used",
+                    ),
+                    persistence::UnrecognizedField::Practice => (
+                        "ui_state.practice_unknown",
+                        "Some of the stored practice progress was not recognized; the rest loaded",
                     ),
                     persistence::UnrecognizedField::Detail => (
                         "ui_state.detail_unknown",
@@ -2206,6 +2217,7 @@ impl Runtime {
             remote_operations: HashMap::new(),
             remote_connection_generations: HashMap::new(),
             remote_tab_creations_in_flight: HashSet::new(),
+            registration_terminals: VecDeque::new(),
             terminals: Arc::new(terminal::NoTerminals),
             terminal_states: HashMap::new(),
             terminal_attach_requested: HashSet::new(),

@@ -3096,6 +3096,39 @@ impl AgentLogoMode {
     }
 }
 
+/// How an agent pane draws its turn row over the terminal, the operator's
+/// last request and the agent's answer (View menu, `pane_turn_row_mode_set`).
+/// One line is the default: an ask no longer wraps over the terminal on a
+/// narrow pane. Two lines give the request its own line; off draws no turn
+/// row, and an ask then rides the pane head as a mark.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneTurnRowMode {
+    #[default]
+    OneLine,
+    TwoLines,
+    Off,
+}
+
+impl PaneTurnRowMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OneLine => "one_line",
+            Self::TwoLines => "two_lines",
+            Self::Off => "off",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "one_line" => Some(Self::OneLine),
+            "two_lines" => Some(Self::TwoLines),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
 /// The palette every window draws in (Settings > Appearance > Color theme),
 /// independent of the Mode above: Hide is the landing page's Owl Field
 /// colors, Neutral the grey chrome. Hide is the default, including for a store
@@ -3699,6 +3732,33 @@ pub struct SidebarProject {
     pub workspace_id: String,
 }
 
+/// The most chapters of Hide's practice mode whose progress is kept.
+pub const PRACTICE_CHAPTER_LIMIT: usize = 64;
+
+/// The highest step index a chapter's progress can hold.
+pub const PRACTICE_STEP_LIMIT: u32 = 255;
+
+/// How far a learner got in one practice-mode chapter: the chapter version
+/// they played, the step they reached, and whether they reached the end.
+/// The chapters run in their own window on scripted data, so the core keeps
+/// only this, per chapter id (`ui_state.practice`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PracticeProgress {
+    pub version: u32,
+    pub step: u32,
+    pub finished: bool,
+}
+
+/// Whether `id` names a practice chapter: 1 to 32 characters of `a-z`, `0-9`
+/// and `-`.
+pub fn practice_chapter_id_valid(id: &str) -> bool {
+    (1..=32).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
 /// The most items the 보기 slot's ← steps back through; past it the oldest
 /// goes first (PRD sidebar-task-lens B47).
 pub const DETAIL_HISTORY_LIMIT: usize = 20;
@@ -3858,6 +3918,11 @@ pub struct UiStateSnapshot {
     /// every project; kept like the lens.
     #[serde(default)]
     pub sidebar_project: Option<SidebarProject>,
+    /// Practice mode's progress, by chapter id (`practice_progress_set`):
+    /// the learner's place in each onboarding chapter, kept like the lens so
+    /// a relaunch resumes it. At most [`PRACTICE_CHAPTER_LIMIT`] chapters.
+    #[serde(default)]
+    pub practice: BTreeMap<String, PracticeProgress>,
     /// The lane's 보기 slot (D-50): a pull request's card or a session's
     /// record, one per window and no checkout's or Agent tab's, so it stays
     /// when either changes.
@@ -3913,6 +3978,9 @@ pub struct UiStateSnapshot {
     /// Whether list rows and tabs draw the agent's logo (`agent_logo_mode_set`).
     #[serde(default)]
     pub agent_logo_mode: AgentLogoMode,
+    /// How agent panes draw their turn row (`pane_turn_row_mode_set`).
+    #[serde(default)]
+    pub pane_turn_row_mode: PaneTurnRowMode,
     /// The palette every window draws in; `color_theme_set` owns it.
     #[serde(default)]
     pub color_theme: ColorTheme,
@@ -4466,7 +4534,10 @@ pub struct IssueDetailSnapshot {
     /// `reading`, `ready` or `failed`.
     pub phase: String,
     pub body: Option<String>,
-    pub message: Option<String>,
+    /// Why the read failed, as a code the page words: a `local_issue.*`
+    /// code, or `issue_detail.read_failed` with `gh`'s words in the
+    /// `issue_detail.failed` diagnostic.
+    pub failure: Option<String>,
     pub labels: Vec<crate::tasks::TaskLabel>,
     pub author: Option<String>,
     pub created_at_unix_ms: Option<u64>,
@@ -4484,7 +4555,8 @@ impl IssueDetailSnapshot {
         Self::settled(workspace_id, device_id, task_key, "reading", None)
     }
 
-    /// The answer to a read: `ready` with what it read, or `failed` with why.
+    /// The answer to a read: `ready` with what it read, or `failed` with the
+    /// failure code.
     pub fn answered(
         workspace_id: String,
         device_id: String,
@@ -4493,8 +4565,8 @@ impl IssueDetailSnapshot {
     ) -> Self {
         match answer {
             Ok(detail) => Self::settled(workspace_id, device_id, task_key, "ready", Some(detail)),
-            Err(message) => Self {
-                message: Some(message),
+            Err(failure) => Self {
+                failure: Some(failure),
                 ..Self::settled(workspace_id, device_id, task_key, "failed", None)
             },
         }
@@ -4521,7 +4593,7 @@ impl IssueDetailSnapshot {
             task_key,
             phase: phase.into(),
             body: read.then_some(detail.body),
-            message: None,
+            failure: None,
             labels: detail.labels,
             author: detail.author,
             created_at_unix_ms: detail.created_at_unix_ms,
@@ -4693,10 +4765,11 @@ pub struct PrLinkSnapshot {
 }
 
 /// One failed check of a pull request, by the name GitHub shows and the page
-/// that says why.
+/// that says why. A check GitHub gives no name has none, and the page words
+/// it.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PrFailedCheck {
-    pub name: String,
+    pub name: Option<String>,
     pub url: Option<String>,
 }
 
@@ -4722,7 +4795,10 @@ pub struct PrFeedbackSnapshot {
     pub body: Option<String>,
     pub failed_checks: Vec<PrFailedCheck>,
     pub change_requests: Vec<PrChangeRequest>,
-    pub message: Option<String>,
+    /// Why the read failed, as a code the page words:
+    /// `project_settings_repository_changed`, or `pr_feedback.read_failed`
+    /// with the sentence in the `pr_feedback.failed` diagnostic.
+    pub failure: Option<String>,
 }
 
 /// The background AI's name for a worktree started from an issue.
@@ -4763,6 +4839,7 @@ impl Default for UiStateSnapshot {
             sidebar_lens: SidebarLens::default(),
             task_view: TaskView::default(),
             sidebar_project: None,
+            practice: BTreeMap::new(),
             detail: DetailSlot::default(),
             overview_graph: OverviewGraphChoices::default(),
             selected_path: None,
@@ -4784,6 +4861,7 @@ impl Default for UiStateSnapshot {
             accent_hex: default_accent_hex(),
             theme: ThemePreference::Dark,
             agent_logo_mode: AgentLogoMode::Hidden,
+            pane_turn_row_mode: PaneTurnRowMode::OneLine,
             color_theme: ColorTheme::Hide,
             interface_language: None,
             usage: Default::default(),
@@ -5144,9 +5222,10 @@ pub struct ChangedFileSnapshot {
 pub struct ChangedFileDiffSnapshot {
     pub path: String,
     pub text: String,
-    /// Set when the diff was cut short, naming the limit that cut it. A
-    /// silently truncated diff would read as a complete one.
-    pub notice: Option<String>,
+    /// Set when the diff was cut short, naming the limit that cut it, or
+    /// could not be taken; the page words it. A silently truncated diff
+    /// would read as a complete one.
+    pub notice: Option<hide_node_link::git::DiffNotice>,
 }
 
 /// A diff a View display shows: the file, the group it is taken in, and the
@@ -5157,8 +5236,8 @@ pub struct ViewDiffSnapshot {
     pub committed: bool,
     pub text: String,
     /// Set when the diff was cut short, or when the file is no longer in
-    /// its group, naming why.
-    pub notice: Option<String>,
+    /// its group or outside the folder History reads, naming why.
+    pub notice: Option<hide_node_link::git::DiffNotice>,
 }
 
 /// What a branch's pull request is, reduced to the five values the row badge
@@ -5495,8 +5574,11 @@ pub struct GithubStatusSnapshot {
     /// The last lookup failed, so the values shown are the previous ones.
     pub stale: bool,
     pub last_success_at_unix_ms: Option<u64>,
-    /// The card's one allowed sentence: gh missing, logged out, or the exact
-    /// failure. Absent when the lookup is healthy.
+    /// `gh`'s own words for the failure, for the `pull_requests.failed`
+    /// diagnostic and the core's own judgments. Absent when the lookup is
+    /// healthy. Never sent to the screen, which words `failure_category`
+    /// (docs/LOCALIZATION.md, Translation boundary).
+    #[serde(skip_serializing)]
     pub unavailable_reason: Option<String>,
     /// The extra questions of the last read that failed while the pull request
     /// list was read: the list is current and the judgments derived from these
@@ -5688,24 +5770,88 @@ pub struct WorktreeAgentLineSnapshot {
     pub uninstrumented_code: Option<String>,
 }
 
-/// One policy shared by all worktree deletion surfaces.
+/// One policy shared by all worktree deletion surfaces. Every field is a
+/// fact or a code the page words (docs/LOCALIZATION.md, Translation
+/// boundary); the core sends no sentence here.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct WorktreeDeletionGateSnapshot {
     /// Why deletion cannot start: main, locked or unmeasured ignored folders.
-    pub blocked_reason: Option<String>,
+    pub blocked: Option<WorktreeDeletionBlock>,
     /// What the operator should know before deleting, in the order shown.
-    pub warnings: Vec<String>,
-    pub button_label: String,
+    pub warnings: Vec<WorktreeDeletionWarning>,
+    /// The panes the deletion closes first, which the button counts.
+    pub pane_count: usize,
     /// The branch may go with the folder: it is named, is not the base, and
     /// the worktree is on disk.
     pub can_delete_branch: bool,
     /// What deleting the branch loses: commits the base does not have, or an
     /// answer Git could not give. Present means `git branch -D`.
-    pub branch_warning: Option<String>,
-    /// The checkbox that accepts losing what the folder holds (uncommitted
-    /// files, a worktree inside it, or a status Git could not read). Present
-    /// means deletion waits for it and then runs `git worktree remove --force`.
-    pub discard_label: Option<String>,
+    pub branch_loss: Option<WorktreeBranchLoss>,
+    /// What the folder would lose (uncommitted files, a worktree inside it,
+    /// a status Git could not read, ignored repositories). Present means
+    /// deletion waits for the operator to accept it and then runs
+    /// `git worktree remove --force`.
+    pub discard: Option<WorktreeDiscard>,
+}
+
+/// Why a worktree cannot be deleted at all.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorktreeDeletionBlock {
+    Main,
+    /// Git's own lock; `reason` is the text the lock was given, empty when
+    /// it was given none.
+    Locked {
+        name: String,
+        reason: String,
+    },
+    /// The scan for repositories inside it did not finish; its own sentence
+    /// stays on the row's `ignored_scan_unavailable`.
+    IgnoredScanUnavailable,
+}
+
+/// One warning badge in the deletion confirmation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorktreeDeletionWarning {
+    /// `files` is 0 when Git reported dirt without a count.
+    Uncommitted {
+        files: u32,
+    },
+    Nested,
+    Base,
+    StatusUnknown,
+    Unmerged {
+        ahead: u32,
+    },
+    NotPushed,
+    IgnoredRepositories {
+        count: usize,
+    },
+}
+
+/// What deleting the branch with the folder loses.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorktreeBranchLoss {
+    /// Commits the base branch does not have; `base` is absent when the
+    /// worktree's base is unknown.
+    Commits { count: u32, base: Option<String> },
+    /// Git does not count it as merged though it has no commits ahead.
+    NotMerged,
+    /// Git could not tell whether it is merged.
+    Unknown,
+}
+
+/// What the folder's removal would lose, which the operator accepts.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct WorktreeDiscard {
+    /// Present when the folder has uncommitted changes; 0 when Git gave no count.
+    pub changed_files: Option<u32>,
+    pub nested: bool,
+    /// Git could not read the status, so there may be uncommitted changes.
+    pub status_unknown: bool,
+    pub ignored_repositories: Vec<String>,
 }
 
 /// The accepted deletion, measured before any pane closes and executed by
@@ -5731,7 +5877,53 @@ pub struct WorktreeRemovalSnapshot {
     pub discard_changes: bool,
     pub expected_ignored_repositories: Vec<String>,
     pub phase: String,
-    pub message: Option<String>,
+    /// How it ended, or why it stopped, as the delete dialog words it; the
+    /// sentences stay in the `worktree_removal` diagnostics.
+    pub notice: Option<WorktreeRemovalNotice>,
+}
+
+/// How a worktree removal ended, or why it stopped
+/// (docs/LOCALIZATION.md, Translation boundary).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorktreeRemovalNotice {
+    /// The folder is gone; `branch` says what became of the local branch.
+    Removed {
+        branch: hide_node_link::worktrees::RemovalBranch,
+    },
+    /// The repository's host stopped it.
+    Stopped {
+        stop: hide_node_link::worktrees::RemovalStop,
+        panes_closed: bool,
+    },
+    /// Herdr closed the panes, and these programs still run in the folder,
+    /// which the operator can end before deleting again.
+    StillRunning { programs: Vec<RunningProgram> },
+    /// A pane appeared in the worktree while the panes were closing.
+    PaneAppeared,
+    /// The worktree or its deletion gate changed while the panes closed.
+    ChangedWhileClosing,
+    /// The panes could not be closed, or Herdr did not confirm it.
+    CloseFailed,
+    /// The repository's host could not be asked (`reason`: a `host.*` or
+    /// `link.*` code, `node_access::link_failure_code`), or stopped it
+    /// without naming why (a helper of an older build: no reason).
+    HostFailed {
+        panes_closed: bool,
+        reason: Option<String>,
+    },
+    /// The removal was sent and its answer never came, so its effect is
+    /// unknown.
+    ResultUnknown,
+    /// The removal's worker could not start; nothing was closed.
+    WorkerUnavailable,
+}
+
+/// A program still running in a worktree its panes were closed for.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RunningProgram {
+    pub name: String,
+    pub pid: u32,
 }
 
 /// One user-initiated task whose blocking work runs outside the runtime mutex.
@@ -5753,7 +5945,10 @@ pub struct TaskOperationSnapshot {
     pub path: Option<String>,
     pub pane_id: Option<String>,
     pub agent_kind: Option<String>,
-    pub message: Option<String>,
+    /// Why the task failed, as a code the web words (`task_operation.*`,
+    /// `agent_start.*`, `checkout_purpose.*`, a start reason); the core's
+    /// own sentence goes to the `task_operation.failed` diagnostic.
+    pub failure: Option<String>,
     /// How starting `agent_kind` in the created pane went, kept apart from
     /// the creation itself: `starting`, `started`, `failed`, or `unknown`
     /// when Herdr did not answer and the pane has to be looked at. `None`
@@ -6348,8 +6543,9 @@ pub struct HerdrTakeoverSnapshot {
     /// server Hide cannot use could not be read, so the offer is to look
     /// again).
     pub kind: String,
-    /// `offered`, `moving`, `failed`, or `moved` until the operator has read
-    /// what the move left them to do.
+    /// `offered`, `moving` (a move starts on its own once offered),
+    /// `failed`, or `moved` while the first-run wizard shows the move's
+    /// result or the operator's own `herdr` is not yet settled.
     pub stage: String,
     /// Empty for `look`, which read no server.
     pub server_version: String,
@@ -6362,9 +6558,22 @@ pub struct HerdrTakeoverSnapshot {
     /// after a move, `stop_failed` after a restart that did not stop the
     /// server.
     pub failure: Option<String>,
-    /// After a move: the operator's own `herdr`'s version when its protocol
-    /// is older than the server's (B5).
-    pub path_herdr_behind: Option<String>,
+    /// After a move that left the operator's own `herdr` on an older
+    /// protocol: how Hide's update of it went (B5).
+    pub path_herdr: Option<MovedPathHerdrSnapshot>,
+}
+
+/// The operator's own `herdr` after a move left it behind.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MovedPathHerdrSnapshot {
+    /// `updating` while Hide runs its update command, `updated` once it
+    /// speaks the server's protocol, `behind` when it could not be brought
+    /// up (the command asks for an administrator, failed, or brought another
+    /// protocol), so the operator copies the command.
+    pub stage: String,
+    /// Its version: the one being updated while `updating`, the one it names
+    /// afterwards otherwise.
+    pub version: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -7670,6 +7879,19 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "agent_logo_mode", &logo_modes);
         checked.insert("agent_logo_mode");
+
+        let turn_row_modes = [
+            PaneTurnRowMode::OneLine,
+            PaneTurnRowMode::TwoLines,
+            PaneTurnRowMode::Off,
+        ];
+        for variant in turn_row_modes {
+            match variant {
+                PaneTurnRowMode::OneLine | PaneTurnRowMode::TwoLines | PaneTurnRowMode::Off => {}
+            }
+        }
+        assert_wire(&contract, "pane_turn_row_mode", &turn_row_modes);
+        checked.insert("pane_turn_row_mode");
 
         let behind = [
             hide_kit::device_herdr::BehindCause::CannotHandOff,

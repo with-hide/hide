@@ -45,7 +45,7 @@ class PlatformKeyboardEvent extends Event {
 
 const bridge: HostBridge = {
   kind: "electron", platform: "darwin", onCommand: () => () => {}, reportBindings() {}, reportLanguage() {},
-  revealPath() {}, quit() {}, pickFolder: async () => null, probePaths: async () => [], openPath() {}, notify() {}, onNotificationOpen: () => () => {}, withdrawNotifications() {}, notificationPermission: async () => "unsupported", onWindowChrome: () => () => undefined, editorAvailable: async () => false, openInEditor: () => undefined, restartHerdr: async () => "unavailable", openNotificationSettings() {}, reportBadge() {},
+  revealPath() {}, quit() {}, openPractice() {}, pickFolder: async () => null, probePaths: async () => [], openPath() {}, notify() {}, onNotificationOpen: () => () => {}, withdrawNotifications() {}, notificationPermission: async () => "unsupported", onWindowChrome: () => () => undefined, editorAvailable: async () => false, openInEditor: () => undefined, restartHerdr: async () => "unavailable", openNotificationSettings() {}, reportBadge() {},
   updates: { onStatus: () => () => {}, check() {}, restart() {}, setPrerelease() {} },
   browser: {
     sync() {}, capture: async () => null,
@@ -177,5 +177,60 @@ describe("native cycle responder return", () => {
     expect(events).toEqual([]);
     expect(ended).toEqual([1]);
     expect(pageCommands).toEqual([["local\u0000/fixture", "d1", "focus"]]);
+  });
+});
+
+describe("close chords close what covers the screen first", () => {
+  const press = (init: KeyboardEventInit) => window.dispatchEvent(new PlatformKeyboardEvent("keydown", init));
+  const closeChord = { key: "w", code: "KeyW", metaKey: true };
+  // The documents are drawn in the lane, so the chord's ordinary target is the focused View's page.
+  beforeEach(() => useUiStore.setState({ drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } }));
+
+  it("closes the focused view when nothing covers it", () => {
+    press(closeChord);
+    expect(events).toEqual([expect.objectContaining({ kind: "view_layout", payload: expect.objectContaining({ action: "close", display_id: "d1" }) })]);
+  });
+
+  it("closes the innermost covering layer and leaves the view under it", () => {
+    const closed: string[] = [];
+    useUiStore.getState().pushEscape(() => closed.push("sheet"));
+    useUiStore.getState().pushEscape(() => closed.push("menu"));
+    press(closeChord);
+    expect(closed).toEqual(["menu"]);
+    expect(events).toEqual([]);
+  });
+
+  it("passes an inline layer and closes the cover behind it", () => {
+    const closed: string[] = [];
+    useUiStore.getState().pushEscape(() => closed.push("sheet"));
+    useUiStore.getState().pushEscape(() => closed.push("filter"), false, true);
+    press({ ...closeChord, shiftKey: true });
+    expect(closed).toEqual(["sheet"]);
+    expect(events).toEqual([]);
+  });
+
+  it("an inline layer alone covers nothing, so the view closes", () => {
+    const closed: string[] = [];
+    useUiStore.getState().pushEscape(() => closed.push("filter"), false, true);
+    press(closeChord);
+    expect(closed).toEqual([]);
+    expect(events).toEqual([expect.objectContaining({ kind: "view_layout", payload: expect.objectContaining({ action: "close" }) })]);
+  });
+
+  it("closes Settings without a layer of its own, but not a pane's find bar", () => {
+    useUiStore.setState({ overlay: "settings" });
+    press(closeChord);
+    expect(useUiStore.getState().overlay).toBe("none");
+    expect(events).toEqual([]);
+    useUiStore.setState({ overlay: "find" });
+    press(closeChord);
+    expect(events).toHaveLength(1);
+  });
+
+  it("leaves the Overview screen for the Workspace in front instead of closing what is hidden", () => {
+    useUiStore.setState({ screen: { kind: "main" } });
+    press(closeChord);
+    expect(useUiStore.getState().screen).toEqual({ kind: "workspace" });
+    expect(events).toEqual([]);
   });
 });

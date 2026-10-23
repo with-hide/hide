@@ -23,7 +23,7 @@ Only checkouts in the current connected catalog contribute to that inventory; a 
 
 ## Opening a page
 
-- `hide browser open <url-or-path> [--wait] [--request-id <id>]` from a shell the daemon can bind to a checkout: a connected Herdr pane, or a local process whose working directory is inside a registered checkout (`docs/ARCHITECTURE.md`, hided and the WebSocket boundary).
+- `hide browser open <url-or-path> [--beside] [--wait] [--request-id <id>]` from a shell the daemon can bind to a checkout: a connected Herdr pane, or a local process whose working directory is inside a registered checkout (`docs/ARCHITECTURE.md`, hided and the WebSocket boundary).
   The CLI resolves a relative file on the calling machine, gives loopback hosts `http` and other hosts `https`, and submits one action scoped to the caller's checkout with no Workspace override.
   The core checks an HTML file against that checkout on its own device and reads it outside the core lock before placing its Browser View.
   The action result confirms View placement, while `hide view status <view-id>` returns `pending`, `loading`, `loaded`, `failed`, `disconnected`, or `unsupported` for its native page.
@@ -32,6 +32,7 @@ Only checkouts in the current connected catalog contribute to that inventory; a 
   Another pane there, of the same tab or another, adds its page to the checkout's one list, in the area it lands in and behind the one in front, and moves no tab, checkout or keyboard; the same address opened from two tabs is one page, so the operator's page and load stay unchanged.
   On a checkout not on screen, a pane of its active tab brings its page to the front of that checkout, where it loads and can be driven, and a pane of another tab adds it behind; neither calls the lane or moves the screen.
   A shell bound only to the checkout counts as another pane on the checkout on screen and as its active tab on one that is not.
+  `--beside` places the page as a file's Open to the side does ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#opening-preview-and-open-to-the-side)): in the area next to the active one, trying right, left, below and above, or a new area to its right; a page of the same address already in that area is brought forward and loaded again rather than opened twice, and with no room for another area the open is refused with the next action to close a View or open without `--beside`.
   The desktop window's gateway, acting for a CDP client that creates a page, brings that page forward, since a page loads only in front; it acts as `gateway:<key>:<path>`, one key per window, so the core tells it from a checkout shell (`gateway_caller_id`).
   A new page that is not in front can stay pending until it first appears.
   An agent reads the checkout's Views (`hide view list`, `hide view status`, select, close, `--wait`) from any of its tabs, even when its tab is not the Workspace's active tab and the Workspace was never in front: every caller sees the same list, so such a page is listed as `pending` rather than missing.
@@ -402,6 +403,8 @@ An evicted page reports its disappearance as disconnected until shown again.
 ## Keyboard ownership and cycling
 
 Only a visible native page can report keyboard focus to the shell; the shell resolves its complete Workspace identity and current View area.
+When the lane closes or its documents fold, the shell retires their keyboard owner with that drawing and returns it to the focused pane, even if a native focus report arrived after the preceding menu command and the terminal was already its active DOM element.
+Input moved to another live column or a popup is left in place.
 The host also reports desktop window activation separately from page focus, so an embedded page taking input does not make the app appear inactive.
 An inactive window retains its selection and logical keyboard destination while hiding canvas input emphasis.
 The page's `before-input-event` matches the shell's effective Electron shortcut registry for focused-area, global panel and project cycle commands before the page or menu sees them.
@@ -483,7 +486,7 @@ A shell drag (a tab, a divider, a lane divider, a tree item) marks the document 
 A new shell drag sets that mark rather than adding its guide to the overlay selector; a drag inside a page never touches the shell and is the page's own.
 Radix layers and the Recent cycle mount as children of the body, where the sync watches for them.
 While a layer that can move with its anchor (a popover, a menu) is drawn over a page the sync follows it every frame.
-Pages sit only among the documents of the right lane's viewing column, and the lane is drawn over Agent Views or beside them, never under another part of the shell (PRD right-lane D-02), so a page needs no still for the lane; a lane put away or closed, or the documents folded, behind the 보기 slot or behind a stacked tool column, hides its slots before they go inert, which hides their pages without closing them (PRD lane-two-columns B3).
+Pages sit only among the documents of the right lane's viewing column, and the lane is drawn over Agent Views or beside them, never under another part of the shell (PRD right-lane D-02), so a page needs no still for the lane; a lane closed, or the documents folded, behind the 보기 slot or behind a stacked tool column, hides its slots before they go inert, which hides their pages without closing them (PRD lane-two-columns B3).
 
 The idle still is one capture per shown page of the front Workspace, kept with the page's address and its slot's size; a still of another address or size is never drawn.
 It is taken once a page has been quiet for half a second (`STILL_QUIET_MS`) after its load finished, its address changed, its slot changed size, or it came into view, and only while the page is shown, uncovered, loaded and not failed; nothing else asks, so an idle page is not captured again, and there is no timer per frame or per tick.
@@ -515,6 +518,8 @@ It opens a page with `hide browser open`, checks the native view sits on its slo
 The test window never activates the app or takes the keyboard, because the e2e fixture launches every app with `--hide-show-inactive` and `--disable-backgrounding-occluded-windows` (see [BUILD.md](BUILD.md#the-desktop-app)); it is shown behind the operator's windows, keeps painting there, and captures of it are taken by window id.
 The zoom test needs the key window: it is tagged `@needs-focus` and brings its window to the front itself.
 Keep screenshots and logs under local-only `agents/runs/`.
+`desktop/e2e/new-tab.spec.ts` preserves the native menu's target and its resulting core and drawn state in the `menu-target-transitions` attachment, through the existing opt-in probe and WebSocket observation.
+It records command and region identifiers, pane presence and close confirmation, with no page address or content; its behavior assertions, waits and retry policy are unchanged.
 `desktop/e2e/local-page-rules.spec.ts` opens a local page from an isolated pane on the fused Electron and checks that its folder's image and script load, that reads of files and requests to a loopback server and this machine's own network address fail, that an image drawn from its own folder cannot be read back, and that each refusal is logged once.
 `desktop/src/main/browserSync.test.ts` tests the request decision and the address ranges, the device size field and zoom commands a sync may carry, and the emulation a device size asks for at a zoom.
 `desktop/e2e/browser.spec.ts`'s `page width` tests open a page into a 520px lane and see it widen to 900px, a width the operator narrows stay through a file tab and back, the widening stop where Agent Views keeps 480px over the agents and docked, and an expanded lane stay; its `page zoom` test zooms a focused page with ⌘=, steps it in the popover with the keyboard left in the shell, sees another page of the host show the zoom and the badge go at 100%, and sees ⌘= take nothing at a device size; its `device size` test reads the page's `window.innerWidth` at 390, 768 and 1280 with the host at 110%, the scaled label in a narrow lane, the size kept through a navigation, the user agent unchanged and Fit back at the zoom.

@@ -394,7 +394,7 @@ export function FindBar({ actions }: { actions: Actions }) {
     close("find");
     if (paneId) focusTerminal(paneId);
   };
-  useEffect(() => (open ? pushEscape(() => dismiss.current()) : undefined), [open, pushEscape]);
+  useEffect(() => (open ? pushEscape(() => dismiss.current(), false, true) : undefined), [open, pushEscape]);
   if (!open) return null;
   const submit = (step: -1 | 0 | 1) => {
     if (paneId) actions.find(paneId, term, step);

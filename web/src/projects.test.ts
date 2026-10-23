@@ -150,7 +150,7 @@ describe("activity", () => {
 describe("checkoutPresentation", () => {
   const now = 1_000_000_000_000;
   const github = (extra: Partial<GithubStatus> = {}): GithubStatus =>
-    ({ failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: now, unavailable_reason: null, ...extra }) as GithubStatus;
+    ({ failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: now, ...extra }) as GithubStatus;
   const pr = (extra: Partial<PullRequest> = {}): PullRequest => ({ number: 155, title: "Browser display", url: "", badge: "open", review: null, is_draft: false, state: "pending", ...extra });
   const project = workspace("repo", { path: "/h/repo", is_git: true });
   const checkout = (extra: Partial<Checkout> = {}): Checkout =>
@@ -186,7 +186,7 @@ describe("checkoutPresentation", () => {
 
   it("dims a stale pull request's mark and falls back to the branch when GitHub could not answer", () => {
     expect(checkoutPresentation(project, checkout({ pull_request: pr(), github: github({ stale: true }) }), now, t)).toMatchObject({ kind: "pull_request", stale: true });
-    expect(checkoutPresentation(project, checkout({ pull_request: pr(), github: github({ available: false, unavailable_reason: "gh is not signed in" }) }), now, t).kind).toBe("branch");
+    expect(checkoutPresentation(project, checkout({ pull_request: pr(), github: github({ available: false, failure_category: "not_logged_in" }) }), now, t).kind).toBe("branch");
   });
 
   it("names the primary checkout, a detached one and a plain folder", () => {
@@ -331,11 +331,14 @@ describe("checkoutCard", () => {
 
   it("shows the pull request a stale refresh kept and none an unavailable lookup lost", () => {
     const github = (extra: Partial<GithubStatus> = {}): GithubStatus =>
-      ({ failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: now, unavailable_reason: null, ...extra }) as GithubStatus;
+      ({ failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: now, ...extra }) as GithubStatus;
     expect(shownPullRequest(checkout({ pull_request: pr(), github: github({ stale: true, available: false }) }))?.number).toBe(180);
-    expect(shownPullRequest(checkout({ pull_request: pr(), github: github({ available: false, unavailable_reason: "gh is not signed in" }) }))).toBeNull();
+    expect(shownPullRequest(checkout({ pull_request: pr(), github: github({ available: false, failure_category: "not_logged_in" }) }))).toBeNull();
     expect(shownPullRequest(checkout({ pull_request: null }))).toBeNull();
-    expect(checkoutCard(project, checkout({ pull_request: pr(), github: github({ available: false, unavailable_reason: "gh is not signed in" }) }), now, t).header).toBeNull();
+    expect(checkoutCard(project, checkout({ pull_request: pr(), github: github({ available: false, failure_category: "not_logged_in" }) }), now, t).header).toBeNull();
+    // The card words the category; gh's own words stay in the core's log.
+    expect(checkoutPresentation(project, checkout({ github: github({ stale: true, failure_category: "network_or_rate_limit" }) }), now, t).detail).toContain("GitHub didn't answer");
+    expect(checkoutPresentation(project, checkout({ github: github({ stale: true, failure_category: "from_a_newer_core" as GithubStatus["failure_category"] }) }), now, t).detail).toContain("GitHub couldn't be read");
   });
 });
 

@@ -71,7 +71,7 @@ export function GroupTabsScene({ params }: { params: URLSearchParams }) {
   useLayoutEffect(() => {
     const focusedPaneId = state === "work" || state === "plain" ? "a1" : null;
     useShellStore.setState({ rest: scene.rest, agents: scene.agents, connection: "live", focusedPaneId });
-    useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneShown: false, laneExpanded: false });
+    useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneExpanded: false });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));

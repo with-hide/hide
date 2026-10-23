@@ -19,6 +19,7 @@ import { useFileSource } from "./viewers/useFileBytes";
 import { commandLabel } from "./shortcutLabels";
 import { absolutePathRoot } from "./terminalLinks";
 import { RegionCommentButton } from "./ViewComments";
+import { diffNoticeText } from "./diffNotice";
 import { isVideoPath } from "./viewers/video";
 import type { ViewWorkspace } from "./viewLayout";
 
@@ -266,7 +267,7 @@ function DiffBody({ display, workspace, wrap, scale, actions }: { display: ViewD
   }
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-diff-path={display.path} data-diff-group={committed ? "committed" : "working"}>
-      {diff.notice ? <div className="border-b border-border px-md py-xs text-caption text-warning" data-diff-notice="true">{diff.notice}</div> : null}
+      {diff.notice ? <div className="border-b border-border px-md py-xs text-caption text-warning" data-diff-notice={diff.notice.code}>{diffNoticeText(diff.notice, t)}</div> : null}
       {diff.text ? <PatchView text={diff.text} wrap={wrap} scale={scale} comments={{ display, workspace, actions }} /> : <div className="min-h-0 flex-1" data-diff-empty="true" />}
     </div>
   );

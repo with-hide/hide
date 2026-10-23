@@ -112,7 +112,7 @@ describe("the Memory tab", () => {
     for (const view of ["documents", "none"] as const) {
       await act(async () => {
         useShellStore.setState({ connection: "live", rest: withViews, memory: { project: null } });
-        useUiStore.setState({ laneShown: true, drawnLane: { mode: "overlay", view, tool: "explorer", stacked: false } });
+        useUiStore.setState({ drawnLane: { mode: "overlay", view, tool: "explorer", stacked: false } });
         root.render(<TooltipProvider><ToolRail actions={actions} /></TooltipProvider>);
       });
       expect(container.querySelector('[data-lane-tool="documents"]')?.getAttribute("aria-pressed")).toBe(view === "documents" ? "true" : "false");

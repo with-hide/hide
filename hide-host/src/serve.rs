@@ -1539,6 +1539,11 @@ pub fn handle_with_progress(
                 if let Some(cwd) = answer.facts.cwd.as_mut() {
                     *cwd = hide_platform::path::to_wire_lossy(Path::new(cwd));
                 }
+                for mark in &mut answer.facts.named {
+                    if let Some(folder) = mark.pr.folder.as_mut() {
+                        *folder = hide_platform::path::to_wire_lossy(Path::new(folder));
+                    }
+                }
             }
             to_value(answers)
         }
@@ -1562,9 +1567,8 @@ pub fn handle_with_progress(
         Call::WorktreeRemovalCheck { removal } => {
             absolute(&removal.repository_root)?;
             absolute(&removal.checkout_path)?;
-            worktrees::check_removal(&removal)
-                .map_err(|reason| HostError::new(ErrorCode::Io, reason))?;
-            to_value(())
+            // A stop is an answer the dialog words, not a refused request.
+            to_value(worktrees::check_removal(&removal).err())
         }
         Call::Changes {
             root,

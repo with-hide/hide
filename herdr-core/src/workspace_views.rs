@@ -122,7 +122,13 @@ pub struct WorkspaceView {
     /// The tool column's width for the Project and Changes, the same way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub panel_width: Option<u32>,
+    /// When the operator last chose this checkout; `0` until they do. The
+    /// checkout resumed after a restart is the latest of these.
     pub last_used_unix_ms: u64,
+    /// When this entry was made. The cap counts it as a use, so an entry
+    /// made for a checkout nobody has opened yet, such as a project just
+    /// added, is not the first one forgotten (`WorkspaceViews::entry`).
+    pub made_unix_ms: u64,
     /// The checkout's one View list, split and selection, whichever Agent tab
     /// is in front. Stored as `view_layout`: the keys earlier builds kept per
     /// tab (a schema 3 file's `layout`, `view_owner`, `view_presentations`) are never read.
@@ -166,6 +172,8 @@ struct StoredLane {
     panel_width: Option<u32>,
     #[serde(default)]
     last_used_unix_ms: u64,
+    #[serde(default)]
+    made_unix_ms: u64,
     #[serde(default, rename = "view_layout")]
     layout: Layout,
     #[serde(default)]
@@ -194,6 +202,7 @@ impl StoredLane {
             explorer_width: self.explorer_width,
             panel_width: self.panel_width,
             last_used_unix_ms: self.last_used_unix_ms,
+            made_unix_ms: self.made_unix_ms,
             layout: self.layout,
             agent_layout: self.agent_layout,
             agent_groups: self.agent_groups,
@@ -287,6 +296,7 @@ impl WorkspaceView {
             explorer_width: None,
             panel_width: None,
             last_used_unix_ms: 0,
+            made_unix_ms: 0,
             layout: Layout::default(),
             agent_layout: crate::agent_layout::Layout::default(),
             agent_groups: Default::default(),
@@ -300,13 +310,30 @@ impl WorkspaceView {
         self.device_id == device_id && self.path == path
     }
 
-    /// Opens the lane on a tool: the tool column shows it, and a closed
-    /// lane opens with its viewing column back as it was (B14, lane-two-
-    /// columns mockup: opening something in a closed lane brings the other
-    /// column back as it was before the close).
-    pub fn show_tool(&mut self, tool: Tool) {
-        self.tool = Some(tool);
+    /// Opens a closed lane on the column a call brings forward, the other
+    /// column closed: a tool pressed, a file opened or the 보기 slot called
+    /// into a lane ⌘E closed shows that alone, and only ⌘E's `open: true`
+    /// brings back the columns it closed with (B15; operator decision
+    /// 2026-10-23, replacing the mockup's reopen of the other column).
+    /// Whether the lane was closed.
+    pub fn open_on(&mut self, side: crate::model::LaneCallSide) -> bool {
+        if self.open {
+            return false;
+        }
         self.open = true;
+        match side {
+            crate::model::LaneCallSide::View => self.tool = None,
+            crate::model::LaneCallSide::Tool => self.documents = false,
+        }
+        true
+    }
+
+    /// Shows a tool in the tool column (B14), a closed lane opening on it
+    /// alone (`open_on`). Whether the lane was closed.
+    pub fn show_tool(&mut self, tool: Tool) -> bool {
+        let opened = self.open_on(crate::model::LaneCallSide::Tool);
+        self.tool = Some(tool);
+        opened
     }
 
     /// Closes the tool column alone (B14); the viewing column stays.
@@ -314,11 +341,11 @@ impl WorkspaceView {
         self.tool = None;
     }
 
-    /// Shows the documents in the viewing column and opens a closed lane
-    /// (B6, B11).
+    /// Shows the documents in the viewing column (B6, B11), a closed lane
+    /// opening on them alone (`open_on`).
     pub fn show_documents(&mut self) {
+        self.open_on(crate::model::LaneCallSide::View);
         self.documents = true;
-        self.open = true;
     }
 
     /// Whether anything of the Workspace's own is drawn while the lane is
@@ -366,6 +393,20 @@ impl WorkspaceViews {
     /// The Workspace's entry, made with the defaults on first use. Making one
     /// past the cap forgets the least recently used entry.
     pub fn entry(&mut self, device_id: &str, path: &str) -> &mut WorkspaceView {
+        self.entry_at(device_id, path, crate::observed::now_unix_ms())
+    }
+
+    /// `entry`, with the moment an entry it makes counts as used. Ranked by
+    /// its unset choice stamp alone, a just-made entry was the first one
+    /// forgotten, and two checkouts nobody had opened yet forgot each other
+    /// at every session publish: a project just added showed the empty start
+    /// screen over its live terminal.
+    pub fn entry_at(
+        &mut self,
+        device_id: &str,
+        path: &str,
+        now_unix_ms: u64,
+    ) -> &mut WorkspaceView {
         if let Some(index) = self
             .workspaces
             .iter()
@@ -378,12 +419,15 @@ impl WorkspaceViews {
                 .workspaces
                 .iter()
                 .enumerate()
-                .min_by_key(|(_, view)| view.last_used_unix_ms)
+                .min_by_key(|(_, view)| view.last_used_unix_ms.max(view.made_unix_ms))
                 .map(|(index, _)| index)
         {
             self.workspaces.remove(oldest);
         }
-        self.workspaces.push(WorkspaceView::new(device_id, path));
+        self.workspaces.push(WorkspaceView {
+            made_unix_ms: now_unix_ms,
+            ..WorkspaceView::new(device_id, path)
+        });
         self.workspaces.last_mut().expect("just pushed")
     }
 }
@@ -814,8 +858,9 @@ mod tests {
     }
 
     /// B5, B12, B14, B15: the documents count as a column only with a view to
-    /// show, a tool closes alone, and a close keeps both columns' shape for
-    /// the reopen.
+    /// show, a tool closes alone, a close keeps both columns' shape for ⌘E's
+    /// reopen, and a tool or the documents called into a closed lane open
+    /// their own column alone (operator decision 2026-10-23).
     #[test]
     fn the_columns_open_close_and_keep_their_shape_through_a_close() {
         let mut view = WorkspaceView::new("local", "/repo");
@@ -836,11 +881,35 @@ mod tests {
         view.open = false;
         assert_eq!(lane(&view), (false, true, Some(Tool::Project), false));
         assert!(!view.shows_explorer(), "a closed lane draws no tool");
-        view.show_tool(Tool::Project);
+        view.open = true;
         assert_eq!(
             lane(&view),
             (true, true, Some(Tool::Project), false),
-            "the reopen brings the documents back beside the tool"
+            "⌘E's reopen brings both columns back"
+        );
+        view.open = false;
+        assert!(
+            view.show_tool(Tool::Memory),
+            "the tool opened a closed lane"
+        );
+        assert_eq!(
+            lane(&view),
+            (true, false, Some(Tool::Memory), false),
+            "a tool opens a closed lane on itself alone"
+        );
+        assert!(!view.show_tool(Tool::Changes), "the lane was already open");
+        view.show_documents();
+        assert_eq!(
+            lane(&view),
+            (true, true, Some(Tool::Changes), false),
+            "the documents join an open lane beside its tool"
+        );
+        view.open = false;
+        view.show_documents();
+        assert_eq!(
+            lane(&view),
+            (true, true, None, false),
+            "the documents open a closed lane on themselves alone"
         );
     }
 
@@ -1015,14 +1084,42 @@ mod tests {
         let mut views = WorkspaceViews::default();
         for index in 0..MAX_WORKSPACES {
             views
-                .entry("local", &format!("/w{index}"))
+                .entry_at("local", &format!("/w{index}"), 1)
                 .last_used_unix_ms = index as u64 + 10;
         }
-        views.entry("local", "/w0").last_used_unix_ms = 1_000;
-        views.entry("local", "/new");
+        views.entry_at("local", "/w0", 2_000).last_used_unix_ms = 1_000;
+        views.entry_at("local", "/new", 2_000);
         assert_eq!(views.workspaces.len(), MAX_WORKSPACES);
         assert!(views.get("local", "/w1").is_none());
         assert!(views.get("local", "/w0").is_some());
+    }
+
+    /// Being made counts as a use: two Workspaces made past the cap for
+    /// checkouts nobody has chosen yet both stay, and the two stalest
+    /// chosen ones go, rather than each forgetting the other.
+    #[test]
+    fn a_workspace_made_past_the_cap_is_not_the_next_one_forgotten() {
+        let mut views = WorkspaceViews::default();
+        for index in 0..MAX_WORKSPACES {
+            let stamp = index as u64 + 10;
+            views
+                .entry_at("local", &format!("/w{index}"), stamp)
+                .last_used_unix_ms = stamp;
+        }
+        views.entry_at("local", "/added", 5_000);
+        views.entry_at("local", "/other", 5_001);
+        views.entry_at("local", "/added", 5_002);
+        assert_eq!(views.workspaces.len(), MAX_WORKSPACES);
+        assert!(views.get("local", "/added").is_some());
+        assert!(views.get("local", "/other").is_some());
+        assert!(views.get("local", "/w0").is_none());
+        assert!(views.get("local", "/w1").is_none());
+        assert!(views.get("local", "/w2").is_some());
+        assert_eq!(
+            views.get("local", "/added").unwrap().last_used_unix_ms,
+            0,
+            "made is not chosen"
+        );
     }
 
     /// One View on file, as an entry's `layout` key.

@@ -217,14 +217,6 @@ type UiStore = {
   /** The `pane_find_open` whose answer ⌘F waits for, until the find bar or the agent's own search takes it, with where the keyboard was when ⌘F was pressed. */
   agentFindRequest: { id: string; owner: KeyboardOwner } | null;
   viewFocusRequest: ViewFocusRequest | null;
-  /**
-   * Whether the front Workspace's unpinned lane is up over Agent Views (PRD
-   * right-lane D-02, D-11): Escape puts it away, and a call or the rail puts
-   * it up again; nothing else moves it, so a lane the operator left open
-   * stays open across a terminal click, an agent chosen, another Workspace
-   * and a restart. Never sent.
-   */
-  laneShown: boolean;
   /** Whether the lane takes the whole body (D-04); never sent. */
   laneExpanded: boolean;
   /** The column in front while a narrow pinned lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
@@ -320,14 +312,10 @@ type UiStore = {
   requestEditorFind: (displayId: string | null) => void;
   setAgentFindRequest: (request: { id: string; owner: KeyboardOwner } | null) => void;
   setViewFocusRequest: (request: ViewFocusRequest | null) => void;
-  /** The lane was called (an open, a tool, a reveal): an unpinned lane comes up. */
-  showLane: () => void;
   setPageWiden: (workspace: string | null) => void;
   setBrowserDevice: (key: string, device: BrowserDevice) => void;
   /** Drops the device sizes of displays the core no longer keeps (`keep` holds their host keys). */
   keepBrowserDevices: (keep: ReadonlySet<string>) => void;
-  /** A terminal click, Escape or an agent chosen: an unpinned lane is put away and an expanded one returns. */
-  putLaneAway: () => void;
   setLaneExpanded: (expanded: boolean) => void;
   setStackFront: (side: LaneSide) => void;
   setDrawnLane: (drawn: DrawnLane) => void;
@@ -360,11 +348,23 @@ type UiStore = {
   setWatchedRemoval: (removal: { deviceId: string; path: string; afterId: number } | null) => void;
   setRecordingShortcut: (recording: boolean) => void;
   setHint: (hint: NumberedFamily | null) => void;
-  /** Registers an Escape layer and returns its removal. */
-  pushEscape: (handler: () => void, base?: boolean) => () => void;
+  /**
+   * Registers an Escape layer and returns its removal. An `inline` layer (a
+   * filter, a field being added, a drag, a pane's find bar) covers nothing,
+   * so the close chords pass it (`coveringLayer`).
+   */
+  pushEscape: (handler: () => void, base?: boolean, inline?: boolean) => () => void;
   /** Registers an open tooltip's close and returns its removal. */
   pushTooltip: (close: () => void) => () => void;
 };
+
+/** The Escape layers registered `inline`: they answer Escape but cover nothing. */
+const inlineLayers = new WeakSet<() => void>();
+
+/** The innermost open layer that covers the screen (a menu, popover, dialog or sheet), or null. */
+export function coveringLayer(layers: readonly (() => void)[]): (() => void) | null {
+  return [...layers].reverse().find((layer) => !inlineLayers.has(layer)) ?? null;
+}
 
 export const useUiStore = create<UiStore>((set, get) => ({
   screen: null,
@@ -391,7 +391,6 @@ export const useUiStore = create<UiStore>((set, get) => ({
   editorFindDisplay: null,
   agentFindRequest: null,
   viewFocusRequest: null,
-  laneShown: true,
   laneExpanded: false,
   stackFront: "view",
   laneCallsSeen: NO_CALLS_SEEN,
@@ -441,9 +440,6 @@ export const useUiStore = create<UiStore>((set, get) => ({
   requestEditorFind: (displayId) => set({ editorFindRequest: get().editorFindRequest + 1, editorFindDisplay: displayId }),
   setAgentFindRequest: (agentFindRequest) => set({ agentFindRequest }),
   setViewFocusRequest: (viewFocusRequest) => set({ viewFocusRequest }),
-  showLane: () => {
-    if (!get().laneShown) set({ laneShown: true });
-  },
   setPageWiden: (pageWiden) => {
     if (get().pageWiden !== pageWiden) set({ pageWiden });
   },
@@ -462,9 +458,6 @@ export const useUiStore = create<UiStore>((set, get) => ({
     const next = { ...devices };
     for (const key of gone) delete next[key];
     set({ browserDevices: next });
-  },
-  putLaneAway: () => {
-    if (get().laneShown || get().laneExpanded) set({ laneShown: false, laneExpanded: false });
   },
   setLaneExpanded: (laneExpanded) => {
     if (get().laneExpanded !== laneExpanded) set({ laneExpanded });
@@ -506,7 +499,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setHint: (hint) => {
     if (get().hint !== hint) set({ hint });
   },
-  pushEscape: (handler, base = false) => {
+  pushEscape: (handler, base = false, inline = false) => {
+    if (inline) inlineLayers.add(handler);
     set({ escapeLayers: base ? [handler, ...get().escapeLayers] : [...get().escapeLayers, handler] });
     return () => set({ escapeLayers: get().escapeLayers.filter((layer) => layer !== handler) });
   },

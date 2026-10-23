@@ -194,9 +194,7 @@ impl Runtime {
                     .agent_starts
                     .get(request)
             })
-            .ok_or(
-                "The original start receipt is unavailable. Return to its tab before retrying.",
-            )?;
+            .ok_or("agent_start.confirmation_unavailable")?;
         Ok(start
             .agent_kind
             .clone()
@@ -237,7 +235,7 @@ impl Runtime {
         let store = self
             .workspace_views
             .as_mut()
-            .ok_or("Workspace settings are not ready. Retry.")?;
+            .ok_or("task_operation.settings_not_ready")?;
         let reserved = store
             .agent_admissions
             .get(&workspace)
@@ -285,9 +283,7 @@ impl Runtime {
             })
             .map(|(key, start)| (key.clone(), start.clone()));
         if confirm_only && existing.is_none() {
-            return Err(
-                "The original start receipt is unavailable. No process was started.".into(),
-            );
+            return Err("agent_start.confirmation_unavailable".into());
         }
         let (key, mut intent, recovery_only) = if let Some((key, existing)) = existing {
             if existing.state == StartState::Pending && active_key.as_deref() != Some(key.as_str())

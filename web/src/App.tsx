@@ -16,6 +16,7 @@ import { AgentCloseNotice, ConfirmClose, ConfirmTrash, CycleOverlay, NoticeBar }
 import { ConfirmArchive, ConfirmArchiveDelete } from "./ArchiveDialogs";
 import { QuickAdd } from "./QuickAdd";
 import { Palette } from "./Palette";
+import { usePracticeChannel } from "./practice/channel";
 import { installProbe, probeEnabled } from "./probe";
 import { configurePaneVisits, expectPane, expectSurface, focusSignature } from "./recent";
 import { FirstRunWizard } from "./FirstRunWizard";
@@ -57,6 +58,7 @@ export function App() {
   useAgentNotifications(actions);
   useGithubLook(actions);
   useFetchLook(actions);
+  usePracticeChannel(actions);
   // Open in VS Code is offered only where the desktop app found it (D-14).
   useEffect(() => readEditorAvailability(), []);
 

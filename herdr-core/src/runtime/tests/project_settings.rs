@@ -656,7 +656,7 @@ fn connection_change_invalidates_only_feedback_owned_by_that_project() {
         body: None,
         failed_checks: vec![],
         change_requests: vec![],
-        message: None,
+        failure: None,
     });
     change(
         &mut runtime,
@@ -680,7 +680,7 @@ fn connection_change_invalidates_only_feedback_owned_by_that_project() {
             .feedback
             .as_ref()
             .unwrap()
-            .message
+            .failure
             .as_deref(),
         Some("project_settings_repository_changed")
     );

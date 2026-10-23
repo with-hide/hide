@@ -2202,6 +2202,55 @@ fn closing_the_lane_whole_keeps_the_card_and_the_slot_button_opens_a_closed_lane
     assert!(!runtime.snapshot.ui_state.detail.shown);
 }
 
+/// Operator decision 2026-10-23 (B15): a lane ⌘E closed with the card
+/// beside a tool opens on what calls it alone; a tool pressed leaves the
+/// card on the rail, and the card's button leaves the tool closed.
+#[test]
+fn a_call_into_a_lane_closed_with_the_card_opens_its_own_column_alone() {
+    let (mut runtime, _checkout_id, _directory) = views_runtime("lane-closed-card-call");
+    let pull: crate::model::PullRequestSnapshot = serde_json::from_value(serde_json::json!({
+        "number":42,"title":"Ship","url":"https://github.com/acme/app/pull/42",
+        "head_branch":"feature-42","base_branch":"main","badge":"open","checks":"passing",
+        "is_draft":false,"closing_issues":[]
+    }))
+    .unwrap();
+    runtime.snapshot.navigator.workspaces[0].pull_requests = vec![pull];
+    let lane = |runtime: &Runtime| {
+        let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+        (
+            view.open,
+            view.tool,
+            runtime.snapshot.ui_state.detail.shown,
+            runtime.snapshot.ui_state.detail.items.len(),
+        )
+    };
+    layout(&mut runtime, serde_json::json!({"tool": "changes"}));
+    assert!(runtime.dispatch_json(&explorer_event(
+        "pr_open",
+        serde_json::json!({"workspace_id": "workspace:order", "pr_number": 42}),
+    )));
+    layout(&mut runtime, serde_json::json!({"open": false}));
+    assert_eq!(lane(&runtime), (false, Some(Tool::Changes), true, 1));
+
+    layout(&mut runtime, serde_json::json!({"tool": "memory"}));
+    assert_eq!(
+        lane(&runtime),
+        (true, Some(Tool::Memory), false, 1),
+        "the tool alone, the card kept on the rail"
+    );
+
+    layout(&mut runtime, serde_json::json!({"open": false}));
+    assert!(runtime.dispatch_json(&explorer_event(
+        "detail_show",
+        serde_json::json!({"shown": true})
+    )));
+    assert_eq!(
+        lane(&runtime),
+        (true, None, true, 1),
+        "the card alone, the tool closed"
+    );
+}
+
 /// PRD lane-two-columns B9, B19: with the lane already open on a tool, a
 /// card opened, the rail's button on a shown slot and ← are each a call
 /// the viewing column's, so a stacked lane draws the slot over the tool

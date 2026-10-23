@@ -1,5 +1,7 @@
 //! Moving the operator's older Herdr server as the core decides it (PRD
-//! herdr-takeover B1, B3, B4, B6-B9, B12, B14, B17, B19, D-23).
+//! herdr-takeover B1, B3, B4, B6-B9, B12, B14, B17, B19, D-23, and the
+//! operator's decision of 2026-10-23: a live move starts on its own, once
+//! per server, and the operator's own `herdr` is brought up after it).
 //!
 //! The takeover the core asks is a stand-in whose answers each test hands to
 //! the runtime itself, so the order of looks and moves is the test's.
@@ -9,7 +11,7 @@ use std::sync::{Arc, Mutex, Weak, mpsc};
 use super::first_run::{event, first_run_pass, report_here, step};
 use super::*;
 use crate::herdr_takeover::{
-    FailureCause, HerdrTakeover, Look, Moved, Offer, OfferKind, PathHerdr, Versions,
+    FailureCause, HerdrTakeover, Look, Moved, Offer, OfferKind, PathHerdr, PathUpdated, Versions,
 };
 use crate::model::FirstRunStep;
 
@@ -39,6 +41,10 @@ impl HerdrTakeover for StandIn {
 
     fn versions(&self) -> Versions {
         Versions::default()
+    }
+
+    fn update_path_herdr(&self) -> PathUpdated {
+        PathUpdated::Gone
     }
 }
 
@@ -99,8 +105,8 @@ fn the_wizard_opens_on_herdr_only_while_there_may_be_a_server_to_move() {
     assert_eq!(
         takeover(&offered),
         serde_json::json!({
-            "kind": "move", "stage": "offered", "server_version": "0.8.2", "version": "0.9.5",
-            "same_protocol": false, "failure": null, "path_herdr_behind": null,
+            "kind": "move", "stage": "moving", "server_version": "0.8.2", "version": "0.9.5",
+            "same_protocol": false, "failure": null, "path_herdr": null,
         })
     );
 
@@ -111,8 +117,9 @@ fn the_wizard_opens_on_herdr_only_while_there_may_be_a_server_to_move() {
 
 /// B8, B9, engineering rule 10: a look that does not answer in time counts
 /// as one that could not read the server; while Hide cannot use the server
-/// the step says so, Not now closes the wizard, and a later look that finds
-/// nothing takes the failure away. A server Hide reads keeps it in the log.
+/// it is asked again three times without a word, then the step says so, Not
+/// now closes the wizard, and a later look that finds nothing takes the
+/// failure away. A server Hide reads keeps it in the log.
 #[test]
 fn a_look_that_could_not_read_an_unusable_server_shows_its_failure() {
     let (release, held) = mpsc::channel();
@@ -130,13 +137,26 @@ fn a_look_that_could_not_read_an_unusable_server_shows_its_failure() {
     let mut runtime = installed();
     runtime.snapshot.status.herdr.state = "malformed".into();
     report_here(&mut runtime, &first_run_pass());
+    for quiet in 1..=3 {
+        runtime.ingest_herdr_look(look.clone());
+        assert_eq!(
+            takeover(&runtime),
+            serde_json::Value::Null,
+            "quiet retry {quiet}"
+        );
+        assert_eq!(step(&runtime), Some(FirstRunStep::Herdr));
+        assert!(
+            runtime.herdr_takeover_looking_for_test(),
+            "retry {quiet} is on its way"
+        );
+    }
     runtime.ingest_herdr_look(look.clone());
     assert_eq!(step(&runtime), Some(FirstRunStep::Herdr));
     assert_eq!(
         takeover(&runtime),
         serde_json::json!({
             "kind": "look", "stage": "failed", "server_version": "", "version": "",
-            "same_protocol": false, "failure": "unreadable", "path_herdr_behind": null,
+            "same_protocol": false, "failure": "unreadable", "path_herdr": null,
         })
     );
     assert!(act(&mut runtime, "later"));
@@ -190,20 +210,70 @@ fn bounded_look_for_test(takeover: &Arc<dyn HerdrTakeover>, within: std::time::D
     super::super::herdr_takeover::bounded_look(takeover, within).0
 }
 
-/// B3, B7, B8, B9: a server Hide cannot read offers the move alone; a second
-/// press while it moves starts nothing; a failure names its cause and keeps
-/// the step; Not now appears only then and closes the wizard with the move
-/// unanswered, which a later kit pass does not reopen; the move made from
-/// Overview afterwards brings the agent question back.
+/// A look that offers a live move starts it with no press, whatever the
+/// protocol; a restart, which ends running commands, waits for the press.
+#[test]
+fn a_move_offer_starts_the_move_without_a_press() {
+    for protocol in [OLD_PROTOCOL, PROTOCOL] {
+        let mut runtime = installed();
+        assert!(runtime.ingest_herdr_look(offer(OfferKind::Move, "0.8.2", protocol)));
+        assert_eq!(takeover(&runtime)["stage"], "moving", "protocol {protocol}");
+        assert!(!act(&mut runtime, "move"), "a press is the same move");
+    }
+    let mut restart = installed();
+    restart.ingest_herdr_look(offer(OfferKind::Restart, "0.6.2", OLD_PROTOCOL));
+    assert_eq!(takeover(&restart)["stage"], "offered");
+}
+
+/// One automatic try per server: a failed automatic move offers the button
+/// and is not tried again on its own for that server, whether its record
+/// says so (D-23) or not, while another server is moved on its own.
+#[test]
+fn a_failed_automatic_move_offers_the_button_and_does_not_retry_the_same_server() {
+    let mut runtime = installed();
+    runtime.ingest_herdr_look(offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL));
+    runtime.ingest_herdr_move(Moved::Failed {
+        cause: FailureCause::NotConfirmed,
+        stage: "confirm".into(),
+        detail: "another program runs it".into(),
+    });
+    assert_eq!(takeover(&runtime)["stage"], "failed");
+    assert_eq!(takeover(&runtime)["failure"], "not_confirmed");
+
+    // The record was not written: the same server is offered as if new.
+    runtime.ingest_herdr_look(offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL));
+    assert_eq!(takeover(&runtime)["stage"], "offered");
+    assert!(act(&mut runtime, "move"), "the button moves it");
+    assert_eq!(takeover(&runtime)["stage"], "moving");
+    runtime.ingest_herdr_move(Moved::Failed {
+        cause: FailureCause::Refused,
+        stage: "handoff".into(),
+        detail: "refused".into(),
+    });
+
+    // Another server on the socket is a server Hide has not tried.
+    runtime.ingest_herdr_look(Look::Offer(Offer {
+        server_pid: Some(77),
+        ..match offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL) {
+            Look::Offer(offer) => offer,
+            _ => unreachable!(),
+        }
+    }));
+    assert_eq!(takeover(&runtime)["stage"], "moving");
+}
+
+/// B7, B8, B9: a move under way takes no second press; a failure names its
+/// cause and keeps the step; Not now appears only then and closes the
+/// wizard with the move unanswered, which a later kit pass does not reopen;
+/// the move made from Overview afterwards brings the agent question back.
 #[test]
 fn a_server_hide_cannot_read_is_moved_or_its_failure_lets_the_wizard_close() {
     let mut runtime = installed();
     runtime.ingest_herdr_look(offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL));
     report_here(&mut runtime, &first_run_pass());
 
-    assert!(!act(&mut runtime, "later"), "no Not now before a failure");
+    assert!(!act(&mut runtime, "later"), "no Not now while it moves");
     assert_eq!(step(&runtime), Some(FirstRunStep::Herdr));
-    assert!(act(&mut runtime, "move"));
     assert_eq!(takeover(&runtime)["stage"], "moving");
     assert!(
         !act(&mut runtime, "move"),
@@ -244,41 +314,97 @@ fn a_server_hide_cannot_read_is_moved_or_its_failure_lets_the_wizard_close() {
     assert_eq!(takeover(&runtime), serde_json::Value::Null);
 }
 
-/// B4, B5: a move whose operator's own `herdr` keeps up goes straight on to
-/// the agents; one whose `herdr` is behind stays to say so until Continue.
-#[test]
-fn a_moved_server_stays_on_screen_only_while_the_operators_herdr_is_behind() {
-    let mut keeps_up = installed();
-    keeps_up.ingest_herdr_look(offer(OfferKind::Move, "0.9.1", PROTOCOL));
-    report_here(&mut keeps_up, &first_run_pass());
-    act(&mut keeps_up, "move");
-    keeps_up.ingest_herdr_move(Moved::Done {
+fn moved(path_herdr_behind: Option<&str>) -> Moved {
+    Moved::Done {
         from_pid: 41,
         to_pid: 42,
         elapsed_ms: 900,
-        path_herdr_behind: None,
-    });
+        path_herdr_behind: path_herdr_behind.map(str::to_owned),
+    }
+}
+
+/// B4, B5: the wizard shows the moved result until Continue, with the
+/// operator's own `herdr` as Hide's update of it left it; outside the
+/// wizard a move shows only a `herdr` that could not be brought up.
+#[test]
+fn a_moved_server_shows_its_result_and_how_the_operators_herdr_was_brought_up() {
+    let mut keeps_up = installed();
+    keeps_up.ingest_herdr_look(offer(OfferKind::Move, "0.9.1", PROTOCOL));
+    report_here(&mut keeps_up, &first_run_pass());
+    keeps_up.ingest_herdr_move(moved(None));
+    assert_eq!(takeover(&keeps_up)["stage"], "moved");
+    assert_eq!(takeover(&keeps_up)["path_herdr"], serde_json::Value::Null);
+    keeps_up.ingest_herdr_look(Look::Nothing);
+    assert_eq!(
+        step(&keeps_up),
+        Some(FirstRunStep::Herdr),
+        "the step stays to be read"
+    );
+    assert!(act(&mut keeps_up, "continue"));
     assert_eq!(step(&keeps_up), Some(FirstRunStep::Agents));
     assert_eq!(takeover(&keeps_up), serde_json::Value::Null);
+
+    let mut updated = installed();
+    updated.ingest_herdr_look(offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL));
+    report_here(&mut updated, &first_run_pass());
+    updated.ingest_herdr_move(moved(Some("0.8.2")));
+    assert_eq!(
+        takeover(&updated)["path_herdr"],
+        serde_json::json!({"stage": "updating", "version": "0.8.2"})
+    );
+    assert!(updated.ingest_path_herdr_update(PathUpdated::Current {
+        version: "0.9.5".into()
+    }));
+    assert_eq!(
+        takeover(&updated)["path_herdr"],
+        serde_json::json!({"stage": "updated", "version": "0.9.5"})
+    );
+    assert_eq!(step(&updated), Some(FirstRunStep::Herdr));
 
     let mut behind = installed();
     behind.ingest_herdr_look(offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL));
     report_here(&mut behind, &first_run_pass());
-    act(&mut behind, "move");
-    behind.ingest_herdr_move(Moved::Done {
-        from_pid: 41,
-        to_pid: 42,
-        elapsed_ms: 900,
-        path_herdr_behind: Some("0.8.2".into()),
+    behind.ingest_herdr_move(moved(Some("0.8.2")));
+    behind.ingest_path_herdr_update(PathUpdated::Behind {
+        version: "0.10.0".into(),
+        ran: Some("brew upgrade herdr".into()),
+        detail: "Homebrew's latest speaks another protocol".into(),
     });
-    assert_eq!(takeover(&behind)["stage"], "moved");
-    assert_eq!(takeover(&behind)["path_herdr_behind"], "0.8.2");
-    // The look at the moved server finds nothing; the step stays to be read.
-    behind.ingest_herdr_look(Look::Nothing);
-    assert_eq!(step(&behind), Some(FirstRunStep::Herdr));
+    assert_eq!(
+        takeover(&behind)["path_herdr"],
+        serde_json::json!({"stage": "behind", "version": "0.10.0"})
+    );
     assert!(act(&mut behind, "continue"));
     assert_eq!(step(&behind), Some(FirstRunStep::Agents));
     assert_eq!(takeover(&behind), serde_json::Value::Null);
+    assert!(
+        !behind.ingest_path_herdr_update(PathUpdated::Gone),
+        "an answer after Continue changes nothing"
+    );
+
+    // No wizard: nothing to show unless the `herdr` stays behind.
+    let mut outside = installed();
+    outside.ingest_herdr_look(offer(OfferKind::Move, "0.9.1", PROTOCOL));
+    outside.ingest_herdr_move(moved(None));
+    assert_eq!(takeover(&outside), serde_json::Value::Null);
+    outside.ingest_herdr_look(offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL));
+    outside.ingest_herdr_move(moved(Some("0.8.2")));
+    assert_eq!(takeover(&outside)["path_herdr"]["stage"], "updating");
+    outside.ingest_path_herdr_update(PathUpdated::Current {
+        version: "0.9.5".into(),
+    });
+    assert_eq!(takeover(&outside), serde_json::Value::Null);
+    outside.ingest_herdr_look(offer(OfferKind::Move, "0.8.3", OLD_PROTOCOL));
+    outside.ingest_herdr_move(moved(Some("0.8.3")));
+    outside.ingest_path_herdr_update(PathUpdated::Behind {
+        version: "0.8.3".into(),
+        ran: None,
+        detail: "it is left to the operator".into(),
+    });
+    assert_eq!(
+        takeover(&outside)["path_herdr"],
+        serde_json::json!({"stage": "behind", "version": "0.8.3"})
+    );
 }
 
 /// B6, B12: a server Hide reads as it is can be left for later from the
@@ -364,7 +490,7 @@ fn a_stop_failure_is_refused_where_no_restart_is_offered() {
     let mut runtime = installed();
     runtime.ingest_herdr_look(offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL));
     assert!(!act(&mut runtime, "stop_failed"));
-    assert_eq!(takeover(&runtime)["stage"], "offered");
+    assert_eq!(takeover(&runtime)["stage"], "moving");
 }
 
 /// B18: a newer protocol is shown but never asks the wizard to wait.
@@ -390,10 +516,10 @@ fn a_browser_tabs_continue_leaves_the_herdr_step() {
         serde_json::json!({"agents": ["codex"], "finish": true}),
     )));
     assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
-    assert_eq!(takeover(&runtime)["stage"], "offered");
+    assert_eq!(takeover(&runtime)["stage"], "moving");
 }
 
-/// B3: a look that started before the press read the server the move
+/// B3: a look that started before the move read the server the move
 /// replaces; its answer neither unlocks the button nor takes the step away,
 /// and a failure after it still shows.
 #[test]
@@ -401,7 +527,7 @@ fn a_look_that_started_before_the_move_does_not_undo_it() {
     let mut runtime = installed();
     runtime.ingest_herdr_look(offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL));
     report_here(&mut runtime, &first_run_pass());
-    assert!(act(&mut runtime, "move"));
+    assert_eq!(takeover(&runtime)["stage"], "moving");
     let before_the_press = 0;
     runtime.ingest_herdr_look_from(
         before_the_press,
@@ -449,13 +575,7 @@ fn a_moved_step_cannot_be_left_for_later() {
     let mut runtime = installed();
     runtime.ingest_herdr_look(offer(OfferKind::Move, "0.9.1", PROTOCOL));
     report_here(&mut runtime, &first_run_pass());
-    act(&mut runtime, "move");
-    runtime.ingest_herdr_move(Moved::Done {
-        from_pid: 41,
-        to_pid: 42,
-        elapsed_ms: 900,
-        path_herdr_behind: Some("0.8.2".into()),
-    });
+    runtime.ingest_herdr_move(moved(Some("0.8.2")));
     assert!(!act(&mut runtime, "later"));
     assert_eq!(takeover(&runtime)["stage"], "moved");
 }

@@ -1,5 +1,5 @@
 import { ChevronRightIcon, GitBranchIcon, HistoryIcon, XIcon } from "lucide-react";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { PlanGraph } from "./PlanGraph";
 import { planNowLine } from "./plans";
 import type { Actions } from "./actions";
@@ -11,11 +11,12 @@ import { PrMark } from "./components/pr-mark";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
+import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { launchModelOf, missionCounts, missionOf, missionOpen, nodeLine, nodeMark, shownNodes, stackWaiting, stepsOf, workerWords, kindWord } from "./missions";
+import { launchModelOf, missionCounts, missionOf, missionOpen, nodeLine, nodeMark, stackWaiting, stepsOf, workerWords, kindWord } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { PR_LOOK, staleLabel } from "./prMark";
 import { layerDependencies } from "./projectBoard";
@@ -59,11 +60,10 @@ function MapState({ text, tone, state }: { text: string; tone?: string; state: s
 function MissionBody({ mission, actions }: { mission: Mission; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const [selected, setSelected] = useState<string | null>(null);
-  const [unfolded, setUnfolded] = useState(false);
+  const [zoom, setZoom] = useState<Zoom>("fit");
   const device = useShellStore((s) => (mission.stale ? machineName(s.rest?.navigator?.devices, mission.device_id, t) : null));
   const present = mission.conductor.present;
   const takeover = !present && missionOpen(mission);
-  const { nodes, folded } = shownNodes(mission, unfolded);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-mission={mission.id} data-mission-status={mission.status} data-mission-stale={mission.stale || undefined}>
       {takeover ? (
@@ -83,20 +83,60 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
         />
       ) : null}
       {/* Before the first plan the map is one line (B19). */}
-      {mission.nodes.length > 0 ? <Summary mission={mission} /> : null}
+      {mission.nodes.length > 0 ? <Summary mission={mission} zoom={zoom} onZoom={setZoom} /> : null}
       {mission.delay && missionOpen(mission) ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{t("mission.delay", { line: mission.delay })}</p> : null}
       {device ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
       <div className={cn("min-h-0 flex-1 overflow-auto px-md pb-md pt-xs", mission.stale && "opacity-(--opacity-dimmed)")} data-mission-scroll="true">
-        {nodes.length === 0 ? (
+        {mission.nodes.length === 0 ? (
           <p className="text-body text-muted-foreground" data-mission-planning="true">{t("mission.planning")}</p>
         ) : (
-          <Graph mission={mission} nodes={nodes} selected={selected} onSelect={setSelected} actions={actions} />
+          <FitWidth fit={zoom === "fit"}>
+            <Graph mission={mission} nodes={mission.nodes} selected={selected} onSelect={setSelected} actions={actions} />
+          </FitWidth>
         )}
-        {folded > 0 ? (
-          <Button size="sm" variant="ghost" className="mt-sm" onClick={() => setUnfolded(true)} data-mission-unfold={folded}>
-            {t("mission.folded", { count: folded })} · {t("mission.unfold")}
-          </Button>
-        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** How big the map is drawn: shrunk to the slot's width so every edge shows at once, or at its own size with scrolling. */
+type Zoom = "fit" | "actual";
+
+/**
+ * The map shrunk to the width it has, never grown: a wide row of nodes stays
+ * one row, so what waits on what is read at a glance, and a card's detail
+ * opens at full size. The box holds the shrunk size, so the slot scrolls only
+ * down, or both ways at 100%.
+ */
+function FitWidth({ fit, children }: { fit: boolean; children: ReactNode }) {
+  const room = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const [drawn, setDrawn] = useState<{ scale: number; width: number; height: number } | null>(null);
+  useLayoutEffect(() => {
+    const outer = room.current;
+    const inner = content.current;
+    if (!outer || !inner) return;
+    const measure = () => {
+      // Layout sizes, which a transform does not change.
+      const width = inner.offsetWidth;
+      const height = inner.offsetHeight;
+      const scale = fit && width > outer.clientWidth ? outer.clientWidth / width : 1;
+      setDrawn((current) => (current?.scale === scale && current.width === width && current.height === height ? current : { scale, width, height }));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(outer);
+    observer.observe(inner);
+    return () => observer.disconnect();
+  }, [fit]);
+  const scale = drawn?.scale ?? 1;
+  return (
+    <div ref={room} className="min-w-0" data-mission-fit={fit ? "fit" : "actual"} data-mission-scale={scale.toFixed(2)}>
+      <div className="relative" style={drawn ? { width: drawn.width * scale, height: drawn.height * scale } : undefined}>
+        <div ref={content} className={cn("w-max origin-top-left", drawn && "absolute left-0 top-0")} style={scale < 1 ? { transform: `scale(${scale})` } : undefined}>
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -113,7 +153,7 @@ function Banner({ mark, text, tone, action, ...data }: { mark: ReactNode; text: 
 }
 
 /** The numbers above the map (B19, B21): what the record holds, in the words of the mission's state. */
-function Summary({ mission }: { mission: Mission }) {
+function Summary({ mission, zoom, onZoom }: { mission: Mission; zoom: Zoom; onZoom: (zoom: Zoom) => void }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const running = useElapsed(mission.status === "running" ? mission.started_at_unix_ms : null);
@@ -144,6 +184,10 @@ function Summary({ mission }: { mission: Mission }) {
           {item.value ? <span className="font-semibold tabular-nums text-foreground">{item.value}</span> : null}
         </span>
       ))}
+      <ToggleGroup type="single" value={zoom} onValueChange={(value) => value && onZoom(value as Zoom)} aria-label={t("mission.zoom")} className="ml-auto self-center" data-mission-zoom={zoom}>
+        <ToggleGroupItem size="sm" value="fit" data-mission-zoom-choice="fit">{t("mission.zoom.fit")}</ToggleGroupItem>
+        <ToggleGroupItem size="sm" value="actual" data-mission-zoom-choice="actual">{t("mission.zoom.actual")}</ToggleGroupItem>
+      </ToggleGroup>
     </div>
   );
 }
@@ -221,6 +265,7 @@ function NodeCard({ mission, node, open, onOpen, actions }: { mission: Mission; 
   const staleTip = staleLabel({ stale: mission.github_stale, lastRead: mission.github_read_at_unix_ms }, t, requireInterfaceLanguage(i18n.language));
   const pending = node.status === "planned" || node.blocked !== null;
   const attention = node.status === "failed" || node.status === "waiting";
+  const moving = node.status === "working" || node.status === "review";
   return (
     <Popover open={open} onOpenChange={onOpen}>
       <PopoverAnchor asChild>
@@ -234,10 +279,13 @@ function NodeCard({ mission, node, open, onOpen, actions }: { mission: Mission; 
           data-mission-node={node.key}
           data-node-status={node.status}
           data-node-blocked={node.blocked ?? undefined}
+          data-node-moving={moving || undefined}
           className={cn(
             "flex w-(--size-mission-node) min-w-0 flex-col gap-xxs rounded-md border border-border bg-card px-sm py-xs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
             pending && "border-dashed bg-transparent",
             node.status === "failed" && "border-destructive",
+            // A worker at it is outlined in the working colour, so what runs now reads at a glance, even on a shrunk map.
+            moving && "border-agent-working ring-1 ring-agent-working",
             // The band after the failed outline, so the outline leaves the band its PR colour.
             node.pr_state && "border-l-(length:--size-mission-band)",
             node.pr_state && BAND[node.pr_state],

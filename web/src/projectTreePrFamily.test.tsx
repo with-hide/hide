@@ -157,7 +157,7 @@ const delegated = () => [
   agent("pane:child", "검증 스크립트", [{ repo: "app", number: 1073, state: "pending" }], { delegated: true, lineage_parent_pane_id: "pane:root" }),
 ];
 const PULL: PullRequest = { number: 1073, title: "릴리스 검증 스크립트", url: "https://github.com/acme/app/pull/1073", badge: "open", review: null, is_draft: false, checks: "pending", state: "pending", head_branch: "feat/verify" };
-const READ: GithubStatus = { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: Date.UTC(2026, 9, 18, 9, 0), unavailable_reason: null };
+const READ: GithubStatus = { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: Date.UTC(2026, 9, 18, 9, 0) };
 const hover = async (container: HTMLElement, pane: string) => {
   const trigger = container.querySelector<HTMLElement>(`[data-pr-hover="${pane}"]`)!;
   await act(async () => { trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true })); });

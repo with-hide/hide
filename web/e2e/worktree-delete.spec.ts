@@ -315,7 +315,7 @@ test("a dirty worktree with an unmerged branch and an agent is deleted once both
     // The row may arrive after the dialog opened; the consequences follow it.
     const consequences = dialog.locator("[data-delete-consequences]");
     await expect(consequences).toContainText("1 changed file not committed", { timeout: 30_000 });
-    await expect(consequences).toContainText("ahead 1 unmerged");
+    await expect(consequences).toContainText("Unmerged, 1 ahead");
     await expect(consequences).toContainText(/stops 1 agent: 삭제 대상 작업 정리 \(/);
     await expect(dialog.locator("[data-delete-branch-warning]")).toHaveText("1 commit not on main is lost with it");
     await expect(dialog).toContainText("Discard 1 changed file");

@@ -24,6 +24,7 @@ import { SessionWorkScene } from "./SessionWorkScene";
 import { PrCardScene } from "./PrCardScene";
 import { MissionScene } from "./MissionScene";
 import { PlanScene } from "./PlanScene";
+import { PracticeScene, practiceSceneParams } from "./PracticeScene";
 import { PALETTE_HIDE_CLASS } from "../theme";
 
 export function mountGallery(root: Root) {
@@ -55,6 +56,10 @@ export function mountGallery(root: Root) {
     if (scene === "mission") {
       document.title = "hide · Mission scene";
       root.render(<StrictMode><MissionScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "practice") {
+      root.render(<StrictMode><PracticeScene {...practiceSceneParams(params)} /></StrictMode>);
       return;
     }
     if (scene === "plan") {

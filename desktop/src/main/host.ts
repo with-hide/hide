@@ -16,8 +16,9 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notif
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type HerdrRestart } from "../../../web/src/host";
 import type { MenuCommand } from "./menu";
-import { BINDINGS_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, PICK_FOLDER_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { BINDINGS_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
+import { practiceUrl } from "./practice";
 import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpScope } from "./browserCdp";
 import {
   cliRecords,
@@ -118,6 +119,8 @@ function mtimeMs(file: string): number | null {
 export class DesktopHost {
   private state: HostState = { kind: "connecting" };
   private window: BrowserWindow | null = null;
+  /** The practice window, while one is open; it lives no longer than `window` (`practice.ts`). */
+  private practice: BrowserWindow | null = null;
   /**
    * The status page load still in flight. The window takes one navigation at
    * a time, so every render waits for it: a shell load started while the
@@ -229,6 +232,7 @@ export class DesktopHost {
     this.listenNotify();
     this.listenWindowChrome();
     this.listenEditor();
+    this.listenPractice();
     // An optional feature: a failure to set it up is the log's, and the window opens regardless.
     try {
       this.startUpdates();
@@ -777,6 +781,12 @@ export class DesktopHost {
     // A page's popup window holding the keyboard answers the command itself,
     // whatever the shell's state.
     if (command && this.browsers?.popupCommand(command)) return;
+    // The practice window answers its own chords; a menu command while it
+    // holds the keyboard is not the operator's shell's to run.
+    if (this.practice?.isFocused()) {
+      this.log.event("practice.menu_command_dropped", {});
+      return;
+    }
     if (!this.window || (this.state.kind !== "attached" && this.state.kind !== "lost")) return;
     // Text size in a page is the page's zoom, and the page keeps the keyboard.
     if (command && this.browsers?.zoomFocused(command)) return;
@@ -1427,6 +1437,8 @@ export class DesktopHost {
     window.on("closed", () => {
       if (this.window !== window) return;
       this.window = null;
+      // The practice window keeps its progress through this window's shell, so it goes with it.
+      this.practice?.close();
       // What this window showed and was loading is gone with it; the next window starts from nothing.
       this.statusScreen = null;
       this.statusLoad = null;
@@ -1440,6 +1452,64 @@ export class DesktopHost {
       return;
     }
     this.render();
+  }
+
+  /** Help > Practice Hide and the empty Home: one practice window, opened or brought forward; only this window's shell is heard. */
+  private listenPractice(): void {
+    ipcMain.on(PRACTICE_OPEN_CHANNEL, (event: IpcMainEvent, language: unknown) => {
+      const origin = this.daemonOrigin();
+      if (!this.fromShell(event) || !origin) {
+        this.log.event("practice.refused", { reason: "sender" });
+        return;
+      }
+      if (this.practice) {
+        this.present(this.practice, true);
+        return;
+      }
+      const url = practiceUrl(origin, language, process.platform);
+      if (typeof url !== "string") {
+        this.log.event("practice.refused", { reason: url.refused });
+        return;
+      }
+      this.openPractice(url);
+    });
+  }
+
+  private openPractice(url: string): void {
+    const size = this.window?.getNormalBounds();
+    const window = new BrowserWindow({
+      width: size?.width ?? 1280,
+      height: size?.height ?? 800,
+      minWidth: MIN_SIZE.width,
+      minHeight: MIN_SIZE.height,
+      show: false,
+      title: "hide",
+      backgroundColor: __HIDE_BACKGROUND__,
+      // No preload: the page stands in for this host from its address and reaches nothing here.
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false },
+    });
+    this.practice = window;
+    window.once("ready-to-show", () => this.present(window, true));
+    window.on("closed", () => {
+      if (this.practice === window) this.practice = null;
+    });
+    const contents = window.webContents;
+    contents.on("will-navigate", (event, target) => {
+      event.preventDefault();
+      if (!this.isDaemonUrl(target)) this.openExternal(target);
+    });
+    contents.on("will-redirect", (event) => {
+      event.preventDefault();
+      this.log.event("practice.redirect_refused", {});
+    });
+    contents.setWindowOpenHandler(({ url: target }) => {
+      if (!this.isDaemonUrl(target)) this.openExternal(target);
+      return { action: "deny" };
+    });
+    contents.loadURL(url).then(
+      () => this.log.event("practice.opened", {}),
+      (error: unknown) => this.log.event("practice.load_failed", { detail: String(error) }),
+    );
   }
 
   // --- the security boundary (B10, B11) ----------------------------------------

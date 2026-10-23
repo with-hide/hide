@@ -17,8 +17,9 @@ use hide_node_link::protocol::Call;
 use hide_node_link::worktrees::{GIT_WATCH_LIMIT, GitWatchReport};
 
 use crate::model::{
-    ProjectWorktreesSnapshot, UnpushedSnapshot, WorktreeCatalogSnapshot,
-    WorktreeDeletionGateSnapshot, WorktreeSnapshot,
+    ProjectWorktreesSnapshot, UnpushedSnapshot, WorktreeBranchLoss, WorktreeCatalogSnapshot,
+    WorktreeDeletionBlock, WorktreeDeletionGateSnapshot, WorktreeDeletionWarning, WorktreeDiscard,
+    WorktreeSnapshot,
 };
 use crate::reader::BackgroundRead;
 
@@ -855,14 +856,14 @@ pub(crate) fn merged_heads(
 ///
 /// Main, locked or unmeasured worktrees are refused; other loss is a
 /// warning the confirmation shows, and the loss itself is a choice the
-/// operator makes there (`discard_label`, `can_delete_branch`).
+/// operator makes there (`discard`, `can_delete_branch`).
 pub fn deletion_gate(
     worktree: &WorktreeSnapshot,
     is_base: bool,
     pane_count: usize,
 ) -> WorktreeDeletionGateSnapshot {
-    let blocked_reason = if worktree.is_main {
-        Some("The main worktree cannot be deleted".to_owned())
+    let blocked = if worktree.is_main {
+        Some(WorktreeDeletionBlock::Main)
     } else if let Some(reason) = worktree.lock_reason.as_deref() {
         let name = worktree
             .branch
@@ -872,95 +873,74 @@ pub fn deletion_gate(
                     .file_name()
                     .and_then(|name| name.to_str())
             })
-            .unwrap_or("selected checkout");
-        Some(hide_node_link::worktrees::locked_removal_reason(
-            name, reason,
-        ))
+            .unwrap_or_default();
+        Some(WorktreeDeletionBlock::Locked {
+            name: name.to_owned(),
+            reason: reason.to_owned(),
+        })
     } else {
-        worktree.ignored_scan_unavailable.clone()
+        worktree
+            .ignored_scan_unavailable
+            .is_some()
+            .then_some(WorktreeDeletionBlock::IgnoredScanUnavailable)
     };
     let status_unknown = worktree.unavailable_reason.is_some() && !worktree.missing;
-    let files = |count: u32| match count {
-        0 => "uncommitted changes".to_owned(),
-        1 => "1 changed file".to_owned(),
-        count => format!("{count} changed files"),
-    };
     let mut warnings = Vec::new();
     if worktree.dirty {
-        warnings.push(format!(
-            "{} not committed",
-            files(worktree.changed_file_count)
-        ));
+        warnings.push(WorktreeDeletionWarning::Uncommitted {
+            files: worktree.changed_file_count,
+        });
     }
     if worktree.nested {
-        warnings.push("another worktree lies inside it".to_owned());
+        warnings.push(WorktreeDeletionWarning::Nested);
     }
     if is_base {
-        warnings.push("holds the base branch".to_owned());
+        warnings.push(WorktreeDeletionWarning::Base);
     }
     if status_unknown {
-        warnings.push("Git status unavailable".to_owned());
+        warnings.push(WorktreeDeletionWarning::StatusUnknown);
     }
     if !worktree.missing {
         if worktree.merged != Some(true) {
-            warnings.push(format!("ahead {} unmerged", worktree.ahead));
+            warnings.push(WorktreeDeletionWarning::Unmerged {
+                ahead: worktree.ahead,
+            });
         }
         if worktree.upstream_state != "pushed" {
-            warnings.push("not pushed".to_owned());
+            warnings.push(WorktreeDeletionWarning::NotPushed);
         }
     }
-    let mut discard_label = match (worktree.dirty, worktree.nested) {
-        (true, true) => Some(format!(
-            "Discard {} and the worktree inside it",
-            files(worktree.changed_file_count)
-        )),
-        (true, false) => Some(format!("Discard {}", files(worktree.changed_file_count))),
-        (false, true) => Some("Discard the worktree inside it".to_owned()),
-        (false, false) => status_unknown.then(|| "Discard any uncommitted changes".to_owned()),
-    };
     if !worktree.ignored_repositories.is_empty() {
-        let names = worktree.ignored_repositories.join(", ");
-        warnings.push(format!(
-            "{} ignored repositories",
-            worktree.ignored_repositories.len()
-        ));
-        discard_label = Some(match discard_label {
-            Some(label) => format!("{label} and ignored repositories {names}"),
-            None => format!("Discard ignored repositories {names}"),
+        warnings.push(WorktreeDeletionWarning::IgnoredRepositories {
+            count: worktree.ignored_repositories.len(),
         });
     }
+    let discard = WorktreeDiscard {
+        changed_files: worktree.dirty.then_some(worktree.changed_file_count),
+        nested: worktree.nested,
+        // An unread status matters only when nothing more certain is lost.
+        status_unknown: status_unknown && !worktree.dirty && !worktree.nested,
+        ignored_repositories: worktree.ignored_repositories.clone(),
+    };
+    let discard = (discard != WorktreeDiscard::default()).then_some(discard);
     let can_delete_branch = !worktree.missing && worktree.branch.is_some() && !is_base;
-    let branch_warning = match worktree.merged {
+    let branch_loss = match worktree.merged {
         _ if !can_delete_branch => None,
         Some(true) => None,
-        Some(false) if worktree.ahead == 0 => {
-            Some("Git does not count it as merged; it is deleted anyway".to_owned())
-        }
-        Some(false) => Some(format!(
-            "{} not on {} {} lost with it",
-            if worktree.ahead == 1 {
-                "1 commit".to_owned()
-            } else {
-                format!("{} commits", worktree.ahead)
-            },
-            worktree.base_branch.as_deref().unwrap_or("the base"),
-            if worktree.ahead == 1 { "is" } else { "are" },
-        )),
-        None => Some("Git could not tell whether it is merged; it is deleted anyway".to_owned()),
+        Some(false) if worktree.ahead == 0 => Some(WorktreeBranchLoss::NotMerged),
+        Some(false) => Some(WorktreeBranchLoss::Commits {
+            count: worktree.ahead,
+            base: worktree.base_branch.clone(),
+        }),
+        None => Some(WorktreeBranchLoss::Unknown),
     };
     WorktreeDeletionGateSnapshot {
-        blocked_reason,
+        blocked,
         warnings,
-        button_label: if pane_count == 1 {
-            "Close 1 pane and delete".to_owned()
-        } else if pane_count > 0 {
-            format!("Close {pane_count} panes and delete")
-        } else {
-            "Delete worktree…".to_owned()
-        },
+        pane_count,
         can_delete_branch,
-        branch_warning,
-        discard_label,
+        branch_loss,
+        discard,
     }
 }
 
