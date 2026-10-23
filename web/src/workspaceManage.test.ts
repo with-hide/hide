@@ -331,7 +331,7 @@ it("requires a new Discard choice when the measured repository names change", ()
 describe("language-dependent sentences", () => {
   const counted = { removal: { pane_count: 2, running_agent_count: 1 } } as Partial<Workspace>;
   it("joins a removal's facts in Korean from the plural-free Korean forms", () => {
-    expect(factsLine(manage.projectRemovalFacts(workspace(counted), ko))).toBe("페인 2개 닫힘 · 에이전트 1개 종료 · 등록만 제거 · 디스크의 파일은 유지");
+    expect(factsLine(manage.projectRemovalFacts(workspace(counted), ko))).toBe("터미널 2개 닫힘 · 에이전트 1개 종료 · 등록만 제거 · 디스크의 파일은 유지");
   });
 
   it("names the version a remote device lacks, or says it is unknown", () => {
@@ -339,7 +339,7 @@ describe("language-dependent sentences", () => {
     expect(remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: "0.9.0" }] as never)).toBe("Set purpose requires Herdr 0.9.1 or newer on the remote device; 0.9.0 is installed.");
     expect(remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: null }] as never)).toBe("Set purpose requires Herdr 0.9.1 or newer on the remote device; its version is unavailable.");
     expect(remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: "0.9.1" }] as never)).toBeNull();
-    expect(manage.remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: "0.9.0" }] as never, ko)).toBe("원격 기기의 Herdr 0.9.1 이상에서 용도를 설정할 수 있습니다. 설치된 버전: 0.9.0");
+    expect(manage.remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: "0.9.0" }] as never, ko)).toBe("용도를 설정하려면 원격 기기에 Herdr 0.9.1 이상이 필요해요. 설치된 버전: 0.9.0");
   });
 });
 

@@ -144,7 +144,7 @@ type PaneMenuId =
  * each opened only by choosing it, its name and Herdr id to copy, and closing it. Opening
  * the menu moves no focus and marks nothing read.
  */
-/** 다시 볼 것 on a root agent's pane (PRD revisit-group D-08, B10): `star` offers the ★, `done` offers 다 봤음. */
+/** 다시 볼 것 on a root agent's pane (PRD revisit-group D-08, B10): `star` offers the ★, `done` offers 다시 볼 것에서 빼기. */
 export type RevisitOffer = "hidden" | "star" | "done";
 
 /**

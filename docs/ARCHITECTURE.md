@@ -3048,7 +3048,7 @@ The web also owns the pixel rule, because it has the geometry: an edge takes a d
 A pane's delegated children and ancestors come from the global machine-qualified pane rows the core projects (`children.chips`, `lineage_path`; rules in `web/src/lineage.ts`).
 The remote replica preserves a declared raw pane and machine id, and the runtime scopes it only after the consented helper greeting supplies that device's immutable machine identity.
 A parent's header opens the tree popover from its tree button, a child's header draws its ancestor path, and the pane menu lists parent, siblings and children.
-Each explicit Open follows the same tracked navigation as the sidebar and Sessions; Escape returns to its badge, and the tree popover's `Overview에서 일감 보기` opens the Overview at the agent's task.
+Each explicit Open follows the same tracked navigation as the sidebar and Sessions; Escape returns to its badge, and the tree popover's `개요에서 보기` opens the Overview at the agent's task.
 Each of those moves is one `focus_pane` carrying a `request_id` (on a device, `remote_control` with `report_pane_focus_outcome`), and the core's `status.pane_focus_request` is the only answer the header shows: pending until Herdr's layout confirms, or failed with the core's reason and Retry when it can be retried; a second click on the same target while one is in flight is dropped, and a failure never splits the parent or makes a pane.
 
 ### The `$HOME` filesystem boundary

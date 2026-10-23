@@ -284,7 +284,7 @@ it("says why when its pass could not run here, and Try again has the agents read
     (next.rest.navigator.devices[0]!.kit as { unavailable?: string }).unavailable = "timed out";
     useShellStore.setState({ ...next, revision: 2 } as never);
   });
-  expect(document.querySelector("[data-first-run-unavailable]")?.textContent).toContain("Hide could not set up agents on this Mac: timed out");
+  expect(document.querySelector("[data-first-run-unavailable]")?.textContent).toContain("Could not set up agents on this device: timed out");
   // An unread kit is not a Mac with no agent installed.
   expect(document.querySelector("[data-first-run-no-agent]")).toBeNull();
   expect(continueButton().textContent).toContain("Try again");
