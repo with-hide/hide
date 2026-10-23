@@ -121,7 +121,7 @@ export function AgentTabStart({ workspace, target, groupName, actions }: { works
       <Button variant="secondary" className="w-full" disabled={!connected || (locked && !terminalRetry)} onClick={() => start(true)} data-group-start-terminal="true"><TerminalIcon />{t(terminalRetry ? "groups.retryTerminal" : "groups.terminal")}</Button>
       <p className="truncate text-center text-caption text-muted-foreground" title={workspace.path}>{workspace.path}</p>
       {!connected ? <p role="status" className="text-caption text-muted-foreground">{t("groups.notConnected")}</p> : null}
-      {failure ? <p role="alert" className="whitespace-pre-line text-caption text-destructive">{failure}</p> : null}
+      {failure ? <p role="alert" data-core-error={draft.failure && "code" in draft.failure ? draft.failure.code : undefined} className="whitespace-pre-line text-caption text-destructive">{failure}</p> : null}
       {draft.phase === "unknown" ? <div className="flex flex-col items-start gap-xs"><p role="status" className="text-caption text-muted-foreground">{t("groups.unknown")}</p><Button variant="outline" disabled={!connected} onClick={() => start(false, true)}>{t("groups.confirm")}</Button></div> : null}
       {full ? <p role="alert" className="text-caption text-destructive">{t("groups.draftLimit")}</p> : null}
     </div>

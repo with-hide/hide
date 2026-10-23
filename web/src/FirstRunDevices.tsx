@@ -11,6 +11,7 @@ import type { MessageKey } from "./i18n/catalogs";
 import type { HerdrProfile } from "./snapshot";
 import { DeviceInstallTerms } from "./settings/AddDevice";
 import { useShellStore } from "./store";
+import { remoteStateText } from "./coreError";
 
 export function FirstRunDevices({ actions, primary, onBack, onNext }: {
   actions: Actions;
@@ -81,7 +82,9 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
           <div role="group" aria-label={t("firstRun.devices.selection")} className="divide-y divide-border rounded-md border border-border bg-card">
             {rows.map((profile) => {
               const state = rowState(profile);
-              const reason = profile.connect_error ?? rest?.status?.remote?.find((row) => row.target_id === profile.device_id)?.message;
+              // A device's connection is worded from its state; the core's sentence beside it is the log's.
+              const remote = rest?.status?.remote?.find((row) => row.target_id === profile.device_id);
+              const reason = profile.connect_error ?? (remote && remote.state !== "connected" && remote.state !== "not_connected" ? remoteStateText(remote.state, profile.label, t) : null);
               const locked = busy || ["added", "connected", "disabled", "unavailable"].includes(state);
               return (
                 <div key={profile.id} className="flex flex-wrap items-start gap-sm px-md py-sm" data-first-run-device={profile.id} data-device-state={state}>

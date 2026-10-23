@@ -17,7 +17,8 @@ describe("the failures the operator is told about", () => {
     // A kind this build does not word gets its family's general line; the core's sentence is never drawn.
     expect(errorNotice(error("remote.control.refused", 1))).toEqual({ text: "The device could not do this. Try again.", refreshable: false });
     expect(errorNotice(error("view_layout.display_limit", 1))?.text).toBe("No more views can be open. Close one, then open another.");
-    expect(errorNotice(error("view_layout.unsaved", 1))?.text).toBe("The view did not change. Try again.");
+    expect(errorNotice(error("view_layout.unsaved", 1))?.text).toBe("This file has unsaved changes, so its last view stays open. Close it with Save or Don't save.");
+    expect(errorNotice(error("view_layout.unknown_display", 1))?.text).toBe("The view did not change. Try again.");
     expect(errorNotice(error("view_layout.stale_workspace", 1))).toBeNull();
     expect(errorNotice(error("file.save_failed", 1))).toBeNull();
     expect(errorNotice(null)).toBeNull();

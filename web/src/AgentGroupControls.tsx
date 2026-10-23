@@ -74,7 +74,7 @@ function NameForm({ actions, intent }: { actions: Actions; intent: NonNullable<R
     <DialogHeader><DialogTitle>{t(intent.groupId === null ? "groups.createTitle" : "groups.rename")}</DialogTitle></DialogHeader>
     <DialogBody><Input autoFocus value={name} readOnly={pending} aria-label={t("groups.name")} aria-invalid={submitted && !!problem} onChange={(event) => { setName(event.target.value); setRequest(null); setTimedOut(false); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); submit(); } }} />
       {timedOut ? <p role="status" className="mt-xs text-caption text-muted-foreground">{t("groups.saveUnknown")}</p> : null}
-      {submitted && problem ? <p role="alert" className="mt-xs text-caption text-destructive">{t(problem)}</p> : failed ? <p role="alert" className="mt-xs text-caption text-destructive">{rest?.status?.last_error ? coreErrorText(rest.status.last_error, t, "groups.saveFailed") : t("groups.saveFailed")}</p> : null}
+      {submitted && problem ? <p role="alert" className="mt-xs text-caption text-destructive">{t(problem)}</p> : failed ? <p role="alert" data-core-error={rest?.status?.last_error?.kind} className="mt-xs text-caption text-destructive">{rest?.status?.last_error ? coreErrorText(rest.status.last_error, t, "groups.saveFailed") : t("groups.saveFailed")}</p> : null}
     </DialogBody><DialogFooter><Button variant="ghost" onClick={() => useGroupName.getState().close()}>{t("common.cancel")}</Button><Button disabled={pending} onClick={submit}>{t("common.save")}</Button></DialogFooter>
   </DialogContent></Dialog>;
 }

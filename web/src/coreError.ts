@@ -86,6 +86,8 @@ const KEYS = new Map<string, MessageKey>([
   ["pane_reopen.not_restarted", "coreError.notice.reopenNotRestarted"],
 
   ["view_layout.limit", "coreError.view.limit"],
+  ["view_layout.unsaved", "coreError.view.unsaved"],
+  ["view_layout.waiting", "coreError.view.waiting"],
   ["view_layout.display_limit", "coreError.view.displayLimit"],
   ["view_layout.nothing_to_split", "coreError.view.nothingToSplit"],
   ["agent_layout.display_limit", "coreError.view.agentTabLimit"],
