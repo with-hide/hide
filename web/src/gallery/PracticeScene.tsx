@@ -13,7 +13,6 @@ import { clientI18n } from "../i18n/translator";
 import { installKeyboard } from "../keyboard";
 import { CHAPTERS } from "../practice/chapters";
 import { PracticeCoach } from "../practice/PracticeCoach";
-import { applyPractice, paneScreen, practiceSnapshot, type PracticeModel } from "../practice/practiceWorld";
 import { Sidebar } from "../sidebar";
 import { useShellStore } from "../store";
 import { feedChunks, terminalFor } from "../terminals";
@@ -25,7 +24,7 @@ import { WorkspaceScreen } from "../WorkspaceScreen";
 export type PracticeSceneParams = { chapter: number; theme: "light" | "dark"; system: "mac" | "pc" };
 
 export function practiceSceneParams(params: URLSearchParams): PracticeSceneParams {
-  const chapter = Number(params.get("chapter") ?? "1");
+  const chapter = Number(params.get("chapter") ?? "0");
   if (!CHAPTERS.some((row) => row.number === chapter)) throw new Error(`Unknown practice chapter ${chapter}`);
   return { chapter, theme: params.get("theme") === "light" ? "light" : "dark", system: params.get("sys") === "pc" ? "pc" : "mac" };
 }
@@ -37,19 +36,21 @@ function standInHost(system: PracticeSceneParams["system"]): HostBridge {
   return part<HostBridge>({ kind: "electron", platform: system === "mac" ? "darwin" : "win32", browser: part({}), updates: part({}) });
 }
 
-export function PracticeScene({ chapter: number, theme, system }: PracticeSceneParams) {
+export function PracticeScene({ chapter: first, theme, system }: PracticeSceneParams) {
   if (!window.hideHost) window.hideHost = standInHost(system);
+  const [number, setNumber] = useState(first);
   const chapter = CHAPTERS.find((row) => row.number === number)!;
+  const next = CHAPTERS.find((row) => row.number === number + 1) ?? null;
   const [run, setRun] = useState(0);
-  const [model, setModel] = useState<PracticeModel>(chapter.model);
-  const live = useRef(model);
-  live.current = model;
+  const [model, setModel] = useState<unknown>(() => chapter.world.initial());
+  const live = useRef({ world: chapter.world, model });
+  live.current = { world: chapter.world, model };
 
   const actions = useMemo(() => createActions((event) => {
-    const next = applyPractice(live.current, event);
-    if (next) {
-      live.current = next;
-      setModel(next);
+    const after = live.current.world.apply(live.current.model, event);
+    if (after) {
+      live.current = { ...live.current, model: after };
+      setModel(after);
     }
     return true;
   }), []);
@@ -57,12 +58,15 @@ export function PracticeScene({ chapter: number, theme, system }: PracticeSceneP
   useEffect(() => installKeyboard(actions), [actions]);
 
   useLayoutEffect(() => {
-    const { rest, agents, focused } = practiceSnapshot(model, Date.now());
-    useShellStore.setState({ rest, agents, connection: "live", focusedPaneId: focused });
-  }, [model]);
+    const { rest, agents, focused, usage } = chapter.world.snapshot(model, Date.now());
+    useShellStore.setState({ rest, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null });
+  }, [chapter, model]);
 
   useLayoutEffect(() => {
-    useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneShown: false, laneExpanded: false });
+    useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneShown: chapter.world.lane, laneExpanded: false, projectTab: "status", stackFront: "view" });
+  }, [chapter, run]);
+
+  useLayoutEffect(() => {
     const root = document.documentElement;
     root.classList.toggle("dark", theme === "dark");
     root.classList.toggle("light", theme === "light");
@@ -72,7 +76,6 @@ export function PracticeScene({ chapter: number, theme, system }: PracticeSceneP
     document.title = `hide · 연습 모드 ${chapter.number}편`;
   }, [chapter.number, theme]);
 
-  // Each pane shows its first screen once its terminal has fitted the pane: a pane keeps no scrollback.
   // A pane keeps no scrollback, so a terminal a layout change re-created or
   // shrank comes back blank; whichever terminal shows blank gets its screen again.
   useEffect(() => {
@@ -84,25 +87,27 @@ export function PracticeScene({ chapter: number, theme, system }: PracticeSceneP
     };
     let frame = requestAnimationFrame(function write() {
       const now = performance.now();
-      const ready = live.current.panes.filter((pane) => {
-        const terminal = terminalFor(pane.id);
-        return terminal && terminal.rows > 8 && blank(terminal) && now - (wrote.get(terminal) ?? 0) > 500;
+      const { world, model: current } = live.current;
+      const ready = world.panes(current).flatMap((id) => {
+        const terminal = terminalFor(id);
+        return terminal && terminal.rows > 8 && blank(terminal) && now - (wrote.get(terminal) ?? 0) > 500 ? [{ id, terminal }] : [];
       });
       if (ready.length) {
-        feedChunks(ready.map((pane) => ({ pane_id: pane.id, bytes_base64: encode(paneScreen(pane)) })));
-        for (const pane of ready) wrote.set(terminalFor(pane.id)!, now);
+        feedChunks(ready.map(({ id, terminal }) => ({ pane_id: id, bytes_base64: encode(world.screen(current, id, terminal.cols)) })));
+        for (const { terminal } of ready) wrote.set(terminal, now);
       }
       frame = requestAnimationFrame(write);
     });
     return () => cancelAnimationFrame(frame);
   }, [run]);
 
-  const restart = useCallback(() => {
-    const fresh = chapter.model();
-    live.current = fresh;
+  const start = useCallback((target: typeof chapter) => {
+    const fresh = target.world.initial();
+    live.current = { world: target.world, model: fresh };
+    setNumber(target.number);
     setModel(fresh);
     setRun((value) => value + 1);
-  }, [chapter]);
+  }, []);
 
   return (
     <TooltipProvider>
@@ -113,8 +118,7 @@ export function PracticeScene({ chapter: number, theme, system }: PracticeSceneP
           <WorkspaceScreen key={run} actions={actions} />
         </div>
         <GroupNameDialog actions={actions} />
-        <div className="pointer-events-none fixed left-1/2 top-[6px] z-[61] -translate-x-1/2 rounded-full border border-border bg-card px-sm py-xxs text-caption text-muted-foreground">연습 모드 · {chapter.number}편 · 예시 화면</div>
-        <PracticeCoach key={run} chapter={chapter} model={model} onRestart={restart} />
+        <PracticeCoach key={run} chapter={chapter} model={model} next={next} onNext={() => next && start(next)} onRestart={() => start(chapter)} />
       </div>
     </TooltipProvider>
   );

@@ -6,6 +6,7 @@ import type { AgentGroup, AgentLayout } from "../agentLayout";
 import type { AgentScope } from "../agentScope";
 import type { AgentRow, Checkout, LayoutNode, SnapshotRest } from "../snapshot";
 import { galleryAgentState } from "../gallery/agentStates";
+import type { CoreEvent, PracticeWorld } from "./world";
 import { agent, checkout, REFERENCE_FOLDS, sidebarStatusAxisScene, workspace } from "../gallery/sceneData";
 import statusAxisScope from "../gallery/sidebarStatusAxisScope.json";
 
@@ -61,7 +62,6 @@ function shellPane(model: PracticeModel): PracticePane {
   return { id: `sh${model.nextId}`, agent: null, title: "zsh" };
 }
 
-type CoreEvent = { kind: string; payload: Record<string, unknown> };
 
 /**
  * The model after `event`, as the core would leave it, or null for an event
@@ -238,6 +238,12 @@ export function paneScreen(pane: PracticePane): string {
   ].join("\r\n");
 }
 
-export function panesOfModel(model: PracticeModel): PracticePane[] {
-  return model.panes;
-}
+/** Chapter 1's world: the practice project, answering splits, focus, zoom, tabs and groups. */
+export const PRACTICE_WORLD: PracticeWorld<PracticeModel> = {
+  initial: chapterOneModel,
+  apply: applyPractice,
+  snapshot: (model, nowMs) => ({ ...practiceSnapshot(model, nowMs), usage: null }),
+  panes: (model) => model.panes.map((pane) => pane.id),
+  screen: (model, paneId) => paneScreen(model.panes.find((pane) => pane.id === paneId)!),
+  lane: false,
+};
