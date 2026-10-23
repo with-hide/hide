@@ -1273,12 +1273,10 @@ test("in a stacked lane, Select in File Tree brings the Explorer in front even w
     await page.setViewportSize({ width: Math.round(sidebar + 440), height: 1080 });
     await expect(workspace).toHaveAttribute("data-lane-stacked", "true");
     await expect(workspace).toHaveAttribute("data-lane-view", "documents");
-    // Pinned where docking has no room, the menu's pin says what is drawn (B19).
+    // Pinned where docking has no room, the rail's pin says what is drawn (B19).
     await setLanePinned(page, true);
     await page.setViewportSize({ width: Math.round(sidebar + 300), height: 1080 });
-    await page.locator("[data-lane-more]").click();
-    await expect(page.locator('[data-lane-menu-item="pin"][data-lane-pin="narrow"]')).toHaveText("Pin · too narrow, drawn over");
-    await page.keyboard.press("Escape");
+    await expect(page.locator('[data-lane-pin="narrow"]')).toHaveAttribute("aria-description", "Pin · too narrow, drawn over");
     await page.setViewportSize({ width: Math.round(sidebar + 440), height: 1080 });
     await expect(workspace).toHaveAttribute("data-lane-stacked", "true");
 
