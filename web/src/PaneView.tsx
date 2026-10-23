@@ -18,7 +18,7 @@ import { PaneLetterButton } from "./components/letter-mark";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
-import { PaneForkMark, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
+import { PaneAskMark, PaneForkMark, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
 import { PaneWorkChip } from "./PaneMissionChip";
 import { PaneViews } from "./ViewComments";
 import { PaneConnectionChip } from "./PaneConnection";
@@ -384,6 +384,7 @@ export const PaneView = memo(function PaneView({
           </>
         )}
         {agentKind ? <PaneForkMark pane={pane} actions={actions} /> : null}
+        {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         {agentKind ? <PaneWorkChip paneId={paneId} actions={actions} /> : null}
         {agentKind ? <PanePrChip paneId={paneId} actions={actions} /> : null}
