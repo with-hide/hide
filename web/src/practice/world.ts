@@ -7,6 +7,13 @@ import type { AgentRow, SnapshotRest } from "../snapshot";
 
 export type CoreEvent = { kind: string; payload: Record<string, unknown> };
 
+/**
+ * What the practice window sends a world besides the core's events: text the
+ * shell would have put on the clipboard (`{ text, what }`). The operator's
+ * clipboard is never written from a practice screen.
+ */
+export const PRACTICE_COPY = "practice_copy";
+
 export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null };
 
 export type PracticeWorld<M> = {

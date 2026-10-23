@@ -2312,7 +2312,8 @@ It opens on the chapter list: each chapter's number, title, one line of what it 
 A chapter seen once stays seen when it is played again.
 
 A chapter playing dims everything but what its step marks, rings that, and puts a light bubble beside it with what happens and how: the command's chord as keycaps (`Or press ⌘D`), `Press the button, or ⇧⌘↩` for a step with a button, or `Press where it's marked` where this host has no chord for the command (⌥1 in a browser tab).
-⏎ or → performs the step in the learner's place, pressing the chord, the button, or dragging the pane with a hand cursor; ← goes back over a step that only looks.
+⏎ or → performs the step in the learner's place, pressing the chord, the button, dragging the pane with a hand cursor, typing what the learner would say into an agent's prompt and sending it, or right-clicking and choosing from the shell's own menu with the hand; ← goes back over a step that only looks.
+A copy made on the practice screen (a menu's Copy pane ID) goes to the practice world, never to the operator's clipboard.
 The learner can also do it themselves, by key, click or drag: a step that changes the screen is done when the world says so, however it was done.
 ⌘K search and ⌘P Open file open over the practice screen as they do in the shell; while one is open every key is the palette's, and ⏎, → and ← go back to the guide when it closes.
 A pressed chord shows large in the middle for a moment, so the keys are seen as they are used.
@@ -2335,8 +2336,9 @@ A chapter is three new files and no change to a shared one, so chapters written 
   `practice.ts` keeps the guide's own words and joins every file there, refusing a key outside its file's chapter; the catalog checks read them like any other words.
 - `web/src/practice/worlds/<id>.ts`, when no world there fits: the world the chapter plays in.
 
-A step names what it rings (`target`, a selector into the shell), where the bubble sits (`side`), the command it teaches (`command`, never a chord), a `gesture` when ⏎ should press a button or drag a pane instead of pressing the chord, and `done`, which reads the world; a step without `done` is a look.
+A step names what it rings (`target`, a selector into the shell), where the bubble sits (`side`), the command it teaches (`command`, never a chord), a `gesture` when ⏎ should press a button, drag a pane, type into a pane's terminal (`type`) or choose from a right-click menu (`menu`) instead of pressing the chord, and `done`, which reads the world; a step without `done` is a look.
 A world (`web/src/practice/world.ts`) gives the first state, answers the core events the chapter's steps dispatch as the core would (an event it does not need answers nothing), and draws the snapshot and each pane's screen.
+What is typed into a terminal reaches the world as the terminal's `key` events and a copy as `practice_copy`; a pane whose screen the world changes is cleared and drawn again, so an agent's answer appears as the world writes it.
 `worlds/kit.ts` holds what several worlds build with: a checkout's desk of tabs, panes and groups and the events that change it (`applyDesk`), agent rows (`agent`, with a parent named as the core names it), and the snapshot of one or more projects' desks (`deskSnapshot`).
 A tool only one chapter needs stays in that chapter's world file, and moves to `kit.ts` when a second chapter needs it.
 A world's data is the practice window's own, invented for it: no world imports the gallery's fixtures.
