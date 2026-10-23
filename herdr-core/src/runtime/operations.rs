@@ -1085,7 +1085,7 @@ impl Runtime {
     /// split Hide asked for keeps from its answer: drawn until Herdr's layout
     /// lists `created`, unknown at the same bound, and holding the tab's line
     /// meanwhile, since what waits there is predicted on the layout with it.
-    pub(super) fn draw_answered_split(&mut self, target: &str, created: &str) {
+    pub(crate) fn draw_answered_split(&mut self, target: &str, created: &str) {
         let (Some(scope_id), Some(baseline_signature)) = (
             self.pane_operation_scope(target),
             self.pane_operation_baseline(target),

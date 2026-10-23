@@ -1850,10 +1850,12 @@ impl Runtime {
         let now = unix_milliseconds();
         let mut requests = Vec::new();
         let mut settled = Vec::new();
+        let beside = self.beside_spawned_panes();
         for agent in &self.snapshot.navigator.agents {
             if !agent.delegated
                 || crate::agent_hooks::is_remote_pane(&agent.pane_id)
                 || self.manually_placed_pane(&agent.pane_id)
+                || beside.contains(agent.pane_id.as_str())
             {
                 continue;
             }
@@ -1913,6 +1915,35 @@ impl Runtime {
             }
         }
         true
+    }
+
+    /// The panes of this machine's live agents that a spawn opened beside
+    /// its caller (`hide agent spawn --beside`), which stay in the caller's
+    /// tab. Keyed by the spawn's child record, so a restarted Hide or Herdr
+    /// that rebinds the child to its pane keeps it there too.
+    fn beside_spawned_panes(&self) -> std::collections::HashSet<&str> {
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return Default::default();
+        };
+        let children: std::collections::HashSet<&str> = ledger
+            .spawns
+            .iter()
+            .filter(|spawn| spawn.beside && spawn.machine.is_none())
+            .filter_map(|spawn| spawn.child.as_deref())
+            .collect();
+        if children.is_empty() {
+            return Default::default();
+        }
+        ledger
+            .agents
+            .iter()
+            .filter(|agent| {
+                !agent.ended
+                    && agent.machine == self.node.as_str()
+                    && children.contains(agent.id.as_str())
+            })
+            .map(|agent| agent.pane.as_str())
+            .collect()
     }
 
     /// The operator's provider choice once the settings file has been read.
