@@ -9,9 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     AgentLogoMode, ColorTheme, DetailSlot, DeviceRegistration, OverviewGraphChoices,
-    PaneCompletion, PaneReadRecord, PetOriginSnapshot, RightPanelSection, SidebarLens, SidebarProject, TaskView,
-    ThemePreference, UiStateSnapshot, WorkspaceRegistration, default_accent_hex, default_font_size,
-    default_pane_text_scale, default_panel_visible, default_sidebar_width,
+    PaneCompletion, PaneReadRecord, PetOriginSnapshot, RightPanelSection, SidebarLens,
+    SidebarProject, TaskView, ThemePreference, UiStateSnapshot, WorkspaceRegistration,
+    default_accent_hex, default_font_size, default_pane_text_scale, default_panel_visible,
+    default_sidebar_width,
 };
 
 const UI_STATE_SCHEMA_VERSION: u32 = 1;
@@ -273,10 +274,11 @@ pub enum UnrecognizedField {
     ColorTheme,
     /// The agent logo mode; hidden was used.
     AgentLogoMode,
-    /// The sidebar's lens, the 태스크 view option or the project its lists
-    /// are narrowed to; the projects, grouped by state, every project, was
-    /// used.
+    /// The sidebar's lens or the 태스크 view option; the projects, grouped
+    /// by state, was used.
     SidebarLens,
+    /// The project the sidebar's lists are narrowed to; every project was used.
+    SidebarProject,
     /// The lane's 보기 slot; it loaded empty.
     Detail,
     /// Records of the Overview map's choices; the ones that read loaded.
@@ -444,7 +446,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
     };
     let sidebar_project = stored.sidebar_project.and_then(|value| {
         serde_json::from_value::<SidebarProject>(value)
-            .map_err(|_| unrecognized.push(UnrecognizedField::SidebarLens))
+            .map_err(|_| unrecognized.push(UnrecognizedField::SidebarProject))
             .ok()
     });
     let detail = match stored.detail {

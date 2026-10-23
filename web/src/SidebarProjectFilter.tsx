@@ -1,5 +1,5 @@
 import { ChevronDownIcon, XIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { Actions } from "./actions";
 import { deviceScope } from "./agentScope";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
@@ -19,18 +19,22 @@ import { groupOf, taskList, type TaskList } from "./taskList";
 // rail's device, and a 현황 tile sets the same choice. While it narrows them,
 // the 내 차례 of the other projects stays in sight as `+N`.
 
-/** The project the sidebar's lists are narrowed to on `deviceId`, or null for every project. */
+/**
+ * The project the sidebar's lists are narrowed to on `deviceId`, or null for
+ * every project, as it is while the device's catalog does not hold the project.
+ */
 export function useSidebarProject(deviceId: string): SidebarProject | null {
   return useShellStore((s) => {
     const project = s.rest?.ui_state?.sidebar_project;
-    return project && project.device_id === deviceId ? project : null;
+    if (!project || project.device_id !== deviceId) return null;
+    return catalogWorkspaces(s.rest).some((row) => row.id === project.workspace_id && row.device_id === deviceId) ? project : null;
   });
 }
 
 /** What a project holds for the operator: its 내 차례 and every open task and pull request. */
 export type ProjectCount = { needsYou: number; open: number };
 
-/** Counts per project id of one device's open tasks and pull requests, 내 차례 apart, as the two lists draw them. */
+/** Counts per project id of one device's open tasks and pull requests, 내 차례 apart, as the two lists' groups count them. */
 export function projectCounts(tasks: TaskList, prs: PrListModel): Map<string, ProjectCount> {
   const counts = new Map<string, ProjectCount>();
   const add = (id: string | undefined, needsYou: boolean) => {
@@ -41,10 +45,9 @@ export function projectCounts(tasks: TaskList, prs: PrListModel): Map<string, Pr
     counts.set(id, count);
   };
   for (const group of tasks.groups) for (const entry of group.entries) add(entry.project?.id, groupOf(entry.card.state) === "needs_you");
-  const asks = new Set(prs.needsYou.map((entry) => entry.key));
   for (const group of prs.groups) {
     if (group.group === "merged") continue;
-    for (const entry of [...group.entries, ...group.team, ...group.old]) add(entry.project.id, asks.has(entry.key));
+    for (const entry of [...group.entries, ...group.team, ...group.old]) add(entry.project.id, group.group === "needs_you");
   }
   return counts;
 }
@@ -66,12 +69,15 @@ export function SidebarProjectFilter({ deviceId, actions }: { deviceId: string; 
   const filter = useSidebarProject(deviceId);
   const rest = useShellStore((s) => s.rest);
   const localAgents = useShellStore((s) => s.agents);
+  const [open, setOpen] = useState(false);
   const projects = useMemo(() => catalogWorkspaces(rest).filter((row) => row.device_id === deviceId && !row.is_home), [rest, deviceId]);
-  const counts = useMemo(() => deviceCounts(rest, localAgents, deviceId), [rest, localAgents, deviceId]);
+  // Only the menu and `+N` read the counts, so an unnarrowed list with the menu shut builds no second list.
+  const counted = open || filter !== null;
+  const counts = useMemo(() => (counted ? deviceCounts(rest, localAgents, deviceId) : new Map<string, ProjectCount>()), [counted, rest, localAgents, deviceId]);
   const front = frontProject(rest);
   const here = front && front.device_id === deviceId && front.id !== filter?.workspace_id ? front : null;
-  const needsYou = [...counts.values()].reduce((sum, count) => sum + count.needsYou, 0);
-  const elsewhere = filter ? needsYou - (counts.get(filter.workspace_id)?.needsYou ?? 0) : 0;
+  const total = [...counts.values()].reduce((sum, count) => ({ needsYou: sum.needsYou + count.needsYou, open: sum.open + count.open }), { needsYou: 0, open: 0 });
+  const elsewhere = filter ? total.needsYou - (counts.get(filter.workspace_id)?.needsYou ?? 0) : 0;
   const choose = (id: string | null) => {
     if (id !== (filter?.workspace_id ?? null)) actions.setSidebarProject(id === null ? null : { device_id: deviceId, workspace_id: id });
   };
@@ -79,7 +85,7 @@ export function SidebarProjectFilter({ deviceId, actions }: { deviceId: string; 
   return (
     <span className="flex min-w-0 shrink items-center gap-xs" data-sidebar-project={filter?.workspace_id ?? ""}>
       <span className={cn("flex min-w-0 items-center rounded-xs border border-border text-micro", filter ? "bg-secondary text-foreground" : "text-subtle-foreground")}>
-        <DropdownMenu>
+        <DropdownMenu open={open} onOpenChange={setOpen}>
           <DropdownMenuTrigger asChild>
             <button type="button" aria-label={t("projectTool.sidebar.choose", { project: label })} data-sidebar-project-trigger="true"
               className="flex min-w-0 items-center gap-xxs rounded-xs py-px pl-xs pr-xxs outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
@@ -91,7 +97,7 @@ export function SidebarProjectFilter({ deviceId, actions }: { deviceId: string; 
             <DropdownMenuRadioGroup value={filter?.workspace_id ?? ""} onValueChange={(id) => choose(id || null)}>
               <DropdownMenuRadioItem value="" data-sidebar-project-option="">
                 <span className="min-w-0 flex-1 truncate">{t("projectTool.sidebar.allProjects")}</span>
-                <Counts count={{ needsYou, open: 0 }} />
+                <Counts count={total} />
               </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
             {here ? (
