@@ -3971,7 +3971,8 @@ impl Runtime {
             agent_kind,
             message: None,
             agent_phase: None,
-            agent_message: None,
+            agent_reason: None,
+            agent_line: None,
             request_id: None,
             stays_behind: false,
         });
@@ -4969,10 +4970,10 @@ impl Runtime {
         let Some(operation) = self.snapshot.task_operation.as_mut() else {
             return false;
         };
-        let (phase, message) = match outcome {
+        let (phase, failure) = match outcome {
             live::TaskAgentOutcome::Started => ("started", None),
-            live::TaskAgentOutcome::Failed(message) => ("failed", Some(message)),
-            live::TaskAgentOutcome::Unknown(message) => ("unknown", Some(message)),
+            live::TaskAgentOutcome::Failed(failure) => ("failed", Some(failure)),
+            live::TaskAgentOutcome::Unknown(failure) => ("unknown", Some(failure)),
         };
         let started_pane = (phase == "started" && operation.device_id.is_none())
             .then(|| operation.pane_id.clone());
@@ -4982,9 +4983,12 @@ impl Runtime {
             "id": id,
             "pane_id": operation.pane_id,
             "agent_kind": operation.agent_kind,
+            "reason": failure.as_ref().map(|failure| &failure.reason),
+            "message": failure.as_ref().and_then(|failure| failure.detail.as_ref()),
         }));
         operation.agent_phase = Some(phase.to_owned());
-        operation.agent_message = message;
+        operation.agent_reason = failure.as_ref().map(|failure| failure.reason.clone());
+        operation.agent_line = failure.and_then(|failure| failure.line);
         // Keys typed while the agent's tab was being made reach the agent
         // once it has started, never the launch command.
         let origin = super::terminal_input::InputOrigin::Task(id);
@@ -5063,9 +5067,16 @@ impl Runtime {
             .as_mut()
             .expect("checked above");
         operation.agent_phase = Some("starting".into());
-        operation.agent_message = None;
+        operation.agent_reason = None;
+        operation.agent_line = None;
         if let Err(message) = live::spawn_task_agent_start(context, id) {
-            return self.ingest_task_agent_result(id, live::TaskAgentOutcome::Failed(message));
+            return self.ingest_task_agent_result(
+                id,
+                live::TaskAgentOutcome::Failed(live::AgentFailure::with_detail(
+                    "agent_start.worker_unavailable",
+                    message,
+                )),
+            );
         }
         true
     }

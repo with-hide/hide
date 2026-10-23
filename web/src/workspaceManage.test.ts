@@ -75,7 +75,7 @@ const task = (patch: Partial<TaskOperation>): TaskOperation => ({
   agent_kind: null,
   message: null,
   agent_phase: null,
-  agent_message: null,
+  agent_reason: null, agent_line: null,
   ...patch,
 });
 

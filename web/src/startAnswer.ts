@@ -15,7 +15,7 @@ export type StartAnswer =
   /** `message` is the core's reason, null when it sent none. */
   | { phase: "failed"; message: string | null }
   /** The tab exists; `agentPhase` says whether the agent behind it started (`starting`, `started`, `failed`). */
-  | { phase: "ready"; taskId: number; paneId: string | null; agentPhase: string | null; agentMessage: string | null };
+  | { phase: "ready"; taskId: number; paneId: string | null; agentPhase: string | null; agentReason: string | null; agentLine: string | null };
 
 /** 1-64 characters of `[A-Za-z0-9_-]`, the core's request id format. */
 export function startRequestId(): string {
@@ -30,5 +30,5 @@ export function startAnswer(rest: SnapshotRest | null, requestId: string, kind: 
   if (operation?.request_id !== requestId || operation.kind !== kind) return { phase: "pending" };
   if (operation.phase === "failed") return { phase: "failed", message: operation.message };
   if (operation.phase !== "ready") return { phase: "pending" };
-  return { phase: "ready", taskId: operation.id, paneId: operation.pane_id, agentPhase: operation.agent_phase, agentMessage: operation.agent_message };
+  return { phase: "ready", taskId: operation.id, paneId: operation.pane_id, agentPhase: operation.agent_phase, agentReason: operation.agent_reason, agentLine: operation.agent_line };
 }

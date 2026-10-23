@@ -5634,7 +5634,13 @@ pub struct TaskOperationSnapshot {
     /// when Herdr did not answer and the pane has to be looked at. `None`
     /// when the task started no agent.
     pub agent_phase: Option<String>,
-    pub agent_message: Option<String>,
+    /// Why the agent did not start, when `agent_phase` is `failed` or
+    /// `unknown`: a code the start surfaces word (`agent_start.*`, or a
+    /// session check's own code), never a sentence.
+    pub agent_reason: Option<String>,
+    /// The last line of the pane's screen for an `agent_start.shell_starting`
+    /// failure, quoted as the terminal showed it.
+    pub agent_line: Option<String>,
     /// The id the start surface sent with the request, so it follows its own
     /// task and never another window's or phone's.
     #[serde(default, skip_serializing_if = "Option::is_none")]

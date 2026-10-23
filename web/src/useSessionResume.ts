@@ -3,6 +3,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { startAnswer, startRequestId, START_ANSWER_TIMEOUT_MS } from "./startAnswer";
 import { coreErrorKey } from "./coreError";
 import { startReasonText } from "./startReason";
+import { agentFailure } from "./startDraft";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -51,7 +52,8 @@ export function useSessionResume(): { resume: Resume; start: (send: Send) => voi
         if (answer.agentPhase) ui.setWatchedTask(answer.taskId);
         if (answer.paneId) ui.setFocusWhenListed(answer.paneId);
       }
-      const reason = answer.agentMessage ? startReasonText(answer.agentMessage, t) : "";
+      const failure = agentFailure(answer.agentReason, null);
+      const reason = "key" in failure ? t(failure.key) : failure.message;
       setResume({ request: null, failure: answer.agentPhase === "failed" ? reason : null, uncertain: false });
     } else if (answer.phase === "refused" || answer.phase === "failed") {
       sending.current = false;

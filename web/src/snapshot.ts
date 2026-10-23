@@ -1928,7 +1928,10 @@ export type TaskOperation = {
   message: string | null;
   /** `starting`, `started`, `failed` or `unknown`; null when no agent was chosen. */
   agent_phase: string | null;
-  agent_message: string | null;
+  /** Why the agent did not start: a code (`agent_start.*`, or a session check's), worded by `agentFailure`. */
+  agent_reason: string | null;
+  /** The pane screen's last line for `agent_start.shell_starting`, quoted as the terminal showed it. */
+  agent_line: string | null;
   /** The id the start surface sent (`agent_start_in_checkout.request_id`), so each surface reads only its own answer. */
   request_id?: string | null;
 };

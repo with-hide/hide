@@ -45,18 +45,19 @@ pub(crate) mod cleanup;
 mod checkout_start;
 #[path = "worktree_control.rs"]
 mod worktree_control;
+pub use worktree_control::{
+    AgentFailure, CheckoutTabRequest, HomeStartRequest, IssueWriteFailure, PendingAgentStart,
+    PurposeMirror, PurposeTaskOutcome, PurposeTaskRequest, TabTarget, TaskAgentOutcome,
+    WorktreeTarget, WorktreeTaskOutcome, WorktreeTaskRequest, spawn_branch_migration,
+    spawn_checkout_tab_create, spawn_existing_branch_worktree, spawn_home_link_sync,
+    spawn_home_start, spawn_purpose_write, spawn_remote_purpose_write, spawn_task_agent_start,
+    spawn_workspace_close, spawn_worktree_close, spawn_worktree_create, spawn_worktree_open,
+    spawn_worktree_preflight,
+};
 pub(crate) use worktree_control::{
     CONFIRM_TIMEOUT, ProcessWait, close_checkout_panes, prompt_argument,
 };
 pub(crate) use worktree_control::{CheckoutStart, spawn_targeted_checkout_start};
-pub use worktree_control::{
-    CheckoutTabRequest, HomeStartRequest, IssueWriteFailure, PendingAgentStart, PurposeMirror,
-    PurposeTaskOutcome, PurposeTaskRequest, TabTarget, TaskAgentOutcome, WorktreeTarget,
-    WorktreeTaskOutcome, WorktreeTaskRequest, spawn_branch_migration, spawn_checkout_tab_create,
-    spawn_existing_branch_worktree, spawn_home_link_sync, spawn_home_start, spawn_purpose_write,
-    spawn_remote_purpose_write, spawn_task_agent_start, spawn_workspace_close,
-    spawn_worktree_close, spawn_worktree_create, spawn_worktree_open, spawn_worktree_preflight,
-};
 pub(crate) use worktree_control::{GhPlace, spawn_issue_write};
 
 /// What live commands and session sync need from the live configuration.
@@ -2785,18 +2786,25 @@ fn start_agent_checked(
         request_id,
         pane_id,
         shell,
-        wire::agent_start_params(pane_id, name, kind, args, codex_daemon)
-            .map_err(crate::agent_start::StartError::NotStarted)?,
+        wire::agent_start_params(pane_id, name, kind, args, codex_daemon).map_err(|detail| {
+            crate::agent_start::StartError::NotStarted {
+                reason: "agent_start.failed".into(),
+                detail,
+            }
+        })?,
         Duration::from_secs(5),
         check,
     )?;
-    wire::started_agent(answer).map_err(crate::agent_start::StartError::NotStarted)
+    wire::started_agent(answer).map_err(|detail| crate::agent_start::StartError::NotStarted {
+        reason: "agent_start.unconfirmed".into(),
+        detail,
+    })
 }
 
 /// A start's failure as an operator reads it.
 fn start_error_message(error: crate::agent_start::StartError) -> String {
     match error {
-        crate::agent_start::StartError::NotStarted(message) => message,
+        crate::agent_start::StartError::NotStarted { detail, .. } => detail,
         crate::agent_start::StartError::ShellStarting(screen) => {
             crate::agent_start::shell_starting_message(screen.as_deref())
         }
@@ -3452,11 +3460,15 @@ pub(crate) struct CurrentSessionConnector<'a> {
     pub(crate) current: &'a (dyn Fn() -> Result<(), String> + Sync),
 }
 
+/// The message of the refusal [`CurrentSessionConnector`] answers in Herdr's
+/// place, before anything reached Herdr: its `code` is Hide's own check's.
+pub(crate) const SESSION_CHANGED: &str = "The session execution changed; refresh before retrying";
+
 impl CurrentSessionConnector<'_> {
     fn check(&self) -> Result<(), ApiError> {
         (self.current)().map_err(|code| ApiError::Remote {
             code,
-            message: "The session execution changed; refresh before retrying".into(),
+            message: SESSION_CHANGED.into(),
         })
     }
 }

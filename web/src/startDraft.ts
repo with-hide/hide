@@ -26,11 +26,24 @@ export type StartPreset = { projectId: string; kind?: ProviderKind };
  * key the panel words in the operator's language, with the core's `code` for
  * the log and the element's `data-core-error` when it sent one.
  */
-export type StartFailure = { message: string } | { key: MessageKey; code?: string };
+/** `line` is a pane screen's last line, quoted beside the sentence as the terminal showed it. */
+export type StartFailure = { message: string } | { key: MessageKey; code?: string; line?: string };
 
 /** The core's reason when it sent one (`startReason`), else the plain "did not start". */
 export function startFailure(message: string | null | undefined): StartFailure {
   return message ? startReason(message) : { key: "workspace.agentNotStarted" };
+}
+
+/**
+ * Why a task's agent did not start, from `agent_reason`, always a code, and
+ * `agent_line`; a code this build does not word, a daemon of another build's
+ * included, is the plain "did not start", and stays on `data-core-error`.
+ */
+export function agentFailure(reason: string | null, line: string | null): StartFailure {
+  const worded = reason ? startReason(reason) : null;
+  const key = worded && "key" in worded ? worded.key : "workspace.agentNotStarted";
+  const code = worded && "key" in worded ? worded.code : reason;
+  return { key, ...(code ? { code } : {}), ...(line ? { line } : {}) };
 }
 
 /** A start the core refused, by its `last_error.kind`; a kind this build does not word is the plain "did not start". */

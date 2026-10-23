@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { endedSentence, startFailure, startRefusal, useStartPanel } from "./startDraft";
+import { agentFailure, endedSentence, startFailure, startRefusal, useStartPanel } from "./startDraft";
 
 describe("the start panel's draft", () => {
   beforeEach(() => useStartPanel.setState({ isOpen: false, text: "", target: null, overSettings: false, request: null, failure: null, sent: "", spent: null }));
@@ -50,6 +50,15 @@ describe("the start panel's draft", () => {
     expect(startRefusal("home.conflict")).toEqual({ key: "coreError.home.conflict", code: "home.conflict" });
     expect(startRefusal("agent_start.unknown_provider")).toEqual({ key: "workspace.agentNotStarted", code: "agent_start.unknown_provider" });
     expect(startFailure("constructor")).toEqual({ message: "constructor" });
+  });
+
+  it("words why a task's agent did not start by its code, quoting the shell's last line beside it", () => {
+    expect(agentFailure("agent_start.shell_starting", "Trust this folder? [y/N]")).toEqual({ key: "coreError.agent.shellStarting", code: "agent_start.shell_starting", line: "Trust this folder? [y/N]" });
+    expect(agentFailure("agent_start.not_installed", null)).toEqual({ key: "coreError.agent.notInstalled", code: "agent_start.not_installed" });
+    expect(agentFailure("session_route_reader_unavailable", null)).toEqual({ key: "coreError.startReason.session_route_unconfirmed", code: "session_route_reader_unavailable" });
+    // A code from a daemon of another build is never drawn as text.
+    expect(agentFailure("agent_start.from_the_future", null)).toEqual({ key: "workspace.agentNotStarted", code: "agent_start.from_the_future" });
+    expect(agentFailure(null, null)).toEqual({ key: "workspace.agentNotStarted" });
   });
 });
 

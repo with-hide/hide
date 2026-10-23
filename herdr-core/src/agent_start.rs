@@ -229,8 +229,10 @@ fn program_name(shell: &str) -> String {
 #[derive(Debug)]
 pub(crate) enum StartError {
     /// Nothing was typed into the pane: its shell never held the terminal in
-    /// time, or its state could not be read.
-    NotStarted(String),
+    /// time, or its state could not be read. `reason` is the code a start
+    /// surface words (`agent_start.shell_*`, or a session check's own code);
+    /// `detail` the sentence the log, a wake's record and the CLI keep.
+    NotStarted { reason: String, detail: String },
     /// Nothing was typed into the pane: its shell held the terminal but had
     /// not marked its first prompt within the wait, stopped in its startup
     /// files (a question waiting for a key). Carries the screen's last line.
@@ -249,16 +251,17 @@ pub(crate) fn trust_worktree(
     node: Option<&dyn crate::node_access::NodeLink>,
     kind: &str,
     path: &str,
-) -> Result<(), String> {
+) -> Result<(), TrustRefusal> {
     let Some((adapter, agent)) = hide_agent_adapter::adapter(kind).and_then(|adapter| {
         let agent = hide_agent_hooks::folder_trust::Agent::of(adapter.start?)?;
         Some((adapter, agent))
     }) else {
         return Ok(());
     };
-    let node = node.ok_or(
-        "agent_trust_unavailable: the machine that runs the worktree's pane cannot be reached.",
-    )?;
+    let node = node.ok_or_else(|| TrustRefusal {
+        code: "agent_trust_unavailable",
+        detail: "the machine that runs the worktree's pane cannot be reached.".to_owned(),
+    })?;
     crate::node_access::call_as::<()>(
         node,
         hide_node_link::protocol::Call::AgentTrust {
@@ -271,12 +274,28 @@ pub(crate) fn trust_worktree(
         // carries the answer back.
         agent.longest_change() + Duration::from_secs(5),
     )
-    .map_err(|error| {
-        format!(
-            "agent_trust_failed: {}'s trust of {path} could not be recorded ({error})",
+    .map_err(|error| TrustRefusal {
+        code: "agent_trust_failed",
+        detail: format!(
+            "{}'s trust of {path} could not be recorded ({error})",
             adapter.label
-        )
+        ),
     })
+}
+
+/// A worktree's folder trust that could not be recorded: `code` is what a
+/// start surface words, `detail` the sentence with the path for the log, and
+/// the two together (`code: detail`) the refusal a spawn answers its caller.
+#[derive(Debug)]
+pub(crate) struct TrustRefusal {
+    pub code: &'static str,
+    pub detail: String,
+}
+
+impl From<TrustRefusal> for String {
+    fn from(refusal: TrustRefusal) -> Self {
+        format!("{}: {}", refusal.code, refusal.detail)
+    }
 }
 
 /// How a pane Hide makes for a start runs the account's shell so that it
@@ -309,6 +328,31 @@ pub(crate) fn shell_launch(
         .ok()
         .flatten()
 }
+
+impl StartError {
+    /// A start its own check refused before anything was typed; the check
+    /// answers a code (`session_route_unconfirmed`, `agent_start.*`).
+    pub(crate) fn refused(reason: String) -> Self {
+        Self::NotStarted {
+            detail: reason.clone(),
+            reason,
+        }
+    }
+}
+
+/// A start whose pane's shell could not be read: nothing was typed.
+fn shell_unreadable(message: String) -> StartError {
+    StartError::NotStarted {
+        reason: "agent_start.shell_unreadable".into(),
+        detail: format!(
+            "The pane's shell could not be read, so the agent was not started: {message}"
+        ),
+    }
+}
+
+/// The code a start surface words a start whose shell had not finished
+/// starting by; the screen's last line goes beside it, never into a sentence.
+pub(crate) const SHELL_STARTING_REASON: &str = "agent_start.shell_starting";
 
 /// What an operator reads for a start whose shell had not finished starting,
 /// with the screen's last line when there was one.
@@ -418,7 +462,7 @@ fn start_within(
     let mut busy = 0_u32;
     loop {
         shell.wait(started, deadline)?;
-        check().map_err(StartError::NotStarted)?;
+        check().map_err(StartError::refused)?;
         match request_with_correlation_id(
             connector,
             correlation_id,
@@ -511,8 +555,7 @@ impl Shell<'_> {
     /// line over whole.
     #[allow(clippy::disallowed_methods)] // a production wait, not test code
     fn wait(&self, started: Instant, deadline: Instant) -> Result<(), StartError> {
-        let params =
-            wire::pane_process_info_params(self.pane_id).map_err(StartError::NotStarted)?;
+        let params = wire::pane_process_info_params(self.pane_id).map_err(shell_unreadable)?;
         loop {
             let group = request_with_connector(
                 self.connector,
@@ -522,11 +565,7 @@ impl Shell<'_> {
             )
             .map_err(|error| format!("pane.process_info failed: {error}"))
             .and_then(wire::pane_process_group)
-            .map_err(|message| {
-                StartError::NotStarted(format!(
-                    "The pane's shell could not be read, so the agent was not started: {message}"
-                ))
-            })?;
+            .map_err(shell_unreadable)?;
             // An unmarked shell is still starting whoever else holds the
             // terminal with it (a startup file's own program, or fish's
             // completion generator beside a question); the limit of a
@@ -561,17 +600,23 @@ impl Shell<'_> {
                 if matches!(waiting, Waiting::Prompt) {
                     return Err(StartError::ShellStarting(self.last_screen_line()));
                 }
-                return Err(StartError::NotStarted(match held {
-                    Some(limit) => format!(
-                        "The pane's shell did not start reading its command line within {} s, so the agent was not started: until it does, its terminal keeps only {limit} bytes of a typed line, and this start's line is up to {} bytes. Check what the shell's startup files wait on, then retry.",
-                        SHELL_WAIT.as_secs(),
-                        self.line,
-                    ),
-                    None => format!(
-                        "The pane's shell did not reach its prompt within {} s, so the agent was not started.",
-                        SHELL_WAIT.as_secs()
-                    ),
-                }));
+                return Err(match held {
+                    Some(limit) => StartError::NotStarted {
+                        reason: "agent_start.shell_not_reading".into(),
+                        detail: format!(
+                            "The pane's shell did not start reading its command line within {} s, so the agent was not started: until it does, its terminal keeps only {limit} bytes of a typed line, and this start's line is up to {} bytes. Check what the shell's startup files wait on, then retry.",
+                            SHELL_WAIT.as_secs(),
+                            self.line,
+                        ),
+                    },
+                    None => StartError::NotStarted {
+                        reason: "agent_start.shell_no_prompt".into(),
+                        detail: format!(
+                            "The pane's shell did not reach its prompt within {} s, so the agent was not started.",
+                            SHELL_WAIT.as_secs()
+                        ),
+                    },
+                });
             }
             thread::sleep(POLL_INTERVAL);
         }
@@ -609,11 +654,7 @@ impl Shell<'_> {
                     .map_err(|error| format!("pane.get failed: {error}"))
             })
             .and_then(|pane| wire::pane_token(pane, PROMPT_TOKEN))
-            .map_err(|message| {
-                StartError::NotStarted(format!(
-                    "The pane's shell could not be read, so the agent was not started: {message}"
-                ))
-            })?
+            .map_err(shell_unreadable)?
             .is_some();
         self.awaits_mark.set(!marked);
         Ok(!marked)
@@ -691,11 +732,12 @@ impl Shell<'_> {
         if self.line < SHORTEST_LINE_LIMIT {
             return Ok(None);
         }
-        let refused = |reason: String| {
-            StartError::NotStarted(format!(
+        let refused = |reason: String| StartError::NotStarted {
+            reason: "agent_start.line_unchecked".into(),
+            detail: format!(
                 "The agent was not started: its start line is up to {} bytes, more than a terminal keeps before the shell's line editor reads it, and {reason}.",
                 self.line
-            ))
+            ),
         };
         let node = self.node.ok_or_else(|| {
             refused(
@@ -1053,7 +1095,7 @@ mod tests {
                 },
             );
             assert!(
-                matches!(answer, Err(StartError::NotStarted(reason)) if reason == "session_route_unconfirmed")
+                matches!(answer, Err(StartError::NotStarted { reason, .. }) if reason == "session_route_unconfirmed")
             );
             let typed_attempts = herdr
                 .methods()
@@ -1070,10 +1112,13 @@ mod tests {
             "pane.process_info" => process_info(4200, &[4200]),
             other => panic!("unexpected {other}"),
         });
-        let Err(StartError::NotStarted(message)) = start(&herdr, Duration::from_millis(300)) else {
+        let Err(StartError::NotStarted { reason, detail }) =
+            start(&herdr, Duration::from_millis(300))
+        else {
             panic!("a shell that never holds the terminal is not a start");
         };
-        assert!(message.contains("did not reach its prompt"), "{message}");
+        assert_eq!(reason, "agent_start.shell_no_prompt");
+        assert!(detail.contains("did not reach its prompt"), "{detail}");
         assert!(!herdr.methods().iter().any(|method| method == "agent.start"));
     }
 
@@ -1349,12 +1394,13 @@ mod tests {
     fn a_terminal_that_never_leaves_line_mode_gets_nothing_typed() {
         let herdr = shell_alone("agent-start-canonical");
         let terminal = Terminal::answering(vec![Ok(LineInput::Lines { limit: 1024 })]);
-        let Err(StartError::NotStarted(message)) =
+        let Err(StartError::NotStarted { reason, detail }) =
             start_with_prompt(&herdr, Some(&terminal), 4800, Duration::from_millis(300))
         else {
             panic!("a line the terminal would cut is not typed");
         };
-        assert!(message.contains("1024 bytes"), "{message}");
+        assert_eq!(reason, "agent_start.shell_not_reading");
+        assert!(detail.contains("1024 bytes"), "{detail}");
         assert_eq!(typed(&herdr), 0);
     }
 
@@ -1363,19 +1409,20 @@ mod tests {
     #[test]
     fn a_long_line_whose_terminal_cannot_be_read_gets_nothing_typed() {
         let herdr = shell_alone("agent-start-unread");
-        let Err(StartError::NotStarted(message)) =
+        let Err(StartError::NotStarted { reason, detail }) =
             start_with_prompt(&herdr, None, 4800, Duration::from_secs(5))
         else {
             panic!("no node, no long line");
         };
-        assert!(message.contains("cannot be asked"), "{message}");
+        assert_eq!(reason, "agent_start.line_unchecked");
+        assert!(detail.contains("cannot be asked"), "{detail}");
         let terminal = Terminal::answering(vec![Err("the helper is gone".into())]);
-        let Err(StartError::NotStarted(message)) =
+        let Err(StartError::NotStarted { detail, .. }) =
             start_with_prompt(&herdr, Some(&terminal), 4800, Duration::from_secs(5))
         else {
             panic!("an unread terminal is not a reading one");
         };
-        assert!(message.contains("the helper is gone"), "{message}");
+        assert!(detail.contains("the helper is gone"), "{detail}");
         assert_eq!(typed(&herdr), 0);
     }
 
@@ -1626,13 +1673,15 @@ mod tests {
         );
         // A folder that is not a worktree is never trusted.
         for kind in ["antigravity", "claude"] {
-            let refused = trust_worktree(Some(&node), kind, &wire("plain")).unwrap_err();
+            let refused =
+                String::from(trust_worktree(Some(&node), kind, &wire("plain")).unwrap_err());
             assert!(refused.starts_with("agent_trust_failed"), "{refused}");
         }
         // A trust that cannot be recorded stops the start with its reason,
         // naming the agent.
         std::fs::write(&agy, "{ not json").unwrap();
-        let refused = trust_worktree(Some(&node), "antigravity", &wire("tree-2")).unwrap_err();
+        let refused =
+            String::from(trust_worktree(Some(&node), "antigravity", &wire("tree-2")).unwrap_err());
         assert!(
             refused.starts_with("agent_trust_failed: Antigravity's trust of"),
             "{refused}"
@@ -1640,7 +1689,8 @@ mod tests {
         assert!(
             trust_worktree(None, "claude", &wire("tree-2"))
                 .unwrap_err()
-                .starts_with("agent_trust_unavailable")
+                .code
+                == "agent_trust_unavailable"
         );
     }
 }

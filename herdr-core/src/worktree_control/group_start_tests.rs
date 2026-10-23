@@ -304,12 +304,9 @@ fn admission_case(change: Option<&str>) {
     if change.is_some() {
         assert_eq!(starts, 0, "no command may reach the replacement shell");
         assert_eq!(operation.agent_phase.as_deref(), Some("failed"));
-        assert!(
-            operation
-                .agent_message
-                .as_deref()
-                .unwrap()
-                .contains("original terminal changed")
+        assert_eq!(
+            operation.agent_reason.as_deref(),
+            Some("agent_start.terminal_changed")
         );
         assert!(
             node.inspected
