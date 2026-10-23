@@ -410,7 +410,7 @@ def listing(call, path, key=None):
     raise RuntimeError(f"{path} lists more than {PAGES * 100} entries")
 
 
-def history_record(folder, source, suite, job_name, system, env):
+def history_record(folder, data, suite, job_name, system, env):
     """Keep the checkout we actually tested, never GITHUB_SHA's PR head substitute."""
     done = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, timeout=10, check=True)
     tested_sha = done.stdout.decode("ascii").strip()
@@ -419,17 +419,13 @@ def history_record(folder, source, suite, job_name, system, env):
         "attempt": int(env["GITHUB_RUN_ATTEMPT"]), "workflow_ref": env["GITHUB_WORKFLOW_REF"],
         "workflow_sha": env["GITHUB_WORKFLOW_SHA"], "tested_sha": tested_sha,
         "system": system, "suite": suite, "job_name": job_name, "runner_name": env["RUNNER_NAME"],
-        "has_report": source.is_file(),
+        "has_report": data is not None,
     }
     folder.mkdir(parents=True, exist_ok=True)
     # A reused local directory must not lend a missing run somebody else's pass.
     (folder / "record.json").unlink(missing_ok=True)
     (folder / "report.json").unlink(missing_ok=True)
-    if record["has_report"]:
-        with source.open("rb") as report_file:
-            data = report_file.read(HISTORY_BYTES + 1)
-        if len(data) > HISTORY_BYTES:
-            raise RuntimeError(f"Playwright report exceeds {HISTORY_BYTES} bytes")
+    if data is not None:
         (folder / "report.json").write_bytes(data)
     (folder / "record.json").write_text(json.dumps(record), encoding="utf-8")
 
@@ -493,8 +489,24 @@ def history_archive(data):
     return record, report_data
 
 
+def assertion_error(error):
+    """Recognize the located expect diagnostic that Playwright 1.63 JSON retains.
+
+    JSON drops matcherResult and expect steps. Its rendered message is the
+    remaining positive signal, not a general exception classifier. Custom
+    messages/matchers without this format stay unknown, as do generic errors.
+    """
+    if not isinstance(error, dict):
+        return False
+    location = error.get("location") or {}
+    return (isinstance(location, dict) and bool(location.get("file"))
+            and isinstance(location.get("line"), int) and location["line"] > 0
+            and bool(re.match(r"^(?:Error: )?expect\([^\n]*\)(?:\.(?:not|resolves|rejects))*\.[A-Za-z]\w*\(",
+                              plain(error.get("message", "")))))
+
+
 def history_tests(data, suite):
-    """Only normal assertions with explicit, complete Playwright outcomes prove anything."""
+    """Only supported assertions with explicit, complete outcomes prove a failure."""
     found = {}
     seen = 0
 
@@ -515,11 +527,16 @@ def history_tests(data, suite):
                 results = test.get("results", [])
                 outcome = None
                 if (test.get("status") == "expected" and len(results) == 1
-                        and results[0].get("status") == "passed" and results[0].get("retry") == 0):
+                        and results[0].get("status") == "passed" and results[0].get("retry") == 0
+                        and not results[0].get("error") and not results[0].get("errors")):
                     outcome = "pass"
                 elif (test.get("status") == "unexpected" and len(results) >= 2
                       and all(result.get("status") in ("failed", "timedOut")
-                              and result.get("retry") == retry for retry, result in enumerate(results))):
+                              and result.get("retry") == retry
+                              and assertion_error(result.get("error"))
+                              and result.get("errors")
+                              and all(assertion_error(error) for error in result["errors"])
+                              for retry, result in enumerate(results))):
                     outcome = "fail"
                 found[key] = {
                     "outcome": outcome, "file": f"{suite}/e2e/{spec['file']}", "line": spec.get("line"),
@@ -592,6 +609,9 @@ def retry_history(env, call=gh, download=artifact_bytes):
         if not record["has_report"] or data is None:
             notes.append(f"- Not measured: {job['html_url']} attempt {number} has no Playwright report.")
             continue
+        if data.get("errors"):
+            notes.append(f"- Not measured: {job['html_url']} has report-level errors.")
+            continue
         suite_step = {"web": "End-to-end", "desktop": "Desktop app end-to-end"}[record["suite"]]
         suite_steps = [step for step in job.get("steps", []) if step["name"] == suite_step]
         outcome = job.get("conclusion")
@@ -601,6 +621,10 @@ def retry_history(env, call=gh, download=artifact_bytes):
         tests = history_tests(data, record["suite"])
         if not tests or not any(test["outcome"] for test in tests.values()):
             notes.append(f"- Not measured: {job['html_url']} has no supported explicit test outcomes.")
+        for test in tests.values():
+            if test["outcome"] is None:
+                notes.append(f"- Not measured: {job['html_url']} has an unsupported or ambiguous test outcome: "
+                             f"{clean(test['name'])}.")
         evidence.append((record, job, tests))
     # A missing artifact is not a passing report. List it, including old runs
     # that predate this protocol; only explicit test outcomes below can pair.
@@ -1092,18 +1116,37 @@ def main(argv=None):
     if args.history_record:
         if not args.playwright or args.suite == "rust" or not args.job_name:
             parser.error("--history-record needs a Playwright suite and --job-name")
+    report_bytes = None
+    if args.playwright and args.playwright.is_file():
         try:
-            history_record(args.history_record, args.playwright, args.suite, args.job_name, args.system, os.environ)
+            with args.playwright.open("rb") as report_file:
+                report_bytes = report_file.read(HISTORY_BYTES + 1)
+            if len(report_bytes) > HISTORY_BYTES:
+                raise RuntimeError(f"Playwright report exceeds {HISTORY_BYTES} bytes")
+            report_data = json.loads(report_bytes)
+        except (RuntimeError, ValueError, OSError) as error:
+            print(f"::warning::could not read Playwright report: {error}")
+            summary(["### Playwright report not measured", "", str(error)])
+            # Do not upload a previous local record after rejecting this input.
+            if args.history_record:
+                try:
+                    (args.history_record / "record.json").unlink(missing_ok=True)
+                    (args.history_record / "report.json").unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    print(f"::warning::could not remove stale job test history: {cleanup_error}")
+            return 1
+    if args.history_record:
+        try:
+            history_record(args.history_record, report_bytes, args.suite, args.job_name, args.system, os.environ)
         except (RuntimeError, KeyError, ValueError, OSError, subprocess.SubprocessError) as error:
             print(f"::warning::could not preserve job test history: {error}")
             history_error = True
-    paths = [args.playwright] if args.playwright else args.junit
-    paths = [path for path in paths if path.is_file()]
+    paths = ([args.playwright] if report_bytes is not None else []) if args.playwright else [
+        path for path in args.junit if path.is_file()]
     if not paths:
         print("no report; nothing to file")
         return int(history_error)
     if args.playwright:
-        report_data = json.loads(paths[0].read_text(encoding="utf-8"))
         tests, failed = playwright_flaky(report_data, args.suite), playwright_failed(report_data, args.suite)
     else:
         roots = [ET.parse(path).getroot() for path in paths]

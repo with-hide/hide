@@ -801,15 +801,19 @@ HISTORY_ENV = {
 
 
 def history_playwright(passed=False):
-    # Playwright's explicit statuses distinguish a real assertion from an
-    # expected failure, interrupted run, skipped test or absent JSON report.
+    # Located expect messages and errors[] are retained by real Playwright
+    # 1.63 JSON; status/retry alone also describe a worker exit (review #1648).
+    def failure(retry, message):
+        error = {"message": f"Error: expect(received).toBe(expected) // Object.is equality\n\n{message}",
+                 "location": {"file": "/fixture/a.spec.ts", "line": 42, "column": 1}}
+        return {"status": "failed", "retry": retry, "error": error, "errors": [dict(error)]}
+
     return {"suites": [{"title": "a.spec.ts", "specs": [{
         "file": "a.spec.ts", "title": "opens the checkout", "line": 42,
         "tests": [{"projectId": "chromium", "projectName": "chromium", "expectedStatus": "passed",
                    "status": "expected" if passed else "unexpected",
                    "results": ([{"status": "passed", "retry": 0}] if passed else [
-                       {"status": "failed", "retry": 0, "error": {"message": "original first failure"}},
-                       {"status": "timedOut", "retry": 1, "error": {"message": "last retry failed"}},
+                       failure(0, "original first failure"), failure(1, "last retry failed"),
                    ])}],
     }]}]}
 
@@ -951,7 +955,9 @@ class RetryHistory(unittest.TestCase):
         github.reports[3] = history_playwright(True)
         github.jobs[2][0].update(conclusion="failure", steps=[{"name": "End-to-end", "conclusion": "failure"}])
         github.reports[2] = history_playwright()
-        github.reports[2]["suites"][0]["specs"][0]["tests"][0]["results"][0]["error"]["message"] = "later failure"
+        result = github.reports[2]["suites"][0]["specs"][0]["tests"][0]["results"][0]
+        result["error"]["message"] = "Error: expect(received).toBe(expected)\n\nlater failure"
+        result["errors"][0]["message"] = result["error"]["message"]
         self.collect(github, {**HISTORY_ENV, "GITHUB_RUN_ATTEMPT": "3"})
         body = github.writes[0][1]["body"]
         self.assertIn("original first failure", body)
@@ -1000,6 +1006,61 @@ class RetryHistory(unittest.TestCase):
         github.jobs[1][0]["steps"] = [{"name": "Install Chromium", "conclusion": "failure"}]
         self.collect(github)
         self.assertEqual(github.writes, [])
+
+    def test_worker_generic_missing_or_mixed_errors_never_prove_an_assertion_flake(self):
+        worker = {"message": "Error: worker process exited unexpectedly (code=137, signal=null)"}
+        generic = {"message": "Error: service unavailable", "location": {"file": "/fixture/a.spec.ts", "line": 42}}
+        for kind in ("worker", "generic", "missing", "mixed", "retry", "location", "custom"):
+            with self.subTest(kind=kind):
+                github = RetryGitHub()
+                github.reports[1]["errors"] = []  # A real worker exit has no top-level error.
+                results = github.reports[1]["suites"][0]["specs"][0]["tests"][0]["results"]
+                for result in results:
+                    if kind in ("worker", "generic"):
+                        error = worker if kind == "worker" else generic
+                        result.update(error=error, errors=[error])
+                    elif kind == "missing":
+                        result.pop("error")
+                        result.pop("errors")
+                    elif kind == "mixed":
+                        result["errors"].append(generic)
+                    elif kind == "retry" and result["retry"] == 1:
+                        result.update(error=worker, errors=[worker])
+                    elif kind == "location":
+                        result["error"].pop("location")
+                        result["errors"][0].pop("location")
+                    elif kind == "custom":
+                        result["error"]["message"] = "custom assertion failed"
+                        result["errors"][0]["message"] = "custom assertion failed"
+                self.collect(github)
+                self.assertEqual(github.writes, [])
+                self.assertIn("Not measured", self.summary.read_text())
+
+    def test_report_errors_or_errors_on_a_pass_are_not_complete_evidence(self):
+        for attempt, field in ((1, "report"), (2, "report"), (2, "error"), (2, "errors")):
+            with self.subTest(attempt=attempt, field=field):
+                github = RetryGitHub()
+                if field == "report":
+                    github.reports[attempt]["errors"] = [{"message": "global teardown failed"}]
+                else:
+                    result = github.reports[attempt]["suites"][0]["specs"][0]["tests"][0]["results"][0]
+                    result[field] = {"message": "error on pass"} if field == "error" else [{"message": "error on pass"}]
+                self.collect(github)
+                self.assertEqual(github.writes, [])
+                self.assertIn("Not measured", self.summary.read_text())
+
+    def test_unknown_failure_beside_a_supported_assertion_is_reported_separately(self):
+        github = RetryGitHub()
+        specs = github.reports[1]["suites"][0]["specs"]
+        unknown = json.loads(json.dumps(specs[0]))
+        unknown["title"] = "worker lost"
+        for result in unknown["tests"][0]["results"]:
+            result.update(error={"message": "worker unavailable"}, errors=[{"message": "worker unavailable"}])
+        specs.append(unknown)
+        self.collect(github)
+        self.assertEqual(len(github.writes), 1)
+        self.assertIn("Not measured", self.summary.read_text())
+        self.assertIn("worker lost", self.summary.read_text())
 
     def test_copied_success_with_new_id_and_attempt_but_old_times_is_not_executed(self):
         github = RetryGitHub()
@@ -1117,16 +1178,79 @@ class RetryHistory(unittest.TestCase):
             source = root / "playwright.json"
             source.write_text(json.dumps(history_playwright()), encoding="utf-8")
             env = {**HISTORY_ENV, "RUNNER_NAME": "runner-1", "GITHUB_SHA": "d" * 40}
-            r.history_record(root / "saved", source, "web", "web e2e linux 1/6", "Linux", env)
+            r.history_record(root / "saved", source.read_bytes(), "web", "web e2e linux 1/6", "Linux", env)
             record = json.loads((root / "saved/record.json").read_text())
             actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
             self.assertEqual(record["tested_sha"], actual)
             self.assertNotEqual(record["tested_sha"], env["GITHUB_SHA"])
             self.assertEqual((root / "saved/report.json").read_bytes(), source.read_bytes())
             source.unlink()
-            r.history_record(root / "saved", source, "web", "web e2e linux 1/6", "Linux", env)
+            r.history_record(root / "saved", None, "web", "web e2e linux 1/6", "Linux", env)
             self.assertFalse(json.loads((root / "saved/record.json").read_text())["has_report"])
             self.assertFalse((root / "saved/report.json").exists())
+
+    def test_cli_bounds_the_report_before_parsing_with_or_without_history(self):
+        # The caller must stop on cap+1, not warn then fall through to a
+        # second unbounded load. Below/at the cap still preserves the raw JSON.
+        for history in (False, True):
+            for size in (r.HISTORY_BYTES - 1, r.HISTORY_BYTES, r.HISTORY_BYTES + 1):
+                with self.subTest(history=history, size=size), tempfile.TemporaryDirectory() as folder:
+                    root = Path(folder)
+                    source = root / "report.json"
+                    prefix, suffix = b'{"suites": [], "padding": "', b'"}'
+                    source.write_bytes(prefix + b"x" * (size - len(prefix) - len(suffix)) + suffix)
+                    args = [sys.executable, str(SCRIPT), "--suite", "web", "--playwright", str(source)]
+                    if history:
+                        args += ["--history-record", str(root / "saved"), "--job-name", "web e2e linux 1/6"]
+                        (root / "saved").mkdir()
+                        (root / "saved/report.json").write_text("stale report")
+                        (root / "saved/record.json").write_text("stale record")
+                    summary = root / "summary"
+                    done = subprocess.run(args, capture_output=True, text=True, timeout=15,
+                                          env={**os.environ, **HISTORY_ENV, "RUNNER_NAME": "fixture",
+                                               "GITHUB_STEP_SUMMARY": str(summary)})
+                    if size > r.HISTORY_BYTES:
+                        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+                        self.assertIn(f"exceeds {r.HISTORY_BYTES} bytes", done.stdout)
+                        self.assertNotIn("no flaky test", done.stdout)
+                        self.assertIn("not measured", summary.read_text())
+                        self.assertFalse((root / "saved/report.json").exists())
+                        self.assertFalse((root / "saved/record.json").exists())
+                    else:
+                        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                        self.assertIn("no flaky test", done.stdout)
+                        if history:
+                            self.assertEqual((root / "saved/report.json").read_bytes(), source.read_bytes())
+
+    def test_cli_reports_invalid_json_without_falling_through_or_preserving_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "report.json"
+            source.write_text('{"suites":')
+            done = subprocess.run([sys.executable, str(SCRIPT), "--suite", "web", "--playwright", str(source),
+                                   "--history-record", str(root / "saved"), "--job-name", "web e2e linux 1/6"],
+                                  capture_output=True, text=True, timeout=15,
+                                  env={**os.environ, **HISTORY_ENV, "RUNNER_NAME": "fixture"})
+            self.assertEqual(done.returncode, 1)
+            self.assertIn("could not read Playwright report", done.stdout)
+            self.assertNotIn("no flaky test", done.stdout)
+            self.assertNotIn("Traceback", done.stderr)
+            self.assertFalse((root / "saved/record.json").exists())
+
+    def test_cli_history_metadata_failure_keeps_the_existing_failed_test_annotation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "report.json"
+            source.write_text(json.dumps(history_playwright()))
+            env = {**os.environ, **HISTORY_ENV, "RUNNER_NAME": "fixture"}
+            del env["GITHUB_WORKFLOW_REF"]
+            done = subprocess.run([sys.executable, str(SCRIPT), "--suite", "web", "--playwright", str(source),
+                                   "--history-record", str(root / "saved"), "--job-name", "web e2e linux 1/6"],
+                                  capture_output=True, text=True, timeout=15, env=env)
+            self.assertEqual(done.returncode, 1)
+            self.assertIn("could not preserve job test history", done.stdout)
+            self.assertIn("title=Failed test", done.stdout)
+            self.assertIn("last retry failed", done.stdout)
 
 
 if __name__ == "__main__":

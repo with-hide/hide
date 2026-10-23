@@ -557,13 +557,17 @@ CI retries a failed test once, for classification and for the report, and for no
   The existing final `verify` job calls `--retry-history`, with `actions: read` and `issues: write`, even after a planned lane failed; it reads only this workflow run's attempts and files through the same `quarantine` issue, deadline, matching and comment contract.
   The nightly's full `verify` call uses this path too; OS-only nightly calls retain their reports but have no final `verify` collector and do not link reruns.
   A link requires equal checkout SHA, OS, calling workflow ref/SHA, suite, test file, complete describe/title path and Playwright project ID/name, plus one unambiguous completed job with the recorded runner, run and attempt.
-  Only a normal assertion with explicit failed/timed-out results on both tries, followed by an explicit first-try pass in a successful test job, is evidence.
+  Failure evidence requires explicit failed/timed-out results on both tries, each with a located standard `expect(...)` matcher diagnostic in both `error` and every entry of `errors`, followed by an error-free explicit first-try pass in a successful test job.
+  Playwright 1.63 JSON does not retain a general matcher type or assertion steps: the collector recognizes its rendered `expect(...).matcher(...)` message after removing terminal controls, with a source file and positive line number.
+  Generic exceptions, worker exits, plain test timeouts, mixed assertion/infrastructure errors, report-level errors and custom assertion messages without that format are unsupported or ambiguous and remain `Not measured`; status and retry count alone never prove an assertion failed.
+  This is a limited diagnostic format contract, not a classifier for every failure or a guarantee about custom errors that imitate that format; existing within-job flaky reporting is unchanged.
   Skips, expected failures, interrupted or unsupported results, infrastructure failures and missing reports never prove a test passed or flaked; the summary identifies missing or unsupported evidence as `Not measured`.
   The issue keeps the original first failure, the tested SHA, project, job URLs and workflow-attempt URLs, and records each original failure only once across repeated collection and later reruns.
   It reports the original job's runner time and the newly executed passing job's additional runner time when their timestamps measure those intervals; total added run cost remains `not measured`.
   A jobs endpoint can return earlier successful jobs under a new ID and `run_attempt`; a start before the attempt's `run_started_at` is a copied job, never a newly executed pass or added runner cost.
   Runner seconds are not PR wall latency or billed cost, and missing duration is `not measured`.
   History is capped at five workflow attempts, eighty history artifacts, sixteen MiB per archive and expanded contents, ten thousand tests per report and ten pages of one hundred entries per API listing.
+  The lane reporter reads its local Playwright JSON once, with the same sixteen MiB cap before parsing, and shares those bytes with history preservation; an oversized input stops reporting with a warning, summary and nonzero exit instead of being loaded again.
   Artifact downloads use the existing `gh` credentials, need gh 2.97 or newer, stop at the byte cap and a 45-second deadline, and reap the child process on every exit.
   Unsupported provenance, ambiguity, API refusal or a resource cap stops history filing with a warning and summary rather than guessing from partial evidence; a history notice cannot turn a failed lane green or block a passing lane.
   Local reporter regressions use fixture reports and mocked APIs, never live test issues or comments.
