@@ -410,11 +410,13 @@ impl Doorbell {
             if !targets.insert(pane.clone()) {
                 continue;
             }
-            let Some(connector) = owner
-                .lock()
-                .ok()
-                .and_then(|guard| guard.delivery_connector(&letter.recipient.device_id))
-            else {
+            // The bell is worded in the operator's language, read with the
+            // connector from what the runtime already holds.
+            let Some((connector, language)) = owner.lock().ok().and_then(|guard| {
+                guard
+                    .delivery_connector(&letter.recipient.device_id)
+                    .map(|connector| (connector, guard.interface_language()))
+            }) else {
                 self.link_lost(&letter.id);
                 self.hold(&letter.id, pane, Hold::Absent);
                 continue;
@@ -445,7 +447,7 @@ impl Doorbell {
                 })
                 .count();
             let sender = bell_sender(owner, &ledger, letter);
-            let line = bell_line(&sender, letter, others);
+            let line = bell_line(&sender, letter, others, language);
             match deliver(
                 owner,
                 client,
@@ -562,13 +564,19 @@ impl Doorbell {
 /// and this line is read by a person. A watch warning names the agent it
 /// watches. Memory only: the ledger is the pass's copy and the title one short
 /// look under the lock.
-fn bell_line(name: &str, letter: &Letter, others: usize) -> String {
+fn bell_line(
+    name: &str,
+    letter: &Letter,
+    others: usize,
+    language: crate::model::InterfaceLanguage,
+) -> String {
     super::bell::line(&super::bell::Ring {
         sender: name,
         kind: &letter.kind,
         body: &letter.body,
         others,
         inbox: super::bell::names_inbox(&letter.recipient.kind),
+        language,
     })
 }
 
@@ -1436,6 +1444,23 @@ mod tests {
     }
 
     #[test]
+    fn the_bell_is_worded_in_the_operators_interface_language() {
+        let bell = Bell::start(json!({"interactive_ready": true}));
+        let language = serde_json::to_vec(&json!({
+            "schema_version": crate::model::SCHEMA_VERSION,
+            "kind": "interface_language_set",
+            "payload": {"language": "ko"},
+        }))
+        .unwrap();
+        assert!(bell.runtime.lock().unwrap().dispatch_json(&language));
+        bell.pass(&mut Doorbell::default(), now());
+        assert_eq!(
+            bell.typed()[0]["text"],
+            "🦉 Codex 보고: private · hide inbox"
+        );
+    }
+
+    #[test]
     fn a_pane_herdr_reports_no_readiness_for_is_belled_at_rest_like_a_started_one() {
         // A pane the operator started by typing `codex` carries neither flag;
         // one `herdr agent start` launched reports itself ready.
@@ -1448,7 +1473,7 @@ mod tests {
             assert_eq!(typed[0]["target"], "recipient");
             // The recipient is a Codex, so the line names where the letter is.
             assert_eq!(
-                typed[0]["text"], "🦉 Codex 보고: private · hide inbox",
+                typed[0]["text"], "🦉 Codex report: private · hide inbox",
                 "{flags}"
             );
             // Herdr owns each input reader's submission. Hide neither sends
@@ -1468,7 +1493,7 @@ mod tests {
             // recognizes the turn the bell opens.
             assert_eq!(
                 bell.line().as_deref(),
-                Some("🦉 Codex 보고: private · hide inbox")
+                Some("🦉 Codex report: private · hide inbox")
             );
         }
     }
@@ -1632,7 +1657,12 @@ mod tests {
         )
         .unwrap();
         let line = |ledger: &Ledger, letter: &Letter| {
-            bell_line(&bell_sender(&runtime, ledger, letter), letter, 1)
+            bell_line(
+                &bell_sender(&runtime, ledger, letter),
+                letter,
+                1,
+                crate::model::InterfaceLanguage::Korean,
+            )
         };
         // No registration and no row: the runtime's name, never an id.
         assert_eq!(
@@ -1907,12 +1937,12 @@ mod tests {
         // as a ring at rest does, and the letter keeps that line.
         let typed = bell.typed();
         assert_eq!(typed.len(), 1);
-        assert_eq!(typed[0]["text"], "🦉 Codex 보고: private · hide inbox");
+        assert_eq!(typed[0]["text"], "🦉 Codex report: private · hide inbox");
         assert_eq!(typed[0]["target"], "recipient");
         assert!(typed[0].get("wait").is_none());
         assert_eq!(
             bell.line().as_deref(),
-            Some("🦉 Codex 보고: private · hide inbox")
+            Some("🦉 Codex report: private · hide inbox")
         );
         assert_eq!(bell.attempts(), 1);
     }
@@ -2013,7 +2043,7 @@ mod tests {
         pass_logged(&bell, &mut doorbell, start + 250);
         let typed = bell.typed();
         assert_eq!(typed.len(), 1);
-        assert_eq!(typed[0]["text"], "🦉 Codex 보고: private · hide inbox");
+        assert_eq!(typed[0]["text"], "🦉 Codex report: private · hide inbox");
         assert_eq!(bell.reads(), 1, "a released draft is not read again");
     }
 

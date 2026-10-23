@@ -6,7 +6,7 @@ const project = { id: "project-on-node", device_id: "node" };
 const key = "local:/repo#1";
 const detail = (phase: IssueDetail["phase"]): IssueDetail => ({
   workspace_id: project.id, device_id: project.device_id, task_key: key, phase,
-  body: phase === "ready" ? "Node's private memo" : null, message: null,
+  body: phase === "ready" ? "Node's private memo" : null, failure: null,
   labels: [], author: null, created_at_unix_ms: null, assignees: [], comment_count: null, comments: [],
 });
 

@@ -17,6 +17,8 @@ import type { AgentRow, ArchivedSession, TaskView, Workspace } from "./snapshot"
  */
 export type TaskGroupState = "needs_you" | "done" | "revisit" | "working" | "waiting";
 export const TASK_GROUPS: readonly TaskGroupState[] = ["needs_you", "done", "revisit", "working", "waiting"];
+/** The 상태별 groups held still above the rest of the list, the projects tree's raised Needs You and Done. */
+export const RAISED_TASK_GROUPS: ReadonlySet<TaskGroupState> = new Set(["needs_you", "done"]);
 
 export type TaskEntry = { card: TaskCardScope; agent: AgentRow; project: Workspace | null };
 

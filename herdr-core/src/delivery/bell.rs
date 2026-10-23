@@ -1,11 +1,15 @@
 //! The line the doorbell submits through Herdr's `agent.prompt`: who wrote, what kind
 //! of letter it is and the letter's first line, so the operator watching the
-//! pane can tell what arrived (`docs/delivery.md`, The bell line).
+//! pane can tell what arrived (`docs/delivery.md`, The bell line). Its words
+//! are in the operator's interface language; nothing reads them back, since a
+//! letter's turn is matched by the whole line its ledger kept.
 //!
 //! The line reaches an agent's composer through that API, so it is one line
 //! and carries nothing a composer acts on while it is received: no
 //! control or invisible character, and none of the characters that open a
 //! picker or continue the line in the runtimes the doorbell rings.
+
+use crate::model::InterfaceLanguage;
 
 /// The longest sender name and letter summary the line carries, in
 /// characters; a longer one is cut and ends in `…`.
@@ -18,21 +22,27 @@ const LINE_LIMIT: usize = 512;
 
 /// What one bell says. `sender` is the name the operator knows the writer
 /// by, `others` the letters waiting for the same recipient besides this one,
-/// and `inbox` whether the line names where the letter is, for a recipient
-/// whose prompt can arrive without its hook having run.
+/// `inbox` whether the line names where the letter is, for a recipient
+/// whose prompt can arrive without its hook having run, and `language` the
+/// operator's interface language the line is worded in.
 pub(crate) struct Ring<'a> {
     pub sender: &'a str,
     pub kind: &'a str,
     pub body: &'a str,
     pub others: usize,
     pub inbox: bool,
+    pub language: InterfaceLanguage,
 }
 
-/// `🦉 <sender> <kind>: <first line of the letter>`, then ` · 외 N통` when
-/// other letters wait for the same recipient and ` · hide inbox` when the
-/// ring asks for it.
+/// `🦉 <sender> <kind>: <first line of the letter>`, then ` · and N more`
+/// (` · 외 N통`) when other letters wait for the same recipient and
+/// ` · hide inbox` when the ring asks for it.
 pub(crate) fn line(ring: &Ring) -> String {
-    let mut line = format!("🦉 {} {}", inert(ring.sender, NAME_CHARS), word(ring.kind));
+    let mut line = format!(
+        "🦉 {} {}",
+        inert(ring.sender, NAME_CHARS),
+        word(ring.kind, ring.language)
+    );
     let summary = ring
         .body
         .lines()
@@ -43,7 +53,8 @@ pub(crate) fn line(ring: &Ring) -> String {
         line.push_str(&summary);
     }
     if ring.others > 0 {
-        line.push_str(&format!(" · 외 {}통", ring.others));
+        line.push_str(" · ");
+        line.push_str(&more(ring.others, ring.language));
     }
     if ring.inbox {
         line.push_str(" · hide inbox");
@@ -67,15 +78,34 @@ pub(crate) fn valid_line(line: &str) -> bool {
     !line.is_empty() && line.len() <= LINE_LIMIT && !line.chars().any(char::is_control)
 }
 
-fn word(kind: &str) -> &'static str {
-    match kind {
-        "request" => "요청",
-        "block" => "막힘",
-        "report" => "보고",
-        "progress" => "진행",
-        "reply" => "답장",
-        "watch" => "감시",
-        _ => "편지",
+/// The kind of letter in `language`; a kind this build does not know is a
+/// letter.
+fn word(kind: &str, language: InterfaceLanguage) -> &'static str {
+    const KINDS: [&str; 6] = ["request", "block", "report", "progress", "reply", "watch"];
+    let words: [&str; 7] = match language {
+        InterfaceLanguage::English => [
+            "request", "blocked", "report", "progress", "reply", "watch", "letter",
+        ],
+        InterfaceLanguage::Korean => ["요청", "막힘", "보고", "진행", "답장", "감시", "편지"],
+        InterfaceLanguage::SimplifiedChinese => {
+            ["请求", "受阻", "报告", "进展", "回复", "监视", "信"]
+        }
+        InterfaceLanguage::Japanese => ["依頼", "ブロック", "報告", "進捗", "返信", "監視", "手紙"],
+    };
+    let index = KINDS
+        .iter()
+        .position(|known| *known == kind)
+        .unwrap_or(KINDS.len());
+    words[index]
+}
+
+/// How many other letters wait, in `language`.
+fn more(others: usize, language: InterfaceLanguage) -> String {
+    match language {
+        InterfaceLanguage::English => format!("and {others} more"),
+        InterfaceLanguage::Korean => format!("외 {others}통"),
+        InterfaceLanguage::SimplifiedChinese => format!("另有 {others} 封"),
+        InterfaceLanguage::Japanese => format!("ほか {others} 通"),
     }
 }
 
@@ -135,7 +165,39 @@ mod tests {
             body,
             others,
             inbox: false,
+            language: InterfaceLanguage::Korean,
         })
+    }
+
+    #[test]
+    fn the_line_keeps_its_shape_in_every_interface_language() {
+        let worded = |language| {
+            line(&Ring {
+                sender: "ci-lead",
+                kind: "report",
+                body: "PR #881",
+                others: 2,
+                inbox: false,
+                language,
+            })
+        };
+        assert_eq!(
+            worded(InterfaceLanguage::English),
+            "🦉 ci-lead report: PR #881 · and 2 more"
+        );
+        assert_eq!(
+            worded(InterfaceLanguage::Korean),
+            "🦉 ci-lead 보고: PR #881 · 외 2통"
+        );
+        assert_eq!(
+            worded(InterfaceLanguage::SimplifiedChinese),
+            "🦉 ci-lead 报告: PR #881 · 另有 2 封"
+        );
+        assert_eq!(
+            worded(InterfaceLanguage::Japanese),
+            "🦉 ci-lead 報告: PR #881 · ほか 2 通"
+        );
+        assert_eq!(word("a_newer_kind", InterfaceLanguage::English), "letter");
     }
 
     #[test]
@@ -150,6 +212,7 @@ mod tests {
                 body: "PR #881을 열었습니다",
                 others: 1,
                 inbox: true,
+                language: InterfaceLanguage::Korean,
             }),
             "🦉 label-end-fix 보고: PR #881을 열었습니다 · 외 1통 · hide inbox"
         );

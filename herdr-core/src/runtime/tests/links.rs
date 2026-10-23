@@ -1149,7 +1149,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
             let reason = operation
                 .agent_reason
                 .as_deref()
-                .or(operation.message.as_deref())
+                .or(operation.failure.as_deref())
                 .expect("retired execution must refuse the start");
             assert!(
                 reason.contains(

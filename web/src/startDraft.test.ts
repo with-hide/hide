@@ -39,8 +39,8 @@ describe("the start panel's draft", () => {
     expect(useStartPanel.getState()).toMatchObject({ text: "", failure: null });
   });
 
-  it("keeps the core's own reason as sent and words a missing one by key", () => {
-    expect(startFailure("claude: command not found")).toEqual({ message: "claude: command not found" });
+  it("words a code this build does not know, or a missing one, as the plain did-not-start", () => {
+    expect(startFailure("task_operation.failed")).toEqual({ key: "workspace.agentNotStarted", code: "task_operation.failed" });
     expect(startFailure(null)).toEqual({ key: "workspace.agentNotStarted" });
   });
 
@@ -49,7 +49,7 @@ describe("the start panel's draft", () => {
     expect(startFailure("session_checkpoint_invalid:cursor_launch_root_changed")).toEqual({ key: "coreError.startReason.cursor_launch_root_changed", code: "cursor_launch_root_changed" });
     expect(startRefusal("home.conflict")).toEqual({ key: "coreError.home.conflict", code: "home.conflict" });
     expect(startRefusal("agent_start.unknown_provider")).toEqual({ key: "workspace.agentNotStarted", code: "agent_start.unknown_provider" });
-    expect(startFailure("constructor")).toEqual({ message: "constructor" });
+    expect(startFailure("constructor")).toEqual({ key: "workspace.agentNotStarted", code: "constructor" });
   });
 
   it("words why a task's agent did not start by its code, quoting the shell's last line beside it", () => {

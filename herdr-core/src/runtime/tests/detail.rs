@@ -1,7 +1,7 @@
 //! The sidebar's lens, the 태스크 view option and a task revealed from
 //! outside the list (PRD sidebar-task-lens B2, B3, B40, D-47, D-48).
 use super::*;
-use crate::model::{DetailItem, SidebarLens, TaskView};
+use crate::model::{DetailItem, PracticeProgress, SidebarLens, TaskView};
 
 fn event(runtime: &mut Runtime, kind: &str, payload: serde_json::Value) -> bool {
     runtime.dispatch_json(&explorer_event(kind, payload))
@@ -42,6 +42,106 @@ fn the_sidebar_project_narrows_both_lists_until_lifted() {
     ));
     assert_eq!(runtime.snapshot.ui_state.sidebar_project, None);
     assert_eq!(runtime.snapshot.ui_state.sidebar_lens, SidebarLens::Prs);
+}
+
+fn practice_event(runtime: &mut Runtime, chapter: &str, step: u32, finished: bool) -> bool {
+    event(
+        runtime,
+        "practice_progress_set",
+        serde_json::json!({"chapter": chapter, "version": 2, "step": step, "finished": finished}),
+    )
+}
+
+fn last_error_kind(runtime: &Runtime) -> Option<String> {
+    runtime
+        .snapshot
+        .status
+        .last_error
+        .as_ref()
+        .map(|error| error.kind.clone())
+}
+
+/// A learner's place in a practice chapter is written per chapter id, an
+/// identical write changes nothing, and a later write replaces the entry.
+#[test]
+fn practice_progress_is_kept_per_chapter_and_an_identical_write_changes_nothing() {
+    let mut runtime = runtime();
+    assert!(runtime.snapshot.ui_state.practice.is_empty());
+    assert!(practice_event(&mut runtime, "first-agent", 3, false));
+    assert!(practice_event(&mut runtime, "sidebar-tour", 0, false));
+    let practice = &runtime.snapshot.ui_state.practice;
+    assert_eq!(practice.len(), 2);
+    assert_eq!(
+        practice["first-agent"],
+        PracticeProgress {
+            version: 2,
+            step: 3,
+            finished: false
+        }
+    );
+    assert!(
+        !practice_event(&mut runtime, "first-agent", 3, false),
+        "the value it already holds is no change"
+    );
+    assert!(practice_event(&mut runtime, "first-agent", 7, true));
+    let progress = runtime.snapshot.ui_state.practice["first-agent"];
+    assert_eq!((progress.step, progress.finished), (7, true));
+    assert_eq!(runtime.snapshot.ui_state.practice.len(), 2);
+    assert_eq!(last_error_kind(&runtime), None);
+
+    // The wire form a shell reads.
+    let snapshot = serde_json::to_value(&runtime.snapshot.ui_state).unwrap();
+    assert_eq!(
+        snapshot["practice"]["first-agent"],
+        serde_json::json!({"version": 2, "step": 7, "finished": true})
+    );
+}
+
+/// A chapter id outside `^[a-z0-9-]{1,32}$` and a step past 255 are refused
+/// with their codes and leave the progress as it was.
+#[test]
+fn practice_progress_refuses_a_bad_chapter_id_and_a_step_past_the_limit() {
+    let mut runtime = runtime();
+    assert!(practice_event(&mut runtime, "a-1", 255, false));
+    for chapter in ["", "Upper", "has space", "under_score", &"a".repeat(33)] {
+        practice_event(&mut runtime, chapter, 1, false);
+        assert_eq!(
+            last_error_kind(&runtime).as_deref(),
+            Some("practice.chapter_invalid"),
+            "{chapter:?}"
+        );
+        runtime.snapshot.status.last_error = None;
+    }
+    assert!(practice_event(&mut runtime, &"a".repeat(32), 1, false));
+    practice_event(&mut runtime, "a-1", 256, false);
+    assert_eq!(
+        last_error_kind(&runtime).as_deref(),
+        Some("practice.step_invalid")
+    );
+    let practice = &runtime.snapshot.ui_state.practice;
+    assert_eq!(practice.len(), 2);
+    assert_eq!(practice["a-1"].step, 255);
+}
+
+/// Progress is kept for 64 chapters; a 65th is refused, while a chapter
+/// already kept can still be updated.
+#[test]
+fn practice_progress_keeps_at_most_sixty_four_chapters() {
+    let mut runtime = runtime();
+    for index in 0..64 {
+        assert!(practice_event(&mut runtime, &format!("c{index}"), 0, false));
+    }
+    assert_eq!(last_error_kind(&runtime), None);
+    practice_event(&mut runtime, "one-more", 0, false);
+    assert_eq!(
+        last_error_kind(&runtime).as_deref(),
+        Some("practice.too_many")
+    );
+    let practice = &runtime.snapshot.ui_state.practice;
+    assert_eq!(practice.len(), 64);
+    assert!(!practice.contains_key("one-more"));
+    assert!(practice_event(&mut runtime, "c0", 4, true));
+    assert_eq!(runtime.snapshot.ui_state.practice["c0"].step, 4);
 }
 
 /// Removing the chosen project lifts the narrowing, so a restart never opens

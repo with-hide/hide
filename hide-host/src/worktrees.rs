@@ -2165,6 +2165,16 @@ pub fn remove_worktree(
     checkout: &Path,
     force: bool,
 ) -> Result<String, String> {
+    remove_worktree_stopping(repository_root, checkout, force).map_err(|stopped| stopped.message)
+}
+
+/// [`remove_worktree`] with why it stopped, for the confirmed removal the
+/// delete dialog words.
+fn remove_worktree_stopping(
+    repository_root: &Path,
+    checkout: &Path,
+    force: bool,
+) -> Result<String, Stopped> {
     let common = git(
         repository_root,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -2194,12 +2204,15 @@ pub fn remove_worktree(
     if let Some(aside) = set_aside.as_ref()
         && still_registered(&aside.admin)
     {
-        std::fs::rename(&aside.entry, checkout).map_err(|error| {
-            format!(
+        std::fs::rename(&aside.entry, checkout).map_err(|error| Stopped {
+            stop: RemovalStop::NotMovedBack {
+                path: aside.entry.display().to_string(),
+            },
+            message: format!(
                 "Git kept the worktree but its folder could not be moved back from {} ({error}). Move it back to {} before retrying.",
                 aside.entry.display(),
                 checkout.display()
-            )
+            ),
         })?;
     }
     // Every removal sweeps, so an entry a stopped process left behind goes
@@ -2212,23 +2225,36 @@ pub fn remove_worktree(
     // readback also fails keeps Git's own reason.
     let listed = registered(repository_root)
         .map(|rows| rows.iter().any(|row| Path::new(&row.path) == checkout));
+    let unreadable = |message: String| Stopped {
+        stop: RemovalStop::StateUnreadable,
+        message,
+    };
     let remains = match (listed, &answer) {
         (Ok(listed), Err(_)) => listed || checkout.try_exists().unwrap_or(true),
         (Ok(listed), Ok(_)) => {
-            listed || checkout.try_exists().map_err(|error| error.to_string())?
+            listed
+                || checkout
+                    .try_exists()
+                    .map_err(|error| unreadable(error.to_string()))?
         }
         (Err(_), Err(_)) => true,
-        (Err(error), Ok(_)) => return Err(error),
+        (Err(error), Ok(_)) => return Err(unreadable(error)),
     };
     match (answer, remains) {
         (_, false) => {
             forget_agent_trust(checkout);
             Ok("Worktree folder and its build output removed. Branch and Git history kept.".into())
         }
-        (Err(error), true) => Err(error),
-        (Ok(_), true) => Err(
-            "Git acknowledged removal but the folder or registration remains. Review again.".into(),
-        ),
+        (Err(error), true) => Err(Stopped {
+            stop: RemovalStop::GitRefused,
+            message: error,
+        }),
+        (Ok(_), true) => Err(Stopped {
+            stop: RemovalStop::StillThere,
+            message:
+                "Git acknowledged removal but the folder or registration remains. Review again."
+                    .into(),
+        }),
     }
 }
 
@@ -2639,41 +2665,51 @@ fn still_registered(admin: &Path) -> bool {
 }
 
 pub use hide_node_link::worktrees::{
-    ConfirmedRemoval, RemovalOutcome, RepositoryWorktrees, Unpushed, WorktreeFacts,
+    ConfirmedRemoval, RemovalBranch, RemovalOutcome, RemovalStop, Removed, RepositoryWorktrees,
+    Stopped, Unpushed, WorktreeFacts,
 };
 
 /// Measures the accepted deletion without changing files or Git registration.
 /// The core asks before closing any pane; removal repeats the same checks.
-pub fn check_removal(request: &ConfirmedRemoval) -> Result<(), String> {
+pub fn check_removal(request: &ConfirmedRemoval) -> Result<(), Stopped> {
     check_confirmed_removal(request, false)
 }
 
-fn check_confirmed_removal(request: &ConfirmedRemoval, panes_closed: bool) -> Result<(), String> {
+fn check_confirmed_removal(request: &ConfirmedRemoval, panes_closed: bool) -> Result<(), Stopped> {
     let root = Path::new(&request.repository_root);
     let target = Path::new(&request.checkout_path);
-    let stopped = |detail: String| {
+    // The sentence is the log's; the dialog words `stop`.
+    let stopped = |stop: RemovalStop, detail: String| {
         let detail = detail.trim_end_matches('.');
-        format!(
-            "Worktree removal stopped: {detail}. {}",
-            if panes_closed {
-                "The worktree remains; panes already closed stay closed."
-            } else {
-                "The worktree and its panes are kept. Review again before deleting."
-            }
-        )
+        Stopped {
+            stop,
+            message: format!(
+                "Worktree removal stopped: {detail}. {}",
+                if panes_closed {
+                    "The worktree remains; panes already closed stay closed."
+                } else {
+                    "The worktree and its panes are kept. Review again before deleting."
+                }
+            ),
+        }
     };
     let rows = registered(root).map_err(|error| {
-        stopped(format!(
-            "could not re-read the worktree registration: {error}"
-        ))
+        stopped(
+            RemovalStop::RegistrationUnreadable,
+            format!("could not re-read the worktree registration: {error}"),
+        )
     })?;
     let Some(index) = rows.iter().position(|row| Path::new(&row.path) == target) else {
         return Err(stopped(
+            RemovalStop::NotRegistered,
             "the worktree is no longer registered at this path".into(),
         ));
     };
     if index == 0 {
-        return Err(stopped("the main worktree cannot be deleted".into()));
+        return Err(stopped(
+            RemovalStop::Main,
+            "the main worktree cannot be deleted".into(),
+        ));
     }
     let current = &rows[index];
     if let Some(reason) = current.lock_reason.as_deref() {
@@ -2681,18 +2717,24 @@ fn check_confirmed_removal(request: &ConfirmedRemoval, panes_closed: bool) -> Re
             .branch
             .as_deref()
             .or_else(|| target.file_name().and_then(|name| name.to_str()))
-            .unwrap_or("selected checkout");
-        return Err(stopped(hide_node_link::worktrees::locked_removal_reason(
-            name, reason,
-        )));
+            .unwrap_or_default();
+        return Err(stopped(
+            RemovalStop::Locked {
+                name: name.to_owned(),
+                reason: reason.to_owned(),
+            },
+            format!("worktree {name} is locked ({reason})"),
+        ));
     }
     if current.head != request.expected_head_sha || current.branch != request.expected_branch {
         return Err(stopped(
+            RemovalStop::IdentityChanged,
             "the worktree identity changed after confirmation".into(),
         ));
     }
     if current.branch.is_some() && current.branch == request.protected_base_branch {
         return Err(stopped(
+            RemovalStop::HoldsBase,
             "the worktree now holds the protected base branch".into(),
         ));
     }
@@ -2702,54 +2744,59 @@ fn check_confirmed_removal(request: &ConfirmedRemoval, panes_closed: bool) -> Re
             .any(|row| Path::new(&row.path) != target && Path::new(&row.path).starts_with(target))
     {
         return Err(stopped(
+            RemovalStop::Nested,
             "the worktree now contains a nested worktree".into(),
         ));
     }
     if target
         .try_exists()
-        .map_err(|error| stopped(error.to_string()))?
+        .map_err(|error| stopped(RemovalStop::StateUnreadable, error.to_string()))?
     {
         if !request.discard_changes {
             let status = git(
                 target,
                 &["status", "--porcelain=v1", "--untracked-files=all"],
             )
-            .map_err(|error| stopped(format!("could not recheck the worktree state: {error}")))?;
+            .map_err(|error| {
+                stopped(
+                    RemovalStop::StateUnreadable,
+                    format!("could not recheck the worktree state: {error}"),
+                )
+            })?;
             let changed = status
                 .lines()
                 .filter(|line| !line.trim().is_empty())
                 .count();
             if changed > 0 {
-                return Err(if panes_closed {
-                    format!(
-                        "Not deleted: {} changed after you confirmed, likely written by an agent as it stopped. \
-                 The worktree and its files are kept; the panes already closed stay closed. \
-                 Delete again and tick Discard to remove it anyway.",
-                        if changed == 1 {
-                            "1 file".to_owned()
-                        } else {
-                            format!("{changed} files")
-                        }
-                    )
-                } else {
-                    stopped(format!(
-                        "{changed} files changed after confirmation; review again and explicitly choose Discard"
-                    ))
-                });
+                return Err(stopped(
+                    RemovalStop::Changed {
+                        files: u32::try_from(changed).unwrap_or(u32::MAX),
+                    },
+                    format!("{changed} files changed after confirmation"),
+                ));
             }
         }
         // Git leaves ignored folders out of the status above, and removing
         // the worktree deletes them, including a repository cloned into one
         // (B28): such a nested repository stops the removal.
-        let nested = ignored_repositories(target).map_err(stopped)?;
+        let nested = ignored_repositories(target)
+            .map_err(|error| stopped(RemovalStop::StateUnreadable, error))?;
         if !nested.is_empty() && !request.discard_changes {
-            return Err(stopped(format!(
-                "ignored repositories would be deleted: {}. Review and explicitly choose Discard",
-                nested.join(", ")
-            )));
+            return Err(stopped(
+                RemovalStop::IgnoredRepositories {
+                    names: nested.clone(),
+                },
+                format!(
+                    "ignored repositories would be deleted: {}",
+                    nested.join(", ")
+                ),
+            ));
         }
         if nested != request.expected_ignored_repositories {
-            return Err(stopped("the ignored repository list changed after confirmation; refresh and review every repository before choosing Discard".to_owned()));
+            return Err(stopped(
+                RemovalStop::IgnoredListChanged,
+                "the ignored repository list changed after confirmation".to_owned(),
+            ));
         }
     }
     Ok(())
@@ -2757,21 +2804,36 @@ fn check_confirmed_removal(request: &ConfirmedRemoval, panes_closed: bool) -> Re
 
 /// Repeats the preflight after pane closure, then applies the existing
 /// guarded removal and only the branch policy the operator accepted.
-pub fn remove_confirmed(request: &ConfirmedRemoval) -> Result<String, String> {
+pub fn remove_confirmed(request: &ConfirmedRemoval) -> Result<Removed, Stopped> {
     check_confirmed_removal(request, true)?;
     let root = Path::new(&request.repository_root);
     let target = Path::new(&request.checkout_path);
-    remove_worktree(root, target, request.discard_changes).map_err(|error| {
-        format!("git worktree remove failed: {error}. The worktree remains; panes already closed stay closed.")
+    remove_worktree_stopping(root, target, request.discard_changes).map_err(|stopped| Stopped {
+        message: format!(
+            "git worktree remove failed: {}. The worktree remains; panes already closed stay closed.",
+            stopped.message
+        ),
+        ..stopped
     })?;
     let path = target.display();
     let Some(branch) = request.delete_branch.as_deref() else {
-        return Ok(format!("Deleted {path}. Its local branch was kept."));
+        return Ok(Removed {
+            message: format!("Deleted {path}. Its local branch was kept."),
+            branch: RemovalBranch::Kept,
+        });
     };
-    match delete_branch(root, branch, request.force_delete_branch) {
-        Ok(_) => Ok(format!("Deleted {path} and local branch {branch}.")),
-        Err(detail) => Ok(format!("Deleted {path}; branch {branch} remains: {detail}")),
-    }
+    Ok(
+        match delete_branch(root, branch, request.force_delete_branch) {
+            Ok(_) => Removed {
+                message: format!("Deleted {path} and local branch {branch}."),
+                branch: RemovalBranch::Deleted,
+            },
+            Err(detail) => Removed {
+                message: format!("Deleted {path}; branch {branch} remains: {detail}"),
+                branch: RemovalBranch::Remains,
+            },
+        },
+    )
 }
 
 fn delete_branch(root: &Path, branch: &str, force: bool) -> Result<String, String> {

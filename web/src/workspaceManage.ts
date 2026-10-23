@@ -330,7 +330,7 @@ export function deletionFacts(checkout: Checkout, paneCount: number, t: TFunctio
 /** A Discard choice belongs only to the measured loss currently displayed. */
 export function discardConfirmationKey(checkout: Checkout): string {
   const row = checkout.worktree;
-  return JSON.stringify([row?.deletion_gate.discard_label ?? null, row?.ignored_repositories ?? [], row?.ignored_scan_unavailable ?? null, row?.lock_reason ?? null]);
+  return JSON.stringify([row?.deletion_gate.discard ?? null, row?.ignored_repositories ?? [], row?.ignored_scan_unavailable ?? null, row?.lock_reason ?? null]);
 }
 
 /** Facts joined into the one line a confirmation shows, its first word capitalized. */

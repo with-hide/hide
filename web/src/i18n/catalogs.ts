@@ -22,6 +22,12 @@ import { kitReasonsCatalogs, kitReasonsEnglish } from "./resources/kitReasons";
 import { issueReasonsCatalogs, issueReasonsEnglish } from "./resources/issueReasons";
 import { agentActionReasonsCatalogs, agentActionReasonsEnglish } from "./resources/agentActionReasons";
 import { fileReasonsCatalogs, fileReasonsEnglish } from "./resources/fileReasons";
+import { taskReasonsCatalogs, taskReasonsEnglish } from "./resources/taskReasons";
+import { deletionGateCatalogs, deletionGateEnglish } from "./resources/deletionGate";
+import { githubReasonsCatalogs, githubReasonsEnglish } from "./resources/githubReasons";
+import { removalReasonsCatalogs, removalReasonsEnglish } from "./resources/removalReasons";
+import { diffReasonsCatalogs, diffReasonsEnglish } from "./resources/diffReasons";
+import { wakeReasonsCatalogs, wakeReasonsEnglish } from "./resources/wakeReasons";
 import { agentsCatalogs, agentsEnglish } from "./resources/agents";
 import { hideAiCatalogs, hideAiEnglish } from "./resources/hideAi";
 import { issueSettingsCatalogs, issueSettingsEnglish } from "./resources/issueSettings";
@@ -40,6 +46,7 @@ import { coreMoveCatalogs, coreMoveEnglish } from "./resources/coreMove";
 import { nativeCatalogs, nativeEnglish } from "./resources/native";
 import { overviewCatalogs, overviewEnglish } from "./resources/overview";
 import { firstRunCatalogs, firstRunEnglish } from "./resources/firstRun";
+import { practiceCatalogs, practiceEnglish } from "./resources/practice";
 import { herdrTakeoverCatalogs, herdrTakeoverEnglish } from "./resources/herdrTakeover";
 import { memoryCatalogs, memoryEnglish } from "./resources/memory";
 import { prWorkCatalogs, prWorkEnglish } from "./resources/prWork";
@@ -93,6 +100,12 @@ export const english = {
   ...issueReasonsEnglish,
   ...agentActionReasonsEnglish,
   ...fileReasonsEnglish,
+  ...taskReasonsEnglish,
+  ...deletionGateEnglish,
+  ...githubReasonsEnglish,
+  ...removalReasonsEnglish,
+  ...diffReasonsEnglish,
+  ...wakeReasonsEnglish,
   ...mobileSetupEnglish,
   ...coreMoveEnglish,
   ...workspaceEnglish,
@@ -110,6 +123,7 @@ export const english = {
   ...feedbackEnglish,
   ...overviewEnglish,
   ...firstRunEnglish,
+  ...practiceEnglish,
   ...herdrTakeoverEnglish,
   ...memoryEnglish,
   ...projectSettingsEnglish,
@@ -157,6 +171,12 @@ export const catalogs = {
     ...issueReasonsCatalogs.ko,
     ...agentActionReasonsCatalogs.ko,
     ...fileReasonsCatalogs.ko,
+    ...taskReasonsCatalogs.ko,
+    ...deletionGateCatalogs.ko,
+    ...githubReasonsCatalogs.ko,
+    ...removalReasonsCatalogs.ko,
+    ...diffReasonsCatalogs.ko,
+    ...wakeReasonsCatalogs.ko,
     ...mobileSetupCatalogs.ko,
     ...coreMoveCatalogs.ko,
     ...workspaceCatalogs.ko,
@@ -174,6 +194,7 @@ export const catalogs = {
     ...feedbackCatalogs.ko,
     ...overviewCatalogs.ko,
     ...firstRunCatalogs.ko,
+    ...practiceCatalogs.ko,
     ...herdrTakeoverCatalogs.ko,
     ...memoryCatalogs.ko,
     ...projectSettingsCatalogs.ko,
@@ -216,6 +237,12 @@ export const catalogs = {
     ...issueReasonsCatalogs["zh-CN"],
     ...agentActionReasonsCatalogs["zh-CN"],
     ...fileReasonsCatalogs["zh-CN"],
+    ...taskReasonsCatalogs["zh-CN"],
+    ...deletionGateCatalogs["zh-CN"],
+    ...githubReasonsCatalogs["zh-CN"],
+    ...removalReasonsCatalogs["zh-CN"],
+    ...diffReasonsCatalogs["zh-CN"],
+    ...wakeReasonsCatalogs["zh-CN"],
     ...mobileSetupCatalogs["zh-CN"],
     ...coreMoveCatalogs["zh-CN"],
     ...workspaceCatalogs["zh-CN"],
@@ -233,6 +260,7 @@ export const catalogs = {
     ...feedbackCatalogs["zh-CN"],
     ...overviewCatalogs["zh-CN"],
     ...firstRunCatalogs["zh-CN"],
+    ...practiceCatalogs["zh-CN"],
     ...herdrTakeoverCatalogs["zh-CN"],
     ...memoryCatalogs["zh-CN"],
     ...projectSettingsCatalogs["zh-CN"],
@@ -275,6 +303,12 @@ export const catalogs = {
     ...issueReasonsCatalogs.ja,
     ...agentActionReasonsCatalogs.ja,
     ...fileReasonsCatalogs.ja,
+    ...taskReasonsCatalogs.ja,
+    ...deletionGateCatalogs.ja,
+    ...githubReasonsCatalogs.ja,
+    ...removalReasonsCatalogs.ja,
+    ...diffReasonsCatalogs.ja,
+    ...wakeReasonsCatalogs.ja,
     ...mobileSetupCatalogs.ja,
     ...coreMoveCatalogs.ja,
     ...workspaceCatalogs.ja,
@@ -292,6 +326,7 @@ export const catalogs = {
     ...feedbackCatalogs.ja,
     ...overviewCatalogs.ja,
     ...firstRunCatalogs.ja,
+    ...practiceCatalogs.ja,
     ...herdrTakeoverCatalogs.ja,
     ...memoryCatalogs.ja,
     ...projectSettingsCatalogs.ja,

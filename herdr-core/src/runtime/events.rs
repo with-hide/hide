@@ -1411,6 +1411,11 @@ pub(super) struct AgentLogoModeSetPayload {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct PaneTurnRowModeSetPayload {
+    pub(super) mode: crate::model::PaneTurnRowMode,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct ColorThemeSetPayload {
     pub(super) color_theme: crate::model::ColorTheme,
 }
@@ -1545,6 +1550,7 @@ pub(super) enum Event {
     SidebarLensSet(super::detail::SidebarLensPayload),
     TaskViewSet(super::detail::TaskViewPayload),
     SidebarProjectSet(super::detail::SidebarProjectPayload),
+    PracticeProgressSet(super::detail::PracticeProgressPayload),
     OverviewGraphChange(super::overview_graph::OverviewGraphChangePayload),
     TaskReveal(super::detail::TaskRevealPayload),
     DetailOpen(super::detail::DetailOpenPayload),
@@ -1617,6 +1623,7 @@ pub(super) enum Event {
     ProductAnalyticsConnected,
     ThemeSet(ThemeSetPayload),
     AgentLogoModeSet(AgentLogoModeSetPayload),
+    PaneTurnRowModeSet(PaneTurnRowModeSetPayload),
     ColorThemeSet(ColorThemeSetPayload),
     InterfaceLanguageSet(InterfaceLanguageSetPayload),
     UsagePinSet(UsagePinSetPayload),
@@ -1813,6 +1820,9 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "sidebar_lens_set" => decode!(super::detail::SidebarLensPayload, SidebarLensSet),
         "task_view_set" => decode!(super::detail::TaskViewPayload, TaskViewSet),
         "sidebar_project_set" => decode!(super::detail::SidebarProjectPayload, SidebarProjectSet),
+        "practice_progress_set" => {
+            decode!(super::detail::PracticeProgressPayload, PracticeProgressSet)
+        }
         "overview_graph_change" => decode!(
             super::overview_graph::OverviewGraphChangePayload,
             OverviewGraphChange
@@ -1900,6 +1910,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "product_analytics_connected" => Ok(Event::ProductAnalyticsConnected),
         "theme_set" => decode!(ThemeSetPayload, ThemeSet),
         "agent_logo_mode_set" => decode!(AgentLogoModeSetPayload, AgentLogoModeSet),
+        "pane_turn_row_mode_set" => decode!(PaneTurnRowModeSetPayload, PaneTurnRowModeSet),
         "color_theme_set" => decode!(ColorThemeSetPayload, ColorThemeSet),
         "usage_pin_set" => decode!(UsagePinSetPayload, UsagePinSet),
         "usage_hidden_set" => decode!(UsageHiddenSetPayload, UsageHiddenSet),
@@ -4007,6 +4018,14 @@ impl Runtime {
                 self.persist_ui_state();
                 true
             }
+            Event::PaneTurnRowModeSet(payload) => {
+                if self.snapshot.ui_state.pane_turn_row_mode == payload.mode {
+                    return false;
+                }
+                self.snapshot.ui_state.pane_turn_row_mode = payload.mode;
+                self.persist_ui_state();
+                true
+            }
             Event::ColorThemeSet(payload) => {
                 if self.snapshot.ui_state.color_theme == payload.color_theme {
                     return false;
@@ -4097,6 +4116,7 @@ impl Runtime {
             Event::SidebarLensSet(payload) => self.set_sidebar_lens(payload),
             Event::TaskViewSet(payload) => self.set_task_view(payload),
             Event::SidebarProjectSet(payload) => self.set_sidebar_project(payload),
+            Event::PracticeProgressSet(payload) => self.set_practice_progress(payload),
             Event::OverviewGraphChange(payload) => self.change_overview_graph(payload),
             Event::TaskReveal(payload) => self.reveal_task(payload),
             Event::DetailOpen(payload) => self.open_detail(payload.item),
@@ -4169,11 +4189,13 @@ impl Runtime {
                     expanded_agent_pane_ids: current.expanded_agent_pane_ids,
                     sessions_expanded_agent_pane_ids: current.sessions_expanded_agent_pane_ids,
                     // Each has its own event (`sidebar_lens_set`,
-                    // `task_view_set`, `sidebar_project_set`, `detail_*`,
+                    // `task_view_set`, `sidebar_project_set`,
+                    // `practice_progress_set`, `detail_*`,
                     // `overview_graph_change`).
                     sidebar_lens: current.sidebar_lens,
                     task_view: current.task_view,
                     sidebar_project: current.sidebar_project,
+                    practice: current.practice,
                     detail: current.detail,
                     overview_graph: current.overview_graph,
                     selected_path: payload.selected_path,
@@ -4225,6 +4247,7 @@ impl Runtime {
                     theme: current.theme,
                     // `agent_logo_mode_set` owns the logo mode the same way.
                     agent_logo_mode: current.agent_logo_mode,
+                    pane_turn_row_mode: current.pane_turn_row_mode,
                     // `color_theme_set` owns the color theme the same way.
                     color_theme: current.color_theme,
                     interface_language: current.interface_language,

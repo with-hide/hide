@@ -86,11 +86,11 @@ type AgentSpec = Partial<AgentRow> & Pick<AgentRow, "pane_id" | "group" | "mark"
 
 const UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
 
-function agent({ elapsed, ...spec }: AgentSpec): AgentRow {
+export function agent({ elapsed, ...spec }: AgentSpec): AgentRow {
   const unit = UNIT_MS[elapsed.slice(-1)] ?? 0;
   const changed = Date.now() - Number(elapsed.slice(0, -1)) * unit;
   return {
-    state: galleryAgentState(spec.pane_id, spec.detail, changed),
+    state: spec.state ?? galleryAgentState(spec.pane_id, spec.detail, changed),
     id: spec.pane_id,
     identity_label: spec.pane_id,
     agent_kind: "claude",
@@ -168,10 +168,10 @@ export function checkout(spec: CheckoutSpec, nowSeconds: number): Checkout {
           merged: false,
           behind_upstream: null,
           pane_count: panes.length,
-          deletion_gate: { blocked_reason: null, warnings: [], button_label: "Delete worktree", can_delete_branch: true, branch_warning: null, discard_label: null },
+          deletion_gate: { blocked: null, warnings: [], pane_count: 0, can_delete_branch: true, branch_loss: null, discard: null },
         },
     pull_request: spec.pr ? { url: "", review: null, ...spec.pr } : null,
-    github: { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: nowSeconds * 1000, unavailable_reason: null },
+    github: { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: nowSeconds * 1000 },
     tabs: panes.length ? [{ id: `${spec.id}:t1`, workspace_id: spec.workspace, checkout_id: spec.id, label: "1", sidebar: { manual_name: null, number: 1, named_by_operator: false }, empty: false, delegated: false, panes: panes.map(pane) }] : [],
     active_tab_id: panes.length ? `${spec.id}:t1` : null,
     strip: [],

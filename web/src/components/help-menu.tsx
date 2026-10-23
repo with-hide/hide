@@ -1,7 +1,7 @@
 // The sidebar footer's Help menu (PRD sidebar-titlebar-refresh D-11, D-12,
-// B13, B14): the shortcut sheet with its chord, Copy diagnostics with the
-// same text as Settings' About, the repository's new-issue page in the default
-// browser, and the version, which is a line to read rather than an action
+// B13, B14): the shortcut sheet with its chord, the practice window, Copy
+// diagnostics with the same text as Settings' About, the repository's
+// new-issue page in the default browser, and the version, which is a line to read rather than an action
 // until an update of this app is ready (PRD auto-update D-03, B15): then a dot
 // sits on the menu's button and the line names the ready version and restarts
 // into it. Nothing else of an update shows here (D-21).
@@ -10,6 +10,7 @@ import { CircleHelpIcon } from "lucide-react";
 import { useState } from "react";
 import type { Actions } from "../actions";
 import { useInterfaceTranslation } from "../i18n/client";
+import { openPractice } from "../practice/channel";
 import { diagnosticsInputOf, diagnosticsText } from "../settings";
 import { commandLabel } from "../shortcutLabels";
 import { useShellStore } from "../store";
@@ -57,6 +58,9 @@ export function HelpMenu({ actions }: { actions: Actions }) {
         <DropdownMenuItem data-help-item="shortcuts" onSelect={() => actions.openShortcuts()}>
           {t("sidebar.help.shortcuts")}
           {chord ? <DropdownMenuShortcut>{chord}</DropdownMenuShortcut> : null}
+        </DropdownMenuItem>
+        <DropdownMenuItem data-help-item="practice" onSelect={openPractice}>
+          {t("sidebar.help.practice")}
         </DropdownMenuItem>
         <DropdownMenuItem data-help-item="copy_diagnostics" onSelect={copyDiagnostics}>
           {t("settings.copyDiagnostics")}

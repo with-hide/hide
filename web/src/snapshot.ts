@@ -6,7 +6,7 @@ import type { ProjectSettings, ProjectSettingsWrite } from "./projectSettings";
 // layout. Every selector is a lookup: the snapshot carries every tab's layout,
 // so a tab switch never draws a waiting state (PRD S2 B3).
 
-import type { AgentLogoMode, UsagePreferences } from "./generated/hided-ws";
+import type { AgentLogoMode, PaneTurnRowMode, UsagePreferences } from "./generated/hided-ws";
 
 /** The status codes the core sends in `status_code`; the catalogs name one word for each (agents.status.*). */
 export type AgentStatusCode = "error" | "question" | "approval" | "working" | "done" | "idle" | "unknown" | "waiting" | "unfinished" | "stopped" | "attached" | "sleeping" | "waking" | "sleep_failed";
@@ -372,7 +372,7 @@ export type PullRequestWork = {
   review_requests: { kind: "user" | "team"; name: string }[];
   /** `unknown` while the question that tells could not be answered. */
   asked_of_me: "unknown" | "none" | "direct" | "team";
-  failed_checks: { name: string; url: string | null }[];
+  failed_checks: { name: string | null; url: string | null }[];
   pending_checks: number;
   /** Disjoint counts from the open head's GitHub rollup; absent until read. */
   check_counts?: { total: number; passed: number; failed: number; running: number; waiting: number; skipped: number; unknown: number } | null;
@@ -422,7 +422,6 @@ export type GithubStatus = {
   loading: boolean;
   stale: boolean;
   last_success_at_unix_ms: number | null;
-  unavailable_reason: string | null;
   /** The extra questions of the last read that went unanswered while the pull request list was read (`ExtraQuery`). */
   unread_queries?: ExtraQuery[];
 };
@@ -545,7 +544,8 @@ export type IssueDetail = {
   task_key: string;
   phase: "reading" | "ready" | "failed";
   body: string | null;
-  message: string | null;
+  /** A `local_issue.*` code, or `issue_detail.read_failed` for a GitHub read; `gh`'s words stay in the core's log. */
+  failure: string | null;
   labels: IssueLabel[];
   author: string | null;
   created_at_unix_ms: number | null;
@@ -661,9 +661,10 @@ export type PrFeedback = {
   phase: "reading" | "ready" | "failed";
   /** The body once read. */
   body: string | null;
-  failed_checks: { name: string; url: string | null }[];
+  failed_checks: { name: string | null; url: string | null }[];
   change_requests: { author: string | null; body: string }[];
-  message: string | null;
+  /** `project_settings_repository_changed` or `pr_feedback.read_failed`. */
+  failure: string | null;
 };
 
 /** The Overview's pull-request work in flight (`PrWorkSnapshot`), one slot each. */
@@ -729,17 +730,45 @@ export type StripTab = {
   preview: boolean;
 };
 
-/** The removal gate the core computed for a linked worktree (`WorktreeDeletionGateSnapshot`). */
+/**
+ * Why a worktree cannot be deleted at all (`WorktreeDeletionBlock`): `main`, `locked` (with the branch or folder `name`
+ * and Git's lock `reason`, empty when it was given none) or `ignored_scan_unavailable`. `deletionGate.ts` words it.
+ */
+export type DeletionBlock = { code: string; name?: string; reason?: string };
+
+/**
+ * One warning badge in the deletion confirmation (`WorktreeDeletionWarning`): `uncommitted` (`files`, 0 when Git gave
+ * no count), `nested`, `base`, `status_unknown`, `unmerged` (`ahead`), `not_pushed`, `ignored_repositories` (`count`).
+ */
+export type DeletionWarning = { code: string; files?: number; ahead?: number; count?: number };
+
+/**
+ * What deleting the branch with the folder loses (`WorktreeBranchLoss`): `commits` the `base` does not have (`count`;
+ * `base` null when unknown), `not_merged` with none ahead, or `unknown` when Git could not tell.
+ */
+export type BranchLoss = { code: string; count?: number; base?: string | null };
+
+/** What the folder's removal would lose, which the operator accepts (`WorktreeDiscard`). */
+export type DeletionDiscard = {
+  /** Present when the folder has uncommitted changes; 0 when Git gave no count. */
+  changed_files: number | null;
+  nested: boolean;
+  status_unknown: boolean;
+  ignored_repositories: string[];
+};
+
+/** The removal gate the core computed for a linked worktree (`WorktreeDeletionGateSnapshot`): facts and codes, no sentence. */
 export type DeletionGate = {
   /** Main, locked or unavailable ignored-repository measurement. */
-  blocked_reason: string | null;
-  warnings: string[];
-  button_label: string;
+  blocked: DeletionBlock | null;
+  warnings: DeletionWarning[];
+  /** The panes the deletion closes first. */
+  pane_count: number;
   can_delete_branch: boolean;
   /** What deleting the branch loses; present means the core deletes it with `git branch -D`. */
-  branch_warning: string | null;
-  /** The checkbox that accepts losing the folder's changes; present means deletion waits for it. */
-  discard_label: string | null;
+  branch_loss: BranchLoss | null;
+  /** What the folder would lose; present means deletion waits for the operator to accept it. */
+  discard: DeletionDiscard | null;
 };
 
 /** The parts of the core's worktree row the removal confirmation reads. */
@@ -1503,7 +1532,10 @@ export type ViewSplitSnapshot = import("./areaLayout").AreaSplit<ViewDisplaySnap
 export type ViewNode = import("./areaLayout").AreaNode<ViewDisplaySnapshot>;
 export type ViewLayoutSnapshot = import("./areaLayout").AreaLayout<ViewDisplaySnapshot>;
 
-export type DiffSnapshot = { path: string; committed: boolean; text: string; notice: string | null };
+/** Why a diff is short or absent (`DiffNotice`); `diffNotice.ts` words it. */
+export type DiffNotice = { code: string; limit_kb?: number; root?: string };
+
+export type DiffSnapshot = { path: string; committed: boolean; text: string; notice: DiffNotice | null };
 
 /** The six working-tree states the core presents (ChangedFileStatus). */
 export type ChangedFileStatus = "modified" | "added" | "deleted" | "untracked" | "renamed" | "conflict";
@@ -1532,7 +1564,7 @@ export type ChangesSnapshot = {
   selected_path: string | null;
   selected_committed: boolean;
   /** The selected diff of a client without View areas; the web shell reads `diffs`. */
-  diff: { path: string; text: string; notice: string | null } | null;
+  diff: { path: string; text: string; notice: DiffNotice | null } | null;
   /** One bounded patch per visible diff display of the front Workspace (S7 contract 3.2); absent when none shows. */
   diffs?: DiffSnapshot[];
   unavailable_reason: string | null;
@@ -1820,8 +1852,10 @@ export type HerdrStatus = {
  * went (PRD herdr-takeover): `kind` is `move`, `restart` (Herdr cannot hand it
  * over here), `update_hide` (a newer protocol) or `look` (a server Hide cannot
  * use could not be read: always `failed`, with no versions); `stage` is
- * `offered`, `moving`, `failed`, or `moved` while the operator's own `herdr`
- * is behind.
+ * `offered`, `moving` (a move starts on its own), `failed`, or `moved` while
+ * the wizard shows the result or the operator's own `herdr` is not settled.
+ * `path_herdr` is that `herdr` after a move left it behind: Hide `updating`
+ * it, `updated`, or `behind` when the operator has to run the command.
  */
 export type HerdrTakeover = {
   kind: "move" | "restart" | "update_hide" | "look";
@@ -1830,15 +1864,15 @@ export type HerdrTakeover = {
   version: string;
   same_protocol: boolean;
   failure: "refused" | "not_confirmed" | "unreadable" | "stop_failed" | null;
-  path_herdr_behind: string | null;
+  path_herdr: { stage: "updating" | "updated" | "behind"; version: string } | null;
 };
 
 /**
  * The Herdr this app ships and the operator's own `herdr`, as Settings > About
  * names them; `path_herdr` is null when the operator's terminal finds none.
  * `behind` says its commands are refused by a server on Hide's protocol, and
- * `update_command` is the one command that brings it up, for the operator to
- * copy and run (Hide never runs it).
+ * `update_command` is the one command that brings it up, which Hide runs after
+ * a move unless it asks for `sudo`.
  */
 export type HerdrVersions = {
   hide: string;
@@ -1962,7 +1996,8 @@ export type TaskOperation = {
   path: string | null;
   pane_id: string | null;
   agent_kind: string | null;
-  message: string | null;
+  /** Why the task failed, as a code (`task_operation.*`, `agent_start.*`, `checkout_purpose.*`, a start reason), worded by `coreErrorText` or `startFailure`. */
+  failure: string | null;
   /** `starting`, `started`, `failed` or `unknown`; null when no agent was chosen. */
   agent_phase: string | null;
   /** Why the agent did not start: a code (`agent_start.*`, or a session check's), worded by `agentFailure`. */
@@ -2005,7 +2040,30 @@ export type WorktreeRemoval = {
   force_delete_branch?: boolean;
   discard_changes?: boolean;
   phase: string;
-  message: string | null;
+  /** How it ended or why it stopped (`WorktreeRemovalNotice`); `removalNotice.ts` words it. */
+  notice: RemovalNotice | null;
+};
+
+/**
+ * Why the repository's host stopped a removal (`hide_node_link::worktrees::RemovalStop`): `locked` names the branch or
+ * folder and Git's lock reason, `changed` the files that changed, `ignored_repositories` their names and
+ * `not_moved_back` where the folder was left.
+ */
+export type RemovalStop = { code: string; name?: string; reason?: string; files?: number; names?: string[]; path?: string };
+
+/**
+ * How a worktree removal ended, or why it stopped (`WorktreeRemovalNotice`): `removed` with what became of the branch
+ * (`kept`, `deleted`, `remains`), `stopped` by the host, `still_running` programs in the folder, `host_failed` with a
+ * `host.*` or `link.*` reason, and the core's own `pane_appeared`, `changed_while_closing`, `close_failed`,
+ * `result_unknown` and `worker_unavailable`.
+ */
+export type RemovalNotice = {
+  code: string;
+  branch?: "kept" | "deleted" | "remains";
+  stop?: RemovalStop;
+  panes_closed?: boolean;
+  programs?: { name: string; pid: number }[];
+  reason?: string | null;
 };
 
 /** A card's kind (`contracts/snapshot-wire-enums.json`: `memory_card_kind`). */
@@ -2359,6 +2417,8 @@ export type SnapshotRest = {
     task_view?: TaskView;
     /** The project both of the sidebar's lists are narrowed to; absent or null is every project. */
     sidebar_project?: SidebarProject | null;
+    /** Practice mode's progress by chapter id (`practice_progress_set`): the chapter version played, the step reached, and whether the end was reached; absent reads as none. */
+    practice?: Record<string, { version: number; step: number; finished: boolean }>;
     /** The lane's 보기 slot (D-50), one per window. */
     detail?: DetailSlot;
     /** The Overview Work map's remembered choices; absent reads as the defaults. */
@@ -2370,6 +2430,8 @@ export type SnapshotRest = {
     theme?: string;
     /** Whether list rows and tabs draw the agent's logo (`contracts/snapshot-wire-enums.json`: `agent_logo_mode`); absent reads as hidden. */
     agent_logo_mode?: AgentLogoMode;
+    /** How agent panes draw their turn row (`contracts/snapshot-wire-enums.json`: `pane_turn_row_mode`); absent reads as one line. */
+    pane_turn_row_mode?: PaneTurnRowMode;
     /** `hide` or `neutral` (`contracts/snapshot-wire-enums.json`: `color_theme`); the page reads anything else as Hide. */
     color_theme?: string;
     /** Core-confirmed explicit choice; null follows this client's system language. */

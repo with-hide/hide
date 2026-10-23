@@ -112,3 +112,6 @@ export const HERDR_RESTART_CHANNEL = "hide:herdr-restart";
  * the app menu's would; hided keeps running, as it does after any quit.
  */
 export const QUIT_CHANNEL = "hide:quit";
+
+/** Help > Practice Hide and the empty Home: open the practice window, or bring it forward (renderer -> main). */
+export const PRACTICE_OPEN_CHANNEL = "hide:practice-open";

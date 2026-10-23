@@ -11,7 +11,7 @@
 //! server.
 //!
 //! This machine's server the operator started from their own older Herdr
-//! moves only when the operator asks (`hided::herdr_handoff::LocalTakeover`,
+//! is offered and moved by the core (`hided::herdr_handoff::LocalTakeover`,
 //! PRD herdr-takeover): one on the protocol this build reads (0.9.1) and one
 //! on an older protocol (0.8.2) are offered and moved with their panes, and
 //! a failed move is remembered for that server and tried again on a press.

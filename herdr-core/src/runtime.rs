@@ -2014,6 +2014,10 @@ impl Runtime {
                         "ui_state.agent_logo_mode_unknown",
                         "The stored agent logo mode was not recognized; hidden was used",
                     ),
+                    persistence::UnrecognizedField::PaneTurnRowMode => (
+                        "ui_state.pane_turn_row_mode_unknown",
+                        "The stored pane turn row mode was not recognized; one line was used",
+                    ),
                     persistence::UnrecognizedField::SidebarLens => (
                         "ui_state.sidebar_lens_unknown",
                         "The stored sidebar lens or task view was not recognized; the projects, by state, were used",
@@ -2021,6 +2025,10 @@ impl Runtime {
                     persistence::UnrecognizedField::SidebarProject => (
                         "ui_state.sidebar_project_unknown",
                         "The stored sidebar project was not recognized; every project was used",
+                    ),
+                    persistence::UnrecognizedField::Practice => (
+                        "ui_state.practice_unknown",
+                        "Some of the stored practice progress was not recognized; the rest loaded",
                     ),
                     persistence::UnrecognizedField::Detail => (
                         "ui_state.detail_unknown",

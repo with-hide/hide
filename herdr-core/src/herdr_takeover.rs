@@ -3,7 +3,8 @@
 //!
 //! The core decides what the screen offers and when; the work itself (who
 //! runs the server, its ping, the handoff and its confirmation, the record
-//! of handoffs that failed) is `hided`'s, which installs a working
+//! of handoffs that failed, the update of the operator's own `herdr`) is
+//! `hided`'s, which installs a working
 //! [`HerdrTakeover`] only in a daemon that runs from a desktop package with
 //! that package's own Herdr and one that finds nothing (`NoTakeover`) in any
 //! other (`hided/src/herdr_handoff.rs`). Every call blocks on a socket or a
@@ -20,6 +21,27 @@ pub trait HerdrTakeover: Send + Sync {
     /// The Herdr this app ships and the operator's own `herdr`, as Settings >
     /// About names them; asked beside each look.
     fn versions(&self) -> Versions;
+    /// Runs [`PathHerdr::update`] on the operator's own `herdr`, unless it
+    /// asks for an administrator (`sudo`), which is never run, and reads that
+    /// `herdr` again; asked once after each move that left it behind.
+    fn update_path_herdr(&self) -> PathUpdated;
+}
+
+/// What updating the operator's own `herdr` came to, read after the update.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PathUpdated {
+    /// It speaks this build's protocol, at this version.
+    Current { version: String },
+    /// It still speaks another protocol, at this version. `ran` is the
+    /// command run, `None` when none was (it asks for an administrator, or
+    /// this system has no move to follow), and `detail` is the log's.
+    Behind {
+        version: String,
+        ran: Option<String>,
+        detail: String,
+    },
+    /// The terminal finds no `herdr` any more.
+    Gone,
 }
 
 /// What this machine's Herdr programs say about themselves.
