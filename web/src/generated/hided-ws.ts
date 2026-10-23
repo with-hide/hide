@@ -121,6 +121,8 @@ export type SnapshotSections =
   | InterfaceLanguageSetPayload
   | AgentLogoMode
   | AgentLogoModeSetPayload
+  | PaneTurnRowMode
+  | PaneTurnRowModeSetPayload
   | ColorThemeSetPayload
   | TerminalFrame
   | AgentNotice
@@ -133,6 +135,10 @@ export type InterfaceLanguage = null | "en" | "ko" | "zh-CN" | "ja";
  * Whether the sidebar, the Sessions list and the tab bar draw an agent's provider logo before its title. Hidden is the default and what a store without the field, or with a value this build does not know, publishes.
  */
 export type AgentLogoMode = "shown" | "hidden";
+/**
+ * How an agent pane draws its turn row, the operator's last request and the agent's answer, over the terminal: one_line keeps every turn and ask on one line and is the default, what a store without the field or with a value this build does not know publishes (with the diagnostic ui_state.pane_turn_row_mode_unknown); two_lines gives the request its own line above the answer; off draws no turn row, an ask rides the pane head as a mark, and a pane with live children keeps its children button.
+ */
+export type PaneTurnRowMode = "one_line" | "two_lines" | "off";
 /**
  * The palette every window draws in, `ui_state.color_theme`: hide is the landing page's Owl Field colors and the default (a store without the field opens hide), neutral the grey chrome. Independent of `ui_state.theme`, which picks light, dark or system. A stored value the core does not know opens hide with the diagnostic ui_state.color_theme_unknown.
  */
@@ -588,6 +594,12 @@ export interface InterfaceLanguageSetPayload {
  */
 export interface AgentLogoModeSetPayload {
   mode: AgentLogoMode;
+}
+/**
+ * Payload of pane_turn_row_mode_set. This event alone edits the core preference; ui_state_update never changes it, a mode outside paneTurnRowMode is refused and changes nothing, and the current mode again saves nothing.
+ */
+export interface PaneTurnRowModeSetPayload {
+  mode: PaneTurnRowMode;
 }
 /**
  * Payload of color_theme_set. This event alone edits the color theme; ui_state_update never changes it, a value outside colorTheme is refused, and the current value again saves nothing.

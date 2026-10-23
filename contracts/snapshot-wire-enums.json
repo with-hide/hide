@@ -21,6 +21,7 @@
   "first_run_step": ["herdr", "agents", "devices", "notifications", "project", "done"],
   "screen_intro": ["factory"],
   "agent_logo_mode": ["shown", "hidden"],
+  "pane_turn_row_mode": ["one_line", "two_lines", "off"],
   "herdr_behind_cause": ["cannot_hand_off", "handoff_failed"],
   "kit_agent_availability": ["available", "not_installed", "unsupported_system"],
   "codex_daemon_off_failure": ["codex_missing", "codex_refused", "timed_out", "unreachable", "stop_failed"],
