@@ -17,6 +17,14 @@ export type CoreEvent = { kind: string; payload: Record<string, unknown> };
 export const PRACTICE_COPY = "practice_copy";
 
 /**
+ * What the practice window sends a world when the shell would have left the
+ * page (`{ what, detail }`: a window it would open, a link, a navigation, or a
+ * call on the desktop host), held there instead (`outside.ts`). A world that
+ * has no answer for it keeps it as told.
+ */
+export const PRACTICE_OUTSIDE = "practice_outside";
+
+/**
  * What the core sends beside the snapshot: the ⌘P index's answer, the open
  * editor tabs and their documents, ⌘K's session search, the record and link
  * record the lane's 보기 slot shows, the Explorer's folder listings (keyed by

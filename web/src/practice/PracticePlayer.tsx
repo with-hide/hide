@@ -21,6 +21,7 @@ import { WorkspaceScreen } from "../WorkspaceScreen";
 import type { PracticeChapter } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
 import { holdPageClipboard, practiceClipboard } from "./clipboard";
+import { holdPageOutside } from "./outside";
 import type { CoreEvent } from "./world";
 
 type UiState = NonNullable<SnapshotRest["ui_state"]>;
@@ -52,7 +53,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   const live = useRef({ world: chapter.world, model });
   live.current = { world: chapter.world, model };
 
-  const { actions, clipboard } = useMemo(() => {
+  const { actions, clipboard, send } = useMemo(() => {
     const send = (event: CoreEvent) => {
       const after = live.current.world.apply(live.current.model, event);
       if (after) {
@@ -64,11 +65,13 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
     };
     // A copy goes to the world and a paste takes the last copy back; the operator's clipboard is never read or written.
     const clipboard = practiceClipboard(send);
-    return { actions: createActions(send, clipboard), clipboard };
+    return { actions: createActions(send, clipboard), clipboard, send };
   }, []);
 
   useEffect(() => installKeyboard(actions), [actions]);
   useEffect(() => holdPageClipboard(clipboard), [clipboard]);
+  // A link, a window, a navigation or a host call the shell would have sent off the page goes to the world instead.
+  useEffect(() => holdPageOutside(send), [send]);
 
   useLayoutEffect(() => {
     const { rest, agents, focused, usage, frames } = chapter.world.snapshot(model, Date.now());
