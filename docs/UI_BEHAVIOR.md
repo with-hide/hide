@@ -969,7 +969,7 @@ With This Mac alone there is no switch, since there is nothing to choose.
 Choosing a device changes only what the Overview shows; the rail, the sidebar and the Workspace in front stay, and a project chip that was set clears.
 The tab row shows Work, Projects, Backlog, History and Usage, with counts derived from the same scoped records each view shows.
 A device that does not answer dims the live Work, Projects and Backlog tabs, and their body holds `<device>가 응답하지 않는다 · <언제부터>` and `다시 연결`; the age is the core's `unreachable_since_unix_ms`, and the diagnostic reason stays in the line's tooltip.
-When this machine's Herdr server answers another protocol, that body is instead its version badge, `This Herdr does not work with Hide`, and what Hide can do: `Move` on macOS and Linux, which behaves as the first-run step's (PRD herdr-takeover B16), or on Windows `Restart Herdr`, which opens a confirmation listing what comes back and what ends before anything stops.
+When this machine's Herdr server answers another protocol, that body is instead its version badge, `This Herdr isn't compatible with Hide`, and what Hide can do: `Move` on macOS and Linux, which behaves as the first-run step's (PRD herdr-takeover B16), or on Windows `Restart Herdr`, which opens a confirmation listing what comes back and what ends before anything stops.
 A browser tab has no restart, since stopping and starting the carried Herdr is the desktop host's: it shows `Restart Herdr from the Hide desktop app.` in that place, one line with no button (lead decision 2026-10-23, narrowing B19 for Windows).
 A server on a newer protocol is never touched: the place says `Update Hide` with `The running Herdr is newer than this Hide.`, and the desktop app adds `Check for updates`, which runs the update check and opens Settings > About (B18).
 A server on Hide's own protocol is read as healthy, so Overview adds nothing for it and the move stays in Help > Set up Hide.
@@ -1353,7 +1353,7 @@ A 태스크 row's record button or Space, and an agent pane head's status mark, 
 The Overview's panel draws the same record under its own head ([A record beside the tabs](#a-record-beside-the-tabs)); the two differ only in that frame, and a window reads one record at a time (PRD overview-device-tasks D-07, B17).
 The record starts with its title and agent logo, then `<device> · <agent product> · <project> · ⌂ <checkout>`; long titles and paths stay within the lane.
 The title is the flow the operator asked the most in, the later one on a tie, while the pane and the sidebar keep the current flow's name; with Hide AI off it is the session's own title (PRD session-record-fact-status D-06, B9, B10).
-Its native status and elapsed time share a quiet row with a `pane 열림` or `pane 닫힘` chip; there is no coloured action box.
+Its native status and elapsed time share a quiet row with a `터미널 열림` or `터미널 닫힘` chip; there is no coloured action box.
 An open pane offers `터미널로 이동` even after its work ends, or `답하러 가기` while asking.
 A closed pane offers `세션 복구하기`, using the existing native-session resume in a new pane in the registered checkout containing its original working folder on its device.
 A missing conversation path, unsupported agent, disconnected device or missing checkout disables restore and states why beside the action.
@@ -1436,7 +1436,7 @@ A stored `PR #N` tab from an older build is dropped when the app starts, and the
 From the top the card reads (B32-B36):
 
 - the head shows the PR mark, number and lifecycle, an explicit `GitHub에서 보기 ↗` button and `⋯`; the wrapping title follows, with the author on a teammate's PR and the mono `branch → base · 파일 N · +a −d` facts below it; Workspace opens the known checkout, and the links line shows actual linked issues and branch worktrees only; an absent issue draws no placeholder, and `이슈 잇기` remains in the menu;
-- a quiet CI and merge section replaces the coloured agent action box: `CI 검사 18개 중 3개 진행 중`, followed by the real nonzero counts for passed, running, waiting, failed, skipped and unknown checks; missing counts say they are not confirmed, never an invented total; `전체 검사 보기 ↗` opens this PR's checks, and review/conflict facts, failed-check logs and unresolved threads retain their existing actions;
+- a quiet CI and merge section replaces the coloured agent action box: `CI 검사 18개 중 3개 실행 중`, followed by the real nonzero counts for passed, running, waiting, failed, skipped and unknown checks; missing counts say they are not confirmed, never an invented total; `전체 검사 보기 ↗` opens this PR's checks, and review/conflict facts, failed-check logs and unresolved threads retain their existing actions;
 - `타임라인 · 세션 N`, a small quiet head (D-03, D-05, B3-B6; PRD record-card-readability D-01, D-09, B16), the count left out while no session worked on it: the sessions that made the pull request or worked on its branch and the pull request's own milestones, one list oldest first, sessions by their start and milestones by their time, joined by one vertical line behind their marks, every time in the right column in mono, a row with no time leaving that place empty, and with no axis or bar; the milestones are only what happened, `PR 열림`, `검사 통과` or `검사 실패` (the latest completed run, read from GitHub's check runs, D-15), `검토 요청 · <누구에게>`, `승인` or `변경 요청`, `머지됨`, each a small square in its colour where a session row has its mark (green for a pass or an approval, red for a failure or changes, yellow for a request, purple for the merge), its word in normal weight and its time at the right, a check or review row whose time could not be read standing right after `PR 열림` with none; an open pull request ends on one line, `지금 · 검사 N개 도는 중` with the dashed ring of proven work it waits on while checks run, and `지금` with an empty slot otherwise (status-marks D-06, D-25; PRD record-card-readability D-12, B21); there is no `작업 → PR → 검토 → 머지` stage bar; the session rows are below;
 - `바뀐 파일 N`, one folded line with +/- at the right that opens in place and stays as it was left while the app runs, to the files with files `.gitattributes` marks `linguist-generated` and the common lock files gathered into `생성 파일 N개 접음` (B11);
 - `본문`, never folded (D-02, B12, B13): a row of the body's `##` headings that sticks to the top of the card while the body scrolls under it, a chip scrolling to its heading and the chip of the heading last passed pressed, then the whole body as Markdown, with the HTML GitHub draws in a body drawn too (PRD record-card-readability D-11, B19, B20): `<details>` and `<summary>` as a folded box, `<img>` and Markdown's `![]()` as the picture when its address is https on a public host, because the card loads it by itself as it opens and a body must not make the operator's machine ask this computer or its network for anything (its description where it cannot be read), `<br>`, `<p>`, `<b>`/`<strong>`, `<i>`/`<em>`, `<code>`, `<kbd>`, `<sub>`, `<sup>`, and `<a>` and Markdown's links to an http or https address as links that open in the browser; any other tag, an attribute outside that list (an `on…` handler among them) and a `javascript:` or relative address stay as the text they are, nothing runs, an opening tag past 32 open elements stays as its text, and an HTML comment is not drawn; a body with no heading has no row, an empty one reads `본문 없음`, and one that could not be read says `읽지 못함 · 다시 시도` for that part alone.
@@ -2141,7 +2141,7 @@ Every tile is a button reached with Tab and chosen with Enter or Space, named fo
 `기기 추가` opens Settings › Devices with the Add device dialog in front, as the hidden rail's `기기 추가…` and the Add a project dialog's host list do.
 Removing the device in front moves the front to This Mac; that device's agents and its `~/hide` stay on it, and the rail stays.
 
-A right-click on the rail offers `레일 숨기기`.
+A right-click on the rail offers `기기 목록 숨기기`.
 While the rail is hidden the top row's device name becomes a `This Mac ⌄` menu that lists the devices (a check on the one in front), `기기 추가…` and `레일 표시`.
 The View menu of the desktop app carries `Toggle device rail` (`toggle_device_rail`, no default chord, bindable in Settings › Shortcuts like the sidebar switch); a browser tab uses the `This Mac ⌄` menu.
 The hidden state is the core's `ui_state.device_rail_visible`, kept beside `left_sidebar_visible`, so it survives a restart.
@@ -2157,7 +2157,7 @@ The tile of the machine that runs the core wears a crown notched into its bottom
 A window on a machine whose core runs elsewhere shows its core's state and takes its strip, in the place and size of the connection badge, when the core cannot draw it (W1 to W3, B16):
 
 - while a move holds the window, `core를 Mac mini로 옮기는 중 · 3/5 프로젝트와 기록 복사 · 다시 연결될 때까지 입력을 받지 않아요`, the move's step of five, with `…`, and the window sends nothing but the move's own give-up (a rollback says `옮기지 못해 이 Mac의 core로 되돌리는 중`); while the move waits on a machine that took its link and stopped answering, the strip ends with `그만 기다리기` (`여기로 가져오기` for a move back), which only opens the move dialog at its confirm;
-- while this machine updates its core to this app's build, `Mac mini의 core를 이 앱의 빌드로 바꾸는 중 · 에이전트는 계속 돌아요`, with `…`;
+- while this machine updates its core to this app's build, `Mac mini의 core를 이 앱의 빌드로 바꾸는 중 · 에이전트는 계속 실행돼요`, with `…`;
 - while the core cannot be reached, `! Mac mini의 core에 연결할 수 없어요 · 다시 연결하는 중`;
 - after the operator ended the link here, `! Mac mini core와 연결을 끊었어요` with `다시 연결` at its end, which links it again and is the only thing the window sends while it waits;
 - otherwise the shell's own connecting state.
@@ -2582,18 +2582,18 @@ That window's own row offers instead `core를 이 Mac으로 되돌리기…` and
 A move is one dialog over Settings whose body turns with the move, and every form names the reason first, `Mac mini는 늘 켜져 있어서 이 Mac을 덮어도 에이전트와 폰 연결이 계속돼요.` (B3 to B5):
 
 - checking: `점검하는 중…` while both machines are checked and nothing is changed;
-- checks failed: `고칠 것 2개 · 통과 9` (the passed count only when every check ran) and one line per failing check, naming the machine and either the one command that fixes it, with Copy (`gh auth login`, `sudo pmset -c sleep 0`), or what to do in words; `다시 점검` checks again;
+- checks failed: `고칠 것 2개 · 통과 9개` (the passed count only when every check ran) and one line per failing check, naming the machine and either the one command that fixes it, with Copy (`gh auth login`, `sudo pmset -c sleep 0`), or what to do in words; `다시 점검` checks again;
   a line names the machine the failure is on, so a Hide AI with no agent chosen names the machine whose core moves, since that setting moves with the core, `이 Mac의 Hide AI` with `설정 › Hide AI에서 켜고 에이전트를 고르세요`, while an agent of it not signed in names the machine taking the core (`checkMachine` in `web/src/coreMove.ts`);
   earlier core records on the machine taking the core fail `Mac mini의 이전 core 기록` with `Mac mini에서 정리하세요`, and a folder the copy cannot reach there (a file on the way to its state folder, a link that leads nowhere, a folder another account owns) fails `Mac mini의 상태 폴더` with the cause as its line and `Mac mini에서 폴더를 고치세요`; a link on the way is no failure, since the machine answers the folder by its resolved path;
-- confirm: what happens (`몇 초 동안 창이 입력을 받지 않고, 폰은 QR을 한 번 다시 스캔해요.`), that it can be undone, and `Mac mini로 옮기기`;
-- moving: the five steps with ✓, `…` and `-`, and, while the other machine cannot be reached, `Mac mini에 연결할 수 없어요 · 다시 연결되면 이어서 해요`; where that machine may already have taken the core, so only it can say whether the move committed, the footer offers `그만 기다리기`, and for a move back whose core machine does not answer its retirement, `여기로 가져오기`;
+- confirm: what happens (`몇 초 동안 창이 입력을 받지 않아요. 폰에서는 QR을 한 번 다시 스캔해야 해요.`), that it can be undone, and `Mac mini 기기로 옮기기`;
+- moving: the five steps with ✓, `…` and `-`, and, while the other machine cannot be reached, `Mac mini에 연결할 수 없어요 · 연결되면 옮기기를 이어 가요`; where that machine may already have taken the core, so only it can say whether the move committed, the footer offers `그만 기다리기`, and for a move back whose core machine does not answer its retirement, `여기로 가져오기`;
 - give up (amendment 4): the confirm of that action in the same dialog, `되돌릴 수 없어요.` first, then that this Mac's core starts again as it was and that a core coming back on Mac mini is stopped and set aside, not merged, and one plain line, in the body color like the others, that a Mac mini only cut off, not gone, keeps its core running until this Mac reaches it; `취소` goes back to the steps and `그만 기다리기` is the destructive action, never the default; the move back's `core를 여기로 가져올까요?` says instead that this Mac's core starts from the copy it received and that Mac mini's core stays stopped until it is retired, with no risk line;
-- stopped waiting: `이 Mac의 core가 이전 그대로 실행 중이에요.` and that Mac mini's core stops once this Mac reaches it;
+- stopped waiting: `이 Mac의 core가 원래대로 실행 중이에요.` and that Mac mini's core stops once this Mac reaches it;
 - failed: the step that failed with ×, `이 Mac의 core는 그대로예요.` with ✓, and Retry;
-- done: `폰은 Mac mini의 QR을 한 번 다시 스캔하세요.` and `되돌리기`, which opens the same dialog for the move back.
+- done: `폰에서 Mac mini의 QR을 한 번 다시 스캔하세요.` and `되돌리기`, which opens the same dialog for the move back.
 
 The dialog only asks; the supervisor's `core_move` frame says where the move is, so a window that closed it and opens Settings again finds the same form, and a request another move holds is answered `다른 이동이 진행 중이에요`.
-In Korean the particle after the machine's name follows its last sound, as Korean reads the name (`Mac mini로` but `집으로`, `web/src/i18n/koParticle.ts`).
+In Korean a fixed noun follows the machine's name (`Mac mini 기기로`), so no particle depends on how the name ends.
 
 Settings > Agents shows the seven agents Hide supports, Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity, in that order, for one machine at a time (PRD settings-cleanup B8 to B20, B67).
 With a device registered, a switch at the top chooses This Mac or a device and the list below is that machine's; with none there is no switch.
@@ -2653,7 +2653,7 @@ A Mac whose kit has already run (an existing install) never sees it, and nothing
 Until the choice is made the kit puts nothing for Claude Code or Codex on a fresh Mac either, so the hooks wait for Continue or for Settings, Agents.
 A device whose own record waits gets the saved choice once per run, by what is installed there, as soon as it reports (also after it was not connected when Continue was pressed); with nothing chosen it is told that, so its record stops waiting, and nothing is installed for agents.
 A device that still waits after it was sent the choice is logged once (`first_run_choice.unanswered`) and not sent it again until it reconnects.
-Under `Continue`, one line names the agent Hide AI will use: the first agent in that fixed order that is switched on in the step and signed in (`firstRunAgent` in `web/src/hideAi.ts`, "Hide AI uses Claude Code"; in Korean the name takes 를, or 을 after Grok, whose reading ends in a consonant, `hideAiFirstRunKey` in `web/src/agentOnboardingRules.ts`), read from `status.background_ai.providers[].state`, which the step asks the core to probe while it is open; with no such agent the line is absent, and it follows each flip of a tile (PRD settings-cleanup D-18, B45, B46).
+Under `Continue`, one line names the agent Hide AI will use: the first agent in that fixed order that is switched on in the step and signed in (`firstRunAgent` in `web/src/hideAi.ts`, "Hide AI uses Claude Code", `Hide AI가 쓰는 에이전트: Claude Code`), read from `status.background_ai.providers[].state`, which the step asks the core to probe while it is open; with no such agent the line is absent, and it follows each flip of a tile (PRD settings-cleanup D-18, B45, B46).
 An agent installed later appears in these rows off and is never turned on by a pass.
 
 ### Conductor
@@ -2696,16 +2696,16 @@ Every value is the core's `status.background_ai`; the tab sends `ai_settings` ev
 ### Settings > Mobile
 
 Mobile is a page of Settings' machine group, after Hide AI; Tailscale runs on the core's machine, so a failing step and the serve entry line name that machine (`Tailscale isn't installed on Mac mini` on a window of another machine, `This Mac` on its own).
-Its switch, 폰에서 hide 열기, is off at first, and its one-line description says it works over Tailscale and only inside the tailnet (PRD settings-cleanup B59).
+Its switch, 폰에서 Hide 열기, is off at first, and its one-line description says it works over Tailscale and only inside the tailnet (PRD settings-cleanup B59).
 While the switch is off hide runs no Tailscale command.
 Turned on, the three Mac checks (Tailscale installed, logged in, MagicDNS and HTTPS on for the tailnet) fold into one line, `Tailscale is ready`, once they all pass (B57); a failing step shows only itself with a warning and its action (a download link, "Tailscale 앱에서 로그인", or the admin console's DNS page with a link) and nothing for the steps that passed or still wait.
 The phone side, Tailscale on the phone with the same account, is guidance hide cannot check and is part of the `폰 연결하기` row's description.
 The page rechecks every three seconds while it is open, so logging in or turning HTTPS on continues without reopening it.
 Once every Mac step passes and hide has confirmed its serve entry, the `폰 연결하기` row offers `QR 보기`; opening the page makes no code and voids none (B58).
-Pressing it shows the QR, 폰 카메라로 찍으세요, the ts.net address and the code's m:ss countdown, and the row's button becomes `QR 숨기기`, which takes the code out again; a pairing phone spends the code and the QR goes, so the next phone needs `QR 보기` again.
+Pressing it shows the QR, 폰 카메라로 스캔하세요, the ts.net address and the code's m:ss countdown, and the row's button becomes `QR 숨기기`, which takes the code out again; a pairing phone spends the code and the QR goes, so the next phone needs `QR 보기` again.
 An HTTPS entry hide did not make shows its target in one line and no pairing row; a failed serve command shows the failed step and its message in one line, and so does a Funnel that would publish the address, which also disconnects every phone when it is turned on later.
 A removal that fails when the switch goes off keeps that line under the switch until hide finishes it.
-The phones group is titled 연결된 폰 · n / 4; each row shows the phone's name, when it was last seen, whether notifications are on or off, the days left before the seven-day revoke once it has been away a day, and 해지, which closes that phone at once.
+The phones group is titled 연결된 폰 · n / 4; each row shows the phone's name, when it was last seen, whether notifications are on or off, the days left before the seven-day revoke once it has been away a day, and 연결 해제, which closes that phone at once.
 The push to the phone is on Settings > Notifications, not on this page (PRD settings-left-nav B7): one dropdown of 끔 (the default), 앱이 닫혀 있을 때만 and 항상, with the description of the chosen mode only under it, and the choice survives a restart (B59).
 
 ### The phone app
@@ -2727,7 +2727,7 @@ The target names the core's machine as its system does in the phone's language (
 The desktop does not follow a phone start: the visible tab and the keyboard stay where the operator has them, and the new agent only appears in the sidebar and the lists like any other.
 Pressing 시작 again for the same text and choice after a lost answer sends the same request id, and hided starts one agent for it.
 While hided is out of reach the sheet shows the unreachable line and keeps what was written; a refused start shows its reason inside the sheet and keeps the text, which is cleared only by a start that went.
-When hided is out of reach the last list stays dimmed under "연결 안 됨 · 맥의 hide가 꺼져 있거나 폰의 Tailscale이 꺼져 있어요. 다시 시도 중", the app retries on its own, and it shows the same line when opened without a network.
+When hided is out of reach the last list stays dimmed under "연결 안 됨 · Mac의 Hide가 꺼져 있거나 폰의 Tailscale이 꺼져 있어요. 다시 시도 중", the app retries on its own, and it shows the same line when opened without a network.
 A Mac that went to sleep shows it too: the phone asks hided when it has heard nothing for 20 seconds and shows the line 10 seconds after an unanswered ask, and on returning to the phone it asks at once, so the green dot never outlasts a hided that has stopped answering by more than 30 seconds.
 A row opens its detail: ← 목록, the elapsed time and the row's head, with 대화 | 터미널 between ← 목록 and the elapsed time when the agent has a conversation to show, a Claude Code, Codex, Grok, Pi, omp, Cursor or OpenCode agent on this Mac whose session Herdr reports.
 대화 is the agent's own conversation, its newest 30 messages with the newest at the bottom: the operator's messages as ❯ blocks on a grey ground, the agent's Markdown drawn at full width (headings, emphasis, lists, tables, and code wrapped without highlighting, a link or an image as its text), an interruption as 중단됨, and the time after each turn; pulling to the top loads 30 older messages at a time up to the first, and at 300 it says 최근 300개까지 볼 수 있어요.
@@ -2748,7 +2748,7 @@ With push on, the list offers 알림 켜기; a Safari tab without push is told t
 A notification's title is the root's row title and, with a sentence, its body is `<translated row status> · <exact sentence> · <project>`; without a sentence it is the row's status word with the project (`승인 · <project>` in Korean), and a payload with no status code says the section (내 차례 or 읽을 것) in the phone's language.
 The sentence is the core's chosen row detail, untranslated, and may appear in lock-screen previews according to the phone's setting (operator-approved update 2026-10-13); tapping the notice opens that agent's detail.
 See [With and without Hide AI](status-model.md#with-and-without-hide-ai) for native question and plain-text question behavior, and cached-worker compatibility.
-A revoked phone shows "이 폰의 연결이 해지됐어요. 맥에서 QR을 다시 여세요." and drops its own push subscription.
+A revoked phone shows "이 폰의 연결이 해제됐어요. Mac에서 QR을 다시 여세요." and drops its own push subscription.
 The app follows the phone's light or dark setting, draws text a quarter larger than the desktop, and keeps every control at least 44 points tall.
 
 ## Keyboard shortcuts per system
