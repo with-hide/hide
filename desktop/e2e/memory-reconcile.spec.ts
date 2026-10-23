@@ -38,7 +38,7 @@ test("Memory compares sources, limits a batch and groups a confirmed PR", async 
     await expect(page.locator('[data-workspace-screen]')).toBeVisible();
     await expect(page.locator('[data-connection]')).toHaveCount(0);
     await showProjectMemory(page);
-    const tab = page.locator('[data-lane="project"]');
+    const tab = page.locator('[data-lane="memory"]');
     await expect(tab.locator('[data-memory="on"]')).toBeVisible();
     await expect(tab.locator('[data-memory-pr-group="72"]')).toContainText("m9 · m10");
     await expect(tab).toContainText("Personal");

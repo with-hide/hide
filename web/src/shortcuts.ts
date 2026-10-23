@@ -171,19 +171,21 @@ export type AreaCommandId = (typeof AREA_COMMANDS)[number];
  * D-19, D-29): the lane opens on that tool, or closes when it already shows
  * it, as pressing the icon does. The checkout's tools take a letter of their
  * name (⇧⌘E Explorer, ⇧⌘G Changes), Alt+Shift with the same letter elsewhere
- * (PRD lane-two-columns D-08); the Project tool has no chord until one is
- * bound, because ⇧⌘L opens its 기억 tab (`open_project_memory`) and ⇧⌘R the
- * sidebar's PR list (`open_sidebar_prs`, B25).
+ * (PRD lane-two-columns D-08); the Project and Memory tools have no chord
+ * until one is bound, because ⇧⌘L opens Memory without closing it
+ * (`open_project_memory`) and ⇧⌘R the sidebar's PR list (`open_sidebar_prs`, B25).
  */
 export type LaneToolCommandId = `toggle_lane_${Tool}`;
 export const LANE_TOOL_COMMANDS: readonly LaneToolCommandId[] = TOOLS.map((tool): LaneToolCommandId => `toggle_lane_${tool}`);
 const LANE_TOOL_TITLES: Record<LaneToolCommandId, string> = {
   toggle_lane_project: "Toggle Project tool",
+  toggle_lane_memory: "Toggle Memory tool",
   toggle_lane_explorer: "Toggle Explorer tool",
   toggle_lane_changes: "Toggle Changes tool",
 };
 const LANE_TOOL_CHORDS: Record<LaneToolCommandId, { browser: Chord | null; electron: Chord | null; moved: boolean }> = {
   toggle_lane_project: { browser: null, electron: null, moved: false },
+  toggle_lane_memory: { browser: null, electron: null, moved: false },
   toggle_lane_explorer: { browser: { code: "KeyE", meta: true, shift: true }, electron: { code: "KeyE", meta: true, shift: true }, moved: false },
   toggle_lane_changes: { browser: { code: "KeyG", meta: true, shift: true }, electron: { code: "KeyG", meta: true, shift: true }, moved: false },
 };
@@ -698,13 +700,13 @@ export type EffectiveRegistry = { registry: readonly Command[]; diagnostic: stri
 const RETIRED_KEYS: readonly string[] = ["toggle_sidebar_view", "project_home", "sidebar_agents", "toggle_lane_work", "toggle_file_tree", "toggle_lane_files"];
 
 /**
- * Stored commands read as the command that took their place. The Memory and
- * PRs tools became the Project tool's 기억 tab and the sidebar's PR list, and
- * a chord the operator bound to either keeps doing what it did, now there
- * (PRD lane-two-columns B25). The new name, once stored, wins over the old.
+ * Stored commands read as the command that took their place. The PRs tool
+ * became the sidebar's PR list, and a chord the operator bound to it keeps
+ * doing what it did, now there (PRD lane-two-columns B25). The new name, once
+ * stored, wins over the old. `toggle_lane_memory` is a live command again,
+ * so a chord stored under it toggles the Memory tool as it did before.
  */
 const RENAMED_KEYS: Readonly<Record<string, CommandId>> = {
-  toggle_lane_memory: "open_project_memory",
   toggle_lane_prs: "open_sidebar_prs",
 };
 

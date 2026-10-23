@@ -3553,7 +3553,7 @@ fn an_exited_panes_root_directory_does_not_become_a_checkout() {
 
     let spaces = Runtime::session_spaces(
         &payload,
-        &workspace::paths_here(Runtime::session_cwds(&payload)),
+        &workspace::paths_here(Runtime::session_paths(&payload)),
     );
 
     assert_eq!(spaces.len(), 1);

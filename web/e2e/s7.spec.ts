@@ -1480,9 +1480,9 @@ test("the rail, tools, kind marks and an open while the lane is closed keep work
     const workspace = page.locator("[data-workspace-screen]");
     const laneSent = () => stack.events.filter((event) => event.kind === "workspace_view").length;
 
-    // The rail carries the documents' button and the three tools, and the
+    // The rail carries the documents' button and the four tools, and the
     // top row none of them (PRD right-lane B1; lane-two-columns B2).
-    await expect(page.locator("[data-tool-rail] [data-lane-tool]")).toHaveCount(4);
+    await expect(page.locator("[data-tool-rail] [data-lane-tool]")).toHaveCount(5);
     await expect(page.locator("[data-workspace-toolbar] [data-lane-tool]")).toHaveCount(0);
 
     // The first file opens one View area beside the Explorer (B2, B12).

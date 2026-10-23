@@ -501,7 +501,7 @@ Hide itself is a code-owned identity, `hide:<role>` of kind `hide`: `hide:memory
 A spawn is Hide AI's own when it is a handoff whose origin is that identity (`coordination::started::hide_started`): a pane agent's handoff has a pane's identity as its origin, so neither counts, and no branch or worktree name ever decides it.
 Only that identity may give a spawn a `task` (`SpawnTask`: a `kind` code such as `memory_promote` and a `target` such as the card `m72`, the codes the screen words), on a handoff; any other caller that sets one is refused `task_reserved`, and the task is part of the intent, so the same intent with another task is an `intent_conflict`.
 A receipt from before the task existed has none, and its agent and checkout are still Hide AI's, which the screen names `Hide AI` alone.
-The kind is a closed set in code (`TaskKind`), and each known kind names its home, the screen that shows its work (`TaskKind::home`, today `memory_promote` to the Memory tab); a new kind cannot be added without naming one.
+The kind is a closed set in code (`TaskKind`), and each known kind names its home, the screen that shows its work (`TaskKind::home`, today `memory_promote` to the Memory tool); a new kind cannot be added without naming one.
 A kind this build does not know loads from the ledger as it was written, so a record a newer build wrote never fails the load or loses the rest of the ledger, and its agent stays an operator's row.
 A new spawn of a kind with no home is refused `task_kind_unknown`, and the first time an agent of such a kind is seen the diagnostic log records `hide_ai.task_kind_unknown` once.
 

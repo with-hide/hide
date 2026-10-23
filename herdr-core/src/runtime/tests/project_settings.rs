@@ -580,7 +580,7 @@ fn project_memory_navigation_scopes_tools_without_a_front_workspace() {
     runtime.dispatch_json(&serde_json::to_vec(&serde_json::json!({"schema_version": SCHEMA_VERSION, "kind": "project_memory_navigate", "payload": {"device_id": crate::node::TEST_NODE, "workspace_id": "visible-id", "checkout_id": checkout.id, "request_id": "memory"}})).unwrap());
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(view.path, checkout.path);
-    assert_eq!(view.tool, Some(crate::workspace_views::Tool::Project));
+    assert_eq!(view.tool, Some(crate::workspace_views::Tool::Memory));
     assert_eq!(
         runtime
             .snapshot
@@ -622,7 +622,7 @@ fn delayed_memory_choice_changes_only_its_checkout_and_a_refusal_changes_neither
     runtime.sync_workspace_view();
     assert_ne!(
         runtime.snapshot.workspace_view.as_ref().unwrap().tool,
-        Some(crate::workspace_views::Tool::Project)
+        Some(crate::workspace_views::Tool::Memory)
     );
     runtime.focus_checkout("visible-id", &first.id);
     runtime.sync_workspace_view();
@@ -633,7 +633,7 @@ fn delayed_memory_choice_changes_only_its_checkout_and_a_refusal_changes_neither
     runtime.sync_workspace_view();
     assert_eq!(
         runtime.snapshot.workspace_view.as_ref().unwrap().tool,
-        Some(crate::workspace_views::Tool::Project)
+        Some(crate::workspace_views::Tool::Memory)
     );
     runtime.focus_checkout("visible-id", &first.id);
     runtime.sync_workspace_view();

@@ -16,6 +16,9 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # The preview watch below opens an issue; the contribution gate lets
+  # github-actions[bot] through.
+  issues: write
 
 concurrency:
   group: herdr-pin-update
@@ -39,6 +42,8 @@ jobs:
           latest=${latest_tag#v}
           pinned_tag=$(jq -er .tag contracts/herdr-bundle.json)
           pinned=$(jq -er .version contracts/herdr-bundle.json)
+          pinned_protocol=$(jq -er .protocol contracts/herdr-api.schema.json)
+          echo "pinned_protocol=$pinned_protocol" >> "$GITHUB_OUTPUT"
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
           echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
           echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
@@ -147,7 +152,26 @@ jobs:
           git add contracts/herdr-bundle.json contracts/herdr-api.schema.json "${documents[@]}"
           git commit -m "build: move the bundled Herdr pin to v${latest}"
           git push --force --set-upstream origin "$branch"
+          # Hide speaks exactly the pin's protocol (docs/HERDR_VERSIONS.md), so
+          # a release on a new one holds the screen of every operator who
+          # updates Herdr before Hide ships this pin. That bump says so in its
+          # title, label and first line, and is merged and released promptly.
+          from_protocol="${{ steps.upstream.outputs.pinned_protocol }}"
+          to_protocol=$(jq -er .protocol "$RUNNER_TEMP/bump.json")
+          title="build: move the bundled Herdr pin to v${latest}"
+          label_args=()
+          protocol_note=""
+          if [ "$to_protocol" != "$from_protocol" ]; then
+            title="${title} on Herdr protocol ${to_protocol}"
+            gh label create herdr-protocol --color B60205 \
+              --description "Moves Hide to a new Herdr protocol; release it promptly" 2>/dev/null || true
+            label_args=(--label herdr-protocol)
+            protocol_note="**This release moves Herdr's protocol from ${from_protocol} to ${to_protocol}.** An operator who updates Herdr before Hide ships this pin sees Hide's held screen until then, so merge and release this promptly (docs/HERDR_VERSIONS.md, When Herdr releases)."
+            echo "herdr.pin.protocol_change from=${from_protocol} to=${to_protocol}" >&2
+          fi
           cat > "$RUNNER_TEMP/pr-body.md" <<BODY
+          ${protocol_note}
+
           Moves the pinned Herdr runtime from v${pinned} to v${latest}.
 
           The asset was downloaded, its reported version and SHA-256 verified, the
@@ -174,6 +198,61 @@ jobs:
           v${latest} server and exercise the tab, scroll and reorder paths.
           BODY
           gh pr create \
-            --title "build: move the bundled Herdr pin to v${latest}" \
+            --title "$title" \
+            "${label_args[@]}" \
             --body-file "$RUNNER_TEMP/pr-body.md"
           echo "Opened a bump proposal for v${latest}." >> "$GITHUB_STEP_SUMMARY"
+
+  # A protocol change can reach a preview before a stable release, so the
+  # newest preview's protocol is read daily: one that differs from the pin's opens one issue, which is the
+  # warning to prepare the bump before operators can update into the held
+  # screen. Nothing is pinned or proposed here.
+  watch-preview:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the newest preview's protocol
+        id: preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh api repos/herdrdev/herdr/releases --jq '[.[] | select(.prerelease)][0].tag_name')
+          pinned_protocol=$(jq -er .protocol contracts/herdr-api.schema.json)
+          # The dry run downloads and verifies the assets and reads the protocol
+          # the binary answers in its schema; it writes nothing.
+          protocol=$(zsh scripts/bump-herdr.sh --repo herdrdev/herdr "$tag" --dry-run | jq -er .protocol)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "protocol=$protocol" >> "$GITHUB_OUTPUT"
+          echo "pinned_protocol=$pinned_protocol" >> "$GITHUB_OUTPUT"
+          echo "herdr.preview.protocol tag=$tag protocol=$protocol pinned_protocol=$pinned_protocol" >&2
+          echo "Newest Herdr preview $tag speaks protocol $protocol; the pin speaks $pinned_protocol." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open one issue for a preview on another protocol
+        if: steps.preview.outputs.protocol != steps.preview.outputs.pinned_protocol
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          protocol="${{ steps.preview.outputs.protocol }}"
+          pinned_protocol="${{ steps.preview.outputs.pinned_protocol }}"
+          tag="${{ steps.preview.outputs.tag }}"
+          title="Herdr previews speak protocol ${protocol}; the pin speaks ${pinned_protocol}"
+          # One issue per protocol: the daily run finds the open one by title
+          # rather than opening another.
+          open=$(gh issue list --state open --search "in:title \"${title}\"" --json title --jq "[.[] | select(.title == \"${title}\")] | length")
+          if [ "$open" != "0" ]; then
+            echo "An issue for preview protocol ${protocol} is already open." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          cat > "$RUNNER_TEMP/issue.md" <<BODY
+          Herdr's newest preview, [${tag}](https://github.com/herdrdev/herdr/releases/tag/${tag}), answers protocol ${protocol} in \`herdr api schema --json\`; Hide's pin speaks ${pinned_protocol}.
+
+          Hide speaks exactly the pin's protocol, so once a stable Herdr ships protocol ${protocol}, every operator who updates Herdr before Hide sees the held screen until Hide ships that pin (docs/HERDR_VERSIONS.md).
+
+          To prepare: try the preview with \`zsh scripts/bump-herdr.sh ${tag}\` on a branch and run the suites, so the stable bump the pin update workflow proposes can merge and release the same day.
+          Close this once the pin speaks protocol ${protocol}.
+          BODY
+          gh issue create --title "$title" --body-file "$RUNNER_TEMP/issue.md"
+          echo "Opened an issue for preview protocol ${protocol}." >> "$GITHUB_STEP_SUMMARY"

@@ -27,7 +27,7 @@ import { SettingsGate } from "./SettingsSheet";
 import { StartPanelHost } from "./StartPanel";
 import { GroupNameDialog } from "./AgentGroupControls";
 import { InlineStartHost } from "./AgentTabStart";
-import { FONT_SIZE_BASE, usableAccent, usableFontSize } from "./settings";
+import { FONT_SIZE_BASE, usableAccent, usableFontSize, usableTerminalFontSize } from "./settings";
 import { ShortcutSheet } from "./ShortcutSheet";
 import { Sidebar } from "./sidebar";
 import { TitleRow } from "./TitleRow";
@@ -40,7 +40,7 @@ import { useShellStore } from "./store";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { WorkspaceDialogs, WorkspaceNotices } from "./WorkspaceDialogs";
 import { applyEditorTheme } from "./editor/theme";
-import { applyTerminalTheme, attachedPaneIds, feedChunks, liveTerminalIds, resetAllTerminals, retainTerminals, terminalFor, terminalSelectionText } from "./terminals";
+import { applyTerminalFontSize, applyTerminalTheme, attachedPaneIds, feedChunks, liveTerminalIds, resetAllTerminals, retainTerminals, terminalFor, terminalSelectionText } from "./terminals";
 import { PALETTE_HIDE_CLASS, primaryValue, readColorTheme, readTheme, resolveTheme } from "./theme";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { useUsageWindowHint } from "./components/usage";
@@ -167,6 +167,8 @@ export function App() {
     if (fontSize) root.setProperty("--interface-scale", String(fontSize / FONT_SIZE_BASE));
     else root.removeProperty("--interface-scale");
   }, [accentHex, fontSize]);
+  const terminalFontSize = useShellStore((s) => usableTerminalFontSize(s.rest?.ui_state?.terminal_font_size));
+  useEffect(() => applyTerminalFontSize(terminalFontSize), [terminalFontSize]);
 
   // The theme is the core's too (D-14, D-15): System follows the OS
   // appearance while it changes, and the terminals are re-colored in place.

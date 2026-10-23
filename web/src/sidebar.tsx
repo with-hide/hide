@@ -129,11 +129,8 @@ export function Sidebar({ actions }: { actions: Actions }) {
     // alike (`useSidebarColumns`), never the nav's own inline width, which the
     // e2e overflow check sets to try other widths (PRD sidebar-typography D-13).
     <div className="relative h-full w-(--sidebar-total) shrink-0" style={columns} data-sidebar-box="true">
-      {/* The sidebar keeps its own text sizes whatever Appearance's interface
-          font is (D-05): `interface-scale-exempt` is the generated rule in
-          tokens.css that declares the sizes again at scale 1. */}
       <nav
-        className={cn("interface-scale-exempt absolute inset-y-0 left-0 flex w-(--sidebar-total) bg-sidebar text-foreground", preview !== null && "z-30")}
+        className={cn("absolute inset-y-0 left-0 flex w-(--sidebar-total) bg-sidebar text-foreground", preview !== null && "z-30")}
         style={
           preview === null
             ? undefined

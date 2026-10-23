@@ -27,6 +27,7 @@ import {
   socketProblem as socketProblemIn,
   usableAccent,
   usableFontSize,
+  usableTerminalFontSize,
   unstoredDeviceDrafts,
 } from "./settings";
 import { redact } from "./redact";
@@ -143,6 +144,9 @@ describe("settings rules", () => {
     expect(usableFontSize(10)).toBeNull();
     expect(usableFontSize(18)).toBeNull();
     expect(usableFontSize("13")).toBeNull();
+    expect(usableTerminalFontSize(14)).toBe(14);
+    expect(usableTerminalFontSize(9)).toBeNull();
+    expect(usableTerminalFontSize(25)).toBeNull();
   });
 
   it("names a device after its alias without colliding", () => {

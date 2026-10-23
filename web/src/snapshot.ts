@@ -2443,6 +2443,8 @@ export type SnapshotRest = {
     /** The screens whose one-line introduction was shown (B43). */
     screen_intros_seen?: ScreenIntro[];
     font_size?: number;
+    /** Every terminal's base size in pixels, 10 to 24, that a pane's own text scale multiplies. */
+    terminal_font_size?: number;
     /** The sidebar's width in CSS pixels, 220 to 440; the core refuses anything else (PRD sidebar-typography D-09). */
     sidebar_width?: number;
     /** The desktop app's macOS pane chords, in the removed native app's format. */

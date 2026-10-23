@@ -87,7 +87,7 @@ export async function screenshot(page: Page, name: string): Promise<unknown> {
   return page.screenshot({ path: path.join(dir, `${name}.png`) });
 }
 
-export type LaneTool = "project" | "explorer" | "changes";
+export type LaneTool = "project" | "memory" | "explorer" | "changes";
 
 /**
  * Shows one tool in the lane's tool column: its rail icon opens the column
@@ -102,12 +102,9 @@ export async function showTool(page: Page, tool: LaneTool): Promise<void> {
   await expect(page.locator(`aside[data-lane="${tool}"]`)).toBeVisible();
 }
 
-/** Shows the Project tool on its 기억 tab, the front checkout's Project's Memory (PRD lane-two-columns B26, B40). */
+/** Shows the Memory tool, the front checkout's Project's Memory. */
 export async function showProjectMemory(page: Page): Promise<void> {
-  await showTool(page, "project");
-  const tab = page.locator('aside[data-lane="project"] [data-project-tab="memory"]');
-  if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
-  await expect(page.locator('aside[data-lane="project"] [data-project-panel="memory"]')).toBeVisible();
+  await showTool(page, "memory");
 }
 
 /** Turns the sidebar to its PR list (PRD lane-two-columns B41). */

@@ -8,6 +8,7 @@
 //! registration therefore cannot remove a checkout or terminate a remote
 //! process.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -191,14 +192,26 @@ pub fn inspect_temporary(path: &str, device_id: &str, paths: &PathIndex) -> Work
 /// One Herdr workspace and the working directories its panes occupy.
 ///
 /// Herdr owns the workspace axis, so the navigator mirrors it rather than
-/// inventing a second one. Herdr reports no path for a workspace, so the
-/// checkouts under it come from where its panes actually are.
+/// inventing a second one. The checkouts under it come from where its panes
+/// actually are; the checkout Herdr attached it to only places a pane whose
+/// folder the node can no longer read.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SessionSpace {
     pub id: String,
     pub label: String,
     pub cwds: Vec<String>,
     pub purpose: Option<String>,
+    pub checkout: Option<HerdrCheckout>,
+}
+
+/// The checkout Herdr attached a workspace to (`workspace.worktree`) and the
+/// repository Herdr reports it in, both in comparison form. Herdr recorded
+/// it when the checkout was opened, so it still names the repository of a
+/// checkout whose folder has since been removed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HerdrCheckout {
+    pub path: String,
+    pub repository: String,
 }
 
 /// The effective live purpose for one checkout.
@@ -499,6 +512,12 @@ impl PathIndex {
         }
         for space in spaces {
             paths.extend(space.cwds.iter().cloned());
+            paths.extend(
+                space
+                    .checkout
+                    .iter()
+                    .flat_map(|checkout| [checkout.path.clone(), checkout.repository.clone()]),
+            );
         }
         for project in &worktrees.projects {
             paths.insert(project.root_path.clone());
@@ -526,9 +545,14 @@ pub fn build_catalog(
     // two Herdr workspaces in one repository are one project with both Herdr
     // ids attached. Herdr closing a workspace with its last pane therefore
     // never changes which row the user is looking at.
+    let places = Places {
+        paths,
+        spaces,
+        worktrees,
+    };
     let mut result: Vec<WorkspaceSnapshot> = Vec::new();
     for space in spaces {
-        for projected in inspect_space(node, space, paths) {
+        for projected in inspect_space(node, space, &places) {
             match result
                 .iter_mut()
                 .find(|existing| existing.id == projected.id)
@@ -546,11 +570,17 @@ pub fn build_catalog(
     // A registration on another device names a path on that machine; this
     // machine's filesystem says nothing about it, so it is never inspected
     // here (PRD S5.5 B7). That device's catalog is its helper's to answer.
-    for registration in registrations
+    // A repository's own registration names its project before a
+    // registration of one of its checkouts could adopt the row.
+    let mut local = registrations
         .iter()
         .filter(|registration| *node == registration.device_id)
-    {
-        let comparison = project_root(&registration.path, paths);
+        .collect::<Vec<_>>();
+    local.sort_by_key(|registration| {
+        places.project_root(&registration.path) != paths.comparison(&registration.path)
+    });
+    for registration in local {
+        let comparison = places.project_root(&registration.path);
         let occupied = result
             .iter()
             .position(|workspace| comparison_by_names(Path::new(&workspace.path)) == comparison);
@@ -594,12 +624,70 @@ pub(crate) fn apply_primary_checkout(project: &mut WorkspaceSnapshot, primary_id
     }
 }
 
-/// The directory that identifies a project, in comparison form: the
-/// repository's main worktree for a git checkout, the folder itself otherwise.
-fn project_root(path: &str, paths: &PathIndex) -> String {
-    match paths.place(path) {
-        Some(place) => place.main_root.clone(),
-        None => paths.comparison(path),
+/// Which repository each path of one catalog belongs to, so a pane's
+/// directory and a registration reach the same project by the same rule.
+///
+/// The node's answer comes first. A path it cannot place, such as a checkout
+/// whose folder was removed, is placed by the deepest checkout holding it
+/// that Git's worktree list or Herdr's attached checkout still names; only a
+/// path none of them places is a folder of its own. Nothing is placed by the
+/// shape of its name.
+struct Places<'a> {
+    paths: &'a PathIndex,
+    spaces: &'a [SessionSpace],
+    worktrees: &'a WorktreeCatalogSnapshot,
+}
+
+impl Places<'_> {
+    /// The repository `path` is in, and the working tree holding it.
+    fn place(&self, path: &str) -> Option<Cow<'_, RepositoryPlace>> {
+        if let Some(place) = self.paths.place(path) {
+            return Some(Cow::Borrowed(place));
+        }
+        let path = self.paths.comparison(path);
+        let listed = self.worktrees.projects.iter().flat_map(|project| {
+            project.worktrees.iter().map(|worktree| RepositoryPlace {
+                root: self.paths.comparison(&worktree.path),
+                main_root: self.paths.comparison(&project.root_path),
+                branch: worktree.branch.clone(),
+                head_oid: worktree.head_sha.clone(),
+            })
+        });
+        let attached = self
+            .spaces
+            .iter()
+            .filter_map(|space| space.checkout.as_ref())
+            .map(|checkout| RepositoryPlace {
+                root: checkout.path.clone(),
+                main_root: self
+                    .paths
+                    .place(&checkout.repository)
+                    .map(|place| place.main_root.clone())
+                    .unwrap_or_else(|| checkout.repository.clone()),
+                branch: None,
+                head_oid: None,
+            });
+        listed
+            .chain(attached)
+            .filter(|place| Path::new(&path).starts_with(&place.root))
+            .fold(
+                None,
+                |deepest: Option<RepositoryPlace>, place| match deepest {
+                    Some(deepest) if deepest.root.len() >= place.root.len() => Some(deepest),
+                    _ => Some(place),
+                },
+            )
+            .map(Cow::Owned)
+    }
+
+    /// The directory that identifies `path`'s project, in comparison form:
+    /// the repository's main worktree for a git checkout, the folder itself
+    /// otherwise.
+    fn project_root(&self, path: &str) -> String {
+        match self.place(path) {
+            Some(place) => place.main_root.clone(),
+            None => self.paths.comparison(path),
+        }
     }
 }
 
@@ -666,13 +754,20 @@ fn adopt_registration(workspace: &mut WorkspaceSnapshot, registration: &Workspac
 /// without git. Every other worktree of the repository is added by
 /// [`apply_worktrees`] from the worktree reader's answer, which is what makes
 /// a worktree with no terminal a row the operator can select and start one in.
-fn inspect_space(node: &NodeId, space: &SessionSpace, paths: &PathIndex) -> Vec<WorkspaceSnapshot> {
+fn inspect_space(node: &NodeId, space: &SessionSpace, places: &Places) -> Vec<WorkspaceSnapshot> {
+    let paths = places.paths;
     let mut projects: Vec<WorkspaceSnapshot> = Vec::new();
     for cwd in &space.cwds {
         // One answer per directory gives root, project and branch, read by
         // the node from Git's files.
-        let repository = paths.place(cwd);
-        let root_comparison = paths.root(cwd);
+        let repository = places.place(cwd);
+        let repository = repository.as_deref();
+        // A checkout only Git's list or Herdr's record places is one the
+        // node could not read; it says whether the folder is gone.
+        let recorded_only = repository.is_some() && paths.place(cwd).is_none();
+        let root_comparison = repository
+            .map(|place| place.root.clone())
+            .unwrap_or_else(|| paths.comparison(cwd));
         let project_comparison = repository
             .map(|place| place.main_root.clone())
             .unwrap_or_else(|| root_comparison.clone());
@@ -740,7 +835,7 @@ fn inspect_space(node: &NodeId, space: &SessionSpace, paths: &PathIndex) -> Vec<
             &root,
             &label,
             (is_worktree, false),
-            true,
+            !(recorded_only && paths.gone(&root_comparison)),
             repository
                 .map(|place| git_facts(&place.main_root, branch, place.head_oid.clone(), paths)),
         ));
@@ -1304,6 +1399,7 @@ mod tests {
             .expect("registration");
         let spaces = vec![
             SessionSpace {
+                checkout: None,
                 id: "w1".to_owned(),
                 label: "one".to_owned(),
                 purpose: None,
@@ -1313,6 +1409,7 @@ mod tests {
                 ],
             },
             SessionSpace {
+                checkout: None,
                 id: "w2".to_owned(),
                 label: "two".to_owned(),
                 purpose: None,
@@ -1427,6 +1524,7 @@ mod tests {
         let occupied = catalog(
             &[],
             &[SessionSpace {
+                checkout: None,
                 id: "w1".to_owned(),
                 label: "Demo".to_owned(),
                 purpose: None,
@@ -1471,6 +1569,7 @@ mod tests {
             registration(root.to_str().unwrap(), "Registered", crate::node::TEST_NODE)
                 .expect("registration");
         let spaces = [SessionSpace {
+            checkout: None,
             id: "w1".to_owned(),
             label: "Registered".to_owned(),
             purpose: None,
@@ -1500,6 +1599,7 @@ mod tests {
         let registration = registration(root.to_str().unwrap(), "Identity", crate::node::TEST_NODE)
             .expect("registration");
         let space = SessionSpace {
+            checkout: None,
             id: "w7".to_owned(),
             label: "hide main".to_owned(),
             purpose: None,
@@ -1527,6 +1627,7 @@ mod tests {
         let (_first_scratch, first) = temp_dir("first-repo");
         let (_second_scratch, second) = temp_dir("second-repo");
         let space = SessionSpace {
+            checkout: None,
             id: "w9".to_owned(),
             label: "hide main".to_owned(),
             purpose: None,
@@ -1564,6 +1665,7 @@ mod tests {
     fn an_unregistered_space_is_keyed_by_its_repository_path() {
         let (_scratch, root) = temp_dir("unregistered-space");
         let space = SessionSpace {
+            checkout: None,
             id: "w8".to_owned(),
             label: "scratch".to_owned(),
             purpose: None,
@@ -1585,12 +1687,14 @@ mod tests {
         let cwd = root.to_string_lossy().into_owned();
         let spaces = [
             SessionSpace {
+                checkout: None,
                 id: "w1".to_owned(),
                 label: "first".to_owned(),
                 purpose: Some("Earlier purpose".to_owned()),
                 cwds: vec![cwd.clone()],
             },
             SessionSpace {
+                checkout: None,
                 id: "w2".to_owned(),
                 label: "second".to_owned(),
                 purpose: None,
@@ -1621,18 +1725,21 @@ mod tests {
     fn purpose_authority_is_the_last_project_occupant_not_a_nested_repository() {
         let spaces = vec![
             SessionSpace {
+                checkout: None,
                 id: "outer-first".to_owned(),
                 label: "Outer first".to_owned(),
                 purpose: Some("First".to_owned()),
                 cwds: vec!["/fixture/outer/worktree".to_owned()],
             },
             SessionSpace {
+                checkout: None,
                 id: "nested".to_owned(),
                 label: "Nested".to_owned(),
                 purpose: Some("Wrong repository".to_owned()),
                 cwds: vec!["/fixture/outer/worktree/nested".to_owned()],
             },
             SessionSpace {
+                checkout: None,
                 id: "outer-last".to_owned(),
                 label: "Outer last".to_owned(),
                 purpose: Some("Last".to_owned()),
@@ -1691,12 +1798,14 @@ mod tests {
         let paths = paths_here([alias.clone(), dotted.clone()]);
         let spaces = vec![
             SessionSpace {
+                checkout: None,
                 id: "symlink".to_owned(),
                 label: "Symlink".to_owned(),
                 purpose: Some("Earlier".to_owned()),
                 cwds: vec![paths.comparison(&alias)],
             },
             SessionSpace {
+                checkout: None,
                 id: "dot-segment".to_owned(),
                 label: "Dot segment".to_owned(),
                 purpose: None,
@@ -1805,6 +1914,7 @@ mod tests {
         let catalog = catalog(
             &[registration],
             &[SessionSpace {
+                checkout: None,
                 id: "w1".to_owned(),
                 label: "Project".to_owned(),
                 purpose: None,
@@ -1904,6 +2014,171 @@ mod tests {
 
         assert_eq!(before, unrelated);
         assert_eq!(before[0].checkouts.len(), 1);
+    }
+
+    /// What a node says when each of `repositories` is the main worktree of
+    /// a repository and each of `gone` is a folder it found nothing at.
+    fn answered(repositories: &[&str], gone: &[&str]) -> PathIndex {
+        let fact = |path: &str, repository: bool| {
+            let fact = PathFact {
+                comparison: path.into(),
+                exists: repository,
+                project: None,
+                project_unread: None,
+                repository: repository.then(|| RepositoryPlace {
+                    root: path.into(),
+                    main_root: path.into(),
+                    branch: Some("main".into()),
+                    head_oid: None,
+                }),
+            };
+            (path.to_owned(), fact)
+        };
+        PathIndex::new(PathFacts {
+            paths: repositories
+                .iter()
+                .map(|path| fact(path, true))
+                .chain(gone.iter().map(|path| fact(path, false)))
+                .collect(),
+            ..PathFacts::default()
+        })
+    }
+
+    /// A repository at `/repo` and a linked worktree of it whose folder was
+    /// removed while a Herdr workspace attached to it kept a pane there.
+    fn gone_checkout() -> (PathIndex, SessionSpace) {
+        let paths = answered(&["/repo"], &["/worktrees/topic", "/worktrees/topic/src"]);
+        let space = SessionSpace {
+            id: "w2".to_owned(),
+            label: "topic".to_owned(),
+            cwds: vec!["/worktrees/topic/src".to_owned()],
+            purpose: None,
+            checkout: Some(HerdrCheckout {
+                path: "/worktrees/topic".to_owned(),
+                repository: "/repo".to_owned(),
+            }),
+        };
+        (paths, space)
+    }
+
+    #[test]
+    fn a_pane_in_a_removed_worktree_is_a_missing_checkout_of_its_repository() {
+        let (paths, space) = gone_checkout();
+
+        let catalog = build_catalog(
+            &crate::node::test_node(),
+            &[],
+            &[space],
+            &no_worktrees(),
+            &paths,
+        );
+
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].path, "/repo");
+        assert!(catalog[0].is_git);
+        let rows = catalog[0]
+            .checkouts
+            .iter()
+            .map(|row| (row.path.as_str(), row.is_worktree, row.exists))
+            .collect::<Vec<_>>();
+        assert_eq!(rows, [("/worktrees/topic", true, false)]);
+    }
+
+    #[test]
+    fn a_registration_of_a_removed_worktree_adds_no_project() {
+        let (paths, space) = gone_checkout();
+        let main = space_in("w1", "/repo");
+        let registrations = [
+            registration("/worktrees/topic", "topic", crate::node::TEST_NODE).expect("worktree"),
+            registration("/repo", "Repo", crate::node::TEST_NODE).expect("repository"),
+        ];
+
+        let catalog = build_catalog(
+            &crate::node::test_node(),
+            &registrations,
+            &[main, space],
+            &no_worktrees(),
+            &paths,
+        );
+
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].id, registrations[1].id);
+        assert_eq!(catalog[0].label, "Repo");
+        let rows = catalog[0]
+            .checkouts
+            .iter()
+            .map(|row| (row.path.as_str(), row.exists))
+            .collect::<Vec<_>>();
+        assert_eq!(rows, [("/repo", true), ("/worktrees/topic", false)]);
+        assert_eq!(catalog[0].session_workspace_ids, ["w1", "w2"]);
+    }
+
+    #[test]
+    fn a_removed_worktree_git_still_lists_stays_under_its_repository() {
+        let paths = answered(&["/repo"], &["/worktrees/topic"]);
+        let worktrees = WorktreeCatalogSnapshot {
+            projects: vec![ProjectWorktreesSnapshot {
+                root_path: "/repo".to_owned(),
+                worktrees: vec![
+                    listed_worktree("/repo", "main", true),
+                    WorktreeSnapshot {
+                        missing: true,
+                        ..listed_worktree("/worktrees/topic", "topic", false)
+                    },
+                ],
+                ..ProjectWorktreesSnapshot::default()
+            }],
+        };
+
+        let catalog = build_catalog(
+            &crate::node::test_node(),
+            &[],
+            &[space_in("w2", "/worktrees/topic")],
+            &worktrees,
+            &paths,
+        );
+
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].path, "/repo");
+        let gone = catalog[0]
+            .checkouts
+            .iter()
+            .find(|row| row.path == "/worktrees/topic")
+            .expect("the removed worktree is a checkout of the repository");
+        assert!(gone.is_worktree && !gone.exists);
+        assert_eq!(gone.branch.as_deref(), Some("topic"));
+    }
+
+    #[test]
+    fn a_removed_folder_nothing_places_stays_a_folder_of_its_own() {
+        let paths = answered(&["/repo"], &["/scratch/notes"]);
+
+        let catalog = build_catalog(
+            &crate::node::test_node(),
+            &[],
+            &[space_in("w1", "/repo"), space_in("w3", "/scratch/notes")],
+            &no_worktrees(),
+            &paths,
+        );
+
+        let folder = catalog
+            .iter()
+            .find(|project| project.path == "/scratch/notes")
+            .expect("the folder is its own row");
+        assert!(!folder.is_git);
+        assert_eq!(folder.checkouts.len(), 1);
+        assert_eq!(catalog.len(), 2);
+    }
+
+    /// A Herdr workspace with one pane at `cwd` and no attached checkout.
+    fn space_in(id: &str, cwd: &str) -> SessionSpace {
+        SessionSpace {
+            id: id.to_owned(),
+            label: id.to_owned(),
+            cwds: vec![cwd.to_owned()],
+            purpose: None,
+            checkout: None,
+        }
     }
 
     #[test]
