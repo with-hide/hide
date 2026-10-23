@@ -547,7 +547,7 @@ export function landingMap(nowMs: number): OverviewWorld {
 }
 
 /**
- * The memory shot's cards (the Project tool's Memory tab): what the story's sessions decided about the
+ * The memory shot's cards (the Memory tool): what the story's sessions decided about the
  * billing-app, in the kinds and states the core gives them. One rule is asked
  * about for the docs, an agent is writing another into them, and one already
  * lives in the repository's CONTRIBUTING.md.

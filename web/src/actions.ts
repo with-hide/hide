@@ -1801,11 +1801,10 @@ export function createActions(send: DispatchFn) {
       openDetail(item);
     },
 
-    /** ⇧⌘L (B25): the Project tool's 기억 tab for the Project in front. */
+    /** ⇧⌘L (B25): the Memory tool for the Project in front. */
     openFrontProjectMemory() {
       if (!workspaceInFront()) return diagnostic("project_memory: no Workspace in front");
-      ui().setProjectTab("memory");
-      showTool("project");
+      showTool("memory");
     },
 
     /** ← in the 보기 head (B47): the item opened before, or the slot closes. */
@@ -1971,7 +1970,7 @@ export function createActions(send: DispatchFn) {
     },
 
     /**
-     * Opens a catalog Project's Memory for the Memory tab (PRD
+     * Opens a catalog Project's Memory for the Memory tool (PRD
      * project-memory-v2 D-17); the core keeps one opened Project per daemon
      * and reads it again when asked for the same one.
      */
@@ -1987,8 +1986,7 @@ export function createActions(send: DispatchFn) {
       const workspace = catalogWorkspaces(rest()).find((row) => row.id === workspaceId && row.device_id === deviceId);
       const checkout = workspace && deviceConnected(rest(), deviceId) ? projectCheckout(workspace, rest()?.ui_state?.recent_checkouts) : null;
       if (!checkout) return false;
-      ui().setProjectTab("memory");
-      beginOpening({ checkoutId: checkout.id, deviceId, path: checkout.path, workspaceId, tool: "project" });
+      beginOpening({ checkoutId: checkout.id, deviceId, path: checkout.path, workspaceId, tool: "memory" });
       return dispatch({ schema_version: 2, kind: "project_memory_navigate", payload: { device_id: deviceId, workspace_id: workspaceId, checkout_id: checkout.id, request_id: crypto.randomUUID() } });
     },
 
@@ -1997,7 +1995,7 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "memory_expand", payload: { workspace_id: workspaceId, number } });
     },
 
-    /** The Memory tab showed how many older cards were cleared, the newest at `throughUnixMs`; false when it was not sent. */
+    /** The Memory tool showed how many older cards were cleared, the newest at `throughUnixMs`; false when it was not sent. */
     memoryEvictionsSeen(workspaceId: string, throughUnixMs: number): boolean {
       return dispatch({ schema_version: 2, kind: "memory_evictions_seen", payload: { workspace_id: workspaceId, through_unix_ms: throughUnixMs } }) !== false;
     },
@@ -2014,14 +2012,13 @@ export function createActions(send: DispatchFn) {
 
     /**
      * A card number under a past conversation (B33): that Project's Memory
-     * opens with the card in full, in the Memory tab of one of its checkouts.
+     * opens with the card in full, in the Memory tool of one of its checkouts.
      */
     openMemoryCard(deviceId: string, workspaceId: string, number: number) {
       this.memoryOpen(workspaceId);
       this.memoryExpand(workspaceId, number);
       this.openProjectById(deviceId, workspaceId);
-      ui().setProjectTab("memory");
-      showTool("project");
+      showTool("memory");
     },
 
     /**
@@ -2051,7 +2048,7 @@ export function createActions(send: DispatchFn) {
     /**
      * An agent chosen in a list that shows only what the operator has to do
      * (the sidebar, Sessions, a digit): a row its home owns opens the home,
-     * the Memory tab with that attempt's row open, and any other row its pane
+     * the Memory tool with that attempt's row open, and any other row its pane
      * (PRD hide-ai-work-home B11). Its pane stays one link away from there.
      */
     openListedAgent(paneId: string) {

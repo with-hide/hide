@@ -149,9 +149,9 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     // Opening the Memory tab makes the Project's store; the card and its promotion are seeded into it while the core is down.
     await (await showProjectRow(page, project.locator("[data-checkout]").first())).click();
     await showProjectMemory(page);
-    await expect(page.locator('[data-lane="project"] [data-memory-switch="off"]')).toBeEnabled({ timeout: 20_000 });
-    await page.locator('[data-lane="project"] [data-memory-switch="off"]').click();
-    await expect(page.locator('[data-lane="project"] [data-memory-switch="on"]')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('[data-lane="memory"] [data-memory-switch="off"]')).toBeEnabled({ timeout: 20_000 });
+    await page.locator('[data-lane="memory"] [data-memory-switch="off"]').click();
+    await expect(page.locator('[data-lane="memory"] [data-memory-switch="on"]')).toBeVisible({ timeout: 20_000 });
     const workspace = String(sent.get("memory_open")?.workspace_id);
     const session = sessionOf(stack.herdr, stack.hideAiPane);
     stack.daemon = await stack.daemon.restart((dir) => {
@@ -173,7 +173,7 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
 
     // B11: choosing it opens the Memory tab on that attempt's row, and does not go to its pane.
     await row.locator("[data-agent-open]").click();
-    const lane = page.locator('[data-lane="project"]');
+    const lane = page.locator('[data-lane="memory"]');
     await expect(lane.locator('[data-memory-card="43"][data-memory-progress]')).toBeVisible({ timeout: 20_000 });
     await expect(lane.locator('[data-memory-row-toggle="43"]')).toHaveAttribute("aria-expanded", "true");
     await expect(lane.locator('[data-memory-progress-detail="43"]')).toBeVisible();

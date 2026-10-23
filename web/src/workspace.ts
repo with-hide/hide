@@ -14,7 +14,7 @@ import type { Tool } from "./laneTools";
 
 /** What a tool is about: the Project (the Project tool) or the front checkout (Explorer, Changes). The rail and the tool column's header draw it (PRD work-tab-pr-lens D-37). */
 export type ToolScope = "project" | "checkout";
-export const TOOL_SCOPES: Record<Tool, ToolScope> = { project: "project", explorer: "checkout", changes: "checkout" };
+export const TOOL_SCOPES: Record<Tool, ToolScope> = { project: "project", memory: "project", explorer: "checkout", changes: "checkout" };
 
 /**
  * What the viewing column shows (PRD lane-two-columns D-01, D-04): the 보기

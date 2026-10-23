@@ -14,7 +14,6 @@ import { useUiStore } from "./ui";
 import { emptyScope } from "../test/legacyAgentScope";
 import type { DispatchFn } from "./ws";
 import type { UsageSnapshot } from "./generated/hided-ws";
-import { recentCards } from "./projectStatus";
 
 // The Project tool (PRD lane-two-columns B26-B39): the front checkout `c`
 // belongs to project `p`, whose scope carries the core's 현황.
@@ -72,7 +71,7 @@ describe("the Project tool", () => {
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
       useShellStore.setState({ connection: "live", rest, memory: { project }, usage });
-      useUiStore.setState({ screen: { kind: "workspace" }, laneShown: true, projectTab: "status", drawnLane: { mode: "docked", view: rest.ui_state?.detail?.shown ? "detail" : "none", tool: "project", stacked: false } });
+      useUiStore.setState({ screen: { kind: "workspace" }, laneShown: true, drawnLane: { mode: "docked", view: rest.ui_state?.detail?.shown ? "detail" : "none", tool: "project", stacked: false } });
       root.render(<TooltipProvider><ToolRail actions={actions} /><ProjectTool actions={actions} /></TooltipProvider>);
     });
     return actions;
@@ -92,16 +91,19 @@ describe("the Project tool", () => {
     expect(container.querySelector('[data-project-todo="empty"]')).not.toBeNull();
   });
 
-  it("adds what Memory asks to the rail's number and names both parts (B38)", async () => {
+  it("counts what Memory asks on the Memory icon, apart from the Project's 할 일", async () => {
     const asks: ProjectMemory["questions"] = [{ kind: "failed", number: 9, title: "card 9", start_failure: null }];
     await render(snapshot(status({ todo: [{ kind: "pr", number: 7 }], todo_total: 1 })), memory(asks));
-    const button = container.querySelector('[data-lane-tool="project"]');
-    expect(button?.querySelector("[data-lane-todo-count]")?.textContent).toBe("2");
-    expect(button?.getAttribute("aria-description")).toBe("1 to do · Memory: 1 to handle");
+    const project = container.querySelector('[data-lane-tool="project"]');
+    const memoryIcon = container.querySelector('[data-lane-tool="memory"]');
+    expect(project?.querySelector("[data-lane-todo-count]")?.textContent).toBe("1");
+    expect(project?.getAttribute("aria-description")).toBe("1 to do");
+    expect(memoryIcon?.querySelector("[data-lane-todo-count]")?.textContent).toBe("1");
+    expect(memoryIcon?.getAttribute("aria-description")).toBe("To handle 1");
     await render(snapshot(status()), memory(asks));
-    expect(container.querySelector('[data-lane-tool="project"] [data-lane-todo-count]')?.textContent).toBe("1");
-    await render(snapshot(status()), { ...memory(asks), enabled: false });
     expect(container.querySelector('[data-lane-tool="project"] [data-lane-todo-count]')).toBeNull();
+    await render(snapshot(status()), { ...memory(asks), enabled: false });
+    expect(container.querySelector('[data-lane-tool="memory"] [data-lane-todo-count]')).toBeNull();
   });
 
   it("holds the tiles' numbers empty until the core answers, and shows 0 as 0 (B33)", async () => {
@@ -148,14 +150,6 @@ describe("the Project tool", () => {
     await press('[data-project-tile-press="git"]');
     expect(sent("detail_show")).toEqual([{ shown: false }]);
   });
-
-  it("dots the 기억 tab while Memory has something to handle (B26)", async () => {
-    await render(snapshot(status()), memory([]));
-    expect(container.querySelector('[data-project-tab-dot="memory"]')).toBeNull();
-    await render(snapshot(status()), memory([{ kind: "failed", number: 9, title: "card 9", start_failure: null }]));
-    expect(container.querySelector('[data-project-tab-dot="memory"]')).not.toBeNull();
-    expect(container.querySelector("[data-project-memory-handle]")?.textContent).toContain("1");
-  });
 });
 
 describe("the 할 일 cut (B37)", () => {
@@ -175,18 +169,6 @@ describe("the 할 일 cut (B37)", () => {
     expect(todoView(status, false).more).toBe(3);
     expect(todoView(status, true).more).toBe(0);
     expect(todoView(status, true).beyond).toEqual({ agents: 6, prs: 56 });
-  });
-});
-
-describe("최근 기억 (B39)", () => {
-  it("keeps naming the newest cards while a 기억 search narrows that tab", () => {
-    const card = (number: number, updated: number) => ({ number, title: `card ${number}`, kind: "rule", human_source_count: 1, provided_session_count: 0, pull_count: 0, updated_at_unix_ms: updated, verifying: false, promotion: null });
-    const project = {
-      workspace_id: "p", unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0, evicted_through_unix_ms: null,
-      rows: [card(1, 10), card(2, 30), card(3, 20)], questions: [], analysis: "idle", consent_required: false, usable_cards: 3, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null, expanded: null,
-      search: { query: "x", numbers: [1] },
-    } as unknown as ProjectMemory;
-    expect(recentCards(project).map((row) => row.number)).toEqual([2, 3, 1]);
   });
 });
 

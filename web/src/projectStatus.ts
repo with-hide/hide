@@ -7,23 +7,11 @@
 import type { ProjectStatus, ProjectTodo } from "./agentScope";
 import type { NodeUsage, ProjectCost } from "./generated/hided-ws";
 import type { InterfaceLanguage } from "./i18n/locale";
-import { memoryCards } from "./memoryList";
 import { openMissedWork } from "./sessionWork";
-import { catalogWorkspaces, frontCheckout, type LinkSummaries, type MemoryRow, type ProjectMemory, type SnapshotRest, type Workspace } from "./snapshot";
+import { catalogWorkspaces, frontCheckout, type LinkSummaries, type ProjectMemory, type SnapshotRest, type Workspace } from "./snapshot";
 
 /** The 할 일 rows shown before `+N 더` (B37). */
 export const TODO_SHOWN = 5;
-
-/** The recent cards 현황 names (B39). */
-export const RECENT_CARDS = 5;
-
-/**
- * The newest cards 현황 names (B39), from every card Memory holds: a search
- * in the 기억 tab narrows that tab and not this list.
- */
-export function recentCards(project: ProjectMemory): MemoryRow[] {
-  return memoryCards({ ...project, search: null }).sort((a, b) => b.updated_at_unix_ms - a.updated_at_unix_ms).slice(0, RECENT_CARDS);
-}
 
 /** What the project's Memory asks the operator (its 처리할 것), 0 while Memory is off or holds another project. */
 export function memoryAsks(memory: ProjectMemory | null | undefined, projectId: string): number {

@@ -246,6 +246,8 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.toggleSidebarLens();
       case "toggle_lane_project":
         return actions.toggleTool("project");
+      case "toggle_lane_memory":
+        return actions.toggleTool("memory");
       case "toggle_lane_explorer":
         return actions.toggleTool("explorer");
       case "toggle_lane_changes":
