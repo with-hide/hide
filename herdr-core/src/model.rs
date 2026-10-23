@@ -5729,7 +5729,10 @@ pub struct TaskOperationSnapshot {
     pub path: Option<String>,
     pub pane_id: Option<String>,
     pub agent_kind: Option<String>,
-    pub message: Option<String>,
+    /// Why the task failed, as a code the web words (`task_operation.*`,
+    /// `agent_start.*`, `checkout_purpose.*`, a start reason); the core's
+    /// own sentence goes to the `task_operation.failed` diagnostic.
+    pub failure: Option<String>,
     /// How starting `agent_kind` in the created pane went, kept apart from
     /// the creation itself: `starting`, `started`, `failed`, or `unknown`
     /// when Herdr did not answer and the pane has to be looked at. `None`

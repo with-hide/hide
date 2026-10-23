@@ -344,7 +344,7 @@ impl Runtime {
                     .as_mut()
                     .expect("the task operation was begun above");
                 operation.phase = "failed".into();
-                operation.message = Some(message);
+                operation.failure = Some(crate::live::TaskFailure::from(message).code);
                 return Ok(());
             }
         };

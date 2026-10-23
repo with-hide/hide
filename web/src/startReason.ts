@@ -10,6 +10,8 @@ import type { MessageKey } from "./i18n/catalogs";
 /** The codes the core sends for a start it refused, each worded once in the catalog. */
 const REASON_KEYS = new Map<string, MessageKey>([
   ["codex_capability_unknown", "agents.codexUnread"],
+  // A task that failed for a reason the core words only in its log.
+  ["task_operation.failed", "workspace.agentNotStarted"],
   ["session_route_unconfirmed", "coreError.startReason.session_route_unconfirmed"],
   ["session_route_reader_unavailable", "coreError.startReason.session_route_unconfirmed"],
   ["session_route_reference_unconfirmed", "coreError.startReason.session_route_unconfirmed"],

@@ -126,9 +126,9 @@ impl TabTarget {
                 .map_err(|_| "runtime unavailable")?
                 .save_group_start_effect(id, effect.clone())?
         };
-        saved.recv_timeout(Duration::from_secs(10)).map_err(|_| {
-            "The terminal proof could not be saved. Check this start's status again.".to_owned()
-        })?
+        saved
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "agent_start.not_saved".to_owned())?
     }
 
     fn acquire_start_geometry(
@@ -451,6 +451,45 @@ pub struct WorktreeTaskRequest {
     /// worktree's own machine: this one's or a node's that dials the core,
     /// never a dialed device's, which the runtime leaves this empty for.
     pub issue: Option<String>,
+}
+
+/// Why a task failed: the code the screen words and the sentence the log
+/// keeps. A worker's error arrives as text; text that is already a reason
+/// code (`agent_start.not_saved`, `session_resume_reader_changed`) is that
+/// code, and a sentence is the general `task_operation.failed` with the
+/// sentence kept for the log.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskFailure {
+    pub code: String,
+    pub detail: String,
+}
+
+impl From<String> for TaskFailure {
+    fn from(text: String) -> Self {
+        let is_code = !text.is_empty()
+            && text.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'_' | b'.' | b':' | b'-')
+            });
+        if is_code {
+            Self {
+                code: text.clone(),
+                detail: text,
+            }
+        } else {
+            Self {
+                code: "task_operation.failed".to_owned(),
+                detail: text,
+            }
+        }
+    }
+}
+
+impl From<&str> for TaskFailure {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -828,7 +867,10 @@ fn spawn_worktree_task(
             });
             if let Some(runtime) = context.runtime.upgrade() {
                 if let Ok(mut guard) = runtime.lock() {
-                    guard.ingest_task_operation_result(request.id, result);
+                    guard.ingest_task_operation_result(
+                        request.id,
+                        result.map_err(TaskFailure::from),
+                    );
                 } else {
                     return;
                 }
@@ -1522,10 +1564,7 @@ pub(crate) fn spawn_targeted_checkout_start(
         .spawn(move || {
             let result = saved
                 .recv_timeout(Duration::from_secs(10))
-                .map_err(|_| {
-                    "The start intent could not be saved in time. Retry; nothing was started."
-                        .to_owned()
-                })
+                .map_err(|_| "agent_start.not_saved".to_owned())
                 .and_then(|result| result)
                 .and_then(|()| target.check_current(request.id));
             if let Err(message) = result {
@@ -1539,7 +1578,7 @@ pub(crate) fn spawn_targeted_checkout_start(
                             .as_ref()
                             .is_some_and(|start| start.recovery_only),
                     );
-                    runtime.ingest_task_operation_result(request.id, Err(message));
+                    runtime.ingest_task_operation_result(request.id, Err(message.into()));
                 }
                 target.notifier.notify();
                 return;
@@ -1547,7 +1586,7 @@ pub(crate) fn spawn_targeted_checkout_start(
             open_tab_and_start_agent(&target, &request);
         })
         .map(|_| ())
-        .map_err(|_| "The start worker could not run. Retry; nothing was started.".into())
+        .map_err(|_| "task_operation.worker_unavailable".into())
 }
 
 /// Opens the task's tab, publishes it, then starts the task's agent in it.
@@ -1630,11 +1669,9 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
             current: &current_geometry,
         };
         if request.start.is_some() {
-            let node = node.as_deref().ok_or_else(|| {
-                ControlFailure::Definite(
-                    "The device cannot check terminal identity. Reconnect it and retry.".into(),
-                )
-            })?;
+            let node = node
+                .as_deref()
+                .ok_or_else(|| ControlFailure::Definite("agent_start.terminal_unchecked".into()))?;
             create_checked_checkout_tab(
                 target,
                 &connector,
@@ -1681,7 +1718,7 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         }
         guard.ingest_task_operation_result(
             request.id,
-            result.map_err(|failure| failure.message().to_owned()),
+            result.map_err(|failure| TaskFailure::from(failure.message().to_owned())),
         );
         if request
             .start
@@ -1785,10 +1822,7 @@ fn folder_present(
 ) -> Result<(), String> {
     if request.cwd != request.checkout_path && !crate::node_access::is_directory(node, &request.cwd)
     {
-        return Err(format!(
-            "The working folder {} no longer exists",
-            request.cwd
-        ));
+        return Err("agent_start.folder_missing".to_owned());
     }
     Ok(())
 }
@@ -1991,7 +2025,10 @@ pub fn spawn_branch_migration(
             );
             if let Some(runtime) = context.runtime.upgrade() {
                 if let Ok(mut guard) = runtime.lock() {
-                    guard.ingest_task_operation_result(request.id, result);
+                    guard.ingest_task_operation_result(
+                        request.id,
+                        result.map_err(TaskFailure::from),
+                    );
                 } else {
                     return;
                 }
@@ -2710,10 +2747,7 @@ mod tests {
         let gone = checkout.path().join("removed");
         assert_eq!(
             folder_present(&node, &request(&gone)),
-            Err(format!(
-                "The working folder {} no longer exists",
-                gone.display()
-            ))
+            Err("agent_start.folder_missing".to_owned())
         );
     }
 

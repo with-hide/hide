@@ -3916,8 +3916,10 @@ impl Runtime {
         let context = match context {
             Ok(context) => context,
             Err(message) => {
-                return self
-                    .ingest_task_operation_result(id, Err(format!("create worktree: {message}")));
+                return self.ingest_task_operation_result(
+                    id,
+                    Err(format!("create worktree: {message}").into()),
+                );
             }
         };
         let spawned = if existing_branch {
@@ -3926,7 +3928,7 @@ impl Runtime {
             live::spawn_worktree_create(context, request)
         };
         if let Err(message) = spawned {
-            return self.ingest_task_operation_result(id, Err(message));
+            return self.ingest_task_operation_result(id, Err(message.into()));
         }
         true
     }
@@ -4367,9 +4369,9 @@ impl Runtime {
             return self.ingest_task_operation_result(
                 id,
                 Err(if local {
-                    "A live Herdr connection is required. Reconnect and retry.".into()
+                    "workspace.control_unavailable".into()
                 } else {
-                    "The device's Herdr connection is unavailable. Reconnect and retry.".into()
+                    "agent_start.device_unavailable".into()
                 }),
             );
         }
@@ -4383,7 +4385,7 @@ impl Runtime {
                 payload.confirm_only,
             ) {
                 Ok(prepared) => Some(prepared),
-                Err(message) => return self.ingest_task_operation_result(id, Err(message)),
+                Err(message) => return self.ingest_task_operation_result(id, Err(message.into())),
             }
         } else {
             self.group_start = None;
@@ -4422,7 +4424,7 @@ impl Runtime {
             self.remote_controls
                 .get(&device)
                 .map(live::TabTarget::device)
-                .ok_or("start an agent: the device's Herdr connection is unavailable")
+                .ok_or("agent_start.device_unavailable")
         };
         let target = match target {
             Ok(target) => target,
@@ -4437,7 +4439,7 @@ impl Runtime {
         };
         if let Err(message) = spawned {
             self.group_start_failed(id, recovery_only);
-            return self.ingest_task_operation_result(id, Err(message));
+            return self.ingest_task_operation_result(id, Err(message.into()));
         }
         true
     }
@@ -4613,15 +4615,13 @@ impl Runtime {
             issue: None,
         };
         let Some(context) = self.live.as_ref().cloned() else {
-            return self.ingest_task_operation_result(
-                id,
-                Err("move branch: a live Herdr connection is required".into()),
-            );
+            return self
+                .ingest_task_operation_result(id, Err("workspace.control_unavailable".into()));
         };
         if let Err(message) =
             live::spawn_branch_migration(context, Arc::clone(&self.own_node), request)
         {
-            return self.ingest_task_operation_result(id, Err(message));
+            return self.ingest_task_operation_result(id, Err(message.into()));
         }
         true
     }

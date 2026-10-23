@@ -73,7 +73,7 @@ const task = (patch: Partial<TaskOperation>): TaskOperation => ({
   path: null,
   pane_id: null,
   agent_kind: null,
-  message: null,
+  failure: null,
   agent_phase: null,
   agent_reason: null, agent_line: null,
   ...patch,

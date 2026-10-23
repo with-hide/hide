@@ -30,8 +30,10 @@ export type StartPreset = { projectId: string; kind?: ProviderKind };
 export type StartFailure = { message: string } | { key: MessageKey; code?: string; line?: string };
 
 /** The core's reason when it sent one (`startReason`), else the plain "did not start". */
-export function startFailure(message: string | null | undefined): StartFailure {
-  return message ? startReason(message) : { key: "workspace.agentNotStarted" };
+/** A failed task's `failure` code worded (`startReason`); a code this build does not word is the plain "did not start", the code kept for `data-core-error`. */
+export function startFailure(code: string | null | undefined): StartFailure {
+  const worded = code ? startReason(code) : null;
+  return worded && "key" in worded ? worded : { key: "workspace.agentNotStarted", ...(code ? { code } : {}) };
 }
 
 /**

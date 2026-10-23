@@ -452,12 +452,9 @@ fn a_device_worktree_for_a_branch_that_exists_there_is_refused_by_its_helper() {
     assert_eq!(operation.phase, "failed");
     assert_eq!(operation.device_id.as_deref(), Some(DEVICE));
     assert!(
-        operation
-            .message
-            .as_deref()
-            .is_some_and(|message| message.contains("already exists")),
+        operation.failure.as_deref() == Some("task_operation.failed"),
         "{:?}",
-        operation.message
+        operation.failure
     );
 }
 

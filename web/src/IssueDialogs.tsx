@@ -175,7 +175,7 @@ export function StartIssueDialog({ actions, workspace, task, onClose }: { action
   const problem = git ? branchProblem(branch) : null;
   const existing = git && branches.includes(branch) ? (workspace.checkouts.find((checkout) => checkout.branch === branch) ?? null) : null;
   const taken = git && branches.includes(branch);
-  const failure = created?.phase === "failed" ? (created.message ?? t("issue.worktreeFailed")) : refused ? coreErrorText(refused, t, "issue.worktreeFailed") : null;
+  const failure = created?.phase === "failed" ? (created.failure ? coreErrorText({ kind: created.failure }, t, "issue.worktreeFailed") : t("issue.worktreeFailed")) : refused ? coreErrorText(refused, t, "issue.worktreeFailed") : null;
 
   const submit = () => {
     if (working) return;

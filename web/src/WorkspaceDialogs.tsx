@@ -305,7 +305,7 @@ function NewWorktreeDialog({ actions, workspace, onClose }: { actions: Actions; 
       purpose: purpose.trim() ? normalizePurpose(purpose.trim()) : null,
     });
   };
-  const failure = task?.phase === "failed" ? (task.message ?? t("workspace.createFailed")) : refused ? coreErrorText(refused, t, "workspace.createFailed") : null;
+  const failure = task?.phase === "failed" ? (task.failure ? coreErrorText({ kind: task.failure }, t, "workspace.createFailed") : t("workspace.createFailed")) : refused ? coreErrorText(refused, t, "workspace.createFailed") : null;
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
       <DialogContent data-new-worktree={workspace.id}>
@@ -385,7 +385,7 @@ function PurposeDialog({ actions, checkout, deviceLabel, onClose }: { actions: A
     setRequest({ afterId: actions.taskIdNow(), at: Date.now(), text: value });
     actions.setPurpose(checkout.id, value);
   };
-  const failure = task?.phase === "failed" ? (task.message ?? t("workspace.purposeFailed")) : refused ? coreErrorText(refused, t, "workspace.purposeFailed") : null;
+  const failure = task?.phase === "failed" ? (task.failure ? coreErrorText({ kind: task.failure }, t, "workspace.purposeFailed") : t("workspace.purposeFailed")) : refused ? coreErrorText(refused, t, "workspace.purposeFailed") : null;
   const label = checkout.branch ?? checkout.label;
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>

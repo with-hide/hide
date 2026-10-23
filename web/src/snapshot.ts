@@ -1946,7 +1946,8 @@ export type TaskOperation = {
   path: string | null;
   pane_id: string | null;
   agent_kind: string | null;
-  message: string | null;
+  /** Why the task failed, as a code (`task_operation.*`, `agent_start.*`, `checkout_purpose.*`, a start reason), worded by `coreErrorText` or `startFailure`. */
+  failure: string | null;
   /** `starting`, `started`, `failed` or `unknown`; null when no agent was chosen. */
   agent_phase: string | null;
   /** Why the agent did not start: a code (`agent_start.*`, or a session check's), worded by `agentFailure`. */

@@ -28,7 +28,7 @@ export function startAnswer(rest: SnapshotRest | null, requestId: string, kind: 
   if (error?.request_id === requestId) return { phase: "refused", kind: error.kind };
   const operation = rest?.task_operation;
   if (operation?.request_id !== requestId || operation.kind !== kind) return { phase: "pending" };
-  if (operation.phase === "failed") return { phase: "failed", message: operation.message };
+  if (operation.phase === "failed") return { phase: "failed", message: operation.failure };
   if (operation.phase !== "ready") return { phase: "pending" };
   return { phase: "ready", taskId: operation.id, paneId: operation.pane_id, agentPhase: operation.agent_phase, agentReason: operation.agent_reason, agentLine: operation.agent_line };
 }

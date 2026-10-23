@@ -257,7 +257,7 @@ export function PrDelegateDialog({ actions, workspace, pr, intent, onClose }: { 
   );
   const refused = useErrorSince(request?.at ?? null, ["pr_delegate.", "worktree.create", "task_operation.", "agent_start.", "overview.unknown_checkout"]);
   const working = request !== null && refused === null && (started === null || started.phase === "working");
-  const failure = started?.phase === "failed" ? (started.message ?? t("prWork.startFailed")) : refused ? coreErrorText(refused, t, "prWork.startFailed") : null;
+  const failure = started?.phase === "failed" ? (started.failure ? coreErrorText({ kind: started.failure }, t, "prWork.startFailed") : t("prWork.startFailed")) : refused ? coreErrorText(refused, t, "prWork.startFailed") : null;
   useEffect(() => {
     if (started?.phase !== "ready") return;
     if (started.agent_phase) useUiStore.getState().setWatchedTask(started.id);

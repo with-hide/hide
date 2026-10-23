@@ -1926,11 +1926,9 @@ fn agent_start_in_checkout_reports_through_the_task_operation_slot() {
     assert_eq!(operation.kind, "agent_start");
     assert_eq!(operation.agent_kind.as_deref(), Some("claude"));
     assert_eq!(operation.phase, "failed");
-    assert!(
-        operation
-            .message
-            .as_deref()
-            .is_some_and(|message| message.contains("live Herdr connection"))
+    assert_eq!(
+        operation.failure.as_deref(),
+        Some("workspace.control_unavailable")
     );
     assert_eq!(operation.pane_id, None);
 }
@@ -2276,7 +2274,7 @@ fn created_worktree_starts_collapsed_and_keeps_purpose_failure_non_blocking() {
     );
     let operation = runtime.snapshot.task_operation.as_ref().unwrap();
     assert_eq!(operation.phase, "ready");
-    assert!(operation.message.is_none());
+    assert!(operation.failure.is_none());
     assert!(
         runtime
             .snapshot
@@ -2321,8 +2319,8 @@ fn invalid_purpose_fails_the_sheet_operation_with_the_shared_scalar_limit() {
     assert_eq!(operation.kind, "checkout_purpose");
     assert_eq!(operation.phase, "failed");
     assert_eq!(
-        operation.message.as_deref(),
-        Some("Purpose must be one line of 80 characters or fewer")
+        operation.failure.as_deref(),
+        Some("checkout_purpose.invalid")
     );
     assert!(
         runtime

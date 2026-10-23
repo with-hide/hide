@@ -3969,7 +3969,7 @@ impl Runtime {
             path: None,
             pane_id: None,
             agent_kind,
-            message: None,
+            failure: None,
             agent_phase: None,
             agent_reason: None,
             agent_line: None,
@@ -3981,7 +3981,7 @@ impl Runtime {
     pub fn ingest_task_operation_result(
         &mut self,
         id: u64,
-        result: Result<live::WorktreeTaskOutcome, String>,
+        result: Result<live::WorktreeTaskOutcome, live::TaskFailure>,
     ) -> bool {
         let Some(operation) = self.snapshot.task_operation.as_ref() else {
             return false;
@@ -4198,7 +4198,7 @@ impl Runtime {
                 }
                 self.refresh_worktrees();
             }
-            Err(message) => {
+            Err(failure) => {
                 self.discard_input_request(&super::terminal_input::InputOrigin::Task(id), "failed");
                 self.op_timings
                     .finish(&super::op_timing::task_create_op_id(id), "failed");
@@ -4208,7 +4208,14 @@ impl Runtime {
                     .as_mut()
                     .expect("task operation was checked above");
                 operation.phase = "failed".into();
-                operation.message = Some(message);
+                operation.failure = Some(failure.code.clone());
+                self.push_diagnostic(
+                    "task_operation.failed",
+                    format!(
+                        "{operation_kind} {id}: {}: {}",
+                        failure.code, failure.detail
+                    ),
+                );
                 self.refresh_worktrees();
             }
         }
@@ -4257,16 +4264,16 @@ impl Runtime {
                 (
                     "failed",
                     Some(if token_written {
-                        "Saved to Herdr, but git did not record it. Save tries again.".to_owned()
+                        "checkout_purpose.git_failed_saved".to_owned()
                     } else {
-                        "Git did not record it. Your text is kept; Save tries again.".to_owned()
+                        "checkout_purpose.git_failed".to_owned()
                     }),
                     Some(("checkout_purpose.git_failed", detail)),
                 )
             }
             Err(detail) => (
                 "failed",
-                Some("Herdr did not answer. Your text is kept; Save tries again.".to_owned()),
+                Some("checkout_purpose.token_failed".to_owned()),
                 Some(("checkout_purpose.token_failed", detail)),
             ),
         };
@@ -4358,7 +4365,7 @@ impl Runtime {
             .as_mut()
             .expect("purpose operation was checked above");
         operation.phase = phase.to_owned();
-        operation.message = message;
+        operation.failure = message;
         self.purpose_operation_target = None;
         if let Some((kind, detail)) = diagnostic {
             self.push_diagnostic(kind, detail);
@@ -4386,7 +4393,8 @@ impl Runtime {
             return false;
         }
         operation.phase = "failed".to_owned();
-        operation.message = Some(message.clone());
+        // The diagnostic's kind is the code the screen words.
+        operation.failure = Some(diagnostic_kind.to_owned());
         self.purpose_operation_target = None;
         self.push_diagnostic(diagnostic_kind, message);
         true
