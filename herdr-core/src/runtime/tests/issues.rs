@@ -165,6 +165,7 @@ fn manual_issue_runtime() -> Runtime {
     let mut runtime = issue_runtime();
     runtime.snapshot.navigator.workspaces[0].session_workspace_ids = vec!["w".into()];
     runtime.last_session_spaces = vec![workspace::SessionSpace {
+        checkout: None,
         id: "w".into(),
         label: "Repo".into(),
         cwds: vec!["/repo/task".into()],

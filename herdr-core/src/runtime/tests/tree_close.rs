@@ -95,12 +95,14 @@ fn tree_payload_in(
 pub(super) fn tree_catalog() -> session_sync::PrecomputedCatalog {
     let spaces = vec![
         workspace::SessionSpace {
+            checkout: None,
             id: "w1".to_owned(),
             label: "a".to_owned(),
             purpose: None,
             cwds: vec![A.to_owned()],
         },
         workspace::SessionSpace {
+            checkout: None,
             id: "w5".to_owned(),
             label: "b".to_owned(),
             purpose: None,

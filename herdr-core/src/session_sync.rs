@@ -102,7 +102,7 @@ impl PrecomputedCatalog {
     ) -> Self {
         let node = crate::node::test_node();
         let mut wanted = workspace::PathIndex::wanted(&node, &registrations, &[], worktrees);
-        wanted.extend(Runtime::session_cwds(payload));
+        wanted.extend(Runtime::session_paths(payload));
         let paths = workspace::paths_here(wanted);
         let spaces = Runtime::session_spaces(payload, &paths);
         Self {

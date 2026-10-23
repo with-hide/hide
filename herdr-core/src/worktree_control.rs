@@ -2887,6 +2887,7 @@ mod tests {
         assert!(receiver.try_recv().is_err(), "detaching is not deletion");
         project.checkouts.clear();
         let space = workspace::SessionSpace {
+            checkout: None,
             id: "w-purpose".into(),
             label: "Fixture".into(),
             cwds: vec!["/fixture/repo/worktrees/topic".into()],
@@ -3048,6 +3049,7 @@ mod tests {
     fn purpose_mirror_emits_initial_changes_and_clear_for_the_exact_branch() {
         let (mut mirror, receiver) = PurposeMirror::recording();
         let mut space = workspace::SessionSpace {
+            checkout: None,
             id: "w-purpose".to_owned(),
             label: "Fixture".to_owned(),
             cwds: vec!["/fixture/repo/worktrees/topic".to_owned()],
@@ -3158,18 +3160,21 @@ mod tests {
         let (mut mirror, receiver) = PurposeMirror::recording();
         let spaces = vec![
             workspace::SessionSpace {
+                checkout: None,
                 id: "w-outer".to_owned(),
                 label: "Outer".to_owned(),
                 cwds: vec!["/fixture/repo/worktrees/topic".to_owned()],
                 purpose: Some("Outer purpose".to_owned()),
             },
             workspace::SessionSpace {
+                checkout: None,
                 id: "w-nested".to_owned(),
                 label: "Nested".to_owned(),
                 cwds: vec!["/fixture/repo/worktrees/topic/nested".to_owned()],
                 purpose: Some("Nested purpose".to_owned()),
             },
             workspace::SessionSpace {
+                checkout: None,
                 id: "w-authority".to_owned(),
                 label: "Outer second".to_owned(),
                 cwds: vec!["/fixture/repo/worktrees/topic".to_owned()],
@@ -3229,12 +3234,14 @@ mod tests {
     fn purpose_mirror_tracks_source_switches_by_checkout_and_restores_the_last_value() {
         let (mut mirror, receiver) = PurposeMirror::recording();
         let first = workspace::SessionSpace {
+            checkout: None,
             id: "w-first".to_owned(),
             label: "First".to_owned(),
             cwds: vec!["/fixture/repo/worktrees/topic".to_owned()],
             purpose: Some("First purpose".to_owned()),
         };
         let later_without_token = workspace::SessionSpace {
+            checkout: None,
             id: "w-later".to_owned(),
             label: "Later".to_owned(),
             cwds: vec!["/fixture/repo/worktrees/topic".to_owned()],
