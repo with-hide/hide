@@ -2319,6 +2319,7 @@ A pressed chord shows large in the middle for a moment, so the keys are seen as 
 Every chord is the operator's own: the host's set, the system's, and the operator's stored bindings.
 A chapter with tasks lists them on a card in the lower left with a check as each is done and `↺ 처음부터`; the top center names the chapter and leads back to the list.
 The last step of a chapter offers the next chapter, and the last chapter's offers the list.
+Chapter 5 (찾고 다시 보기) finds yesterday's ended session in ⌘K by a word of its requests, opens its record in the lane's 보기 slot, finds the PR it made by `#3` and opens that card, and puts a finished task in 다시 볼 것 from its right-click menu; the invented PR wears a `예시` mark so it is never taken for a real one.
 
 The window holds no daemon connection and carries no token.
 It asks the shell of the same origin, over one `BroadcastChannel` (`hide-practice`), for the operator's language, chords, theme and progress, and hands each step it reaches back; the shell dispatches `practice_progress_set`, and the core keeps `ui_state.practice` like the other UI choices.
