@@ -96,6 +96,8 @@ One row is one thing the screen names. A word in the last column is not used for
 | Herdr's workspace | workspace | 작업공간 (the tab named `Workspace` keeps its name) | ワークスペース | 工作区 | 워크스페이스 |
 | Git worktree | worktree | 워크트리 | ワークツリー | 工作树 | worktree |
 | An agent started by another | child agent | 자식 에이전트 (count: 개) | 子エージェント | 子智能体 | 하위, 형제 as a heading |
+| A tab's document or browser page | view | 뷰 | ビュー | 视图 | 화면 |
+| Folder | folder | 폴더 | フォルダ | 文件夹 | フォルダー |
 | An agent the operator put to sleep | asleep | 재움 (action: 재우기) | 休止 | 休眠 | 휴면, 잠자기 |
 | Copy of a session that goes on separately | fork | 포크 | フォーク | 分叉 | 분기 |
 | The first agent of a delegation chain | root session | 맨 위 세션 | 最上位セッション | 根会话 | 루트 |
