@@ -164,6 +164,7 @@ A Workspace stored by a build with the one-tool lane comes back closed at the de
 
 Agent Views is always live: clicking a pane or a tab focuses it and typing goes to it, and chords such as ⌘F, ⌘T and ⌥W act where the keyboard is, a View area, the lane's tool or a pane.
 A lane going out of sight with the keyboard inside it, or a viewing column that folds or closes while the keyboard is in its documents, hands the keyboard to the focused pane.
+That handback retires the hidden region as a command target in the same drawing, even when the terminal input is already the shell's active element and no new focus event fires; input the operator moved to another live column or a popup keeps its owner.
 Tab never walks into a folded or stacked-behind column: it is inert and holds no Escape layer or focus return, and a native page in it is hidden before it goes inert.
 
 An Agent tab shows the focused pane's status mark, then title, using the sidebar row's title and mark rules; the agent's logo stands between them only while the agent logo view mode shows it ([Agent logo view mode](#agent-logo-view-mode)); a tab with no agent keeps the neutral `>_` in both modes.
