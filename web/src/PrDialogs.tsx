@@ -22,7 +22,8 @@ import { localDeviceId, type PrFeedback, type PrLink, type PullRequest, type Tas
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { taskFor } from "./workspaceManage";
-import { useErrorSince } from "./WorkspaceDialogs";
+import { coreErrorKey, coreErrorText, type CoreError } from "./coreError";
+import { useErrorSince } from "./errorSince";
 import { fieldLabel } from "./shortcutLabels";
 
 /** A request this dialog sent, by the id the core answers under. */
@@ -36,7 +37,7 @@ function requestId(kind: string, number: number): string {
  * The core's answer to this dialog's own link request and a refusal since it
  * was sent; a link that reached `ready` closes the dialog.
  */
-function useLinkAnswer(sent: Sent | null, onClose: () => void): { answer: PrLink | null; refused: string | null; working: boolean; failed: boolean } {
+function useLinkAnswer(sent: Sent | null, onClose: () => void): { answer: PrLink | null; refused: CoreError | null; working: boolean; failed: boolean } {
   const link = useShellStore((s) => s.rest?.pr_work?.link ?? null);
   const refused = useErrorSince(sent?.at ?? null, ["pr_link."]);
   const answer = sent && link?.request_id === sent.id ? link : null;
@@ -79,12 +80,14 @@ function retryLabel(answer: PrLink | null, created: string, t: TFunction<"transl
   return t("prWork.retryLink");
 }
 
-function LinkFailure({ answer, refused }: { answer: PrLink | null; refused: string | null }) {
+function LinkFailure({ answer, refused }: { answer: PrLink | null; refused: CoreError | null }) {
   const { t } = useInterfaceTranslation();
   const headline = answer ? failureHeadline(answer, t) : t("prWork.linkFailed");
-  const reason = answer?.message ?? refused;
+  // A refusal under the headline says only what this build words; the headline already says it failed.
+  const known = refused ? coreErrorKey(refused.kind) : null;
+  const reason = answer?.message ?? (known ? t(known) : null);
   return (
-    <Note tone="error" data-pr-link-failure={answer?.step ?? "refused"}>
+    <Note tone="error" data-pr-link-failure={answer?.step ?? "refused"} data-core-error={refused?.kind}>
       <span className="block">{headline}</span>
       {reason ? <span className="line-clamp-2 block break-words text-caption text-muted-foreground">{reason}</span> : null}
     </Note>
@@ -253,7 +256,7 @@ export function PrDelegateDialog({ actions, workspace, pr, intent, onClose }: { 
   );
   const refused = useErrorSince(request?.at ?? null, ["pr_delegate.", "worktree.create", "task_operation.", "agent_start.", "overview.unknown_checkout"]);
   const working = request !== null && refused === null && (started === null || started.phase === "working");
-  const failure = started?.phase === "failed" ? (started.message ?? t("prWork.startFailed")) : refused;
+  const failure = started?.phase === "failed" ? (started.message ?? t("prWork.startFailed")) : refused ? coreErrorText(refused, t, "prWork.startFailed") : null;
   useEffect(() => {
     if (started?.phase !== "ready") return;
     if (started.agent_phase) useUiStore.getState().setWatchedTask(started.id);
@@ -305,7 +308,7 @@ export function PrDelegateDialog({ actions, workspace, pr, intent, onClose }: { 
                 </span>
               </Note>
             ) : null}
-            {failure ? <Note tone="error" data-pr-delegate-error="true">{failure}</Note> : null}
+            {failure ? <Note tone="error" data-pr-delegate-error="true" data-core-error={refused?.kind}>{failure}</Note> : null}
             {working ? <Status tone="pending">{t(newWorktree ? "issue.creatingWorktree" : "prWork.startingAgent")}</Status> : null}
           </DialogBody>
           <DialogFooter>

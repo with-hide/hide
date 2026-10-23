@@ -10,12 +10,14 @@ const rest = (lastError: ReturnType<typeof error> | null, device = "local") =>
 const publish = (next: SnapshotRest) => useShellStore.setState({ rest: next });
 
 describe("the failures the operator is told about", () => {
-  it("picks the ones the operator can act on and leaves the rest to the diagnostic log (design 13)", () => {
-    expect(errorNotice(error("pane_reopen.not_restarted", 1))).toEqual({ text: "reason for pane_reopen.not_restarted", refreshable: false });
-    expect(errorNotice(error("terminal.input_hold_failed", 1))).toEqual({ text: "reason for terminal.input_hold_failed", refreshable: false });
-    expect(errorNotice(error("remote.control.close_status_unknown", 1))).toEqual({ text: "reason for remote.control.close_status_unknown", refreshable: true });
-    expect(errorNotice(error("remote.control.refused", 1))?.refreshable).toBe(false);
-    expect(errorNotice(error("view_layout.unsaved", 1))?.text).toBe("reason for view_layout.unsaved");
+  it("picks the ones the operator can act on, words each by its kind, and leaves the rest to the diagnostic log (design 13)", () => {
+    expect(errorNotice(error("pane_reopen.not_restarted", 1))).toEqual({ text: "Reopening ended the agent but could not start it again. Its conversation is kept.", refreshable: false });
+    expect(errorNotice(error("terminal.input_hold_failed", 1))).toEqual({ text: "Queued input could not be delivered. Type it again once the terminal is ready.", refreshable: false });
+    expect(errorNotice(error("remote.control.close_status_unknown", 1))).toEqual({ text: "This terminal's state is unknown, so it was not closed. Refresh the state, then close it.", refreshable: true });
+    // A kind this build does not word gets its family's general line; the core's sentence is never drawn.
+    expect(errorNotice(error("remote.control.refused", 1))).toEqual({ text: "The device could not do this. Try again.", refreshable: false });
+    expect(errorNotice(error("view_layout.display_limit", 1))?.text).toBe("No more views can be open. Close one, then open another.");
+    expect(errorNotice(error("view_layout.unsaved", 1))?.text).toBe("The view did not change. Try again.");
     expect(errorNotice(error("view_layout.stale_workspace", 1))).toBeNull();
     expect(errorNotice(error("file.save_failed", 1))).toBeNull();
     expect(errorNotice(null)).toBeNull();
@@ -37,11 +39,11 @@ describe("the notice a failed Reopen leaves", () => {
 
   it("appears from the snapshot's last_error and stays when the core clears it at its next event", () => {
     publish(rest(error("pane_reopen.not_restarted", 7)));
-    expect(useUiStore.getState().notice).toEqual({ text: "reason for pane_reopen.not_restarted", refreshable: false });
+    expect(useUiStore.getState().notice).toEqual({ text: "Reopening ended the agent but could not start it again. Its conversation is kept.", refreshable: false });
 
     // The core takes last_error at the next event of any kind; the operator has not read the line yet.
     publish(rest(null));
-    expect(useUiStore.getState().notice?.text).toBe("reason for pane_reopen.not_restarted");
+    expect(useUiStore.getState().notice?.text).toBe("Reopening ended the agent but could not start it again. Its conversation is kept.");
   });
 
   it("is raised once per occurrence: a dismissed notice does not come back with the next snapshot", () => {

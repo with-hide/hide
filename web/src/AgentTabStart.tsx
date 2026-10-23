@@ -8,7 +8,7 @@ import { Button } from "./components/ui/button";
 import { deviceConnected } from "./devices";
 import { useInterfaceTranslation } from "./i18n/client";
 import { startRequestId } from "./startAnswer";
-import { inlineStartKey, startFailure, useInlineStarts, type InlineStartDraft } from "./startDraft";
+import { inlineStartKey, startFailure, startRefusal, useInlineStarts, type InlineStartDraft } from "./startDraft";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { catalogWorkspaces } from "./snapshot";
@@ -58,7 +58,7 @@ export function InlineStartHost() {
           const failure = startFailure(answer.message);
           if (draft.phase !== "unknown" || draft.taskId !== answer.taskId || JSON.stringify(draft.failure) !== JSON.stringify(failure)) store.put(key, { ...draft, phase: "unknown", taskId: answer.taskId, failure });
         } else if (draft.phase !== "failed") {
-          store.put(key, { ...draft, phase: "failed", request: answer.phase === "refused" ? null : draft.request, failure: startFailure(answer.message) });
+          store.put(key, { ...draft, phase: "failed", request: answer.phase === "refused" ? null : draft.request, failure: answer.phase === "refused" ? startRefusal(answer.kind) : startFailure(answer.message) });
         }
       }
       for (const requestId of movedFailures) store.retireFailed(requestId);

@@ -8,7 +8,7 @@ import { useEscapeLayer } from "./components/ui/layer";
 import { Kbd } from "./components/ui/kbd";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "./components/ui/select";
 import { START_ANSWER_TIMEOUT_MS, startAnswer, startRequestId } from "./startAnswer";
-import { useStartPanel, startFailure } from "./startDraft";
+import { useStartPanel, startFailure, startRefusal } from "./startDraft";
 import { resolveTarget, startTargets, type StartTarget } from "./startTargets";
 import { windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
@@ -42,7 +42,7 @@ function useStartAnswer() {
       const panel = useStartPanel.getState();
       if (answer.phase === "pending") return false;
       if (answer.phase === "refused" || answer.phase === "failed") {
-        panel.fail(answer.phase === "refused" ? { message: answer.message } : startFailure(answer.message));
+        panel.fail(answer.phase === "refused" ? startRefusal(answer.kind) : startFailure(answer.message));
         return true;
       }
       const ui = useUiStore.getState();
@@ -200,7 +200,7 @@ function StartPanel({ actions }: { actions: Actions }) {
         }}
       />
       {failure ? (
-        <p role="alert" data-start-failure="true" className="whitespace-pre-line break-words px-md pb-xs text-caption text-destructive">
+        <p role="alert" data-start-failure="true" data-core-error={"code" in failure ? failure.code : undefined} className="whitespace-pre-line break-words px-md pb-xs text-caption text-destructive">
           {"key" in failure ? t(failure.key) : failure.message}
         </p>
       ) : null}

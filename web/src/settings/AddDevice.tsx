@@ -17,7 +17,8 @@ import { deviceIdFor, socketProblem } from "../settings";
 import type { Device } from "../snapshot";
 import { defaultDeviceName, hostChoices, pickableAliases, type HostChoice } from "../sshHosts";
 import { useShellStore } from "../store";
-import { useRefusalSince } from "./useErrorSince";
+import { coreErrorText } from "../coreError";
+import { useRefusalSince } from "../errorSince";
 
 const HOST_EXAMPLE = "Host studio\n  HostName studio.local\n  User you";
 
@@ -82,7 +83,7 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
       {hosts.truncated ? <Note>{t("devices.hostsTruncated", { count: hosts.hosts.length })}</Note> : null}
       <Note data-ssh-hosts-hint="true">{t("devices.notListed")}</Note>
       <Group>
-        <Row label={t("devices.name")} detail={error ? <Note tone="error" data-add-device-error="true">{error}</Note> : null}>
+        <Row label={t("devices.name")} detail={error ? <Note tone="error" data-add-device-error="true" data-core-error={error.kind}>{coreErrorText(error, t)}</Note> : null}>
           <Input
             value={name}
             disabled={pending}

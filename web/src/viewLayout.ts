@@ -40,14 +40,13 @@ export function viewLayoutPayload(workspace: ViewWorkspace, action: { action: st
 }
 
 /**
- * What the operator is told when the core refuses a View action or open
- * (B19): the core's reason, for every `view_layout.*` refusal. An action
- * that arrived for a Workspace no longer in front (`stale_workspace`) is the
- * log's alone, since the screen already shows another Workspace.
+ * Whether the operator is told that the core refused a View action or open
+ * (B19): every `view_layout.*` refusal is, worded by its kind (`coreErrorText`).
+ * An action that arrived for a Workspace no longer in front (`stale_workspace`)
+ * is the log's alone, since the screen already shows another Workspace.
  */
-export function viewRefusal(error: { kind: string; message: string } | null | undefined): string | null {
-  if (!error || (!error.kind.startsWith("view_layout.") && error.kind !== "agent_layout.display_limit") || error.kind === "view_layout.stale_workspace") return null;
-  return error.message;
+export function isViewRefusal(error: { kind: string } | null | undefined): boolean {
+  return !!error && (error.kind.startsWith("view_layout.") || error.kind === "agent_layout.display_limit") && error.kind !== "view_layout.stale_workspace";
 }
 
 /** Whether two displays show one document: its path and kind, and a diff's History group (the core's `Display::shows`). */

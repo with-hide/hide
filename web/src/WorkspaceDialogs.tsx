@@ -24,6 +24,8 @@ import { closeScope, subtreeOf, type Subtree } from "./close";
 import { StartIssueDialog } from "./IssueDialogs";
 import { PrDelegateDialog, PrLinkDialog, PrNewIssueDialog } from "./PrDialogs";
 import { translate, useInterfaceTranslation } from "./i18n/client";
+import { coreErrorText } from "./coreError";
+import { useErrorSince } from "./errorSince";
 import { localDeviceId, type Checkout, type Workspace } from "./snapshot";
 import { machineName, windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
@@ -42,12 +44,6 @@ import {
   removalFor,
   taskFor,
 } from "./workspaceManage";
-
-export function useErrorSince(since: number | null, prefixes: readonly string[]): string | null {
-  const error = useShellStore((s) => s.rest?.status?.last_error ?? null);
-  if (since === null || !error || error.occurred_at < since) return null;
-  return prefixes.some((prefix) => error.kind.startsWith(prefix)) ? error.message : null;
-}
 
 /** The row a dialog names, among this machine's projects or a connected device's workspaces (a remote purpose). */
 function findTarget(workspaceId: string, checkoutId?: string): { workspace: Workspace; checkout: Checkout | null } | null {
@@ -223,8 +219,8 @@ function RemoveProjectDialog({ actions, workspace, listed, onClose }: { actions:
           </Status>
         ) : null}
         {refused ? (
-          <Note tone="error" data-remove-result="failed">
-            {refused}
+          <Note tone="error" data-remove-result="failed" data-core-error={refused.kind}>
+            {coreErrorText(refused, t, "coreError.project.removeFailed")}
           </Note>
         ) : null}
         {removed ? (
@@ -308,7 +304,7 @@ function NewWorktreeDialog({ actions, workspace, onClose }: { actions: Actions; 
       purpose: purpose.trim() ? normalizePurpose(purpose.trim()) : null,
     });
   };
-  const failure = task?.phase === "failed" ? (task.message ?? t("workspace.createFailed")) : refused;
+  const failure = task?.phase === "failed" ? (task.message ?? t("workspace.createFailed")) : refused ? coreErrorText(refused, t, "workspace.createFailed") : null;
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
       <DialogContent data-new-worktree={workspace.id}>
@@ -353,7 +349,7 @@ function NewWorktreeDialog({ actions, workspace, onClose }: { actions: Actions; 
             {purpose ? (
               <p className={`text-caption ${purposeIsLong(purpose) ? "text-warning" : "text-muted-foreground"}`}>{purposeCountLabel(purpose, t)}{purposeIsLong(purpose) ? ` · ${t("workspace.purposeLong")}` : ""}</p>
             ) : null}
-            {failure ? <Note tone="error" data-worktree-error="true">{failure}</Note> : null}
+            {failure ? <Note tone="error" data-worktree-error="true" data-core-error={refused?.kind}>{failure}</Note> : null}
             {working ? <Status tone="pending">{t("workspace.creatingWorktree")}</Status> : null}
           </DialogBody>
           <DialogFooter>
@@ -388,7 +384,7 @@ function PurposeDialog({ actions, checkout, deviceLabel, onClose }: { actions: A
     setRequest({ afterId: actions.taskIdNow(), at: Date.now(), text: value });
     actions.setPurpose(checkout.id, value);
   };
-  const failure = task?.phase === "failed" ? (task.message ?? t("workspace.purposeFailed")) : refused;
+  const failure = task?.phase === "failed" ? (task.message ?? t("workspace.purposeFailed")) : refused ? coreErrorText(refused, t, "workspace.purposeFailed") : null;
   const label = checkout.branch ?? checkout.label;
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
@@ -421,7 +417,7 @@ function PurposeDialog({ actions, checkout, deviceLabel, onClose }: { actions: A
               {purposeScope(deviceLabel, checkout.branch ?? null, t)}
             </p>
             {failure ? (
-              <Note tone="error" data-purpose-error="true">
+              <Note tone="error" data-purpose-error="true" data-core-error={refused?.kind}>
                 {t("workspace.purposeFailure", { message: failure })}
               </Note>
             ) : null}
@@ -467,7 +463,7 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
   const finished = removal?.phase === "finished" ? removal : null;
   // A refusal or a failed removal keeps the worktree, so the choices come
   // back under the reason and Delete tries again on the row as it is now.
-  const failure = refused ?? (removal?.phase === "failed" ? (removal.message ?? t("workspace.deleteFailed")) : null);
+  const failure = refused ? coreErrorText(refused, t, "workspace.deleteFailed") : removal?.phase === "failed" ? (removal.message ?? t("workspace.deleteFailed")) : null;
   const choosing = !!row && !!gate && !gate.blocked_reason && !inFlight && !finished;
   const branch = row?.branch ?? checkout.branch;
   const needsDiscard = !!gate?.discard_label;
@@ -506,7 +502,7 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
           </Note>
         ) : null}
         {failure ? (
-          <Note tone="error" data-delete-result="failed">
+          <Note tone="error" data-delete-result="failed" data-core-error={refused?.kind}>
             {failure}
           </Note>
         ) : null}

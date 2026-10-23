@@ -5,7 +5,8 @@ import { Group, Note, Row } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import { SLEEP_AFTER_CHOICES, sleepAfterChoice, sleepAfterLabel, sleepingCount } from "../settings";
 import { useShellStore } from "../store";
-import { useErrorSince } from "./useErrorSince";
+import { coreErrorText } from "../coreError";
+import { useErrorSince } from "../errorSince";
 
 /**
  * Sleep idle agents (PRD agent-sleep B1-B3): one choice, and how many of this
@@ -19,7 +20,7 @@ export function IdleAgentsGroup({ actions }: { actions: Actions }) {
   const error = useErrorSince(changedAt, ["agent_sleep."]);
   return (
     <Group title={t("settings.idleAgents")} note={t("settings.sleepingNow", { count: sleeping })} data-settings-group="idle-agents">
-      <Row label={t("settings.sleepAfter")} detail={error ? <Note tone="error" data-agent-sleep-error="true">{t("settings.notSaved", { reason: error })}</Note> : null}>
+      <Row label={t("settings.sleepAfter")} detail={error ? <Note tone="error" data-agent-sleep-error="true" data-core-error={error.kind}>{coreErrorText(error, t, "coreError.settings.notSaved")}</Note> : null}>
         <Select
           value={choice}
           onValueChange={(value) => {
