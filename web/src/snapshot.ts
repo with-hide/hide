@@ -372,7 +372,7 @@ export type PullRequestWork = {
   review_requests: { kind: "user" | "team"; name: string }[];
   /** `unknown` while the question that tells could not be answered. */
   asked_of_me: "unknown" | "none" | "direct" | "team";
-  failed_checks: { name: string; url: string | null }[];
+  failed_checks: { name: string | null; url: string | null }[];
   pending_checks: number;
   /** Disjoint counts from the open head's GitHub rollup; absent until read. */
   check_counts?: { total: number; passed: number; failed: number; running: number; waiting: number; skipped: number; unknown: number } | null;
@@ -661,7 +661,7 @@ export type PrFeedback = {
   phase: "reading" | "ready" | "failed";
   /** The body once read. */
   body: string | null;
-  failed_checks: { name: string; url: string | null }[];
+  failed_checks: { name: string | null; url: string | null }[];
   change_requests: { author: string | null; body: string }[];
   /** `project_settings_repository_changed` or `pr_feedback.read_failed`. */
   failure: string | null;

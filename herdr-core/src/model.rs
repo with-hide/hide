@@ -4688,10 +4688,11 @@ pub struct PrLinkSnapshot {
 }
 
 /// One failed check of a pull request, by the name GitHub shows and the page
-/// that says why.
+/// that says why. A check GitHub gives no name has none, and the page words
+/// it.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PrFailedCheck {
-    pub name: String,
+    pub name: Option<String>,
     pub url: Option<String>,
 }
 
