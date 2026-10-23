@@ -20,6 +20,8 @@ it("holds Hide for every server on another protocol and never for one on Hide's"
   expect(herdrGate(rest("unreachable", null, takeover({ kind: "look", stage: "failed" })))).toBeNull();
   expect(herdrGate(rest("connected", 22, takeover({ same_protocol: true, server_version: "0.9.4" })))).toBeNull();
   expect(herdrGate(rest("connected", 22, takeover({ stage: "moved" })))).toBeNull();
+  // The moved step comes at once, before the connection reads Hide's Herdr (measured: about a second on 0.8.2).
+  expect(herdrGate(rest("protocol_mismatch", 20, takeover({ stage: "moved" })))).toBeNull();
   expect(herdrGate(rest("connected", 22))).toBeNull();
 });
 

@@ -108,6 +108,11 @@ function HerdrRows({ actions }: { actions: Actions }) {
   const movable = takeover?.kind === "move" && takeover.same_protocol && takeover.stage !== "moved";
   const path = versions?.path_herdr ?? null;
   const update = pathHerdrUpdate(versions);
+  // A daemon that reads versions looks again as About opens, so a `herdr` the operator just updated reads as it is now.
+  const reads = versions !== null;
+  useEffect(() => {
+    if (reads) actions.herdrTakeover("look");
+  }, [actions, reads]);
   return (
     <>
       <Row label={t("settings.herdrServer")}>

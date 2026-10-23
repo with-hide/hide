@@ -333,7 +333,8 @@ it("Settings > About names the server and the terminal's herdr, with a button on
   expect(document.querySelector("[data-herdr-update-command]")?.getAttribute("data-herdr-update-command")).toBe(brew);
   expect(document.body.textContent).toContain("Updates it with Homebrew");
   await act(async () => button("[data-herdr-takeover-move]")!.click());
-  expect(sent(older.events)).toEqual([{ action: "move" }]);
+  // Opening About looks again, so a `herdr` updated since reads as it is now.
+  expect(sent(older.events)).toEqual([{ action: "look" }, { action: "move" }]);
   await older.unmount();
 
   const none = await about({ state: "connected", received_version: "0.9.5" }, null, versions(null));

@@ -32,7 +32,9 @@ export type HerdrGate = "move" | "restart" | "update_hide" | "look" | "newer" | 
 export function herdrGate(rest: SnapshotRest | null | undefined): HerdrGate | null {
   const takeover = rest?.status?.herdr_takeover;
   const herdr = rest?.status?.herdr;
-  if (takeover && takeover.stage !== "moved" && !takeover.same_protocol && takeover.kind !== "look") return takeover.kind;
+  // A server just moved onto Hide's Herdr is Hide's, though the connection reads the old one for a moment longer.
+  if (takeover?.stage === "moved") return null;
+  if (takeover && !takeover.same_protocol && takeover.kind !== "look") return takeover.kind;
   if (herdr?.state !== "protocol_mismatch") return null;
   if (takeover?.kind === "look") return "look";
   return (herdr.received_protocol ?? 0) > (herdr.expected_protocol ?? Infinity) ? "newer" : "older";
