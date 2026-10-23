@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { hostBridge } from "../host";
 import { standInHost } from "./mount";
 import { holdPageOutside } from "./outside";
 import type { CoreEvent } from "./world";
+
+// Importing the stood-in host loads xterm; answer its canvas probe at the browser boundary.
+const browserCanvas = vi.hoisted(() => {
+  const original = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = () => null;
+  return { restore: () => { HTMLCanvasElement.prototype.getContext = original; } };
+});
+afterAll(() => browserCanvas.restore());
 
 describe("holdPageOutside", () => {
   afterEach(() => {
