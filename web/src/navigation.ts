@@ -11,6 +11,7 @@ import type { TreeRow } from "./agentRow";
 import type { MessageKey } from "./i18n/catalogs";
 import { thisMachineKey } from "./devices";
 import { translate } from "./i18n/client";
+import { coreErrorText, herdrStateText, remoteStateText } from "./coreError";
 import type { BoardProject } from "./projectBoard";
 import { projectsOf } from "./remote";
 import { machineName, windowDeviceId } from "./screenMachine";
@@ -173,8 +174,8 @@ function localAvailability(rest: SnapshotRest | null): DeviceAvailability {
   if (herdr.state === "not_connected") return { state: "loading", text: translate("overview.availability.connectingHerdr") };
   // A Herdr on another protocol says so in the operator's language; Overview draws its move in this place (PRD herdr-takeover B16).
   if (herdr.state === "protocol_mismatch") return { state: "unavailable", text: translate("herdrTakeover.overview.mismatch"), retry: null };
-  const reason = herdr.message ?? translate("overview.availability.herdrState", { state: herdr.state.replace(/_/g, " ") });
-  return { state: "unavailable", text: translate("overview.availability.agentCountsLater", { reason }), retry: null };
+  // The state is worded here; Herdr's own sentence, with its socket path, is the About tab's and the log's.
+  return { state: "unavailable", text: translate("coreError.herdr.countsLater", { reason: herdrStateText(herdr.state, translate) }), retry: null };
 }
 
 /** `name`: the device as this window calls it (`machineName`). */
@@ -182,14 +183,14 @@ function deviceAvailability(device: Device, status: RemoteStatus | undefined, na
   if (device.kind !== "remote") return { state: "ready" };
   if (!status || status.state === "not_connected") return { state: "loading", text: translate("devices.state.connecting") };
   if (status.state !== "connected" && status.state !== "stale") {
-    return { state: "unavailable", text: status.message ?? translate("overview.availability.deviceState", { device: name, state: status.state.replace(/_/g, " ") }), retry: status.state === "disabled" ? null : "connect" };
+    return { state: "unavailable", text: remoteStateText(status.state, name, translate), retry: status.state === "disabled" ? null : "connect" };
   }
   if (status.state === "stale") {
-    return { state: "unavailable", text: status.message ?? translate("overview.availability.deviceStale", { device: name }), retry: "connect" };
+    return { state: "unavailable", text: translate("overview.availability.deviceStale", { device: name }), retry: "connect" };
   }
   const catalog = status.catalog;
   if (catalog?.state === "resolving") return { state: "loading", text: translate("overview.availability.readingProjects") };
-  if (catalog?.state === "unavailable") return { state: "unavailable", text: catalog.message ?? translate("overview.availability.projectsUnreadable"), retry: "helper" };
+  if (catalog?.state === "unavailable") return { state: "unavailable", text: translate("overview.availability.projectsUnreadable"), retry: "helper" };
   return { state: "ready" };
 }
 
@@ -424,7 +425,7 @@ export function openingProgress(rest: SnapshotRest | null, opening: Opening): "l
     && !rest.navigator.workspaces.some((workspace) => workspace.id === target.workspaceId && workspace.checkouts.some((checkout) => checkout.id === target.checkoutId))) return "cancelled";
   if (openingLanded(rest, target)) return "landed";
   const error = rest?.status?.last_error;
-  if (error && error.occurred_at !== opening.errorBefore) return error.message;
+  if (error && error.occurred_at !== opening.errorBefore) return coreErrorText(error, translate);
   return null;
 }
 

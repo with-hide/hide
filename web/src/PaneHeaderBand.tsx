@@ -1,5 +1,6 @@
 import { ChevronDownIcon, GitForkIcon, ListTreeIcon } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
+import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { agentProductName } from "./agentAdapters";
 import { askWhat, VerbText } from "./components/agent-tree";
@@ -10,7 +11,9 @@ import { Elapsed } from "./components/elapsed";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import { localDeviceId, type PaneBand, type PaneHeader, type PaneRow, type SnapshotRest, type AgentRow } from "./snapshot";
+import { localDeviceId, type PaneBand, type PaneHeader, type PaneRow, type SnapshotRest, type AgentRow, type Device, type RemoteStatus } from "./snapshot";
+import { remoteStateText } from "./coreError";
+import { machineName } from "./screenMachine";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { relationState } from "./lineage";
@@ -87,7 +90,7 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const outcome = useShellStore((state) => state.rest?.status?.pane_focus_request);
   const agents = usePaneAgents();
   const { children, devices } = usePaneChildren(paneId, agents);
-  const childConnection = children?.unavailableDevice ? devices?.status?.remote?.find((row) => row.target_id === children.unavailableDevice)?.message ?? t("devices.rail.notConnected") : null;
+  const childConnection = children?.unavailableDevice ? notConnectedText(devices?.status?.remote, devices?.navigator?.devices, children.unavailableDevice, t) : null;
   const band = header?.band ?? null;
   // A running plan's current step and its line take the progress place (PRD hide-plan B7).
   const planLine = useShellStore((state) => {
@@ -224,6 +227,12 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
   </>;
 }
 
+/** Why `device` is not connected, worded from its state; a device still connecting or holding its last report is plainly not connected. */
+function notConnectedText(remote: readonly RemoteStatus[] | undefined, devices: readonly Device[] | undefined, device: string, t: TFunction<"translation">): string {
+  const state = remote?.find((row) => row.target_id === device)?.state;
+  return !state || state === "not_connected" || state === "stale" ? t("devices.rail.notConnected") : remoteStateText(state, machineName(devices, device, t), t);
+}
+
 /** Why a pane on a device that is not connected cannot be opened now, or null when it can (B8). */
 function useUnreachable(paneId: string | null): string | null {
   const { t } = useInterfaceTranslation();
@@ -231,7 +240,7 @@ function useUnreachable(paneId: string | null): string | null {
     if (paneId === null) return null;
     const device = remoteTargetOfPane(state.rest, paneId);
     if (device === null || deviceConnected(state.rest, device)) return null;
-    return state.rest?.status?.remote?.find((row) => row.target_id === device)?.message ?? t("devices.rail.notConnected");
+    return notConnectedText(state.rest?.status?.remote, state.rest?.navigator?.devices, device, t);
   });
 }
 

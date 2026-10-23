@@ -10,8 +10,8 @@ export const START_ANSWER_TIMEOUT_MS = 90_000;
 
 export type StartAnswer =
   | { phase: "pending" }
-  /** The core refused the request before any work: the reason is the operator's to act on. */
-  | { phase: "refused"; message: string }
+  /** The core refused the request before any work: `kind` names why, worded by `startRefusal`. */
+  | { phase: "refused"; kind: string }
   /** `message` is the core's reason, null when it sent none. */
   | { phase: "failed"; message: string | null }
   /** The tab exists; `agentPhase` says whether the agent behind it started (`starting`, `started`, `failed`). */
@@ -25,7 +25,7 @@ export function startRequestId(): string {
 
 export function startAnswer(rest: SnapshotRest | null, requestId: string, kind: "agent_start" | "worktree_create" = "agent_start"): StartAnswer {
   const error = rest?.status?.last_error;
-  if (error?.request_id === requestId) return { phase: "refused", message: error.message };
+  if (error?.request_id === requestId) return { phase: "refused", kind: error.kind };
   const operation = rest?.task_operation;
   if (operation?.request_id !== requestId || operation.kind !== kind) return { phase: "pending" };
   if (operation.phase === "failed") return { phase: "failed", message: operation.message };

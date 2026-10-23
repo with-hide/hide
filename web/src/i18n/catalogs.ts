@@ -48,6 +48,7 @@ import { settingsCatalogs, settingsEnglish } from "./resources/settings";
 import { workspaceCatalogs, workspaceEnglish } from "./resources/workspace";
 import { checkoutGitCatalogs, checkoutGitEnglish } from "./resources/checkoutGit";
 import type { Catalogs } from "./schema";
+import { coreErrorsCatalogs, coreErrorsEnglish } from "./resources/coreErrors";
 import { sessionWorkCatalogs, sessionWorkEnglish } from "./resources/sessionWork";
 import { deviceOverviewCatalogs, deviceOverviewEnglish } from "./resources/deviceOverview";
 import { overviewRedesignCatalogs, overviewRedesignEnglish } from "./resources/overviewRedesign";
@@ -105,6 +106,7 @@ export const english = {
   ...memoryEnglish,
   ...projectSettingsEnglish,
   ...projectToolEnglish,
+  ...coreErrorsEnglish,
 } as const;
 
 export type MessageKey = keyof typeof english;
@@ -164,6 +166,7 @@ export const catalogs = {
     ...memoryCatalogs.ko,
     ...projectSettingsCatalogs.ko,
     ...projectToolCatalogs.ko,
+    ...coreErrorsCatalogs.ko,
   },
   "zh-CN": {
     ...groupTabsCatalogs["zh-CN"],
@@ -218,6 +221,7 @@ export const catalogs = {
     ...memoryCatalogs["zh-CN"],
     ...projectSettingsCatalogs["zh-CN"],
     ...projectToolCatalogs["zh-CN"],
+    ...coreErrorsCatalogs["zh-CN"],
   },
   ja: {
     ...groupTabsCatalogs.ja,
@@ -272,5 +276,6 @@ export const catalogs = {
     ...memoryCatalogs.ja,
     ...projectSettingsCatalogs.ja,
     ...projectToolCatalogs.ja,
+    ...coreErrorsCatalogs.ja,
   },
 } satisfies Catalogs<typeof english>;

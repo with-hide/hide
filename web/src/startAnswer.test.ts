@@ -30,7 +30,7 @@ describe("the answer to one start request", () => {
   });
 
   it("carries a refusal's reason", () => {
-    expect(startAnswer(rest(null, { kind: "home.conflict", message: "~/hide is not Hide's", request_id: "mine" }), "mine")).toEqual({ phase: "refused", message: "~/hide is not Hide's" });
+    expect(startAnswer(rest(null, { kind: "home.conflict", message: "~/hide is not Hide's", request_id: "mine" }), "mine")).toEqual({ phase: "refused", kind: "home.conflict" });
   });
 
   it("reports a ready task with the pane and how the agent stands", () => {

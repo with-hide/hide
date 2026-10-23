@@ -13,7 +13,8 @@ import { IdleAgentsGroup } from "./IdleAgentsGroup";
 import { HideSkillsGroup } from "./HideSkillsGroup";
 import { StartingWorkGroup } from "./StartingWorkGroup";
 import { useAgentsDemand } from "./useAgentsDemand";
-import { useErrorSince } from "./useErrorSince";
+import { coreErrorText } from "../coreError";
+import { useErrorSince } from "../errorSince";
 
 /**
  * Agents (PRD settings-cleanup D-06 to D-13): the seven supported agents of one
@@ -134,8 +135,8 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
             </Note>
           ) : null}
           {failure ? (
-            <Note tone="error" data-agents-error="true">
-              {failure}
+            <Note tone="error" data-agents-error="true" data-core-error={failure.kind}>
+              {coreErrorText(failure, t, "coreError.kit.unavailable")}
             </Note>
           ) : null}
           {machine.notInstalled.length > 0 ? (

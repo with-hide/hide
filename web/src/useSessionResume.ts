@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useInterfaceTranslation } from "./i18n/client";
 import { startAnswer, startRequestId, START_ANSWER_TIMEOUT_MS } from "./startAnswer";
+import { coreErrorKey } from "./coreError";
 import { startReasonText } from "./startReason";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+
+/** The sentence for a resume the core refused, by its kind. */
+function startRefusalKey(kind: string) {
+  return coreErrorKey(kind) ?? "workspace.agentNotStarted";
+}
 
 /** A resume in flight: the request it sent, then the core's refusal if it came. */
 type Resume = { request: string | null; failure: string | null; uncertain: boolean };
@@ -51,7 +57,8 @@ export function useSessionResume(): { resume: Resume; start: (send: Send) => voi
       sending.current = false;
       // Refusing an inspection says nothing about the original launch.
       const uncertain = confirming.current && answer.phase === "refused";
-      setResume({ request: uncertain ? request : null, failure: answer.message ?? "", uncertain });
+      const failure = answer.phase === "refused" ? t(startRefusalKey(answer.kind)) : answer.message ? startReasonText(answer.message, t) : "";
+      setResume({ request: uncertain ? request : null, failure, uncertain });
     }
   }, [request, operation, error, t]);
   useEffect(() => {

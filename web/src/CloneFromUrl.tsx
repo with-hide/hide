@@ -23,7 +23,8 @@ import { RegistrationStatus, useRegistration } from "./registration";
 import { localDeviceId, type RepositoryClone, type WorkspaceRegistration } from "./snapshot";
 import { useShellStore } from "./store";
 import { useInterfaceTranslation } from "./i18n/client";
-import { useErrorSince } from "./WorkspaceDialogs";
+import { coreErrorText } from "./coreError";
+import { useErrorSince } from "./errorSince";
 
 /** How long typing settles before hided is asked about the folder. */
 const TARGET_CHECK_DELAY_MS = 150;
@@ -67,7 +68,7 @@ export function CloneFromUrl({ actions, registrations, pickParent, onBack, draft
     following && "path" in following && pathRefusal?.kind === "clone_repository" && pathRefusal.path === following.path ? pathRefusal.reason : null;
   // A refusal of the clone itself (hided's, or the core's), or the core
   // unable to register the finished folder; a running clone has neither.
-  const refusal = hidedRefusal ? refusalText(hidedRefusal, t) : cloneError && !running ? cloneError : null;
+  const refusal = hidedRefusal ? refusalText(hidedRefusal, t) : cloneError && !running ? coreErrorText(cloneError, t, "addProject.clone.failed") : null;
   const ended = clone?.phase === "failed" || clone?.phase === "cancelled" || refusal !== null;
   const answer = target && name && target.parent === parentPath && target.name === name ? target : null;
   const waiting = following !== null && !ended && registration.shown === null;
@@ -168,7 +169,7 @@ export function CloneFromUrl({ actions, registrations, pickParent, onBack, draft
         </div>
         <CloneProgress clone={clone} following={following !== null} />
         {refusal ? (
-          <div role="alert" className="flex min-w-0 flex-col gap-xxs" data-clone-refused={hidedRefusal ?? "core"}>
+          <div role="alert" className="flex min-w-0 flex-col gap-xxs" data-clone-refused={hidedRefusal ?? "core"} data-core-error={hidedRefusal ? undefined : cloneError?.kind}>
             <Status tone="error">{refusal}</Status>
           </div>
         ) : clone?.phase === "finished" ? (

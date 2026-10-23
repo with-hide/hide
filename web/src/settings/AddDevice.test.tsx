@@ -122,15 +122,19 @@ it("keeps a refused Add enabled with its reason after the core clears last_error
   expect(q('[data-add-device="true"]')?.hasAttribute("disabled")).toBe(true);
   expect(q("[data-device-label]")?.hasAttribute("disabled")).toBe(true);
 
-  const refused = { kind: "device.consent_required", message: "Hide has no consent to install on lab", retryable: false, occurred_at: Date.now() + 1000 };
+  const refused = { kind: "device.duplicate", message: "Device lab is already registered", retryable: false, occurred_at: Date.now() + 1000 };
   await act(async () => { useShellStore.setState({ rest: { ...useShellStore.getState().rest, status: { ...useShellStore.getState().rest?.status, last_error: refused } } } as never); });
-  expect(q('[data-add-device-error="true"]')?.textContent).toBe("Hide has no consent to install on lab");
+  // Worded by its kind; the core's sentence is the log's.
+  expect(q('[data-add-device-error="true"]')?.textContent).toBe("This device has already been added.");
+  expect(q('[data-add-device-error="true"]')?.getAttribute("data-core-error")).toBe("device.duplicate");
   expect(q('[data-add-device="true"]')?.hasAttribute("disabled")).toBe(false);
   expect(q("[data-device-label]")?.hasAttribute("disabled")).toBe(false);
 
   // An unrelated event arrives and the core takes last_error: the refusal stays, and the form stays usable.
   await act(async () => { useShellStore.setState({ rest: { ...useShellStore.getState().rest, status: { ...useShellStore.getState().rest?.status, last_error: null } } } as never); });
-  expect(q('[data-add-device-error="true"]')?.textContent).toBe("Hide has no consent to install on lab");
+  // Worded by its kind; the core's sentence is the log's.
+  expect(q('[data-add-device-error="true"]')?.textContent).toBe("This device has already been added.");
+  expect(q('[data-add-device-error="true"]')?.getAttribute("data-core-error")).toBe("device.duplicate");
   expect(q('[data-add-device="true"]')?.hasAttribute("disabled")).toBe(false);
   expect(q("[data-device-label]")?.hasAttribute("disabled")).toBe(false);
 

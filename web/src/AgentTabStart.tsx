@@ -8,7 +8,7 @@ import { Button } from "./components/ui/button";
 import { deviceConnected } from "./devices";
 import { useInterfaceTranslation } from "./i18n/client";
 import { startRequestId } from "./startAnswer";
-import { inlineStartKey, startFailure, useInlineStarts, type InlineStartDraft } from "./startDraft";
+import { inlineStartKey, startFailure, startRefusal, useInlineStarts, type InlineStartDraft } from "./startDraft";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { catalogWorkspaces } from "./snapshot";
@@ -58,7 +58,7 @@ export function InlineStartHost() {
           const failure = startFailure(answer.message);
           if (draft.phase !== "unknown" || draft.taskId !== answer.taskId || JSON.stringify(draft.failure) !== JSON.stringify(failure)) store.put(key, { ...draft, phase: "unknown", taskId: answer.taskId, failure });
         } else if (draft.phase !== "failed") {
-          store.put(key, { ...draft, phase: "failed", request: answer.phase === "refused" ? null : draft.request, failure: startFailure(answer.message) });
+          store.put(key, { ...draft, phase: "failed", request: answer.phase === "refused" ? null : draft.request, failure: answer.phase === "refused" ? startRefusal(answer.kind) : startFailure(answer.message) });
         }
       }
       for (const requestId of movedFailures) store.retireFailed(requestId);
@@ -121,7 +121,7 @@ export function AgentTabStart({ workspace, target, groupName, actions }: { works
       <Button variant="secondary" className="w-full" disabled={!connected || (locked && !terminalRetry)} onClick={() => start(true)} data-group-start-terminal="true"><TerminalIcon />{t(terminalRetry ? "groups.retryTerminal" : "groups.terminal")}</Button>
       <p className="truncate text-center text-caption text-muted-foreground" title={workspace.path}>{workspace.path}</p>
       {!connected ? <p role="status" className="text-caption text-muted-foreground">{t("groups.notConnected")}</p> : null}
-      {failure ? <p role="alert" className="whitespace-pre-line text-caption text-destructive">{failure}</p> : null}
+      {failure ? <p role="alert" data-core-error={draft.failure && "code" in draft.failure ? draft.failure.code : undefined} className="whitespace-pre-line text-caption text-destructive">{failure}</p> : null}
       {draft.phase === "unknown" ? <div className="flex flex-col items-start gap-xs"><p role="status" className="text-caption text-muted-foreground">{t("groups.unknown")}</p><Button variant="outline" disabled={!connected} onClick={() => start(false, true)}>{t("groups.confirm")}</Button></div> : null}
       {full ? <p role="alert" className="text-caption text-destructive">{t("groups.draftLimit")}</p> : null}
     </div>

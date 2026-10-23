@@ -46,7 +46,8 @@ export default tseslint.config(
           mode: "jsx-only",
           "jsx-attributes": { include: READ_ATTRIBUTES },
           "jsx-components": { exclude: ["Kbd"] },
-          callees: { exclude: ["data", "fieldLabel", "commandLabel", "sheetRows", "divider", "cn", "t", "translate", "getChildren"] },
+          // `coreErrorText` takes a catalog key as its fallback sentence, as `t` does.
+          callees: { exclude: ["data", "fieldLabel", "commandLabel", "sheetRows", "divider", "cn", "t", "translate", "getChildren", "coreErrorText"] },
           words: { exclude: WORDS_EXCLUDE },
         },
       ],

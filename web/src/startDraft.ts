@@ -8,6 +8,7 @@
 import { create } from "zustand";
 import type { ProviderKind } from "./agentPicker";
 import type { MessageKey } from "./i18n/catalogs";
+import { coreErrorKey } from "./coreError";
 import { startReason } from "./startReason";
 import type { AgentSelection } from "./agentPicker";
 import type { AgentStartTarget } from "./agentLayout";
@@ -20,12 +21,21 @@ import type { AgentStartTarget } from "./agentLayout";
  */
 export type StartPreset = { projectId: string; kind?: ProviderKind };
 
-/** Why a start did not go: the core's own sentence, shown as sent, or a catalog key the panel words in the operator's language. */
-export type StartFailure = { message: string } | { key: MessageKey };
+/**
+ * Why a start did not go: the core's own sentence, shown as sent, or a catalog
+ * key the panel words in the operator's language, with the core's `code` for
+ * the log and the element's `data-core-error` when it sent one.
+ */
+export type StartFailure = { message: string } | { key: MessageKey; code?: string };
 
 /** The core's reason when it sent one (`startReason`), else the plain "did not start". */
 export function startFailure(message: string | null | undefined): StartFailure {
   return message ? startReason(message) : { key: "workspace.agentNotStarted" };
+}
+
+/** A start the core refused, by its `last_error.kind`; a kind this build does not word is the plain "did not start". */
+export function startRefusal(kind: string): StartFailure {
+  return { key: coreErrorKey(kind) ?? "workspace.agentNotStarted", code: kind };
 }
 
 /** The core's reason as a sentence that another sentence can follow: a reason sent without its full stop gets one. */

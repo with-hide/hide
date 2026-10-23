@@ -351,14 +351,15 @@ describe("deviceCatalogLine", () => {
 
   it("tells loading, failure, a kept stale list and an empty host apart", () => {
     expect(line(null)?.state).toBe("loading");
-    expect(line(status("auth_failed", null))).toMatchObject({ state: "error", text: "Studio is auth failed: ssh refused" });
+    expect(line(status("auth_failed", null))).toMatchObject({ state: "error", text: "Studio is not connected" });
+    expect(line(status("unreachable", null))).toMatchObject({ state: "error", text: "Hide cannot reach Studio" });
     expect(line(status("stale", session()))?.state).toBe("stale");
     expect(line(status("connected", { ...session(), workspaces: [] }))?.state).toBe("empty");
   });
 
   it("never presents projects the helper has not confirmed as confirmed", () => {
     expect(line(status("connected", session(), { state: "resolving", message: null, refused: [] }))?.state).toBe("resolving");
-    expect(line(status("connected", session(), { state: "unavailable", message: "Allow the helper in Settings", refused: [] }))?.text).toContain("Allow the helper in Settings");
+    expect(line(status("connected", session(), { state: "unavailable", message: "Allow the helper in Settings", refused: [] }))?.text).toBe("Projects on Studio are listed by workspace until its helper can confirm them.");
     expect(line(status("connected", session(), { state: "ready", message: null, refused: [{ path: "/gone", message: "missing" }] }))?.state).toBe("partial");
     expect(line(status("connected", session(), { state: "ready", message: null, refused: [] }))).toBeNull();
   });
