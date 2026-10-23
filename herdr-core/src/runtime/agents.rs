@@ -1850,12 +1850,15 @@ impl Runtime {
         let now = unix_milliseconds();
         let mut requests = Vec::new();
         let mut settled = Vec::new();
-        let beside = self.beside_spawned_panes();
+        // Read from the ledger only once a delegated child reaches the check.
+        let mut beside = None;
         for agent in &self.snapshot.navigator.agents {
             if !agent.delegated
                 || crate::agent_hooks::is_remote_pane(&agent.pane_id)
                 || self.manually_placed_pane(&agent.pane_id)
-                || beside.contains(agent.pane_id.as_str())
+                || beside
+                    .get_or_insert_with(|| self.beside_spawned_panes())
+                    .contains(agent.pane_id.as_str())
             {
                 continue;
             }

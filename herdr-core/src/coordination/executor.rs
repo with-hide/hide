@@ -591,21 +591,38 @@ fn spawn(
     if machine.is_some() && hide_agent_adapter::start_kind(kind).is_none() {
         return Err("invalid_spawn".into());
     }
+    let mut ledger = state(client)?;
     // A spawn beside its caller opens in the caller's own tab, so it is
-    // judged before anything is registered, reserved or created.
+    // judged before anything is registered, reserved or created; a retry of
+    // an intent whose pane exists already is judged by what it did, and a
+    // completed one stays offline (engineering #11).
     let beside_of = if *beside {
+        let known_parent = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
+            super::live_self(&ledger, actor)
+                .next()
+                .map(|p| p.id.clone())
+        } else {
+            parent.clone()
+        };
+        let placed = known_parent.is_some_and(|id| {
+            ledger.spawns.iter().any(|record| {
+                record.parent == id
+                    && record.intent == *intent
+                    && record.beside
+                    && (record.pane.is_some() || record.completed)
+            })
+        });
         Some(beside_target(
             client,
             authority,
             actor,
             machine.as_deref(),
-            (repo, branch, path.as_deref()),
+            (!placed).then_some((repo.as_str(), branch.as_str(), path.as_deref())),
             intent,
         )?)
     } else {
         None
     };
-    let mut ledger = state(client)?;
     if let Some(device) = machine {
         // Nothing is created for a device that cannot take the spawn, so the
         // judgment comes before the parent is registered or the intent
@@ -813,7 +830,12 @@ fn spawn(
                         .map(|workspace| workspace.label.as_str()),
                     &label,
                 );
-                let launch = crate::agent_start::shell_launch(node.as_deref(), &reserved.id);
+                // A split beside the caller runs Herdr's own shell, as a fork's
+                // does, so only a tab is launched with Hide's.
+                let launch = beside_of
+                    .is_none()
+                    .then(|| crate::agent_start::shell_launch(node.as_deref(), &reserved.id))
+                    .flatten();
                 // A tab under the spawn's label is one this spawn opened, with
                 // the launch when there is one; a workspace under it holds
                 // Herdr's own first tab, which was never replaced.
@@ -848,14 +870,20 @@ fn spawn(
                             &existing,
                             &reserved.id,
                         )?;
+                        // Drawing ahead is only the screen's: Herdr's layout
+                        // replaces it, so a runtime that cannot draw it now
+                        // never fails the spawn.
                         if split
                             && on_node
                             && let Some(runtime) = client.runtime.upgrade()
                         {
-                            runtime
-                                .lock()
-                                .map_err(|_| "delivery_unavailable")?
-                                .draw_answered_split(caller, &pane);
+                            match runtime.lock() {
+                                Ok(mut runtime) => runtime.draw_answered_split(caller, &pane),
+                                Err(_) => crate::diagnostic!(json!({
+                                    "component": "spawn", "kind": "beside.draw_skipped",
+                                    "spawn": reserved.id, "pane_id": pane,
+                                })),
+                            }
                         }
                         pane
                     }
@@ -886,6 +914,10 @@ fn spawn(
                     }
                 };
                 (existing, pane, seed_tab, made)
+            } else if beside_of.is_some() {
+                // The caller's worktree was listed a moment ago and is gone
+                // now; a spawn beside never makes one.
+                return Err("beside_other_checkout".into());
             } else {
                 let mut params = crate::wire::worktree_create_params(repo, branch, None, false)?;
                 params["label"] = json!(format!("hide:{}", reserved.id));
@@ -947,6 +979,25 @@ fn spawn(
                 },
             )?)
             .map_err(|_| "spawn_unavailable")?;
+            // The record names the split now, so its label has done its work
+            // and leaves Herdr's own title of the pane.
+            if let (Some(_), Some(pane)) = (beside_of.as_ref(), reserved.pane.as_deref()) {
+                let cleared = crate::wire::pane_rename_params(pane, None).and_then(|params| {
+                    request_with_connector(
+                        connector.as_ref(),
+                        "pane.rename",
+                        params,
+                        Duration::from_secs(5),
+                    )
+                    .map_err(|error| error.to_string())
+                });
+                if let Err(detail) = cleared {
+                    crate::diagnostic!(json!({
+                        "component": "spawn", "kind": "beside.label_kept",
+                        "spawn": reserved.id, "pane_id": pane, "detail": detail,
+                    }));
+                }
+            }
         }
         let pane = reserved.pane.clone().ok_or("spawn_unavailable")?;
         let pane = pane.as_str();
@@ -1142,12 +1193,14 @@ fn spawn(
 /// device: refused, with nothing created, when the child would run on another
 /// device or in another checkout than the caller's (a new worktree, another
 /// branch or another folder), or when the caller is no agent pane Hide knows.
+/// `target` is the repository, branch and folder asked for, compared with
+/// Herdr's worktrees; none for a retry whose pane exists already.
 fn beside_target(
     client: &Client,
     authority: &Authority,
     actor: &Actor,
     machine: Option<&str>,
-    (repo, branch, path): (&str, &str, Option<&str>),
+    target: Option<(&str, &str, Option<&str>)>,
     intent: &str,
 ) -> Result<String, String> {
     let refused = |reason: &str| {
@@ -1169,6 +1222,9 @@ fn beside_target(
         .strip_prefix(&format!("remote:{}:pane:", actor.device_id))
         .unwrap_or(&actor.pane_id)
         .to_owned();
+    let Some((repo, branch, path)) = target else {
+        return Ok(pane);
+    };
     let CoordinationContext { connector, .. } = context(client, &actor.device_id)?;
     let listed = request_with_connector(
         connector.as_ref(),
@@ -1187,8 +1243,10 @@ fn beside_target(
 
 /// The pane a spawn beside `caller` runs in, and whether it was split now:
 /// the pane an earlier attempt split and labelled, else a new split right of
-/// the caller, labelled before anything else so a retry finds it rather than
-/// splitting again. A split that cannot be labelled is closed.
+/// the caller, labelled before anything else so that, once labelled, a retry
+/// finds it rather than splitting again. A split that cannot be labelled is
+/// closed; one whose own reply was lost is never labelled, and a retry makes
+/// its own.
 fn beside_pane(
     connector: &dyn ApiConnector,
     snapshot: &crate::session_sync::ProjectionState,

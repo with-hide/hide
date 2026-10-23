@@ -467,7 +467,16 @@ impl Runtime {
                 })
                 .map_err(|error| Refusal {
                     reason: error.kind(),
-                    next_action: "There is no room for another View area beside this one; close one with hide view close <view-id>, or open without --beside, and retry",
+                    next_action: match error {
+                        crate::view_layout::LayoutError::AreaLimit
+                        | crate::view_layout::LayoutError::DepthLimit => {
+                            "There is no room for another View area beside this one; close an area's last View with hide view close <view-id>, or open without --beside, and retry"
+                        }
+                        crate::view_layout::LayoutError::DisplayLimit => {
+                            "The Workspace holds as many Views as it can; close one with hide view close <view-id> and retry"
+                        }
+                        _ => "Run hide view list, choose an available View or area, and retry",
+                    },
                 })?
             } else {
                 self.change_view_layout(key, |layout, stamp| {

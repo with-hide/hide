@@ -43,9 +43,16 @@ impl NodeLink for Node {
 /// agent was started, and the refusals the next calls meet.
 #[derive(Default)]
 struct Device {
+    /// The caller's pane and the checkout it works in.
+    caller: String,
+    checkout: String,
     panes: Vec<(String, Option<String>)>,
     started: bool,
     split_refused: bool,
+    /// Whether Herdr refuses to label the split.
+    rename_refused: bool,
+    /// Whether the caller's worktree is no longer listed.
+    worktree_gone: bool,
     /// How many more `pane.get` reads fail, as a reply lost on the way.
     lost_reads: usize,
 }
@@ -53,33 +60,40 @@ struct Device {
 fn device_herdr(device: Arc<Mutex<Device>>) -> FakeHerdr {
     FakeHerdr::start_with_errors("beside-spawn", move |method, params| {
         let mut device = device.lock().unwrap();
+        let checkout = device.checkout.clone();
         Ok(match method {
+            "worktree.list" if device.worktree_gone => {
+                return Err(("internal_error".into(), "the repository is gone".into()));
+            }
             "worktree.list" => json!({"type": "worktree_list", "source": {
                 "repo_key": "/srv/repo/.git", "repo_name": "repo", "repo_root": "/srv/repo",
                 "source_checkout_path": "/srv/repo", "source_workspace_id": "w1"},
                 "worktrees": [{"branch": "topic", "is_bare": false, "is_detached": false,
                     "is_linked_worktree": true, "is_prunable": false, "label": "repo",
-                    "open_workspace_id": "w2", "path": CHECKOUT}]}),
+                    "open_workspace_id": "w2", "path": checkout}]}),
             "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
                 "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
                 "workspaces": [], "tabs": [], "layouts": [], "agents": [],
                 "panes": device.panes.iter().map(|(pane, label)| json!({
                     "pane_id": pane, "workspace_id": "w2", "tab_id": "w2:t1",
                     "terminal_id": format!("terminal-{pane}"), "focused": false,
-                    "agent_status": "idle", "revision": 1, "cwd": CHECKOUT,
+                    "agent_status": "idle", "revision": 1, "cwd": checkout,
                     "label": label})).collect::<Vec<_>>()}}),
             "pane.split" if device.split_refused => {
                 return Err(("pane_not_found".into(), "pane w2:p0 not found".into()));
             }
             "pane.split" => {
-                assert_eq!(params["target_pane_id"], CALLER);
+                assert_eq!(params["target_pane_id"], device.caller.as_str());
                 assert_eq!(params["direction"], "right");
                 assert_eq!(params["focus"], false);
-                assert_eq!(params["cwd"], CHECKOUT);
+                assert_eq!(params["cwd"], checkout.as_str());
                 device.panes.push(("w2:p1".into(), None));
                 json!({"type": "pane_info", "pane": {"workspace_id": "w2", "tab_id": "w2:t1",
                     "pane_id": "w2:p1", "terminal_id": "terminal-w2:p1", "focused": false,
                     "agent_status": "idle", "revision": 0}})
+            }
+            "pane.rename" if device.rename_refused => {
+                return Err(("pane_not_found".into(), "the pane is gone".into()));
             }
             "pane.rename" => {
                 let pane = params["pane_id"].as_str().unwrap();
@@ -125,6 +139,8 @@ fn child_row() -> Value {
 }
 
 struct Spawner {
+    /// The checkout the caller works in.
+    checkout: &'static str,
     _turn: std::sync::MutexGuard<'static, ()>,
     _root: tempfile::TempDir,
     runtime: Arc<Mutex<Runtime>>,
@@ -152,6 +168,8 @@ fn spawner() -> Spawner {
         session: crate::wire::session_digest("native-lead"),
     };
     let device = Arc::new(Mutex::new(Device {
+        caller: CALLER.into(),
+        checkout: CHECKOUT.into(),
         panes: vec![(CALLER.into(), None)],
         ..Default::default()
     }));
@@ -299,6 +317,7 @@ fn spawner() -> Spawner {
     )
     .unwrap();
     Spawner {
+        checkout: CHECKOUT,
         _turn: turn,
         _root: root,
         runtime,
@@ -314,6 +333,7 @@ fn spawner() -> Spawner {
 /// Where a spawn asks for its child: which machine, branch and folder, and
 /// whether beside its caller.
 struct Ask<'a> {
+    parent: Option<&'a str>,
     beside: bool,
     machine: Option<&'a str>,
     branch: &'a str,
@@ -321,6 +341,7 @@ struct Ask<'a> {
 }
 
 const BESIDE: Ask<'static> = Ask {
+    parent: Some("here"),
     beside: true,
     machine: None,
     branch: "topic",
@@ -334,13 +355,13 @@ impl Spawner {
             .lock()
             .unwrap()
             .workspace_control_query(
-                DEVICE,
+                &self.actor.device_id,
                 &self.actor.pane_id,
                 crate::workspace_control::Query::Info,
             )
             .expect("the caller's checkout")
             .context;
-        assert_eq!(context.checkout_path, CHECKOUT);
+        assert_eq!(context.checkout_path, self.checkout);
         let authority = crate::delivery::worker::Authority {
             caller: self.actor.pane_id.clone(),
             context,
@@ -351,7 +372,7 @@ impl Spawner {
             self.actor.clone(),
             Command::Spawn {
                 mission: None,
-                parent: Some("here".into()),
+                parent: ask.parent.map(str::to_owned),
                 machine: ask.machine.map(str::to_owned),
                 name: "worker".into(),
                 intent: intent.into(),
@@ -486,4 +507,165 @@ fn an_intent_reused_with_another_placement_is_refused() {
         ),
         Err("intent_conflict".to_owned())
     );
+}
+
+const LOCAL_CHECKOUT: &str = "/checkouts/fixture";
+
+/// A registered caller agent in pane `sender` of this machine, working in the
+/// fixture's checkout, with this machine's Herdr laid out as one tab.
+fn local_spawner() -> Spawner {
+    let turn = crate::coordination::SPAWN_TURN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, mut actor, _, path) = crate::runtime::delivery::tests::fixture(root.path());
+    actor.session = crate::wire::session_digest("native-parent");
+    let device = Arc::new(Mutex::new(Device {
+        caller: "sender".into(),
+        checkout: LOCAL_CHECKOUT.into(),
+        panes: vec![("sender".into(), None)],
+        ..Default::default()
+    }));
+    let herdr = device_herdr(device.clone());
+    {
+        let mut guard = runtime.lock().unwrap();
+        let payload: crate::sidebar::SessionSnapshotPayload =
+            serde_json::from_value(json!({"agents": [{
+                "id": "sender", "pane_id": "sender", "agent": "codex", "agent_status": "working",
+                "state_change_seq": 1, "lineage_session": actor.session,
+            }]}))
+            .unwrap();
+        guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+        guard.ingest_kit_report(
+            crate::node::TEST_NODE,
+            &hide_kit::KitReport {
+                codex_daemon: Some(true),
+                ..Default::default()
+            },
+        );
+        guard.live = Some(live::LiveContext {
+            socket_path: herdr.socket_path().to_owned(),
+            runtime: std::sync::Weak::new(),
+            notifier: ChangeNotifier::noop(),
+            api_connector: Arc::new(herdr.connector()),
+            node: Arc::new(Node),
+        });
+        guard.own_node = Arc::new(Node);
+        guard.snapshot.pane_layouts = vec![crate::model::PaneLayoutSnapshot {
+            workspace_id: "workspace".into(),
+            tab_id: "t1".into(),
+            focused_pane_id: "sender".into(),
+            zoomed: false,
+            root: crate::model::PaneLayoutNodeSnapshot::Pane {
+                pane_id: "sender".into(),
+            },
+        }];
+    }
+    let mut state = ledger::Ledger::default();
+    crate::coordination::apply(
+        &mut state,
+        &actor,
+        &crate::coordination::Mutation::Register {
+            record: AgentRecord {
+                id: String::new(),
+                name: Some("sender".into()),
+                machine: crate::node::TEST_NODE.into(),
+                host_scope: "fixture".into(),
+                native_machine: "machine-local".into(),
+                session: "native-parent".into(),
+                instance: "sender".into(),
+                pane: "sender".into(),
+                parent: None,
+                origin: None,
+                project: None,
+                actor: actor.clone(),
+                ended: false,
+                terminal_id: None,
+                forked: false,
+            },
+            check: false,
+        },
+        1,
+    )
+    .unwrap();
+    ledger::save(&path, &state).unwrap();
+    runtime
+        .lock()
+        .unwrap()
+        .publish_delivery(Arc::new(ledger::load(&path).unwrap()), false);
+    let (worker, client) = Worker::spawn(
+        Arc::downgrade(&runtime),
+        ChangeNotifier::noop(),
+        path.clone(),
+    )
+    .unwrap();
+    Spawner {
+        checkout: LOCAL_CHECKOUT,
+        _turn: turn,
+        _root: root,
+        runtime,
+        actor,
+        device,
+        herdr,
+        path,
+        _worker: worker,
+        client,
+    }
+}
+
+/// B1, B2, B4 on this machine: a handoff beside the caller is split right of
+/// it, drawn at once until Herdr's layout lists it, and is an operator-owned
+/// root with no watch.
+#[test]
+fn a_local_beside_handoff_is_drawn_at_once_beside_its_caller() {
+    let spawner = local_spawner();
+    let mut ask = BESIDE;
+    ask.parent = None;
+    let child = spawner.spawn("handoff", ask).unwrap();
+    assert_eq!(child["pane"], "w2:p1");
+    assert_eq!(child["parent"], Value::Null);
+    assert_eq!(child["watch"], Value::Null);
+    assert_eq!(spawner.count("pane.split"), 1);
+    assert_eq!(spawner.count("tab.create"), 0);
+    let runtime = spawner.runtime.lock().unwrap();
+    assert!(
+        runtime
+            .pane_operations
+            .values()
+            .any(|operation| operation.created_pane_id.as_deref() == Some("w2:p1")),
+        "the split is drawn before Herdr's layout lists it"
+    );
+}
+
+/// The split's label is cleared once the record names the pane, and running
+/// the same command after the spawn completed answers the same agent without
+/// asking Herdr about the checkout again, even when it no longer could.
+#[test]
+fn a_completed_beside_spawn_asked_again_stays_offline() {
+    let spawner = spawner();
+    let child = spawner.spawn("done", BESIDE).unwrap();
+    assert_eq!(
+        spawner.device.lock().unwrap().panes[1],
+        ("w2:p1".to_owned(), None),
+        "the label leaves the pane once the record names it"
+    );
+    spawner.device.lock().unwrap().worktree_gone = true;
+    let lists = spawner.count("worktree.list");
+    assert_eq!(spawner.spawn("done", BESIDE).unwrap()["id"], child["id"]);
+    assert_eq!(spawner.count("worktree.list"), lists);
+}
+
+/// A split Herdr will not label cannot be found by a retry, so it is closed
+/// and the spawn fails with nothing left beside the caller.
+#[test]
+fn a_split_that_cannot_be_labelled_is_closed() {
+    let spawner = spawner();
+    spawner.device.lock().unwrap().rename_refused = true;
+    assert_eq!(
+        spawner.spawn("unlabelled", BESIDE),
+        Err("beside_pane_unavailable".to_owned())
+    );
+    assert_eq!(spawner.count("pane.close"), 1);
+    assert_eq!(spawner.device.lock().unwrap().panes.len(), 1);
+    assert_eq!(spawner.count("agent.start"), 0);
 }
