@@ -125,11 +125,14 @@ function submit(model: DelegateModel): DelegateModel {
 
 const decode = (base64: string) => new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)));
 
-/** The lead's prompt after the keys `text`: ⌃U clears it, ⌫ takes a character back, ⏎ sends it. */
+/** The lead's prompt after the keys `text`: ⌃U clears it, ⌫ takes a character back, ⏎ sends it; an arrow or other escape sequence moves nothing. */
 function typed(model: DelegateModel, text: string): DelegateModel {
   let next = model;
-  for (const char of text.replace(/\x1b\[[0-9;]*[A-Za-z~]/g, "")) {
-    if (char === "\r") next = submit(next);
+  let escape = false;
+  for (const char of text) {
+    if (escape) escape = !/[A-Za-z~]/.test(char);
+    else if (char === "\x1b") escape = true;
+    else if (char === "\r") next = submit(next);
     else if (char === "\x15") next = { ...next, draft: "" };
     else if (char === "\x7f") next = { ...next, draft: [...next.draft].slice(0, -1).join("") };
     else if (char >= " ") next = { ...next, draft: next.draft + char };
