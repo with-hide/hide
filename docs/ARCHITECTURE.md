@@ -1802,6 +1802,7 @@ There is no version floor; the pin is exact.
 Move the pin with `scripts/bump-herdr.sh <release-tag>` (a stable `v0.8.3` or a `preview-...` tag), which verifies the asset, writes the contract that binary reports, and rewrites the tag, version and digest tokens in the README, install guide and third-party notice.
 A bump also compares the release's own PowerShell prompt wrapper (`WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND` in its `src/pane.rs`) with the copy Hide's Windows integration carries (`hide_host::shell_integration`), and moves the copy with it, since an agent's tab runs Hide's command in place of Herdr's own PowerShell start.
 `.github/workflows/herdr-update.yml` polls for a new stable release daily and opens a PR with that bump after running both test suites; it never merges, because the core's Herdr behavior assumptions are only asserted against fixtures this repository wrote.
+A bump whose binary answers another protocol than the pin's says so in its title, the `herdr-protocol` label and its first line, since operators who update Herdr first are held until Hide ships it; the same workflow reads the newest preview's protocol daily with a dry run of `scripts/bump-herdr.sh` and opens one issue per protocol when it differs from the pin's ([HERDR_VERSIONS.md](HERDR_VERSIONS.md)).
 
 ### The operator's own older server
 
