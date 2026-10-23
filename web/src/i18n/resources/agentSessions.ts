@@ -2,7 +2,6 @@ import type { Catalog, Catalogs } from "../schema";
 
 export const agentSessionsEnglish = {
   "agentSessions.allCheckouts": "All checkouts",
-  "agentSessions.onlyCheckout": "{{checkout}} only",
   "agentSessions.tag.blocked": "Blocked",
   "agentSessions.tag.stopped": "Stopped",
   "agentSessions.resolve": "Resolve",
@@ -44,7 +43,6 @@ type Messages = Catalog<typeof agentSessionsEnglish>;
 
 const ko: Messages = {
   "agentSessions.allCheckouts": "모든 체크아웃",
-  "agentSessions.onlyCheckout": "{{checkout}}만",
   "agentSessions.tag.blocked": "막힘",
   "agentSessions.tag.stopped": "멈춤",
   "agentSessions.resolve": "해결",
@@ -84,7 +82,6 @@ const ko: Messages = {
 
 const zh: Messages = {
   "agentSessions.allCheckouts": "所有检出",
-  "agentSessions.onlyCheckout": "仅 {{checkout}}",
   "agentSessions.tag.blocked": "受阻",
   "agentSessions.tag.stopped": "已停止",
   "agentSessions.resolve": "解决",
@@ -124,7 +121,6 @@ const zh: Messages = {
 
 const ja: Messages = {
   "agentSessions.allCheckouts": "すべてのチェックアウト",
-  "agentSessions.onlyCheckout": "{{checkout}}のみ",
   "agentSessions.tag.blocked": "ブロック中",
   "agentSessions.tag.stopped": "停止",
   "agentSessions.resolve": "解決",
