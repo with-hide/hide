@@ -524,9 +524,11 @@ export class BrowserViews {
         this.externals.slotCleared(slot);
         continue;
       }
-      this.configuredSessions.delete(partition);
-      // A slot whose storage could not be cleared is never handed out again, so no later page reads it.
-      void session.fromPartition(partition).clearStorageData().then(
+      // The session keeps its handlers, which name no grant, so a page reusing
+      // the slot adds none; a slot whose storage or cache could not be
+      // cleared is never handed out again, so no later page reads it.
+      const pageSession = session.fromPartition(partition);
+      void Promise.all([pageSession.clearStorageData(), pageSession.clearCache()]).then(
         () => this.externals.slotCleared(slot),
         (error: unknown) => this.log.event("external.storage_clear_failed", { grant: id, reason: errorCode(error) }),
       );

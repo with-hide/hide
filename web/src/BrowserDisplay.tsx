@@ -395,7 +395,7 @@ export function BrowserHost({ actions }: { actions: Actions }) {
     // An open the core never answered stops holding its grant at its deadline.
     const deadline = pendingDeadline();
     if (deadline === null) return undefined;
-    const timer = setTimeout(() => settlePendingGrants(haveRest ? (grants ?? []) : [], receipts ?? []), Math.max(0, deadline - Date.now()));
+    const timer = setTimeout(() => settlePendingGrants(haveRest ? (grants ?? []) : [], receipts ?? []), Math.max(0, deadline - Date.now()) + 1);
     return () => clearTimeout(timer);
   }, [pending, haveRest, grants, receipts]);
   useEffect(() => {
