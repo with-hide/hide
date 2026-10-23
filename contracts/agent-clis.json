@@ -34,7 +34,7 @@
       "installer": "omp"
     },
     "agy": {
-      "version": "1.4.4",
+      "version": "1.4.5",
       "installer": "agy",
       "pinned": "installer takes no version"
     }
