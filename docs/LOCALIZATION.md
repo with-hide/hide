@@ -96,6 +96,9 @@ One row is one thing the screen names. A word in the last column is not used for
 | Herdr's workspace | workspace | 작업공간 (the tab named `Workspace` keeps its name) | ワークスペース | 工作区 | 워크스페이스 |
 | Git worktree | worktree | 워크트리 | ワークツリー | 工作树 | worktree |
 | An agent started by another | child agent | 자식 에이전트 (count: 개) | 子エージェント | 子智能体 | 하위, 형제 as a heading |
+| An agent the operator put to sleep | asleep | 재움 (action: 재우기) | 休止 | 休眠 | 휴면, 잠자기 |
+| Copy of a session that goes on separately | fork | 포크 | フォーク | 分叉 | 분기 |
+| An agent below a child | descendant session | 하위 세션 | 下位セッション | 下级会话 | 后代会话 |
 | An agent is busy | working | 작업 중 | 作業中 | 工作中 | 일하는 중 |
 | A unit of work in the sidebar | task | 태스크 | タスク | 任务 | 일감 |
 | GitHub issue | issue | 이슈 | Issue | 议题 | 課題 |
