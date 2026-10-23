@@ -1,6 +1,7 @@
 //! The facts a session file states about where its work went (PRD
 //! link-graph D-15, D-27): the branch it worked on and when, the pull request
-//! addresses its tools printed, the operator's request before each, whether
+//! addresses its tools printed, the pull requests its tool calls named
+//! (`crate::named_prs`), the operator's request before each, whether
 //! it was an interactive run, and the pointers that say it continues another
 //! session.
 //!
@@ -61,6 +62,22 @@ pub struct PrMark {
     pub request: Option<String>,
 }
 
+/// A pull request one of the session's tool calls named
+/// ([`crate::named_prs`]): work on it, where a printed address is only a
+/// sighting.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NamedMark {
+    #[serde(flatten)]
+    pub pr: crate::NamedPr,
+    pub at_unix_ms: u64,
+    /// The operator's last request before the call, as [`PrMark::request`].
+    pub request: Option<String>,
+}
+
+/// The most named pull requests one read keeps; past it the read counts
+/// what it dropped (`named_capped`).
+pub const NAMED_PER_READ: usize = 200;
+
 /// What one chunk of a session file says about links.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LinkFacts {
@@ -92,6 +109,11 @@ pub struct LinkFacts {
     pub forked_from: Option<String>,
     pub spans: Vec<BranchSpan>,
     pub prs: Vec<PrMark>,
+    /// The pull requests its tool calls named, in record order.
+    #[serde(default)]
+    pub named: Vec<NamedMark>,
+    #[serde(default)]
+    pub named_capped: usize,
     pub first_at_unix_ms: Option<u64>,
     pub last_at_unix_ms: Option<u64>,
     /// The last operator request in the chunk with its time.
@@ -214,6 +236,39 @@ impl LinkAccumulator {
         }
     }
 
+    /// The pull requests one tool call named, at the call's time.
+    pub(crate) fn named(&mut self, named: Vec<crate::NamedPr>, at: u64) {
+        let request = self
+            .facts
+            .last_request
+            .as_ref()
+            .map(|(_, text)| text.clone());
+        for pr in named {
+            if self.facts.named.iter().any(|mark| mark.pr == pr) {
+                continue;
+            }
+            if self.facts.named.len() >= NAMED_PER_READ {
+                self.facts.named_capped += 1;
+                continue;
+            }
+            self.facts.named.push(NamedMark {
+                pr,
+                at_unix_ms: at,
+                request: request.clone(),
+            });
+        }
+    }
+
+    /// Every tool call among `calls`, each `(input, folder)`.
+    fn calls<'a>(&mut self, calls: impl Iterator<Item = (&'a Value, Option<&'a str>)>, at: u64) {
+        for (input, folder) in calls {
+            let named = crate::named_prs::tool_call(input, folder);
+            if !named.is_empty() {
+                self.named(named, at);
+            }
+        }
+    }
+
     fn pr(&mut self, repository: &str, number: u64, at: u64) {
         let request = self
             .facts
@@ -311,6 +366,18 @@ pub(crate) fn claude_line(item: &Value, offset: u64, links: &mut LinkAccumulator
     }
     if let Some(at) = at {
         links.activity(at);
+        if item.get("type").and_then(Value::as_str) == Some("assistant") {
+            let folder = item.get("cwd").and_then(Value::as_str);
+            let calls = item
+                .pointer("/message/content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+                .filter_map(|block| block.get("input"))
+                .map(|input| (input, folder));
+            links.calls(calls, at);
+        }
     }
 }
 
@@ -323,6 +390,16 @@ pub(crate) fn pi_line(item: &Value, offset: u64, links: &mut LinkAccumulator) {
     }
     if let Ok(at) = crate::timestamp_ms(item.get("timestamp")) {
         links.activity(at);
+        if item["type"] == "message" && item["message"]["role"] == "assistant" {
+            let calls = item["message"]["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|block| block["type"] == "toolCall")
+                .filter_map(|block| block.get("arguments"))
+                .map(|input| (input, None));
+            links.calls(calls, at);
+        }
     }
 }
 
@@ -335,6 +412,15 @@ pub(crate) fn grok_line(item: &Value, _offset: u64, links: &mut LinkAccumulator)
         .map_or_else(|| crate::timestamp_ms(item.get("timestamp")), Ok);
     if let Ok(at) = at {
         links.activity(at);
+        let update = item.pointer("/params/update");
+        if update
+            .and_then(|update| update.get("sessionUpdate"))
+            .and_then(Value::as_str)
+            == Some("tool_call")
+            && let Some(input) = update.and_then(|update| update.get("rawInput"))
+        {
+            links.calls(std::iter::once((input, None)), at);
+        }
     }
 }
 
@@ -343,6 +429,14 @@ pub(crate) fn grok_line(item: &Value, _offset: u64, links: &mut LinkAccumulator)
 pub(crate) fn antigravity_line(item: &Value, _offset: u64, links: &mut LinkAccumulator) {
     if let Ok(at) = crate::timestamp_ms(item.get("created_at")) {
         links.activity(at);
+        let calls = item
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|call| call.get("args"))
+            .map(|input| (input, None));
+        links.calls(calls, at);
     }
 }
 
@@ -395,8 +489,35 @@ pub(crate) fn codex_line(item: &Value, _offset: u64, links: &mut LinkAccumulator
     ) {
         return;
     }
-    if let Some(at) = at {
-        links.activity(at);
+    let Some(at) = at else {
+        return;
+    };
+    links.activity(at);
+    if item.get("type").and_then(Value::as_str) != Some("response_item") {
+        return;
+    }
+    let payload = item.get("payload");
+    match payload
+        .and_then(|payload| payload.get("type"))
+        .and_then(Value::as_str)
+    {
+        // A function call's arguments are a JSON text: `exec_command`'s
+        // `{cmd, workdir}`, `shell`'s argv, an MCP tool's own fields.
+        Some("function_call") => {
+            if let Some(input) = payload
+                .and_then(|payload| payload.get("arguments"))
+                .and_then(Value::as_str)
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            {
+                links.calls(std::iter::once((&input, None)), at);
+            }
+        }
+        Some("local_shell_call") => {
+            if let Some(action) = payload.and_then(|payload| payload.get("action")) {
+                links.calls(std::iter::once((action, None)), at);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -779,8 +900,8 @@ fn read_opencode(home: &std::path::Path, request: &ReadRequest, answer: &mut Rea
     };
     // A link line is each session as its own row records it, a subagent's
     // child session included; it never joins the root's conversation.
-    let (transcript, proven) =
-        match crate::opencode::read_as(home, &label, crate::opencode::Owner::Recorded) {
+    let (transcript, proven, named) =
+        match crate::opencode::read_links(home, &label, crate::opencode::Owner::Recorded) {
             Ok(read) => read,
             Err(refusal) => {
                 answer.error = Some(refusal.into());
@@ -798,10 +919,15 @@ fn read_opencode(home: &std::path::Path, request: &ReadRequest, answer: &mut Rea
     // and the addresses they print.
     links.current = Some(None);
     let mut sightings = transcript.pr_sightings.iter().peekable();
+    let mut named = named.into_iter().peekable();
     for event in &transcript.events {
         while let Some(sighting) = sightings.next_if(|s| s.at_unix_ms < event.at_unix_ms) {
             links.activity(sighting.at_unix_ms);
             links.pr(&sighting.repository, sighting.number, sighting.at_unix_ms);
+        }
+        while let Some((at, call)) = named.next_if(|(at, _)| *at < event.at_unix_ms) {
+            links.activity(at);
+            links.named(call, at);
         }
         links.activity(event.at_unix_ms);
         let kind = match event.kind {
@@ -814,6 +940,10 @@ fn read_opencode(home: &std::path::Path, request: &ReadRequest, answer: &mut Rea
     for sighting in sightings {
         links.activity(sighting.at_unix_ms);
         links.pr(&sighting.repository, sighting.number, sighting.at_unix_ms);
+    }
+    for (at, call) in named {
+        links.activity(at);
+        links.named(call, at);
     }
     links.issue_sightings(&transcript.issue_sightings);
     answer.rescanned = transcript.rescanned.is_some();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agent, deskSnapshot, type DeskModel, type PracticePane } from "./kit";
+import { agent, counted, deskSnapshot, oneTabDesk, typed, withLineage, type DeskModel, type PracticePane } from "./kit";
 
 const PLACE = { project: "shop-app", label: "shop-app", branch: "main" };
 const NOW = Date.UTC(2026, 9, 23, 12);
@@ -26,5 +26,33 @@ describe("a practice desk's tab strip (UI_BEHAVIOR, delegated child tabs)", () =
     expect(checkout.strip.map((row) => row.source_id)).toEqual(["t1", "t4"]);
     // The canvas still shows the child's tab the core made visible.
     expect(checkout.active_tab_id).toBe("t2");
+  });
+});
+
+describe("an agent's prompt in a practice world", () => {
+  it("takes letters, ⌫ and ⌃U, ignores an arrow, and hands each ⏎ to submit", () => {
+    const sent: string[] = [];
+    const submit = (model: { draft: string }) => (sent.push(model.draft), { draft: "" });
+    const after = typed({ draft: "" }, "ab\x7fc\x1b[D\rgone\x15left", submit);
+    expect(sent).toEqual(["ac"]);
+    expect(after.draft).toBe("left");
+  });
+});
+
+describe("a practice desk's lineage and counts", () => {
+  it("draws a child under its parent and counts only the root as asking", () => {
+    const model: DeskModel = {
+      ...oneTabDesk(pane("lead", lead)),
+      panes: [pane("lead", lead), pane("cause", child("cause"))],
+      tabs: [tab("t1", "lead"), tab("t2", "cause")],
+      groups: [{ id: null, name: null, tabs: ["t1", "t2"] }],
+    };
+    const rest = counted(withLineage(deskSnapshot([{ place: PLACE, model }], PLACE.project, NOW).rest, "lead", ["cause"]), "needs_you");
+    const workspace = rest.navigator!.workspaces![0]!;
+    const scope = workspace.checkouts[0]!.agent_scope;
+    expect(scope.roots.map((row) => row.pane_id)).toEqual(["lead"]);
+    expect(scope.sidebar_tree.rows.map((row) => [row.pane_id, row.depth])).toEqual([["lead", 0], ["cause", 1]]);
+    expect(scope.groups).toEqual({ needs_you: 1, done: 0, working: 1, seen: 0 });
+    expect([scope.has_working, scope.sidebar_tree.needs_you, workspace.agent_presence?.working]).toEqual([true, true, true]);
   });
 });

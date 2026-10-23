@@ -460,6 +460,11 @@ impl super::Read {
 
     /// What a finished tool call printed: its text content.
     fn tool_output(&mut self, item: &Value, message_at: u64) {
+        let called = item
+            .pointer("/time/created")
+            .and_then(Value::as_u64)
+            .unwrap_or(message_at);
+        self.note_call(item.pointer("/state/input"), called);
         let output = item
             .pointer("/state/content")
             .and_then(Value::as_array)

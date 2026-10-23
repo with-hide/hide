@@ -57,6 +57,7 @@ pub enum CommandKind {
     Dev,
     BrowserOpen {
         target: String,
+        beside: bool,
         wait: bool,
         request_id: Option<String>,
     },
@@ -103,7 +104,7 @@ const LINKS_USAGE: &str = "usage: hide links pr <number> | issue <number> | bran
 
 const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card>";
 
-const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
+const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--beside] [--wait] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
 
 const FILE_USAGE: &str = "usage: hide file open <path> [--beside] [--request-id <id>]";
 
@@ -179,7 +180,7 @@ fn help_text() -> String {
         "hide workspace info",
         FILE_USAGE.trim_start_matches("usage: "),
         DIFF_USAGE.trim_start_matches("usage: "),
-        "hide browser open <url-or-path> [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help",
+        "hide browser open <url-or-path> [--beside] [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help",
         "hide view list\nhide view status <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]",
         LINKS_USAGE.trim_start_matches("usage: "),
         MEMORY_USAGE.trim_start_matches("usage: "),
@@ -611,9 +612,10 @@ fn parse_browser<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<Comma
     if verb != Some("open") {
         return Err(BROWSER_USAGE.to_owned());
     }
-    let (mut target, mut wait, mut request_id) = (None, false, None);
+    let (mut target, mut beside, mut wait, mut request_id) = (None, false, false, None);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--beside" if !beside => beside = true,
             "--wait" if !wait => wait = true,
             "--request-id" if request_id.is_none() => {
                 request_id = Some(
@@ -630,6 +632,7 @@ fn parse_browser<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<Comma
     let target = target.ok_or_else(|| BROWSER_USAGE.to_owned())?;
     Ok(CommandKind::BrowserOpen {
         target,
+        beside,
         wait,
         request_id,
     })
@@ -760,9 +763,10 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Dev => dev(env),
         CommandKind::BrowserOpen {
             target,
+            beside,
             wait,
             request_id,
-        } => browser_open(&env, &target, wait, request_id.as_deref()),
+        } => browser_open(&env, &target, beside, wait, request_id.as_deref()),
         CommandKind::BrowserConnect { display_id } => {
             let answer = browser_connect_value(&env, display_id.as_deref(), true)?;
             println!("{answer}");
@@ -1428,6 +1432,7 @@ fn view_status(env: &Env, view_id: &str) -> Result<(), String> {
 fn browser_open(
     env: &Env,
     target: &str,
+    beside: bool,
     wait: bool,
     request_id: Option<&str>,
 ) -> Result<(), String> {
@@ -1447,6 +1452,7 @@ fn browser_open(
             url,
             area_id: None,
             new_target: false,
+            beside,
         },
         request_id,
     )?;
@@ -3154,6 +3160,16 @@ mod tests {
             parse(&["hide", "browser", "open", "index.html"]),
             Ok(CommandKind::BrowserOpen {
                 target: "index.html".into(),
+                beside: false,
+                wait: false,
+                request_id: None,
+            })
+        );
+        assert_eq!(
+            parse(&["hide", "browser", "open", "--beside", "localhost:3000"]),
+            Ok(CommandKind::BrowserOpen {
+                target: "localhost:3000".into(),
+                beside: true,
                 wait: false,
                 request_id: None,
             })
@@ -3170,6 +3186,7 @@ mod tests {
             ]),
             Ok(CommandKind::BrowserOpen {
                 target: "localhost:3000".into(),
+                beside: false,
                 wait: true,
                 request_id: Some("1234567890000-abc".into()),
             })
@@ -3181,6 +3198,7 @@ mod tests {
             &["hide", "browser", "open", "a", "b"],
             &["hide", "browser", "open", "a", "--pane"],
             &["hide", "browser", "open", "a", "--reveal"],
+            &["hide", "browser", "open", "a", "--beside", "--beside"],
             &[
                 "hide", "browser", "open", "a", "--pane", "p1", "--pane", "p2",
             ],

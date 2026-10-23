@@ -31,11 +31,26 @@ pub const HOOK_VERSION: u32 = 8;
 /// pane reporting protocol. Version 10 adds passive Post observation slots.
 pub const HOOK_ENTRY_VERSION: u32 = 10;
 
-/// The one sentence SessionStart adds to either agent runtime inside Hide.
-/// Both runtimes accept the same `hookSpecificOutput.additionalContext`
-/// envelope, while the runtime argument remains explicit in the installed
-/// command so a future protocol difference has one dispatch point.
-pub const PURPOSE_CONTEXT: &str = "Herdr provides direct terminal input and control. Call it as `\"${HERDR_BIN_PATH:-herdr}\"` (PowerShell: `& $env:HERDR_BIN_PATH`), the Herdr that serves this pane, because a `herdr` found on PATH may be an older one its server refuses. `\"${HERDR_BIN_PATH:-herdr}\" agent prompt` submits input directly; Hide may show a passive observation, but this creates no Hide letter, watch, or parent relationship. Use Hide letters for stored delivery, replies and retry management. When you create a worktree, set its one-line purpose in 40 characters or fewer by running `\"${HERDR_BIN_PATH:-herdr}\" workspace report-metadata <workspace> --source <you> --token purpose=\"…\"`. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`.";
+/// The intent table at the front of `PURPOSE_CONTEXT`, as a literal so the
+/// `hide` skill (`hide_kit::agents::GUIDE_SKILL`) carries the very same text.
+#[macro_export]
+macro_rules! intent_table {
+    () => {
+        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| open a file or diff beside you | `hide file open <path> --beside`, `hide diff open <path> --beside` |\n| open a web page beside you | `hide browser open <url-or-path> --beside` |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; add `--parent here` to supervise it) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\nWithout --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `\"${HERDR_BIN_PATH:-herdr}\" pane split` or `\"${HERDR_BIN_PATH:-herdr}\" agent start`: that pane has no parent, letters or watch."
+    };
+}
+
+/// What SessionStart adds to every agent runtime inside Hide: first the table
+/// that turns what the operator asks for into the one command that does it,
+/// then the rules behind those commands. Every runtime accepts the same
+/// `hookSpecificOutput.additionalContext` envelope, while the runtime
+/// argument remains explicit in the installed command so a future protocol
+/// difference has one dispatch point.
+pub const PURPOSE_CONTEXT: &str = concat!(
+    intent_table!(),
+    "\n\n",
+    "Herdr provides direct terminal input and control. Call it as `\"${HERDR_BIN_PATH:-herdr}\"` (PowerShell: `& $env:HERDR_BIN_PATH`), the Herdr that serves this pane, because a `herdr` found on PATH may be an older one its server refuses. `\"${HERDR_BIN_PATH:-herdr}\" agent prompt` submits input directly; Hide may show a passive observation, but this creates no Hide letter, watch, or parent relationship. Use Hide letters for stored delivery, replies and retry management. When you create a worktree, set its one-line purpose in 40 characters or fewer by running `\"${HERDR_BIN_PATH:-herdr}\" workspace report-metadata <workspace> --source <you> --token purpose=\"…\"`. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`."
+);
 
 pub fn hook_stdout(runtime: AgentRuntime, event: HookEvent) -> Option<String> {
     hook_stdout_with_context(runtime, event, None)
@@ -504,6 +519,20 @@ mod tests {
             assert!(PURPOSE_CONTEXT.contains("`hide agent list`"));
             assert!(PURPOSE_CONTEXT.contains("From the machine that runs Hide"));
             assert!(PURPOSE_CONTEXT.contains("`machine_not_permitted`"));
+            // The intent table comes first, in English, and names the exact
+            // command for each request (PRD agent-beside-and-session-guide B18).
+            assert!(PURPOSE_CONTEXT.starts_with("Inside Hide, turn what the operator asks for"));
+            for command in [
+                "`hide file open <path> --beside`",
+                "`hide diff open <path> --beside`",
+                "`hide browser open <url-or-path> --beside`",
+                "`hide agent spawn --beside …`",
+                "`hide agent spawn --parent here …`",
+                "`hide agent spawn …` without --parent",
+                "Never start an agent with `\"${HERDR_BIN_PATH:-herdr}\" pane split` or `\"${HERDR_BIN_PATH:-herdr}\" agent start`",
+            ] {
+                assert!(PURPOSE_CONTEXT.contains(command), "{command}");
+            }
             for event in [
                 HookEvent::SubagentStart,
                 HookEvent::SubagentStop,
