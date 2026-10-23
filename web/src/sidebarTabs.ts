@@ -2,8 +2,11 @@ import type { BoardRow } from "./projectBoard";
 import type { AgentRow, Checkout, Tab } from "./snapshot";
 import type { AgentGroup } from "./agentLayout";
 
-/** One tab's segment of a checkout's agent list; `glyph` is set for every real tab, which draws its guide and tab line whatever it holds or is named. */
-export type SidebarTabGroup = { tab: Tab | null; rows: BoardRow[]; count: number; glyph: boolean };
+/**
+ * One tab's segment of a checkout's agent list. `glyph` is set for every real tab, which draws its guide whatever it holds or is named;
+ * `line` is set when it also draws its tab line, which an unnamed tab holding one agent leaves out, since `Tab N` says nothing its one row does not.
+ */
+export type SidebarTabGroup = { tab: Tab | null; rows: BoardRow[]; count: number; glyph: boolean; line: boolean };
 
 /** One collection of a checkout's agent tree: the core's own group, its drawn tab segments and its draft ids. */
 export type SidebarCollection = { group: AgentGroup; segments: SidebarTabGroup[]; drafts: string[] };
@@ -30,7 +33,8 @@ export function sidebarTabGroups(checkout: Checkout, device: string, rows: reado
     if (!members.length && !(tab !== null && namedOnStrip(tab))) return [];
     const count = tab ? new Set(tab.panes.filter((pane) => agentPanes.has(pane.id)).map((pane) => pane.id)).size : 0;
     const glyph = tab !== null && tab.id !== null && tab.sidebar !== undefined;
-    return [{ tab, rows: members, count, glyph }];
+    const line = glyph && (tab!.sidebar!.manual_name !== null || count !== 1);
+    return [{ tab, rows: members, count, glyph, line }];
   });
 }
 
@@ -45,7 +49,7 @@ export function sidebarNamedGroups(checkout: Checkout, segments: readonly Sideba
       const existing = segments.find((segment) => segment.tab?.id === id);
       if (existing) return [existing];
       const tab = checkout.tabs.find((tab) => tab.id === id && !tab.delegated);
-      return tab ? [{ tab, rows: [], count: 0, glyph: true }] : [];
+      return tab ? [{ tab, rows: [], count: 0, glyph: true, line: true }] : [];
     });
     if (group.id === null) selected.push(...segments.filter((segment) => segment.tab === null || (!collections.groups.some((candidate) => candidate.tabs.includes(segment.tab!.id!)) && !owned.has(segment.tab!.id!))));
     return { group, segments: selected, drafts: group.tabs.filter((id) => collections.drafts.includes(id)) };
