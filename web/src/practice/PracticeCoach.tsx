@@ -201,7 +201,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const perform = useCallback(() => {
     if (!acts(step)) return advance();
     if (step.gesture && "drag" in step.gesture) return dragPane(step.gesture.drag, setHand);
-    if (step.gesture && "click" in step.gesture) return document.querySelector<HTMLElement>(step.target ?? "")?.click();
+    if (step.gesture && "click" in step.gesture) return pressTarget(step.target);
     if (pressed) return pressTarget(step.target);
     if (step.command) pressCommand(step.command);
   }, [advance, pressed, step]);
