@@ -97,7 +97,10 @@ pub(crate) use op_timing::HerdrArrival;
 use operations::*;
 #[cfg(test)]
 pub(crate) use terminal::NoTerminals;
-use view_areas::{BrowserOpenPayload, BrowserStatePayload, ViewLayoutPayload};
+use view_areas::{
+    BrowserOpenPayload, BrowserStatePayload, ExternalGrantsPayload, ExternalOpenPayload,
+    ViewLayoutPayload,
+};
 use workspace_view::{AreaIntent, WorkspaceViewPayload, WorkspaceViewStore};
 
 use crate::agent_state::ReadRecordScope;
