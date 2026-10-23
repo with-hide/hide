@@ -171,7 +171,7 @@ function NoProject({ actions }: { actions: Actions }) {
   const chord = commandLabel("new_workspace");
   return (
     <div className="flex flex-col items-start gap-sm px-md py-md text-caption text-muted-foreground" data-tasks-no-project="true">
-      <p>{t("taskLens.noProject")}</p>
+      <p>{t("firstRun.home.noProject")}</p>
       <Hint label={t("taskLens.addProject")} shortcut={chord || null}>
         <Button variant="outline" size="sm" onClick={() => actions.openAddProject()} data-tasks-add-project="true"><PlusIcon />{t("taskLens.addProject")}</Button>
       </Hint>
@@ -507,7 +507,7 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
   return { items, select };
 }
 
-/** Whether the task waits in 다시 볼 것 or wears the ★: its menu and button then say 다 봤음. */
+/** Whether the task waits in 다시 볼 것 or wears the ★: its menu and button then say 다시 볼 것에서 빼기. */
 function revisitOn(agent: AgentRow): boolean {
   return agent.revisit != null;
 }
@@ -519,7 +519,7 @@ function revisitEntry(agent: AgentRow, disabled: boolean, t: TFunction<"translat
 
 /**
  * The ☆/★ beside the record button (PRD revisit-group D-08, B8): ☆ stars the
- * task, ★ on a starred task or one waiting in 다시 볼 것 is 다 봤음.
+ * task, ★ on a starred task or one waiting in 다시 볼 것 is 다시 볼 것에서 빼기.
  */
 function RevisitButton({ agent, on, disabled, actions }: { agent: AgentRow; on: boolean; disabled: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
