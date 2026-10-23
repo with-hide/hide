@@ -260,7 +260,7 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
   }, [rootPath, needle, filtering, device, overlay, answer, actions]);
 
   // Escape clears the filter before any layer opened earlier.
-  useEscapeLayer(filtering, () => setFilter(""));
+  useEscapeLayer(filtering, () => setFilter(""), false, true);
 
   // A reveal (or an open from anywhere) sets the core's selected_path. A
   // palette pick also sets the local cursor before the core replies; a panel

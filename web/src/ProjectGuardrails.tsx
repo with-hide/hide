@@ -72,7 +72,7 @@ export function ProjectGuardrails({ rules, isGit, base, disabled, unguarded, sav
     setRefusal(null);
   };
   // Escape leaves the field and keeps the dialog open: the shell answers Escape with the innermost layer.
-  useEscapeLayer(adding, cancel);
+  useEscapeLayer(adding, cancel, false, true);
   // A refused add leaves the field open with what was typed; the save that disabled it no longer holds focus.
   const wasDisabled = useRef(disabled);
   useEffect(() => {

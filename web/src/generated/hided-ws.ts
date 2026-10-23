@@ -90,6 +90,7 @@ export type WorkspaceCommand =
   | {
       action: "open_browser";
       url: string;
+      beside?: boolean;
     }
   | {
       action: "select";

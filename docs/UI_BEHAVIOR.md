@@ -164,6 +164,7 @@ A Workspace stored by a build with the one-tool lane comes back closed at the de
 
 Agent Views is always live: clicking a pane or a tab focuses it and typing goes to it, and chords such as ⌘F, ⌘T and ⌥W act where the keyboard is, a View area, the lane's tool or a pane.
 A lane going out of sight with the keyboard inside it, or a viewing column that folds or closes while the keyboard is in its documents, hands the keyboard to the focused pane.
+That handback retires the hidden region as a command target in the same drawing, even when the terminal input is already the shell's active element and no new focus event fires; input the operator moved to another live column or a popup keeps its owner.
 Tab never walks into a folded or stacked-behind column: it is inert and holds no Escape layer or focus return, and a native page in it is hidden before it goes inert.
 
 An Agent tab shows the focused pane's status mark, then title, using the sidebar row's title and mark rules; the agent's logo stands between them only while the agent logo view mode shows it ([Agent logo view mode](#agent-logo-view-mode)); a tab with no agent keeps the neutral `>_` in both modes.
@@ -182,6 +183,9 @@ Its title is cut at the tail to fit, and its tooltip and accessible name carry t
 A dirty view shows a warning-colored mark after its title.
 Closing a view is always called Close view, distinct from moving a file to the Trash and from closing a pane or tab.
 The close chord, ⌘W in the desktop app and ⌥W in a browser, closes the smallest unit that holds the keyboard: the focused View area's active display, or the focused terminal pane.
+Before that, the close chord and the close-pane chord (⇧⌘W, ⌥⇧W in a browser) close what covers the screen, as a window's close does: the innermost menu, popover, dialog or sheet (Settings, Shortcuts, the Overview over a Workspace, the Start panel), a close's confirmation, which stays unanswered as with Escape, or the Overview screen, which gives way to the Workspace in front.
+Windows and Linux press the same chords through the system rule, Ctrl+Shift+W and Alt+Shift+W in the desktop app, and plain Ctrl+W stays the terminal's.
+Nothing under a cover closes, since the operator cannot see it; a filter, a field being added, a drag and a pane's find bar answer Escape but cover nothing, so the chords pass them.
 The page records its last focused region as View area, pane, the lane's tool, the 보기 slot, or none from focus events, including native browser-page focus; the chord does not walk the active DOM element or choose a region from panel size.
 When the desktop app hands the keyboard back from a native page to deliver a menu command, the focus the shell's last element regains is not a move while that command runs, so ⌘W and ⌘T pressed in a page act on that page's View area; once the command has run, the keyboard's owner is the shell element holding it, so after any other command from a page the next chord acts where the operator now types.
 While the viewing column draws the 보기 slot, the chord closes the slot as its `✕` does when the keyboard is in the slot or nowhere (the sidebar row or the rail button that opened it); a pane or a View that holds the keyboard keeps the chord, and the tool column closes nothing (PRD lane-two-columns B13, B16).
@@ -191,6 +195,7 @@ An unavailable or retired keyboard target never falls through to closing a diffe
 When a connected pane selects, splits, moves, or closes a View through `hide view`, the same View layout rules apply to that pane's Workspace even while another Workspace is in front.
 These commands do not move the keyboard target; a close that would lose the last View of an unsaved document reports the refusal and keeps the draft.
 `hide file open` and `hide diff open` put the calling pane's file or changed-file diff into its own Workspace and never select that Workspace or another tab.
+With `--beside` each of them, and `hide browser open --beside` for a page, places its View by the Open to the side rule below; a page of the same address already in that neighbouring area comes forward instead of opening again, and a Workspace with no room for another area refuses the page with the next action to close a View or open without `--beside`.
 Only an agent in the pane the operator is in, the selected pane of the front Workspace, changes what the operator sees: its open or `hide view select` brings the View to the front and shows the documents as a click does, the tool column staying as it was.
 Another pane of that Workspace, of the same tab or another, adds its View to the checkout's list and leaves the selection, the active area, the keyboard, the lane and the tab on screen as they were, and the documents button's badge counts the new view (see File Views per checkout).
 A Workspace not on screen is not what the operator sees: there, an agent in its active tab brings its View to that Workspace's front, so a page it opens loads and can be driven, and an agent in another tab adds its View behind.
@@ -1309,7 +1314,7 @@ A hidden list draws no rows, the elapsed clock updates only its own text, and th
 
 The lane has one 보기 slot per window, which holds a pull request's card, a session's record or a mission's map and belongs to no checkout and no Agent tab, so changing either leaves it as it was (PRD sidebar-task-lens D-50, B48).
 Whatever opens a card or a record opens it there, in front of the documents in the lane's viewing column, and the Workspace in front, its Agent tab, the tool column and the keyboard stay (B14, B15, B50; PRD lane-two-columns B9); no `PR #N` or record tab appears among the documents.
-Its head reads `←`, the item's mark and name (`PR #N · <project>`, `기록 · <title>` or `미션 · <title>`), `↗` (GitHub) on a card, and `✕` (B47); a card's mark is its PR mark, in its state's icon and colour, here and on the rail.
+Its head reads `←`, the item's mark and name (`PR #N · <project>`, `기록 · <title>` or `미션 · <title>`), `↗` (GitHub) on a card, a gear on a map that opens Settings › Conductor, and `✕` (B47); a card's mark is its PR mark, in its state's icon and colour, here and on the rail.
 The head keeps the lane's surface and what the slot holds sits on the page's background, a card and a record alike, as the 보기 screens draw it.
 Opening another item puts it in front, and `←` steps back through the ones opened before, at most 20, the oldest leaving first; `✕` empties the slot and the viewing column goes back to the documents, or closes when the checkout has none, the lane closing with it when there is no tool column (PRD lane-two-columns B13).
 The close chord (⌘W) is the slot's `✕` while the keyboard is in the slot or nowhere, as the close chord's rule says ([The right lane](#the-right-lane)); in the tool column it closes nothing.

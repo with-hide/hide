@@ -354,3 +354,90 @@ fn an_opencode_root_and_its_child_session_are_separate_link_lines() {
         "a child line belongs to its root session"
     );
 }
+
+/// Each format's fixture records one shell call, `bash scripts/ship.sh`,
+/// whose output prints pull request 12, and the folder the record says the
+/// call ran in.
+const CALL_FIXTURES: [(Agent, &str, Option<&str>); 6] = [
+    (Agent::Claude, CLAUDE, Some("/work/app")),
+    (
+        Agent::Codex,
+        "codex-0.160.0/sessions/2026/10/03/rollout-2026-10-03T01-00-00-0199a000-0000-7000-8000-000000000002.jsonl",
+        None,
+    ),
+    (Agent::Grok, "grok-1.0.46/updates.jsonl", None),
+    (Agent::Pi, "pi-1.0.4/session.jsonl", None),
+    (Agent::Omp, "omp-18.7.0/session.jsonl", None),
+    (
+        Agent::Antigravity,
+        "antigravity-1.3.6/transcript_full.jsonl",
+        Some("/work/app"),
+    ),
+];
+
+fn named_twelve(folder: Option<&str>) -> Vec<hide_session::NamedPr> {
+    vec![hide_session::NamedPr {
+        repository: None,
+        number: 12,
+        folder: folder.map(str::to_owned),
+    }]
+}
+
+fn named(facts: &links::LinkFacts) -> Vec<hide_session::NamedPr> {
+    facts.named.iter().map(|mark| mark.pr.clone()).collect()
+}
+
+#[test]
+fn a_pull_request_a_tool_printed_is_seen_and_one_its_call_named_is_named_in_every_format() {
+    for (agent, path, folder) in CALL_FIXTURES {
+        let contents = fs::read_to_string(fixture(path)).unwrap();
+        let printed = parse_events(agent, &contents).links;
+        assert!(
+            printed.prs.iter().any(|pr| pr.number == 12),
+            "{agent:?} sees the printed address"
+        );
+        assert_eq!(named(&printed), vec![], "{agent:?} names nothing");
+
+        let viewed = contents.replace("bash scripts/ship.sh", "gh pr view 12");
+        assert_ne!(viewed, contents, "{agent:?} records the call");
+        let facts = parse_events(agent, &viewed).links;
+        assert_eq!(named(&facts), named_twelve(folder), "{agent:?}");
+        assert!(facts.named[0].at_unix_ms > 0);
+    }
+}
+
+#[test]
+fn an_opencode_call_that_names_a_pull_request_is_named_in_both_schemas() {
+    for schema in ["opencode-1.18.30", "opencode-2.0.29"] {
+        for (command, expected) in [
+            ("bash scripts/ship.sh", vec![]),
+            ("gh pr view 12", named_twelve(None)),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let folder = home.path().join(".local/share/opencode");
+            fs::create_dir_all(&folder).unwrap();
+            let sql = fs::read_to_string(fixture(&format!("{schema}/opencode.sql")))
+                .unwrap()
+                .replace("bash scripts/ship.sh", command);
+            rusqlite::Connection::open(folder.join("opencode.db"))
+                .unwrap()
+                .execute_batch(&sql)
+                .unwrap();
+            let answer = links::read(
+                home.path(),
+                &[ReadRequest {
+                    agent: Agent::OpenCode,
+                    path: "opencode/ses_0a1b2c3d4e5f60718293a4b5c6".into(),
+                    checkpoint: None,
+                }],
+            )
+            .remove(0);
+            assert_eq!(answer.error, None, "{schema}");
+            assert!(
+                answer.facts.prs.iter().any(|pr| pr.number == 12),
+                "{schema} sees the printed address"
+            );
+            assert_eq!(named(&answer.facts), expected, "{schema}: {command}");
+        }
+    }
+}

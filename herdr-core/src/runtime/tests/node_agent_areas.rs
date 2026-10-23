@@ -63,6 +63,7 @@ fn delegated_inbound_caller_can_manage_background_views() {
             url: "https://example.test/delegated".to_owned(),
             area_id: None,
             new_target: false,
+            beside: false,
         },
         "delegated-browser",
     );
@@ -118,6 +119,7 @@ fn authoritative_final_node_tab_close_keeps_its_page_and_drops_its_bookmark() {
                 url: "https://example.test/owned".to_owned(),
                 area_id: None,
                 new_target: false,
+                beside: false,
             },
             Ok(None),
         )

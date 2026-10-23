@@ -1315,6 +1315,18 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "codex_capability_unknown" => {
             "Hide has not read whether that machine's Codex runs a shared server; ask the operator to press Check again in Settings > Agents for that machine, then run the same command again with the same intent"
         }
+        "beside_other_checkout" => {
+            "--beside opens an agent only in the checkout you work in; pass that checkout's --repo and --branch, or run the command again without --beside to open it in a new tab"
+        }
+        "beside_other_machine" => {
+            "--beside opens an agent only on your own machine; leave out --machine, or run the command again without --beside to open it in a new tab"
+        }
+        "beside_needs_agent_pane" => {
+            "--beside opens the agent beside the pane that calls it; run the command from an agent pane Hide knows, or without --beside to open it in a new tab"
+        }
+        "beside_pane_unavailable" => {
+            "Herdr could not split your pane (it closed, or Herdr refused the split), so nothing was opened; run the same command again from your agent pane, or with a new intent without --beside to open it in a new tab"
+        }
         _ => "Check the current agent pane and retry the same intent",
     }
 }
@@ -4536,6 +4548,10 @@ mod tests {
             "target_ambiguous",
             "target_unavailable",
             "codex_capability_unknown",
+            "beside_other_checkout",
+            "beside_other_machine",
+            "beside_needs_agent_pane",
+            "beside_pane_unavailable",
         ] {
             let (reason, next) = refusal_answer(code.to_owned(), delivery_next_action(code));
             assert_eq!(reason, code);

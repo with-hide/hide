@@ -1357,3 +1357,238 @@ fn direct_observation_schema_migrates_existing_v4_without_recreating_retention_a
         "Preserved backlog"
     );
 }
+
+/// A Claude session on `main` in `cwd` that asks once and makes one shell
+/// call; the call's output prints pull request `printed`'s address when
+/// given. The request is at `at`, the call a second later and its output a
+/// second after that.
+fn claude_call(
+    home: &Path,
+    id: &str,
+    cwd: &str,
+    at: u64,
+    request: &str,
+    command: &str,
+    printed: Option<u64>,
+) -> String {
+    let dir = home.join(".claude/projects/-work-app");
+    fs::create_dir_all(&dir).unwrap();
+    let common = |kind: &str, uuid: &str, at: u64, message: serde_json::Value| {
+        serde_json::json!({
+            "type": kind, "isSidechain": false, "uuid": uuid, "parentUuid": null,
+            "message": message, "timestamp": iso(at), "userType": "external",
+            "entrypoint": "cli", "cwd": cwd, "sessionId": id, "gitBranch": "main",
+        })
+    };
+    let mut ask = common(
+        "user",
+        &format!("{id}-u"),
+        at,
+        serde_json::json!({"role": "user", "content": request}),
+    );
+    ask["promptId"] = "p".into();
+    ask["origin"] = serde_json::json!({"kind": "human"});
+    let mut lines = vec![
+        ask.to_string(),
+        common(
+            "assistant",
+            &format!("{id}-a"),
+            at + 1_000,
+            serde_json::json!({"role": "assistant", "content": [{
+                "type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": command},
+            }]}),
+        )
+        .to_string(),
+    ];
+    if let Some(number) = printed {
+        lines.push(
+            common(
+                "user",
+                &format!("{id}-r"),
+                at + 2_000,
+                serde_json::json!({"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": "t1",
+                    "content": format!("https://github.com/acme/app/pull/{number}"),
+                }]}),
+            )
+            .to_string(),
+        );
+    }
+    let path = dir.join(format!("{id}.jsonl"));
+    fs::write(&path, lines.join("\n") + "\n").unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+fn roles(lines: &[LinkedSession]) -> Vec<(&str, SessionRole, Option<&str>)> {
+    lines
+        .iter()
+        .map(|line| (line.id.as_str(), line.role, line.request.as_deref()))
+        .collect()
+}
+
+#[test]
+fn an_address_a_tool_only_printed_links_nothing_and_a_call_that_named_the_pull_request_worked_on_it()
+ {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut store = open(state.path());
+    store
+        .apply_project(&project(vec![pr(7, "feat/x", T0, None)]), T0)
+        .unwrap();
+    // Made it: its `gh pr create` printed the address as GitHub made it.
+    let maker = claude_call(
+        home.path(),
+        "s-maker",
+        ROOT,
+        T0 - 1_000,
+        "PR 올려 줘",
+        "gh pr create --fill",
+        Some(7),
+    );
+    // Listed the browser's tabs, which held the pull request's page.
+    let tabs = claude_call(
+        home.path(),
+        "s-tabs",
+        ROOT,
+        T0 + 20 * MIN,
+        "탭 정리해 줘",
+        "aside tabs",
+        Some(7),
+    );
+    // Reviewed it.
+    let review = claude_call(
+        home.path(),
+        "s-review",
+        ROOT,
+        T0 + 30 * MIN,
+        "7번 리뷰해 줘",
+        "gh pr view 7 --comments",
+        Some(7),
+    );
+    for path in [&maker, &tabs, &review] {
+        ingest(&mut store, home.path(), path);
+    }
+
+    assert_eq!(
+        roles(&panel(&store, 7)),
+        vec![
+            ("s-review", SessionRole::Worked, Some("7번 리뷰해 줘")),
+            ("s-maker", SessionRole::Created, Some("PR 올려 줘")),
+        ]
+    );
+    let summary = store.summary(PROJECT, &[]).unwrap();
+    assert_eq!(summary.prs.get(&7), Some(&2));
+    assert!(
+        store
+            .session_links(PROJECT, "s-tabs", Some(here()))
+            .unwrap()
+            .is_some_and(|(_, prs)| prs.is_empty()),
+        "the tab lister works in the project and on none of its pull requests"
+    );
+}
+
+#[test]
+fn a_number_named_alone_belongs_to_the_project_whose_folder_the_call_ran_in() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut store = open(state.path());
+    store
+        .apply_project(&project(vec![pr(7, "feat/x", T0, None)]), T0)
+        .unwrap();
+    store
+        .apply_project(
+            &ProjectFacts {
+                key: "project:other".into(),
+                root: "/work/other".into(),
+                repository: Some("acme/other".into()),
+                repository_id: Some("R_2".into()),
+                worktrees: Vec::new(),
+                ..project(vec![PrFact {
+                    repository: "acme/other".into(),
+                    url: "https://github.com/acme/other/pull/7".into(),
+                    ..pr(7, "feat/y", T0, None)
+                }])
+            },
+            T0,
+        )
+        .unwrap();
+    let calls = [
+        ("s-here", ROOT, "gh pr view 7"),
+        ("s-there", ROOT, "cd /work/other && gh pr diff 7"),
+        ("s-sub", "/work/other", "cd ../app/sub && gh pr checks 7"),
+        ("s-repo", "/work/other", "gh pr view 7 -R acme/app"),
+        ("s-lost", ROOT, "cd ~/elsewhere && gh pr view 7"),
+    ];
+    for (id, cwd, command) in calls {
+        let path = claude_call(home.path(), id, cwd, T0 + 10 * MIN, "봐 줘", command, None);
+        ingest(&mut store, home.path(), &path);
+    }
+
+    let mut app: Vec<String> = panel(&store, 7).into_iter().map(|line| line.id).collect();
+    app.sort();
+    assert_eq!(app, vec!["s-here", "s-repo", "s-sub"]);
+    let mut other: Vec<String> = store
+        .pr_panel("project:other", 7, Some(here()))
+        .unwrap()
+        .unwrap()
+        .sessions
+        .into_iter()
+        .map(|line| line.id)
+        .collect();
+    other.sort();
+    assert_eq!(other, vec!["s-there"]);
+}
+
+#[test]
+fn a_record_from_before_named_pull_requests_reads_its_files_again_and_finds_them() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let path = state.path().join("links.sqlite3");
+    let review = claude_call(
+        home.path(),
+        "s-review",
+        ROOT,
+        T0 + 30 * MIN,
+        "7번 리뷰해 줘",
+        "gh pr view 7",
+        Some(7),
+    );
+    {
+        let (mut store, _) = LinkStore::open(&path).unwrap();
+        store
+            .apply_project(&project(vec![pr(7, "feat/x", T0, None)]), T0)
+            .unwrap();
+        ingest(&mut store, home.path(), &review);
+        // The record as version 9 left it: read to its end, with no named
+        // pull requests kept.
+        store
+            .connection
+            .execute_batch(
+                "DROP TABLE session_named_prs;
+                 INSERT INTO meta VALUES('backfill_done','1'),('listed_at','5'),('listed_at:mini','6');
+                 PRAGMA user_version=9;",
+            )
+            .unwrap();
+    }
+    let (mut store, opened) = LinkStore::open(&path).unwrap();
+    assert_eq!(opened, Opened::Existing);
+    assert!(panel(&store, 7).is_empty());
+    assert_eq!(
+        store
+            .stamps(DEVICE)
+            .unwrap()
+            .get(&review)
+            .map(String::as_str),
+        Some("")
+    );
+    assert_eq!(store.checkpoint(DEVICE, &review).unwrap(), None);
+    assert_eq!(store.meta("listed_at").unwrap(), None);
+    assert_eq!(store.meta("listed_at:mini").unwrap(), None);
+    assert_eq!(store.meta("backfill_done").unwrap().as_deref(), Some("1"));
+
+    ingest(&mut store, home.path(), &review);
+    assert_eq!(
+        roles(&panel(&store, 7)),
+        vec![("s-review", SessionRole::Worked, Some("7번 리뷰해 줘"))]
+    );
+}

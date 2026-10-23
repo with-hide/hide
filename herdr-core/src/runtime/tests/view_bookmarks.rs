@@ -339,6 +339,7 @@ fn open_page(url: &str) -> Action {
         url: url.to_owned(),
         area_id: None,
         new_target: false,
+        beside: false,
     }
 }
 
