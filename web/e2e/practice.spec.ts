@@ -37,6 +37,22 @@ function practiceState(page: Page): Promise<string> {
   });
 }
 
+/**
+ * Chapter 4's paste step by hand, as a learner would: the lead pane's Paste
+ * takes the pane ID the chapter copied, never the system clipboard, and the
+ * learner's own words then go with Enter as they are.
+ */
+async function pasteByHand(practice: Page): Promise<void> {
+  const lead = practice.locator('[data-pane-view="w1:p1"] .xterm');
+  await lead.click({ button: "right" });
+  await practice.locator('[role="menu"] [data-menu-item="paste"]').click();
+  await lead.click();
+  await practice.keyboard.type(" update the signup copy");
+  await practice.keyboard.press("Enter");
+  // The world took the request only if it named the copied ID.
+  await expect.poll(() => practiceState(practice), { message: "the pasted request did not reach the signup agent" }).toMatch(/^delegate:end:/);
+}
+
 /** Presses Enter from the chapter list until it comes back to it, each press waiting for the practice to move. */
 async function playEveryChapter(practice: Page, chapters: number): Promise<void> {
   let now = await practiceState(practice);
@@ -44,7 +60,8 @@ async function playEveryChapter(practice: Page, chapters: number): Promise<void>
   do {
     expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(chapters * PRESSES_PER_CHAPTER);
     const before = now;
-    await practice.keyboard.press("Enter");
+    if (now.startsWith("delegate:paste:")) await pasteByHand(practice);
+    else await practice.keyboard.press("Enter");
     presses += 1;
     await expect.poll(() => practiceState(practice), { message: `Enter at ${before} moved nothing`, timeout: 10_000 }).not.toBe(before);
     now = await practiceState(practice);

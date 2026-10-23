@@ -1,6 +1,7 @@
 // Chapter 4's world: a lead agent and two other open agents in one tab, where
-// the learner hands work on by saying it. Each request typed into the lead's
-// prompt plays the next part of the script, as the agents would: the lead
+// the learner hands work on by saying it. Each request sent from the lead's
+// prompt, in whatever words, plays the next part of the script, as the agents
+// would, since a practice understands no words: the lead
 // starts a child in a tab of its own and later passes it an instruction, the
 // child reports back by letter, the lead finds an open agent by what it does
 // and writes to it, and a pane ID copied from a pane's menu names the agent
@@ -33,6 +34,10 @@ export type DelegateModel = {
   stage: DelegateStage;
   /** What the learner has typed into the lead's prompt and not sent yet. */
   draft: string;
+  /** Each request the lead took, in the learner's words, one for each stage played. */
+  said: string[];
+  /** The last request for the signup agent that named no pane ID, which the lead asks about. */
+  unnamed: string | null;
   /** What the practice screen copied last; it never reaches the operator's clipboard. */
   copied: string | null;
 };
@@ -75,7 +80,7 @@ function initial(): DelegateModel {
     nextId: 3,
     operations: [],
   };
-  return { desk, stage: 0, draft: "", copied: null };
+  return { desk, stage: 0, draft: "", said: [], unnamed: null, copied: null };
 }
 
 /** The desk with the agent row of `paneId` replaced. */
@@ -101,9 +106,15 @@ function spawnChild(desk: DeskModel): DeskModel {
 
 const NO_COUNTS = { error: 0, approval: 0, question: 0, working: 0, done: 0 };
 
-/** The lead's request, sent: the next part of the script, or nothing where the request does not fit it. */
+/**
+ * The lead's prompt, sent: any words play the next part of the script, except
+ * the last, which takes only a request naming the copied pane ID. An empty
+ * prompt sends nothing, and a last request with no ID has the lead ask for one.
+ */
 function submit(model: DelegateModel): DelegateModel {
-  const sent = { ...model, draft: "" };
+  const request = model.draft.trim();
+  if (!request) return { ...model, draft: "" };
+  const sent = { ...model, draft: "", unnamed: null, said: model.stage < 4 ? [...model.said, request] : model.said };
   switch (model.stage) {
     case 0:
       return { ...sent, stage: 1, desk: spawnChild(model.desk) };
@@ -116,7 +127,7 @@ function submit(model: DelegateModel): DelegateModel {
       return { ...sent, stage: 3, desk: withRow(model.desk, DOCS, (row) => working(row.pane_id, row.agent_kind, "1s")) };
     case 3:
       // Only the copied pane ID says which agent; a request that names none waits for it.
-      if (!model.draft.includes(SIGNUP)) return sent;
+      if (!request.includes(SIGNUP)) return { ...model, draft: "", unnamed: request };
       return { ...sent, stage: 4, desk: withRow(model.desk, SIGNUP, (row) => working(row.pane_id, row.agent_kind, "1s")) };
     default:
       return sent;
@@ -166,13 +177,15 @@ function leadScreen(model: DelegateModel, cols: number): string {
     "● Raised the checkout timeout from 3s to 10s.",
     `  ${DIM}⎿${RESET}  src/payment/checkout.ts`,
   ];
-  if (model.stage >= 1) rows.push(...said("Hand the tests to a Codex child"), ...ran("hide agent spawn --parent here …", `Started ${LABELS[CHILD]} in its own tab`), "● It reports back to me by letter when it is done.");
+  const asked = (stage: number) => model.said[stage - 1]!;
+  if (model.stage >= 1) rows.push(...said(asked(1)), ...ran("hide agent spawn --parent here …", `Started ${LABELS[CHILD]} in its own tab`), "● It reports back to me by letter when it is done.");
   if (model.stage >= 2) {
-    rows.push(...said("Tell the child to use sqlite"), ...ran(`hide request send ${CHILD} …`, `Passed on to ${LABELS[CHILD]}`));
+    rows.push(...said(asked(2)), ...ran(`hide request send ${CHILD} …`, `Passed on to ${LABELS[CHILD]}`));
     rows.push("", `${OWL}🦉  Letter from ${LABELS[CHILD]}${RESET}`, `  ${GREEN}✓${RESET} The timeout test passes on sqlite. 12 passed.`);
   }
-  if (model.stage >= 3) rows.push(...said("Tell the docs writer the timeout changed"), ...ran("hide agent list", `${LABELS[DOCS]} · ${LABELS[SIGNUP]} · ${LABELS[CHILD]}`), ...ran(`hide request send ${DOCS} …`, `Letter sent to ${LABELS[DOCS]} (Codex)`));
-  if (model.stage >= 4) rows.push(...said(`${SIGNUP} update the signup copy for the new timeout`), ...ran(`hide request send ${SIGNUP} …`, `Letter sent to ${SIGNUP} (${LABELS[SIGNUP]})`));
+  if (model.stage >= 3) rows.push(...said(asked(3)), ...ran("hide agent list", `${LABELS[DOCS]} · ${LABELS[SIGNUP]} · ${LABELS[CHILD]}`), ...ran(`hide request send ${DOCS} …`, `Letter sent to ${LABELS[DOCS]} (Codex)`));
+  if (model.unnamed !== null) rows.push(...said(model.unnamed), "● Which agent should get it? Paste its terminal ID into the request.");
+  if (model.stage >= 4) rows.push(...said(asked(4)), ...ran(`hide request send ${SIGNUP} …`, `Letter sent to ${SIGNUP} (${LABELS[SIGNUP]})`));
   if (model.stage === 1) rows.push("", `${CLAUDE}✻ Waiting on 1 child… ${DIM}(esc to interrupt)${RESET}`);
   rows.push("", rule(cols), `${DIM}>${RESET} ${model.draft}`, rule(cols));
   return lines(...rows);
@@ -269,6 +282,7 @@ export const DELEGATE_WORLD: PracticeWorld<DelegateModel> = {
     return desk ? { ...model, desk } : null;
   },
   snapshot,
+  prompt: (model, paneId) => (paneId === LEAD ? model.draft : ""),
   panes: (model) => model.desk.panes.map((pane) => pane.id),
   screen: (model, paneId, cols) => SCREENS[paneId]!(model, cols),
   lane: false,
