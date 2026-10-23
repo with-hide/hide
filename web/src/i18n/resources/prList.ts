@@ -15,12 +15,12 @@ export const prListEnglish = {
 } as const;
 
 const ko = {
-  "prList.takeHint": "에이전트에게 맡기기\nPR 브랜치에서 시작 대화상자를 연다. 첫 지시 = 실패한 검사 · 리뷰 코멘트",
-  "prList.linkHint": "이슈 잇기\n이 PR을 이슈에 잇는다. 이을 이슈가 없으면 PR 제목 · 본문으로 새로 만든다",
-  "prList.cleanHint": "정리\n머지됐거나 폴더가 없는 워크트리와 거기서 쉬는 에이전트를 지운다. 확인 대화상자가 먼저 뜬다",
+  "prList.takeHint": "에이전트에게 맡기기\nPR 브랜치에서 시작 대화상자를 열어요. 첫 지시에는 실패한 검사와 리뷰 코멘트가 들어가요",
+  "prList.linkHint": "이슈 연결\n이 PR을 이슈에 연결해요. 연결할 이슈가 없으면 PR 제목과 본문으로 새 이슈를 만들어요",
+  "prList.cleanHint": "정리\n머지됐거나 폴더가 없는 워크트리와 거기서 쉬는 에이전트를 지워요. 먼저 확인 대화상자가 떠요",
   "prList.gitHubHint": "GitHub\n리뷰하고 머지",
-  "prList.openIssue": "{{issue}} GitHub에서 열기",
-  "prList.linkIssue": "이슈 잇기",
+  "prList.openIssue": "GitHub에서 {{issue}} 열기",
+  "prList.linkIssue": "이슈 연결",
   "prList.searchIssues": "이슈 검색",
   "prList.newIssue": "새 이슈 만들기",
   "prList.delegate": "맡기기",
@@ -44,13 +44,13 @@ const zhCN = {
 
 const ja = {
   "prList.takeHint": "エージェントに任せる\nPR のブランチで開始ダイアログを開きます。最初の指示 = 失敗したチェックとレビューコメント",
-  "prList.linkHint": "課題を関連付ける\nこの PR を課題に関連付けます。該当する課題がなければ PR のタイトルと本文から作成します",
+  "prList.linkHint": "Issue を関連付ける\nこの PR を Issue に関連付けます。該当する Issue がなければ PR のタイトルと本文から作成します",
   "prList.cleanHint": "整理\nマージ済み、またはフォルダーのないワークツリーと、そこで待機中のエージェントを削除します。先に確認ダイアログが表示されます",
   "prList.gitHubHint": "GitHub\nレビューしてマージ",
   "prList.openIssue": "GitHub で{{issue}}を開く",
-  "prList.linkIssue": "課題を関連付ける",
-  "prList.searchIssues": "課題を検索",
-  "prList.newIssue": "新しい課題を作成",
+  "prList.linkIssue": "Issue を関連付ける",
+  "prList.searchIssues": "Issue を検索",
+  "prList.newIssue": "新しい Issue を作成",
   "prList.delegate": "任せる",
   "prList.actions": "PR の操作",
   "prList.copyBranch": "ブランチ名をコピー",
