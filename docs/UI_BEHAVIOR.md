@@ -2357,12 +2357,13 @@ A world (`web/src/practice/world.ts`) gives the first state, answers the core ev
 What is typed into a terminal reaches the world as the terminal's `key` events and a copy as `practice_copy`; a pane whose screen the world changes is cleared and drawn again, so an agent's answer appears as the world writes it.
 A `type` gesture can name a field (a palette's search box) instead of a pane: ⏎ types the words in letter by letter, the coach keeping ⏎ while the palette is open until they are in, and a field the step's `command` opens is opened by the first ⏎.
 A world names in `examples` what it invented that could pass for a real record (a pull request's title), and the coach marks each `예시` just past its text; the shell's own components stay as they are.
-`worlds/kit.ts` holds what several worlds build with: a checkout's desk of tabs, panes and groups and the events that change it (`applyDesk`), agent rows (`agent`, with a parent named as the core names it), and the snapshot of one or more projects' desks (`deskSnapshot`).
+`worlds/kit.ts` holds what several worlds build with: a checkout's desk of tabs, panes and groups and the events that change it (`applyDesk`), agent rows (`agent`, with a parent named as the core names it), and the snapshot of one or more projects' desks (`deskSnapshot`), which leaves a tab of only delegated children off the strip and lists each pane's, tab's and desk's close consequence as the core does.
 A tool only one chapter needs stays in that chapter's world file, and moves to `kit.ts` when a second chapter needs it.
 A world's data is the practice window's own, invented for it: no world imports the gallery's fixtures.
 `worlds/tour.ts` plays on `data/tour.json`, a whole snapshot kept with each time written as how long before now it was (`$msAgo`, `$sAgo`, `$isoAgo`, `$daysAgo`).
 Bump a chapter's `version` when its steps change, so a learner's old progress reads as `바뀜`.
 `web/e2e/practice.spec.ts` plays every chapter to its end with ⏎ alone, so a new chapter is played there without a change to the spec; a step whose ⏎ moves nothing stops it.
+`web/src/practice/worlds.test.ts` sends every chapter's world, at each step the shell's commands and pane focus can reach, every command the keyboard runs and every pane focus, and fails when the world, its snapshot or a pane's screen throws; a step only a drag, typing or a palette reaches is checked from the state before it.
 
 ## Search keyboard navigation
 
