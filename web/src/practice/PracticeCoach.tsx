@@ -299,7 +299,8 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   useEffect(() => {
     if (seen.current === model) return;
     seen.current = model;
-    if (step.command) setFlash(commandLabel(step.command));
+    // While a palette or a switcher the shell opened is up, the change came from its own keys, not the step's chord.
+    if (step.command && !shellLayerOpen(useUiStore.getState())) setFlash(commandLabel(step.command));
     if (step.done?.(model)) setIndex((value) => value + 1);
   }, [model, step]);
   useEffect(() => {

@@ -288,6 +288,42 @@ function rootScope(members: { pane_id: string; place: PracticePlace }[]): AgentS
   };
 }
 
+/** Whether a tab is somebody else's work, as the core decides it: it holds an agent, and every agent in it is a delegated child. */
+function tabIsDelegated(model: DeskModel, tab: PracticeTab): boolean {
+  const agents = panesOf(tab.root).flatMap((id) => model.panes.find((pane) => pane.id === id)?.agent ?? []);
+  return agents.length > 0 && agents.every((row) => row.delegated === true);
+}
+
+/**
+ * What closing a pane, a tab or a whole desk would end, keyed by its pane ids
+ * the way the core keys them (`tally/close.rs`). A practice agent tracks no
+ * descendants to close with it, so no close asks about a subtree.
+ */
+function closes(desks: readonly PracticeDesk[]): AgentScope["closes"] {
+  const result: AgentScope["closes"] = {};
+  const add = (ids: string[], panes: PracticePane[]) => {
+    const asks = (pane: PracticePane) => pane.agent?.requires_close_confirmation === true;
+    result[ids.join("\0")] ??= {
+      decision: { action: panes.some(asks) ? "confirm" : "close" },
+      stop_work: { rows: panes.map((pane) => ({ pane_id: pane.id, agent: pane.agent !== null, label: pane.agent?.identity_label ?? pane.title, state: asks(pane) ? "active" : "quiet" })), unknown: null },
+      subtree: null,
+      subtree_all: null,
+    };
+  };
+  add([], []);
+  for (const { model } of desks) {
+    const paneOf = (id: string) => model.panes.find((pane) => pane.id === id)!;
+    for (const tab of model.tabs) {
+      const ids = panesOf(tab.root);
+      for (const id of ids) add([id], [paneOf(id)]);
+      add(ids, ids.map(paneOf));
+    }
+    const every = model.tabs.flatMap((tab) => panesOf(tab.root));
+    add(every, every.map(paneOf));
+  }
+  return result;
+}
+
 /** The desk's checkout: the project's main checkout, last committed ten minutes ago, with the desk's tabs. */
 function deskCheckout(model: DeskModel, place: PracticePlace, scope: AgentScope, agents: AgentRow[], nowMs: number): Checkout {
   const id = checkoutId(place);
@@ -302,7 +338,7 @@ function deskCheckout(model: DeskModel, place: PracticePlace, scope: AgentScope,
   const tabs = model.tabs.map((tab, index) => ({
     id: tab.id, workspace_id: place.project, checkout_id: id, label: String(index + 1),
     sidebar: { number: index + 1, manual_name: tab.name, named_by_operator: tab.name !== null },
-    empty: false, delegated: false, panes: panesOf(tab.root).map(pane),
+    empty: false, delegated: tabIsDelegated(model, tab), panes: panesOf(tab.root).map(pane),
   }));
   return {
     agent_scope: scope,
@@ -330,7 +366,8 @@ function deskCheckout(model: DeskModel, place: PracticePlace, scope: AgentScope,
     github: { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: nowMs, unavailable_reason: null },
     tabs,
     active_tab_id: model.activeTab,
-    strip: tabs.map((tab) => ({ id: `strip:${tab.id}`, kind: "herdr", source_id: tab.id, label: tab.sidebar.manual_name ?? `Tab ${tab.sidebar.number}`, preview: false })),
+    // A tab holding only delegated children stays off the strip; the sidebar still reaches it.
+    strip: tabs.filter((tab) => !tab.delegated).map((tab) => ({ id: `strip:${tab.id}`, kind: "herdr", source_id: tab.id, label: tab.sidebar.manual_name ?? `Tab ${tab.sidebar.number}`, preview: false })),
     next_tab_label: String(model.tabs.length + 1),
     agent_groups: { selected: model.selectedGroup, groups: model.groups, drafts: [] },
   };
@@ -373,7 +410,7 @@ export function deskSnapshot(desks: readonly PracticeDesk[], front: string, nowM
   if (!shownDesk) throw new Error(`Practice project ${front} has no desk`);
   const model = shownDesk.model;
   const agents = desks.flatMap((desk) => agentsOf(desk.model));
-  const scope = rootScope(desks.flatMap(({ place, model: one }) => agentsOf(one).map((row) => ({ pane_id: row.pane_id, place }))));
+  const scope = { ...rootScope(desks.flatMap(({ place, model: one }) => agentsOf(one).map((row) => ({ pane_id: row.pane_id, place })))), closes: closes(desks) };
   const workspaces = desks.map((desk) => deskProject(desk, nowMs));
   const frontProject = workspaces.find((row) => row.id === front)!;
   const main = frontProject.checkouts[0]!;
