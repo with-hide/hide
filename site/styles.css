@@ -306,7 +306,7 @@ code, .mono { font-family: var(--font-mono); }
 .center { text-align: center; }
 
 /* Hide AI: one switch, and only the rows it rewrites. */
-.ai-switch { width: min(100%, 560px); margin: 48px auto 0; }
+.ai-switch { width: min(100%, 380px); margin: 48px auto 0; }
 .switch-bar { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 18px; font-family: var(--font-mono); font-size: var(--t-label); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .toggle { position: relative; width: 52px; height: 30px; padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: var(--surface-2); cursor: pointer; transition: background-color 300ms ease, border-color 300ms ease; }
 .toggle-knob { position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--muted); transition: transform 300ms cubic-bezier(.4, 0, .2, 1), background-color 300ms ease; }
@@ -334,6 +334,50 @@ code, .mono { font-family: var(--font-mono); }
 /* What started it: a command the agent ran, or the question it asked, over the picture. */
 .bubble { width: fit-content; max-width: 100%; margin: 0 0 -18px 18px; position: relative; z-index: 1; padding: 10px 16px; border: 1px solid var(--line-strong); border-radius: 14px 14px 14px 4px; background: var(--bg-raised); box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.5); font-size: var(--t-small); color: var(--ink); overflow-wrap: anywhere; }
 .bubble code { font-family: var(--font-mono); font-size: 0.92em; }
+
+/* The agent's pointer over the page it drives: the same arrow, ripple and flash hide draws on the operator's view
+   of a browser display (hided/assets/browser/overlay.js), in the product's own accent. */
+.agent-page { position: relative; --agent: #84cc16; --agent-ink: #1c1f12; }
+.agent-pointer { position: absolute; left: 18%; top: 88%; width: 22px; height: 28px; opacity: 0; pointer-events: none; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45)); transition: left 760ms cubic-bezier(.3, .7, .3, 1), top 760ms cubic-bezier(.3, .7, .3, 1), opacity 160ms ease-out; }
+.agent-pointer svg { display: block; transform: translate(-2px, -2px); transform-origin: 2px 2px; transition: transform 120ms ease-out; }
+.agent-pointer path { fill: var(--agent); stroke: var(--agent-ink); stroke-width: 1.6; stroke-linejoin: round; }
+.agent-pointer.shown { opacity: 1; }
+.agent-pointer.pressed svg { transform: translate(-2px, -2px) scale(.86); }
+.agent-ripple { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border: 2px solid var(--agent); border-radius: 50%; pointer-events: none; animation: agent-ripple 520ms ease-out forwards; }
+.agent-flash { position: absolute; border: 2px solid var(--agent); border-radius: 5px; box-shadow: 0 0 0 3px rgba(132, 204, 22, 0.25); pointer-events: none; animation: agent-flash 900ms ease-out forwards; }
+@keyframes agent-ripple { from { transform: scale(1); opacity: 1; } to { transform: scale(4.2); opacity: 0; } }
+@keyframes agent-flash { 0%, 55% { opacity: 1; } to { opacity: 0; } }
+.agent-command { transition: opacity 200ms ease; }
+.agent-command.swapping { opacity: 0; }
+
+/* Every machine: the core's devices as a small map, a letter running between their agents. */
+.mesh-figure { margin: 0; }
+.mesh { position: relative; aspect-ratio: 6 / 5; }
+.mesh-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.mesh-lines line { stroke: var(--line-strong); stroke-width: 1.5; stroke-dasharray: 4 6; vector-effect: non-scaling-stroke; }
+.node { position: absolute; display: grid; gap: 6px; width: min(42%, 220px); padding: 14px 16px; transform: translate(-50%, -50%); border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-raised); box-shadow: 0 18px 40px -24px rgba(0, 0, 0, 0.6); transition: opacity 400ms ease, border-color 400ms ease; }
+.node b { font-weight: var(--w-semibold); font-size: var(--t-body); color: var(--ink); }
+.node-tag { font-family: var(--font-mono); font-size: var(--t-label); letter-spacing: 0.04em; color: var(--faint); }
+.node .agent { display: flex; align-items: center; gap: 8px; font-size: var(--t-small); color: var(--muted); }
+.node .agent i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--st-working); }
+.node.laptop { left: 24%; top: 17%; }
+.node.server { left: 76%; top: 17%; }
+.node.core { left: 50%; top: 52%; border-color: color-mix(in srgb, var(--lime) 40%, var(--line)); }
+.node.phone { left: 50%; top: 87%; }
+.node .lid { display: none; }
+.phone-note { font-size: var(--t-small); color: var(--muted); transition: color 300ms ease; }
+.mesh[data-step="4"] .phone-note, .mesh[data-step="5"] .phone-note { color: var(--st-needs); }
+.mesh[data-step="3"] .node.laptop, .mesh[data-step="4"] .node.laptop { opacity: 0.45; }
+.mesh[data-step="3"] .node.laptop .lid, .mesh[data-step="4"] .node.laptop .lid { display: inline; }
+.mesh[data-step="3"] .node.laptop .awake, .mesh[data-step="4"] .node.laptop .awake { display: none; }
+.mesh[data-step="3"] .node.laptop .agent i, .mesh[data-step="4"] .node.laptop .agent i { background: var(--st-seen); }
+.node.lit { border-color: color-mix(in srgb, var(--lime) 70%, var(--line)); }
+.letter { position: absolute; left: 24%; top: 17%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 6px color-mix(in srgb, var(--lime) 22%, transparent); opacity: 0; transition: left 650ms cubic-bezier(.45, 0, .55, 1), top 650ms cubic-bezier(.45, 0, .55, 1), opacity 200ms ease; }
+.letter.moving { opacity: 1; }
+.mesh-caption { display: grid; gap: 4px; min-height: 64px; margin-top: 20px; padding: 14px 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-raised); transition: opacity 250ms ease; }
+.mesh-caption.swapping { opacity: 0; }
+.mesh-route { font-family: var(--font-mono); font-size: var(--t-label); letter-spacing: 0.04em; color: var(--faint); }
+.mesh-text { font-size: var(--t-small); color: var(--ink); }
 
 /* Text on one side, the picture on the other. */
 .split { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 64px; align-items: center; }
@@ -416,7 +460,7 @@ select { width: 100%; min-height: 48px; padding: 0 40px 0 14px; border: 1px soli
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .reveal { opacity: 1; transform: none; transition: none; }
-  .toggle, .toggle-knob, .switch-shot, .switch-shot picture { transition: none; }
+  .toggle, .toggle-knob, .switch-shot, .switch-shot picture, .node, .letter, .mesh-caption, .agent-pointer, .agent-command { transition: none; }
 }
 
 @media (max-width: 1000px) {
@@ -430,6 +474,10 @@ select { width: 100%; min-height: 48px; padding: 0 40px 0 14px; border: 1px soli
 }
 
 @media (max-width: 640px) {
+  .mesh { aspect-ratio: 3 / 4; }
+  .node { width: 47%; padding: 10px 12px; gap: 4px; }
+  .node.core { width: 60%; }
+  .node .agent { font-size: 13px; }
   :root {
     --gutter: 20px;
     --t-sub: 19px;

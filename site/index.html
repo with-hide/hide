@@ -95,22 +95,22 @@
           <div class="shot switch-shot">
             <picture class="s-off">
               <source media="(prefers-color-scheme: light)" srcset="./assets/shots/rows-off-light.webp">
-              <img src="./assets/shots/rows-off-dark.webp" width="744" height="424" alt="Hide AI off: the two agents that need you show only their vendor's name, Codex and Antigravity, with their raw question cut off, and the finished one is just OpenCode." loading="lazy" decoding="async">
+              <img src="./assets/shots/rows-off-dark.webp" width="632" height="904" alt="Hide AI off: the Tasks list names most tasks only by their vendor, Codex, Antigravity, OpenCode and Codex again." loading="lazy" decoding="async">
             </picture>
             <picture class="s-on">
               <source media="(prefers-color-scheme: light)" srcset="./assets/shots/rows-on-light.webp">
-              <img src="./assets/shots/rows-on-dark.webp" width="744" height="424" alt="Hide AI on: the same rows read Approve #431 and #436? Both checked. Tests pass, and #433: CSV or XLSX for the export? A product call the lead won't make for you; the finished one reads Fix the test that broke the export." loading="lazy" decoding="async">
+              <img src="./assets/shots/rows-on-dark.webp" width="632" height="904" alt="Hide AI on: the same Tasks list reads Approve #431 and #436? and #433: CSV or XLSX for the export? under Needs You, Fix the test that broke the export under Unread, a starred task under Revisit, then Working and Waiting, each with its pull request." loading="lazy" decoding="async">
             </picture>
           </div>
-          <figcaption><b>Off</b>, a vendor's name and a cut-off question. <b>On</b>, what the task is and why it stopped.</figcaption>
+          <figcaption><b>Off</b>, four tasks called Codex, Antigravity and OpenCode. <b>On</b>, what each one is, sorted by who acts next.</figcaption>
         </figure>
         <div class="cards three">
           <figure class="card reveal">
             <div class="card-shot"><picture>
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/tasks-list-light.webp">
-              <img src="./assets/shots/tasks-list-dark.webp" width="640" height="840" alt="The sidebar's Tasks list: Needs You first with two tasks, then Unread, Working and Waiting, each with its agent and project." loading="lazy" decoding="async">
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/prs-list-light.webp">
+              <img src="./assets/shots/prs-list-dark.webp" width="640" height="712" alt="The sidebar's PR list: #431 and #436 under Needs You, ready to merge with checks passed; #438 and #432 under Agent is working, one with failed checks; one merged pull request folded away." loading="lazy" decoding="async">
             </picture></div>
-            <figcaption><b>What needs you, first.</b> Every task on the machine, sorted by who acts next.</figcaption>
+            <figcaption><b>Every pull request, by who acts next.</b> Ready to merge on top, the ones an agent is still fixing below.</figcaption>
           </figure>
           <figure class="card reveal">
             <div class="card-shot"><picture>
@@ -185,11 +185,11 @@
         </div>
         <div class="cards two">
           <figure class="card reveal">
-            <p class="bubble"><code>hide browser click browser-1 --text "Export CSV"</code></p>
-            <div class="card-shot"><picture>
+            <p class="bubble"><code class="agent-command">hide browser click browser-1 --text "Export CSV"</code></p>
+            <div class="card-shot agent-page"><picture>
               <source media="(prefers-color-scheme: light)" srcset="./assets/shots/browser-lane-light.webp">
-              <img src="./assets/shots/browser-lane-dark.webp" width="1144" height="1200" alt="A browser display beside the agent: the invoices page it opened, after it clicked Export CSV, with the Export ready message and a csv.ts tab beside the page." loading="lazy" decoding="async">
-            </picture></div>
+              <img src="./assets/shots/browser-lane-dark.webp" width="1144" height="1200" alt="A browser display beside the agent: the invoices page it opened at localhost:5173, with an Export CSV button over a table of invoices, and a csv.ts tab beside the page." loading="lazy" decoding="async">
+            </picture><span class="agent-pointer" aria-hidden="true"><svg width="22" height="28" viewBox="0 0 22 28"><path d="M2 2 L2 22 L7.5 17 L11 25.5 L14.6 24 L11.2 15.8 L18.5 15.8 Z"/></svg></span></div>
             <figcaption><b>The page it changed.</b> Your agent opens it, clicks through it and reads it before it asks you.</figcaption>
           </figure>
           <figure class="card reveal">
@@ -207,14 +207,23 @@
         <div class="split reveal">
           <div class="section-head">
             <img class="owl" data-owl="devices" src="./assets/owls/owl-devices-still.svg" data-motion="./assets/owls/owl-devices.svg" width="633" height="583" alt="" loading="lazy">
-          <p class="label bare">Every machine</p>
-            <h2 id="machines-title">One core, any screen.<br> <span class="accent">Close the laptop anytime.</span></h2>
-            <p>Run hide's core on a machine that stays on, and your agents keep working while the laptop sleeps. Add a server by its SSH alias, and answer from your phone over your own Tailscale.</p>
+            <p class="label bare">Every machine</p>
+            <h2 id="machines-title">Every machine, one team.<br> <span class="accent">Agents talk across them.</span></h2>
+            <p>Start an agent on your laptop, a Mac mini or a Linux server. They hand work to each other across machines, the core keeps them going while the laptop sleeps, and you answer from your phone.</p>
           </div>
-          <div class="card-shot"><picture>
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/devices-light.webp">
-              <img src="./assets/shots/devices-dark.webp" width="2120" height="1060" alt="Settings in hide: Devices lists This Mac as the core, a MacBook and a Linux server, both connected; Mobile shows Tailscale ready and one paired phone receiving notifications." loading="lazy" decoding="async">
-            </picture></div>
+          <figure class="mesh-figure">
+            <div class="mesh" data-step="0" role="img" aria-label="Four machines around one core: Claude Code on a MacBook sends the export tests to Codex on a Linux server through the Mac mini that runs the core, the server answers that the tests pass, the laptop closes while the Mac mini keeps going, and the phone is asked to approve both pull requests.">
+              <svg class="mesh-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <line x1="24" y1="17" x2="50" y2="52"/><line x1="76" y1="17" x2="50" y2="52"/><line x1="50" y1="52" x2="50" y2="87"/>
+              </svg>
+              <div class="node laptop" aria-hidden="true"><b>MacBook</b><span class="node-tag"><span class="awake">your laptop</span><span class="lid">lid closed</span></span><span class="agent"><i></i>Claude Code · lead</span></div>
+              <div class="node server" aria-hidden="true"><b>Linux server</b><span class="node-tag">over SSH</span><span class="agent"><i></i>Codex · tests</span></div>
+              <div class="node core" aria-hidden="true"><b>Mac mini</b><span class="node-tag">core · always on</span><span class="agent"><i></i>Codex · CSV export</span><span class="agent"><i></i>OpenCode · fix</span></div>
+              <div class="node phone" aria-hidden="true"><b>Phone</b><span class="node-tag">over Tailscale</span><span class="phone-note">Approve #431 and #436?</span></div>
+              <span class="letter" aria-hidden="true"></span>
+            </div>
+            <figcaption class="mesh-caption" aria-hidden="true"><span class="mesh-route">Claude Code on MacBook → Codex on Linux server</span><span class="mesh-text">Run the export tests on the Linux box.</span></figcaption>
+          </figure>
         </div>
       </section>
 
