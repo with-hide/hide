@@ -1038,6 +1038,7 @@ When a session appears, every placed session holds still while only the new one 
 Admission keeps the map within the 400-node budget (below); a map the layout cannot place fails into the existing Retry and session list.
 A root's circle shows its title and its sidebar second line (what it is doing, what it asks, what it waits for); a descendant shows only its title, plus what it asks in amber while it is the operator's turn.
 Under every circle's title, the model and effort Hide proved it launched the session with sit in one small quiet line (`opus · high`), as the start chose them; a session Hide did not start, or one whose conversation has changed since, shows no line rather than a guess.
+Under that, a session working in a linked worktree carries a small branch chip (the folder's name for a detached one), but only where its lineage parent works in another checkout, so a team inside one worktree names it once on its top session and a session in the main checkout has none; the project stays the repository, never the worktree.
 State words and judged tasks are not drawn under circles; the accessible name reads title, state, provider and the launch choice.
 The ring colour and shape of each circle encode its mark (working, waiting, my turn, unread result, quiet), with the StatusMark beside it and a dashed outline on the current pane's session.
 

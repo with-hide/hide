@@ -17,7 +17,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { frontDeviceId } from "./devices";
 import { Input } from "./components/ui/input";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
-import { GRAPH_CHOICES_DEFAULTS, graphActivity, graphProjectIdOf, graphProjectKey, graphSessionId, graphSessionIdOf, graphSessionKey, overviewGraphModel, overviewGraphTeam, sameGraphScope, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
+import { checkoutChip, GRAPH_CHOICES_DEFAULTS, graphActivity, graphProjectIdOf, graphProjectKey, graphSessionId, graphSessionIdOf, graphSessionKey, overviewGraphModel, overviewGraphTeam, sameGraphScope, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
 import { projectDropPlaces, useGraphTheme, useOverviewGraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
 import { ClusterGraphNode, GlowGraphNode, GraphLine, GraphStateCounts, hasGraphLine, launchWords, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, TeamGraphNode, type ClusterNode, type ExchangeBadge, type GlowNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type TeamNode } from "./overviewGraphNodes";
 import type { BoardProject } from "./projectBoard";
@@ -297,7 +297,7 @@ function WorkGraph({ projects, deviceId, actions, onOpenRecord, projectId, initi
         // The layout owns these fixed dimensions. Retaining them also preserves React Flow's
         // measured handle bounds when hover/focus replaces a controlled node object.
         const measured = { width: shape.width, height: shape.height };
-        sessions.push({ id: row.id, type: "session", position: { x: point.x - shape.width / 2, y: point.y - shape.orb / 2 }, ...measured, measured, selected: activeSession === row.id, data: { row, root, context: model.context.has(row.id), muted: selection !== null && !related, highlighted: pointedRelated.has(row.id), current: current?.id === row.id, team, highlight, choose: chooseSession }, dragHandle: ".og-session-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 });
+        sessions.push({ id: row.id, type: "session", position: { x: point.x - shape.width / 2, y: point.y - shape.orb / 2 }, ...measured, measured, selected: activeSession === row.id, data: { row, root, branch: checkoutChip(row, agentsById.get(model.parents.get(row.id) ?? "")), context: model.context.has(row.id), muted: selection !== null && !related, highlighted: pointedRelated.has(row.id), current: current?.id === row.id, team, highlight, choose: chooseSession }, dragHandle: ".og-session-drag", draggable: true, connectable: false, focusable: false, selectable: false, zIndex: 2 });
       }
     }
     // The chosen team's dashed outline goes round its circles and words.

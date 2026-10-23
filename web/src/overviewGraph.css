@@ -97,6 +97,10 @@
 .og-session[data-root="true"] .og-session-title { font-size: var(--text-body); font-weight: 600; }
 /* The model and effort Hide launched the session with, quiet under its title. */
 .og-session-launch { max-width: 100%; overflow: hidden; padding-inline: var(--spacing-xxs); border-radius: var(--radius-sm); background: var(--background); color: var(--subtle-foreground); font-size: var(--text-micro); line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+/* A worktree's branch, named once per team: the top session working in that checkout. */
+.og-session-branch { display: inline-flex; max-width: 100%; align-items: center; gap: var(--size-hairline); overflow: hidden; padding: 0 var(--spacing-xxs); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); background: var(--background); color: var(--muted-foreground); font-size: var(--text-micro); line-height: 1.3; }
+.og-session-branch svg { width: 1em; height: 1em; flex-shrink: 0; }
+.og-session-branch span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .og-session-line { justify-content: center; font-size: var(--text-caption); line-height: 1.4; color: var(--subtle-foreground); }
 .og-session-line.og-asking { color: var(--warning); }
 .og-session[data-context="true"] .og-session-target, .og-session[data-muted="true"] .og-session-target { opacity: var(--opacity-dimmed); }

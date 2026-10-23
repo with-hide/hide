@@ -1,5 +1,5 @@
 import { BaseEdge, EdgeLabelRenderer, Handle, Position, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
-import { ChevronsDownUpIcon, MailIcon, TerminalIcon } from "lucide-react";
+import { ChevronsDownUpIcon, GitBranchIcon, MailIcon, TerminalIcon } from "lucide-react";
 import { useId } from "react";
 import { AgentMark } from "./AgentMark";
 import { badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
@@ -38,7 +38,7 @@ export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent;
 export type TeamNode = Node<{ path: string; width: number; height: number; selected: boolean }, "team">;
 /** A team root's fold: how many descendants, their states, and whether they are folded away. */
 export type TeamFold = { count: number; turn: number; going: number; done: number; folded: boolean; toggle: () => void };
-export type SessionNode = Node<{ row: GraphAgent; root: boolean; context: boolean; muted: boolean; highlighted: boolean; current: boolean; team: TeamFold | null; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
+export type SessionNode = Node<{ row: GraphAgent; root: boolean; branch: string | null; context: boolean; muted: boolean; highlighted: boolean; current: boolean; team: TeamFold | null; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
 /** A straight relationship between two orbs, already trimmed to their edges; it carries no words. */
 /** A line's letters and Herdr inputs, summed over both directions, and its hint saying them per direction. */
 export type ExchangeBadge = { letters: number; direct: number; label: string };
@@ -118,17 +118,18 @@ export function TeamGraphNode({ data }: NodeProps<TeamNode>) {
 
 export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>) {
   const { t } = useInterfaceTranslation();
-  const { row, root, choose, highlight, team } = data;
+  const { row, root, branch, choose, highlight, team } = data;
   const reveal = useRevealNode(id);
   const asking = row.agent.mark === "turn";
   const launch = launchWords(row);
   return <div className="og-session" data-root={root} data-mark={row.agent.mark} data-selected={selected} data-current={data.current} data-context={data.context} data-muted={data.muted} data-highlighted={data.highlighted} data-folded-turn={team?.folded === true && team.turn > 0} data-graph-session={row.agent.pane_id}>
     <Ports />
-    <button type="button" className="og-session-target nopan" aria-label={[rowAccessibleName(t, row.agent, row.device), starred(row.agent) ? t("taskLens.revisit.starred") : null, data.current ? t("overviewGraph.currentPane") : null, data.context ? t("overviewGraph.context") : null, launch ? t("overviewGraph.launchModel", { model: launch }) : null].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
+    <button type="button" className="og-session-target nopan" aria-label={[rowAccessibleName(t, row.agent, row.device), starred(row.agent) ? t("taskLens.revisit.starred") : null, data.current ? t("overviewGraph.currentPane") : null, data.context ? t("overviewGraph.context") : null, launch ? t("overviewGraph.launchModel", { model: launch }) : null, branch].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
       {/* A delegated session is the same circle, smaller (its size comes from data-root). */}
       <span className="og-orb og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })}><AgentMark kind={row.agent.agent_kind} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} /></span></span>
       <strong className="og-session-title"><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong>
       {launch ? <span className="og-session-launch" aria-hidden="true">{launch}</span> : null}
+      {branch ? <span className="og-session-branch" aria-hidden="true"><GitBranchIcon aria-hidden="true" /><span>{branch}</span></span> : null}
       {root || asking ? <GraphLine agent={row.agent} className={asking ? "og-session-line og-asking" : "og-session-line"} /> : null}
     </button>
     {team ? <button type="button" className="og-team-chip nodrag nopan" data-folded={team.folded} data-turn={team.turn > 0} aria-expanded={!team.folded} aria-label={t(team.folded ? "overviewGraph.unfoldTeam" : "overviewGraph.foldTeam", { count: team.count })} onClick={team.toggle}>

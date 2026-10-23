@@ -132,6 +132,14 @@ function projectSessions(projects: readonly BoardProject[], metadata: OverviewGr
   });
 }
 
+/** The branch a session's chip names on the map: a linked worktree's only, and only where its lineage parent
+ * works in another checkout, so a team inside one worktree names it once, on its top session. */
+export function checkoutChip(row: GraphAgent, parent: GraphAgent | undefined): string | null {
+  if (!row.checkout.is_worktree) return null;
+  if (parent && parent.deviceId === row.deviceId && parent.checkout.id === row.checkout.id) return null;
+  return row.checkout.branch ?? row.checkout.label;
+}
+
 export type ProjectGraphCounts = { total: number; roots: number; children: number };
 
 /** The Projects comparison shares graph identity and scope, before any visible-node cap. */
