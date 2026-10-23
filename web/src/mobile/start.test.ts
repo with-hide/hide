@@ -77,10 +77,10 @@ describe("startProblem", () => {
 
 describe("startFailure", () => {
   it("names the core's refusals and never shows a raw kind", () => {
-    expect(noticeText(korean, startFailure("task_operation.busy"))).toContain("진행 중");
+    expect(noticeText(korean, startFailure("task_operation.busy"))).toContain("시작하는 중");
     expect(noticeText(korean, startFailure("home.conflict"))).toContain("~/hide");
-    expect(noticeText(korean, startFailure("something.new"))).toBe("시작하지 못했어요. 다시 시작하세요.");
-    expect(noticeText(korean, startFailure(null))).toBe("시작하지 못했어요. 다시 시작하세요.");
+    expect(noticeText(korean, startFailure("something.new"))).toBe("시작하지 못했어요. 다시 시도하세요.");
+    expect(noticeText(korean, startFailure(null))).toBe("시작하지 못했어요. 다시 시도하세요.");
   });
 });
 

@@ -197,7 +197,7 @@ it("Overview puts the version, one line and the move in place of not answering; 
   const first = await mount(state(offer(), "done"), "overview");
   expect(document.querySelector("[data-herdr-takeover-overview]")?.getAttribute("data-herdr-takeover-overview")).toBe("move");
   expect(document.body.textContent).toContain("Herdr 0.8.2");
-  expect(document.body.textContent).toContain("This Herdr does not work with Hide");
+  expect(document.body.textContent).toContain("This Herdr isn't compatible with Hide");
   await act(async () => button("[data-herdr-takeover-move]")!.click());
   expect(sent(first.events)).toEqual([{ action: "move" }]);
   await first.unmount();
