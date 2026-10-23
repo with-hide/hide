@@ -22,5 +22,4 @@ export const TOUR_WORLD: PracticeWorld<TourModel> = {
   },
   panes: () => [...HERO_PANES],
   screen: (_model, paneId, cols) => HERO_TERMINALS[paneId as (typeof HERO_PANES)[number]].replaceAll(RULE, "─".repeat(cols)),
-  lane: true,
 };

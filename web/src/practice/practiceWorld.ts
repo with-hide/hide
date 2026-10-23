@@ -293,5 +293,4 @@ export const PRACTICE_WORLD: PracticeWorld<PracticeModel> = {
   snapshot: (model, nowMs) => ({ ...practiceSnapshot(model, nowMs), usage: null }),
   panes: (model) => model.panes.map((pane) => pane.id),
   screen: (model, paneId) => paneScreen(model.panes.find((pane) => pane.id === paneId)!),
-  lane: false,
 };
