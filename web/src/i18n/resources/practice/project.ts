@@ -67,7 +67,7 @@ const ko = {
   "practice.project.close.quest": "레인 닫기",
   "practice.project.close.kick": "닫기",
   "practice.project.close.title": "단축키로 닫아요",
-  "practice.project.close.text": "같은 키로 다시 열면 보던 도구로 열려요. ×로 닫았다면 탐색기로 열려요.",
+  "practice.project.close.text": "같은 키로 다시 열면 보던 도구로, ×로 닫았다면 탐색기로 열려요.",
   "practice.project.end.kick": "6편 끝",
   "practice.project.end.title": "도구 줄은 오른쪽에 늘 있어요",
   "practice.project.end.text": "아이콘의 숫자는 거기서 기다리는 일의 수예요.",
