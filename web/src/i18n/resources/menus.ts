@@ -73,7 +73,7 @@ const ko = {
   "menus.terminalName": "터미널 이름",
   "menus.terminalId": "터미널 ID",
   "menus.parent": "부모 · {{name}}",
-  "menus.sibling": "같은 부모 · {{name}}",
+  "menus.sibling": "같은 부모의 세션 · {{name}}",
   "menus.sessionTitle": "세션 이름",
   "menus.sessionId": "세션 ID",
 } satisfies Catalog<typeof menusEnglish>;
