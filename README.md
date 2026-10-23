@@ -251,6 +251,7 @@ These are one machine's numbers on macOS, taken without quiescing it: they leave
 | [Browser displays](docs/BROWSER_DISPLAYS.md) | `hide browser` and the pages drawn beside the work |
 | [Architecture](docs/ARCHITECTURE.md) | The core, the daemon, the desktop host and the Herdr boundary |
 | [All docs](docs/README.md) | Every current guide and what owns it |
+| [llms.txt](https://withhide.dev/llms.txt) | The same guides as one index for an agent to read |
 
 ## Contributing
 
