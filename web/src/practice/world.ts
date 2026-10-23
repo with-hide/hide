@@ -39,6 +39,12 @@ export type PracticeWorld<M> = {
   /** Whether the right lane is open on this world's screen. */
   lane: boolean;
   /**
+   * The words typed into `paneId`'s prompt and not sent yet. A world whose
+   * chapter types to an agent keeps it, so ⏎ sends what the learner wrote
+   * there and types the step's example only into an empty prompt.
+   */
+  prompt?: (model: M, paneId: string) => string;
+  /**
    * What on the screen is an invented record that could pass for a real one
    * (a pull request's title): the coach marks each match `예시`, so the
    * shell's own components stay as they are.

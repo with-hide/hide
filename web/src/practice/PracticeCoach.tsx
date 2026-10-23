@@ -14,6 +14,7 @@ import { pasteText, terminalFor } from "../terminals";
 import { useUiStore } from "../ui";
 import type { PracticeChapter, PracticeDrag, PracticeMenu, PracticeStep, PracticeTyping } from "./chapter";
 import { COACH_CSS } from "./coachStyle";
+import type { PracticeWorld } from "./world";
 
 type Rect = { x: number; y: number; w: number; h: number };
 type Point = { x: number; y: number };
@@ -100,8 +101,8 @@ const READ_MS = 700;
 const LETTER_MS = 90;
 
 /**
- * Types `typing.text` as the learner would. Into a pane: the terminal takes
- * the words, after ⌃U clears whatever the learner had typed there, then ⏎;
+ * Types `typing.text` as the learner would, where they have written nothing.
+ * Into a pane: the terminal takes the words, after ⌃U clears the prompt, then ⏎;
  * a practice terminal reaches no program. Into a field: letter by letter, in
  * place of what it held, each letter an input the field's own handler hears.
  */
@@ -125,6 +126,12 @@ async function typeInField(selector: string, text: string): Promise<void> {
     field.dispatchEvent(new Event("input", { bubbles: true }));
     await pause(LETTER_MS);
   }
+}
+
+/** What the learner has written into `pane`'s prompt and not sent, as its world keeps it. */
+function promptWords(world: PracticeWorld<unknown>, model: unknown, pane: string): string {
+  if (!world.prompt) throw new Error(`Practice step types into ${pane}, but its world keeps no prompt`);
+  return world.prompt(model, pane).trim();
 }
 
 const middle = (element: Element): Point => {
@@ -273,6 +280,9 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     if (index >= resume) onStep(index, last);
   }, [index, last, onStep, resume]);
 
+  // The model as it is now, for a press that reads it after this render.
+  const current = useRef(model);
+  current.current = model;
   // A step the world can finish is done when the world says so, however the learner did it.
   const seen = useRef(model);
   useEffect(() => {
@@ -327,18 +337,37 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     });
   }, [step]);
 
+  // Whether the learner typed into the step's field themselves: a field may still hold an earlier step's words.
+  const wrote = useRef<PracticeStep | null>(null);
+  useEffect(() => {
+    const typing = step.gesture && "type" in step.gesture ? step.gesture.type : null;
+    if (!typing || !("input" in typing)) return undefined;
+    const onInput = (event: Event) => {
+      if (event.isTrusted && event.target instanceof Element && event.target.matches(typing.input)) wrote.current = step;
+    };
+    document.addEventListener("input", onInput, true);
+    return () => document.removeEventListener("input", onInput, true);
+  }, [step]);
+
   const perform = useCallback(() => {
     if (playing.current === step) return;
     if (!acts(step)) return advance();
     // A field the step types into is opened first by the step's command: ⌘K, then the words.
     if (step.gesture && "type" in step.gesture && "input" in step.gesture.type && !document.querySelector(step.gesture.type.input) && step.command) return pressCommand(step.command);
-    if (step.gesture && "type" in step.gesture) return play(typeInto(step.gesture.type));
+    if (step.gesture && "type" in step.gesture) {
+      const typing = step.gesture.type;
+      // The learner's own words go as they are, for the world to judge: a prompt's are sent,
+      // and a field answers as it is typed, so its words stay. The example goes only where there are none.
+      if ("pane" in typing && promptWords(chapter.world, current.current, typing.pane)) return pasteText(typing.pane, "\r");
+      if ("input" in typing && wrote.current === step && document.querySelector<HTMLInputElement>(typing.input)?.value.trim()) return;
+      return play(typeInto(typing));
+    }
     if (step.gesture && "menu" in step.gesture) return play(chooseFromMenu(step.gesture.menu, setHand));
     if (step.gesture && "drag" in step.gesture) return dragPane(step.gesture.drag, setHand);
     if (step.gesture && "click" in step.gesture) return pressTarget(step.target);
     if (pressed) return pressTarget(step.target);
     if (step.command) pressCommand(step.command);
-  }, [advance, play, pressed, step]);
+  }, [advance, chapter.world, play, pressed, step]);
 
   useEffect(() => {
     if (index >= resume) return undefined;
