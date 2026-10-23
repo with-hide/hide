@@ -24,6 +24,9 @@ export const PALETTE_HIDE = 'palette-hide';
 
 export const INTERFACE_TEXT = ['--text-micro', '--text-caption', '--text-body', '--text-subhead', '--text-title', '--text-headline'];
 
+/** The line boxes that hold one line of interface text at a fixed height, so they grow with it. */
+export const INTERFACE_LINES = ['--size-sidebar-line', '--size-sidebar-line-detail', '--size-sidebar-section-header'];
+
 export function readTokens(root = process.cwd()) {
   return JSON.parse(fs.readFileSync(path.join(root, TOKENS), 'utf8')).tokens;
 }
@@ -70,6 +73,8 @@ export function generate(root = process.cwd()) {
       mapped.push(`  --color-${name.slice(2)}: var(${name});`);
     } else if (INTERFACE_TEXT.includes(name)) {
       theme.push(`  ${name}: calc(${plain(token)} * var(--interface-scale, 1));`);
+    } else if (INTERFACE_LINES.includes(name)) {
+      rest.push(`  ${name}: calc(${plain(token)} * var(--interface-scale, 1));`);
     } else if (name.startsWith('--spacing-') || name.startsWith('--radius-')) {
       theme.push(`  ${name}: ${plain(token)};`);
     } else {
