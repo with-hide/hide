@@ -35,6 +35,8 @@ const BOLD = "\x1b[1m";
 const GREEN = "\x1b[32m";
 const RESET = "\x1b[0m";
 const lines = (...rows: string[]) => rows.join("\r\n");
+/** A pull request reference as the terminal writes it. */
+const ref = (number: number) => `#${number}`;
 /** Where a terminal's full-width rule goes; it is drawn as wide as the terminal. */
 const RULE = "{rule}";
 
@@ -74,20 +76,20 @@ const TERMINALS: Record<string, string> = {
     `${DIM}│${RESET} ${DIM}~/billing-app · main${RESET}         ${DIM}│${RESET}`,
     `${DIM}╰──────────────────────────────╯${RESET}`,
     "",
-    `${CODEX}›${RESET} Check #431 and #436, then ask me`,
+    `${CODEX}›${RESET} Check ${ref(431)} and ${ref(436)}, then ask me`,
     "",
     `${DIM}•${RESET} ${BOLD}Ran${RESET} pnpm test export`,
     `  ${DIM}└${RESET} ${GREEN}38 passed${RESET}`,
     "",
     `${DIM}•${RESET} Both pull requests are ready:`,
-    "  #431 Export invoices as CSV",
-    "  #436 Add the export button",
+    `  ${ref(431)} Export invoices as CSV`,
+    `  ${ref(436)} Add the export button`,
     "",
     `${DIM}${RULE}${RESET}`,
     ` ${BOLD}Merge both into main?${RESET}`,
     "",
     ` ${CODEX}› 1. Yes, merge both${RESET}`,
-    "   2. Only #431",
+    `   2. Only ${ref(431)}`,
     "   3. Not yet",
   ),
 };
