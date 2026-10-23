@@ -168,7 +168,7 @@ export function checkout(spec: CheckoutSpec, nowSeconds: number): Checkout {
           merged: false,
           behind_upstream: null,
           pane_count: panes.length,
-          deletion_gate: { blocked_reason: null, warnings: [], button_label: "Delete worktree", can_delete_branch: true, branch_warning: null, discard_label: null },
+          deletion_gate: { blocked: null, warnings: [], pane_count: 0, can_delete_branch: true, branch_loss: null, discard: null },
         },
     pull_request: spec.pr ? { url: "", review: null, ...spec.pr } : null,
     github: { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: nowSeconds * 1000, unavailable_reason: null },

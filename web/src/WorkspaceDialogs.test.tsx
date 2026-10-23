@@ -26,8 +26,8 @@ function row(): WorktreeRow {
     is_main: false, missing: false, dirty: false, changed_file_count: 0, pane_count: 0,
     lock_reason: null, ignored_repositories: names, ignored_scan_unavailable: null,
     deletion_gate: {
-      blocked_reason: null, warnings: [], button_label: "Delete worktree", can_delete_branch: true,
-      branch_warning: null, discard_label: `Discard ignored repositories ${names.join(", ")}`,
+      blocked: null, warnings: [], pane_count: 0, can_delete_branch: true, branch_loss: null,
+      discard: { changed_files: null, nested: false, status_unknown: false, ignored_repositories: names },
     },
   };
 }
@@ -90,11 +90,11 @@ describe("worktree Discard confirmation", () => {
     const changed = row();
     if (change === "repository list") {
       changed.ignored_repositories = [...names, "target/late"];
-      changed.deletion_gate.discard_label = `Discard ignored repositories ${changed.ignored_repositories.join(", ")}`;
+      changed.deletion_gate.discard = { changed_files: null, nested: false, status_unknown: false, ignored_repositories: changed.ignored_repositories };
     } else {
       if (change === "lock") changed.lock_reason = "Review in progress";
       else changed.ignored_scan_unavailable = "Check repository metadata and refresh";
-      changed.deletion_gate.blocked_reason = change;
+      changed.deletion_gate.blocked = change === "lock" ? { code: "locked", name: "feature/delete", reason: "Review in progress" } : { code: "ignored_scan_unavailable" };
     }
     await act(async () => useShellStore.setState({ rest: catalog(changed) }));
     expect(confirm() === null || confirm()?.disabled).toBe(true);

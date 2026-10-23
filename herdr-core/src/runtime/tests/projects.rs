@@ -952,19 +952,23 @@ fn the_card_projects_the_worktrees_shared_deletion_gate() {
     let mut runtime = runtime();
     let mut checkout = settled_worktree(PullRequestBadge::Open);
     let gate = checkout.worktree.as_mut().expect("worktree");
-    gate.deletion_gate.discard_label = Some("Discard 2 changed files".to_owned());
-    gate.deletion_gate.warnings = vec!["not pushed".to_owned()];
-    gate.deletion_gate.button_label = "Close 2 panes and delete".to_owned();
+    let discard = crate::model::WorktreeDiscard {
+        changed_files: Some(2),
+        ..crate::model::WorktreeDiscard::default()
+    };
+    gate.deletion_gate.discard = Some(discard.clone());
+    gate.deletion_gate.warnings = vec![crate::model::WorktreeDeletionWarning::NotPushed];
+    gate.deletion_gate.pane_count = 2;
 
     assert_eq!(
         card_for(&mut runtime, checkout).deletion_gate,
         Some(crate::model::WorktreeDeletionGateSnapshot {
-            blocked_reason: None,
-            warnings: vec!["not pushed".to_owned()],
-            button_label: "Close 2 panes and delete".to_owned(),
+            blocked: None,
+            warnings: vec![crate::model::WorktreeDeletionWarning::NotPushed],
+            pane_count: 2,
             can_delete_branch: true,
-            branch_warning: None,
-            discard_label: Some("Discard 2 changed files".to_owned()),
+            branch_loss: None,
+            discard: Some(discard),
         })
     );
 }

@@ -729,17 +729,45 @@ export type StripTab = {
   preview: boolean;
 };
 
-/** The removal gate the core computed for a linked worktree (`WorktreeDeletionGateSnapshot`). */
+/**
+ * Why a worktree cannot be deleted at all (`WorktreeDeletionBlock`): `main`, `locked` (with the branch or folder `name`
+ * and Git's lock `reason`, empty when it was given none) or `ignored_scan_unavailable`. `deletionGate.ts` words it.
+ */
+export type DeletionBlock = { code: string; name?: string; reason?: string };
+
+/**
+ * One warning badge in the deletion confirmation (`WorktreeDeletionWarning`): `uncommitted` (`files`, 0 when Git gave
+ * no count), `nested`, `base`, `status_unknown`, `unmerged` (`ahead`), `not_pushed`, `ignored_repositories` (`count`).
+ */
+export type DeletionWarning = { code: string; files?: number; ahead?: number; count?: number };
+
+/**
+ * What deleting the branch with the folder loses (`WorktreeBranchLoss`): `commits` the `base` does not have (`count`;
+ * `base` null when unknown), `not_merged` with none ahead, or `unknown` when Git could not tell.
+ */
+export type BranchLoss = { code: string; count?: number; base?: string | null };
+
+/** What the folder's removal would lose, which the operator accepts (`WorktreeDiscard`). */
+export type DeletionDiscard = {
+  /** Present when the folder has uncommitted changes; 0 when Git gave no count. */
+  changed_files: number | null;
+  nested: boolean;
+  status_unknown: boolean;
+  ignored_repositories: string[];
+};
+
+/** The removal gate the core computed for a linked worktree (`WorktreeDeletionGateSnapshot`): facts and codes, no sentence. */
 export type DeletionGate = {
   /** Main, locked or unavailable ignored-repository measurement. */
-  blocked_reason: string | null;
-  warnings: string[];
-  button_label: string;
+  blocked: DeletionBlock | null;
+  warnings: DeletionWarning[];
+  /** The panes the deletion closes first. */
+  pane_count: number;
   can_delete_branch: boolean;
   /** What deleting the branch loses; present means the core deletes it with `git branch -D`. */
-  branch_warning: string | null;
-  /** The checkbox that accepts losing the folder's changes; present means deletion waits for it. */
-  discard_label: string | null;
+  branch_loss: BranchLoss | null;
+  /** What the folder would lose; present means deletion waits for the operator to accept it. */
+  discard: DeletionDiscard | null;
 };
 
 /** The parts of the core's worktree row the removal confirmation reads. */

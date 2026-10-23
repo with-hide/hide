@@ -2221,20 +2221,24 @@ impl Runtime {
         worktree: &crate::model::WorktreeSnapshot,
         payload: &RemoveWorktreePayload,
     ) -> bool {
-        if let Some(reason) = worktree.deletion_gate.blocked_reason.as_ref() {
-            self.set_error("worktree.remove_blocked", reason.clone(), true);
+        if let Some(blocked) = worktree.deletion_gate.blocked.as_ref() {
+            self.set_error(
+                "worktree.remove_blocked",
+                format!("Not deleted: the deletion gate refuses it ({blocked:?})"),
+                true,
+            );
             return false;
         }
         if worktree.ignored_repositories != payload.expected_ignored_repositories {
             self.set_error("worktree.remove_ignored_changed", "Not deleted: the ignored repository list changed. Refresh and review every repository before choosing Discard.".to_owned(), true);
             return false;
         }
-        if let Some(label) = worktree.deletion_gate.discard_label.as_ref()
+        if let Some(discard) = worktree.deletion_gate.discard.as_ref()
             && !payload.discard_changes
         {
             self.set_error(
                 "worktree.remove_discard_unconfirmed",
-                format!("Not deleted: deleting it would lose work. Tick \"{label}\" to delete it anyway."),
+                format!("Not deleted: deleting it would lose work the operator did not accept losing ({discard:?})"),
                 true,
             );
             return false;
@@ -2268,8 +2272,8 @@ impl Runtime {
             protected_base_branch: protected_base_branch
                 .filter(|base| worktree.branch.as_deref() != Some(base.as_str())),
             delete_branch,
-            force_delete_branch: delete_branch && gate.branch_warning.is_some(),
-            discard_changes: payload.discard_changes && gate.discard_label.is_some(),
+            force_delete_branch: delete_branch && gate.branch_loss.is_some(),
+            discard_changes: payload.discard_changes && gate.discard.is_some(),
             expected_ignored_repositories: payload.expected_ignored_repositories.clone(),
             branch: worktree.branch,
             phase: "checking".to_owned(),
@@ -2962,7 +2966,7 @@ impl Runtime {
                         .is_none_or(|worktree| {
                             worktree.head_sha != active.expected_head_sha
                                 || worktree.branch != active.expected_branch
-                                || worktree.deletion_gate.blocked_reason.is_some()
+                                || worktree.deletion_gate.blocked.is_some()
                         })
                 });
             // The close worker names a device's panes by Herdr's own ids.

@@ -297,7 +297,7 @@ fn a_device_worktree_is_deleted_by_its_helper_whatever_this_machine_lists_at_tha
         let mut runtime = shared.lock().unwrap();
         let mut local = runtime.device_worktrees[DEVICE].projects[&repo.root].clone();
         for row in &mut local.worktrees {
-            row.deletion_gate.blocked_reason = Some("Local block".to_owned());
+            row.deletion_gate.blocked = Some(crate::model::WorktreeDeletionBlock::Main);
         }
         runtime.worktree_catalog.projects = vec![local];
     }
@@ -374,14 +374,20 @@ fn a_dirty_device_worktree_is_deleted_only_once_the_operator_accepts_the_loss() 
             .iter()
             .find(|row| row.path == repo.linked)
             .unwrap();
-        assert!(row.deletion_gate.blocked_reason.is_none());
+        assert!(row.deletion_gate.blocked.is_none());
         assert_eq!(
-            row.deletion_gate.discard_label.as_deref(),
-            Some("Discard 1 changed file")
+            row.deletion_gate
+                .discard
+                .as_ref()
+                .and_then(|discard| discard.changed_files),
+            Some(1)
         );
         assert_eq!(
-            row.deletion_gate.branch_warning.as_deref(),
-            Some("1 commit not on main is lost with it")
+            row.deletion_gate.branch_loss,
+            Some(crate::model::WorktreeBranchLoss::Commits {
+                count: 1,
+                base: Some("main".to_owned())
+            })
         );
     }
 

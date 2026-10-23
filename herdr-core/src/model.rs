@@ -5664,24 +5664,88 @@ pub struct WorktreeAgentLineSnapshot {
     pub uninstrumented_code: Option<String>,
 }
 
-/// One policy shared by all worktree deletion surfaces.
+/// One policy shared by all worktree deletion surfaces. Every field is a
+/// fact or a code the page words (docs/LOCALIZATION.md, Translation
+/// boundary); the core sends no sentence here.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct WorktreeDeletionGateSnapshot {
     /// Why deletion cannot start: main, locked or unmeasured ignored folders.
-    pub blocked_reason: Option<String>,
+    pub blocked: Option<WorktreeDeletionBlock>,
     /// What the operator should know before deleting, in the order shown.
-    pub warnings: Vec<String>,
-    pub button_label: String,
+    pub warnings: Vec<WorktreeDeletionWarning>,
+    /// The panes the deletion closes first, which the button counts.
+    pub pane_count: usize,
     /// The branch may go with the folder: it is named, is not the base, and
     /// the worktree is on disk.
     pub can_delete_branch: bool,
     /// What deleting the branch loses: commits the base does not have, or an
     /// answer Git could not give. Present means `git branch -D`.
-    pub branch_warning: Option<String>,
-    /// The checkbox that accepts losing what the folder holds (uncommitted
-    /// files, a worktree inside it, or a status Git could not read). Present
-    /// means deletion waits for it and then runs `git worktree remove --force`.
-    pub discard_label: Option<String>,
+    pub branch_loss: Option<WorktreeBranchLoss>,
+    /// What the folder would lose (uncommitted files, a worktree inside it,
+    /// a status Git could not read, ignored repositories). Present means
+    /// deletion waits for the operator to accept it and then runs
+    /// `git worktree remove --force`.
+    pub discard: Option<WorktreeDiscard>,
+}
+
+/// Why a worktree cannot be deleted at all.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorktreeDeletionBlock {
+    Main,
+    /// Git's own lock; `reason` is the text the lock was given, empty when
+    /// it was given none.
+    Locked {
+        name: String,
+        reason: String,
+    },
+    /// The scan for repositories inside it did not finish; its own sentence
+    /// stays on the row's `ignored_scan_unavailable`.
+    IgnoredScanUnavailable,
+}
+
+/// One warning badge in the deletion confirmation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorktreeDeletionWarning {
+    /// `files` is 0 when Git reported dirt without a count.
+    Uncommitted {
+        files: u32,
+    },
+    Nested,
+    Base,
+    StatusUnknown,
+    Unmerged {
+        ahead: u32,
+    },
+    NotPushed,
+    IgnoredRepositories {
+        count: usize,
+    },
+}
+
+/// What deleting the branch with the folder loses.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorktreeBranchLoss {
+    /// Commits the base branch does not have; `base` is absent when the
+    /// worktree's base is unknown.
+    Commits { count: u32, base: Option<String> },
+    /// Git does not count it as merged though it has no commits ahead.
+    NotMerged,
+    /// Git could not tell whether it is merged.
+    Unknown,
+}
+
+/// What the folder's removal would lose, which the operator accepts.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct WorktreeDiscard {
+    /// Present when the folder has uncommitted changes; 0 when Git gave no count.
+    pub changed_files: Option<u32>,
+    pub nested: bool,
+    /// Git could not read the status, so there may be uncommitted changes.
+    pub status_unknown: bool,
+    pub ignored_repositories: Vec<String>,
 }
 
 /// The accepted deletion, measured before any pane closes and executed by
