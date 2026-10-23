@@ -10,6 +10,7 @@ use super::control_order::diagnostic_messages;
 use super::documents::FakeDevice;
 use super::*;
 use crate::device_catalog::{self, DeviceFacts, Fact};
+use crate::model::{ProjectWorktreesSnapshot, WorktreeSnapshot};
 
 const TARGET: &str = "mini";
 
@@ -163,7 +164,12 @@ fn a_devices_workspaces_are_grouped_into_its_repositories_by_its_helper_facts() 
         herdr_workspace(TARGET, "w2", &t.linked, &[("t3", &t.linked)]),
         herdr_workspace(TARGET, "w3", &t.other, &[("t4", &t.other)]),
     ]);
-    let grouped = device_catalog::group(TARGET, &raw, &answered(&[&t.main, &t.linked, &t.other]));
+    let grouped = device_catalog::group(
+        TARGET,
+        &raw,
+        &answered(&[&t.main, &t.linked, &t.other]),
+        None,
+    );
 
     let mut shape = layout(&grouped);
     shape.sort();
@@ -222,8 +228,117 @@ fn a_devices_workspaces_are_grouped_into_its_repositories_by_its_helper_facts() 
         &t.main,
         &[("t1", &t.main)],
     )]);
-    let studio = device_catalog::group("studio", &elsewhere, &answered(&[&t.main]));
+    let studio = device_catalog::group("studio", &elsewhere, &answered(&[&t.main]), None);
     assert_ne!(studio.workspaces[0].id, main.id);
+}
+
+/// `answered` with each of `refused` answered as a folder the helper
+/// cannot read.
+fn with_refused(mut facts: DeviceFacts, refused: &[&str]) -> DeviceFacts {
+    for path in refused {
+        facts
+            .facts
+            .insert((*path).to_owned(), Fact::Refused("missing".to_owned()));
+    }
+    facts
+}
+
+/// A Herdr workspace attached to a linked worktree of `repository` at
+/// `path`, as the session projection reports it.
+fn worktree_workspace(wid: &str, path: &str, repository: &str) -> WorkspaceSnapshot {
+    let mut workspace = herdr_workspace(TARGET, wid, path, &[(wid, path)]);
+    workspace.checkouts[0].is_worktree = true;
+    workspace.checkouts[0].herdr_repo_root = Some(repository.to_owned());
+    workspace
+}
+
+#[test]
+fn a_devices_removed_worktree_stays_a_missing_checkout_of_the_repository_herdr_recorded() {
+    let t = tree();
+    let gone = format!("{}-gone", t.linked);
+    let raw = session(vec![
+        herdr_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)]),
+        worktree_workspace("w2", &gone, &t.main),
+    ]);
+
+    let unanswered = device_catalog::group(TARGET, &raw, &answered(&[&t.main]), None);
+    let grouped = device_catalog::group(
+        TARGET,
+        &raw,
+        &with_refused(answered(&[&t.main]), &[&gone]),
+        None,
+    );
+
+    assert!(
+        unanswered
+            .workspaces
+            .iter()
+            .any(|row| row.path == gone && row.checkouts[0].unconfirmed),
+        "nothing is grouped before the helper has answered"
+    );
+    assert_eq!(
+        layout(&grouped),
+        vec![(
+            t.main.clone(),
+            vec![
+                (t.main.clone(), vec!["t1".to_owned()]),
+                (gone.clone(), vec!["w2".to_owned()]),
+            ]
+        )]
+    );
+    let row = &grouped.workspaces[0].checkouts[1];
+    assert!(row.is_worktree && !row.exists && !row.unconfirmed);
+    assert_eq!(row.id, device_catalog::checkout_id(TARGET, &gone));
+}
+
+#[test]
+fn a_devices_removed_worktree_its_git_still_lists_stays_under_its_repository() {
+    let t = tree();
+    let gone = format!("{}-gone", t.linked);
+    let mut plain = herdr_workspace(TARGET, "w2", &gone, &[("t2", &gone)]);
+    plain.checkouts[0].herdr_repo_root = None;
+    let raw = session(vec![plain]);
+    let mut worktrees = device_catalog::DeviceWorktrees::default();
+    worktrees.projects.insert(
+        t.main.clone(),
+        ProjectWorktreesSnapshot {
+            root_path: t.main.clone(),
+            worktrees: vec![WorktreeSnapshot {
+                path: gone.clone(),
+                branch: Some("topic".to_owned()),
+                missing: true,
+                ..WorktreeSnapshot::default()
+            }],
+            ..ProjectWorktreesSnapshot::default()
+        },
+    );
+
+    let grouped = device_catalog::group(
+        TARGET,
+        &raw,
+        &with_refused(answered(&[&t.main]), &[&gone]),
+        Some(&worktrees),
+    );
+
+    assert_eq!(grouped.workspaces.len(), 1);
+    assert_eq!(grouped.workspaces[0].path, t.main);
+    let row = &grouped.workspaces[0].checkouts[0];
+    assert_eq!(row.path, gone);
+    assert_eq!(row.branch.as_deref(), Some("topic"));
+    assert!(row.is_worktree && !row.exists);
+}
+
+#[test]
+fn a_devices_removed_folder_nothing_places_stays_a_row_of_its_own() {
+    let t = tree();
+    let gone = format!("{}-gone", t.other);
+    let raw = session(vec![herdr_workspace(TARGET, "w3", &gone, &[("t3", &gone)])]);
+
+    let grouped = device_catalog::group(TARGET, &raw, &with_refused(answered(&[]), &[&gone]), None);
+
+    assert_eq!(grouped.workspaces.len(), 1);
+    assert_eq!(grouped.workspaces[0].path, gone);
+    assert!(grouped.workspaces[0].checkouts[0].unconfirmed);
 }
 
 #[test]
@@ -234,7 +349,7 @@ fn a_directory_the_helper_has_not_confirmed_is_shown_as_its_workspace_and_says_w
         herdr_workspace(TARGET, "w3", &t.other, &[("t4", &t.other)]),
     ]);
     let mut facts = answered(&[&t.main]);
-    let grouped = device_catalog::group(TARGET, &raw, &facts);
+    let grouped = device_catalog::group(TARGET, &raw, &facts, None);
     assert!(
         grouped
             .workspaces
@@ -2022,7 +2137,7 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
         grouped.workspaces[0].checkouts[0].clone()
     };
     for facts in [DeviceFacts::default(), answered(&[&t.main])] {
-        let checkout = row(&device_catalog::group(TARGET, &raw(), &facts));
+        let checkout = row(&device_catalog::group(TARGET, &raw(), &facts, None));
         assert_eq!(checkout.id, device_catalog::checkout_id(TARGET, &t.main));
         assert_eq!(checkout.path, t.main);
         assert_eq!(checkout.owner_workspace_id.as_deref(), Some("w5N"));
@@ -2039,7 +2154,7 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
     }
     // The tab brought forward: Herdr's focused tab when it is in the
     // checkout, else the owner's active tab.
-    let grouped = device_catalog::group(TARGET, &raw(), &answered(&[&t.main]));
+    let grouped = device_catalog::group(TARGET, &raw(), &answered(&[&t.main]), None);
     let id = device_catalog::checkout_id(TARGET, &t.main);
     assert_eq!(
         grouped.active_tab_ids.get(&id).map(String::as_str),
@@ -2047,7 +2162,7 @@ fn one_device_folder_held_by_two_workspaces_is_one_row_whose_new_tabs_go_to_its_
     );
     let mut focused = raw();
     focused.focused_tab_id = Some("remote:mini:tab:c".to_owned());
-    let grouped = device_catalog::group(TARGET, &focused, &answered(&[&t.main]));
+    let grouped = device_catalog::group(TARGET, &focused, &answered(&[&t.main]), None);
     assert_eq!(
         grouped.active_tab_ids.get(&id).map(String::as_str),
         Some("remote:mini:tab:c")
