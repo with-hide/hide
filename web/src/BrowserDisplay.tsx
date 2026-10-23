@@ -15,7 +15,7 @@ import { Hint } from "./components/ui/tooltip";
 import { BROWSER_DEVICES, deviceLabel, devicePlacement, type BrowserDevice } from "./browserDevice";
 import { cn } from "./lib/utils";
 import { browserBridge, type BrowserCommand } from "./host";
-import type { ViewDisplaySnapshot } from "./snapshot";
+import { localDeviceId, type ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 import { locateDisplay, workspaceKey, type ViewWorkspace } from "./viewLayout";
 import { workspaceViewOf } from "./workspace";
@@ -24,6 +24,8 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { MessageSquarePlusIcon } from "lucide-react";
 import { browserCommentKey, commentsOn, useFeedbackStore, noteBrowserComment } from "./viewFeedback";
 import { OpenerMark, PageNoteLayer, useViewFeedback } from "./ViewComments";
+import { externalBridge, pendingDeadline, settlePendingGrants, syncedGrants, useExternalStore } from "./externalFiles";
+import { windowDeviceId } from "./screenMachine";
 
 // A browser display (issue 155): its toolbar and the place its page shows.
 // In the desktop app the page is a native view the host lays over the slot
@@ -60,6 +62,16 @@ export function BrowserDisplay({ display, workspace, actions }: { display: ViewD
   return <HostedPage display={display} workspace={workspaceKey(workspace)} actions={actions} />;
 }
 
+/**
+ * An outside HTML file's page (PRD outside-path-in-hide B3): the page the
+ * desktop host loads from its grant, with Back, Forward and Reload and the
+ * file's name where the address would be, since the path is this window's
+ * alone. It takes no address, device size or Comment.
+ */
+export function ExternalPage({ display, workspace, actions }: { display: ViewDisplaySnapshot; workspace: ViewWorkspace; actions: Actions }) {
+  return <HostedPage display={display} workspace={workspaceKey(workspace)} actions={actions} external />;
+}
+
 function NewTab({ display, actions }: { display: ViewDisplaySnapshot; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const root = useShellStore((s) => s.rest?.navigator?.changes_root_path ?? null);
@@ -78,12 +90,13 @@ function NewTab({ display, actions }: { display: ViewDisplaySnapshot; actions: A
   );
 }
 
-function HostedPage({ display, workspace, actions }: { display: ViewDisplaySnapshot; workspace: string; actions: Actions }) {
+function HostedPage({ display, workspace, actions, external = false }: { display: ViewDisplaySnapshot; workspace: string; actions: Actions; external?: boolean }) {
   const { t } = useInterfaceTranslation();
   const key = hostKey(workspace, display.id);
   const page = useBrowserStore((s) => s.pages[key] ?? null);
   const still = useBrowserStore((s) => s.stills[display.id]);
-  const device = useUiStore((s) => s.browserDevices[key] ?? "fit");
+  const chosen = useUiStore((s) => s.browserDevices[key] ?? "fit");
+  const device = external ? "fit" : chosen;
   const size = devicePlacement(device);
   const slot = useRef<HTMLDivElement>(null);
   // The width the page's frame takes in the area, for the device button's scale.
@@ -132,19 +145,30 @@ function HostedPage({ display, workspace, actions }: { display: ViewDisplaySnaps
             </Button>
           </Hint>
         )}
-        <AddressField
-          address={address}
-          onSubmit={(url) => actions.navigateBrowser(display.id, url)}
-          trailing={size || !zoomed(page?.zoom ?? 1) ? null : <ZoomBadge zoom={page?.zoom ?? 1} command={command} />}
-        />
-        <DeviceButton device={device} drawn={drawn} onChoose={(next) => useUiStore.getState().setBrowserDevice(key, next)} />
-        <BrowserCommentButton display={display} workspace={workspace} areaId={areaId} address={address} actions={actions} />
-        {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
+        {external ? (
+          <>
+            <span className="min-w-0 flex-1 truncate font-mono text-caption text-subtle-foreground" data-browser-address="external">
+              {display.label}
+            </span>
+            {zoomed(page?.zoom ?? 1) ? <ZoomBadge zoom={page?.zoom ?? 1} command={command} /> : null}
+          </>
+        ) : (
+          <>
+            <AddressField
+              address={address}
+              onSubmit={(url) => actions.navigateBrowser(display.id, url)}
+              trailing={size || !zoomed(page?.zoom ?? 1) ? null : <ZoomBadge zoom={page?.zoom ?? 1} command={command} />}
+            />
+            <DeviceButton device={device} drawn={drawn} onChoose={(next) => useUiStore.getState().setBrowserDevice(key, next)} />
+            <BrowserCommentButton display={display} workspace={workspace} areaId={areaId} address={address} actions={actions} />
+            {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
+          </>
+        )}
       </div>
       <DeviceFrame width={size?.width ?? null}>
         <div ref={slot} className={cn("relative min-h-0 min-w-0", size ? "h-full max-w-full shadow-lg ring-1 ring-border" : "flex-1")} style={size ? { width: size.width } : undefined} data-browser-slot={display.id} data-browser-device={device}>
           {page?.failure ? (
-            <AreaEmpty state="browser-failed" text={t("documents.browserFailed", { address, reason: page.failure })}>
+            <AreaEmpty state="browser-failed" text={t("documents.browserFailed", { address: external ? display.label : address, reason: page.failure })}>
               <Button variant="secondary" onClick={() => command("reload")} data-browser-retry={display.id}>
                 {t("documents.browserReload")}
               </Button>
@@ -152,7 +176,7 @@ function HostedPage({ display, workspace, actions }: { display: ViewDisplaySnaps
           ) : still ? (
             <img src={still} alt="" aria-hidden="true" draggable={false} className="absolute inset-0 size-full select-none object-fill" data-browser-still={display.id} />
           ) : null}
-          {view && areaId ? (
+          {view && areaId && !external ? (
             <PageNoteLayer
               commentKey={browserCommentKey(view, display.id)}
               displayId={display.id}
@@ -358,30 +382,64 @@ export function BrowserHost({ actions }: { actions: Actions }) {
   const view = useShellStore((s) => workspaceViewOf(s.rest));
   const inventory = useShellStore((s) => s.rest?.browser_views);
   const scopes = useShellStore((s) => s.rest?.browser_scopes);
+  const haveRest = useShellStore((s) => s.rest !== null && s.connection === "live");
+  const grants = useShellStore((s) => s.rest?.external_grants);
+  const receipts = useShellStore((s) => s.rest?.status?.browser_opens);
+  const pending = useExternalStore((s) => s.pending);
   const front = view ? workspaceKey({ device_id: view.device_id, path: view.path }) : null;
   const layout = view?.layout ?? null;
   useEffect(() => {
-    syncBrowserFront(front ? parseWorkspaceKey(front) : null, layout, inventory ?? [], scopes ?? []);
+    if (haveRest) settlePendingGrants(grants ?? [], receipts ?? []);
+  }, [haveRest, grants, receipts]);
+  useEffect(() => {
+    // An open the core never answered stops holding its grant at its deadline.
+    const deadline = pendingDeadline();
+    if (deadline === null) return undefined;
+    const timer = setTimeout(() => settlePendingGrants(haveRest ? (grants ?? []) : [], receipts ?? []), Math.max(0, deadline - Date.now()) + 1);
+    return () => clearTimeout(timer);
+  }, [pending, haveRest, grants, receipts]);
+  useEffect(() => {
+    // The grants the core's tabs stand on are named only once this window
+    // has the core's tabs, so a reload lets go of none (PRD outside-path-in-hide B15).
+    syncBrowserFront(front ? parseWorkspaceKey(front) : null, layout, inventory ?? [], scopes ?? [], syncedGrants(haveRest ? (grants ?? []) : null));
     // A display the core no longer keeps takes its device size with it.
     if (inventory) useUiStore.getState().keepBrowserDevices(new Set(inventory.map((row) => hostKey(workspaceKey(row), row.view_id))));
-  }, [front, layout, inventory, scopes]);
+  }, [front, layout, inventory, scopes, haveRest, grants, pending]);
   useEffect(() => {
     if (connection !== "live") clearBrowserAttachments();
   }, [connection]);
 
   const latest = useRef(actions);
   latest.current = actions;
+  // This window's host tells the core which outside files it still holds each
+  // time the window attaches, so a tab left from before the app quit goes
+  // (PRD outside-path-in-hide D-07). Only a window on the core's machine
+  // holds any (D-09).
+  const onCore = useShellStore((s) => (s.rest ? windowDeviceId(s.rest.navigator?.devices) === localDeviceId(s.rest) : null));
+  useEffect(() => {
+    const bridge = externalBridge();
+    if (connection !== "live" || onCore !== true || !bridge) return undefined;
+    let live = true;
+    void bridge.live().then((grants) => {
+      // An open on its way was granted after the host answered, and is kept.
+      if (live) latest.current.keepExternalGrants([...new Set([...grants, ...Object.keys(useExternalStore.getState().pending)])]);
+    }, () => undefined);
+    return () => {
+      live = false;
+    };
+  }, [connection, onCore]);
   useEffect(() => {
     const bridge = browserBridge();
     if (!bridge) return undefined;
     const unsubscribe = bridge.onEvent((event) => {
       if (event.kind === "state") {
         notePageState(event);
-        const workspace = parseWorkspaceKey(event.workspace);
+        // An outside file's address is a path this window alone may know.
+        const workspace = event.external ? null : parseWorkspaceKey(event.workspace);
         if (workspace) latest.current.reportBrowserState(workspace, event.id, event.state.url, event.state.title, event.load, event.state.loading, event.state.failure, true);
       } else if (event.kind === "gone") {
         noteBrowserAttachment(event);
-        const workspace = parseWorkspaceKey(event.workspace);
+        const workspace = event.external ? null : parseWorkspaceKey(event.workspace);
         if (workspace) latest.current.reportBrowserState(workspace, event.id, event.url, "", event.load, false, null, false);
       } else if (event.kind === "attached") {
         noteBrowserAttachment(event);

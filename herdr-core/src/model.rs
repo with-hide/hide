@@ -131,6 +131,11 @@ pub struct Snapshot {
     /// Losing a scope permanently revokes its desktop capabilities.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub browser_scopes: Vec<BrowserAreaScopeRow>,
+    /// The desktop host's grants every outside file's tab stands on, across
+    /// every Workspace (PRD outside-path-in-hide). The host lets go of a
+    /// grant this list no longer names, so a closed tab ends its file's grant.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub external_grants: Vec<String>,
     #[serde(skip)]
     pub browser_views_revision: Option<u64>,
     /// Project Memory (PRD project-memory-v2): the Project a shell opened
@@ -447,6 +452,11 @@ pub struct ViewDisplaySnapshot {
     pub comments: usize,
     #[serde(skip_serializing_if = "count_unset")]
     pub not_delivered: usize,
+    /// An outside file's grant, name and viewer (PRD outside-path-in-hide);
+    /// absent for every other kind. The window whose desktop host holds the
+    /// grant draws the file; every other window draws only its name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external: Option<crate::view_layout::ExternalFile>,
 }
 
 fn load_unset(load: &u64) -> bool {
@@ -6861,6 +6871,7 @@ impl Snapshot {
             workspace_view: None,
             browser_views: Vec::new(),
             browser_scopes: Vec::new(),
+            external_grants: Vec::new(),
             browser_views_revision: None,
             memory: None,
             link_summaries: None,

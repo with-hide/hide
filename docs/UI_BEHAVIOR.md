@@ -812,6 +812,7 @@ So `열어뒀어요(http://127.0.0.1:8391).`, `캡처는("/tmp/a.png")입니다`
 These places are found by the kind of character, a Unicode class, not from a list of marks: a link starts after an opening bracket or quote or an `=`, ends before a closing one, stops at sentence punctuation such as `,`, `。` or `、`, and a run of Hangul, kana or Han letters is cut once, where its script meets the link.
 A run that touches `/`, `.`, `-` or `_` belongs to the name, so `docs/회의록에`, `회의록/a.md` and `한글.md` are checked only as written.
 The original spelling is checked before treating punctuation, attached prose or a location as context: if `docs/a.md)에`, `docs/a.md)`, `(src/a.ts:12:5)` or `src/a.ts:12:5` is itself a file name, that complete name wins.
+A drive path a Windows shell prints with backslashes, such as `C:\Users\example\AppData\Local\Temp\shot.png`, is a link like its `C:/` spelling.
 Among the bounded spellings, the longest existing path wins, and of two the same length the one that keeps the token's start; a failed or budget-skipped longer check never establishes a shorter link.
 A path ends at a closing bracket whatever follows it, so `docs/a.md)foo` links `docs/a.md` when only that exists, but never at an opening one, so `app/(auth)/page.tsx` never links `app/`.
 In Korean prose such as `보드 보기 (docs/README.md)에 C안을 추가했습니다.`, only `docs/README.md` is underlined and clickable when that is the actual path.
@@ -823,17 +824,26 @@ A click opens it in the front Workspace: a URL or an HTML file (`.html`, `.htm` 
 A file in another registered checkout opens the same way in the front Workspace and moves no checkout: the pane that printed it stays on screen, the Explorer keeps its tree and selection, and the file stays that checkout's document, so its own Workspace shows the same text and closing one view leaves the other.
 A folder in another registered checkout brings that checkout forward to show it in its Explorer, as does any path while the Overview is on screen, on any machine: a checkout on a node or device comes forward once that machine's Herdr has moved there, and the file opens then; with no Workspace in front a URL goes to the default browser.
 Right-clicking a URL offers Open in Hide, Open in default browser and Copy link above the terminal's ordinary editing and pane actions.
-Right-clicking an existing path offers Open, Open in default application, the host's Reveal in Finder/File Explorer/file manager and Copy path; an HTML file in a registered checkout offers Open in browser and Open source instead of Open.
+Right-clicking an existing path offers Open, Open in default application, the host's Reveal in Finder/File Explorer/file manager and Copy path; an HTML file in a registered checkout, or outside every checkout where the window opens outside files, offers Open in browser and Open source instead of Open.
 Open source opens that HTML file in View at the line its link names.
 These choices use the exact target under the pointer, including an OSC 8 label, and keep that target after the pointer leaves it; Copy path copies its physical path without the line suffix.
 Opening or dismissing the menu moves no checkout, opens nothing and sends no click to the terminal program; a late path check cannot reopen a dismissed menu or replace a newer one.
 ⌘-click (Ctrl off macOS) hands the link to the operating system: a URL to the default browser, a path to its default application or, for a folder, a Finder window, within the limits below.
-A path outside every registered checkout, such as `/tmp`, goes to the operating system on a plain click as well.
+A file outside every registered checkout, such as `/tmp/shot.png`, opens on a plain click in the desktop app's own window on the core's machine as a read-only tab of the front Workspace, with an External (외부) badge beside its name (PRD outside-path-in-hide).
+An image, a PDF and a video open in the viewers a checkout file uses, an HTML file as a browser display, and any other text, a script such as `.sh` or `.py` included, as read-only text at the link's line that saves nothing.
+Holding the pointer on the badge shows the file's full path; there is no warning and no confirmation.
+The tab splits, moves and closes like any View tab, the front checkout and the Explorer's selection stay as they were, and the file never appears in the Explorer.
+A second click on the same file brings its one tab forward, reads the file again from disk and goes to the new link's line; an HTML page and its Open source are two tabs.
+A text file of 16 MiB to 256 MiB shows the too-large notice a checkout text file of that size shows; a file that cannot be read opens the tab's ordinary unavailable state with a Close button.
+While the Overview is on screen the pane that printed the path brings its Workspace forward and the tab opens there.
+The tab lasts as long as the operator keeps it: it survives a reload of the window, and it is gone after the app quits or hided restarts, when a click opens it again.
+Another window, a browser tab of the web shell, the phone, or a window on another machine, opens no outside file: a click there goes to the operating system as before, and the tab another window opened shows dimmed with its name and the hint that only the window that opened it shows it, never its contents or its path.
+A program, an application bundle and an installer are only revealed; audio, a folder, a file over 256 MiB and any other binary go to the operating system on a plain click, as does a click past the 32 outside files the app holds at once.
 The operating system opens only a plain document (text, source, a PDF, an image, audio or video) or a folder whose name has no extension; anything else, such as a script, a program, a spreadsheet, an application bundle or an installer, is revealed in Finder, never opened.
 A program's OSC 8 link takes the same routes with no confirmation dialog: `file://` and `vscode://file/` addresses are paths, any other scheme is not opened, and a refused link goes to the diagnostic log.
 A pane on an SSH device, and a page outside the desktop app, links URLs only, because its paths name files this Mac cannot check.
 A path with a space in it is a link only where the program marks it (OSC 8), since plain text gives no way to tell where it ends.
-Web owner: `web/src/terminalLinks.ts` (detection), `web/src/terminalLinkProvider.ts` (the check and the routes), `web/src/terminals.ts` (pointer-to-cell lookup), `web/src/PaneRelations.tsx` (target-specific menu), `web/src/actions.ts` (`openLink`, `openTerminalPath`), `web/src/editor/lineRequest.ts` (the line); desktop owner: `desktop/src/main/localPath.ts`.
+Web owner: `web/src/terminalLinks.ts` (detection), `web/src/terminalLinkProvider.ts` (the check and the routes), `web/src/terminals.ts` (pointer-to-cell lookup), `web/src/PaneRelations.tsx` (target-specific menu), `web/src/actions.ts` (`openLink`, `openTerminalPath`), `web/src/editor/lineRequest.ts` (the line), `web/src/externalFiles.ts` and `web/src/ExternalDisplay.tsx` (an outside file's tab); desktop owner: `desktop/src/main/localPath.ts`, `desktop/src/main/externalFiles.ts`; core owner: `herdr-core/src/runtime/view_areas.rs` (`external_open`, `external_grants`).
 
 ## The Project tool
 
