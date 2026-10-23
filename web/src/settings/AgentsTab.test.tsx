@@ -320,8 +320,8 @@ it("opens the Partial popover from the chip and lists every feature with a mark 
     ["titles", "sleep", "fork"],
     ["letters", "bell", "memory", "spawn_guard"],
   ]);
-  expect(popover.querySelector('[data-agent-feature="letters:no"]')?.textContent).toContain("–Not available: Letters and Observer warnings");
-  expect(popover.querySelector('[data-agent-feature="skill:yes"]')?.textContent).toContain("✓Works: The hide skill");
+  expect(popover.querySelector('[data-agent-feature="letters:no"]')?.textContent).toContain("–Not supported: Letters and Observer warnings");
+  expect(popover.querySelector('[data-agent-feature="skill:yes"]')?.textContent).toContain("✓Supported: The hide skill");
   // Every supported agent has Herdr's integration, so no row says its status is judged from the screen.
   expect(popover.textContent).not.toContain("from the screen");
   await unmount();

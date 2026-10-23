@@ -110,7 +110,7 @@ export function issueSourceChoices(
   t: Translate,
 ): { value: IssueSourceChoice; options: { id: IssueSourceChoice; label: string }[] } {
   const source = workspace.tasks?.source ?? null;
-  const resolved = source && (!source.chosen || !workspace.is_git) ? source.label : null;
+  const resolved = source && (!source.chosen || !workspace.is_git) ? (source.kind === "local" ? t("issueSettings.local") : source.label) : null;
   const repository = source?.kind === "github" ? source.name : (workspace.home_issues?.repository ?? null);
   const options: { id: IssueSourceChoice; label: string }[] = [
     { id: "auto", label: resolved ? t("issueSettings.autoResolved", { source: resolved }) : t("issueSettings.auto") },

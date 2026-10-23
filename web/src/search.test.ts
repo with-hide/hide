@@ -377,8 +377,8 @@ describe("Open URL in Browser", () => {
   });
 
   it("stays listed and dimmed with its reason when it cannot run", () => {
-    const entry = openUrlEntry("localhost:5173", "Pages open in the hide desktop app.", t);
-    expect(entry).toMatchObject({ dimmed: true, subtitle: "Pages open in the hide desktop app." });
+    const entry = openUrlEntry("localhost:5173", "Pages open in the Hide desktop app.", t);
+    expect(entry).toMatchObject({ dimmed: true, subtitle: "Pages open in the Hide desktop app." });
     expect(openUrlEntry("localhost:5173", null, t)).toMatchObject({ dimmed: false, subtitle: "http://localhost:5173" });
   });
 });

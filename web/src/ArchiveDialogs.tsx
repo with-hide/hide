@@ -54,7 +54,7 @@ export function ConfirmArchive({ actions }: { actions: Actions }) {
   );
 }
 
-/** 보관함에서 지울까요?: names the session and what stays, then 보관함에서 지우기 / 남겨두기 (B28). */
+/** 보관함에서 지울까요?: names the session and what stays, then 보관함에서 지우기 / 남겨 두기 (B28). */
 export function ConfirmArchiveDelete({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const pending = useUiStore((s) => s.pendingArchiveDelete);
