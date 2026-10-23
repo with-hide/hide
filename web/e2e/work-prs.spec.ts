@@ -164,7 +164,7 @@ test("an unreadable account keeps the list and leaves every pull request's owner
       expect((await groupsOf(work)).waiting).toEqual(["31", "32", "33", "34"]);
       for (const number of [31, 32, 33, 34]) {
         await expect(reasonOf(work, number)).toHaveAttribute("data-pr-reason", "unjudged");
-        await expect(reasonOf(work, number)).toContainText("Not judged · can't tell if it is yours");
+        await expect(reasonOf(work, number)).toContainText("Unsorted · can't tell if it is yours");
       }
       // What the list alone decides is still decided: a draft, a bot's, a merged one.
       expect((await groupsOf(work)).drafts).toEqual(["35"]);
@@ -188,7 +188,7 @@ test("unreadable review requests keep the list and judge a team's ask only as un
       await expect(reasonOf(work, 33)).toHaveAttribute("data-pr-reason", "review");
       expect((await groupsOf(work)).waiting).toEqual(["38"]);
       await expect(reasonOf(work, 38)).toHaveAttribute("data-pr-reason", "unjudged");
-      await expect(reasonOf(work, 38)).toContainText("Not judged · can't tell if a review was asked of you");
+      await expect(reasonOf(work, 38)).toContainText("Unsorted · can't tell if a review was asked of you");
       await warnsWith(page, work, "GitHub read incomplete · could not read review requests", "work-prs-unread-review-requests-light");
     },
     { failing: ["review_requests"], teamAsk: true },
@@ -206,7 +206,7 @@ test("an unreadable merge queue keeps the list and holds back only the pull requ
       expect(groups.waiting).toEqual(["31", "32"]);
       for (const number of [31, 32]) {
         await expect(reasonOf(work, number)).toHaveAttribute("data-pr-reason", "unjudged");
-        await expect(reasonOf(work, number)).toContainText("Not judged · can't tell if it is in the merge queue");
+        await expect(reasonOf(work, number)).toContainText("Unsorted · can't tell if it is in the merge queue");
       }
       await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveText("1");
       await warnsWith(page, work, "GitHub read incomplete · could not read the merge queue", "work-prs-unread-merge-queue-light");
@@ -222,7 +222,7 @@ test("all three extra questions failing still lists every pull request and names
       const groups = await groupsOf(work);
       expect(Object.keys(groups)).toEqual(["waiting", "drafts", "bots", "merged"]);
       expect(groups.waiting).toEqual(["31", "32", "33", "34", "38"]);
-      await expect(reasonOf(work, 31)).toContainText("Not judged · can't tell if it is yours");
+      await expect(reasonOf(work, 31)).toContainText("Unsorted · can't tell if it is yours");
       // Plain Waiting says nothing of whose move it is, so the rail's Project icon carries no number.
       await expect(page.locator('[data-lane-tool="project"] [data-lane-todo-count]')).toHaveCount(0);
       await warnsWith(page, work, "GitHub read incomplete · could not read the signed-in account, review requests, the merge queue", "work-prs-unread-all-light");

@@ -22,7 +22,7 @@ test("three usage chips, View, Help and Settings fit the minimum native window i
     await fitWindow(app, { width: 720, height: 480 });
     await expect(page.locator('[data-usage-chip="claude"]')).toContainText("62%", { timeout: 30_000 });
     await page.locator('[data-usage-chip="claude"]').click();
-    await page.getByRole("button", { name: "Choose chips" }).click();
+    await page.getByRole("button", { name: "Choose sidebar items" }).click();
     await page.getByRole("switch", { name: "Claude Code 5 hours" }).click();
     await page.locator('[data-settings-tab="general"]').click();
     await page.locator('[data-font-size] [role="slider"]').press("End");
@@ -84,7 +84,7 @@ test("three usage chips, View, Help and Settings fit the minimum native window i
       await expect(popover.locator('[data-usage-window-row="five_hour"] [data-usage-value]')).toHaveText("4%");
       expect(await popover.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
       await capture(`usage-popover-${language}-electron`);
-      await popover.getByRole("button", { name: language === "en" ? "Choose chips" : "칩 선택", exact: true }).click();
+      await popover.getByRole("button", { name: language === "en" ? "Choose sidebar items" : "사이드바에 표시할 항목 고르기", exact: true }).click();
       await page.locator('[data-settings-tab="general"]').click();
     }
   } catch (error) { failures.push(error); }

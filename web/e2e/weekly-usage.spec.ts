@@ -84,7 +84,7 @@ test("weekly usage: a loading, an available and an unavailable row, and the hint
     await screenshot(page, "usage-chips");
 
     await trigger.click();
-    await popover.getByRole("button", { name: "Choose chips" }).click();
+    await popover.getByRole("button", { name: "Choose sidebar items" }).click();
     const toggle = page.getByRole("switch", { name: "Claude Code 5 hours" });
     await toggle.click();
     const second = await page.context().newPage();

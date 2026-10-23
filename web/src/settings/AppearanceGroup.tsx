@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Actions } from "../actions";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { Slider } from "../components/ui/slider";
@@ -9,7 +9,7 @@ import { ACCENT_STORED_HEX } from "../generated/accents";
 import { useInterfaceTranslation } from "../i18n/client";
 import { INTERFACE_LANGUAGES, LANGUAGE_NAMES, isInterfaceLanguage } from "../i18n/locale";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { ACCENT_CHOICES, FONT_SIZE_BASE, FONT_SIZE_MAX, FONT_SIZE_MIN, usableAccent, usableFontSize } from "../settings";
+import { ACCENT_CHOICES, FONT_SIZE_BASE, FONT_SIZE_MAX, FONT_SIZE_MIN, TERMINAL_FONT_SIZE_BASE, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN, usableAccent, usableFontSize, usableTerminalFontSize } from "../settings";
 import { commandLabel } from "../shortcutLabels";
 import { useShellStore } from "../store";
 import { COLOR_THEMES, THEME_CHOICES, accentNameOf, readColorTheme, readTheme, type AccentName, type ThemeChoice } from "../theme";
@@ -57,8 +57,45 @@ function LanguageRow({ actions }: { actions: Actions }) {
 const COLOR_THEME_SWATCH = { hide: "bg-swatch-hide", neutral: "bg-swatch-neutral" } as const;
 
 /**
- * Language, color theme, mode, accent and interface text, one group (PRD
- * settings-cleanup B2; hide-color-theme B1).
+ * One text size slider: the value moves under the thumb while it drags and is
+ * sent to the core once, on release.
+ */
+function TextSizeRow({ label, sliderLabel, row, marker, size, min, max, detail, onCommit }: {
+  label: string;
+  sliderLabel: string;
+  row: string;
+  /** The slider's own data attribute, the handle tests and other screens find it by. */
+  marker: "data-font-size" | "data-terminal-font-size";
+  size: number;
+  min: number;
+  max: number;
+  detail?: ReactNode;
+  onCommit: (size: number) => void;
+}) {
+  const { t } = useInterfaceTranslation();
+  const [draft, setDraft] = useState(size);
+  useEffect(() => setDraft(size), [size]);
+  return (
+    <Row label={label} data-appearance-row={row} detail={detail}>
+      <Slider
+        min={min}
+        max={max}
+        step={1}
+        value={[draft]}
+        aria-label={sliderLabel}
+        {...{ [marker]: "true" }}
+        className="w-(--size-settings-control-w)"
+        onValueChange={([next]) => next !== undefined && setDraft(next)}
+        onValueCommit={([next]) => next !== undefined && next !== size && onCommit(next)}
+      />
+      <Value>{t("settings.fontPoints", { size: draft })}</Value>
+    </Row>
+  );
+}
+
+/**
+ * Language, color theme, mode, accent, interface text and terminal text, one
+ * group (PRD settings-cleanup B2; hide-color-theme B1).
  */
 export function AppearanceGroup({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -67,18 +104,12 @@ export function AppearanceGroup({ actions }: { actions: Actions }) {
   const colorTheme = useShellStore((s) => readColorTheme(s.rest?.ui_state?.color_theme).choice);
   const connected = useShellStore((s) => s.connection === "live");
   const fontSize = useShellStore((s) => usableFontSize(s.rest?.ui_state?.font_size)) ?? FONT_SIZE_BASE;
+  const terminalFontSize = useShellStore((s) => usableTerminalFontSize(s.rest?.ui_state?.terminal_font_size)) ?? TERMINAL_FONT_SIZE_BASE;
   const textLarger = useShellStore((s) => commandLabel("text_larger", s.rest?.ui_state));
   const textSmaller = useShellStore((s) => commandLabel("text_smaller", s.rest?.ui_state));
   const [changedAt, setChangedAt] = useState<number | null>(null);
   const error = useErrorSince(changedAt, ["ui_state."]);
-  const [draftSize, setDraftSize] = useState(fontSize);
-  useEffect(() => setDraftSize(fontSize), [fontSize]);
   const chosenAccent = accentNameOf(accent);
-  const commitSize = (size: number) => {
-    if (size === fontSize) return;
-    setChangedAt(Date.now());
-    actions.setFontSize(size);
-  };
   return (
     <Group title={t("settings.appearance")} data-settings-group="appearance">
       <LanguageRow actions={actions} />
@@ -149,20 +180,33 @@ export function AppearanceGroup({ actions }: { actions: Actions }) {
           ))}
         </RadioGroup>
       </Row>
-      <Row label={t("settings.interfaceText")} data-appearance-row="interface-text" detail={<Note>{t("settings.densityDescription", { larger: textLarger, smaller: textSmaller })}</Note>}>
-        <Slider
-          min={FONT_SIZE_MIN}
-          max={FONT_SIZE_MAX}
-          step={1}
-          value={[draftSize]}
-          aria-label={t("settings.interfaceFontSize")}
-          data-font-size="true"
-          className="w-(--size-settings-control-w)"
-          onValueChange={([size]) => size !== undefined && setDraftSize(size)}
-          onValueCommit={([size]) => size !== undefined && commitSize(size)}
-        />
-        <Value>{t("settings.fontPoints", { size: draftSize })}</Value>
-      </Row>
+      <TextSizeRow
+        label={t("settings.interfaceText")}
+        sliderLabel={t("settings.interfaceFontSize")}
+        row="interface-text"
+        marker="data-font-size"
+        size={fontSize}
+        min={FONT_SIZE_MIN}
+        max={FONT_SIZE_MAX}
+        onCommit={(size) => {
+          setChangedAt(Date.now());
+          actions.setFontSize(size);
+        }}
+      />
+      <TextSizeRow
+        label={t("settings.terminalText")}
+        sliderLabel={t("settings.terminalFontSize")}
+        row="terminal-text"
+        marker="data-terminal-font-size"
+        size={terminalFontSize}
+        min={TERMINAL_FONT_SIZE_MIN}
+        max={TERMINAL_FONT_SIZE_MAX}
+        detail={<Note>{t("settings.terminalTextDescription", { larger: textLarger, smaller: textSmaller })}</Note>}
+        onCommit={(size) => {
+          setChangedAt(Date.now());
+          actions.setTerminalFontSize(size);
+        }}
+      />
     </Group>
   );
 }

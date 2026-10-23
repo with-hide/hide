@@ -70,15 +70,6 @@ async function probeTextSize(page: Page, selector: string): Promise<number> {
   }, selector);
 }
 
-/** Every text-holding element's font size in the sidebar's lists, in document order. */
-async function sidebarTextSizes(page: Page): Promise<string[]> {
-  return page.evaluate(() =>
-    Array.from(document.querySelectorAll("nav[data-sidebar] *"))
-      .filter((part) => part.getClientRects().length > 0 && Array.from(part.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim()))
-      .map((part) => getComputedStyle(part).fontSize),
-  );
-}
-
 async function chooseTheme(page: Page, theme: "light" | "dark"): Promise<void> {
   await page.keyboard.press(chord("settings"));
   await expect(page.locator('[data-settings="true"]')).toBeVisible();
@@ -414,15 +405,12 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
       await screenshot(page, `projects-sidebar-${theme}`);
     }
 
-    // PRD sidebar-typography B8 (was sidebar-readability B26): the sidebar
-    // does not follow the interface font. At the largest size its text and
-    // rows are the ones the default draws, while text outside it grows, and
-    // hover still moves nothing.
+    // The sidebar follows Interface text with the rest of the interface: at
+    // the largest size its text grows as the text outside it does, every row
+    // still holds its text, and hover still moves nothing.
     await rest(page);
-    const projectsAtDefault = { sizes: await sidebarTextSizes(page), row: await rowGeometry(primaryRow, parentRow, primaryParts) };
     const outsideAtDefault = await probeTextSize(page, "main");
-    await rest(page);
-    const agentsAtDefault = { sizes: await sidebarTextSizes(page), row: await rowGeometry(agentRow, nextRow, agentParts) };
+    const sidebarAtDefault = await probeTextSize(page, "nav[data-sidebar]");
     await page.keyboard.press(chord("settings"));
     await page.locator('[data-settings-tab="general"]').click();
     const fontSize = page.locator('[data-font-size="true"] [role="slider"]');
@@ -434,24 +422,22 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     // The scale is already set at the default size, so wait for its effect, not its presence.
     await expect.poll(() => probeTextSize(page, "main")).toBeGreaterThan(outsideAtDefault);
     await rest(page);
-    expect(await probeTextSize(page, "nav[data-sidebar]")).toBe(12);
-    expect(await sidebarTextSizes(page)).toEqual(projectsAtDefault.sizes);
-    expect(await rowGeometry(primaryRow, parentRow, primaryParts)).toEqual(projectsAtDefault.row);
+    expect(await probeTextSize(page, "nav[data-sidebar]")).toBeGreaterThan(sidebarAtDefault);
+    const projectsAtLarge = await rowGeometry(primaryRow, parentRow, primaryParts);
     expect(await sidebarRowsFit(page)).toEqual([]);
     expect(await projectButtonFills(page)).toBe(true);
     await primaryRow.hover();
-    expect(await rowGeometry(primaryRow, parentRow, primaryParts)).toEqual(projectsAtDefault.row);
+    expect(await rowGeometry(primaryRow, parentRow, primaryParts)).toEqual(projectsAtLarge);
     await rest(page);
     await keyboardFocus(page, primary.locator("[data-checkout]"));
-    expect(await rowGeometry(primaryRow, parentRow, primaryParts)).toEqual(projectsAtDefault.row);
+    expect(await rowGeometry(primaryRow, parentRow, primaryParts)).toEqual(projectsAtLarge);
     await rest(page);
     await screenshot(page, "projects-sidebar-large-font");
     await rest(page);
-    expect(await sidebarTextSizes(page)).toEqual(agentsAtDefault.sizes);
-    expect(await rowGeometry(agentRow, nextRow, agentParts)).toEqual(agentsAtDefault.row);
+    const agentsAtLarge = await rowGeometry(agentRow, nextRow, agentParts);
     expect(await sidebarRowsFit(page)).toEqual([]);
     await agentRow.hover();
-    expect(await rowGeometry(agentRow, nextRow, agentParts)).toEqual(agentsAtDefault.row);
+    expect(await rowGeometry(agentRow, nextRow, agentParts)).toEqual(agentsAtLarge);
     await rest(page);
     await screenshot(page, "agents-sidebar-large-font");
 
