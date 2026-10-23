@@ -128,6 +128,31 @@ function trimPulls(row: AgentRow, ai: boolean): AgentRow {
 /** The roots the operator starred to come back to: the Tasks list's Revisit group (docs/status-model.md, `revisit`). */
 const STARRED = ["tn1"];
 
+/**
+ * What Hide AI writes under each task on the Tasks list: what a waiting ask
+ * wants, and the sentence of a finished, working or read turn
+ * (docs/status-model.md, With and without Hide AI). Off, an ask keeps only its
+ * native question's first line and every other sentence is gone.
+ */
+const TASK_LINES: Record<string, { ask?: string; line?: string; question?: true }> = {
+  a3: { ask: "Both pass. Merge them?" },
+  q1: { ask: "Only you can pick this" },
+  q2: { line: "38 tests pass again" },
+  a2: { line: "Lead with the CSV export?", question: true },
+  tn1: { line: "Three decisions, sorted" },
+  e1: { line: "Wiring the detail endpoint" },
+};
+
+/** A row with the sentences Hide AI wrote for it. */
+function withLines(row: AgentRow): AgentRow {
+  const words = TASK_LINES[row.pane_id];
+  if (!words) return row;
+  const ask = words.ask ? { verb: "answer" as const, what: words.ask, more: 0 } : row.state.ask;
+  const session = words.line ? { ...row.state.session, line: words.line } : row.state.session;
+  // A question only the label found leads with Question, as a native one does.
+  return { ...row, ...(words.question ? { status_code: "question" as const } : {}), state: { ...row.state, ask, session } };
+}
+
 /** Replaces the words of one agent row and leaves everything the core decided as it was. */
 function reword(fixture: AgentRow, ai: boolean): AgentRow {
   const row = trimPulls(fixture, ai);
@@ -189,7 +214,9 @@ export function landingSidebar(nowMs: number, expanded: string[], width: number,
     const readAsk = ai && READ_ASKS.includes(row.pane_id);
     return starred || readAsk ? { ...row, revisit: { starred, read_ask: readAsk, since_unix_ms: nowMs - 3 * 3_600_000 } } : row;
   };
-  return { rest, agents: reworded(base.agents.map((row) => revisit(reword(row, ai)))) };
+  // The lead waits on its workers whatever Hide AI does: a proven wait (docs/status-model.md, `wait`).
+  const waits = (row: AgentRow): AgentRow => (row.pane_id === "a1" ? { ...row, wait: "children", state: { ...row.state, line: { text: "", mode: "waiting", tone: { kind: "working", read: true } } } } : row);
+  return { rest, agents: reworded(base.agents.map((row) => waits(revisit(reword(row, ai)))).map((row) => (ai ? withLines(row) : row))) };
 }
 
 /** What each kind of agent is called when nothing better names it: the provider fallback of Task identity. */
@@ -218,10 +245,11 @@ export function withoutHideAi(scene: { rest: SnapshotRest; agents: AgentRow[] })
   const agents = scene.agents.map((row) => {
     const title = row.agent_kind === "claude" ? row.identity_label : PROVIDERS[row.agent_kind ?? ""] ?? row.identity_label;
     const question = NATIVE_QUESTIONS[row.pane_id];
-    const line = question && row.state.line ? { ...row.state.line, text: question } : null;
+    const line = question && row.state.line ? { ...row.state.line, text: question } : row.state.line?.mode === "waiting" ? row.state.line : null;
     // Only the label judges a turn finished, so an unread stop keeps the plain dot.
     const mark = row.mark === "done" ? "unread" as const : row.mark;
-    return { ...row, identity_label: title, mark, request: row.request ? { ...row.request, request: null } : row.request, state: { ...row.state, line } };
+    const ask = question && row.group === "needs_you" ? { verb: "answer" as const, what: question, more: 0 } : null;
+    return { ...row, identity_label: title, mark, request: row.request ? { ...row.request, request: null } : row.request, state: { ...row.state, line, ask, session: { ...row.state.session, line: null } } };
   });
   const rest: SnapshotRest = { ...scene.rest, status: { ...scene.rest.status, background_ai: { provider: null, providers: [], unavailable_reason: null, enabled: false, chosen: false, agent_summary: false } } as SnapshotRest["status"] };
   return { rest, agents };
@@ -344,49 +372,73 @@ export const BROWSER_PANE = "a1c6";
 /** The page the agent opened, as its View id: the name `hide browser` commands take. */
 export const BROWSER_DISPLAY = "browser-1";
 const BROWSER_URL = "http://localhost:5173/invoices";
-const CSV_PATH = "src/export/csv.ts";
-const CSV_SOURCE = `import type { Invoice } from "../invoices";
-import { byIssueDate, quote } from "./format";
+/** The spec the agent reads before it tries the page: a PDF in the checkout, opened with `hide file open`. */
+export const SPEC_PATH = "docs/export-spec.pdf";
+/** The spec's View id. */
+const SPEC_DISPLAY = "d-spec";
 
-/** The invoices as CSV: one header row, then one row per invoice by issue date. */
-export function toCsv(rows: Invoice[]): string {
-  const head = ["number", "customer", "issued_at", "total"] as const;
-  const lines = [...rows]
-    .sort(byIssueDate)
-    .map((row) => head.map((key) => quote(row[key])).join(","));
-  return [head.join(","), ...lines].join("\\n");
+/** How far the browser story got: the spec open, then the page open, then the button pressed. */
+export type BrowserStep = 1 | 2 | 3;
+
+/** The export spec as a small PDF the shell's own viewer draws: two pages of plain text and one table. */
+export function landingSpecPdf(): Uint8Array {
+  const pages = [
+    ["EXPORT SPEC - BILLING", "Invoice export", "Export CSV downloads every invoice of the month shown.", "Columns, in order: number, customer, issued_at, total.", "Rows sorted by issue date, newest first.", "Totals in USD with two decimals; no currency sign."],
+    ["EXPORT SPEC - BILLING", "Checks before merge", "The button sits in the page header, right aligned.", "An empty month exports the header row only.", "The file is named invoices-<month>.csv.", "October has 128 invoices: the export has 129 lines."],
+  ];
+  const objects: string[] = [];
+  const add = (body: string) => objects.push(body);
+  add("<< /Type /Catalog /Pages 2 0 R >>");
+  add(`<< /Type /Pages /Kids [${pages.map((_, index) => `${4 + index * 2} 0 R`).join(" ")}] /Count ${pages.length} >>`);
+  add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  pages.forEach(([kicker, title, ...body]) => {
+    const text = body.map((line, index) => `0.25 0.25 0.25 rg BT /F1 12 Tf 48 ${300 - index * 26} Td (${line}) Tj ET`).join("\n");
+    const rule = "0.85 0.85 0.85 rg 48 330 504 1 re f";
+    const stream = `1 1 1 rg 0 0 600 440 re f\n0.33 0.4 0.95 rg BT /F1 9 Tf 48 392 Td (${kicker}) Tj ET\n0.1 0.1 0.1 rg BT /F1 24 Tf 48 358 Td (${title}) Tj ET\n${rule}\n${text}`;
+    add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 440] /Resources << /Font << /F1 3 0 R >> >> /Contents ${objects.length + 2} 0 R >>`);
+    add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+  });
+  let text = "%PDF-1.4\n";
+  const offsets = objects.map((body, index) => {
+    const at = text.length;
+    text += `${index + 1} 0 obj\n${body}\nendobj\n`;
+    return at;
+  });
+  const xref = text.length;
+  text += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((at) => `${String(at).padStart(10, "0")} 00000 n \n`).join("")}`;
+  text += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new TextEncoder().encode(text);
 }
-`;
 
 /**
- * The browser shot: the Codex worker that added the export button, alone in
- * its pane, and beside it the View area it filled with \`hide browser open\`
- * and \`hide file open\`: the invoices page in front, the file it changed
- * behind. The page itself is the desktop host's to draw, so the scene hands
- * the shell a still of it (`landing-invoices-<theme>.svg`).
+ * The browser shots: the Codex worker that added the export button, alone in
+ * its pane, and beside it the View area it fills step by step: the spec it
+ * opened with \`hide file open\`, then the invoices page it opened with
+ * \`hide browser open\` and pressed with \`hide browser click\`. The page itself
+ * is the desktop host's to draw, so the scene hands the shell a still of it
+ * (`landing-invoices-<theme>.svg`).
  */
-export function landingBrowser(nowMs: number, width: number): { rest: SnapshotRest; agents: AgentRow[]; editor: { tabs: EditorTabSnapshot[]; active_tab_id: string | null }; documents: Record<string, EditorDocumentSnapshot> } {
+export function landingBrowser(nowMs: number, width: number, step: BrowserStep): { rest: SnapshotRest; agents: AgentRow[]; editor: { tabs: EditorTabSnapshot[]; active_tab_id: string | null }; documents: Record<string, EditorDocumentSnapshot> } {
   const scene = landingWorkspace(nowMs, width);
   const navigator = scene.rest.navigator!;
   const project = navigator.workspaces!.find((row) => row.id === "hide")!;
   const main = project.checkouts[0]!;
   const tab = main.tabs[0]!;
-  const path = `${main.path}/${CSV_PATH}`;
-  const file: EditorTabSnapshot = { id: "t-csv", workspace_id: project.id, checkout_id: main.id, path, label: "csv.ts", kind: "file", diff_committed: null, markdown_live: false, wrap: false, dirty: false, preview: false };
-  const displays: ViewDisplaySnapshot[] = [
-    { id: BROWSER_DISPLAY, tab_id: null, path: "", label: "Invoices", kind: "browser", committed: null, preview: false, state: "open", reason: null, url: BROWSER_URL },
-    { id: "d-csv", tab_id: file.id, path, label: file.label, kind: "file", committed: null, preview: false, state: "open", reason: null },
-  ];
-  const document: EditorDocumentSnapshot = { path, language: "typescript", document_kind: "text", contents_utf8: CSV_SOURCE, revision: "sha256:0", dirty: false, readonly_reason: null, conflict: null, save: null };
+  const path = `${main.path}/${SPEC_PATH}`;
+  const file: EditorTabSnapshot = { id: "t-spec", workspace_id: project.id, checkout_id: main.id, path, label: "export-spec.pdf", kind: "file", diff_committed: null, markdown_live: false, wrap: false, dirty: false, preview: false };
+  const spec: ViewDisplaySnapshot = { id: SPEC_DISPLAY, tab_id: file.id, path, label: file.label, kind: "file", committed: null, preview: false, state: "open", reason: null };
+  const page: ViewDisplaySnapshot = { id: BROWSER_DISPLAY, tab_id: null, path: "", label: "Invoices", kind: "browser", committed: null, preview: false, state: "open", reason: null, url: BROWSER_URL };
+  const displays = step === 1 ? [spec] : [spec, page];
+  const document: EditorDocumentSnapshot = { path, language: "pdf", document_kind: "pdf", contents_utf8: "", revision: "sha256:0", dirty: false, readonly_reason: null, conflict: null, save: null };
   const rest: SnapshotRest = {
     ...scene.rest,
     pane_layouts: [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: BROWSER_PANE, zoomed: false, root: { type: "pane", pane_id: BROWSER_PANE } }],
     workspace_view: {
       ...scene.rest.workspace_view!,
       documents: true, tool: null, pinned: true, document_width: 820,
-      layout: { root: { area: { id: "v1", active: BROWSER_DISPLAY, displays } }, active_area: "v1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
+      layout: { root: { area: { id: "v1", active: step === 1 ? SPEC_DISPLAY : BROWSER_DISPLAY, displays } }, active_area: "v1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
     },
-    terminal: { headers: { [BROWSER_PANE]: { working: false, notice: null, band: null } } },
+    terminal: { headers: { [BROWSER_PANE]: { working: step < 3, notice: null, band: null } } },
   };
   return { rest, agents: scene.agents, editor: { tabs: [file], active_tab_id: null }, documents: { [file.id]: document } };
 }
@@ -538,28 +590,33 @@ const lines = (...rows: string[]) => rows.join("\r\n");
  * under the row of its child that asks.
  */
 export const RULE = "{rule}";
-export const BROWSER_TERMINAL = lines(
-  "",
-  `${DIM}╭──────────────────────────────╮${RESET}`,
-  `${DIM}│${RESET} ${BOLD}>_ Codex${RESET}                     ${DIM}│${RESET}`,
-  `${DIM}│${RESET} ${DIM}~/billing-app · main${RESET}         ${DIM}│${RESET}`,
-  `${DIM}╰──────────────────────────────╯${RESET}`,
-  "",
-  `${CODEX}›${RESET} Add the export button, then check it in the browser`,
-  "",
-  `${DIM}•${RESET} ${BOLD}Edited${RESET} src/export/button.tsx ${GREEN}(+24${RESET} -3${GREEN})${RESET}`,
-  "",
-  `${DIM}•${RESET} ${BOLD}Ran${RESET} hide browser open localhost:5173/invoices`,
-  `  ${DIM}└${RESET} loaded`,
-  "",
-  `${DIM}•${RESET} ${BOLD}Ran${RESET} hide browser click ${BROWSER_DISPLAY} --text "Export CSV"`,
-  `  ${DIM}└${RESET} + dialog "Export ready · 128 rows"`,
-  "",
-  `${DIM}•${RESET} ${BOLD}Ran${RESET} hide file open ${CSV_PATH}`,
-  "",
-  `${DIM}•${RESET} The button works: 128 rows exported.`,
-  "  The page and the file are beside you.",
-);
+/** What the Codex worker's terminal shows at each step of the browser story. */
+export function browserTerminal(step: BrowserStep): string {
+  const head = [
+    "",
+    `${DIM}╭──────────────────────────────╮${RESET}`,
+    `${DIM}│${RESET} ${BOLD}>_ Codex${RESET}                     ${DIM}│${RESET}`,
+    `${DIM}│${RESET} ${DIM}~/billing-app · main${RESET}         ${DIM}│${RESET}`,
+    `${DIM}╰──────────────────────────────╯${RESET}`,
+    "",
+    `${CODEX}›${RESET} Add the export button and check it against the spec`,
+    "",
+    `${DIM}•${RESET} ${BOLD}Edited${RESET} src/export/button.tsx ${GREEN}(+24${RESET} -3${GREEN})${RESET}`,
+    "",
+    `${DIM}•${RESET} ${BOLD}Ran${RESET} hide file open ${SPEC_PATH}`,
+    `  ${DIM}└${RESET} 2 pages: columns, order, file name`,
+  ];
+  const page = ["", `${DIM}•${RESET} ${BOLD}Ran${RESET} hide browser open localhost:5173/invoices`, `  ${DIM}└${RESET} loaded · Invoices`];
+  const click = [
+    "",
+    `${DIM}•${RESET} ${BOLD}Ran${RESET} hide browser click ${BROWSER_DISPLAY} --text "Export CSV"`,
+    `  ${DIM}└${RESET} downloaded invoices-october.csv · 129 lines`,
+    "",
+    `${DIM}•${RESET} The export matches the spec: 128 invoices,`,
+    "  newest first. The spec and the page are beside you.",
+  ];
+  return lines(...head, ...(step >= 2 ? page : []), ...(step >= 3 ? click : []));
+}
 
 export const HERO_TERMINALS: Record<(typeof HERO_PANES)[number], string> = {
   a1: lines(

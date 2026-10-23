@@ -18,11 +18,14 @@
 //   attention  the sidebar with the Needs You and Unread groups raised above the project tree
 //   plain      the attention shot with Agent summaries off: provider names and native questions only
 //   memory     the lead beside a wide Project tool on its Memory tab
-//   browser    a Codex worker beside the invoices page it opened and the file it changed
+//   browser-spec  a Codex worker beside the export spec it opened, a PDF
+//   browser-page  the same, with the invoices page it opened in front
+//   browser    the same after it pressed Export CSV and reported back
 //   core       the device rail beside Settings > Devices and the paired phone
 
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { createActions } from "../actions";
+import { configureFileBytes, receiveBytes } from "../fileBytes";
 import { hostKey, useBrowserStore } from "../browserViews";
 import type { HostBridge } from "../host";
 import type { SnapshotRest } from "../snapshot";
@@ -40,12 +43,12 @@ import { useUiStore } from "../ui";
 import { workspaceKey } from "../viewLayout";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import { LEAD_PANE, laneItem, withSessions, landingMission, landingPrCard, landingPrLink, landingPrWork, landingRecord, type LandingLane } from "./landingLaneData";
-import { BROWSER_DISPLAY, BROWSER_PANE, BROWSER_TERMINAL, HERO_PANES, HERO_TERMINALS, RULE, landingBrowser, landingDevices, landingMap, landingMemory, landingPlainSidebar, landingSidebar, landingUsage, landingWorkspace, withoutHideAi } from "./landingSceneData";
+import { BROWSER_DISPLAY, BROWSER_PANE, HERO_PANES, browserTerminal, landingSpecPdf, type BrowserStep, HERO_TERMINALS, RULE, landingBrowser, landingDevices, landingMap, landingMemory, landingPlainSidebar, landingSidebar, landingUsage, landingWorkspace, withoutHideAi } from "./landingSceneData";
 // The invoices page the agent opened, after its click: what the desktop host would show in the browser display.
 import invoicesDark from "./landing-invoices-dark.svg?url";
 import invoicesLight from "./landing-invoices-light.svg?url";
 
-export const LANDING_SHOTS = ["hero", "tasks", "quiet", "prs", "map", "projects", "attention", "plain", "team", "pr", "record", "conductor", "memory", "browser", "core"] as const;
+export const LANDING_SHOTS = ["hero", "tasks", "quiet", "prs", "map", "projects", "attention", "plain", "team", "pr", "record", "conductor", "memory", "browser-spec", "browser-page", "browser", "core"] as const;
 export type LandingShot = (typeof LANDING_SHOTS)[number];
 export type LandingSceneParams = { shot: LandingShot; theme: "light" | "dark" };
 
@@ -56,9 +59,11 @@ export function landingSceneParams(params: URLSearchParams): LandingSceneParams 
 }
 
 /** The sidebar's width: wide enough that the page's example titles read whole, narrower where Settings needs the room. */
-const SIDEBAR_WIDTH: Record<LandingShot, number> = { hero: 320, tasks: 320, quiet: 320, prs: 320, map: 320, projects: 320, attention: 380, plain: 380, team: 320, pr: 300, record: 300, conductor: 300, memory: 320, browser: 300, core: 340 };
+const SIDEBAR_WIDTH: Record<LandingShot, number> = { hero: 320, tasks: 320, quiet: 320, prs: 320, map: 320, projects: 320, attention: 380, plain: 380, team: 320, pr: 300, record: 300, conductor: 300, memory: 320, "browser-spec": 300, "browser-page": 300, browser: 300, core: 340 };
 /** The shots of a Workspace: the hero's window, and the browser shot's pane beside its View area. */
-const WORKSPACE_SHOTS: readonly LandingShot[] = ["hero", "tasks", "quiet", "prs", "team", "pr", "record", "conductor", "memory", "browser"];
+const WORKSPACE_SHOTS: readonly LandingShot[] = ["hero", "tasks", "quiet", "prs", "team", "pr", "record", "conductor", "memory", "browser-spec", "browser-page", "browser"];
+/** The browser story's shots by how far it got. */
+const BROWSER_STEPS: Partial<Record<LandingShot, BrowserStep>> = { "browser-spec": 1, "browser-page": 2, browser: 3 };
 /** The shots whose lane shows an item in its 보기 slot. */
 const LANE_SHOTS: readonly LandingShot[] = ["pr", "record", "conductor"];
 /** The slot's width in a lane shot: room for a card, a record or a map beside the lead. */
@@ -109,9 +114,10 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
       const record = lane === "record" ? landingRecord(now, scene.agents) : null;
       return { ...none, rest, agents: scene.agents, usage: landingUsage(now), linkPanel, sessionRecord: record ? { session: record.session, loading: false, failure: null, record } : null };
     }
-    if (shot === "browser") {
+    const step = BROWSER_STEPS[shot];
+    if (step) {
       if (!window.hideHost) window.hideHost = standInHost();
-      return { ...none, ...landingBrowser(now, SIDEBAR_WIDTH.browser) };
+      return { ...none, ...landingBrowser(now, SIDEBAR_WIDTH[shot], step) };
     }
     if (shot === "memory") {
       // The lead alone beside a Project tool as wide as the lane shots' slot, so the page can crop the lane at one size.
@@ -128,6 +134,24 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
     return { ...none, ...landingWorkspace(now, SIDEBAR_WIDTH[shot], [], lens), usage: landingUsage(now) };
   }, [shot]);
 
+  // The spec's bytes, answered as hided answers a `file_bytes` request, so the shell's own PDF viewer draws it.
+  useLayoutEffect(() => {
+    if (!BROWSER_STEPS[shot]) return;
+    const pdf = landingSpecPdf();
+    configureFileBytes((message) => {
+      const { request_id, path } = message.payload as { request_id: string; path: string };
+      queueMicrotask(() => {
+        const header = new TextEncoder().encode(JSON.stringify({ type: "file_bytes", request_id, path, offset: 0, total: pdf.byteLength, eof: true }));
+        const frame = new Uint8Array(4 + header.byteLength + pdf.byteLength);
+        new DataView(frame.buffer).setUint32(0, header.byteLength, false);
+        frame.set(header, 4);
+        frame.set(pdf, 4 + header.byteLength);
+        receiveBytes(frame.buffer);
+      });
+      return true;
+    });
+  }, [shot]);
+
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, mobile: fixture.mobile, usage: fixture.usage ? { nodes: [fixture.usage] } : null, memory: { project: fixture.memory }, connection: "live", linkPanel: fixture.linkPanel, sessionRecord: fixture.sessionRecord, ...(fixture.editor ? { editor: fixture.editor, documents: fixture.documents } : {}) });
     useUiStore.setState({ screen: { kind: workspace ? "workspace" : "main" }, overviewOpen: false, laneShown: workspace, projectTab: shot === "memory" ? "memory" : "status", stackFront: "view", ...(shot === "map" ? { mainView: "work" as const } : shot === "projects" ? { mainView: "projects" as const } : {}) });
@@ -139,7 +163,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
 
   // The browser display's page: the still the desktop host would hold of it, with the page's own state.
   useEffect(() => {
-    if (shot !== "browser") return undefined;
+    if (!BROWSER_STEPS[shot]) return undefined;
     const view = fixture.rest.workspace_view!;
     const key = hostKey(workspaceKey({ device_id: view.device_id, path: view.path }), BROWSER_DISPLAY);
     const page = { url: "http://localhost:5173/invoices", title: "Invoices", loading: false, canGoBack: true, canGoForward: false, failure: null, zoom: 1 };
@@ -156,7 +180,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
   useEffect(() => {
     if (!workspace) return;
     const encode = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
-    const screens: Record<string, string> = shot === "browser" ? { [BROWSER_PANE]: BROWSER_TERMINAL } : (LANE_SHOTS as readonly string[]).includes(shot) || shot === "memory" ? { [LEAD_PANE]: HERO_TERMINALS[LEAD_PANE] } : Object.fromEntries(HERO_PANES.map((id) => [id, HERO_TERMINALS[id]]));
+    const screens: Record<string, string> = BROWSER_STEPS[shot] ? { [BROWSER_PANE]: browserTerminal(BROWSER_STEPS[shot]!) } : (LANE_SHOTS as readonly string[]).includes(shot) || shot === "memory" ? { [LEAD_PANE]: HERO_TERMINALS[LEAD_PANE] } : Object.fromEntries(HERO_PANES.map((id) => [id, HERO_TERMINALS[id]]));
     const panes = Object.keys(screens);
     let frame = requestAnimationFrame(function wait() {
       const fitted = panes.every((id) => (terminalFor(id)?.rows ?? 0) > screens[id]!.split("\r\n").length);
