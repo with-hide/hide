@@ -39,6 +39,7 @@ const SURFACE_LABEL: Record<SurfaceKind, MessageKey> = {
   file: "shell.surface.file",
   diff: "shell.diff",
   browser: "shell.surface.browser",
+  external: "shell.surface.file",
 };
 
 function cycleDetail(detail: CycleDetail, t: TFunction<"translation">): string {

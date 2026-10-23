@@ -93,10 +93,11 @@ export type BrowserPageState = {
 
 export type BrowserHostEvent =
   | { kind: "window-focus"; focused: boolean }
-  | { kind: "state"; workspace: string; id: string; load: number; state: BrowserPageState }
+  /** `external` marks an outside file's page, whose address is a path the core never holds (PRD outside-path-in-hide). */
+  | { kind: "state"; workspace: string; id: string; load: number; state: BrowserPageState; external?: true }
   /** Actual debugger ownership, scoped to `device_id + NUL + checkout_path`. */
   | { kind: "attached"; workspace: string; id: string; attached: boolean }
-  | { kind: "gone"; workspace: string; id: string; load: number; url: string }
+  | { kind: "gone"; workspace: string; id: string; load: number; url: string; external?: true }
   /** The page opened a tab: it becomes another browser display, beside the page `id`. */
   | { kind: "open"; workspace: string; id: string; url: string }
   /** The operator clicked or tabbed into the page. */

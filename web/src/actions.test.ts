@@ -134,6 +134,60 @@ describe("a terminal link to a file of this window's own checkout", () => {
   });
 });
 
+// PRD outside-path-in-hide: a file outside every checkout opens in Hide from
+// a desktop window on the core's machine, by the grant its host gives it.
+describe("a terminal link to a file outside every checkout", () => {
+  const own = { id: "c1", workspace_id: "w1", path: "/repo", exists: true };
+  const grant = { id: "0123456789abcdef0123456789abcdef", name: "shot.png", kind: "image" as const };
+  const host = (granted: typeof grant | null) => {
+    const external = { open: vi.fn(async () => granted), read: vi.fn(), describe: vi.fn(), live: vi.fn() };
+    const openPath = vi.fn();
+    Object.assign(window, { hideHost: { kind: "electron", probePaths: async (paths: string[]) => paths.map((path) => ({ real: path, kind: "directory" })), openPath, external } });
+    return { external, openPath };
+  };
+  const clicked = (link = "/tmp/shot.png", node = "#token=t") => {
+    window.location.hash = node;
+    useShellStore.setState({ rest: { navigator: { devices: [{ id: "core", kind: "local" }, { id: "mbp", kind: "remote", dials_in: true }], workspaces: [{ id: "w1", device_id: "core", path: own.path, checkouts: [own] }] }, status: { remote: [] }, workspace_view: { device_id: "core", path: own.path } } as never });
+    useUiStore.setState({ screen: { kind: "workspace" } } as never);
+    const sent: Parameters<DispatchFn>[0][] = [];
+    createActions((event) => { sent.push(event); return true; }).openTerminalPath({ real: link, kind: "file" }, 3, null, false, "auto", "pane-1");
+    return sent;
+  };
+
+  afterEach(() => {
+    window.location.hash = "";
+    clearProbeCache();
+    Reflect.deleteProperty(window, "hideHost");
+    useShellStore.setState({ rest: null });
+  });
+
+  it("opens it as a tab of the Workspace in front named by its grant alone (B1, D-05)", async () => {
+    const { external, openPath } = host(grant);
+    const sent = clicked();
+    await vi.waitFor(() => expect(sent.some((event) => event.kind === "external_open")).toBe(true));
+    expect(external.open).toHaveBeenCalledWith("/tmp/shot.png", "auto");
+    const open = sent.find((event) => event.kind === "external_open")!;
+    expect(open.payload).toEqual({ grant: grant.id, name: "shot.png", kind: "image", request_id: expect.stringMatching(/^follow:/), workspace: { device_id: "core", path: "/repo" } });
+    expect(JSON.stringify(sent)).not.toContain("/tmp");
+    expect(openPath).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing to the core when the host hands the file to the system instead (B7, B8, B17)", async () => {
+    const { external } = host(null);
+    const sent = clicked("/tmp/song.mp3");
+    await vi.waitFor(() => expect(external.open).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(sent.some((event) => event.kind === "external_open")).toBe(false);
+  });
+
+  it("hands it to the system from a window on another machine, which opens no outside file (D-09)", async () => {
+    const { external, openPath } = host(grant);
+    clicked("/tmp/shot.png", "#token=t&node=mbp");
+    await vi.waitFor(() => expect(openPath).toHaveBeenCalledWith("/tmp/shot.png"));
+    expect(external.open).not.toHaveBeenCalled();
+  });
+});
+
 describe("input after a confirmed View close", () => {
   const workspace = { device_id: "local", path: "/repo" };
   const frame = (ids: string[], selected: string) => ({ ...workspace, open: true, documents: true, tool: "explorer", layout: { active_area: "a1", display_count: ids.length, root: { area: { id: "a1", active: selected, displays: ids.map((id) => ({ id, kind: "browser", state: "open", label: id, url: "", tab_id: null })) } } } });

@@ -33,7 +33,7 @@ import { draftExported, unstoredDeviceDrafts, type SettingsTab } from "./setting
 import { latestDraft, noteClosing, noteSent } from "./editor/draft";
 import { RELATION_ANSWER_TIMEOUT_MS, relationState } from "./lineage";
 import { frontDeviceId, localDeviceId, railShown } from "./devices";
-import { machineName } from "./screenMachine";
+import { machineName, windowDeviceId } from "./screenMachine";
 import { allAgents, boardProjects, type OpenTarget } from "./navigation";
 import { cardOfItem } from "./overviewTasks";
 import { missionOfPane, takeOverPrompt, takeOverProvider } from "./missions";
@@ -71,7 +71,8 @@ import {
 } from "./snapshot";
 import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
-import { terminalPathOwner, type FoundPath } from "./terminalLinkProvider";
+import { paneContext, terminalPathOwner, type FoundPath } from "./terminalLinkProvider";
+import { externalBridge, externalLineKey, notePendingGrant, useExternalStore } from "./externalFiles";
 import { homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
@@ -961,7 +962,8 @@ export function createActions(send: DispatchFn) {
     const edge = menuEdge(id);
     if (id === "keep_open") return keepViewOpen(displayId);
     if (id === "copy_path") {
-      const text = located.display.kind === "browser" ? (located.display.url ?? "") : located.display.path;
+      const outside = located.display.external ? useExternalStore.getState().described[located.display.external.grant]?.path : undefined;
+      const text = located.display.kind === "browser" ? (located.display.url ?? "") : located.display.kind === "external" ? (outside ?? "") : located.display.path;
       return void navigator.clipboard?.writeText(text).catch(() => undefined);
     }
     if (id === "select_in_tree") return revealInExplorer(located.display.path);
@@ -2953,8 +2955,9 @@ export function createActions(send: DispatchFn) {
      * or Open source, `reveal_path` for a folder. A file of another checkout
      * opens in the Workspace in front and moves no checkout; a file of the
      * checkout in front, or a folder, is revealed with its checkout forward.
-     * Outside every checkout, or on ⌘ (Ctrl off macOS), the desktop host
-     * hands it to the operating system.
+     * A file outside every checkout opens read-only in the Workspace in
+     * front (`openOutsideFile`). On ⌘ (Ctrl off macOS) the desktop host
+     * hands any path to the operating system.
      */
     openTerminalPath(found: FoundPath, line: number | null, column: number | null, external: boolean, mode: "auto" | "source" = "auto", openerPane?: string) {
       const bridge = hostBridge();
@@ -2965,7 +2968,7 @@ export function createActions(send: DispatchFn) {
       void terminalPathOwner(found).then((owner) => {
         if (owner === undefined) return;
         if (!owner) {
-          bridge.openPath(found.real);
+          this.openOutsideFile(found, line, column, mode, openerPane);
           return;
         }
         const { path, deviceId } = owner;
@@ -3002,6 +3005,58 @@ export function createActions(send: DispatchFn) {
           payload: { path, workspace_id: owner.checkout.workspace_id, checkout_id: owner.checkout.id, is_directory: found.kind === "directory", ...device, ...opener },
         });
       });
+    },
+
+    /**
+     * A file outside every checkout (PRD outside-path-in-hide B1-B3, B13): the
+     * desktop host grants it to this window and the core shows a read-only
+     * tab of it, by its grant alone, in the Workspace in front, or with none
+     * in front in the Workspace of the pane that printed it, brought forward.
+     * The host hands to the system what no viewer shows (a folder, audio, a
+     * program, past the size, the grants full), and so does a window that is
+     * not on the core's machine, which may not open one (D-09).
+     */
+    openOutsideFile(found: FoundPath, line: number | null, column: number | null, mode: "auto" | "source", openerPane?: string) {
+      const bridge = hostBridge();
+      if (!bridge) return diagnostic("terminal link: this host cannot open a path");
+      const external = externalBridge();
+      const now = rest();
+      const onCore = now !== null && windowDeviceId(now.navigator?.devices) === localDeviceId(now);
+      // The core keeps a Workspace in front while the page shows All
+      // projects or an Overview; a tab opened there would land out of sight.
+      const front = ui().screen?.kind === "workspace" ? frontViewWorkspace() : null;
+      const paneRoot = !front && openerPane ? (paneContext(now, openerPane, windowDeviceId(now?.navigator?.devices))?.root ?? null) : null;
+      const target = front ?? (paneRoot ? { device_id: windowDeviceId(now?.navigator?.devices), path: paneRoot } : null);
+      if (!external || !onCore || found.kind !== "file" || !target) {
+        bridge.openPath(found.real);
+        return;
+      }
+      void external.open(found.real, mode).then((granted) => {
+        if (!granted) return;
+        const request_id = followBrowserOpen(target);
+        notePendingGrant(granted.id, request_id);
+        if (line !== null && granted.kind === "text") requestLine([externalLineKey(granted.id)], line, column);
+        dispatch({
+          schema_version: 2,
+          kind: "external_open",
+          payload: {
+            grant: granted.id,
+            name: granted.name,
+            kind: granted.kind,
+            request_id,
+            ...(front ? { workspace: front } : { pane_id: openerPane, reveal: true }),
+          },
+        });
+      }, () => diagnostic("terminal link: the desktop host did not answer for an outside file"));
+    },
+
+    /**
+     * The desktop host's grants when this window attaches (PRD
+     * outside-path-in-hide D-07): an outside file's tab whose grant the host
+     * no longer holds, since the app quit, goes.
+     */
+    keepExternalGrants(live: string[]) {
+      dispatch({ schema_version: 2, kind: "external_grants", payload: { live } });
     },
 
     /** Explorer "Open in Browser" on an HTML file of this machine's checkout. */

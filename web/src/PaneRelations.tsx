@@ -238,7 +238,7 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
   } else if (target?.kind === "path" && found) {
     const html = found.kind === "file" && isHtmlFile(found.real);
     items.push({ id: "link_open", icon: "record", label: translate(html ? "documents.openInBrowser" : "common.open"), unavailable: null });
-    if (html && context.link?.inCheckout) items.push({ id: "link_source", icon: "source", label: translate("panes.menu.openSource"), unavailable: null });
+    if (html && context.link?.sourceInHide) items.push({ id: "link_source", icon: "source", label: translate("panes.menu.openSource"), unavailable: null });
     items.push({ id: "link_external", icon: "external", label: translate("panes.menu.openDefaultApp"), unavailable: null });
     const host = context.reveal === undefined ? revealHost() : context.reveal;
     if (host) items.push({ id: "link_reveal", icon: "external", label: translate(host.label), unavailable: null });

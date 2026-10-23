@@ -38,6 +38,7 @@ import { osc8Handler, registerTerminalLinks, terminalLinkAtCell, terminalPathOwn
 import { isHtmlFile } from "./browserViews";
 import { pointerModifiers, wheelRows } from "./wheel";
 import { useShellStore, type TerminalChunk } from "./store";
+import { outsideFilesShown } from "./externalFiles";
 import { catalogWorkspaces, type SnapshotRest } from "./snapshot";
 import type { DispatchFn } from "./ws";
 
@@ -688,7 +689,9 @@ export async function terminalLinkAt(paneId: string, point: { clientX: number; c
   const link = await terminalLinkAtCell(instance.term, paneId, instance.link, cell.column + 1, instance.term.buffer.active.viewportY + cell.row + 1);
   if (link?.target.kind !== "path" || link.found?.kind !== "file" || !isHtmlFile(link.found.real)) return link;
   const owner = await terminalPathOwner(link.found);
-  return { ...link, inCheckout: !!owner };
+  // An HTML file's source opens in Hide inside a checkout, and outside every
+  // checkout where this window shows outside files (PRD outside-path-in-hide B9).
+  return { ...link, inCheckout: !!owner, sourceInHide: !!owner || (owner === null && outsideFilesShown(useShellStore.getState().rest)) };
 }
 
 /** Pastes text as typed input, wrapped in bracketed paste when the program asked for it. */

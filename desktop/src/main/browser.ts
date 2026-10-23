@@ -991,7 +991,7 @@ export class BrowserViews {
     page.report = setTimeout(() => {
       page.report = null;
       if (this.pages.get(page.key) !== page) return;
-      this.emit({ kind: "state", workspace: page.workspace, id: page.id, load: page.applied, state: page.state });
+      this.emit({ kind: "state", workspace: page.workspace, id: page.id, load: page.applied, state: page.state, ...(page.grant ? { external: true as const } : {}) });
       this.publishCdp();
     }, REPORT_COALESCE_MS);
   }
@@ -1042,7 +1042,7 @@ export class BrowserViews {
   }
 
   private destroy(page: Page, reason: CdpRetirement["reason"]): void {
-    if (reason === "evicted") this.emit({ kind: "gone", workspace: page.workspace, id: page.id, load: page.applied, url: page.state.url });
+    if (reason === "evicted") this.emit({ kind: "gone", workspace: page.workspace, id: page.id, load: page.applied, url: page.state.url, ...(page.grant ? { external: true as const } : {}) });
     if (this.cycleInput?.page === page) this.cancelCycle();
     if (this.returnTo === page) this.returnTo = null;
     this.pages.delete(page.key);
