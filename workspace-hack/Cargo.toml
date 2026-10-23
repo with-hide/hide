@@ -34,7 +34,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server", 
 memchr = { version = "2" }
 once_cell = { version = "1" }
 rusqlite = { version = "0.32", default-features = false, features = ["bundled", "hooks", "limits"] }
-schemars = { version = "0.8", features = ["preserve_order"] }
+schemars = { version = "1.2", features = ["preserve_order"] }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_core = { version = "1", features = ["alloc"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
@@ -50,7 +50,7 @@ memchr = { version = "2" }
 once_cell = { version = "1" }
 proc-macro2 = { version = "1" }
 quote = { version = "1" }
-schemars = { version = "0.8", features = ["preserve_order"] }
+schemars = { version = "1.2", features = ["preserve_order"] }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_core = { version = "1", features = ["alloc"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
