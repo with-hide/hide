@@ -719,11 +719,19 @@ fn connection_scope(
     if let Some(id) = display_id {
         let view = views
             .iter()
-            .find(|view| view.view_id == id && view.kind == "browser")
+            .find(|view| view.view_id == id && (view.kind == "browser" || view.kind == "external"))
             .ok_or((
                 "browser_display_missing",
                 "Run hide view list and choose a browser display",
             ))?;
+        // An outside file's page is the operator's click alone (PRD
+        // outside-path-in-hide B18): refused as a checkout's file page is.
+        if view.kind == "external" {
+            return Err((
+                "browser_address_unsupported",
+                "Use an http or https browser display; native file pages do not support CDP",
+            ));
+        }
         supported_address(&view.target)?;
         return Ok((view.area_id.clone(), Some(view.view_id.clone())));
     }
@@ -1059,6 +1067,14 @@ mod tests {
         );
         // The area capability is still useful for opening HTTP pages beside it.
         assert!(connection_scope(&source, None).is_ok());
+        // An outside file's tab, whose target the core leaves empty, is refused the same way.
+        let view = &mut source.views.as_mut().unwrap()[0];
+        view.kind = "external";
+        view.target = String::new();
+        assert_eq!(
+            connection_scope(&source, Some("browser-a")).unwrap_err().0,
+            "browser_address_unsupported"
+        );
         for address in [
             "file:///checkout/index.html",
             "/checkout/index.html",

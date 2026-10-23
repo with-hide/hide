@@ -73,6 +73,10 @@ describe("pathLookups", () => {
     expect(pathLookups("../../report.HTML", "//server/share/repo", null)).toEqual(["//server/share/report.HTML"]);
     const chosen = await resolveGroups(linkCandidates([row("src/report.HTML:2", 40)], 0), { cwd: "C:/repo", root: "C:/repo" }, host(["C:/repo/src/report.HTML"]));
     expect(chosen[0]?.resolved.found?.real).toBe("C:/repo/src/report.HTML");
+    // A drive path a Windows shell printed with backslashes is one link, asked in the wire spelling.
+    const printed = "img C:\\Users\\example\\AppData\\Local\\Temp\\shot.png";
+    const temp = await resolveGroups(linkCandidates([row(printed, 80)], 0), { cwd: "C:/repo", root: "C:/repo" }, host(["C:/Users/example/AppData/Local/Temp/shot.png"]));
+    expect(temp[0]?.resolved.found?.real).toBe("C:/Users/example/AppData/Local/Temp/shot.png");
   });
 });
 

@@ -13,6 +13,12 @@
 //! and no tab, and names its page by the address it holds. The desktop host
 //! draws the page; this tree only says where it sits.
 //!
+//! An external display (PRD outside-path-in-hide) shows a file outside every
+//! checkout that the operator clicked in the desktop window. It holds no path:
+//! only the desktop host's grant id, the file's name and its viewer kind. The
+//! host reads the file for its own window; this tree only says where it sits,
+//! and it is never stored.
+//!
 //! Nothing here knows the runtime. Every operation applies completely or
 //! returns why it cannot and leaves the tree as it was, so one operator
 //! action is one change (B18). The caps are the core's; the shell enforces
@@ -58,6 +64,9 @@ pub enum DisplayKind {
     /// lane's 보기 slot now, and a stored card is dropped as the file loads
     /// (PRD sidebar-task-lens D-50, `workspace_views::drop_retired_cards`).
     Browser,
+    /// A file outside every checkout the desktop host granted its window;
+    /// `path` is empty and `external` names it. Never stored.
+    External,
 }
 
 impl DisplayKind {
@@ -108,6 +117,66 @@ pub fn browser_title(title: &str) -> String {
         .to_owned()
 }
 
+/// The grant id the desktop host mints is 128 random bits in hex; anything
+/// else is not one of its grants.
+pub const EXTERNAL_GRANT_LEN: usize = 32;
+/// A file name past this many characters is cut; a tab shows far fewer.
+pub const MAX_EXTERNAL_NAME_CHARS: usize = 255;
+
+/// Which viewer an external file opens in, decided by the desktop host when
+/// it granted the file.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalKind {
+    Text,
+    Image,
+    Pdf,
+    Video,
+    Html,
+}
+
+/// An outside file as the core knows it: the desktop host's grant and what
+/// the tab shows. The path stays in the desktop host.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ExternalFile {
+    pub grant: String,
+    pub name: String,
+    pub kind: ExternalKind,
+}
+
+impl ExternalFile {
+    /// The file as an event names it, or why it is not one: a grant id of the
+    /// host's shape and a one-line name that is not a path.
+    pub fn admitted(grant: &str, name: &str, kind: ExternalKind) -> Result<Self, &'static str> {
+        if !external_grant(grant) {
+            return Err("An outside file is named by the desktop host's grant id");
+        }
+        let name: String = name
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .take(MAX_EXTERNAL_NAME_CHARS)
+            .collect::<String>()
+            .trim()
+            .to_owned();
+        if name.is_empty() || name.contains(['/', '\\']) {
+            return Err("An outside file's name is its file name alone");
+        }
+        Ok(Self {
+            grant: grant.to_owned(),
+            name,
+            kind,
+        })
+    }
+}
+
+/// Whether `grant` has the shape of a desktop host's grant id.
+pub fn external_grant(grant: &str) -> bool {
+    grant.len() == EXTERNAL_GRANT_LEN
+        && grant
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Display {
     pub id: String,
@@ -140,6 +209,10 @@ pub struct Display {
     /// opened (PRD view-opener-feedback D-02, D-03).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opener: Option<crate::view_feedback::Opener>,
+    /// An external display's grant, name and viewer; absent for every other
+    /// kind. A stored file never carries one (`workspace_views::save`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<ExternalFile>,
 }
 
 impl Display {
@@ -192,7 +265,7 @@ impl AreaItem for Display {
             // without its group would never find its tab again.
             let group = match display.kind {
                 DisplayKind::Diff => Some(display.committed.unwrap_or(false)),
-                DisplayKind::File | DisplayKind::Browser => None,
+                DisplayKind::File | DisplayKind::Browser | DisplayKind::External => None,
             };
             if display.committed != group {
                 display.committed = group;
@@ -219,6 +292,19 @@ impl AreaItem for Display {
             } else if display.url.is_some() || display.title.is_some() {
                 display.url = None;
                 display.title = None;
+                addresses += 1;
+            }
+            // Only an external display names a grant, and it names nothing
+            // else; the runtime drops one whose grant is gone.
+            if (display.kind == DisplayKind::External) != display.external.is_some()
+                || (display.kind == DisplayKind::External
+                    && (!display.path.is_empty() || display.preview))
+            {
+                if display.kind != DisplayKind::External {
+                    display.external = None;
+                }
+                display.path.clear();
+                display.preview = false;
                 addresses += 1;
             }
         }
@@ -308,6 +394,7 @@ impl Layout {
             title: None,
             load: 0,
             opener: None,
+            external: None,
         }
     }
 
@@ -319,6 +406,33 @@ impl Layout {
             load,
             ..self.new_display("", DisplayKind::Browser, None, false)
         }
+    }
+
+    /// A new external display for `file` with a fresh id, not yet in any
+    /// area. Like a page, it is opened on purpose and never a preview.
+    pub fn new_external_display(&mut self, file: ExternalFile, load: u64) -> Display {
+        Display {
+            external: Some(file),
+            load,
+            ..self.new_display("", DisplayKind::External, None, false)
+        }
+    }
+
+    /// Takes every external display out, as the stored file and a host that
+    /// lost its grants want the tree. Returns how many went.
+    pub fn remove_external(&mut self, keep: impl Fn(&ExternalFile) -> bool) -> usize {
+        let gone: Vec<String> = self
+            .displays()
+            .filter(|display| {
+                display.kind == DisplayKind::External
+                    && !display.external.as_ref().is_some_and(&keep)
+            })
+            .map(|display| display.id.clone())
+            .collect();
+        for id in &gone {
+            self.remove(id);
+        }
+        gone.len()
     }
 }
 

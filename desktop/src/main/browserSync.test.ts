@@ -36,6 +36,22 @@ describe("what the shell may ask of the browser views (issue 155)", () => {
     for (const value of bad) expect(parseSync(value), JSON.stringify(value)?.slice(0, 80)).toBeNull();
   });
 
+  it("takes an outside file by its grant with no address, and the grants its tabs stand on (PRD outside-path-in-hide)", () => {
+    const grant = "0123456789abcdef0123456789abcdef";
+    const external = { ...display, url: "", grant };
+    const named = { ...sync, displays: [external], external_grants: [grant] };
+    expect(parseSync(named)).toEqual(named);
+    expect(parseSync({ ...sync, external_grants: [] })).toEqual({ ...sync, external_grants: [] });
+    for (const bad of [
+      { ...sync, displays: [{ ...external, url: "file:///tmp/a.html" }] },
+      { ...sync, displays: [{ ...external, grant: "/tmp/a.html" }] },
+      { ...sync, displays: [{ ...display, url: "" }] },
+      { ...sync, external_grants: ["/tmp/a.png"] },
+      { ...sync, external_grants: grant },
+      { ...sync, external_grants: Array.from({ length: 257 }, () => grant) },
+    ]) expect(parseSync(bad), JSON.stringify(bad).slice(0, 120)).toBeNull();
+  });
+
   it("requires a bounded area identity on placements and retained pages", () => {
     for (const area_id of [undefined, null, "", 1, "a".repeat(8193), "a\u0000b", "a\u0001b"]) {
       expect(parseSync({ ...sync, displays: [{ ...display, area_id }] })).toBeNull();
