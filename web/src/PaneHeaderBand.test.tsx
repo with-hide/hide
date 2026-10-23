@@ -747,6 +747,14 @@ it("stacks the turn on two lines and draws none when off, keeping the children b
     expect(row.textContent).toBe("Proceed as proposed→QuestionBundle into one PR?");
   } finally { await two.unmount(); }
 
+  // A parent with no turn to show keeps one line: the children button, no empty answer under it.
+  const resting = await mount({ working: false, notice: null, band: null }, childrenFixture(), { rest: rest("two_lines") });
+  try {
+    const row = resting.container.querySelector('[data-pane-header-band="children"]')!;
+    expect([...row.querySelectorAll("[data-pane-turn-part]")].map((part) => part.getAttribute("data-pane-turn-part"))).toEqual(["request"]);
+    expect(row.querySelector("[data-pane-tree]")).not.toBeNull();
+  } finally { await resting.unmount(); }
+
   const off = await mount({ working: true, notice: null, band: null, progress: "Reading the status model", request }, [], { paneId: "solo", rest: rest("off") });
   try {
     expect(off.container.querySelector("[data-pane-header-band]")).toBeNull();

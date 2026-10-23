@@ -130,8 +130,9 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
     {band?.action ? <button type="button" data-pane-band-open={paneId} disabled={unreachable !== null || progress?.phase === "pending" || (progress?.phase === "failed" && !progress.retryable)} aria-busy={progress?.phase === "pending"} className="shrink-0 rounded-xs border border-border bg-background px-xs py-xxs text-micro text-foreground outline-none hover:brightness-95 focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50" onClick={() => actions.followRelation(paneId, band.action!.pane_id, band.action!.label)}>{progress?.phase === "failed" && progress.retryable ? t("common.retry") : t("common.open")}</button> : null}
   </>;
   const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : waitingOnChildren ? "waiting" : request ? "request" : "children");
-  // A working turn with no word beyond its request draws no answer at all.
-  const answered = kind !== "request" || childConnection !== null;
+  // A working turn with no word beyond its request, or a parent with no turn
+  // to show, draws no answer at all, so two lines never add an empty one.
+  const answered = (kind !== "request" && kind !== "children") || childConnection !== null;
   // An ask is the one row the operator acts on, so it keeps the raised
   // surface; a quiet turn sits in the head's surface.
   const tone = band ? "bg-secondary border-l-2 border-warning text-foreground" : "bg-card border-t border-border text-muted-foreground";

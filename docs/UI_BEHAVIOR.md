@@ -746,7 +746,7 @@ The View menu's second section, after the agent logo choices and their key line 
 It shapes the second row of every agent pane ([Agent panes and the Agents explorer](#agent-panes-and-the-agents-explorer)) in every window of one daemon at once:
 
 - One line keeps every turn on one line: the request at most two fifths of the row when an answer follows, the answer in the rest, each cut where it overflows, an ask as much as a quiet turn; the whole request stays on the turn card the request opens.
-- Two lines put the request (after the children button) on its own line and the arrow and answer on the line under it, each cut, so a turn takes at most two lines; a turn with only a request or only an answer takes one.
+- Two lines put the request (after the children button) on its own line and the arrow and answer on the line under it, each cut, so a turn takes at most two lines; a turn with only a request or only an answer takes one, and a parent with no turn to show keeps its children button alone on one.
 - Off draws no request, progress, result or ask on the row; a pane with live children keeps the children button alone on it, whose warning border and tree carry a raised descendant's ask, and Working keeps its thin line.
   The pane's own approval, question, block or stop rides the head after the title as a small warning-edged mark with its verb and wait (`web/src/PaneHeaderBand.tsx`, `PaneAskMark`), named by its verb and what is asked, which opens the same turn card as the request does and dims once read as the row's ask does; an ask is never hidden by the mode.
 
