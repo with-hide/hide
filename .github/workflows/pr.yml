@@ -283,11 +283,11 @@ jobs:
         id: install
         run: bash scripts/verify-web.sh install
       - name: Web shell typecheck, lint, unit test, and build
+        # build includes typecheck; run it once, before the other checks.
         run: |
-          bash scripts/verify-web.sh web typecheck
+          bash scripts/verify-web.sh web build
           bash scripts/verify-web.sh web lint
           bash scripts/verify-web.sh web test
-          bash scripts/verify-web.sh web build
       - name: Desktop app typecheck, lint, and unit test
         # The menu is built from the web registry, so the plan brings this
         # lane for a registry change too. It stands on its own, so it runs

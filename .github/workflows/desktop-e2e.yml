@@ -150,13 +150,14 @@ jobs:
             table=desktop/e2e/shard-durations.json
             list="$RUNNER_TEMP/desktop-e2e-list.txt"
             shard_file="$RUNNER_TEMP/desktop-e2e-shard.txt"
-            bash scripts/verify-web.sh desktop e2e --list --reporter=list "${args[@]}" > "$list"
+            # Discovery needs no host build; e2e prepares it once before running.
+            bash scripts/verify-web.sh desktop e2e-list --reporter=list "${args[@]}" > "$list"
             python3 scripts/e2e-shard.py split --table "$table" --budget 720 --shard "$SHARD" "$list" > "$shard_file"
             if [ ! -s "$shard_file" ]; then
               echo "shard $SHARD is dealt no test: fewer tests than shards"
               exit 0
             fi
-            bash scripts/verify-web.sh desktop e2e --list --reporter=list --test-list "$shard_file" "${args[@]}" > "$RUNNER_TEMP/desktop-e2e-shard-list.txt"
+            bash scripts/verify-web.sh desktop e2e-list --reporter=list --test-list "$shard_file" "${args[@]}" > "$RUNNER_TEMP/desktop-e2e-shard-list.txt"
             python3 scripts/e2e-shard.py check --table "$table" --shard "$SHARD" "$list" "$RUNNER_TEMP/desktop-e2e-shard-list.txt"
             args+=(--test-list "$shard_file")
           fi
