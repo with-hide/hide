@@ -812,7 +812,7 @@ A file outside every registered checkout, such as `/tmp/shot.png`, opens on a pl
 An image, a PDF and a video open in the viewers a checkout file uses, an HTML file as a browser display, and any other text, a script such as `.sh` or `.py` included, as read-only text at the link's line that saves nothing.
 Holding the pointer on the badge shows the file's full path; there is no warning and no confirmation.
 The tab splits, moves and closes like any View tab, the front checkout and the Explorer's selection stay as they were, and the file never appears in the Explorer.
-A second click on the same file brings its one tab forward and reads the file again from disk.
+A second click on the same file brings its one tab forward, reads the file again from disk and goes to the new link's line; an HTML page and its Open source are two tabs.
 A text file of 16 MiB to 256 MiB shows the too-large notice a checkout text file of that size shows; a file that cannot be read opens the tab's ordinary unavailable state with a Close button.
 While the Overview is on screen the pane that printed the path brings its Workspace forward and the tab opens there.
 The tab lasts as long as the operator keeps it: it survives a reload of the window, and it is gone after the app quits or hided restarts, when a click opens it again.

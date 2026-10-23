@@ -176,3 +176,56 @@ test("a reload keeps outside tabs readable, and closing one ends its grant", asy
   await expect.poll(() => hostLog(run.env).filter((line) => line.event === "external.released")).toHaveLength(1);
   await expect(outsideTab(page, "kept.txt")).toHaveAttribute("data-external", "held");
 });
+
+/** A one-page PDF with a correct cross-reference table, the smallest a PDF reader opens. */
+function minimalPdf(): Buffer {
+  const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>"];
+  let out = "%PDF-1.4\n";
+  const offsets = objects.map((object, index) => {
+    const at = out.length;
+    out += `${index + 1} 0 obj\n${object}\nendobj\n`;
+    return at;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((at) => `${String(at).padStart(10, "0")} 00000 n \n`).join("")}`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, "latin1");
+}
+
+test("an outside PDF and video open in their viewers, a file deleted before the click opens unavailable, and a second click goes to its line", async () => {
+  const pdf = path.join(scratch!, "report.pdf");
+  fs.writeFileSync(pdf, minimalPdf());
+  const video = path.join(scratch!, "clip.mp4");
+  fs.writeFileSync(video, new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]));
+  const deleted = path.join(scratch!, "deleted.txt");
+  fs.writeFileSync(deleted, "here at the hover");
+  const notes = path.join(scratch!, "lines.txt");
+  fs.writeFileSync(notes, ["one", "two", "three", "four"].join("\n"));
+  const { page, paneId } = await start();
+  await printInPane(herdr, page, paneId, [`pdf ${pdf}`, `video ${video}`, `gone ${deleted}`, `at ${notes}:1`, `again ${notes}:4`, "END-KINDS"], "END-KINDS");
+
+  // A PDF and a video open in the viewers a checkout file uses (B23).
+  await click(page, paneId, pdf);
+  await expect(outsideTab(page, "report.pdf")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
+  await expect(page.locator('[data-viewer="pdf"] [data-pdf-page="1"]')).toBeAttached({ timeout: 20_000 });
+  await click(page, paneId, video);
+  await expect(outsideTab(page, "clip.mp4")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
+  await expect(page.locator('[data-viewer="video"], [data-viewer-state="video-codec"]')).toBeVisible();
+
+  // A file deleted between the hover and the click opens a tab that says it cannot be opened (B16).
+  const point = await pointOf(page, paneId, deleted, { offset: 2 });
+  await hoverLink(page, paneId, point);
+  fs.rmSync(deleted);
+  await page.mouse.click(point.x, point.y);
+  await expect(outsideTab(page, "deleted.txt")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
+  await expect(page.locator('[data-area-empty="view-unavailable"]')).toBeVisible();
+  await expect.poll(() => hostLog(run.env).some((line) => line.event === "external.read_failed" && line.reason === "ENOENT")).toBe(true);
+
+  // A second click on an open file brings its one tab forward, read again, at the new line (B2, B10).
+  await click(page, paneId, `${notes}:1`);
+  await expect(page.locator("[data-external-text] .cm-activeLine")).toHaveText("one", { timeout: 20_000 });
+  await click(page, paneId, `${notes}:4`);
+  await expect(page.locator("[data-external-text] .cm-activeLine")).toHaveText("four", { timeout: 20_000 });
+  await expect(outsideTab(page, "lines.txt")).toHaveCount(1);
+  expect(await opened()).toEqual([]);
+});

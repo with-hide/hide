@@ -106,31 +106,34 @@ export type ExternalBytes =
   | { status: "failed"; reason: string };
 
 export function useExternalBytes(grant: string, load: number): ExternalBytes {
-  const [state, setState] = useState<ExternalBytes>({ status: "loading" });
+  // Each answer names the read it belongs to, so the render that brings a
+  // new `load` shows loading rather than the last read's bytes, and a view
+  // mounts once, on the bytes now on the disk.
+  const [state, setState] = useState<{ read: string; bytes: ExternalBytes } | null>(null);
+  const read = `${grant}:${load}`;
   useEffect(() => {
     let live = true;
-    setState({ status: "loading" });
+    const answer = (bytes: ExternalBytes) => {
+      if (live) setState({ read, bytes });
+    };
     const bridge = externalBridge();
     if (!bridge) {
-      setState({ status: "failed", reason: "grant_gone" });
+      answer({ status: "failed", reason: "grant_gone" });
       return undefined;
     }
     bridge.read(grant).then(
-      (read) => {
-        if (!live) return;
-        if ("bytes" in read) setState({ status: "ready", bytes: read.bytes });
-        else if ("preview_only" in read) setState({ status: "preview_only" });
-        else setState({ status: "failed", reason: read.failure });
+      (got) => {
+        if ("bytes" in got) answer({ status: "ready", bytes: got.bytes });
+        else if ("preview_only" in got) answer({ status: "preview_only" });
+        else answer({ status: "failed", reason: got.failure });
       },
-      () => {
-        if (live) setState({ status: "failed", reason: "read_failed" });
-      },
+      () => answer({ status: "failed", reason: "read_failed" }),
     );
     return () => {
       live = false;
     };
-  }, [grant, load]);
-  return state;
+  }, [grant, read]);
+  return state?.read === read ? state.bytes : { status: "loading" };
 }
 
 /** The key a text view of an outside file takes a terminal link's line by (`lineRequest.ts`). */
