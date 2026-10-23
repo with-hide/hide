@@ -22,28 +22,40 @@ fn none() -> Tools<'static> {
 /// A repository's main checkout and one linked worktree of it, in the files
 /// Git writes for them.
 fn linked_worktree(root: &Path) -> (PathBuf, PathBuf) {
+    linked_worktree_named(root, "task")
+}
+
+/// [`linked_worktree`] named `repo-<name>`; another name adds another linked
+/// worktree to the same repository.
+fn linked_worktree_named(root: &Path, name: &str) -> (PathBuf, PathBuf) {
     let main = root.join("repo");
-    let linked = root.join("repo-task");
-    std::fs::create_dir_all(main.join(".git/worktrees/task")).unwrap();
+    let linked = root.join(format!("repo-{name}"));
+    let admin = main.join(".git/worktrees").join(name);
+    std::fs::create_dir_all(&admin).unwrap();
     std::fs::write(main.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     std::fs::create_dir_all(&linked).unwrap();
     std::fs::write(
         linked.join(".git"),
-        format!("gitdir: {}\n", main.join(".git/worktrees/task").display()),
+        format!("gitdir: {}\n", admin.display()),
     )
     .unwrap();
+    std::fs::write(admin.join("HEAD"), format!("ref: refs/heads/{name}\n")).unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
     std::fs::write(
-        main.join(".git/worktrees/task/HEAD"),
-        "ref: refs/heads/task\n",
-    )
-    .unwrap();
-    std::fs::write(main.join(".git/worktrees/task/commondir"), "../..\n").unwrap();
-    std::fs::write(
-        main.join(".git/worktrees/task/gitdir"),
+        admin.join("gitdir"),
         format!("{}\n", linked.join(".git").display()),
     )
     .unwrap();
     (main, linked)
+}
+
+/// The folders Hide's record of `agent` holds, in order.
+fn recorded(agent: Agent, home: &Path) -> Vec<String> {
+    read_record(agent, home)
+        .unwrap()
+        .iter()
+        .map(|recorded| recorded.folder().to_owned())
+        .collect()
 }
 
 fn read_json(path: &Path) -> Value {
@@ -167,7 +179,7 @@ fn only_a_git_worktree_below_home_is_trusted_as_a_worktree() {
     trust_worktree(Agent::Antigravity, home.path(), &tree, none()).unwrap();
     let resolved = hide_platform::fs::identity::canonical(&tree).unwrap();
     assert_eq!(
-        read_record(Agent::Antigravity, home.path()).unwrap(),
+        recorded(Agent::Antigravity, home.path()),
         [resolved.to_str().unwrap()],
         "the entry is the folder's resolved path"
     );
@@ -185,7 +197,7 @@ fn only_a_git_worktree_below_home_is_trusted_as_a_worktree() {
         std::os::unix::fs::symlink(&tree, &link).unwrap();
         trust_worktree(Agent::Antigravity, home.path(), &link, none()).unwrap();
         assert_eq!(
-            read_record(Agent::Antigravity, home.path()).unwrap(),
+            recorded(Agent::Antigravity, home.path()),
             [resolved.to_str().unwrap()]
         );
         assert_eq!(
@@ -258,7 +270,7 @@ fn claude_trusts_the_worktree_itself_and_hide_takes_out_only_its_own_flag() {
     // A folder Claude already trusts stays the operator's.
     trust(Agent::ClaudeCode, home.path(), &main, none()).unwrap();
     assert_eq!(
-        read_record(Agent::ClaudeCode, home.path()).unwrap(),
+        recorded(Agent::ClaudeCode, home.path()),
         [key(&tree), key(&kept)]
     );
 
@@ -368,7 +380,7 @@ fn a_folder_that_is_gone_leaves_with_the_next_trust_hide_records() {
 
         trust(agent, home.path(), &next, none()).unwrap();
         assert_eq!(
-            read_record(agent, home.path()).unwrap(),
+            recorded(agent, home.path()),
             [key(&live), key(&next)],
             "{}",
             agent.label()
@@ -400,15 +412,17 @@ fn a_folder_that_is_gone_leaves_with_the_next_trust_hide_records() {
 fn a_trust_past_the_record_s_cap_is_refused_and_folders_that_are_gone_do_not_count() {
     let home = home();
     let gone = real(home.path(), "gone");
-    let mut record: Vec<String> = (0..RECORD_LIMIT - 1)
+    let mut record: Vec<Recorded> = (0..RECORD_LIMIT - 1)
         .map(|n| {
-            real(home.path(), &format!("live-{n}"))
-                .to_str()
-                .unwrap()
-                .to_owned()
+            Recorded::Folder(
+                real(home.path(), &format!("live-{n}"))
+                    .to_str()
+                    .unwrap()
+                    .to_owned(),
+            )
         })
         .collect();
-    record.push(gone.to_str().unwrap().to_owned());
+    record.push(Recorded::Folder(gone.to_str().unwrap().to_owned()));
     std::fs::create_dir_all(agent_hooks_dir(home.path())).unwrap();
     write_record(Agent::Antigravity, home.path(), &record).unwrap();
     std::fs::remove_dir(&gone).unwrap();
@@ -598,17 +612,17 @@ fn codex_trust_needs_a_codex_to_record_it_through() {
 }
 
 #[test]
-fn only_claude_codex_and_agy_starts_record_a_trust() {
+fn only_claude_codex_agy_and_grok_starts_record_a_trust() {
     use hide_agent_adapter::LaunchDialect;
     for dialect in [
         LaunchDialect::Claude,
         LaunchDialect::Codex,
         LaunchDialect::Antigravity,
+        LaunchDialect::Grok,
     ] {
         assert!(Agent::of(dialect).is_some(), "{dialect:?}");
     }
     for dialect in [
-        LaunchDialect::Grok,
         LaunchDialect::OpenCode,
         LaunchDialect::Pi,
         LaunchDialect::Omp,
@@ -616,4 +630,159 @@ fn only_claude_codex_and_agy_starts_record_a_trust() {
     ] {
         assert!(Agent::of(dialect).is_none(), "{dialect:?}");
     }
+}
+
+/// Grok's trust file as Grok reads it: each folder it decided, and whether
+/// it trusts it.
+fn grok_decisions(home: &Path) -> Vec<(String, bool)> {
+    let text = std::fs::read_to_string(Agent::Grok.settings_path(home)).unwrap();
+    let document = text.parse::<toml_edit::DocumentMut>().unwrap();
+    let Some(folders) = document
+        .get("folders")
+        .and_then(|item| item.as_table_like())
+    else {
+        return Vec::new();
+    };
+    folders
+        .iter()
+        .map(|(key, entry)| {
+            let trusted = entry.get("trusted").and_then(|item| item.as_bool());
+            (key.to_owned(), trusted == Some(true))
+        })
+        .collect()
+}
+
+#[test]
+fn grok_trusts_a_worktree_through_its_main_checkout_while_any_worktree_of_hide_s_needs_it() {
+    let home = tempfile::tempdir().unwrap();
+    let settings = Agent::Grok.settings_path(home.path());
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let mine = folder("mine");
+    let original = format!(
+        "[folders.{}]\ntrusted = true\ndecided_at = 1789968913\n",
+        serde_json::to_string(mine.to_str().unwrap()).unwrap()
+    );
+    std::fs::write(&settings, &original).unwrap();
+    let (main, first) = linked_worktree_named(home.path(), "one");
+    let (_, second) = linked_worktree_named(home.path(), "two");
+    let main = hide_platform::fs::identity::canonical(&main)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    trust_worktree(Agent::Grok, home.path(), &first, none()).unwrap();
+    trust_worktree(Agent::Grok, home.path(), &second, none()).unwrap();
+    let text = std::fs::read_to_string(&settings).unwrap();
+    assert!(
+        text.starts_with(&original),
+        "the operator's entry keeps its bytes: {text}"
+    );
+    assert!(text.contains("decided_at = "), "{text}");
+    assert_eq!(
+        grok_decisions(home.path()),
+        [
+            (mine.to_str().unwrap().to_owned(), true),
+            (main.clone(), true)
+        ],
+        "one entry, the main checkout's, for both worktrees"
+    );
+    assert_eq!(recorded(Agent::Grok, home.path()).len(), 2);
+
+    // The entry stays while the other worktree still needs it, and leaves
+    // with the last one, once the folder is gone, as Hide removes it.
+    std::fs::remove_dir_all(&first).unwrap();
+    assert_eq!(forget(Agent::Grok, home.path(), &first, none()).unwrap(), 0);
+    assert!(grok_decisions(home.path()).contains(&(main.clone(), true)));
+    std::fs::remove_dir_all(&second).unwrap();
+    assert_eq!(
+        forget(Agent::Grok, home.path(), &second, none()).unwrap(),
+        1
+    );
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
+    assert!(recorded(Agent::Grok, home.path()).is_empty());
+
+    // Switching Grok off takes out every entry Hide added, and only those.
+    let (_, third) = linked_worktree_named(home.path(), "three");
+    trust_worktree(Agent::Grok, home.path(), &third, none()).unwrap();
+    assert_eq!(forget_all(Agent::Grok, home.path(), none()).unwrap(), 1);
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
+}
+
+#[test]
+fn grok_s_own_answer_for_the_repository_stays_the_operator_s() {
+    let home = tempfile::tempdir().unwrap();
+    let settings = Agent::Grok.settings_path(home.path());
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let (main, linked) = linked_worktree(home.path());
+    let key = serde_json::to_string(
+        hide_platform::fs::identity::canonical(&main)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+    )
+    .unwrap();
+
+    // Trusted by the operator: nothing is written or recorded, so removing
+    // the worktree leaves it.
+    let trusted = format!("[folders.{key}]\ntrusted = true\n");
+    std::fs::write(&settings, &trusted).unwrap();
+    trust_worktree(Agent::Grok, home.path(), &linked, none()).unwrap();
+    assert!(recorded(Agent::Grok, home.path()).is_empty());
+    assert_eq!(
+        forget(Agent::Grok, home.path(), &linked, none()).unwrap(),
+        0
+    );
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), trusted);
+
+    // Answered "No": the start is refused with what to do, never overridden.
+    let untrusted = format!("[folders.{key}]\ntrusted = false\n");
+    std::fs::write(&settings, &untrusted).unwrap();
+    let refused = trust_worktree(Agent::Grok, home.path(), &linked, none())
+        .unwrap_err()
+        .message();
+    assert!(refused.contains("Grok marks"), "{refused}");
+    assert!(refused.contains("trust it in Grok"), "{refused}");
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), untrusted);
+    assert!(recorded(Agent::Grok, home.path()).is_empty());
+
+    // A file Grok could not read either is left as it is.
+    std::fs::write(&settings, "[folders\n").unwrap();
+    assert!(trust_worktree(Agent::Grok, home.path(), &linked, none()).is_err());
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), "[folders\n");
+    assert!(recorded(Agent::Grok, home.path()).is_empty());
+}
+
+#[test]
+fn grok_s_own_lock_is_waited_for() {
+    let home = tempfile::tempdir().unwrap();
+    let settings = Agent::Grok.settings_path(home.path());
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let (_, linked) = linked_worktree(home.path());
+    // A Grok saving its trust holds the lock file beside it.
+    let held = std::fs::File::create(settings.with_extension("toml.lock")).unwrap();
+    held.lock().unwrap();
+    let refused = trust_worktree(Agent::Grok, home.path(), &linked, none())
+        .unwrap_err()
+        .message();
+    assert!(refused.contains("held its trust lock"), "{refused}");
+    assert!(!settings.exists());
+    assert!(recorded(Agent::Grok, home.path()).is_empty());
+
+    held.unlock().unwrap();
+    trust_worktree(Agent::Grok, home.path(), &linked, none()).unwrap();
+    assert_eq!(grok_decisions(home.path()).len(), 1);
+}
+
+#[test]
+fn a_grok_worktree_of_a_repository_without_a_main_checkout_is_refused() {
+    let home = tempfile::tempdir().unwrap();
+    // A folder with a `.git` that names no repository Git can open.
+    let tree = home.path().join("tree");
+    std::fs::create_dir_all(tree.join(".git")).unwrap();
+    let refused = trust_worktree(Agent::Grok, home.path(), &tree, none())
+        .unwrap_err()
+        .message();
+    assert!(refused.contains("main checkout"), "{refused}");
+    assert!(!Agent::Grok.settings_path(home.path()).exists());
 }
