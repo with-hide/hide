@@ -330,6 +330,5 @@ export const FIND_WORLD: PracticeWorld<FindModel> = {
   snapshot,
   panes: (model) => model.desk.panes.map((pane) => pane.id),
   screen: (model, paneId) => paneScreen(model.desk.panes.find((pane) => pane.id === paneId)!),
-  lane: false,
   examples: [`[data-pr-card="${PR_NUMBER}"] [data-pr-card-title]`, PR_ROW],
 };
