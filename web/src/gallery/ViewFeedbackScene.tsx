@@ -167,7 +167,7 @@ export function ViewFeedbackScene({ theme, scale, content, state }: SceneParams 
       return true;
     });
     useShellStore.setState({ rest: fixture.scene.rest, agents: fixture.scene.agents, connection: "live", editor: fixture.editor as never, documents: fixture.documents, changes: fixture.changes as never });
-    useUiStore.setState({ screen: { kind: "workspace" }, laneShown: true, laneExpanded: false });
+    useUiStore.setState({ screen: { kind: "workspace" }, laneExpanded: false });
     useFeedbackStore.setState({ forms: {}, regionMode: {}, browser: {}, sentFrom: {}, deletedFrom: null });
     // A Send this window made shows its line on the View it was made from.
     if (state === "sent") noteSentFrom("r1", "d1");

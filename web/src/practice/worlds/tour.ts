@@ -107,5 +107,4 @@ export const TOUR_WORLD: PracticeWorld<TourModel> = {
   },
   panes: () => Object.keys(TERMINALS),
   screen: (_model, paneId, cols) => TERMINALS[paneId]!.replaceAll(RULE, "─".repeat(cols)),
-  lane: true,
 };

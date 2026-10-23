@@ -12,3 +12,12 @@ export function issueFailureText(failure: CodedFailure | null | undefined, t: TF
   if (!failure || !(key in issueReasonsEnglish)) return null;
   return t(key as MessageKey, { limit: failure.limit });
 }
+
+/**
+ * Why an issue's body was not read, for the Start dialog's note: a Local issue's code with its reason, otherwise the
+ * GitHub read's general line (`gh`'s own words stay in the core's `issue_detail.failed` diagnostic).
+ */
+export function issueBodyFailure(failure: string | null, t: TFunction<"translation">): string {
+  const reason = issueFailureText(failure ? { code: failure } : null, t);
+  return reason ? t("issue.bodyReadFailed", { message: reason }) : t("githubReason.issueBodyReadFailed");
+}

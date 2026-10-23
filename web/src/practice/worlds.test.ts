@@ -4,7 +4,8 @@
 // chapter reaches, every command the shell's keyboard runs and every pane
 // focus is sent, and the world must answer it (or answer nothing) and still
 // draw its snapshot and every pane's screen (docs/UI_BEHAVIOR.md, Adding a
-// chapter). A new chapter is checked here by being added.
+// chapter), and a step done inside a palette names the command that opens it.
+// A new chapter is checked here by being added.
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createActions } from "../actions";
@@ -65,7 +66,7 @@ function stage(chapter: PracticeChapter) {
     useShellStore.setState({ rest, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null });
   };
   show(model);
-  useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneShown: world.lane, laneExpanded: false, stackFront: "view" });
+  useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneExpanded: false, stackFront: "view" });
   const calm = useUiStore.getState();
   const uninstall = installKeyboard(actions);
   // Every command the keyboard runs, each pane clicked, and a close confirmed on its sheet.
@@ -137,6 +138,14 @@ describe.each(CHAPTERS.map((chapter) => [chapter.id, chapter] as const))("practi
     } finally {
       uninstall();
       menu = null;
+    }
+  });
+
+  // Esc closes a palette mid-step; ⏎ alone has to bring it back (docs/UI_BEHAVIOR.md, Adding a chapter).
+  it("gives every step done inside a palette the command that opens it", () => {
+    for (const step of chapter.steps) {
+      const inPalette = step.target?.includes("[data-palette]") || (step.gesture !== undefined && "type" in step.gesture && "input" in step.gesture.type);
+      if (inPalette) expect(step.command, step.id).toBeDefined();
     }
   });
 });

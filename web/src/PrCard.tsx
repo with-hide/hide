@@ -122,7 +122,7 @@ function Head({ project, pr, entry, card, panel, actions }: { project: Workspace
       <div className="flex min-w-0 flex-wrap items-center gap-xs">
         <button type="button" className="mr-auto rounded-xs outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-card-number={pr.number}><span className="inline-flex items-center gap-xs"><PrMark state={pr.state} number={pr.number} /><span className="text-micro text-muted-foreground">{badgeWord(pr, t).label}</span></span></button>
         <Button variant="outline" size="sm" onClick={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-card-github="true">{t("recordCard.github")}<ExternalLinkIcon aria-hidden="true" /></Button>
-        <CardMenu project={project} pr={pr} entry={entry} />
+        <CardMenu project={project} pr={pr} entry={entry} actions={actions} />
       </div>
       <h2 className="min-w-0 whitespace-normal text-subhead font-semibold [overflow-wrap:anywhere]" data-pr-card-title="true">{pr.title}</h2>
       {author ? <span className="text-caption text-muted-foreground" data-pr-card-author={author}>{t("work.row.author", { name: author })}</span> : null}
@@ -139,7 +139,7 @@ function Head({ project, pr, entry, card, panel, actions }: { project: Workspace
 }
 
 /** `⋯` of the card (D-28): hand the PR to an agent, make an issue for it, copy the branch name. */
-function CardMenu({ project, pr, entry }: { project: Workspace; pr: PullRequest; entry: PrEntry | null }) {
+function CardMenu({ project, pr, entry, actions }: { project: Workspace; pr: PullRequest; entry: PrEntry | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const merged = pr.state === "merged" || pr.state === "closed";
   const checkout = entry?.row.checkout_id ? project.checkouts.find((row) => row.id === entry.row.checkout_id) : null;
@@ -158,7 +158,7 @@ function CardMenu({ project, pr, entry }: { project: Workspace; pr: PullRequest;
         {linkable ? <DropdownMenuItem onSelect={() => setLinking(true)}>{t("prList.linkIssue")}</DropdownMenuItem> : null}
         {!merged ? <DropdownMenuItem onSelect={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })}>{t("prList.delegate")}</DropdownMenuItem> : null}
         {linkable ? <DropdownMenuItem onSelect={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_new_issue", workspaceId: project.id, prNumber: pr.number })}>{t("prList.newIssue")}</DropdownMenuItem> : null}
-        <DropdownMenuItem onSelect={() => void navigator.clipboard?.writeText(pr.head_branch ?? "")} data-pr-card-copy="true">{t("prList.copyBranch")}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void actions.copyText(pr.head_branch ?? "", "branch name")} data-pr-card-copy="true">{t("prList.copyBranch")}</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu></span>
     </IssuePicker>
@@ -229,9 +229,9 @@ function Blocked({ pr, entry, card, actions, projectId }: { pr: PullRequest; ent
   return (
     <ul className="flex flex-col gap-xxs" aria-label={t("work.card.blocked")} data-pr-card-blocked="true">
       {conflict ? <li className="text-caption text-pr-failed" data-pr-card-conflict="true">✗ {t("work.card.conflict", { base: pr.base_branch ?? "" })}</li> : null}
-      {failed.map((check) => (
-        <li key={check.name} className="flex min-w-0 items-center gap-xs text-caption" data-pr-card-failed={check.name}>
-          <span className="min-w-0 flex-1 truncate"><span className="text-pr-failed">✗</span> <span className="font-mono">{check.name}</span></span>
+      {failed.map((check, index) => (
+        <li key={`${check.name ?? ""}:${index}`} className="flex min-w-0 items-center gap-xs text-caption" data-pr-card-failed={check.name ?? ""}>
+          <span className="min-w-0 flex-1 truncate"><span className="text-pr-failed">✗</span> {check.name ? <span className="font-mono">{check.name}</span> : t("githubReason.unnamedCheck")}</span>
           {check.url ? (
             <button type="button" className="inline-flex shrink-0 items-center gap-xxs rounded-xs text-micro text-muted-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openPullRequest(check.url!, device, true)}>
               {t("work.card.checkLog")}

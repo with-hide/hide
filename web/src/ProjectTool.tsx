@@ -33,7 +33,7 @@ import { useUiStore } from "./ui";
 
 /** Whether the viewing column draws `item` now, so its tile or row reads `닫기 ✕` (B32). */
 function useDetailOpen(item: DetailItem): boolean {
-  const drawn = useUiStore((s) => s.drawnLane.view === "detail" && s.drawnLane.mode !== "closed" && s.drawnLane.mode !== "hidden");
+  const drawn = useUiStore((s) => s.drawnLane.view === "detail" && s.drawnLane.mode !== "closed");
   const top = useShellStore((s) => {
     const detail = s.rest?.ui_state?.detail;
     return detail?.shown ? (detail.items.at(-1) ?? null) : null;

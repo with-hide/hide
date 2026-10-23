@@ -119,7 +119,7 @@ export function SessionWorkScene({ params }: { params: URLSearchParams }) {
   const actions = useMemo(() => createActions((event) => {
     if (event.kind === "agent_start_in_checkout") {
       if (state === "restore-failed") useShellStore.setState(s => ({rest:{...s.rest,status:{...s.rest?.status,last_error:{kind:"fixture_refusal",retryable:true,occurred_at:AT,request_id:String(event.payload.request_id),message:"Fixture start refused"}}}}));
-      if (state === "restore-unknown") useShellStore.setState(s => ({ rest: { ...s.rest, task_operation: { id: 42, kind: "agent_start", phase: "ready", repository_root: fixture.record.cwd, branch: null, base_branch: null, path: fixture.record.cwd, pane_id: "resumed", agent_kind: "claude", message: null, agent_phase: "unknown", agent_reason: null, agent_line: null, request_id: String(event.payload.request_id) } } }));
+      if (state === "restore-unknown") useShellStore.setState(s => ({ rest: { ...s.rest, task_operation: { id: 42, kind: "agent_start", phase: "ready", repository_root: fixture.record.cwd, branch: null, base_branch: null, path: fixture.record.cwd, pane_id: "resumed", agent_kind: "claude", failure: null, agent_phase: "unknown", agent_reason: null, agent_line: null, request_id: String(event.payload.request_id) } } }));
     }
     if (event.kind === "session_work_search") useShellStore.setState({ sessionWorkSearch: { query: String(event.payload.query), loading: false, failure: null, results: [{ session: SESSION, title: fixture.record.title, matched: "세션 검색을 연결하고 좁은 칸에서도 읽기 좋게 해줘", at_unix_ms: AT, cwd: fixture.record.cwd }] } });
     return true;

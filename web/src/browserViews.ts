@@ -373,7 +373,7 @@ class BrowserSyncLoop {
     for (const row of front?.rows ?? []) {
       const slot = this.slots.get(row.id);
       const element = slot?.element;
-      // A slot in a lane put away, or under another of its tools, keeps its
+      // A slot in folded documents, or under another of its tools, keeps its
       // layout for its scroll and is drawn by nobody: its page is hidden (PRD
       // right-lane B21).
       if (!front || !slot || !element?.isConnected || element.closest(HIDDEN_LANE_SELECTOR)) continue;

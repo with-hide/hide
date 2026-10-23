@@ -41,7 +41,7 @@ import { revealRow, sidebarFocusPane } from "./sidebarFocus";
 import type { SidebarTreeLine } from "./sidebarTree";
 import { catalogWorkspaces, localDeviceId, SIDEBAR_LENSES, type AgentRow, type TaskView } from "./snapshot";
 import { useShellStore } from "./store";
-import { drawnTasks, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
+import { drawnTasks, RAISED_TASK_GROUPS, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
 import type { TaskState } from "./agentScope";
 
@@ -217,35 +217,48 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   // The selected row comes into view when the row standing for the focus
   // changes, and never while it stays the one revealed, so a list the
   // operator scrolled stays where they left it (B13).
-  const scroller = useRef<HTMLDivElement>(null);
+  const lists = useRef<HTMLDivElement>(null);
   const revealed = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (selected === null) { revealed.current = null; return; }
-    const row = scroller.current?.querySelector<HTMLElement>('[data-selected="true"]');
-    if (selected === revealed.current || !scroller.current || !row) return;
+    const row = lists.current?.querySelector<HTMLElement>('[data-selected="true"]');
+    const scroller = row?.closest<HTMLElement>("[data-task-scroll]");
+    if (selected === revealed.current || !row || !scroller) return;
     revealed.current = selected;
-    revealRow(scroller.current, [row], row);
+    revealRow(scroller, [row], row);
   }, [selected]);
   const showAll = (parent: string) => setShownAll((before) => new Set(before).add(parent));
   const rows = (trees: ReturnType<typeof treesOf>) => trees.map(({ entry, lines }) => (
     <TaskTree key={entry.card.root} entry={entry} lines={lines} byPane={byPane} opened={opened} selected={selected} number={numbers ? numberOf(numbers, entry.agent.pane_id) : null} showProject={showProject} disabled={disabled} actions={actions} onShowAll={showAll} />
   ));
   const archivedList = (entries: ArchivedEntry[]) => entries.map((entry) => <ArchivedRow key={entry.row.id} entry={entry} showProject={showProject} disabled={disabled} actions={actions} />);
-  return (
-    <div ref={scroller} className={cn("min-h-0 flex-1 overflow-y-auto px-sm pb-md", disabled && "opacity-(--opacity-disabled)")} data-task-list="true" onKeyDown={moveFocus}>
-      {sections.map(({ group, bands, resting, cleanup, archived }) => (
-        <section key={group.key} data-task-group={group.state ?? group.project?.id ?? ""} aria-label={groupName(group, t)}>
-          <GroupHead group={group} />
-          {bands.map((band) => (
-            <Fragment key={band.state}>
-              {view === "project" ? <BandHead state={band.state} /> : null}
-              <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? t(`taskLens.group.${band.state}`) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>{rows(band.trees)}</ul>
-            </Fragment>
-          ))}
-          {view === "project" ? <Folds group={group} resting={resting} cleanup={cleanup} archived={archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
-        </section>
+  const drawSection = ({ group, bands, resting, cleanup, archived }: (typeof sections)[number]) => (
+    <section key={group.key} data-task-group={group.state ?? group.project?.id ?? ""} aria-label={groupName(group, t)}>
+      <GroupHead group={group} />
+      {bands.map((band) => (
+        <Fragment key={band.state}>
+          {view === "project" ? <BandHead state={band.state} /> : null}
+          <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? t(`taskLens.group.${band.state}`) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>{rows(band.trees)}</ul>
+        </Fragment>
       ))}
-      {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
+      {view === "project" ? <Folds group={group} resting={resting} cleanup={cleanup} archived={archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
+    </section>
+  );
+  // 상태별 holds 내 차례 and 읽을 것 still above the rest, like the projects
+  // tree's raised Needs You and Done: reading one row after another never
+  // scrolls them away. Up to half the height, past which they scroll on their
+  // own; with nothing under them they are the whole list.
+  const raised = view === "status" ? sections.filter(({ group }) => group.state !== null && RAISED_TASK_GROUPS.has(group.state)) : [];
+  const below = sections.filter((section) => !raised.includes(section));
+  const held = raised.length > 0 && (below.length > 0 || list.resting.length + list.cleanup.length + list.archived.length > 0);
+  // The arrow keys move through both parts as one.
+  return (
+    <div ref={lists} className={cn("flex min-h-0 flex-1 flex-col", disabled && "opacity-(--opacity-disabled)")} data-task-list="true" onKeyDown={moveFocus}>
+      {held ? <div className="max-h-1/2 shrink-0 overflow-y-auto border-b border-border px-sm pb-xs" data-task-scroll="raised">{raised.map(drawSection)}</div> : null}
+      <div className="min-h-0 flex-1 overflow-y-auto px-sm pb-md" data-task-scroll="list">
+        {(held ? below : sections).map(drawSection)}
+        {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
+      </div>
     </div>
   );
 }, (before, after) => before.list === after.list && before.view === after.view && before.showProject === after.showProject && before.byPane === after.byPane && before.folds === after.folds && before.focusedPane === after.focusedPane && before.disabled === after.disabled && before.actions === after.actions);

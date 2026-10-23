@@ -89,7 +89,7 @@ impl Runtime {
         for pane_id in &unstarted {
             self.agent_wake_started.remove(pane_id);
             if let Some(record) = self.snapshot.ui_state.agent_sleep.records.get_mut(pane_id) {
-                let reason = "The agent did not become ready in time.".to_owned();
+                let reason = agent_sleep_herdr::WAKE_NOT_READY.to_owned();
                 record.phase = SleepPhase::Failed;
                 record.reason = Some(reason.clone());
                 crate::diagnostic!(serde_json::json!({
@@ -652,15 +652,13 @@ impl Runtime {
                 Ok(launch) => launch,
                 Err(detail) => {
                     return self.ingest_agent_wake(
-                    pane_id,
-                    mode,
-                    WakeOutcome::Failed {
-                        reason:
-                            "The model or effort it was started with is not one this agent takes."
-                                .to_owned(),
-                        detail,
-                    },
-                );
+                        pane_id,
+                        mode,
+                        WakeOutcome::Failed {
+                            reason: agent_sleep_herdr::WAKE_LAUNCH_CHOICE.to_owned(),
+                            detail,
+                        },
+                    );
                 }
             };
         let choice = record.launch.clone();
@@ -679,7 +677,7 @@ impl Runtime {
                         pane_id,
                         mode,
                         WakeOutcome::Failed {
-                            reason: "The conversation couldn\u{2019}t be resumed.".to_owned(),
+                            reason: agent_sleep_herdr::WAKE_NOT_RESUMED.to_owned(),
                             detail,
                         },
                     );
@@ -722,7 +720,7 @@ impl Runtime {
                 pane_id,
                 mode,
                 WakeOutcome::Failed {
-                    reason: "The agent did not become ready in time.".to_owned(),
+                    reason: agent_sleep_herdr::WAKE_NOT_READY.to_owned(),
                     detail: message,
                 },
             );

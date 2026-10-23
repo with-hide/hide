@@ -179,14 +179,21 @@ fn a_locked_worktree_is_named_with_its_reason_and_manual_unlock_action_before_re
     assert_eq!(facts.worktrees[1].lock_reason.as_deref(), Some(reason));
     let mut request = removal(&root, &linked);
     request.discard_changes = true;
-    let refused = handle(Call::WorktreeRemovalCheck {
-        removal: request.clone(),
-    })
-    .unwrap_err();
-    assert!(refused.message.contains("Worktree linked is locked"));
-    assert!(refused.message.contains(reason));
-    assert!(refused.message.contains("git worktree unlock"));
-    assert!(refused.message.contains("panes are kept"));
+    let stopped: Option<hide_node_link::worktrees::Stopped> = serde_json::from_value(
+        handle(Call::WorktreeRemovalCheck {
+            removal: request.clone(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    // The dialog words the lock, its reason and `git worktree unlock`.
+    assert_eq!(
+        stopped.unwrap().stop,
+        hide_node_link::worktrees::RemovalStop::Locked {
+            name: "linked".into(),
+            reason: reason.into(),
+        }
+    );
     let removed: hide_host::worktrees::RemovalOutcome =
         serde_json::from_value(handle(Call::WorktreeRemove { removal: request }).unwrap()).unwrap();
     assert!(!removed.removed);
@@ -246,11 +253,17 @@ fn discard_names_every_ignored_repository_including_worktrees_separate_gitdirs_a
     assert_eq!(ignored_repositories(&linked).unwrap(), expected);
     let mut request = removal(&root, &linked);
     request.discard_changes = true;
-    let refused = handle(Call::WorktreeRemovalCheck {
-        removal: request.clone(),
-    })
-    .unwrap_err();
-    assert!(refused.message.contains("repository list changed"));
+    let stopped: Option<hide_node_link::worktrees::Stopped> = serde_json::from_value(
+        handle(Call::WorktreeRemovalCheck {
+            removal: request.clone(),
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        stopped.unwrap().stop,
+        hide_node_link::worktrees::RemovalStop::IgnoredListChanged
+    );
     assert!(linked.exists());
     request.expected_ignored_repositories = expected.into_iter().map(str::to_owned).collect();
     assert_eq!(

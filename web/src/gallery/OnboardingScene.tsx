@@ -11,6 +11,8 @@ import { useLayoutEffect, useMemo, useState } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { FirstRunWizard, useSetupWalk } from "../FirstRunWizard";
+import { HerdrGate } from "../HerdrTakeover";
+import { herdrGate } from "../herdrTakeoverRules";
 import type { HostBridge, NotificationPermission, UpdateStatus } from "../host";
 import type { MobileState } from "../mobileSettings";
 import { clientI18n } from "../i18n/translator";
@@ -18,7 +20,7 @@ import { OverviewPage } from "../Overview";
 import { SettingsGate } from "../SettingsSheet";
 import { SETTINGS_GROUPS, type SettingsTab } from "../settings";
 import { Sidebar } from "../sidebar";
-import type { AiProvider, HerdrProfile, KitAgent, KitPiece, SnapshotRest } from "../snapshot";
+import type { AiProvider, HerdrProfile, HerdrTakeover, KitAgent, KitPiece, SnapshotRest } from "../snapshot";
 import { StartPanelHost } from "../StartPanel";
 import { useStartPanel } from "../startDraft";
 import { useShellStore } from "../store";
@@ -65,6 +67,14 @@ export const ONBOARDING_STATES = [
   "settings-done-only",
   "settings-both",
   "settings-refused",
+  "herdr-moving",
+  "herdr-failed",
+  "herdr-moved",
+  "herdr-moved-behind",
+  "herdr-restart",
+  "herdr-look",
+  "gate-newer",
+  "gate-mismatch",
 ] as const;
 
 export type OnboardingState = (typeof ONBOARDING_STATES)[number];
@@ -210,13 +220,36 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
   };
 }
 
+/**
+ * The operator's own Herdr as the core publishes it for the `herdr-*` and `gate-*` states (PRD herdr-takeover, operator
+ * decision 2026-10-23): the move the core started on its own, its failure, its result with the terminal's `herdr`, a
+ * restart, a look that could not read the server, a newer Herdr, and a mismatch the core offers nothing for.
+ */
+function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; herdr_takeover?: HerdrTakeover; herdr_versions: Record<string, unknown> } {
+  const offer = (patch: Partial<HerdrTakeover>): HerdrTakeover => ({ kind: "move", stage: "moving", server_version: "0.8.2", version: "0.9.5", same_protocol: false, failure: null, path_herdr: null, ...patch });
+  const older = { state: "protocol_mismatch", received_version: "0.8.2", received_protocol: 20, expected_protocol: 22 };
+  const versions = { hide: "0.9.5", path_herdr: { version: "0.8.2", behind: true, update_command: "sudo install -m 755 '/Applications/hide.app/Contents/Resources/herdr' '/usr/local/bin/herdr'" } };
+  const connected = { state: "connected", received_version: "0.9.5", received_protocol: 22, expected_protocol: 22 };
+  switch (state) {
+    case "herdr-moving": return { herdr: older, herdr_takeover: offer({}), herdr_versions: versions };
+    case "herdr-failed": return { herdr: older, herdr_takeover: offer({ stage: "failed", failure: "refused" }), herdr_versions: versions };
+    case "herdr-moved": return { herdr: connected, herdr_takeover: offer({ stage: "moved", path_herdr: { stage: "updated", version: "0.9.5" } }), herdr_versions: versions };
+    case "herdr-moved-behind": return { herdr: connected, herdr_takeover: offer({ stage: "moved", path_herdr: { stage: "behind", version: "0.8.2" } }), herdr_versions: versions };
+    case "herdr-restart": return { herdr: { ...older, received_version: "0.6.2", received_protocol: 10 }, herdr_takeover: offer({ kind: "restart", stage: "offered", server_version: "0.6.2" }), herdr_versions: versions };
+    case "herdr-look": return { herdr: { state: "malformed" }, herdr_takeover: offer({ kind: "look", stage: "failed", failure: "unreadable", server_version: "", version: "" }), herdr_versions: versions };
+    case "gate-newer": return { herdr: { state: "protocol_mismatch", received_version: "0.10.0", received_protocol: 23, expected_protocol: 22 }, herdr_takeover: offer({ kind: "update_hide", stage: "offered", server_version: "0.10.0" }), herdr_versions: versions };
+    case "gate-mismatch": return { herdr: older, herdr_versions: versions };
+    default: return { herdr: connected, herdr_versions: versions };
+  }
+}
+
 function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRest {
   const now = Math.floor(Date.now() / 1000);
-  const projects = state === "project" || state.startsWith("agents") || state.startsWith("devices") || state.startsWith("notifications") || state === "home-no-project" ? [] : [
+  const projects = state === "project" || state.startsWith("agents") || state.startsWith("devices") || state.startsWith("notifications") || state.startsWith("herdr") || state === "home-no-project" ? [] : [
     workspace("my-app", { path: "/work/my-app", checkouts: [checkout({ id: "my-app:main", workspace: "my-app", branch: "main", primary: true, age: 3600 }, now)] }, REFERENCE_FOLDS),
   ];
   // Help's walk is the page's own, over a first run that ended (B45).
-  const step = state === "agents-setup" ? "done" : state.startsWith("agents") ? "agents" : state.startsWith("devices") ? "devices" : state.startsWith("notifications") ? "notifications" : state === "project" ? "project" : "done";
+  const step = state === "agents-setup" ? "done" : state.startsWith("herdr") ? "herdr" : state.startsWith("agents") ? "agents" : state.startsWith("devices") ? "devices" : state.startsWith("notifications") ? "notifications" : state === "project" ? "project" : "done";
   // The switch is on once Turn on was pressed; macOS's answer is the host's (`permissionOf`).
   const enabled = (state.startsWith("notifications-") && state !== "notifications-no-service") || state === "settings-on" || state === "settings-blocked" || state === "settings-both";
   // A first pass that stopped before changing anything: a state folder HIDE_STATE_DIR chose that other
@@ -247,16 +280,24 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
       left_sidebar_visible: true,
       first_run: { version: 1, step },
       first_run_choices: { devices: state === "devices-partial" ? ["build", "research"] : [] },
-      agent_onboarding: state === "agents-refused" ? null : step === "agents" ? "pending" : "done",
+      agent_onboarding: state === "agents-refused" ? null : step === "agents" || step === "herdr" ? "pending" : "done",
       desktop_notifications: enabled,
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",
       workspace_registrations: [{ id: "home", label: "hide", path: `${HOME}/hide`, device_id: "local", pinned: false, home: true }, ...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],
     },
-    status: { background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : [] },
+    status: { ...sceneHerdr(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : [] },
   } as unknown as SnapshotRest;
 }
 
-export function OnboardingScene({ theme, state, system, language, scale, page = "notifications", update }: OnboardingSceneParams) {
+/** The screen that holds Hide, as `App` draws it in place of the shell; here over it, for a crop. */
+function SceneGate({ actions }: { actions: ReturnType<typeof createActions> }) {
+  const gate = useShellStore((s) => herdrGate(s.rest));
+  return gate ? <HerdrGate actions={actions} gate={gate} /> : null;
+}
+
+export function OnboardingScene({ theme, state, system, language, scale, page = "notifications", update: requested }: OnboardingSceneParams) {
+  // A newer Herdr's wait shows the last check's answer: no Hide made for it yet.
+  const update = requested ?? (state === "gate-newer" ? SCENE_UPDATES.idle : undefined);
   // This fixture changes invented snapshots only. It records consent presses,
   // and never dispatches to a daemon, SSH target or native permission service.
   const actions = useMemo(() => createActions((event) => {
@@ -343,7 +384,7 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
         </main>
         <StartPanelHost actions={actions} />
         <SettingsGate actions={actions} />
-        <FirstRunWizard actions={actions} />
+        {state.startsWith("gate-") ? <SceneGate actions={actions} /> : <FirstRunWizard actions={actions} />}
       </div>
     </TooltipProvider>
   );
