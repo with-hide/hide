@@ -1,7 +1,8 @@
-// The page's moving parts: the Hide AI switch, which flips by itself until the visitor presses it, the agent's
-// pointer driving the browser card's page, a letter crossing the machine map, and the Overview map's recording over its still. Under reduced motion,
-// and without script, the switch rests on, the pointer stays away and the map shows its still; each plays only
-// while it is on screen and the tab is visible.
+// The page's moving parts: the Hide AI switch, which flips by itself until the visitor presses it; the browser
+// story, where the spec opens, then the page, then the agent's pointer presses its button; a letter crossing the
+// machine map; and the Overview map's recording over its still. Under reduced motion, and without script, the
+// switch rests on, the browser story shows its last step, the map of machines holds its first letter and the
+// Overview map shows its still; each plays only while it is on screen and the tab is visible.
 
 (() => {
   const ai = document.querySelector(".ai-switch");
@@ -40,17 +41,13 @@
     });
   }
 
-  // ---- The browser: the agent's pointer runs the commands the bubble names, as hide draws them on the page. ----
-  const page = document.querySelector(".agent-page");
-  if (page) {
+  // ---- The browser: the spec opens, then the page, then the agent's pointer presses Export CSV, as hide draws it. ----
+  const stage = document.querySelector(".agent-stage");
+  if (stage) {
+    const page = stage.querySelector(".agent-page");
     const pointer = page.querySelector(".agent-pointer");
-    const command = page.closest(".card").querySelector(".agent-command");
-    // Places on the captured page, as fractions of its width and height.
-    const STEPS = [
-      { say: "hide browser snapshot browser-1", wait: 1400 },
-      { say: 'hide browser click browser-1 --text "Total"', x: 0.725, y: 0.385, flash: [0.68, 0.355, 0.27, 0.06] },
-      { say: 'hide browser click browser-1 --text "Export CSV"', x: 0.86, y: 0.215, flash: [0.746, 0.177, 0.211, 0.059] },
-    ];
+    // The button on the captured window, as fractions of its width and height: where the pointer lands and what flashes.
+    const BUTTON = { x: 0.879, y: 0.21, flash: [0.825, 0.181, 0.108, 0.06] };
     const mark = (kind, style, ms) => {
       const element = document.createElement("span");
       element.className = kind;
@@ -59,44 +56,40 @@
       setTimeout(() => element.remove(), ms);
     };
     const pct = (value) => `${(value * 100).toFixed(2)}%`;
-    whileSeen(page, () => {
+    whileSeen(stage, () => {
       let timer = 0;
-      let index = 0;
       const later = (ms, next) => { timer = setTimeout(next, ms); };
-      const say = (text) => {
-        command.classList.add("swapping");
-        later(200, () => { command.textContent = text; command.classList.remove("swapping"); });
-      };
-      const step = () => {
-        if (index === STEPS.length) {
-          // hide takes its overlay away two seconds after the last action.
-          later(2000, () => { pointer.classList.remove("shown"); index = 0; later(1400, step); });
-          return;
-        }
-        const now = STEPS[index++];
-        say(now.say);
-        if (now.x === undefined) { later(now.wait, step); return; }
-        later(260, () => {
-          pointer.classList.add("shown");
-          pointer.style.left = pct(now.x);
-          pointer.style.top = pct(now.y);
-          later(820, () => {
-            if (!now.flash) { later(now.wait ?? 600, step); return; }
-            pointer.classList.add("pressed");
-            mark("agent-ripple", { left: pct(now.x), top: pct(now.y) }, 600);
-            const [left, top, width, height] = now.flash;
-            mark("agent-flash", { left: pct(left), top: pct(top), width: pct(width), height: pct(height) }, 900);
-            later(140, () => { pointer.classList.remove("pressed"); later(1300, step); });
+      const show = (step) => { stage.dataset.step = String(step); };
+      const run = () => {
+        pointer.classList.remove("shown");
+        pointer.style.left = "62%";
+        pointer.style.top = "80%";
+        show(1);
+        later(2600, () => {
+          show(2);
+          later(1400, () => {
+            pointer.classList.add("shown");
+            pointer.style.left = pct(BUTTON.x);
+            pointer.style.top = pct(BUTTON.y);
+            later(900, () => {
+              pointer.classList.add("pressed");
+              mark("agent-ripple", { left: pct(BUTTON.x), top: pct(BUTTON.y) }, 600);
+              const [left, top, width, height] = BUTTON.flash;
+              mark("agent-flash", { left: pct(left), top: pct(top), width: pct(width), height: pct(height) }, 900);
+              later(140, () => {
+                pointer.classList.remove("pressed");
+                later(700, () => {
+                  show(3);
+                  // hide takes its overlay away two seconds after the last action.
+                  later(2000, () => { pointer.classList.remove("shown"); later(2600, run); });
+                });
+              });
+            });
           });
         });
       };
-      step();
-      return () => {
-        clearTimeout(timer);
-        pointer.classList.remove("shown");
-        command.classList.remove("swapping");
-        command.textContent = STEPS[STEPS.length - 1].say;
-      };
+      run();
+      return () => { clearTimeout(timer); pointer.classList.remove("shown"); show(3); };
     });
   }
 

@@ -325,19 +325,25 @@ code, .mono { font-family: var(--font-mono); }
 /* Cards: a zoomed crop of the one part that matters, and one line under it. */
 .cards { display: grid; gap: 20px; margin-top: 56px; }
 .cards.three { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
-.cards.two { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 .card { margin: 0; }
 .card-shot { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shot-shadow); }
 .card-shot img { display: block; width: 100%; height: auto; }
 .card figcaption { margin-top: 16px; font-size: var(--t-small); line-height: 1.5; color: var(--muted); }
 .card figcaption b { font-weight: var(--w-medium); color: var(--ink); }
-/* What started it: a command the agent ran, or the question it asked, over the picture. */
-.bubble { width: fit-content; max-width: 100%; margin: 0 0 -18px 18px; position: relative; z-index: 1; padding: 10px 16px; border: 1px solid var(--line-strong); border-radius: 14px 14px 14px 4px; background: var(--bg-raised); box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.5); font-size: var(--t-small); color: var(--ink); overflow-wrap: anywhere; }
-.bubble code { font-family: var(--font-mono); font-size: 0.92em; }
 
 /* The agent's pointer over the page it drives: the same arrow, ripple and flash hide draws on the operator's view
    of a browser display (hided/assets/browser/overlay.js), in the product's own accent. */
-.agent-page { position: relative; --agent: #84cc16; --agent-ink: #1c1f12; }
+.agent-page { position: relative; display: grid; --agent: #84cc16; --agent-ink: #1c1f12; }
+/* The browser story: three stills of the same window, one over the other, and the steps that change them. */
+.agent-stage { width: min(100%, 1040px); margin: 56px auto 0; }
+.agent-page picture { grid-area: 1 / 1; transition: opacity 500ms ease; }
+.agent-page img { display: block; width: 100%; height: auto; }
+.agent-stage[data-step="1"] .a-page, .agent-stage[data-step="1"] .a-click, .agent-stage[data-step="2"] .a-click { opacity: 0; }
+.agent-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
+.agent-steps li { display: grid; gap: 4px; padding: 12px 14px; border-top: 2px solid var(--line); font-size: var(--t-small); color: var(--faint); transition: color 300ms ease, border-color 300ms ease; }
+.agent-steps code { font-family: var(--font-mono); font-size: var(--t-label); letter-spacing: 0.02em; }
+.agent-stage[data-step="1"] [data-for="1"], .agent-stage[data-step="2"] [data-for="2"], .agent-stage[data-step="3"] [data-for="3"] { border-color: var(--lime); color: var(--ink); }
+.agent-stage[data-step="1"] [data-for="1"] code, .agent-stage[data-step="2"] [data-for="2"] code, .agent-stage[data-step="3"] [data-for="3"] code { color: var(--accent-text); }
 .agent-pointer { position: absolute; left: 18%; top: 88%; width: 22px; height: 28px; opacity: 0; pointer-events: none; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45)); transition: left 760ms cubic-bezier(.3, .7, .3, 1), top 760ms cubic-bezier(.3, .7, .3, 1), opacity 160ms ease-out; }
 .agent-pointer svg { display: block; transform: translate(-2px, -2px); transform-origin: 2px 2px; transition: transform 120ms ease-out; }
 .agent-pointer path { fill: var(--agent); stroke: var(--agent-ink); stroke-width: 1.6; stroke-linejoin: round; }
@@ -347,8 +353,6 @@ code, .mono { font-family: var(--font-mono); }
 .agent-flash { position: absolute; border: 2px solid var(--agent); border-radius: 5px; box-shadow: 0 0 0 3px rgba(132, 204, 22, 0.25); pointer-events: none; animation: agent-flash 900ms ease-out forwards; }
 @keyframes agent-ripple { from { transform: scale(1); opacity: 1; } to { transform: scale(4.2); opacity: 0; } }
 @keyframes agent-flash { 0%, 55% { opacity: 1; } to { opacity: 0; } }
-.agent-command { transition: opacity 200ms ease; }
-.agent-command.swapping { opacity: 0; }
 
 /* Every machine: the core's devices as a small map, a letter running between their agents. */
 .mesh-figure { margin: 0; }
@@ -459,7 +463,7 @@ select { width: 100%; min-height: 48px; padding: 0 40px 0 14px; border: 1px soli
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .reveal { opacity: 1; transform: none; transition: none; }
-  .toggle, .toggle-knob, .switch-shot, .switch-shot picture, .node, .letter, .mesh-caption, .agent-pointer, .agent-command { transition: none; }
+  .toggle, .toggle-knob, .switch-shot, .switch-shot picture, .node, .letter, .mesh-caption, .agent-pointer, .agent-page picture, .agent-steps li { transition: none; }
 }
 
 @media (max-width: 1000px) {
@@ -473,6 +477,8 @@ select { width: 100%; min-height: 48px; padding: 0 40px 0 14px; border: 1px soli
 }
 
 @media (max-width: 640px) {
+  .agent-steps { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .agent-steps li { padding: 8px 0; }
   .mesh { aspect-ratio: 3 / 4; }
   .node { width: 47%; padding: 10px 12px; gap: 4px; }
   .node.core { width: 60%; }
@@ -488,7 +494,6 @@ select { width: 100%; min-height: 48px; padding: 0 40px 0 14px; border: 1px soli
   .hero .actions .button { flex: 1 1 100%; }
   .stage { margin-top: 72px; }
   .agents-strip ul { gap: 10px 24px; font-size: var(--t-small); }
-  .cards.two { grid-template-columns: minmax(0, 1fr); }
   .chooser { grid-template-columns: minmax(0, 1fr); }
   .download-picker { padding: 22px; }
   .closing { padding-block: 88px; }

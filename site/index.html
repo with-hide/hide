@@ -181,26 +181,32 @@
         <div class="section-head center reveal">
           <p class="label bare">Side panel</p>
           <h2 id="lane-title">Everything opens<br> <span class="accent">beside the agent.</span></h2>
-          <p>The page your agent is testing and the pull request it opened sit next to its pane, with its record, the project's memory, files and diffs one click away. Your agent opens them for you, too.</p>
+          <p>Your agent opens the spec, the page it is testing and the file it changed next to its own pane, and drives the page while you watch. Its record, pull requests, memory and diffs open there too.</p>
         </div>
-        <div class="cards two">
-          <figure class="card reveal">
-            <p class="bubble"><code class="agent-command">hide browser click browser-1 --text "Export CSV"</code></p>
-            <div class="card-shot agent-page"><picture>
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/browser-lane-light.webp">
-              <img src="./assets/shots/browser-lane-dark.webp" width="1144" height="1200" alt="A browser display beside the agent: the invoices page it opened at localhost:5173, with an Export CSV button over a table of invoices, and a csv.ts tab beside the page." loading="lazy" decoding="async">
-            </picture><span class="agent-pointer" aria-hidden="true"><svg width="22" height="28" viewBox="0 0 22 28"><path d="M2 2 L2 22 L7.5 17 L11 25.5 L14.6 24 L11.2 15.8 L18.5 15.8 Z"/></svg></span></div>
-            <figcaption><b>The page it changed.</b> Your agent opens it, clicks through it and reads it before it asks you.</figcaption>
-          </figure>
-          <figure class="card reveal">
-            <p class="bubble">Approve #431 and #436?</p>
-            <div class="card-shot"><picture>
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/pr-lane-light.webp">
-              <img src="./assets/shots/pr-lane-dark.webp" width="1144" height="1200" alt="Pull request #431's card: Export invoices as CSV, all 12 checks passed, approved with no conflict, a Merge button, and the timeline of the sessions that worked on it." loading="lazy" decoding="async">
-            </picture></div>
-            <figcaption><b>The pull request it opened.</b> Checks, review and every session that worked on it, with Merge.</figcaption>
-          </figure>
-        </div>
+        <figure class="agent-stage reveal" data-step="3">
+          <div class="shot agent-page">
+            <picture class="a-spec">
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/agent-spec-light.webp">
+              <img src="./assets/shots/agent-spec-dark.webp" width="2216" height="1176" alt="Step one: a Codex pane ran hide file open docs/export-spec.pdf, and the export spec opens beside it as a PDF: the columns in order, newest first, the file name." loading="lazy" decoding="async">
+            </picture>
+            <picture class="a-page">
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/agent-page-light.webp">
+              <img src="./assets/shots/agent-page-dark.webp" width="2216" height="1176" alt="Step two: it ran hide browser open localhost:5173/invoices, and the invoices page opens in a tab beside the spec." loading="lazy" decoding="async">
+            </picture>
+            <picture class="a-click">
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/agent-click-light.webp">
+              <img src="./assets/shots/agent-click-dark.webp" width="2216" height="1176" alt="Step three: it ran hide browser click browser-1 --text Export CSV, downloaded 128 invoices, and reports that the export matches the spec." loading="lazy" decoding="async">
+            </picture>
+            <span class="agent-pointer" aria-hidden="true"><svg width="22" height="28" viewBox="0 0 22 28"><path d="M2 2 L2 22 L7.5 17 L11 25.5 L14.6 24 L11.2 15.8 L18.5 15.8 Z"/></svg></span>
+          </div>
+          <figcaption>
+            <ol class="agent-steps">
+              <li data-for="1"><code>hide file open</code><span>It reads the spec, a PDF.</span></li>
+              <li data-for="2"><code>hide browser open</code><span>It opens the page beside it.</span></li>
+              <li data-for="3"><code>hide browser click</code><span>It presses Export CSV and checks the file.</span></li>
+            </ol>
+          </figcaption>
+        </figure>
       </section>
 
       <section class="section wrap" id="machines" aria-labelledby="machines-title">
