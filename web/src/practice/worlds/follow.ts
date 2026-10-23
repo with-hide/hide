@@ -43,8 +43,12 @@ const MINUTE = 60_000;
 
 const tone = (kind: StatusTone["kind"], read = false): StatusTone => ({ kind, read });
 
-/** A row's state as the core states it, for the three ways a row stands here. */
-function state(kind: "working" | "asking" | "done", root: boolean, since: number, extra: Partial<AgentState> = {}): AgentState {
+/**
+ * A row's state as the core states it (`row_state`), for the four ways a row
+ * stands here: working, asking, done (a root's unread result) and quiet (a
+ * finished child, which draws no mark of the operator's).
+ */
+function state(kind: "working" | "asking" | "done" | "quiet", root: boolean, since: number, extra: Partial<AgentState> = {}): AgentState {
   const base: AgentState = {
     attention: false, needs_you: false, root, title_emphasized: false, selection_emphasizes_title: true,
     asking: false, working: true, waits_on_children: false,
@@ -63,8 +67,15 @@ function state(kind: "working" | "asking" | "done", root: boolean, since: number
   if (kind === "done") {
     Object.assign(base, {
       title_emphasized: root, working: false,
-      chip_tone: tone("success"), mark_tone: tone("success"), bucket: "turn", attention_rank: 2, link_rank: 2, search_tone: "done", subtree: "quiet", link: "idle",
+      chip_tone: tone("success"), mark_tone: tone("success"), bucket: "turn", attention_rank: 2, link_rank: 2, search_tone: "done", subtree: "unread", link: "idle",
       verb: "result", session: { group: "done", line: null, unfinished: false }, tree_rank: 2,
+    } satisfies Partial<AgentState>);
+  }
+  if (kind === "quiet") {
+    Object.assign(base, {
+      working: false,
+      chip_tone: tone("subtle"), mark_tone: tone("subtle"), bucket: "resting", attention_rank: 4, link_rank: 2, search_tone: "muted", subtree: "quiet", link: "idle",
+      verb: "idle", session: { group: "idle", line: null, unfinished: false }, tree_rank: 3,
     } satisfies Partial<AgentState>);
   }
   return { ...base, ...extra };
@@ -104,7 +115,7 @@ function rows(beat: Beat, nowMs: number): Record<string, AgentRow> {
     pane_id: CAUSE, identity_label: TITLES[CAUSE]!, agent_kind: "codex", session_id: "practice-cause", delegated: true,
     lineage_parent_pane_id: LEAD, lineage_path_pane_ids: [LEAD, CAUSE], lineage_depth: 1,
     ...(answered
-      ? { group: "seen", mark: "quiet", status_code: "done", activity: "stopped", elapsed: "10s", state: state("done", false, asked + MINUTE) }
+      ? { group: "seen", mark: "quiet", status_code: "done", activity: "stopped", elapsed: "10s", state: state("quiet", false, asked + MINUTE) }
       : { group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "1m", state: state("working", false, asked + MINUTE, { root: false }) }),
     request: request("Find why checkout returns a 500", "Find why checkout returns a 500", asked + MINUTE, true, answered ? { end: "done", line: "Saved cards have an empty currency" } : {}),
   });
@@ -221,9 +232,10 @@ function snapshot(model: FollowModel, nowMs: number): WorldSnapshot {
   const rest = base.rest;
   const navigator = rest.navigator!;
   const lead = agents[LEAD]!;
+  // A plain shell the learner opened has no agent, and so no lineage.
   const lineage = (paneId: string) => {
-    const row = agents[paneId]!;
-    if (!row.lineage_parent_pane_id) return undefined;
+    const row = agents[paneId];
+    if (!row?.lineage_parent_pane_id) return undefined;
     const siblings = lead.lineage_child_pane_ids!.map((id) => chip(agents[id]!));
     return [{ pane_id: LEAD, label: lead.identity_label, siblings: [] }, { pane_id: paneId, label: row.identity_label, siblings }];
   };
@@ -231,7 +243,7 @@ function snapshot(model: FollowModel, nowMs: number): WorldSnapshot {
     ...workspace,
     checkouts: workspace.checkouts.map((checkout) => ({
       ...checkout,
-      tabs: checkout.tabs.map((row) => ({ ...row, delegated: row.panes.some((one) => agents[one.id]?.delegated === true), panes: row.panes.map((one) => ({ ...one, lineage_path: lineage(one.id) })) })),
+      tabs: checkout.tabs.map((row) => ({ ...row, panes: row.panes.map((one) => ({ ...one, lineage_path: lineage(one.id) })) })),
     })),
   }));
   const scope = { ...navigator.devices![0]!.agent_scope, tasks: tasks(model.beat, nowMs) };
