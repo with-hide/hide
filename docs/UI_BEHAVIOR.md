@@ -2525,7 +2525,8 @@ The page reuses the settings group, row and switch parts; loading is an ellipsis
 ### GitHub
 
 GitHub is the GitHub row: its description, whether `gh` is signed in, and Check again, which asks the core to read GitHub again for the registered projects (PRD settings-left-nav B8).
-The core reads GitHub with its own machine's `gh`, so in a window on another machine a signed-out `gh` is named on the core's machine ("Not signed in to gh on Mac mini") with the command that fixes it there (Run on Mac mini, `gh auth login`, with Copy) in place of `gh`'s own reason; on the core's own machine the row is as it was (PRD core-host-node-move B15, B1).
+The core reads GitHub with its own machine's `gh`, so in a window on another machine a signed-out `gh` is named on the core's machine ("Not signed in to gh on Mac mini") with the command that fixes it there (Run on Mac mini, `gh auth login`, with Copy) in place of `gh`'s own reason; on the core's own machine the row says it plainly ("Not signed in to gh") with the same command under Run in a terminal (PRD core-host-node-move B15, B1).
+`gh`'s own reason stays in the core's log on every machine; a missing `gh` has no one command that installs it on every system, so its row names the state only.
 Hide has no GitHub sign-in of its own, so there is no connect or reconnect action beyond that read.
 
 ### About

@@ -22,8 +22,8 @@ export function GithubTab({ actions }: { actions: Actions }) {
   const access = githubAccess(projects, devices);
   const coreMachine = coreMachineAway(devices, t);
   const line = access ? githubAccessLine(access, t, coreMachine) : null;
-  // Signed out on the core's machine, seen from another: where to sign in, and with what.
-  const fixOn = access?.state === "failed" && access.category === "not_logged_in" ? coreMachine : null;
+  // Signed out: the command that signs gh in, and the core's machine to run it on when this window is on another.
+  const signedOut = access?.state === "failed" && access.category === "not_logged_in";
   const ghCommand = checkCommand("gh");
   return (
     <Group data-settings-group="github">
@@ -35,9 +35,9 @@ export function GithubTab({ actions }: { actions: Actions }) {
           </span>
         }
         detail={
-          fixOn && ghCommand ? (
-            <span className="flex min-w-0 flex-wrap items-center gap-sm" data-github-fix-on={fixOn}>
-              <span className="text-body text-muted-foreground">{t("settings.fixOn", { machine: fixOn })}</span>
+          signedOut && ghCommand ? (
+            <span className="flex min-w-0 flex-wrap items-center gap-sm" data-github-fix-on={coreMachine ?? "here"}>
+              <span className="text-body text-muted-foreground">{coreMachine ? t("settings.fixOn", { machine: coreMachine }) : t("githubReason.fixHere")}</span>
               <FixCommand command={ghCommand} what="gh sign-in command" actions={actions} data-github-fix-command="true" />
             </span>
           ) : null

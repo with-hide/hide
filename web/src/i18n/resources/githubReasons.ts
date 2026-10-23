@@ -1,9 +1,10 @@
 // The words for a GitHub read that failed where the core sends only a code:
 // a checkout card's `github.failure_category`, a PR's checks and review
 // comments (`pr_work.feedback.failure`) and an issue's body
-// (`issue_work.detail.failure`), and the name of a failed check GitHub gives
-// none (`failed_checks[].name` null). `gh`'s own words stay in the core's
-// diagnostics (docs/LOCALIZATION.md, Translation boundary).
+// (`issue_work.detail.failure`); the name of a failed check GitHub gives none
+// (`failed_checks[].name` null); and where to run the sign-in command. `gh`'s
+// own words stay in the core's diagnostics (docs/LOCALIZATION.md, Translation
+// boundary).
 import type { Catalogs } from "../schema";
 
 export const githubReasonsEnglish = {
@@ -14,6 +15,7 @@ export const githubReasonsEnglish = {
   "githubReason.feedbackReadFailed": "Couldn't read the checks and review comments.",
   "githubReason.issueBodyReadFailed": "Only the title was filled because the body couldn't be read.",
   "githubReason.unnamedCheck": "Unnamed check",
+  "githubReason.fixHere": "Run in a terminal",
 } as const;
 
 const ko = {
@@ -24,6 +26,7 @@ const ko = {
   "githubReason.feedbackReadFailed": "검사와 리뷰 코멘트를 읽지 못했어요.",
   "githubReason.issueBodyReadFailed": "본문을 불러오지 못해 제목만 넣었어요.",
   "githubReason.unnamedCheck": "이름 없는 검사",
+  "githubReason.fixHere": "터미널에서 실행하세요",
 } satisfies Record<keyof typeof githubReasonsEnglish, string>;
 
 const zhCN = {
@@ -34,6 +37,7 @@ const zhCN = {
   "githubReason.feedbackReadFailed": "无法读取检查和评审评论。",
   "githubReason.issueBodyReadFailed": "未能读取正文，仅填入了标题。",
   "githubReason.unnamedCheck": "未命名的检查",
+  "githubReason.fixHere": "在终端中运行",
 } satisfies Record<keyof typeof githubReasonsEnglish, string>;
 
 const ja = {
@@ -44,6 +48,7 @@ const ja = {
   "githubReason.feedbackReadFailed": "チェックとレビューコメントを読み込めませんでした。",
   "githubReason.issueBodyReadFailed": "本文を読み込めなかったため、タイトルだけを入力しました。",
   "githubReason.unnamedCheck": "名前のないチェック",
+  "githubReason.fixHere": "ターミナルで実行してください",
 } satisfies Record<keyof typeof githubReasonsEnglish, string>;
 
 export const githubReasonsCatalogs = { en: githubReasonsEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof githubReasonsEnglish>;
