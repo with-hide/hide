@@ -268,7 +268,7 @@ function AreaTree({ layout, adapter, children }: { layout: AreaLayout<I>; adapte
       show(IDLE);
       swallow.current = true;
       window.addEventListener("pointerup", swallowClick, { once: true, capture: true });
-    });
+    }, false, true);
   }, [dragging]);
 
   // The pointer says whether the place under it would land (B8).

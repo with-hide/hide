@@ -348,11 +348,23 @@ type UiStore = {
   setWatchedRemoval: (removal: { deviceId: string; path: string; afterId: number } | null) => void;
   setRecordingShortcut: (recording: boolean) => void;
   setHint: (hint: NumberedFamily | null) => void;
-  /** Registers an Escape layer and returns its removal. */
-  pushEscape: (handler: () => void, base?: boolean) => () => void;
+  /**
+   * Registers an Escape layer and returns its removal. An `inline` layer (a
+   * filter, a field being added, a drag, a pane's find bar) covers nothing,
+   * so the close chords pass it (`coveringLayer`).
+   */
+  pushEscape: (handler: () => void, base?: boolean, inline?: boolean) => () => void;
   /** Registers an open tooltip's close and returns its removal. */
   pushTooltip: (close: () => void) => () => void;
 };
+
+/** The Escape layers registered `inline`: they answer Escape but cover nothing. */
+const inlineLayers = new WeakSet<() => void>();
+
+/** The innermost open layer that covers the screen (a menu, popover, dialog or sheet), or null. */
+export function coveringLayer(layers: readonly (() => void)[]): (() => void) | null {
+  return [...layers].reverse().find((layer) => !inlineLayers.has(layer)) ?? null;
+}
 
 export const useUiStore = create<UiStore>((set, get) => ({
   screen: null,
@@ -487,7 +499,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setHint: (hint) => {
     if (get().hint !== hint) set({ hint });
   },
-  pushEscape: (handler, base = false) => {
+  pushEscape: (handler, base = false, inline = false) => {
+    if (inline) inlineLayers.add(handler);
     set({ escapeLayers: base ? [handler, ...get().escapeLayers] : [...get().escapeLayers, handler] });
     return () => set({ escapeLayers: get().escapeLayers.filter((layer) => layer !== handler) });
   },
