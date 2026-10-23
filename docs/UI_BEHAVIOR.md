@@ -2372,6 +2372,8 @@ Chapter 4 (`delegate`) hands work on by saying it to a lead agent, in three ways
 The lead takes the learner's own words for the first three; the last goes only when the request holds the copied ID, and the lead asks for it otherwise.
 The agents' answers and letters are the world's script, drawn in the panes and the list; the learner only types the requests and chooses the menu item.
 
+Chapter 8 hands a Conductor a job of several pull requests as a mission: its world draws the plan, the workers in delegated tabs under the Conductor and the one decision it asks as an ordinary question, in `missions` the way the core keeps them, and the learner's answer in the conversation changes the plan; the first plan opens the pane chip's small map by itself under the shell's own rule ([A mission on its Conductor's pane](#a-mission-on-its-conductors-pane)), and the big map opens only from `크게 ›`, as a lane call the world numbers.
+
 The window holds no daemon connection and carries no token.
 It asks the shell of the same origin, over one `BroadcastChannel` (`hide-practice`), for the operator's language, chords, theme and progress, and hands each step it reaches back; the shell dispatches `practice_progress_set`, and the core keeps `ui_state.practice` like the other UI choices.
 With no shell answering, the chapters still play and the list says `진행 기록은 Hide 창이 열려 있을 때 저장돼요.`.
