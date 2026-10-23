@@ -1068,7 +1068,7 @@ mod tests {
         assert!(connection_scope(&source, None).is_ok());
         // An outside file's tab, whose target the core leaves empty, is refused the same way.
         let view = &mut source.views.as_mut().unwrap()[0];
-        view.kind = "external".into();
+        view.kind = "external";
         view.target = String::new();
         assert_eq!(
             connection_scope(&source, Some("browser-a")).unwrap_err().0,
