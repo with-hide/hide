@@ -163,6 +163,8 @@ export function MiniMap({ paneId, mission, onLarge, onConversation, onRecord }: 
             idOf={(card) => card.key}
             flow="down"
             gaps={{ layers: "--spacing-lg", nodes: "--spacing-sm" }}
+            // A row reads its first card, then the `+N` card for the rest (B8).
+            order="given"
             edgeLook={(edge: GraphEdge): EdgeLook => edgeLookOf(edge, mission, stacked)}
             draw={(card) => <MiniFace key={card.key} mission={mission} card={card} />}
           />
