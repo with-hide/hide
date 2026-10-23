@@ -16,7 +16,7 @@
 //   conductor  the lead's pane conducting its mission, with the mission's map in the lane
 //   attention  the sidebar with the Needs You and Unread groups raised above the project tree
 //   plain      the attention shot with Agent summaries off: provider names and native questions only
-//   memory     the hero's window with the Project tool on its Memory tab
+//   memory     the lead beside a wide Project tool on its Memory tab
 //   browser    a Codex worker beside the invoices page it opened and the file it changed
 //   core       the device rail beside Settings > Devices and the paired phone
 
@@ -112,8 +112,18 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
       if (!window.hideHost) window.hideHost = standInHost();
       return { ...none, ...landingBrowser(now, SIDEBAR_WIDTH.browser) };
     }
+    if (shot === "memory") {
+      // The lead alone beside a Project tool as wide as the lane shots' slot, so the page can crop the lane at one size.
+      const scene = landingWorkspace(now, SIDEBAR_WIDTH.memory);
+      const rest = structuredClone(scene.rest);
+      const project = rest.navigator!.workspaces!.find((row) => row.id === "hide")!;
+      const tab = project.checkouts[0]!.tabs[0]!;
+      rest.workspace_view = { ...rest.workspace_view!, panel_width: DETAIL_WIDTH.pr };
+      rest.pane_layouts = [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: LEAD_PANE, zoomed: false, root: { type: "pane", pane_id: LEAD_PANE } }];
+      return { ...none, rest, agents: scene.agents, usage: landingUsage(now), memory: landingMemory(now, "hide") };
+    }
     const lens = shot === "tasks" ? "tasks" : shot === "prs" ? "prs" : "projects";
-    return { ...none, ...landingWorkspace(now, SIDEBAR_WIDTH[shot], [], lens), usage: landingUsage(now), memory: shot === "memory" ? landingMemory(now, "hide") : null };
+    return { ...none, ...landingWorkspace(now, SIDEBAR_WIDTH[shot], [], lens), usage: landingUsage(now) };
   }, [shot]);
 
   useLayoutEffect(() => {
@@ -144,7 +154,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
   useEffect(() => {
     if (!workspace) return;
     const encode = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
-    const screens: Record<string, string> = shot === "browser" ? { [BROWSER_PANE]: BROWSER_TERMINAL } : (LANE_SHOTS as readonly string[]).includes(shot) ? { [LEAD_PANE]: HERO_TERMINALS[LEAD_PANE] } : Object.fromEntries(HERO_PANES.map((id) => [id, HERO_TERMINALS[id]]));
+    const screens: Record<string, string> = shot === "browser" ? { [BROWSER_PANE]: BROWSER_TERMINAL } : (LANE_SHOTS as readonly string[]).includes(shot) || shot === "memory" ? { [LEAD_PANE]: HERO_TERMINALS[LEAD_PANE] } : Object.fromEntries(HERO_PANES.map((id) => [id, HERO_TERMINALS[id]]));
     const panes = Object.keys(screens);
     let frame = requestAnimationFrame(function wait() {
       const fitted = panes.every((id) => (terminalFor(id)?.rows ?? 0) > screens[id]!.split("\r\n").length);
