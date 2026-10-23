@@ -21,8 +21,8 @@ const ref = (number: number) => `#${number}`;
 type Words = { title: string; kind: string; detail?: string; pull?: [number, string] };
 
 const AGENT_WORDS: Record<string, Words> = {
-  a3: { title: `Approve ${ref(431)} and ${ref(436)}?`, kind: "claude", detail: "Both checked by Claude Code. Tests pass." },
-  q1: { title: `${ref(433)}: CSV or XLSX for the export?`, kind: "claude", detail: "A product call the lead won't make for you." },
+  a3: { title: `Approve ${ref(431)} and ${ref(436)}?`, kind: "codex", detail: "Both checked. Tests pass." },
+  q1: { title: `${ref(433)}: CSV or XLSX for the export?`, kind: "antigravity", detail: "A product call the lead won't make for you." },
   q2: { title: "Fix the test that broke the export", kind: "opencode" },
   e1: { title: "Task detail API", kind: "codex" },
   tn1: { title: "Tidy the meeting notes", kind: "claude" },
@@ -303,10 +303,10 @@ export function landingUsage(nowMs: number): NodeUsage {
 
 /** The Overview's agents in the page's words: who they are, what they ask and what they are doing now, by pane id. */
 const MAP_WORDS: Record<string, { title: string; now?: string; ask?: string; kind?: string }> = {
-  "h-a3": { title: `Approve ${ref(431)} and ${ref(436)}?`, ask: "Both pass their checks. Merge them into main?" },
+  "h-a3": { title: `Approve ${ref(431)} and ${ref(436)}?`, ask: "Both pass their checks. Merge them into main?", kind: "codex" },
   "h-a1": { title: "Split the invoice export in three", now: "Waiting on 3 workers" },
   "h-a1c1": { title: "Export invoices as CSV", now: "Writing the rows" },
-  "h-a1c2": { title: `Check ${ref(431)} and ${ref(436)}` },
+  "h-a1c2": { title: `Check ${ref(431)} and ${ref(436)}`, kind: "antigravity" },
   "h-a1c3": { title: "Sort the export by date", now: "Running the tests" },
   "h-a1c4": { title: "Pick the CSV column order" },
   "h-a1g1": { title: "Add a test for sorted output", now: "Writing the test", kind: "opencode" },
@@ -316,7 +316,7 @@ const MAP_WORDS: Record<string, { title: string; now?: string; ask?: string; kin
   "h-r2": { title: "Update the dependencies", now: "List done" },
   "b-1": { title: "Retry failed payments", ask: "Run the migration on the production database?" },
   "b-2": { title: "Verify webhook signatures", now: "Fixing the failing check" },
-  "s-1": { title: "Polish the pricing page", now: "Three drafts done" },
+  "s-1": { title: "Polish the pricing page", now: "Three drafts done", kind: "antigravity" },
 };
 const MAP_PROJECTS: Record<string, string> = { hide: "billing-app", "billing-api": "payments-api", site: "docs-site", "team-notes": "notes" };
 
@@ -344,6 +344,7 @@ export function landingMap(nowMs: number): OverviewWorld {
 }
 
 const CLAUDE = "\x1b[38;2;215;119;87m";
+const CODEX = "\x1b[36m";
 const DIM = "\x1b[90m";
 const BOLD = "\x1b[1m";
 const GREEN = "\x1b[32m";
@@ -387,22 +388,24 @@ export const HERO_TERMINALS: Record<(typeof HERO_PANES)[number], string> = {
   ),
   a3: lines(
     "",
-    `${CLAUDE}✻${RESET} ${BOLD}Claude Code${RESET}`,
-    `  ${DIM}~/billing-app · main${RESET}`,
+    `${DIM}╭──────────────────────────────╮${RESET}`,
+    `${DIM}│${RESET} ${BOLD}>_ Codex${RESET}                     ${DIM}│${RESET}`,
+    `${DIM}│${RESET} ${DIM}~/billing-app · main${RESET}         ${DIM}│${RESET}`,
+    `${DIM}╰──────────────────────────────╯${RESET}`,
     "",
-    `${DIM}>${RESET} Check ${ref(431)} and ${ref(436)}, then ask me`,
+    `${CODEX}›${RESET} Check ${ref(431)} and ${ref(436)}, then ask me`,
     "",
-    `● ${BOLD}Bash${RESET}(pnpm test export)`,
-    `  ${DIM}⎿${RESET}  ${GREEN}38 passed${RESET}`,
+    `${DIM}•${RESET} ${BOLD}Ran${RESET} pnpm test export`,
+    `  ${DIM}└${RESET} ${GREEN}38 passed${RESET}`,
     "",
-    "● Both pull requests are ready:",
+    `${DIM}•${RESET} Both pull requests are ready:`,
     `  ${ref(431)} Export invoices as CSV`,
     `  ${ref(436)} Add the export button`,
     "",
     `${DIM}${RULE}${RESET}`,
     ` ${BOLD}Merge both into main?${RESET}`,
     "",
-    ` ${CLAUDE}❯ 1. Yes, merge both${RESET}`,
+    ` ${CODEX}› 1. Yes, merge both${RESET}`,
     `   2. Only ${ref(431)}`,
     "   3. Not yet",
   ),

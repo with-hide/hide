@@ -67,7 +67,7 @@
               <div class="panel" role="tabpanel" id="panel-projects" aria-labelledby="tab-projects" data-caption="Every project's agents in one tree, the two that need you on top, and the project's state beside them.">
                 <picture>
                   <source media="(prefers-color-scheme: light)" srcset="./assets/shots/hero-light.webp">
-                  <img src="./assets/shots/hero-dark.webp" width="2912" height="1800" alt="The hide window. The sidebar's Projects list raises the two agents that need an answer above the project tree. A lead splitting the work and the agent asking to merge two pull requests run side by side, and the Project tool beside them counts the sessions, pull requests, worktrees and the last seven days' cost, with the project's to-do list under them.">
+                  <img src="./assets/shots/hero-dark.webp" width="2912" height="1800" alt="The hide window. The sidebar's Projects list raises the two agents that need an answer above the project tree. A Claude Code lead splitting the work and a Codex agent asking to merge two pull requests run side by side, and the Project tool beside them counts the sessions, pull requests, worktrees and the last seven days' cost, with the project's to-do list under them.">
                 </picture>
               </div>
               <div class="panel" role="tabpanel" id="panel-tasks" aria-labelledby="tab-tasks" data-caption="Every task on the machine by state. What waits on you comes first." hidden>
@@ -210,15 +210,15 @@
           <h2 id="beside-title">Your agent drives the browser.<br> <span class="accent">You watch it check its work.</span></h2>
           <p>An agent opens the page it changed beside its pane, clicks through it and reads what it shows before it asks you. A file it names opens next to it too, so you review the work where it happened.</p>
         </div>
-        <div class="canvas beside reveal" id="beside-scene" role="img" aria-label="An agent's terminal beside a browser display. The agent opens the invoices page, clicks Export CSV, reads that an export dialog appeared, and opens the file it changed in a tab beside the page.">
+        <div class="canvas beside reveal" id="beside-scene" role="img" aria-label="A Codex terminal beside a browser display. The agent opens the invoices page, clicks Export CSV, reads that an export dialog appeared, and opens the file it changed in a tab beside the page.">
           <div class="term">
-            <div class="term-bar"><span class="term-ring"></span><b>Claude Code</b><span>· Add the export button</span></div>
-            <pre class="term-body" id="beside-term">&gt; Check the export button works, then show me
-● Bash(hide browser open localhost:5173/invoices)
-● Bash(hide browser click browser-1 --text "Export CSV")
-  ⎿ + dialog "Export ready · 128 rows"
-● Bash(hide file open src/export/csv.ts)
-● It works. The page and the file are beside you.</pre>
+            <div class="term-bar"><span class="term-ring"></span><b>Codex</b><span>· Add the export button</span></div>
+            <pre class="term-body" id="beside-term">› Check the export button works, then show me
+• Ran hide browser open localhost:5173/invoices
+• Ran hide browser click browser-1 --text "Export CSV"
+  └ + dialog "Export ready · 128 rows"
+• Ran hide file open src/export/csv.ts
+• It works. The page and the file are beside you.</pre>
           </div>
           <div class="view" aria-hidden="true">
             <div class="view-tabs"><span class="view-tab on" data-view="page">localhost:5173</span><span class="view-tab" data-view="file" id="beside-file-tab">csv.ts</span></div>
