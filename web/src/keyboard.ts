@@ -30,7 +30,7 @@ import { projectsOf, remoteContext } from "./remote";
 import { hostChord, hostRegistry, isNumberedCommand, releaseModifier, matchHost, numberedCommand, REGISTRY, storedBindings, type CommandId, type Digit, type NumberedFamily } from "./shortcuts";
 import { editorFor, type AgentRow, type SnapshotRest, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
-import { useUiStore, type Cycle } from "./ui";
+import { coveringLayer, useUiStore, type Cycle } from "./ui";
 import { drawnViews, installKeyboardOwner, keyboardCommandOwner, noteCommandDelivered, subscribeKeyboardOwner } from "./viewFocus";
 
 /**
@@ -148,6 +148,38 @@ export function commitCycle(cycle: Cycle, actions: Actions): boolean {
   }
 }
 
+/**
+ * The close chords (⌘W and ⇧⌘W, Ctrl+Shift+W and Alt+Shift+W off macOS, and
+ * a browser's ⌥ forms) close what covers the screen before anything under
+ * it, as a window's close does on every system: the innermost menu, popover,
+ * dialog or sheet (Settings, the Overview over a Workspace), a close's
+ * confirmation (kept open, as Escape keeps it), an overlay, or the Overview
+ * screen. The pane or view under a cover is out of sight, so a chord never
+ * reaches it. An inline layer (a filter, the pane's find bar) covers nothing
+ * and the chord passes it. Returns whether the chord was spent here.
+ */
+export function closeCovering(actions: Pick<Actions, "keepOpen" | "closeOverview">): boolean {
+  const state = useUiStore.getState();
+  const layer = coveringLayer(state.escapeLayers);
+  if (layer) {
+    layer();
+    return true;
+  }
+  if (state.pendingClose) {
+    actions.keepOpen();
+    return true;
+  }
+  if (state.overlay !== "none" && state.overlay !== "find") {
+    state.closeOverlay();
+    return true;
+  }
+  if (state.screen?.kind === "main") {
+    actions.closeOverview();
+    return true;
+  }
+  return false;
+}
+
 function advance(cycle: Cycle, backward: boolean): Cycle {
   const count = cycle.items.length;
   if (cycle.index < 0) return { ...cycle, index: backward ? count - 1 : 0 };
@@ -192,6 +224,7 @@ export function installKeyboard(actions: Actions): () => void {
       case "new_tab":
         return actions.newTabFocused();
       case "close_tab":
+        if (closeCovering(actions)) return;
         return actions.closeFocused();
       case "reopen_closed_tab":
         return actions.reopenClosed();
@@ -290,6 +323,7 @@ export function installKeyboard(actions: Actions): () => void {
       case "toggle_plan":
         return actions.togglePlanChip();
       case "close_pane":
+        if (closeCovering(actions)) return;
         return actions.closePane();
       case "text_larger":
         return actions.textScale("in");
