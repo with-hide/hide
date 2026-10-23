@@ -72,7 +72,7 @@ const PANE_HEADER_CASES: [string, string, Omit<PaneHeader, "working">][] = [
   ["turn-question", "13 · 요청 → 질문", { ...NO_NOTICE, request: TURN_REQUEST, band: { kind: "answer", reason: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", since_unix_ms: null, read: false, action: null, more: 0 } }],
   ["turn-working", "14 · 요청 → 작업 중", { ...NO_NOTICE, request: { text: "탭을 넘는 종합 뷰 + AI 작업 구상", images: 0 }, progress: "종합 뷰의 구성 요소를 고민하고 있어요" }],
   ["turn-finished", "15 · 끝났는데 아직 안 봄", { ...NO_NOTICE, request: { text: "원격 조회 3초로 바꿔 PR·머지", images: 0 }, finished: true, progress: "원격 조회 주기를 3초로 바꾸고 머지함" }],
-  ["turn-narrow", "16 · 좁은 pane · 두 줄", { ...NO_NOTICE, request: TURN_REQUEST, band: { kind: "answer", reason: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", since_unix_ms: null, read: false, action: null, more: 0 } }],
+  ["turn-narrow", "16 · 좁은 pane · 질문", { ...NO_NOTICE, request: TURN_REQUEST, band: { kind: "answer", reason: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", since_unix_ms: null, read: false, action: null, more: 0 } }],
   ["turn-image", "17 · 이미지만 보낸 요청", { ...NO_NOTICE, request: { text: null, images: 2 }, progress: "보낸 화면의 여백을 맞추고 있어요" }],
   ["turn-children", "18 · 요청 → 자식 기다림", { ...NO_NOTICE, request: { text: "요청 추출 누락 원인 찾아줘", images: 0 }, waiting_on_children: 2 }],
   ["turn-request-only", "19 · 작업 중 · 요청 말고 새 사실 없음", { ...NO_NOTICE, request: { text: "OS별 사용자 실패 경험과 개발 불편 우선순위 정리", images: 0 } }],
@@ -181,11 +181,14 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     base.rest.status = { ...base.rest.status, remote: [{ target_id: "mini", state: "not_connected", message: "Mac mini 연결되지 않음", herdr_version: null, session: null }] };
     return { ...base, agents: [...agents, ...children, ...childExamples, raisedChild, ...popoverChildren, ...narrowChildren, ...headerAgents], pane };
   }, [content]);
+  // `turn-two-lines` and `turn-off` draw the turn cases in the View menu's other modes.
+  const turnRow = state === "turn-two-lines" ? "two_lines" : state === "turn-off" ? "off" : "one_line";
+  const turn = state === "turn" || state === "turn-two-lines" || state === "turn-off";
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, connection: "gone" });
+    useShellStore.setState({ rest: { ...fixture.rest, ui_state: { ...fixture.rest.ui_state, pane_turn_row_mode: turnRow } }, agents: fixture.agents, connection: "gone" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
-  }, [fixture, theme, scale]);
-  return <TooltipProvider>{kind === "session-panel" ? <div className="flex h-full bg-background text-foreground" data-gallery-scene={kind}><TaskLens actions={actions} /></div> : <div style={{ width: width ?? undefined }} className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{PANE_HEADER_CASES.slice(state === "turn" ? 12 : state === "edge" ? 6 : 0, state === "turn" ? undefined : state === "edge" ? 12 : 6).map(([id, label]) => <div key={id} data-pane-header-case={id} className={id === "narrow" || id === "turn-narrow" ? "w-(--size-pane-narrow-example) max-w-full min-w-0" : "min-w-0"}><div className="pb-xs text-micro text-muted-foreground">{label}</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={{ ...fixture.pane, id, identity_label: content === "long" ? "긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계" }} transport={undefined} focused={false} scale={1} actions={actions} agentKind="codex" markSymbol={id === "finished" ? "done" : "quiet"} markTone={id === "finished" ? "text-success" : "text-muted-foreground"} paneCount={2} zoomed={false} /></div></div>)}</div>}</TooltipProvider>;
+  }, [fixture, theme, scale, turnRow]);
+  return <TooltipProvider>{kind === "session-panel" ? <div className="flex h-full bg-background text-foreground" data-gallery-scene={kind}><TaskLens actions={actions} /></div> : <div style={{ width: width ?? undefined }} className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{PANE_HEADER_CASES.slice(turn ? 12 : state === "edge" ? 6 : 0, turn ? undefined : state === "edge" ? 12 : 6).map(([id, label]) => <div key={id} data-pane-header-case={id} className={id === "narrow" || id === "turn-narrow" ? "w-(--size-pane-narrow-example) max-w-full min-w-0" : "min-w-0"}><div className="pb-xs text-micro text-muted-foreground">{label}</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={{ ...fixture.pane, id, identity_label: content === "long" ? "긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계" }} transport={undefined} focused={false} scale={1} actions={actions} agentKind="codex" markSymbol={id === "finished" ? "done" : "quiet"} markTone={id === "finished" ? "text-success" : "text-muted-foreground"} paneCount={2} zoomed={false} /></div></div>)}</div>}</TooltipProvider>;
 }

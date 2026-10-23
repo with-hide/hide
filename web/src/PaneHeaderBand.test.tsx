@@ -6,7 +6,7 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { RELATION_ANSWER_TIMEOUT_MS } from "./lineage";
-import { PaneHeaderBand, PanePrChip, PaneRecordButton } from "./PaneHeaderBand";
+import { PaneAskMark, PaneHeaderBand, PanePrChip, PaneRecordButton } from "./PaneHeaderBand";
 import type { AgentPullRequest, AgentRow, PaneBand, PaneHeader, PaneFocusRequest, PrState, SnapshotRest, Workspace } from "./snapshot";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { useShellStore } from "./store";
@@ -605,8 +605,9 @@ it("leads the row with the turn's request before its ask, progress or result", a
       // alone; every other turn has the request and the answer as its parts.
       expect([...row.querySelectorAll("[data-pane-turn-part]")].map((part) => part.getAttribute("data-pane-turn-part"))).toEqual(kind === "request" ? ["request"] : ["request", "answer"]);
       expect(row.querySelector("[data-pane-turn-request]")?.getAttribute("aria-label")).toBe(`Request: ${text.split("→")[0]}`);
-      // Only an ask wraps its answer under the request; a quiet turn stays one line.
-      expect(row.classList.contains("flex-wrap")).toBe(kind === "answer");
+      // One line, the default, cuts an ask as it cuts a quiet turn: nothing wraps over the terminal.
+      expect(row.classList.contains("flex-wrap")).toBe(false);
+      expect(row.querySelector('[data-pane-turn-part="request"]')!.classList.contains("max-w-2/5")).toBe(kind !== "request");
     } finally { await unmount(); }
   }
 });
@@ -729,4 +730,53 @@ it("opens no card on the record button's hover", async () => {
     expect(document.querySelector("[data-pane-turn-card]")).toBeNull();
     expect(document.querySelector("[role=tooltip]")).toBeNull();
   } finally { await act(async () => root.unmount()); }
+});
+
+// The View menu's turn row mode (docs/UI_BEHAVIOR.md, Agent logo view mode):
+// two lines stack the request over the answer, and off draws no turn while a
+// parent keeps its children button and the pane's own ask rides its head.
+it("stacks the turn on two lines and draws none when off, keeping the children button and the pane's own ask", async () => {
+  const request = { text: "Proceed as proposed", images: 0 };
+  const ask: PaneBand = { kind: "answer", reason: "Bundle into one PR?", since_unix_ms: null, read: false, action: null, more: 0 };
+  const rest = (mode: "two_lines" | "off") => ({ status: { pane_focus_request: null }, ui_state: { pane_turn_row_mode: mode } }) as SnapshotRest;
+
+  const two = await mount({ working: false, notice: null, band: ask, request }, [], { paneId: "solo", rest: rest("two_lines") });
+  try {
+    const row = two.container.querySelector('[data-pane-header-band="answer"]')!;
+    expect(row.classList.contains("flex-col")).toBe(true);
+    expect(row.textContent).toBe("Proceed as proposed→QuestionBundle into one PR?");
+  } finally { await two.unmount(); }
+
+  const off = await mount({ working: true, notice: null, band: null, progress: "Reading the status model", request }, [], { paneId: "solo", rest: rest("off") });
+  try {
+    expect(off.container.querySelector("[data-pane-header-band]")).toBeNull();
+    expect(off.container.querySelector("[data-pane-working-line]")).not.toBeNull();
+  } finally { await off.unmount(); }
+
+  const parent = await mount(header, childrenFixture(), { rest: rest("off") });
+  try {
+    const row = parent.container.querySelector('[data-pane-header-band="children"]')!;
+    expect(row.querySelector("[data-pane-tree]")).not.toBeNull();
+    expect(row.querySelector("[data-pane-band-open], [data-pane-turn-request]")).toBeNull();
+  } finally { await parent.unmount(); }
+});
+
+it("puts the pane's own ask on its head only while the turn row is off", async () => {
+  const own: PaneHeader = { working: false, notice: null, band: { kind: "approval", reason: null, since_unix_ms: null, read: false, action: null, more: 0 }, request: { text: "Clean the build", images: 0 } };
+  const draw = async (value: PaneHeader, mode: "one_line" | "off") => {
+    initializeInterfaceI18n("en");
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    useShellStore.setState({ agents: [], rest: { status: { pane_focus_request: null }, ui_state: { pane_turn_row_mode: mode } } as SnapshotRest });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => root.render(<TooltipProvider><PaneAskMark paneId="solo" header={value} actions={createActions(() => true)} /></TooltipProvider>));
+    const mark = container.querySelector("[data-pane-ask-mark]");
+    await act(async () => root.unmount());
+    return mark;
+  };
+  expect((await draw(own, "off"))?.getAttribute("aria-label")).toBe("Approval: Stopped at a permission request");
+  expect(await draw(own, "one_line")).toBeNull();
+  // A raised descendant's ask stays on the children button, not the parent's head.
+  expect(await draw(header, "off")).toBeNull();
 });

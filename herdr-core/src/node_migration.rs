@@ -2045,6 +2045,7 @@ mod tests {
         "accent_hex",
         "theme",
         "agent_logo_mode",
+        "pane_turn_row_mode",
         "color_theme",
         "interface_language",
         "product_analytics_enabled",

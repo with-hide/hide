@@ -1411,6 +1411,11 @@ pub(super) struct AgentLogoModeSetPayload {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct PaneTurnRowModeSetPayload {
+    pub(super) mode: crate::model::PaneTurnRowMode,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct ColorThemeSetPayload {
     pub(super) color_theme: crate::model::ColorTheme,
 }
@@ -1615,6 +1620,7 @@ pub(super) enum Event {
     ProductAnalyticsConnected,
     ThemeSet(ThemeSetPayload),
     AgentLogoModeSet(AgentLogoModeSetPayload),
+    PaneTurnRowModeSet(PaneTurnRowModeSetPayload),
     ColorThemeSet(ColorThemeSetPayload),
     InterfaceLanguageSet(InterfaceLanguageSetPayload),
     UsagePinSet(UsagePinSetPayload),
@@ -1898,6 +1904,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "product_analytics_connected" => Ok(Event::ProductAnalyticsConnected),
         "theme_set" => decode!(ThemeSetPayload, ThemeSet),
         "agent_logo_mode_set" => decode!(AgentLogoModeSetPayload, AgentLogoModeSet),
+        "pane_turn_row_mode_set" => decode!(PaneTurnRowModeSetPayload, PaneTurnRowModeSet),
         "color_theme_set" => decode!(ColorThemeSetPayload, ColorThemeSet),
         "usage_pin_set" => decode!(UsagePinSetPayload, UsagePinSet),
         "usage_hidden_set" => decode!(UsageHiddenSetPayload, UsageHiddenSet),
@@ -4001,6 +4008,14 @@ impl Runtime {
                 self.persist_ui_state();
                 true
             }
+            Event::PaneTurnRowModeSet(payload) => {
+                if self.snapshot.ui_state.pane_turn_row_mode == payload.mode {
+                    return false;
+                }
+                self.snapshot.ui_state.pane_turn_row_mode = payload.mode;
+                self.persist_ui_state();
+                true
+            }
             Event::ColorThemeSet(payload) => {
                 if self.snapshot.ui_state.color_theme == payload.color_theme {
                     return false;
@@ -4219,6 +4234,7 @@ impl Runtime {
                     theme: current.theme,
                     // `agent_logo_mode_set` owns the logo mode the same way.
                     agent_logo_mode: current.agent_logo_mode,
+                    pane_turn_row_mode: current.pane_turn_row_mode,
                     // `color_theme_set` owns the color theme the same way.
                     color_theme: current.color_theme,
                     interface_language: current.interface_language,
