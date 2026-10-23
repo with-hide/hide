@@ -11,7 +11,8 @@ export default chapter<ProjectModel>({
   world: PROJECT_WORLD,
   quest: true,
   steps: [
-    { id: "lane", quest: true, target: "[data-tool-rail]", side: "left", command: "toggle_lane", done: (model) => showsTool(model, "project") },
+    // The Project tool's own icon, not ⌘E: ⌘E brings the lane back on whatever tool the learner last showed.
+    { id: "lane", quest: true, target: '[data-lane-tool="project"]', side: "left", command: "toggle_lane_project", done: (model) => showsTool(model, "project") },
     { id: "status", target: "[data-project-tiles]", side: "left" },
     { id: "todo", target: "[data-project-todo]", side: "left" },
     { id: "explorer", quest: true, target: '[data-lane-tool="explorer"]', side: "left", command: "toggle_lane_explorer", done: (model) => showsTool(model, "explorer") },

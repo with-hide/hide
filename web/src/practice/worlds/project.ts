@@ -1,9 +1,10 @@
 // Chapter 6's world: one invented project with an agent at work beside the
-// right lane. It answers the lane opening and closing and showing a tool, as
-// the core's `workspace_view` does, and the Explorer's folds, and sends what
-// the lane's tools read: the project's 현황 and 할 일 with two pull requests
-// waiting on the operator, the checkout's files and the ones the agent
-// changed, the project's cost over the week, and its Memory's cards.
+// right lane. It answers the lane opening and closing, showing a tool and
+// its pin, as the core's `workspace_view` does, and the Explorer's folds,
+// and sends what the lane's tools read: the project's 현황 and 할 일 with two
+// pull requests waiting on the operator, the checkout's files and the ones
+// the agent changed, the project's cost over the week, and its Memory's
+// cards. Nothing opens from them: a tile, a row or a file is only looked at.
 
 import type { ProjectStatus } from "../../agentScope";
 import type { NodeUsage } from "../../generated/hided-ws";
@@ -18,8 +19,8 @@ const ROOT = `/work/${PLACE.project}`;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 
-/** What the world can change: the desk, whether the lane is open and which tool its column shows, and the Explorer's open folders. */
-export type ProjectModel = { desk: DeskModel; open: boolean; tool: Tool | null; expanded: string[] };
+/** What the world can change: the desk, whether the lane is open, which tool its column shows and whether it is pinned, and the Explorer's open folders. */
+export type ProjectModel = { desk: DeskModel; open: boolean; tool: Tool | null; pinned: boolean; expanded: string[] };
 
 /** Whether the lane draws `tool` now. */
 export const showsTool = (model: ProjectModel, tool: Tool) => model.open && model.tool === tool;
@@ -28,8 +29,8 @@ export const laneDrawn = (model: ProjectModel) => model.open && model.tool !== n
 
 function initial(): ProjectModel {
   const lead = agent({ pane_id: "lead", identity_label: "Fix the checkout 500", agent_kind: "claude", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "4m" });
-  // The lane comes back on the Project tool, the shape it was left in.
-  return { desk: oneTabDesk({ id: "lead", agent: lead, title: "Fix the checkout 500" }), open: false, tool: "project", expanded: [`${ROOT}/src`, `${ROOT}/src/payment`] };
+  // The lane comes back on the Project tool, the shape it was left in, pinned so it docks beside the agent as the operator's would.
+  return { desk: oneTabDesk({ id: "lead", agent: lead, title: "Fix the checkout 500" }), open: false, tool: "project", pinned: true, expanded: [`${ROOT}/src`, `${ROOT}/src/payment`] };
 }
 
 // --- The checkout's files --------------------------------------------------------
@@ -162,8 +163,7 @@ function snapshot(model: ProjectModel, nowMs: number): WorldSnapshot {
       ...base.rest,
       navigator: { ...navigator, workspaces, changes_root_path: ROOT },
       ui_state: { ...base.rest.ui_state!, expanded_paths: model.expanded },
-      // Pinned, the lane docks beside the agent when it is open, as the operator's would.
-      workspace_view: { ...base.rest.workspace_view!, open: model.open, tool: model.tool, pinned: true },
+      workspace_view: { ...base.rest.workspace_view!, open: model.open, tool: model.tool, pinned: model.pinned },
       // Hide AI on, so the Memory tool reads as it does for an operator who keeps one.
       status: { ...base.rest.status, background_ai: { enabled: true, provider: "claude", chosen: true, agent_summary: true, providers: [], unavailable_reason: null } },
     },
@@ -177,20 +177,22 @@ function snapshot(model: ProjectModel, nowMs: number): WorldSnapshot {
 /**
  * The lane after a `workspace_view` patch, as the core applies it: a tool
  * shown opens the lane, a reveal shows the Explorer, and a lane opened with
- * no column comes back on the Explorer. Widths and the pin are the core's
- * alone here and change nothing on the screen.
+ * no column comes back on the Explorer, and the pin docks it or floats it
+ * over the agent. Widths are the core's alone here and change nothing on the
+ * screen.
  */
 function applyView(model: ProjectModel, p: Record<string, unknown>): ProjectModel | null {
-  let { open, tool } = model;
+  let { open, tool, pinned } = model;
   if (typeof p.tool === "string" && (TOOLS as readonly string[]).includes(p.tool)) [tool, open] = [p.tool as Tool, true];
   if (p.tool === null) tool = null;
   if (typeof p.reveal === "string") [tool, open] = ["explorer", true];
   if (p.open === false) open = false;
+  if (typeof p.pinned === "boolean") pinned = p.pinned;
   if (p.open === true) {
     open = true;
     tool ??= "explorer";
   }
-  return open === model.open && tool === model.tool ? null : { ...model, open, tool };
+  return open === model.open && tool === model.tool && pinned === model.pinned ? null : { ...model, open, tool, pinned };
 }
 
 function apply(model: ProjectModel, event: CoreEvent): ProjectModel | null {
