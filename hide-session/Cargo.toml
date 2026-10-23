@@ -12,7 +12,7 @@ hide-platform = { path = "../hide-platform" }
 hide-project = { path = "../hide-project" }
 hide-shell = { path = "../hide-shell" }
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 sha2 = "=0.10.9"
 md5 = "=0.8.1"
 prost = "=0.14.4"
