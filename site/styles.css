@@ -359,7 +359,7 @@ code, .mono { font-family: var(--font-mono); }
 .node b { font-weight: var(--w-semibold); font-size: var(--t-body); color: var(--ink); }
 .node-tag { font-family: var(--font-mono); font-size: var(--t-label); letter-spacing: 0.04em; color: var(--faint); }
 .node .agent { display: flex; align-items: center; gap: 8px; font-size: var(--t-small); color: var(--muted); }
-.node .agent i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--st-working); }
+.node .agent img { flex: none; width: 18px; height: 18px; border-radius: 4px; }
 .node.laptop { left: 24%; top: 17%; }
 .node.server { left: 76%; top: 17%; }
 .node.core { left: 50%; top: 52%; border-color: color-mix(in srgb, var(--lime) 40%, var(--line)); }
@@ -370,7 +370,6 @@ code, .mono { font-family: var(--font-mono); }
 .mesh[data-step="3"] .node.laptop, .mesh[data-step="4"] .node.laptop { opacity: 0.45; }
 .mesh[data-step="3"] .node.laptop .lid, .mesh[data-step="4"] .node.laptop .lid { display: inline; }
 .mesh[data-step="3"] .node.laptop .awake, .mesh[data-step="4"] .node.laptop .awake { display: none; }
-.mesh[data-step="3"] .node.laptop .agent i, .mesh[data-step="4"] .node.laptop .agent i { background: var(--st-seen); }
 .node.lit { border-color: color-mix(in srgb, var(--lime) 70%, var(--line)); }
 .letter { position: absolute; left: 24%; top: 17%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 6px color-mix(in srgb, var(--lime) 22%, transparent); opacity: 0; transition: left 650ms cubic-bezier(.45, 0, .55, 1), top 650ms cubic-bezier(.45, 0, .55, 1), opacity 200ms ease; }
 .letter.moving { opacity: 1; }

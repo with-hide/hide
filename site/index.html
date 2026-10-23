@@ -95,14 +95,14 @@
           <div class="shot switch-shot">
             <picture class="s-off">
               <source media="(prefers-color-scheme: light)" srcset="./assets/shots/rows-off-light.webp">
-              <img src="./assets/shots/rows-off-dark.webp" width="632" height="904" alt="Hide AI off: the Tasks list names most tasks only by their vendor, Codex, Antigravity, OpenCode and Codex again." loading="lazy" decoding="async">
+              <img src="./assets/shots/rows-off-dark.webp" width="632" height="904" alt="Hide AI off: the Tasks list names most tasks only by their vendor, Codex, Antigravity, OpenCode and Codex again; Revisit holds only the starred task, the release notes sit under Working, and only #437 shows outside the lead's task." loading="lazy" decoding="async">
             </picture>
             <picture class="s-on">
               <source media="(prefers-color-scheme: light)" srcset="./assets/shots/rows-on-light.webp">
-              <img src="./assets/shots/rows-on-dark.webp" width="632" height="904" alt="Hide AI on: the same Tasks list reads Approve #431 and #436? and #433: CSV or XLSX for the export? under Needs You, Fix the test that broke the export under Unread, a starred task under Revisit, then Working and Waiting, each with its pull request." loading="lazy" decoding="async">
+              <img src="./assets/shots/rows-on-dark.webp" width="632" height="904" alt="Hide AI on: the same Tasks list reads Approve #431 and #436? and #433: CSV or XLSX for the export? under Needs You, Fix the test that broke the export under Unread, the release notes' question and a starred task under Revisit, and pull requests #438 and #439 linked to the tasks that opened them." loading="lazy" decoding="async">
             </picture>
           </div>
-          <figcaption><b>Off</b>, four tasks called Codex, Antigravity and OpenCode. <b>On</b>, what each one is, sorted by who acts next.</figcaption>
+          <figcaption><b>Off</b>, tasks called Codex and OpenCode. <b>On</b>, what each one is, the question you read and left for later, and the pull requests each agent opened.</figcaption>
         </figure>
         <div class="cards three">
           <figure class="card reveal">
@@ -216,9 +216,9 @@
               <svg class="mesh-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
                 <line x1="24" y1="17" x2="50" y2="52"/><line x1="76" y1="17" x2="50" y2="52"/><line x1="50" y1="52" x2="50" y2="87"/>
               </svg>
-              <div class="node laptop" aria-hidden="true"><b>MacBook</b><span class="node-tag"><span class="awake">your laptop</span><span class="lid">lid closed</span></span><span class="agent"><i></i>Claude Code · lead</span></div>
-              <div class="node server" aria-hidden="true"><b>Linux server</b><span class="node-tag">over SSH</span><span class="agent"><i></i>Codex · tests</span></div>
-              <div class="node core" aria-hidden="true"><b>Mac mini</b><span class="node-tag">core · always on</span><span class="agent"><i></i>Codex · CSV export</span><span class="agent"><i></i>OpenCode · fix</span></div>
+              <div class="node laptop" aria-hidden="true"><b>MacBook</b><span class="node-tag"><span class="awake">your laptop</span><span class="lid">lid closed</span></span><span class="agent"><img src="./assets/agents/claude-code.png" width="128" height="128" alt="">Claude Code · lead</span></div>
+              <div class="node server" aria-hidden="true"><b>Linux server</b><span class="node-tag">over SSH</span><span class="agent"><img src="./assets/agents/codex.png" width="128" height="128" alt="">Codex · tests</span></div>
+              <div class="node core" aria-hidden="true"><b>Mac mini</b><span class="node-tag">core · always on</span><span class="agent"><img src="./assets/agents/codex.png" width="128" height="128" alt="">Codex · CSV export</span><span class="agent"><img src="./assets/agents/opencode.svg" width="512" height="512" alt="">OpenCode · fix</span></div>
               <div class="node phone" aria-hidden="true"><b>Phone</b><span class="node-tag">over Tailscale</span><span class="phone-note">Approve #431 and #436?</span></div>
               <span class="letter" aria-hidden="true"></span>
             </div>
