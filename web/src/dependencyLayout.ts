@@ -80,8 +80,47 @@ export function squarePath(points: readonly ElkPoint[], radius: number): string 
 /** The radius a square edge's corners are rounded by. */
 const CORNER = 8;
 
+/** A card's box in the graph's own coordinates. */
+export type Box = { left: number; right: number; top: number; bottom: number };
+
+/**
+ * A top-down edge drawn before the layout has placed the graph, from the
+ * bottom of `from` to the top of `to`: a curve when nothing stands between
+ * their rows, else a square route down the side, past every card of the rows
+ * between, so an edge never runs over a card. It takes the side nearer the
+ * card it leaves, `gap` clear of the cards it passes.
+ */
+export function downPathAround(from: Box, to: Box, cards: readonly Box[], gap: number): string {
+  const x1 = (from.left + from.right) / 2;
+  const y1 = from.bottom;
+  const x2 = (to.left + to.right) / 2;
+  const y2 = to.top;
+  const between = cards.filter((card) => card.top >= y1 && card.bottom <= y2);
+  if (between.length === 0) {
+    const bend = (y2 - y1) / 2;
+    return `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`;
+  }
+  const left = Math.min(...between.map((card) => card.left));
+  const right = Math.max(...between.map((card) => card.right));
+  const side = x1 - left <= right - x1 ? left - gap : right + gap;
+  const above = Math.min(...between.map((card) => card.top));
+  const below = Math.max(...between.map((card) => card.bottom));
+  const points = [
+    { x: x1, y: y1 },
+    { x: x1, y: (y1 + above) / 2 },
+    { x: side, y: (y1 + above) / 2 },
+    { x: side, y: (below + y2) / 2 },
+    { x: x2, y: (below + y2) / 2 },
+    { x: x2, y: y2 },
+  ];
+  return squarePath(points, CORNER);
+}
+
 /** Lays the graph out with `elk` and reads back each card's place, its column (or row, down), and each edge's route. */
-export async function placeGraph(elk: Pick<ELK, "layout">, nodes: readonly NodeBox[], edges: readonly GraphEdge[], spacing: Spacing, flow: Flow = "across"): Promise<Placement> {
+/** How a layer's cards are ordered: as the layout finds fewest crossings, or as the caller gave them. */
+export type LayerOrder = "free" | "given";
+
+export async function placeGraph(elk: Pick<ELK, "layout">, nodes: readonly NodeBox[], edges: readonly GraphEdge[], spacing: Spacing, flow: Flow = "across", order: LayerOrder = "free"): Promise<Placement> {
   if (nodes.length > LAYOUT_NODE_LIMIT) throw new Error(`dependency graph has ${nodes.length} nodes, over the layout limit of ${LAYOUT_NODE_LIMIT}`);
   const known = new Set(nodes.map((node) => node.id));
   const input: ElkNode = {
@@ -92,6 +131,8 @@ export async function placeGraph(elk: Pick<ELK, "layout">, nodes: readonly NodeB
       "elk.edgeRouting": flow === "down" ? "ORTHOGONAL" : "POLYLINE",
       // Down, every node that waits on nothing starts on the top row, as a plan reads: what starts now, then what follows.
       ...(flow === "down" ? { "elk.layered.layering.strategy": "LONGEST_PATH_SOURCE" } : {}),
+      // A caller whose layer order means something (a row's first card, then its `+N`) keeps it.
+      ...(order === "given" ? { "elk.layered.crossingMinimization.forceNodeModelOrder": "true", "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES" } : {}),
       "elk.layered.spacing.nodeNodeBetweenLayers": String(spacing.betweenLayers),
       "elk.spacing.nodeNode": String(spacing.betweenNodes),
       "elk.layered.spacing.edgeNodeBetweenLayers": String(spacing.betweenNodes / 2),
@@ -116,14 +157,14 @@ export async function placeGraph(elk: Pick<ELK, "layout">, nodes: readonly NodeB
 }
 
 /** `placeGraph` with a deadline: a layout that does not answer in time is refused, and the worker is ended so it cannot keep working. */
-export function placeWithin(elk: Pick<ELK, "layout" | "terminateWorker">, nodes: readonly NodeBox[], edges: readonly GraphEdge[], spacing: Spacing, timeoutMs = LAYOUT_TIMEOUT_MS, flow: Flow = "across"): Promise<Placement> {
+export function placeWithin(elk: Pick<ELK, "layout" | "terminateWorker">, nodes: readonly NodeBox[], edges: readonly GraphEdge[], spacing: Spacing, timeoutMs = LAYOUT_TIMEOUT_MS, flow: Flow = "across", order: LayerOrder = "free"): Promise<Placement> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       elk.terminateWorker();
       dropWorker(elk);
       reject(new Error(`dependency graph layout took longer than ${timeoutMs} ms`));
     }, timeoutMs);
-    placeGraph(elk, nodes, edges, spacing, flow).then(
+    placeGraph(elk, nodes, edges, spacing, flow, order).then(
       (placement) => {
         clearTimeout(timer);
         resolve(placement);

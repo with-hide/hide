@@ -305,9 +305,6 @@ pub struct Mission {
     pub started_at_unix_ms: Option<u64>,
     #[serde(default)]
     pub closed_at_unix_ms: Option<u64>,
-    /// The map opened itself for the first plan already (D-43).
-    #[serde(default)]
-    pub opened: bool,
     /// The wakes not yet in the Conductor's inbox, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wakes: Vec<PendingWake>,
@@ -1287,7 +1284,6 @@ mod tests {
             updated_at_unix_ms: 1,
             started_at_unix_ms: None,
             closed_at_unix_ms: None,
-            opened: false,
             wakes: Vec::new(),
             wake_seq: 0,
         }
@@ -1316,6 +1312,9 @@ mod tests {
         // A move that finds a mission's registration gone writes null.
         let mut stored = serde_json::to_value(&book.missions[0]).unwrap();
         stored["workspace_id"] = serde_json::Value::Null;
+        // A book saved while the first plan still opened the map carries
+        // its `opened` mark, which reads as nothing now (mission-pane-chip D-11).
+        stored["opened"] = serde_json::Value::Bool(true);
         let read: Mission = serde_json::from_value(stored).unwrap();
         assert_eq!(read.workspace_id, "");
         assert!((WRITE_BUDGET as u64) < READ_CAP);

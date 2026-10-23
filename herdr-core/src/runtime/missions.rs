@@ -406,7 +406,6 @@ impl Runtime {
                     updated_at_unix_ms: now,
                     started_at_unix_ms: None,
                     closed_at_unix_ms: None,
-                    opened: false,
                     wakes: Vec::new(),
                     wake_seq: 0,
                 };
@@ -429,19 +428,13 @@ impl Runtime {
                     .get(&id)
                     .cloned()
                     .ok_or("mission_unknown")?;
-                let mut next = crate::missions::apply_plan(&current, &plan, now)?;
-                let open_map = !next.opened && !next.nodes.is_empty();
-                next.opened |= open_map;
+                // A plan opens nothing in the lane: the map opens only from
+                // the operator's press, and the shell shows a first plan on
+                // the Conductor pane's own chip (PRD mission-pane-chip D-02).
+                let next = crate::missions::apply_plan(&current, &plan, now)?;
                 let overlaps = crate::missions::overlaps(&self.missions.book, &next);
                 *self.missions.book.get_mut(&id).ok_or("mission_unknown")? = next;
                 self.save_missions();
-                // The first plan opens its map once, beside what the operator
-                // looks at; nothing opens it by itself again (D-43, B14).
-                if open_map {
-                    self.open_detail(DetailItem::Mission {
-                        mission: id.clone(),
-                    });
-                }
                 Ok((
                     json!({"mission": self.mission_view_of(&id), "overlaps": overlaps}),
                     true,

@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { LAYOUT_TIMEOUT_MS, placeWithin, workerElk, type Flow, type GraphEdge, type NodeBox, type Placement } from "./dependencyLayout";
+import { downPathAround, LAYOUT_TIMEOUT_MS, placeWithin, workerElk, type Box, type Flow, type GraphEdge, type LayerOrder, type NodeBox, type Placement } from "./dependencyLayout";
 import { cn } from "./lib/utils";
 import { useMeasuredPaths } from "./measuredPaths";
 import type { LayeredGraph } from "./projectBoard";
@@ -18,14 +18,14 @@ const ACROSS_GAPS: GraphGaps = { layers: "--home-dependency-gap", nodes: "--spac
  * or (`flow` down) top down: placed by the layout worker once every node is
  * measured, in plain layers until then or when the layout refuses the graph.
  */
-export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gaps = ACROSS_GAPS, edgeLook }: { graph: LayeredGraph<T>; draw: (value: T) => ReactNode; idOf: (value: T) => string; flow?: Flow; gaps?: GraphGaps; edgeLook?: (edge: GraphEdge) => EdgeLook }) {
+export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gaps = ACROSS_GAPS, edgeLook, order = "free" }: { graph: LayeredGraph<T>; draw: (value: T) => ReactNode; idOf: (value: T) => string; flow?: Flow; gaps?: GraphGaps; edgeLook?: (edge: GraphEdge) => EdgeLook; order?: LayerOrder }) {
   const box = useRef<HTMLDivElement>(null);
   const marker = `dependency-arrow-${useId()}`;
   const values = graph.layers.flat();
   const down = flow === "down";
   // What the layout depends on: the nodes and the edges, not the object a snapshot rebuilt.
   const structure = JSON.stringify([values.map(idOf), graph.edges.map((edge) => [edge.from, edge.to])]);
-  const placement = useDependencyPlacement(box, structure, flow, gaps);
+  const placement = useDependencyPlacement(box, structure, flow, gaps, order);
   const places = placement ? values.map((value) => placement.nodes.get(idOf(value))) : [];
   const placed = placement !== null && places.every((place) => place !== undefined);
   const arrows = useMeasuredPaths(
@@ -39,12 +39,10 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
             const to = at("data-dependency-node", edge.to);
             if (!from || !to) return [];
             if (down) {
-              const x1 = from.left + from.width / 2 - origin.left;
-              const y1 = from.bottom - origin.top;
-              const x2 = to.left + to.width / 2 - origin.left;
-              const y2 = to.top - origin.top;
-              const bend = (y2 - y1) / 2;
-              return [{ id: `${edge.from}>${edge.to}`, d: `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}` }];
+              const local = (rect: DOMRect): Box => ({ left: rect.left - origin.left, right: rect.right - origin.left, top: rect.top - origin.top, bottom: rect.bottom - origin.top });
+              const cards = [...(box.current?.querySelectorAll<HTMLElement>("[data-dependency-node]") ?? [])].map((card) => local(card.getBoundingClientRect()));
+              const gap = parseFloat(getComputedStyle(box.current!).getPropertyValue(gaps.nodes)) / 2 || 0;
+              return [{ id: `${edge.from}>${edge.to}`, d: downPathAround(local(from), local(to), cards, gap) }];
             }
             const x1 = from.right - origin.left;
             const y1 = from.top + from.height / 2 - origin.top;
@@ -107,7 +105,7 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
  * structure the layout refused stays in columns without asking again, and
  * the reason goes to the diagnostic log once.
  */
-function useDependencyPlacement(box: RefObject<HTMLDivElement | null>, structure: string, flow: Flow, gaps: GraphGaps): Placement | null {
+function useDependencyPlacement(box: RefObject<HTMLDivElement | null>, structure: string, flow: Flow, gaps: GraphGaps, order: LayerOrder): Placement | null {
   const [placed, setPlaced] = useState<{ key: string; placement: Placement } | null>(null);
   const [measured, setMeasured] = useState<{ key: string; nodes: NodeBox[] } | null>(null);
   // The one structure the layout refused; another structure clears it.
@@ -141,7 +139,7 @@ function useDependencyPlacement(box: RefObject<HTMLDivElement | null>, structure
     workerElk()
       .then((elk) => {
         if (!Number.isFinite(spacing.betweenLayers) || !Number.isFinite(spacing.betweenNodes)) throw new Error("the graph's spacing tokens are not set");
-        return placeWithin(elk, measured.nodes, edges, spacing, LAYOUT_TIMEOUT_MS, flow);
+        return placeWithin(elk, measured.nodes, edges, spacing, LAYOUT_TIMEOUT_MS, flow, order);
       })
       .then(
         (placement) => {
@@ -156,6 +154,6 @@ function useDependencyPlacement(box: RefObject<HTMLDivElement | null>, structure
     return () => {
       current = false;
     };
-  }, [measured, structure, flow, gaps.layers, gaps.nodes]);
+  }, [measured, structure, flow, gaps.layers, gaps.nodes, order]);
   return placed?.key.startsWith(`${structure}|`) ? placed.placement : null;
 }

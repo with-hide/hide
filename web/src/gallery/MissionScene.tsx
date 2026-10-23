@@ -1,16 +1,26 @@
 // The real mission map and Settings › Conductor over invented values (PRD
 // software-factory-conductor), one state per `state` parameter: plan,
-// running, decision, stack, no-conductor, stale, failed, settings. Nothing leaves
-// this scene.
+// running, decision, stack, no-conductor, stale, failed, settings. The
+// Conductor pane's head with its mission chip and pinned small map (PRD
+// mission-pane-chip) is `pane-running`, `pane-decision` and `pane-first-plan`.
+// Nothing leaves this scene.
 import { useLayoutEffect, useMemo } from "react";
+import { AgentMark } from "../AgentMark";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionMap } from "../MissionMap";
+import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { Mission, MissionNode, SnapshotRest } from "../snapshot";
+import type { AgentRow, Mission, MissionNode, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
+import { useUiStore } from "../ui";
+
+/** The Conductor's pane, as its agent row and the mission name it. */
+const CONDUCTOR_PANE = "w1:p1";
+/** A pane state reads the map state it draws small. */
+const PANE_STATES: Record<string, string> = { "pane-running": "running", "pane-decision": "decision", "pane-first-plan": "plan" };
 
 const MINUTE = 60_000;
 /** An issue or pull request number as the boards write it, built so no literal reads as a color. */
@@ -63,7 +73,7 @@ function scene(state: string, now: number): { mission: Mission; rest: SnapshotRe
     id: "mission-1", title: "이슈 정리", workspace_id: "hide", project: "/projects/herdr-ide", checkout_path: "/projects/herdr-ide", device_id: "local",
     status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : "running",
     scope: "pr", cap: 4,
-    conductor: { pane_id: "w1:p1", name: "이슈 정리 · Conductor", agent_kind: "claude", session: null, present: state !== "no-conductor" },
+    conductor: { pane_id: CONDUCTOR_PANE, name: "이슈 정리 · Conductor", agent_kind: "claude", session: { device_id: "local", agent: "claude", session_id: "scene-conductor" }, present: state !== "no-conductor" },
     nodes, merge_order: ["api", "screen"], check: "cargo test && pnpm test", github: "octocat",
     decision: state === "decision" ? "화면 PR 방식 선택" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
     delay: null, report: null,
@@ -100,19 +110,33 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
   useFollowInterfaceLanguage(requireInterfaceLanguage(params.get("lang") ?? "ko"));
   const theme = params.get("theme") === "light" ? "light" : "dark";
   const state = params.get("state") ?? "running";
-  const fixture = useMemo(() => scene(state, Date.now()), [state]);
+  const pane = PANE_STATES[state];
+  const fixture = useMemo(() => scene(pane ?? state, Date.now()), [pane, state]);
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: fixture.rest, agents: [], connection: "live" });
+    const agents = pane ? [{ pane_id: CONDUCTOR_PANE, device_id: "local" } as unknown as AgentRow] : [];
+    useShellStore.setState({ rest: fixture.rest, agents, connection: "live" });
+    // The small map pinned, as a press, the Show plan chord or a first plan watched leaves it.
+    useUiStore.setState({ planPane: pane ? CONDUCTOR_PANE : null });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", params.get("scale") ?? "1");
-  }, [fixture, theme, params]);
+  }, [fixture, pane, theme, params]);
   const width = Number(params.get("width") ?? (state === "settings" ? 900 : 1080));
   return (
     <TooltipProvider>
       <div style={{ width }} className="flex h-full min-w-0 flex-col bg-background text-foreground" data-gallery-scene="mission" data-mission-scene={state}>
-        {state === "settings" ? <div className="p-xl"><ConductorTab actions={actions} /></div> : <MissionMap missionId="mission-1" actions={actions} />}
+        {state === "settings" ? (
+          <div className="p-xl"><ConductorTab actions={actions} /></div>
+        ) : pane ? (
+          <div className="flex h-(--size-pane-header) min-w-0 items-center gap-xs border-b border-border bg-muted px-sm text-caption" data-mission-scene-pane="true">
+            <AgentMark kind="claude" />
+            <span className="truncate">Conductor</span>
+            <PaneWorkChip paneId={CONDUCTOR_PANE} actions={actions} />
+          </div>
+        ) : (
+          <MissionMap missionId="mission-1" actions={actions} />
+        )}
       </div>
     </TooltipProvider>
   );

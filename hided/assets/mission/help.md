@@ -82,7 +82,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
 - Declare the `issues` and `paths` a node touches: the plan's answer lists `overlaps`, the other missions of this project on the same issue or files.
 - Show the plan in the conversation: the nodes and their kinds, dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, the cap, the scope (up to ready pull requests, or through the merge), the GitHub account, and any overlap.
   The operator's changes in conversation change this mission only; the settings stay as they are.
-- The first plan opens the map in the operator's 보기 slot, once.
+- The plan shows on your pane's mission chip; nothing opens in the operator's lane, so tell them the plan is up in the conversation.
 
 ## Cutting the mission and briefing a worker
 

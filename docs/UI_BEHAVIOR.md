@@ -1300,7 +1300,7 @@ A pane head's agent-tree button and a started backlog item (from ⌘K, a record 
 ### A mission's map
 
 A Conductor's mission (PRD software-factory-conductor) is drawn as a map in the 보기 slot, read from the core's mission record; the map edits nothing, and the operator changes a mission by talking to its Conductor.
-The Conductor's first plan opens the map once, widening the lane for it as a page does; after that only the mission chip, the rail's slot button or the Overview opens it again (B14).
+Only the operator opens the map: the Conductor pane's `크게 ›`, the sidebar row's mission chip, the rail's slot button or the Overview (B14; PRD mission-pane-chip D-02); no plan opens it by itself.
 Before the first plan the map is one `계획 중` line (B19).
 A summary row counts the elapsed time, the agents running over the cap, the nodes done over those in the plan, the decisions waiting and, while it is gone, `Conductor 없음` (B21).
 The nodes are drawn top down by what they wait on: every node that waits on nothing starts on the top row, and the edges meet one `보고·인계` card at the bottom.
@@ -1316,10 +1316,25 @@ More than twelve nodes fold the done ones under one line that unfolds them (B19)
 When the device that runs the mission disconnects, the map keeps its last values dimmed under a note and invents no number (B20).
 A build from before missions opens with an empty 보기 slot when the saved slot held a map; the rest of the saved screen loads as it was.
 
+### A mission on its Conductor's pane
+
+A Conductor's pane shows its mission on its head (PRD mission-pane-chip), where a plan chip would be, so a mission's progress stays with the pane that runs it and follows the operator nowhere else.
+The mission chip sits right after the title with the waypoints mark: `계획 중` (dim) before the first plan, `미션 n/m` once there is one, the nodes done over those in the plan, `판단 1` in the warning colour while a decision waits on an open mission, a colour it keeps while its map is open, `머지 대기`, `완료` with a green `m/m` once done, and `취소` (dim) (B1, B2).
+The pane shows the mission chip instead of its session's own plan chip, whose plan stays in the session record (D-07); a pane that conducts nothing shows no mission chip, and while the core cannot read the mission record the pane shows none, as the sidebar row does (B10).
+The chip opens, pins and closes its small map as the plan chip does ([A plan's map](#a-plans-map)): the pointer or the keyboard's focus opens it, a press, Enter or Space on the focused chip, or the Show plan chord (⇧⌘U, Alt+Shift+U on Windows and Linux) pins it, and a second press, the chord or Esc closes a pinned map, the keyboard staying where it was; Esc on a map the pointer only shows goes to the terminal (B3, B4).
+The popover has the plan popover's width; its head is `미션 n/m`, or the chip's state word, `· 판단 1` while a decision waits, and `크게 ›`, which opens the big map in the 보기 slot and closes the popover (B5).
+While a decision waits its first line is `! <decision>` in the warning colour with `대화로`, which brings the Conductor pane forward with the keyboard in its terminal (B9).
+Done nodes are not drawn: one line with a dot per done node and `끝남 N ▸` stands for them, and pressing it opens the big map (B6).
+The nodes still to do are drawn top down by what they wait on as one-line cards (status mark, title, PR number) into one `보고·인계` card; a failed card has the destructive outline, a waiting card is dashed and a stacked edge is dashed in the merged colour, and a dropped node, which left the plan, is not drawn (B7).
+A row of more than two cards shows its first card and one `+N개` card, which every edge into or out of the folded nodes meets (B8).
+Before the first plan the map is one `계획 중` line, and when the mission's device does not answer it keeps its last values dimmed under the big map's note (B10); the footer is `Conductor 기록 열기` with the chord.
+When a mission's first plan lands while the operator looks at its Conductor pane, the keyboard pane of the visible Agent tab of the Workspace in front in a window that is shown and focused (the desktop host's report, or a browser tab's own focus), that pane's popover opens pinned once and the keyboard stays in the terminal; anywhere else, another pane, tab, Workspace, window or app, nothing opens and only the chip changes (B12, B13; D-03, D-06).
+The page decides it from two consecutive frames it received, a mission going from no nodes to some or first appearing with nodes, so a load, a reconnect or a restart opens nothing, nor does a replan (B14; `web/src/missionReveal.ts`).
+
 ### A plan's map
 
 A session's own plan (PRD hide-plan) shows in three places, all the same drawing (`PlanGraph`, the mission map's `DependencyGraphView` with a one-line card per step): the pane head's chip, the 보기 slot and a mission node's detail ([A mission's map](#a-missions-map)).
-The plan chip sits where the task chip was, between the title and the PR chip, only while the pane's session has a plan: the list-checks mark with `n/m`, `검토` in the warning colour while the plan waits for the operator's review, and a green `m/m` once every step is done or dropped.
+The plan chip sits where the task chip was, between the title and the PR chip, only while the pane's session has a plan and conducts no mission ([A mission on its Conductor's pane](#a-mission-on-its-conductors-pane)): the list-checks mark with `n/m`, `검토` in the warning colour while the plan waits for the operator's review, and a green `m/m` once every step is done or dropped.
 The pointer or the keyboard's focus on it opens a small map, a press or ⇧⌘U (Alt+Shift+U on Windows and Linux) pins it, and a second press, ⇧⌘U or Esc closes it; it never takes the keyboard from the terminal.
 The popover's head is `계획 n/m · <N분 전 갱신> · 크게 ›` (`계획 끝남 m/m` once finished), then the map, `맡긴 일 N · 끝남 k` for a pane with children and `기록 열기` with the chord.
 `크게 ›` and the pane ⋯ menu's `계획` open the map in the 보기 slot; the lane opens if closed and the keyboard stays in the terminal, and putting a plan up never opens it by itself.

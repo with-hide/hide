@@ -1,9 +1,11 @@
 // A Conductor's mission as the operator meets it, on an isolated pinned
 // Herdr and hided (PRD software-factory-conductor B14, B15, B19, B21, B48):
 // the real `hide mission` commands from the pane's own shell change the
-// core's record, the first plan opens the map in the lane's 보기 slot once,
-// the map follows each change of the record, and Settings › Conductor keeps
-// the cap the next `hide mission settings` reads.
+// core's record, the first plan opens nothing in the lane and, with the
+// operator looking at the Conductor pane, pins that pane's small map once
+// (PRD mission-pane-chip B11, B12), the map follows each change of the
+// record, and Settings › Conductor keeps the cap the next
+// `hide mission settings` reads.
 
 import { expect, test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
@@ -39,7 +41,7 @@ const PLAN = {
   ],
 };
 
-test("the Conductor's commands draw the mission map once, the map follows the record, and the Conductor settings keep the cap", async ({ page }) => {
+test("the Conductor's first plan shows on its pane, the map follows the record, and the Conductor settings keep the cap", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const herdr = await startHerdr({ agents: false });
   let daemon: Daemon | null = null;
@@ -62,11 +64,26 @@ test("the Conductor's commands draw the mission map once, the map follows the re
 
     // The core reads this machine's projects just after it starts; until then it answers that it is still reading.
     await expect.poll(async () => (await conductor(["mission", "create", "--title", "이슈 정리"])).out, { timeout: 20_000 }).toContain('"ok":true');
-    // A mission without a plan opens nothing (B14: the first plan does).
+    // A mission without a plan opens nothing; its pane's chip says it is being planned.
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await expect(map).toHaveCount(0);
+    const paneChip = page.locator("[data-pane-mission-chip]");
+    await expect(paneChip).toHaveAttribute("data-mission-chip-state", "planning");
+    const small = page.locator("[data-pane-mission]");
+    await expect(small).toHaveCount(0);
 
+    // The first plan opens nothing in the lane; the operator looks at the
+    // Conductor pane, so its small map opens pinned (mission-pane-chip B11, B12).
     await mission(conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
+    await expect(paneChip).toHaveAttribute("data-mission-chip-state", "running");
+    await expect(paneChip).toContainText("0/3");
+    await expect(small).toBeVisible();
+    await expect(small.locator("[data-mission-mini-node]")).toHaveCount(3);
+    await expect(map).toHaveCount(0);
+    await screenshot(page, "mission-pane-first-plan");
+    // `크게 ›` opens the big map in the 보기 slot and closes the popover (B5).
+    await small.locator("[data-mission-mini-large]").click();
+    await expect(small).toHaveCount(0);
     await expect(map).toBeVisible();
     await expect(map.locator("[data-detail-title]")).toHaveAttribute("data-detail-title", /이슈 정리/);
     await expect(map.locator("[data-mission-status]")).toHaveAttribute("data-mission-status", "planning");
@@ -108,6 +125,8 @@ test("the Conductor's commands draw the mission map once, the map follows the re
     const shown = await mission(conductor, ["mission", "show"]);
     expect(JSON.stringify(shown.result)).toContain("together");
     await expect(map).toHaveCount(0);
+    // Nor does a replan open the pane's small map again (B12).
+    await expect(small).toHaveCount(0);
     // The Conductor's row carries the mission mark, and pressing it opens the map again (B14).
     const chip = page.locator("nav[data-sidebar] [data-mission-chip]");
     await expect(chip).toHaveAttribute("data-mission-chip-status", "running");

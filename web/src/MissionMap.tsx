@@ -200,7 +200,7 @@ function Duration({ node }: { node: MissionNode }) {
 }
 
 /** The worker's live row, whose status mark the card wears (B15). */
-function useWorkerRow(node: MissionNode) {
+export function useWorkerRow(node: MissionNode) {
   return useShellStore((s) => {
     if (!node.pane_id) return null;
     const rows = agentsByPane(allAgents(s.agents, s.rest?.status?.remote));

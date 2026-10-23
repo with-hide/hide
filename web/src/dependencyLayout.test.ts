@@ -1,6 +1,6 @@
 import ELK from "elkjs/lib/elk.bundled.js";
 import { describe, expect, it, vi } from "vitest";
-import { LAYOUT_NODE_LIMIT, edgePath, placeGraph, placeWithin, squarePath, type NodeBox } from "./dependencyLayout";
+import { LAYOUT_NODE_LIMIT, downPathAround, edgePath, placeGraph, placeWithin, squarePath, type Box, type NodeBox } from "./dependencyLayout";
 
 const SPACING = { betweenLayers: 96, betweenNodes: 24 };
 const card = (id: string): NodeBox => ({ id, width: 288, height: 120 });
@@ -59,7 +59,49 @@ describe("a mission map's top-down flow", () => {
   });
 });
 
+describe("a top-down graph before the layout places it (PRD mission-pane-chip B7)", () => {
+  // The small map's first plan as the columns draw it: two cards, one below the first, the report under both.
+  const box = (left: number, top: number): Box => ({ left, right: left + 144, top, bottom: top + 30 });
+  const first = box(0, 0);
+  const second = box(152, 0);
+  const middle = box(0, 60);
+  const report = box(76, 120);
+  /** The corners of a square path: every coordinate pair it names, each on the route. */
+  const corners = (d: string) => {
+    const numbers = d.match(/-?\d+(\.\d+)?/g)!.map(Number);
+    return Array.from({ length: numbers.length / 2 }, (_, index) => ({ x: numbers[index * 2]!, y: numbers[index * 2 + 1]! }));
+  };
+  const inside = (point: { x: number; y: number }, card: Box) => point.x > card.left && point.x < card.right && point.y > card.top && point.y < card.bottom;
+
+  it("goes around the cards of a row it skips, on the side nearer the card it leaves", () => {
+    const d = downPathAround(second, report, [first, second, middle, report], 4);
+    expect(d).not.toContain(" C ");
+    const route = corners(d);
+    for (const point of route) expect(inside(point, middle), `${JSON.stringify(point)} is inside the middle card`).toBe(false);
+    // Its run down the side passes the middle row clear of the card, by the gap.
+    expect(route.some((point) => point.x === middle.right + 4 && point.y > middle.top)).toBe(true);
+    // From the left card it takes the left side.
+    expect(corners(downPathAround(first, report, [first, middle, report], 4)).some((point) => point.x === middle.left - 4)).toBe(true);
+  });
+
+  it("stays a curve between neighbouring rows, where only the gap lies between", () => {
+    expect(downPathAround(first, middle, [first, second, middle, report], 4)).toBe("M 72 30 C 72 45, 72 45, 72 60");
+  });
+});
+
 describe("placeGraph", () => {
+  it("keeps each layer's cards in the order given when asked, as a row's first card and then its +N", async () => {
+    // Folded roots: the kept card, then the +N card a deeper node hangs from; free crossing minimization may swap them.
+    const nodes = ["kept", "more", "screen", "report"].map(card);
+    const edges = [
+      { from: "more", to: "screen" },
+      { from: "kept", to: "report" },
+      { from: "screen", to: "report" },
+    ];
+    const placement = await placeGraph(new ELK(), nodes, edges, SPACING, "down", "given");
+    expect(placement.nodes.get("kept")!.x).toBeLessThan(placement.nodes.get("more")!.x);
+  });
+
   it("routes a long edge around the cards of the columns it passes, not across them", async () => {
     // L-1 waits on nothing; L-2 on L-1; L-3 on L-2; L-4 on L-3; L-5 on L-1 and L-4, so L-1 to L-5 spans three columns.
     const nodes = ["L-1", "L-2", "L-3", "L-4", "L-5", "L-6"].map(card);
