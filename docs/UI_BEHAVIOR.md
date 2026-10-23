@@ -2377,6 +2377,9 @@ It asks the shell of the same origin, over one `BroadcastChannel` (`hide-practic
 With no shell answering, the chapters still play and the list says `진행 기록은 Hide 창이 열려 있을 때 저장돼요.`.
 In the desktop app the window has no preload: it stands in for the desktop host from its address (`host=electron&platform=…`), so its keyboard runs the desktop chords, and a menu command while it holds the keyboard is dropped rather than sent to the main window's shell; it closes with the main window.
 
+Chapter 6, the project at a glance (`chapters/project.ts`), opens the right lane beside an agent at work with the Project tool's rail icon (`toggle_lane_project`), so ⏎ reaches the Project tool even after the learner showed another one, and reads its 현황 tiles and 할 일, whose two invented PRs wear the `예시` mark; ⇧⌘E (`toggle_lane_explorer`) shows the files the agent changed, ⇧⌘L (`open_project_memory`) the project's Memory cards, and ⌘E puts the lane away.
+A tool step ends when the lane shows that tool, whether by its chord or its rail icon, and the closing step when the lane is no longer drawn, by ⌘E or by the tool's ×; the world answers the pin too, and nothing opens from a tile, a row or a file, which the bubbles say.
+
 ### Adding a chapter
 
 A chapter is three new files and no change to a shared one, so chapters written side by side do not meet in a file.
