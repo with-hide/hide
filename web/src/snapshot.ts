@@ -1947,7 +1947,10 @@ export type RepositoryClone = {
   /** Git's own stage, `Receiving objects` and the like. */
   stage: string | null;
   percent: number | null;
-  message: string | null;
+  /** Why a `failed` clone failed (`authentication`, `not_found`, `git`, ...), worded by the shell. */
+  failure: string | null;
+  /** Git's own last `fatal:` line when `failure` is `git`, quoted as what Git said. */
+  git_line: string | null;
 };
 
 /** One worktree deletion: `checking` before any close, `closing` panes, `removing` on the core's worker, then `finished` or `failed`. */

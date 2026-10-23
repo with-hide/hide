@@ -5652,8 +5652,8 @@ pub struct TaskOperationSnapshot {
 /// refused, and the same URL and folder sent again joins the one running.
 /// The URL is not here, because it can carry credentials; `host` is what the
 /// shell shows. `phase` is `cloning`, `cancelling`, then `finished` (the
-/// folder is registered through `create_workspace`), `failed` with `message`,
-/// or `cancelled`.
+/// folder is registered through `create_workspace`), `failed` with the
+/// `failure` code the shell words, or `cancelled`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RepositoryCloneSnapshot {
     pub id: u64,
@@ -5664,7 +5664,12 @@ pub struct RepositoryCloneSnapshot {
     /// Git's own stage, `Receiving objects` and the like, once it names one.
     pub stage: Option<String>,
     pub percent: Option<u8>,
-    pub message: Option<String>,
+    /// `CloneFailure::code` of a failed clone (`authentication`, `not_found`,
+    /// `git`, ...); its sentence is the diagnostic log's.
+    pub failure: Option<String>,
+    /// Git's own last `fatal:` line, credentials removed, when `failure` is
+    /// `git`: the shell quotes it as what Git said.
+    pub git_line: Option<String>,
 }
 
 /// The explorer's most recent filesystem change and how far it got.

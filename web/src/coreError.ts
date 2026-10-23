@@ -16,6 +16,12 @@ const KEYS = new Map<string, MessageKey>([
   ["workspace.create_failed", "coreError.project.addFailed"],
   ["workspace.create_worker_failed", "coreError.project.addFailed"],
   ["workspace.create_refused", "coreError.project.addRefused"],
+  ["workspace.create_refused.not_found", "addProject.refusal.notFound"],
+  ["workspace.create_refused.not_a_directory", "addProject.refusal.notADirectory"],
+  ["workspace.create_refused.already_exists", "addProject.refusal.alreadyExists"],
+  ["workspace.create_refused.outside_root", "coreError.project.outsideRoot"],
+  ["workspace.create_local_only", "coreError.project.localOnly"],
+  ["workspace.create_unconfirmed", "coreError.project.addUnconfirmed"],
   ["workspace.create_unavailable", "coreError.deviceNotConnected"],
   ["workspace.create_in_flight", "coreError.project.addInFlight"],
   ["workspace.remove_in_flight", "coreError.project.removeInFlight"],
@@ -46,7 +52,8 @@ const KEYS = new Map<string, MessageKey>([
   ["worktree.remove_busy", "coreError.worktree.removeBusy"],
   ["worktree.remove_unknown", "coreError.worktree.gone"],
   ["worktree.remove_unavailable", "coreError.worktree.removeUnavailable"],
-  ["worktree.remove_unaccepted", "coreError.worktree.removeUnaccepted"],
+  ["worktree.remove_ignored_changed", "coreError.worktree.ignoredChanged"],
+  ["worktree.remove_discard_unconfirmed", "coreError.worktree.discardUnconfirmed"],
   ["worktree.remove_blocked", "coreError.worktree.blocked"],
   ["home.conflict", "coreError.home.conflict"],
   ["home.unavailable", "coreError.home.unavailable"],
@@ -127,4 +134,34 @@ const REMOTE_STATES = new Map<string, MessageKey>([
 /** Why a device is not connected, from `RemoteStatus.state`; `device` is its name as this window calls it. */
 export function remoteStateText(state: string, device: string, t: TFunction<"translation">): string {
   return t(REMOTE_STATES.get(state) ?? "coreError.remote.other", { device });
+}
+
+const CLONE_FAILURES = new Map<string, MessageKey>([
+  ["authentication", "coreError.clone.failure.authentication"],
+  ["unknown_host_key", "coreError.clone.failure.unknown_host_key"],
+  ["not_found", "coreError.clone.failure.not_found"],
+  ["unreachable_host", "coreError.clone.failure.unreachable_host"],
+  ["stalled", "coreError.clone.failure.stalled"],
+  ["target_exists", "coreError.clone.failure.target_exists"],
+  ["io", "coreError.clone.failure.io"],
+]);
+
+/** A failed clone's `failure` code as the screen says it; a code this build does not word is the plain "the clone failed". */
+export function cloneFailureText(failure: string | null, t: TFunction<"translation">): string {
+  return t((failure ? CLONE_FAILURES.get(failure) : undefined) ?? "addProject.clone.failed");
+}
+
+/** Git's own stage names, which a clone's progress carries as Git printed them. */
+const CLONE_STAGES = new Map<string, MessageKey>([
+  ["Enumerating objects", "coreError.clone.stage.enumerating"],
+  ["Counting objects", "coreError.clone.stage.counting"],
+  ["Compressing objects", "coreError.clone.stage.compressing"],
+  ["Receiving objects", "coreError.clone.stage.receiving"],
+  ["Resolving deltas", "coreError.clone.stage.resolving"],
+  ["Updating files", "coreError.clone.stage.updating"],
+]);
+
+/** A clone's Git stage in the viewer's language; a stage Git names that is not listed is the plain "cloning". */
+export function cloneStageText(stage: string, t: TFunction<"translation">): string {
+  return t(CLONE_STAGES.get(stage) ?? "addProject.clone.stageFallback");
 }

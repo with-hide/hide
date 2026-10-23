@@ -23,7 +23,7 @@ import { RegistrationStatus, useRegistration } from "./registration";
 import { localDeviceId, type RepositoryClone, type WorkspaceRegistration } from "./snapshot";
 import { useShellStore } from "./store";
 import { useInterfaceTranslation } from "./i18n/client";
-import { coreErrorText } from "./coreError";
+import { cloneFailureText, cloneStageText, coreErrorText } from "./coreError";
 import { useErrorSince } from "./errorSince";
 
 /** How long typing settles before hided is asked about the folder. */
@@ -212,7 +212,7 @@ function CloneProgress({ clone, following }: { clone: RepositoryClone | null; fo
         </Status>
         <div
           role="progressbar"
-          aria-label={clone.stage ?? t("addProject.clone.stageFallback")}
+          aria-label={clone.stage ? cloneStageText(clone.stage, t) : t("addProject.clone.stageFallback")}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={clone.percent ?? undefined}
@@ -221,15 +221,17 @@ function CloneProgress({ clone, following }: { clone: RepositoryClone | null; fo
           <div className="h-full bg-primary transition-[width]" style={{ width: `${clone.percent ?? 0}%` }} />
         </div>
         <span className="text-caption text-muted-foreground" data-clone-stage={clone.stage ?? ""}>
-          {clone.stage ? `${clone.stage}${clone.percent === null ? "" : ` ${clone.percent}%`}` : t("settings.connection.connecting")}
+          {clone.stage ? `${cloneStageText(clone.stage, t)}${clone.percent === null ? "" : ` ${clone.percent}%`}` : t("settings.connection.connecting")}
         </span>
       </div>
     );
   }
   if (clone.phase === "failed") {
     return (
-      <div role="alert" data-clone-phase="failed">
-        <Status tone="error">{clone.message ?? t("addProject.clone.failed")}</Status>
+      <div role="alert" className="flex min-w-0 flex-col gap-xxs" data-clone-phase="failed" data-core-error={clone.failure ?? undefined}>
+        <Status tone="error">{cloneFailureText(clone.failure, t)}</Status>
+        {/* Git's own line is quoted as what Git said, not worded as the screen's. */}
+        {clone.failure === "git" && clone.git_line ? <span className="break-all font-mono text-caption text-muted-foreground" data-clone-git-line="true">{clone.git_line}</span> : null}
       </div>
     );
   }

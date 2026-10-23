@@ -1113,7 +1113,9 @@ fn workspace_creation_failures_retire_inflight_and_keep_partial_registration_vis
 
     assert!(runtime.ingest_workspace_creation(
         missing_path,
-        Err("Workspace path does not exist".to_owned()),
+        Err(live::WorkspaceCreationFailure::failed(
+            "Workspace path does not exist"
+        )),
         4,
     ));
     assert!(!runtime.workspace_creations_in_flight.contains(missing_path));
