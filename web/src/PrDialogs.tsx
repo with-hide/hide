@@ -257,7 +257,7 @@ export function PrDelegateDialog({ actions, workspace, pr, intent, onClose }: { 
   );
   const refused = useErrorSince(request?.at ?? null, ["pr_delegate.", "worktree.create", "task_operation.", "agent_start.", "overview.unknown_checkout"]);
   const working = request !== null && refused === null && (started === null || started.phase === "working");
-  const failure = started?.phase === "failed" ? (started.message ?? t("prWork.startFailed")) : refused ? coreErrorText(refused, t, "prWork.startFailed") : null;
+  const failure = started?.phase === "failed" ? (started.failure ? coreErrorText({ kind: started.failure }, t, "prWork.startFailed") : t("prWork.startFailed")) : refused ? coreErrorText(refused, t, "prWork.startFailed") : null;
   useEffect(() => {
     if (started?.phase !== "ready") return;
     if (started.agent_phase) useUiStore.getState().setWatchedTask(started.id);
@@ -302,7 +302,7 @@ export function PrDelegateDialog({ actions, workspace, pr, intent, onClose }: { 
             {!reviewing && read?.phase === "failed" ? (
               <Note tone="warn" data-pr-delegate-read-failed="true">
                 <span className="flex items-center gap-sm">
-                  <span className="min-w-0 flex-1 break-words">{t("prWork.feedbackReadFailed", { message: read.message === "project_settings_repository_changed" ? t("projectSettings.repositoryChanged") : read.message ?? "" })}</span>
+                  <span className="min-w-0 flex-1 break-words">{read.failure === "project_settings_repository_changed" ? t("prWork.feedbackReadFailed", { message: t("projectSettings.repositoryChanged") }) : t("githubReason.feedbackReadFailed")}</span>
                   <Button type="button" variant="secondary" size="sm" onClick={() => setReadId(requestId("pr-feedback", pr.number))} data-pr-delegate-reread="true">
                     {t("prWork.readAgain")}
                   </Button>

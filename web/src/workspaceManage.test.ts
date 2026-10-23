@@ -53,7 +53,7 @@ const checkout = (patch: Partial<Checkout> = {}): Checkout => ({ agent_scope: em
     dirty: false,
     changed_file_count: 0,
     pane_count: 0,
-    deletion_gate: { blocked_reason: null, warnings: [], button_label: "Delete worktree", can_delete_branch: true, branch_warning: null, discard_label: null },
+    deletion_gate: { blocked: null, warnings: [], pane_count: 0, can_delete_branch: true, branch_loss: null, discard: null },
   },
   pull_request: null,
   tabs: [],
@@ -73,7 +73,7 @@ const task = (patch: Partial<TaskOperation>): TaskOperation => ({
   path: null,
   pane_id: null,
   agent_kind: null,
-  message: null,
+  failure: null,
   agent_phase: null,
   agent_reason: null, agent_line: null,
   ...patch,
@@ -224,7 +224,7 @@ describe("row menus", () => {
     const dirty = checkout();
     if (dirty.worktree) {
       dirty.worktree.dirty = true;
-      dirty.worktree.deletion_gate.discard_label = "Discard 3 changed files";
+      dirty.worktree.deletion_gate.discard = { changed_files: 3, nested: false, status_unknown: false, ignored_repositories: [] };
     }
     const deletion = (row: Checkout) => checkoutMenu(workspace(), row, desktop).find((item) => item.id === "delete_worktree");
     expect(deletion(dirty)?.unavailable).toBeNull();
@@ -250,12 +250,7 @@ describe("row menus", () => {
         { id: "t2", workspace_id: "w1", checkout_id: "c1", label: "2", empty: false, delegated: false, panes: [pane("p3", "Review tests", "idle")] },
       ],
     });
-    if (row.worktree) {
-      row.worktree.deletion_gate.warnings = ["3 changed files not committed", "ahead 2 unmerged"];
-    }
     expect(factsLine(deletionFacts(row, 3))).toBe("Folder removed for good · 3 panes close · stops 2 agents: Fix the parser (Working), Review tests (Idle)");
-    // The core's warnings are the dialog's badges, word for word.
-    expect(row.worktree?.deletion_gate.warnings).toEqual(["3 changed files not committed", "ahead 2 unmerged"]);
   });
 
   it("puts a folder's own checkout items after its project items, past a separator", () => {
@@ -296,7 +291,7 @@ describe("receipts", () => {
   });
 
   it("reads only the removal of the checkout this page asked to delete", () => {
-    const removal = { id: 3, repository_root: "/r", checkout_path: "/r-feature", branch: "feature", delete_branch: false, phase: "removing", message: null };
+    const removal = { id: 3, repository_root: "/r", checkout_path: "/r-feature", branch: "feature", delete_branch: false, phase: "removing", notice: null };
     expect(removalFor(removal, "local", "/r-feature", 2, "local")?.id).toBe(3);
     expect(removalFor(removal, "local", "/r-other", 2, "local")).toBeNull();
     expect(removalFor(removal, "local", "/r-feature", 3, "local")).toBeNull();
@@ -306,7 +301,7 @@ describe("receipts", () => {
   });
 
   it("marks a checkout as being deleted while checking, closing panes or running Git", () => {
-    const removal = { id: 3, repository_root: "/r", checkout_path: "/r-feature", branch: "feature", delete_branch: false, phase: "closing", message: null };
+    const removal = { id: 3, repository_root: "/r", checkout_path: "/r-feature", branch: "feature", delete_branch: false, phase: "closing", notice: null };
     expect(checkoutRemoving(removal, "local", "/r-feature", "local")).toBe(true);
     expect(checkoutRemoving({ ...removal, phase: "checking" }, "local", "/r-feature", "local")).toBe(true);
     expect(checkoutRemoving({ ...removal, phase: "removing" }, "local", "/r-feature", "local")).toBe(true);

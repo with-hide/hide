@@ -1490,13 +1490,9 @@ fn a_node_checkout_s_github_link_before_its_repository_is_named_fails_with_why()
         (
             operation.kind.as_str(),
             operation.phase.as_str(),
-            operation.message.as_deref()
+            operation.failure.as_deref()
         ),
-        (
-            "checkout_issue",
-            "failed",
-            Some("The node has not named this project's GitHub repository yet")
-        )
+        ("checkout_issue", "failed", Some("task_operation.failed"))
     );
     assert!(node.git_writes().is_empty() && node.gh_calls().is_empty());
     assert!(own.git_writes().is_empty() && own.gh_calls().is_empty());
@@ -2027,7 +2023,7 @@ fn starting_a_node_project_s_issue_links_the_new_worktree_on_the_node() {
         .task_operation
         .clone()
         .unwrap();
-    assert_eq!(operation.phase, "ready", "{:?}", operation.message);
+    assert_eq!(operation.phase, "ready", "{:?}", operation.failure);
     assert_eq!(
         git(&repo.root, &["config", "branch.4-start.issue"]).trim(),
         "L-4"

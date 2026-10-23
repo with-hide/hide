@@ -1226,15 +1226,6 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
         unreachable_since_unix_ms: None,
     });
     runtime.ingest_remote_session(TARGET, Ok(session(Vec::new())));
-    let connector: Arc<dyn hide_herdr_client::ApiConnector> = Arc::new(
-        hide_herdr_client::LocalSocketConnector::new("/tmp/herdr-core-never-connect.sock"),
-    );
-    runtime.install_remote_control(RemoteControlContext::new(
-        TARGET,
-        connector,
-        Weak::new(),
-        ChangeNotifier::noop(),
-    ));
     // A registration answer comes from the device's ready helper.
     runtime.device_hosts.insert(
         TARGET.to_owned(),
@@ -1247,6 +1238,9 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
             generation: 1,
         },
     );
+    // Registered before the device can be asked anything, so the terminal
+    // the registration opens is refused, in the log only, and the shell's tab
+    // is the one asked.
     assert!(runtime.ingest_device_registration(
         TARGET,
         "Other".to_owned(),
@@ -1254,6 +1248,20 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
             root: t.other.clone(),
             is_git: false,
         }),
+    ));
+    assert_eq!(
+        diagnostic_messages(&runtime, "registration.terminal_failed").len(),
+        1
+    );
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    let connector: Arc<dyn hide_herdr_client::ApiConnector> = Arc::new(
+        hide_herdr_client::LocalSocketConnector::new("/tmp/herdr-core-never-connect.sock"),
+    );
+    runtime.install_remote_control(RemoteControlContext::new(
+        TARGET,
+        connector,
+        Weak::new(),
+        ChangeNotifier::noop(),
     ));
     let id = device_catalog::project_id(TARGET, Path::new(&t.other));
     let create = |runtime: &mut Runtime, workspace_id: &str, request: &str| {
@@ -1306,6 +1314,181 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
             .map(|error| error.kind.as_str()),
         Some("remote.control.workspace_not_found")
     );
+}
+
+/// A device whose helper is ready before its Herdr's session arrives, so its
+/// folders are confirmed by the helper's facts as they are named.
+fn registering_device(runtime: &mut Runtime, sessions: Vec<WorkspaceSnapshot>) {
+    let mut row = runtime.snapshot.navigator.devices[0].clone();
+    row.id = TARGET.into();
+    row.kind = "remote".into();
+    runtime.snapshot.navigator.devices.push(row);
+    runtime
+        .snapshot
+        .status
+        .remote
+        .push(connected_status(TARGET));
+    runtime.device_hosts.insert(
+        TARGET.to_owned(),
+        hosts::DeviceHost {
+            phase: hosts::HostPhase::Ready {
+                host: FakeDevice::new(),
+                platform: "macos aarch64".to_owned(),
+                helper_path: Some("/fake/hided".to_owned()),
+            },
+            generation: 1,
+        },
+    );
+    runtime.ingest_remote_session(TARGET, Ok(session(sessions)));
+}
+
+fn register_on_device(runtime: &mut Runtime, root: &str) -> bool {
+    runtime.ingest_device_registration(
+        TARGET,
+        "Project".to_owned(),
+        Ok(hide_node_link::register::Registrable {
+            root: root.to_owned(),
+            is_git: false,
+        }),
+    )
+}
+
+/// A project added on a device opens on one terminal there, as one added on
+/// this machine does: the registration itself asks the device's Herdr to open
+/// the checkout's owner, with no second event from the shell. A folder whose
+/// checkout already has a tab there is left as it is.
+#[test]
+fn a_project_registered_on_a_device_asks_that_device_for_its_first_terminal() {
+    let t = tree();
+    let mut runtime = runtime();
+    registering_device(
+        &mut runtime,
+        vec![herdr_workspace(TARGET, "w1", &t.main, &[("t1", &t.main)])],
+    );
+    recording_device(&mut runtime);
+
+    assert!(register_on_device(&mut runtime, &t.other));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert_eq!(
+        diagnostic_messages(&runtime, "remote.control.requested"),
+        vec![format!("Sending workspace.create to {TARGET}")],
+        "the device is asked to open the checkout's owner"
+    );
+    assert!(
+        runtime
+            .remote_tab_creations_in_flight
+            .iter()
+            .any(|key| key.0 == TARGET && key.2 == t.other),
+        "the terminal opens at the registered folder"
+    );
+    assert!(diagnostic_messages(&runtime, "registration.terminal_skipped").is_empty());
+
+    assert!(register_on_device(&mut runtime, &t.main));
+    assert_eq!(
+        diagnostic_messages(&runtime, "registration.terminal_skipped"),
+        vec![format!(
+            "{} on {TARGET} opens no terminal: it has a tab already",
+            t.main
+        )]
+    );
+    assert_eq!(
+        diagnostic_messages(&runtime, "remote.control.requested").len(),
+        1,
+        "nothing more was asked"
+    );
+}
+
+/// The folder a device just registered is confirmed by its helper's facts,
+/// read on a worker; the terminal waits for that answer, and a helper that
+/// cannot confirm it leaves the project on its start screen.
+#[test]
+fn a_registration_terminal_waits_for_the_helper_to_confirm_the_folder() {
+    let t = tree();
+    let mut runtime = runtime();
+    registering_device(&mut runtime, Vec::new());
+    recording_device(&mut runtime);
+    let generation = 1;
+    for (path, failure) in [(&t.other, None), (&t.main, Some("unreachable"))] {
+        // The helper is reading facts already, as it would be on a worker.
+        runtime
+            .device_facts
+            .entry(TARGET.to_owned())
+            .or_default()
+            .in_flight = Some(generation);
+        assert!(register_on_device(&mut runtime, path));
+        assert!(
+            diagnostic_messages(&runtime, "remote.control.requested").len()
+                == usize::from(failure.is_some()),
+            "nothing is sent for an unconfirmed folder"
+        );
+        let answers = match failure {
+            None => vec![(
+                path.clone(),
+                Fact::Known(hide_project::facts(Path::new(path)).unwrap()),
+            )],
+            Some(_) => Vec::new(),
+        };
+        runtime.ingest_device_facts(TARGET, generation, answers, failure.map(str::to_owned));
+    }
+    assert_eq!(
+        diagnostic_messages(&runtime, "remote.control.requested"),
+        vec![format!("Sending workspace.create to {TARGET}")],
+        "the confirmed folder's terminal is sent once its facts arrive"
+    );
+    assert_eq!(
+        diagnostic_messages(&runtime, "registration.terminal_skipped"),
+        vec![format!(
+            "{} on {TARGET} opens no terminal: the device's helper did not confirm the folder",
+            t.main
+        )]
+    );
+    assert_eq!(runtime.snapshot.status.last_error, None);
+}
+
+/// Principle 13: a registration's terminal that the device refuses is the
+/// diagnostic log's, not the operator's notice; the project stays registered
+/// on its start screen, with no failed tab left to retry.
+#[test]
+fn a_refused_registration_terminal_is_logged_and_leaves_the_project_on_its_start_screen() {
+    let t = tree();
+    let mut runtime = runtime();
+    registering_device(&mut runtime, Vec::new());
+    let herdr = crate::fake_herdr::FakeHerdr::start_with_errors("registration-terminal", |_, _| {
+        Err((
+            "internal_error".to_owned(),
+            "refused by the fixture".to_owned(),
+        ))
+    });
+    let shared = Arc::new(Mutex::new(runtime));
+    shared
+        .lock()
+        .unwrap()
+        .install_remote_control(RemoteControlContext::new(
+            TARGET,
+            Arc::new(herdr.connector()),
+            Arc::downgrade(&shared),
+            ChangeNotifier::noop(),
+        ));
+
+    assert!(register_on_device(&mut shared.lock().unwrap(), &t.other));
+    wait(&shared, "the refused terminal's answer", |runtime| {
+        !diagnostic_messages(runtime, "registration.terminal_failed").is_empty()
+    });
+
+    let runtime = shared.lock().unwrap();
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert!(runtime.snapshot.status.async_operations.is_empty());
+    assert!(runtime.remote_tab_creations_in_flight.is_empty());
+    let id = device_catalog::project_id(TARGET, Path::new(&t.other));
+    let project = runtime.snapshot.status.remote[0]
+        .session
+        .as_ref()
+        .unwrap()
+        .workspaces
+        .iter()
+        .find(|project| project.id == id)
+        .expect("the project stays registered");
+    assert!(project.checkouts[0].tabs.is_empty());
 }
 
 /// A Herdr socket that records each request and answers none, so a test sees

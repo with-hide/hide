@@ -225,8 +225,8 @@ fn blocking_failure(pr: &PullRequestSnapshot) -> bool {
 fn failed_reason(pr: &PullRequestSnapshot) -> Reason {
     let failed = &pr.work.failed_checks;
     let reason = Reason::of("failed").count(failed.len().max(1) as u32);
-    match failed.first() {
-        Some(check) => reason.name(check.name.clone()),
+    match failed.first().and_then(|check| check.name.clone()) {
+        Some(name) => reason.name(name),
         None => reason,
     }
 }
@@ -287,8 +287,12 @@ fn standing(pr: &PullRequestSnapshot) -> Option<Placed> {
             }
             MergeState::Unstable => {
                 let reason = Reason::of("merge");
-                let reason = match work.failed_checks.first() {
-                    Some(check) => reason.text(check.name.clone()),
+                let reason = match work
+                    .failed_checks
+                    .first()
+                    .and_then(|check| check.name.clone())
+                {
+                    Some(name) => reason.text(name),
                     None => reason,
                 };
                 return Some(place("needs_you", reason));
@@ -749,7 +753,7 @@ mod tests {
             pr.checks = PullRequestChecks::Failed;
             pr.work.merge_state = state;
             pr.work.failed_checks = vec![PrFailedCheck {
-                name: "unit".into(),
+                name: Some("unit".into()),
                 url: None,
             }];
             pr

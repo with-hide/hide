@@ -193,7 +193,6 @@ fn settled_worktree(badge: crate::model::PullRequestBadge) -> CheckoutSnapshot {
             branch: Some("feature".to_owned()),
             pull_request: Some(pull_request),
             deletion_gate: crate::model::WorktreeDeletionGateSnapshot {
-                button_label: "Delete worktree…".to_owned(),
                 can_delete_branch: true,
                 ..crate::model::WorktreeDeletionGateSnapshot::default()
             },

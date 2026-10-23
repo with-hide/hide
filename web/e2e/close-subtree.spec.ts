@@ -379,7 +379,7 @@ test("Delete worktree closes the agents its checkout spawned outside it before t
     const dialog = page.locator("[data-delete-worktree]");
     await expect(dialog.locator("[data-removal-subtree]")).toContainText("1 agent outside this worktree", { timeout: 30_000 });
     // The core's warnings are badges, the path shows once.
-    await expect(dialog.locator('[data-delete-warning="not pushed"]')).toBeVisible();
+    await expect(dialog.locator('[data-delete-warning="not_pushed"]')).toBeVisible();
     await expect(dialog.getByText(/repo-spawner/)).toHaveCount(1);
     await expect(dialog.locator(`[data-subtree-row="${outside}"]`)).toBeVisible();
     const withOutside = dialog.locator('[data-delete-confirm="with-outside"]');

@@ -53,7 +53,7 @@ export function sleepingCount(agents: readonly AgentRow[] | undefined): number {
 }
 
 /** What `gh` answered across this Mac's Git projects, General's GitHub row. */
-export type GithubAccess = { state: "connected" } | { state: "failed"; category: GithubFailureCategory; reason: string | null };
+export type GithubAccess = { state: "connected" } | { state: "failed"; category: GithubFailureCategory };
 
 /**
  * Whether GitHub reads work on the core's machine: connected once any Git
@@ -73,7 +73,7 @@ export function githubAccess(workspaces: readonly Workspace[], devices: readonly
   const failure =
     statuses.find((status) => status.failure_category === "not_installed" || status.failure_category === "not_logged_in") ??
     statuses.find((status) => status.failure_category != null && status.failure_category !== "no_github_remote");
-  return failure?.failure_category ? { state: "failed", category: failure.failure_category, reason: failure.unavailable_reason } : null;
+  return failure?.failure_category ? { state: "failed", category: failure.failure_category } : null;
 }
 
 const GH_FAILURE_KEY: Partial<Record<GithubFailureCategory, MessageKey>> = {

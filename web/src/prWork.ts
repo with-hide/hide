@@ -92,7 +92,7 @@ export function prReading(projects: readonly Workspace[], now: number): PrReadin
   const refusal = statuses.find((status) => status.failure_category === "not_installed" || status.failure_category === "not_logged_in");
   if (refusal && answered.length === 0) return { state: "blocked", category: refusal.failure_category as "not_installed" | "not_logged_in" };
   if (answered.length === 0) return { state: "reading" };
-  const failed = answered.some((status) => status.stale === true || (status.unavailable_reason != null && !status.available));
+  const failed = answered.some((status) => status.stale === true || (status.failure_category != null && !status.available));
   const unread = EXTRA_QUERIES.filter((query) => answered.some((status) => status.unread_queries?.includes(query)));
   if (failed) {
     const oldest = Math.min(...answered.map((status) => status.last_success_at_unix_ms!));

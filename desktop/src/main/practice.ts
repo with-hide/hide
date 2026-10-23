@@ -1,7 +1,8 @@
 // The practice window (web `src/practice/`): the shell's own page on the
 // daemon's origin, in a window of its own with no preload. The page stands in
 // for this host from its address, so it needs nothing from the main process;
-// it is only ever this one address, and the window takes no navigation.
+// it is only ever this one address, and the window neither navigates nor opens
+// another, here or in the system's browser.
 
 import { isInterfaceLanguage } from "../../../web/src/i18n/locale";
 

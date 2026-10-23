@@ -1028,9 +1028,10 @@ impl Runtime {
                         Some(operation) if operation.id == *started => {
                             match (operation.phase.as_str(), operation.agent_phase.as_deref()) {
                                 ("failed", _) => Some(Resume::Failed {
-                                    reason: operation.message.clone().unwrap_or_else(|| {
-                                        "The resume tab could not be opened".into()
-                                    }),
+                                    reason: operation
+                                        .failure
+                                        .clone()
+                                        .unwrap_or_else(|| "task_operation.failed".into()),
                                     pane_id: None,
                                 }),
                                 (_, Some("started")) => Some(Resume::Confirming {

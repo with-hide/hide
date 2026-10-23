@@ -360,10 +360,10 @@ function deskCheckout(model: DeskModel, place: PracticePlace, scope: AgentScope,
     worktree: {
       path, branch: place.branch, head_sha: "0000000", last_commit_unix_seconds: nowMs / 1000 - 600, is_main: true, missing: false, dirty: false,
       changed_file_count: 0, merged: false, behind_upstream: null, pane_count: model.panes.length,
-      deletion_gate: { blocked_reason: null, warnings: [], button_label: "Delete worktree", can_delete_branch: true, branch_warning: null, discard_label: null },
+      deletion_gate: { blocked: null, warnings: [], pane_count: model.panes.length, can_delete_branch: true, branch_loss: null, discard: null },
     },
     pull_request: null,
-    github: { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: nowMs, unavailable_reason: null },
+    github: { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: nowMs },
     tabs,
     active_tab_id: model.activeTab,
     // A tab holding only delegated children stays off the strip; the sidebar still reaches it.
