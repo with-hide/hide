@@ -217,7 +217,7 @@ pub fn spawn_workspace_creation(
                     let ask = |session: &SessionSnapshotPayload| {
                         let mut wanted =
                             workspace::PathIndex::wanted(&node, &registrations, &[], &worktrees);
-                        wanted.extend(Runtime::session_cwds(session));
+                        wanted.extend(Runtime::session_paths(session));
                         workspace::PathIndex::ask(context.node.as_ref(), wanted)
                             .map_err(WorkspaceCreationFailure::failed)
                     };

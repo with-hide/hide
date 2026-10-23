@@ -1030,6 +1030,7 @@ mod tests {
             &herdr_core::node::NodeId::parse("test-node").unwrap(),
             &[],
             &[herdr_core::workspace::SessionSpace {
+                checkout: None,
                 id: "fixture".to_owned(),
                 label: "fixture".to_owned(),
                 cwds: vec![path.clone()],
