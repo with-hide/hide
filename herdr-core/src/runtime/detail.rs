@@ -1,12 +1,12 @@
-//! The sidebar's lens and 태스크 view option, and the lane's 보기 slot (PRD
-//! sidebar-task-lens D-10, D-11, D-25, D-48, D-50): one window-level UI value
-//! each, kept in `core-state.json` with the rest of the UI state. The slot
+//! The sidebar's lens, 태스크 view option and project, and the lane's 보기
+//! slot (PRD sidebar-task-lens D-10, D-11, D-25, D-48, D-50): one
+//! window-level UI value each, kept in `core-state.json` with the rest of the UI state. The slot
 //! holds a pull request's card or a session's record, belongs to no checkout
 //! and no Agent tab, and starts the read of what it shows on the event that
 //! opens it, so one operator action is one event.
 
 use super::*;
-use crate::model::{DetailItem, SidebarLens, TaskView};
+use crate::model::{DetailItem, SidebarLens, SidebarProject, TaskView};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -25,6 +25,18 @@ pub(super) struct SidebarLensPayload {
 pub(super) struct TaskViewPayload {
     /// `status` or `project`.
     pub(super) view: String,
+}
+
+/// The project the sidebar's 태스크 and PR lists show, or every project for
+/// none. A 현황 tile turns the sidebar to its list in the same event.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SidebarProjectPayload {
+    pub(super) project: Option<SidebarProject>,
+    #[serde(default)]
+    pub(super) lens: Option<String>,
+    #[serde(default)]
+    pub(super) show: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +105,39 @@ impl Runtime {
             return false;
         }
         self.snapshot.ui_state.task_view = view;
+        self.persist_ui_state();
+        true
+    }
+
+    pub(super) fn set_sidebar_project(&mut self, payload: SidebarProjectPayload) -> bool {
+        let lens = match payload.lens.as_deref() {
+            None => None,
+            Some(value) => match SidebarLens::parse(value) {
+                Some(lens) => Some(lens),
+                None => {
+                    self.set_error(
+                        "sidebar_lens.unknown",
+                        format!("{value} is not a sidebar lens; expected projects, tasks or prs"),
+                        false,
+                    );
+                    return true;
+                }
+            },
+        };
+        let state = &mut self.snapshot.ui_state;
+        let changed = state.sidebar_project != payload.project
+            || lens.is_some_and(|lens| state.sidebar_lens != lens)
+            || (payload.show && !state.left_sidebar_visible);
+        if !changed {
+            return false;
+        }
+        state.sidebar_project = payload.project;
+        if let Some(lens) = lens {
+            state.sidebar_lens = lens;
+        }
+        if payload.show {
+            state.left_sidebar_visible = true;
+        }
         self.persist_ui_state();
         true
     }

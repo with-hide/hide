@@ -1420,6 +1420,7 @@ mod tests {
                     json!({"kind": "pull_request", "workspace_id": registrations[index], "number": 7}),
                     json!({"kind": "record", "session": {"device_id": devices[index], "agent": "claude", "session_id": "s"}}),
                 ]).collect::<Vec<_>>(), "shown": true},
+                "sidebar_project": {"device_id": devices[1], "workspace_id": registrations[1]},
                 "overview_graph": {
                     "focus": "working", "include_resting": false,
                     "hidden_projects": (0..3).map(|index| json!({"device_id": devices[index], "workspace_id": registrations[index]})).collect::<Vec<_>>(),

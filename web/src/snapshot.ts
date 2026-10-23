@@ -1180,6 +1180,9 @@ export function nextSidebarLens(lens: SidebarLens | undefined): SidebarLens {
 }
 export type TaskView = "status" | "project";
 
+/** The one project the sidebar's 태스크 and PR lists show, on its machine. */
+export type SidebarProject = { device_id: string; workspace_id: string };
+
 /** One thing the lane's 보기 slot shows (`DetailItem`, PRD sidebar-task-lens D-50). */
 export type DetailItem =
   | { kind: "pull_request"; workspace_id: string; number: number }
@@ -2311,6 +2314,8 @@ export type SnapshotRest = {
     sidebar_lens?: SidebarLens;
     /** How the 태스크 list groups (`task_view`, D-11); absent reads as status. */
     task_view?: TaskView;
+    /** The project both of the sidebar's lists are narrowed to; absent or null is every project. */
+    sidebar_project?: SidebarProject | null;
     /** The lane's 보기 slot (D-50), one per window. */
     detail?: DetailSlot;
     /** The Overview Work map's remembered choices; absent reads as the defaults. */

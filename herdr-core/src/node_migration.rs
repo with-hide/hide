@@ -237,6 +237,19 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Device,
     ),
+    // The sidebar's project, written only by builds that have node ids.
+    (
+        CORE_STATE,
+        "/sidebar_project/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
+    (
+        CORE_STATE,
+        "/sidebar_project/workspace_id",
+        Mechanism::Owned,
+        Moves::Registration,
+    ),
     // The Overview map's choices name each project and session by its
     // machine, project and pane; a session's digest names no machine.
     // Written only by builds that have node ids.
@@ -1653,6 +1666,7 @@ mod tests {
                     {"kind": "pull_request", "workspace_id": "workspace:a", "number": 7},
                     {"kind": "record", "session": {"device_id": "local", "agent": "claude", "session_id": "s"}},
                 ], "shown": true},
+                "sidebar_project": {"device_id": NODE, "workspace_id": "workspace:a"},
                 "overview_graph": {
                     "focus": "turn", "include_resting": true,
                     "hidden_projects": [{"device_id": NODE, "workspace_id": "workspace:a"}],

@@ -2015,6 +2015,10 @@ impl Runtime {
                         "ui_state.sidebar_lens_unknown",
                         "The stored sidebar lens or task view was not recognized; the projects, by state, were used",
                     ),
+                    persistence::UnrecognizedField::SidebarProject => (
+                        "ui_state.sidebar_project_unknown",
+                        "The stored sidebar project was not recognized; every project was used",
+                    ),
                     persistence::UnrecognizedField::Detail => (
                         "ui_state.detail_unknown",
                         "The stored 보기 slot was not recognized; it loaded empty",

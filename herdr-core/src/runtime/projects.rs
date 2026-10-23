@@ -2899,6 +2899,16 @@ impl Runtime {
             .ui_state
             .collapsed_workspace_ids
             .retain(|id| id != workspace_id);
+        // The sidebar's lists narrowed to the project show every project again.
+        if self
+            .snapshot
+            .ui_state
+            .sidebar_project
+            .as_ref()
+            .is_some_and(|project| project.workspace_id == workspace_id)
+        {
+            self.snapshot.ui_state.sidebar_project = None;
+        }
         self.refresh_inactive_groups();
         self.resync_navigator_focus();
         self.persist_current_ui_state();

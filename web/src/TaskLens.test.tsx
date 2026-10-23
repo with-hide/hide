@@ -118,6 +118,29 @@ it("groups the device's tasks as 내 차례 (a block included), 읽을 것, 일�
   expect(rows(container)).not.toContain("rest");
 });
 
+it("narrows to the project the chip chose, leaves the project's name off its rows, and keeps the other projects' 내 차례 as +N that lifts the choice", async () => {
+  const agents = [row("ask", {}, { group: "needs_you" }), row("works"), row("elsewhere", {}, { group: "needs_you" })];
+  const cards = [card("ask", "needs_you", "hide-main"), card("works", "working", "hide-main"), card("elsewhere", "needs_you", "site-main")];
+  const rest = snapshot(agents, cards);
+  const all = await render(rest, agents);
+  expect(all.container.querySelector("[data-sidebar-project-trigger]")?.textContent).toBe("모든 프로젝트");
+  expect(all.container.querySelector("[data-sidebar-project-elsewhere]")).toBeNull();
+  await cleanup?.();
+  cleanup = null;
+  const hide = rest.navigator!.workspaces![0]!;
+  const hideCards = cards.slice(0, 2);
+  hide.agent_scope = { ...emptyScope(), tasks: { cards: hideCards, needs_you: 1, recency: "" } };
+  rest.ui_state = { ...rest.ui_state!, sidebar_project: { device_id: "local", workspace_id: "hide" } };
+  const { container, sent } = await render(rest, agents);
+  expect(rows(container)).toEqual(["ask", "works"]);
+  expect(container.querySelector("[data-task-project]")).toBeNull();
+  expect(container.querySelector("[data-sidebar-project-trigger]")?.textContent).toBe("herdr-ide");
+  const badge = container.querySelector<HTMLButtonElement>("[data-sidebar-project-elsewhere]");
+  expect(badge?.textContent).toBe("+1");
+  await act(async () => badge!.click());
+  expect(sent.filter((event) => event.kind === "sidebar_project_set").map((event) => event.payload)).toEqual([{ project: null }]);
+});
+
 it("in 프로젝트별 draws one group per project, the asking project first, with no project name on the rows and a state label over each band (B6; status-marks B32)", async () => {
   const agents = [row("a"), row("b", {}, { group: "needs_you" }), row("c"), row("d")];
   const cards = [card("a", "working", "hide-main"), card("b", "needs_you", "site-main"), card("c", "done", "hide-main"), card("d", "waiting", "hide-main")];

@@ -7,6 +7,71 @@ fn event(runtime: &mut Runtime, kind: &str, payload: serde_json::Value) -> bool 
     runtime.dispatch_json(&explorer_event(kind, payload))
 }
 
+/// A 현황 tile narrows both lists and turns the sidebar to one in one event;
+/// the chip's ✕ lifts the narrowing and leaves the lens where it is.
+#[test]
+fn the_sidebar_project_narrows_both_lists_until_lifted() {
+    let mut runtime = runtime();
+    assert_eq!(runtime.snapshot.ui_state.sidebar_project, None);
+    runtime.snapshot.ui_state.left_sidebar_visible = false;
+    let project = serde_json::json!({"device_id": "mini", "workspace_id": "remote:mini:project:p"});
+    assert!(event(
+        &mut runtime,
+        "sidebar_project_set",
+        serde_json::json!({"project": project, "lens": "prs", "show": true})
+    ));
+    let state = &runtime.snapshot.ui_state;
+    assert_eq!(
+        state
+            .sidebar_project
+            .as_ref()
+            .map(|p| p.workspace_id.as_str()),
+        Some("remote:mini:project:p")
+    );
+    assert_eq!(state.sidebar_lens, SidebarLens::Prs);
+    assert!(state.left_sidebar_visible);
+    assert!(!event(
+        &mut runtime,
+        "sidebar_project_set",
+        serde_json::json!({"project": project})
+    ));
+    assert!(event(
+        &mut runtime,
+        "sidebar_project_set",
+        serde_json::json!({"project": null})
+    ));
+    assert_eq!(runtime.snapshot.ui_state.sidebar_project, None);
+    assert_eq!(runtime.snapshot.ui_state.sidebar_lens, SidebarLens::Prs);
+}
+
+/// Removing the chosen project lifts the narrowing, so a restart never opens
+/// the lists on a project that is gone.
+#[test]
+fn removing_the_chosen_project_shows_every_project() {
+    let mut runtime = runtime();
+    let project = "remote:mini:project:p1";
+    runtime
+        .snapshot
+        .ui_state
+        .workspace_registrations
+        .push(crate::model::WorkspaceRegistration {
+            primary_checkout_id: None,
+            id: project.to_owned(),
+            label: "api".to_owned(),
+            path: "/srv/api".to_owned(),
+            device_id: "mini".to_owned(),
+            pinned: false,
+            home: false,
+        });
+    assert!(event(
+        &mut runtime,
+        "sidebar_project_set",
+        serde_json::json!({"project": {"device_id": "mini", "workspace_id": project}})
+    ));
+    assert!(runtime.retire_workspace_registration(project));
+    assert_eq!(runtime.snapshot.ui_state.sidebar_project, None);
+}
+
 #[test]
 fn the_lens_and_view_option_are_kept_and_a_hidden_sidebar_opens_on_the_other_lens() {
     let mut runtime = runtime();
