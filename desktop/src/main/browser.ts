@@ -29,7 +29,7 @@ import { nextZoomFactor, type PageZoom } from "../../../web/src/zoomSteps";
 import type { HostLog } from "./log";
 import type { CdpPage, CdpRetirement, CdpScope } from "./browserCdp";
 import { accelerator } from "./menu";
-import type { ExternalFiles } from "./externalFiles";
+import { errorCode, externalPartition, type ExternalFiles } from "./externalFiles";
 
 /** Page state reports coalesce to one per view in this window, so a title ticking every frame costs one event. */
 const REPORT_COALESCE_MS = 100;
@@ -499,7 +499,7 @@ export class BrowserViews {
    * page (B4); every other page's from its address (`browserPartition`).
    */
   private partitionOf(workspace: string, display: BrowserPlacement): string {
-    return display.grant ? externalPartition(display.grant) : browserPartition(workspace, display.url, this.node);
+    return display.grant ? (this.externals.partition(display.grant) ?? GONE_GRANT_PARTITION) : browserPartition(workspace, display.url, this.node);
   }
 
   /** What a display loads: its address, or the file its grant names, which only this process knows. */
@@ -513,14 +513,23 @@ export class BrowserViews {
    * reads nothing more from the folder (B14).
    */
   private keepGrants(named: ReadonlySet<string>): void {
-    const gone = new Set(this.externals.keep(named));
-    if (gone.size === 0) return;
-    for (const page of [...this.pages.values()]) if (page.grant && gone.has(page.grant)) this.destroy(page, "closed");
-    for (const grant of gone) {
-      const partition = externalPartition(grant);
-      if (!this.configuredSessions.has(partition)) continue;
+    const gone = this.externals.keep(named);
+    if (gone.length === 0) return;
+    const ids = new Set(gone.map((released) => released.id));
+    for (const page of [...this.pages.values()]) if (page.grant && ids.has(page.grant)) this.destroy(page, "closed");
+    for (const { id, slot } of gone) {
+      if (slot === null) continue;
+      const partition = externalPartition(slot);
+      if (!this.configuredSessions.has(partition)) {
+        this.externals.slotCleared(slot);
+        continue;
+      }
       this.configuredSessions.delete(partition);
-      void session.fromPartition(partition).clearStorageData().catch((error: unknown) => this.log.event("external.storage_clear_failed", { grant, detail: String(error) }));
+      // A slot whose storage could not be cleared is never handed out again, so no later page reads it.
+      void session.fromPartition(partition).clearStorageData().then(
+        () => this.externals.slotCleared(slot),
+        (error: unknown) => this.log.event("external.storage_clear_failed", { grant: id, reason: errorCode(error) }),
+      );
     }
   }
 
@@ -1047,7 +1056,8 @@ export class BrowserViews {
     if (this.returnTo === page) this.returnTo = null;
     this.pages.delete(page.key);
     this.publishCdp({ contentsId: page.view.webContents.id, reason });
-    this.release(page.workspace, page.id, page.applied);
+    // An outside file's page resolved no route, so the daemon has none to let go.
+    if (!page.grant) this.release(page.workspace, page.id, page.applied);
     if (page.report) clearTimeout(page.report);
     const window = this.window;
     if (window && !window.isDestroyed()) window.contentView.removeChildView(page.view);
@@ -1092,7 +1102,5 @@ function isFileAddress(url: string): boolean {
   return protocolOf(url) === "file:";
 }
 
-/** An outside file's session: in memory, its grant's alone (PRD outside-path-in-hide B4). */
-export function externalPartition(grant: string): string {
-  return `hide-browser-external-${grant}`;
-}
+/** The session of a page whose grant is gone, which loads nothing and shares nothing (a grant's own come from `ExternalFiles.partition`). */
+const GONE_GRANT_PARTITION = "hide-browser-external-gone";

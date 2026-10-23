@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { ExternalFiles, MAX_EXTERNAL_GRANTS, MAX_EXTERNAL_TEXT_BYTES, externalRoute } from "./externalFiles";
+import { ExternalFiles, MAX_EXTERNAL_GRANTS, MAX_EXTERNAL_TEXT_BYTES, UNNAMED_GRANT_GRACE_MS, clickedRoute, externalPartition, externalRoute } from "./externalFiles";
 
 // The physical spelling `fs.realpath` answers, as the shell's probe sends it.
 const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hide-external-files-")));
@@ -45,6 +45,31 @@ describe("externalRoute", () => {
   });
 });
 
+describe("clickedRoute", () => {
+  it("grants a file deleted since the hover by its name, so its tab says it cannot be opened (B16)", async () => {
+    const gone = path.join(root, "deleted-since.png");
+    expect(await clickedRoute(gone, false)).toEqual({ real: gone, route: { action: "grant", kind: "image" } });
+    expect(await clickedRoute(path.join(root, "deleted-song.mp3"), false)).toMatchObject({ route: { action: "system", reason: "audio" } });
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a path that now resolves through a link swapped in since the hover", async () => {
+    const link = path.join(root, "swapped-link.txt");
+    fs.symlinkSync(file("elsewhere/target.txt", "not this"), link);
+    expect(await clickedRoute(link, false)).toEqual({ refused: "not_physical" });
+  });
+
+  it("brings an open file's one grant back when it is clicked again after being deleted (B10, B16)", async () => {
+    const files = new ExternalFiles(vi.fn());
+    const notes = file("open-then-deleted.txt", "here");
+    const first = files.grant(notes, "text")!;
+    fs.rmSync(notes);
+    const clicked = await clickedRoute(notes, false);
+    expect(clicked).toMatchObject({ route: { action: "grant", kind: "text" } });
+    expect(files.grant(notes, "text")).toEqual(first);
+    expect(await files.read(first.id)).toEqual({ failure: "ENOENT" });
+  });
+});
+
 describe("ExternalFiles", () => {
   it("grants a file once, lets go of what no tab names, and logs no path or name (B10, B14, B22)", async () => {
     const log = vi.fn();
@@ -57,7 +82,7 @@ describe("ExternalFiles", () => {
     expect(await files.read(granted.id)).toEqual({ bytes: new Uint8Array(Buffer.from("png bytes")) });
 
     expect(files.keep(new Set([granted.id]))).toEqual([]);
-    expect(files.keep(new Set())).toEqual([granted.id]);
+    expect(files.keep(new Set())).toEqual([{ id: granted.id, slot: null }]);
     expect(files.live()).toEqual([]);
     expect(await files.read(granted.id)).toEqual({ failure: "grant_gone" });
     for (const [, fields] of log.mock.calls) {
@@ -110,8 +135,56 @@ describe("ExternalFiles", () => {
       fs.symlinkSync(outside, path.join(root, "site", "link.txt"));
       expect(files.inside(id, path.join(root, "site", "link.txt"))).toBe(false);
     }
+    files.keep(new Set([id]));
     files.keep(new Set());
     expect(files.inside(id, style)).toBe(false);
     expect(files.pageUrl(id)).toBeNull();
+  });
+
+  it("keeps a grant no sync has named yet, so a sync the shell sent before the click's answer lets go of nothing (B14)", () => {
+    let now = 1_000;
+    const files = new ExternalFiles(vi.fn(), () => now);
+    const fresh = files.grant(file("fresh.txt", "fresh"), "text")!;
+    expect(files.keep(new Set())).toEqual([]);
+    expect(files.live()).toEqual([fresh.id]);
+    // One whose open never reached the core goes once the grace is over.
+    now += UNNAMED_GRANT_GRACE_MS;
+    expect(files.keep(new Set())).toEqual([{ id: fresh.id, slot: null }]);
+    // A closed tab's file clicked again comes back as fresh, so the sync that closed it does not take it.
+    const again = files.grant(file("again.txt", "again"), "text")!;
+    files.keep(new Set([again.id]));
+    expect(files.grant(file("again.txt", "again"), "text")).toEqual(again);
+    expect(files.keep(new Set())).toEqual([]);
+  });
+
+  it("opens a page and its source as two grants, so the source never replaces the page (B9)", () => {
+    const files = new ExternalFiles(vi.fn());
+    const page = file("both/index.html", "<p>hi</p>");
+    const shown = files.grant(page, "html")!;
+    const source = files.grant(page, "text")!;
+    expect(source.id).not.toBe(shown.id);
+    expect(files.partition(shown.id)).toBe(externalPartition(0));
+    expect(files.partition(source.id)).toBeNull();
+  });
+
+  it("gives HTML pages at most the cap's sessions, and a session again only once its storage is cleared (B4)", () => {
+    let now = 0;
+    const files = new ExternalFiles(vi.fn(), () => now);
+    const partitions = new Set<string>();
+    for (let n = 0; n < MAX_EXTERNAL_GRANTS * 2; n += 1) {
+      const { id } = files.grant(file(`pages/p${n}.html`, "<p>"), "html")!;
+      partitions.add(files.partition(id)!);
+      now += UNNAMED_GRANT_GRACE_MS;
+      const [released] = files.keep(new Set());
+      expect(released).toEqual({ id, slot: expect.any(Number) });
+      // Until its storage is cleared the slot is not handed out again.
+      if (n === 0) {
+        expect(files.partition(files.grant(file("pages/next.html", "<p>"), "html")!.id)).not.toBe(externalPartition(released!.slot!));
+        now += UNNAMED_GRANT_GRACE_MS;
+        files.slotCleared(files.keep(new Set())[0]!.slot!);
+      }
+      files.slotCleared(released!.slot!);
+    }
+    expect(partitions.size).toBeLessThanOrEqual(MAX_EXTERNAL_GRANTS);
   });
 });

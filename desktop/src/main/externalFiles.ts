@@ -31,6 +31,12 @@ export type { ExternalKind };
 
 /** Grants held at once; a click past it goes to the operating system. */
 export const MAX_EXTERNAL_GRANTS = 32;
+/**
+ * How long a grant no sync has named yet is kept: the shell learns of it only
+ * from the click's answer, so a sync it sent before then cannot name it, and
+ * one whose open never reached the core is let go after this.
+ */
+export const UNNAMED_GRANT_GRACE_MS = 10_000;
 /** The largest file a viewer is handed, as `MAX_FILE_BYTES` caps a checkout file's bytes. */
 export const MAX_EXTERNAL_BYTES = 256 * 1024 * 1024;
 /** The largest text a tab holds, as `MAX_EDITABLE_BYTES` caps a checkout document; past it the tab is preview-only. */
@@ -84,6 +90,7 @@ export function looksLikeText(head: Uint8Array, whole: boolean): boolean {
 export async function externalRoute(real: string, source: boolean): Promise<ExternalRoute> {
   const ext = extension(real);
   if (INSTALLERS.has(ext)) return { action: "reveal", reason: "installer" };
+  if (AUDIO.has(ext)) return { action: "system", reason: "audio" };
   let stat;
   try {
     stat = await fs.lstat(real);
@@ -92,7 +99,6 @@ export async function externalRoute(real: string, source: boolean): Promise<Exte
   }
   if (stat.isDirectory()) return { action: "system", reason: "folder" };
   if (!stat.isFile()) return { action: "system", reason: "special" };
-  if (AUDIO.has(ext)) return { action: "system", reason: "audio" };
   if (stat.size > MAX_EXTERNAL_BYTES) return { action: "system", reason: "size" };
   let head: Uint8Array;
   try {
@@ -108,6 +114,19 @@ export async function externalRoute(real: string, source: boolean): Promise<Exte
   if (VIDEOS.has(ext)) return { action: "grant", kind: "video" };
   if (looksLikeText(head, stat.size <= head.length)) return { action: "grant", kind: "text" };
   return { action: "system", reason: "binary" };
+}
+
+/**
+ * The route for a click on `asked`, the physical path the shell probed. A
+ * path that now resolves elsewhere was swapped for a link since the hover and
+ * is refused; one that no longer resolves at all (deleted, or its folder made
+ * unreadable) is still granted by its name, so its tab, or the one it already
+ * has, says it cannot be opened (B16).
+ */
+export async function clickedRoute(asked: string, source: boolean): Promise<{ real: string; route: ExternalRoute } | { refused: "not_physical" }> {
+  const real = await fs.realpath(asked).catch(() => null);
+  if (real !== null && real !== asked) return { refused: "not_physical" };
+  return { real: asked, route: await externalRoute(asked, source) };
 }
 
 function byExtension(ext: string, source: boolean): ExternalKind {
@@ -137,37 +156,72 @@ type Grant = GrantedFile & {
   real: string;
   /** Its folder, the one an HTML page loads its own files from (D-03). */
   folder: string;
+  /** An HTML page's session slot (`externalPartition`), one of `MAX_EXTERNAL_GRANTS`; null for any other viewer. */
+  slot: number | null;
+  /** Whether a sync has named it since it was last handed out. */
+  named: boolean;
+  /** When it was last handed out. */
+  at: number;
 };
+
+/** A grant let go, and the page session slot its storage is to be cleared from. */
+export type ReleasedGrant = { id: string; slot: number | null };
 
 
 export type GrantLog = (event: string, fields: LogFields) => void;
 
 export class ExternalFiles {
   private readonly grants = new Map<string, Grant>();
+  /** Page session slots let go whose storage is not cleared yet; none is handed out again until it is. */
+  private readonly clearing = new Set<number>();
 
-  constructor(private readonly log: GrantLog) {}
+  constructor(
+    private readonly log: GrantLog,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   /**
    * A grant for the file at `real` (physical) opened in `kind`'s viewer, or
-   * null at the cap. The same file clicked again keeps its grant, so its one
-   * tab comes forward (B10).
+   * null at the cap. The same file clicked again in the same viewer keeps its
+   * grant, so its one tab comes forward (B10); its source beside its page is
+   * a grant of its own, so neither replaces the other.
    */
   grant(real: string, kind: ExternalKind): GrantedFile | null {
     for (const held of this.grants.values()) {
-      if (held.real !== real) continue;
-      held.kind = kind;
+      if (held.real !== real || held.kind !== kind) continue;
+      held.named = false;
+      held.at = this.now();
       this.log("external.granted", { grant: held.id, kind, again: true });
       return { id: held.id, name: held.name, kind };
     }
-    if (this.grants.size >= MAX_EXTERNAL_GRANTS) {
+    const slot = kind === "html" ? this.freeSlot() : null;
+    if (this.grants.size >= MAX_EXTERNAL_GRANTS || slot === undefined) {
       this.log("external.cap_reached", { kind, cap: MAX_EXTERNAL_GRANTS });
       return null;
     }
     const id = randomBytes(16).toString("hex");
     const name = path.basename(real);
-    this.grants.set(id, { id, name, kind, real, folder: path.dirname(real) });
+    this.grants.set(id, { id, name, kind, real, folder: path.dirname(real), slot, named: false, at: this.now() });
     this.log("external.granted", { grant: id, kind, again: false });
     return { id, name, kind };
+  }
+
+  /** The lowest page session slot neither held nor still being cleared, or undefined when every one is. */
+  private freeSlot(): number | undefined {
+    const used = new Set([...this.grants.values()].map((held) => held.slot));
+    for (let slot = 0; slot < MAX_EXTERNAL_GRANTS; slot += 1) if (!used.has(slot) && !this.clearing.has(slot)) return slot;
+    return undefined;
+  }
+
+  /** The session an HTML grant's page uses, or null once the grant is gone. */
+  partition(id: string): string | null {
+    const slot = this.grants.get(id)?.slot;
+    return slot === undefined || slot === null ? null : externalPartition(slot);
+  }
+
+  /** Says a released slot's storage is cleared, so another page may use it. */
+  slotCleared(slot: number): void {
+    this.clearing.delete(slot);
   }
 
   /** The grant `id` names, or undefined once it is gone. */
@@ -180,13 +234,23 @@ export class ExternalFiles {
     return [...this.grants.keys()];
   }
 
-  /** Lets go of every grant `named` does not hold; returns the ids let go. */
-  keep(named: ReadonlySet<string>): string[] {
-    const gone = [...this.grants.keys()].filter((id) => !named.has(id));
-    for (const id of gone) {
-      const held = this.grants.get(id)!;
-      this.grants.delete(id);
-      this.log("external.released", { grant: id, kind: held.kind });
+  /**
+   * Lets go of every grant `named` does not hold, but for one handed out in
+   * the last `UNNAMED_GRANT_GRACE_MS` that no sync has named since; returns
+   * those let go. A released page slot waits for `slotCleared`.
+   */
+  keep(named: ReadonlySet<string>): ReleasedGrant[] {
+    const gone: ReleasedGrant[] = [];
+    for (const held of [...this.grants.values()]) {
+      if (named.has(held.id)) {
+        held.named = true;
+        continue;
+      }
+      if (!held.named && this.now() - held.at < UNNAMED_GRANT_GRACE_MS) continue;
+      this.grants.delete(held.id);
+      if (held.slot !== null) this.clearing.add(held.slot);
+      this.log("external.released", { grant: held.id, kind: held.kind });
+      gone.push({ id: held.id, slot: held.slot });
     }
     return gone;
   }
@@ -258,8 +322,13 @@ export class ExternalFiles {
   }
 }
 
+/** An HTML grant's page session: in memory, never two live grants' at once (PRD outside-path-in-hide B4). */
+export function externalPartition(slot: number): string {
+  return `hide-browser-external-${slot}`;
+}
+
 /** The platform's reason code alone: a message can carry the path. */
-function errorCode(error: unknown): string {
+export function errorCode(error: unknown): string {
   const code = (error as NodeJS.ErrnoException | null)?.code;
   return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/u.test(code) ? code : "read_failed";
 }

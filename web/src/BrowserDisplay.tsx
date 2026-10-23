@@ -24,7 +24,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { MessageSquarePlusIcon } from "lucide-react";
 import { browserCommentKey, commentsOn, useFeedbackStore, noteBrowserComment } from "./viewFeedback";
 import { OpenerMark, PageNoteLayer, useViewFeedback } from "./ViewComments";
-import { externalBridge, settlePendingGrants, syncedGrants, useExternalStore } from "./externalFiles";
+import { externalBridge, pendingDeadline, settlePendingGrants, syncedGrants, useExternalStore } from "./externalFiles";
 import { windowDeviceId } from "./screenMachine";
 
 // A browser display (issue 155): its toolbar and the place its page shows.
@@ -392,6 +392,13 @@ export function BrowserHost({ actions }: { actions: Actions }) {
     if (haveRest) settlePendingGrants(grants ?? [], receipts ?? []);
   }, [haveRest, grants, receipts]);
   useEffect(() => {
+    // An open the core never answered stops holding its grant at its deadline.
+    const deadline = pendingDeadline();
+    if (deadline === null) return undefined;
+    const timer = setTimeout(() => settlePendingGrants(haveRest ? (grants ?? []) : [], receipts ?? []), Math.max(0, deadline - Date.now()));
+    return () => clearTimeout(timer);
+  }, [pending, haveRest, grants, receipts]);
+  useEffect(() => {
     // The grants the core's tabs stand on are named only once this window
     // has the core's tabs, so a reload lets go of none (PRD outside-path-in-hide B15).
     syncBrowserFront(front ? parseWorkspaceKey(front) : null, layout, inventory ?? [], scopes ?? [], syncedGrants(haveRest ? (grants ?? []) : null));
@@ -414,7 +421,8 @@ export function BrowserHost({ actions }: { actions: Actions }) {
     if (connection !== "live" || onCore !== true || !bridge) return undefined;
     let live = true;
     void bridge.live().then((grants) => {
-      if (live) latest.current.keepExternalGrants(grants);
+      // An open on its way was granted after the host answered, and is kept.
+      if (live) latest.current.keepExternalGrants([...new Set([...grants, ...Object.keys(useExternalStore.getState().pending)])]);
     }, () => undefined);
     return () => {
       live = false;

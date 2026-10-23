@@ -13,7 +13,7 @@ import type { Actions } from "./actions";
 import { AreaEmpty } from "./AreaEmpty";
 import { ExternalPage } from "./BrowserDisplay";
 import { Button } from "./components/ui/button";
-import { lineOffset, onLineRequest, takeLine } from "./editor/lineRequest";
+import { lineOffset, takeLine } from "./editor/lineRequest";
 import { languageLoader } from "./editor/languages";
 import { editorPhrases } from "./editor/phrases";
 import { baseTheme, scaleTheme } from "./editor/theme";
@@ -83,9 +83,9 @@ function bytesState(read: Exclude<ExternalBytes, { status: "preview_only" }>): F
 
 /**
  * An outside text file, read-only: line numbers, its language's colours and
- * Find, and a terminal link's line (`lineRequest.ts`), taken when it mounts or
- * when a second click brings it forward (B2). It holds no draft and saves
- * nothing, since the file is not the checkout's (D-06).
+ * Find, and a terminal link's line (`lineRequest.ts`), taken when it mounts:
+ * a second click reads the file again and mounts a new view (B2, B10). It
+ * holds no draft and saves nothing, since the file is not the checkout's (D-06).
  */
 function ExternalText({ grant, name, bytes }: { grant: string; name: string; bytes: Uint8Array }) {
   const { t } = useInterfaceTranslation();
@@ -122,17 +122,13 @@ function ExternalText({ grant, name, bytes }: { grant: string; name: string; byt
         if (live) view.dispatch({ effects: language.reconfigure(pack) });
       }, () => undefined);
     }
-    const goToLine = () => {
-      const asked = takeLine(externalLineKey(grant));
-      if (!asked) return;
+    const asked = takeLine(externalLineKey(grant));
+    if (asked) {
       const offset = lineOffset(view.state.doc, asked.line, asked.column);
       view.dispatch({ selection: { anchor: offset }, userEvent: "select", effects: EditorView.scrollIntoView(offset, { y: "center" }) });
-    };
-    goToLine();
-    const stop = onLineRequest(goToLine);
+    }
     return () => {
       live = false;
-      stop();
       view.destroy();
     };
     // One view per read: a second click remounts it by its key.

@@ -49,7 +49,7 @@ import { ChildRunner, executableFile, startDetached, type ChildResult } from "./
 import { fallbackScreen, fallbackScript, statusPageFile } from "./statusPage";
 import { MIN_SIZE, readWindowState, restoreBounds, windowStatePath, writeWindowState } from "./windowState";
 import { openRoute, probe, probeRequest } from "./localPath";
-import { ExternalFiles, externalRoute } from "./externalFiles";
+import { ExternalFiles, clickedRoute } from "./externalFiles";
 import { revealTarget } from "./reveal";
 import { badgeRequest, ClickGate, KeptNotifications, launchedId, notifyRequest, OVERLAY_SIZE, overlayDot, toastXml, withdrawRequest } from "./notify";
 import { Editor } from "./editor";
@@ -798,14 +798,12 @@ export class DesktopHost {
         this.log.event("external.refused", { reason: "path" });
         return null;
       }
-      // The shell sends the physical path it probed; a path that resolves
-      // elsewhere now was swapped for a link since, and is not followed.
-      const real = await fs.promises.realpath(asked).catch(() => null);
-      if (real !== asked) {
-        this.log.event("external.refused", { reason: real === null ? "not_found" : "not_physical" });
+      const clicked = await clickedRoute(asked, mode === "source");
+      if ("refused" in clicked) {
+        this.log.event("external.refused", { reason: clicked.refused });
         return null;
       }
-      const route = await externalRoute(real, mode === "source");
+      const { real, route } = clicked;
       if (route.action === "grant") {
         const granted = this.externals.grant(real, route.kind);
         if (granted) return granted;
