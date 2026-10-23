@@ -140,6 +140,10 @@ One row is one thing the screen names. A word in the last column is not used for
 
 Words that stay in English on purpose: `core`, `stack`, `effort`, `Conductor`, `Hide AI`, `Memory` (tab name), `Factory`.
 
+The rules a scan can decide are enforced by `web/src/i18n/copyRules.test.ts`: no particle that depends on the last sound after an inserted value, no `을(를)` pair, no 합니다체 or 반말 ending, no retired glossary word (Korean, Chinese and Japanese), and no bare English glossary word in a Korean sentence.
+The prompts typed into an agent (`issue.prompt.*`) are the one allowlist; a new entry needs the reason in the test.
+Naturalness, term choice beyond the banned words and ja/zh wording still need a reader.
+
 ## Hardcoded text guard
 
 Product text outside the catalogs is caught by two rules in `web/eslint.config.js`, which `pnpm lint` and the `checks` lane run on `web/src` (tests, `src/i18n` and `src/gallery` excepted).
