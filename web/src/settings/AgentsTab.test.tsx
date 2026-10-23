@@ -232,7 +232,7 @@ it("says a machine whose kit answered with no agent could not be read, with Chec
 
 it("Check again asks the kit and shows the kit's own state: under way while it reads, the old list and one reason when it failed (B10)", async () => {
   const { q, click, events, unmount } = await mount(state([device("local", { kit: kit(SEVEN, { unavailable: "standalone" }) })]));
-  expect(q("[data-agents-unavailable]")?.textContent).toBe("This Hide is not running from the installed app, so it installs nothing on this machine. Open the Hide app to install.");
+  expect(q("[data-agents-unavailable]")?.textContent).toBe("This Hide is not running from the installed app, so it installs nothing on this device. Open the Hide app to install.");
   expect(q('[data-agent-row="local:claude-code:on"]')).not.toBeNull();
   expect(q("[data-agents-check]")?.getAttribute("data-agents-check")).toBe("idle");
   // The tab reads the kit once as it opens (the demand hook); the button asks again and keeps no clock of its own.

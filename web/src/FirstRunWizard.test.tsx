@@ -208,7 +208,7 @@ it("reopened from Help while the kit cannot run, stays on its first step with th
   (next.rest.navigator.devices[0]!.kit as { unavailable?: string }).unavailable = "unreadable";
   const { events, unmount } = await mount(next);
   await act(async () => { useSetupWalk.getState().open(); });
-  expect(document.querySelector("[data-first-run-unavailable]")?.textContent).toContain("Hide could not read its kit on this machine.");
+  expect(document.querySelector("[data-first-run-unavailable]")?.textContent).toContain("Hide could not read its kit on this device.");
   await act(async () => { continueButton().click(); });
   expect(choices(events)).toEqual([{ schema_version: 2, kind: "agent_onboarding_apply", payload: { agents: [], finish: false } }]);
   expect(useSetupWalk.getState().step).toBe("agents");
@@ -284,7 +284,7 @@ it("says why when its pass could not run here, and Try again has the agents read
     (next.rest.navigator.devices[0]!.kit as { unavailable?: string }).unavailable = "unreadable";
     useShellStore.setState({ ...next, revision: 2 } as never);
   });
-  expect(document.querySelector("[data-first-run-unavailable]")?.textContent).toContain("Could not set up agents on this device: Hide could not read its kit on this machine.");
+  expect(document.querySelector("[data-first-run-unavailable]")?.textContent).toContain("Could not set up agents on this device: Hide could not read its kit on this device.");
   // An unread kit is not a Mac with no agent installed.
   expect(document.querySelector("[data-first-run-no-agent]")).toBeNull();
   expect(continueButton().textContent).toContain("Try again");
