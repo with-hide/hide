@@ -60,6 +60,12 @@ export function areasOf<I extends AreaItem>(node: AreaNode<I>): Area<I>[] {
   return "area" in node ? [node.area] : [...areasOf(node.split.first), ...areasOf(node.split.second)];
 }
 
+/** The area drawn at the tree's top-right corner: the right of a row, the top of a column. */
+export function topRightArea<I extends AreaItem>(node: AreaNode<I>): Area<I> {
+  if ("area" in node) return node.area;
+  return topRightArea(node.split.axis === "row" ? node.split.second : node.split.first);
+}
+
 export function findArea<I extends AreaItem>(root: AreaNode<I>, areaId: string): Area<I> | null {
   return areasOf(root).find((area) => area.id === areaId) ?? null;
 }

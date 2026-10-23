@@ -1,4 +1,4 @@
-import { ChevronDownIcon, EllipsisIcon, PlusIcon } from "lucide-react";
+import { ChevronDownIcon, EllipsisIcon, PlusIcon, XIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/entry-menu";
@@ -9,7 +9,7 @@ import { useUiStore } from "./ui";
 import { useInterfaceTranslation } from "./i18n/client";
 import { IDLE, movePointer, pressTab, relayout, releasePointer, type DragSession } from "./areaDrag";
 import { focusFromKeyboard, installFocusModality } from "./areaFocus";
-import { RATIO_MAX, RATIO_MIN, RESIZE_STEP, areasOf, dropTarget, findArea, locateDisplay, ratioAtOffset, revealedScroll, sameTarget, singleAreaGeometry, steppedRatio, tabStripFit, areaGeometry,
+import { RATIO_MAX, RATIO_MIN, RESIZE_STEP, areasOf, topRightArea, dropTarget, findArea, locateDisplay, ratioAtOffset, revealedScroll, sameTarget, singleAreaGeometry, steppedRatio, tabStripFit, areaGeometry,
   type Area, type AreaItem, type AreaLayout, type AreaNode, type AreaSplit, type AreaWords,
   type DividerBox, type DropTarget, type Geometry, type LayoutSizes, type Point, type Rect, type TabFit, type TabSlot, type TabStripSizes } from "./areaLayout";
 
@@ -73,6 +73,8 @@ export type AreaAdapter<I extends AreaItem> = {
   barAttributes?: Record<string, string>;
   barStart?: (area: Area<I>) => React.ReactNode;
   barEnd?: (area: Area<I>) => React.ReactNode;
+  /** The column's own ✕, drawn once at its top-right corner as a tool's head draws it: it closes the whole column. */
+  close?: { label: string; onClose: () => void; attributes?: Record<string, string> };
   shown?: (area: Area<I>) => I | null;
   splitUnavailable?: string;
   label: (item: I) => string;
@@ -583,6 +585,15 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
             </button>
           }
         />
+      ) : null}
+      {tree.adapter.close && (switcher || topRightArea(tree.layout.root).id === area.id) ? (
+        <div className="flex shrink-0 items-center pl-xxs pr-xs">
+          <Hint label={tree.adapter.close.label}>
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={tree.adapter.close.label} onClick={tree.adapter.close.onClose} {...tree.adapter.close.attributes}>
+              <XIcon />
+            </Button>
+          </Hint>
+        </div>
       ) : null}
     </div>
   );

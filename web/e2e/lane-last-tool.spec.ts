@@ -113,6 +113,14 @@ test("a tool pressed into a lane ⌘E or Escape closed opens alone, and the docu
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
     await shows(page, "memory");
 
+    // The documents' own ✕ closes their column alone, as a tool's ✕ does.
+    await screenshot(page, "lane-documents-close");
+    await page.locator("[data-lane-documents-close]").click();
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
+    await shows(page, "memory");
+    await page.locator('[data-lane-tool="documents"]').click();
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
+
     // Escape closes the unpinned lane as ⌘E does, so Memory again opens alone.
     await page.locator("[data-editor-body] .cm-content").click();
     await page.keyboard.press("Escape");

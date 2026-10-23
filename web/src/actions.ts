@@ -461,6 +461,9 @@ export function createActions(send: DispatchFn) {
     }
   };
 
+  /** The documents' own ✕ (B12): the viewing column closes, every view kept on the documents button; the tool column stays. */
+  const closeDocuments = () => setWorkspaceView({ documents: false });
+
   /** The rail's documents button or its command (B2, B11): the documents fold while they show, else they come in front; with no document nothing happens but a diagnostic. */
   const toggleDocuments = () => {
     const view = workspaceViewOf(rest());
@@ -2754,6 +2757,7 @@ export function createActions(send: DispatchFn) {
 
     toggleTool,
     closeTool,
+    closeDocuments,
     toggleDocuments,
     showDocuments,
     closeLane,

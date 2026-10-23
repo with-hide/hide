@@ -220,17 +220,16 @@ impl Runtime {
         self.snapshot.ui_state.detail.back();
         self.read_detail_top(before.top(), false);
         self.persist_ui_state();
-        if self.snapshot.ui_state.detail.items.is_empty() {
-            self.show_front_documents_if_any();
-        } else {
+        if !self.snapshot.ui_state.detail.items.is_empty() {
             self.call_front_lane();
         }
         true
     }
 
-    /// ✕: the slot empties and the rail drops it; the viewing column shows
-    /// the documents when the Workspace has some, else closes (lane-two-
-    /// columns B13).
+    /// ✕: the slot empties and the rail drops it; the viewing column goes
+    /// back to what stood under the slot, the documents only when they
+    /// showed before it came forward, else the column closes (lane-two-
+    /// columns B13; operator decision 2026-10-24).
     pub(super) fn close_detail(&mut self) -> bool {
         let before = self.snapshot.ui_state.detail.clone();
         if before == crate::model::DetailSlot::default() {
@@ -241,7 +240,6 @@ impl Runtime {
             self.close_session_record();
         }
         self.persist_ui_state();
-        self.show_front_documents_if_any();
         true
     }
 
@@ -277,9 +275,11 @@ impl Runtime {
 
     /// The one way the slot comes forward, whatever opened it (a card, a
     /// record, the map, ← or the rail's button): the front Workspace's lane
-    /// opens when it was closed, on the viewing column alone (`open_on`),
-    /// and the call is numbered as the viewing column's, so a stacked lane
-    /// draws the slot over its tool (B9, B19).
+    /// opens when it was closed on the slot alone, the tool column closed
+    /// (`open_on`) and no documents under the slot, so its ✕ closes the
+    /// lane again (operator decision 2026-10-24); the call is numbered as
+    /// the viewing column's, so a stacked lane draws the slot over its tool
+    /// (B9, B19).
     fn call_front_lane(&mut self) {
         let Some(key) = self.front_workspace_key() else {
             return;
@@ -289,6 +289,9 @@ impl Runtime {
         };
         let entry = store.views.entry(&key.0, &key.1);
         let was_closed = entry.open_on(crate::model::LaneCallSide::View);
+        if was_closed {
+            entry.documents = false;
+        }
         store.call_lane(&key, crate::model::LaneCallSide::View);
         if was_closed {
             self.persist_workspace_views();
@@ -297,8 +300,9 @@ impl Runtime {
 
     /// Takes out of the slot the items whose subject is gone (a deleted
     /// session's plan, a mission no longer kept); a slot this empties is
-    /// left as ✕ leaves it, the documents in the viewing column or the
-    /// column closed (lane-two-columns B13). Whether anything was taken.
+    /// left as ✕ leaves it, what stood under the slot in the viewing column
+    /// or the column closed (lane-two-columns B13). Whether anything was
+    /// taken.
     pub(super) fn drop_detail_items(&mut self, keep: impl Fn(&DetailItem) -> bool) -> bool {
         let slot = &mut self.snapshot.ui_state.detail;
         let had = slot.items.len();
@@ -306,33 +310,11 @@ impl Runtime {
         if slot.items.len() == had {
             return false;
         }
-        let emptied = slot.items.is_empty();
-        if emptied {
+        if slot.items.is_empty() {
             slot.shown = false;
         }
         self.persist_ui_state();
-        if emptied {
-            self.show_front_documents_if_any();
-        }
         true
-    }
-
-    /// The slot emptied: the documents take the viewing column when the
-    /// front Workspace has some, else the column closes (B13).
-    fn show_front_documents_if_any(&mut self) {
-        let Some(key) = self.front_workspace_key() else {
-            return;
-        };
-        let Some(store) = self.workspace_views.as_mut() else {
-            return;
-        };
-        let entry = store.views.entry(&key.0, &key.1);
-        let documents = entry.open && entry.layout.display_count() > 0;
-        if entry.documents == documents {
-            return;
-        }
-        entry.documents = documents;
-        self.persist_workspace_views();
     }
 
     /// The viewing column folded behind the rail's 보기 button (B11).

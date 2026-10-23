@@ -2251,6 +2251,73 @@ fn a_call_into_a_lane_closed_with_the_card_opens_its_own_column_alone() {
     );
 }
 
+/// Operator decision 2026-10-24 (B13): the slot's ✕ gives the viewing
+/// column back to what stood under the slot. A card opened into a lane ⌘E
+/// closed over the documents stands alone, and its ✕ leaves no column; a
+/// card opened over the documents shown gives them back.
+#[test]
+fn closing_the_slot_gives_back_what_stood_under_it() {
+    let (mut runtime, checkout_id, directory) = views_runtime("lane-slot-under");
+    files(&directory, &["notes.md"]);
+    let pull: crate::model::PullRequestSnapshot = serde_json::from_value(serde_json::json!({
+        "number":42,"title":"Ship","url":"https://github.com/acme/app/pull/42",
+        "head_branch":"feature-42","base_branch":"main","badge":"open","checks":"passing",
+        "is_draft":false,"closing_issues":[]
+    }))
+    .unwrap();
+    runtime.snapshot.navigator.workspaces[0].pull_requests = vec![pull];
+    let lane = |runtime: &Runtime| {
+        let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+        (
+            view.open,
+            view.documents,
+            view.tool,
+            runtime.snapshot.ui_state.detail.shown,
+        )
+    };
+    let card = |runtime: &mut Runtime| {
+        assert!(runtime.dispatch_json(&explorer_event(
+            "pr_open",
+            serde_json::json!({"workspace_id": "workspace:order", "pr_number": 42}),
+        )));
+    };
+    let close = |runtime: &mut Runtime| {
+        assert!(runtime.dispatch_json(&explorer_event("detail_close", serde_json::json!({}))));
+    };
+    open(
+        &mut runtime,
+        &checkout_id,
+        &directory.join("notes.md"),
+        false,
+        false,
+    );
+    layout(&mut runtime, serde_json::json!({"tool": null}));
+    assert_eq!(lane(&runtime), (true, true, None, false));
+
+    // The documents showed, then ⌘E: the card opens alone and its ✕ leaves
+    // the documents where ⌘E put them.
+    layout(&mut runtime, serde_json::json!({"open": false}));
+    card(&mut runtime);
+    assert_eq!(lane(&runtime), (true, false, None, true), "the card alone");
+    close(&mut runtime);
+    assert_eq!(
+        lane(&runtime),
+        (true, false, None, false),
+        "no column is left, so the lane is closed"
+    );
+
+    // The documents showing: the card stands over them, and its ✕ gives them back.
+    layout(&mut runtime, serde_json::json!({"documents": true}));
+    card(&mut runtime);
+    assert_eq!(lane(&runtime), (true, true, None, true));
+    close(&mut runtime);
+    assert_eq!(
+        lane(&runtime),
+        (true, true, None, false),
+        "the documents back"
+    );
+}
+
 /// PRD lane-two-columns B9, B19: with the lane already open on a tool, a
 /// card opened, the rail's button on a shown slot and ← are each a call
 /// the viewing column's, so a stacked lane draws the slot over the tool
