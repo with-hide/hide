@@ -27,9 +27,9 @@ import { useUiStore } from "./ui";
 // lines joined with what is live now and the pull request's milestones, one
 // list oldest first, each row in the sidebar's agent-row shape, joined by one
 // rail behind the marks (PRD record-card-readability D-09). A live row
-// keeps the one button its state needs under its line; an ended row shows
-// `View conversation` and `Resume` only while the pointer or the keyboard is
-// on it. The record's failure, its first read and its empty line stand in
+// that asks keeps `Answer` under its line; every other row shows its buttons
+// (`Go to pane`, `View conversation`, `Resume`) only while the pointer or the
+// keyboard is on it. The record's failure, its first read and its empty line stand in
 // the section's own place; the rest of the card never moves.
 
 /**
@@ -200,8 +200,9 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
     start((requestId, confirmOnly) => actions.startAgent({ target: { checkoutPath: checkout.path }, deviceId: line.device_id === node ? undefined : line.device_id, provider, resumeSessionId: line.id, resumeSessionPath: line.path ?? undefined, requestId, confirmOnly }));
   };
   const agent = agentProductName(line.agent);
-  // The tooltip carries what the row leaves out (B9): the request, who delegated it, how many sessions it joins, which device.
+  // The tooltip carries what the row leaves out (B9): the agent the logo stands for, the request, who delegated it, how many sessions it joins, which device.
   const hint = [
+    agent,
     line.request ?? t("links.noRequest"),
     line.parent ? t("links.delegatedBy", { name: line.parent.name }) : null,
     line.ids.length > 1 ? t("links.continued", { count: line.ids.length }) : null,
@@ -209,28 +210,24 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
   ].filter((part): part is string => part !== null).join(" · ");
   // The status mark on the rail, then the agent's logo, as a sidebar row (D-09, B17).
   const mark = <><span className={ON_RAIL}>{live ? <StatusMark mark={live.agent.mark} className={markTone(live.agent)} data-agent-status-mark={live.agent.mark} /> : <StatusMark mark={null} data-agent-status-mark="ended" />}</span><AgentMark kind={line.agent} /></>;
-  const caption = asked ? { text: asked, className: "text-warning", wrap: true } : { text: `${agent} · ${live ? statusText(t, live.agent.status_code) : t("sessionWork.done")}` };
+  // The logo already names the agent, so the line carries only its state.
+  const caption = asked ? { text: asked, className: "text-warning", wrap: true } : { text: live ? statusText(t, live.agent.status_code) : t("sessionWork.done") };
   const right = live ? <Elapsed since={line.started_at_unix_ms} className="font-mono text-caption text-muted-foreground" data-link-elapsed={line.id} /> : (() => {
     const span = spanText(line.started_at_unix_ms, line.ended_at_unix_ms);
     return span ? <span className="font-mono text-caption text-muted-foreground" data-link-span={line.id}>{span}</span> : null;
   })();
-  const paneButton = live ? (
-    <Button variant="secondary" size="sm" onClick={() => actions.openAgent(live.agent.pane_id)} data-link-pane={line.id}>
-      <SquareTerminalIcon aria-hidden="true" />
-      {t("links.goToPane")}
-    </Button>
-  ) : null;
+  const paneButton = live ? <LineButton icon={<SquareTerminalIcon aria-hidden="true" />} label={t("links.goToPane")} blocked={null} onClick={() => actions.openAgent(live.agent.pane_id)} data="pane" id={line.id} /> : null;
   const viewButton = <LineButton icon={<MessageSquareIcon aria-hidden="true" />} label={t("links.view")} blocked={viewOff} onClick={view} data="view" id={line.id} />;
   const resuming = resume.request !== null && !resume.uncertain;
   const resumeButton = <LineButton icon={resuming ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <PlayIcon aria-hidden="true" />} label={t(resume.uncertain ? "groups.confirm" : resuming ? "links.resuming" : "links.resume")} blocked={resumeOff} busy={resuming} onClick={resumeLine} data="resume" id={line.id} />;
-  // A live row keeps its one button under the line (B8); an ended row reveals its two in the time's place.
+  // An asking row keeps `Answer` under the line (B8); every other row reveals its buttons in the time's place.
   const below = live?.kind === "question" ? (
     <Button size="sm" onClick={() => actions.openAgent(live.agent.pane_id)} data-link-answer={line.id}>
       <CircleHelpIcon aria-hidden="true" />
       {t("links.answer")}
     </Button>
-  ) : live?.kind === "working" ? paneButton : null;
-  const reveal = live ? (live.kind === "idle" ? <>{viewButton}{paneButton}</> : null) : <>{viewButton}{resumeButton}</>;
+  ) : null;
+  const reveal = live ? (live.kind === "idle" ? <>{viewButton}{paneButton}</> : live.kind === "working" ? paneButton : null) : <>{viewButton}{resumeButton}</>;
   const busy = resume.request !== null || resume.failure !== null;
   return (
     <SessionRow

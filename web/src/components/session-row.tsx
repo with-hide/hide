@@ -12,9 +12,10 @@ import { Hint } from "./ui/tooltip";
  *
  * Nothing grows or moves under the pointer or the keyboard: `reveal` takes the
  * right slot's place while the pointer or focus is on the row (an ended
- * session's `대화 보기 · 이어서 하기`, a child's `기록 보기`) and `right`
- * hides meanwhile, as the sidebar rows do with `REVEALED_CONTROL`. `below`
- * is always drawn, for the one button a live row keeps (B8).
+ * session's `대화 보기 · 이어서 하기`, a live one's `pane으로 가기`, a child's
+ * `기록 보기`) and `right` hides meanwhile, as the sidebar rows do with
+ * `REVEALED_CONTROL`. `below` is always drawn, for the `답하러 가기` an asking
+ * row keeps (B8).
  */
 export function SessionRow({
   mark,
