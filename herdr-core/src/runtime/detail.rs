@@ -6,7 +6,10 @@
 //! opens it, so one operator action is one event.
 
 use super::*;
-use crate::model::{DetailItem, SidebarLens, SidebarProject, TaskView};
+use crate::model::{
+    DetailItem, PRACTICE_CHAPTER_LIMIT, PRACTICE_STEP_LIMIT, PracticeProgress, SidebarLens,
+    SidebarProject, TaskView, practice_chapter_id_valid,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -37,6 +40,16 @@ pub(super) struct SidebarProjectPayload {
     pub(super) lens: Option<String>,
     #[serde(default)]
     pub(super) show: bool,
+}
+
+/// One practice-mode chapter's progress (`ui_state.practice`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PracticeProgressPayload {
+    pub(super) chapter: String,
+    pub(super) version: u32,
+    pub(super) step: u32,
+    pub(super) finished: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,6 +151,45 @@ impl Runtime {
         if payload.show {
             state.left_sidebar_visible = true;
         }
+        self.persist_ui_state();
+        true
+    }
+
+    pub(super) fn set_practice_progress(&mut self, payload: PracticeProgressPayload) -> bool {
+        if !practice_chapter_id_valid(&payload.chapter) {
+            self.set_error(
+                "practice.chapter_invalid",
+                "A practice chapter id is 1 to 32 characters of a-z, 0-9 and -",
+                false,
+            );
+            return true;
+        }
+        if payload.step > PRACTICE_STEP_LIMIT {
+            self.set_error(
+                "practice.step_invalid",
+                format!("A practice step is at most {PRACTICE_STEP_LIMIT}"),
+                false,
+            );
+            return true;
+        }
+        let progress = PracticeProgress {
+            version: payload.version,
+            step: payload.step,
+            finished: payload.finished,
+        };
+        let practice = &mut self.snapshot.ui_state.practice;
+        if practice.get(&payload.chapter) == Some(&progress) {
+            return false;
+        }
+        if !practice.contains_key(&payload.chapter) && practice.len() >= PRACTICE_CHAPTER_LIMIT {
+            self.set_error(
+                "practice.too_many",
+                format!("Progress is kept for at most {PRACTICE_CHAPTER_LIMIT} practice chapters"),
+                false,
+            );
+            return true;
+        }
+        practice.insert(payload.chapter, progress);
         self.persist_ui_state();
         true
     }

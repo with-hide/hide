@@ -256,10 +256,10 @@ test("the Help menu opens the shortcut sheet, copies the diagnostics, opens the 
     expect(triggerBox.x + triggerBox.width).toBeLessThanOrEqual(settingsBox.x);
     expect(Math.round(triggerBox.y)).toBe(Math.round(settingsBox.y));
 
-    // B13: three actions, then the version as a line to read.
+    // B13: the actions, then the version as a line to read.
     await trigger.click();
     const menu = page.locator("[data-help-menu]");
-    await expect(menu.locator("[data-help-item]")).toHaveText([`Keyboard shortcuts${commandLabel("shortcuts")}`, "Copy diagnostics", "Report an issue"]);
+    await expect(menu.locator("[data-help-item]")).toHaveText([`Keyboard shortcuts${commandLabel("shortcuts")}`, "Practice Hide", "Copy diagnostics", "Report an issue"]);
     const version = menu.locator("[data-help-version]");
     await expect(version).toHaveText(/^hide \S+$/);
     await expect(version).not.toHaveAttribute("role", "menuitem");
