@@ -177,7 +177,7 @@ The core answers from the caller's own observation: the letters whose wait is ov
 The plugin and the extension ask at every tool result of the pane's root session, so a `--now` letter goes at the next result (B6), and skip only the results that come while letters they handed over wait for their receipt; Grok's and Cursor's hook runs per tool call and adds one CLI call there, and agy's per model call after the first.
 Each handover the core answers is counted on the letter (`Letter.tool_handovers`), and after three without a receipt the letter is not handed over at a tool again: it waits for the next prompt or `hide inbox`, as a letter does after its three bells (`mailbox::TOOL_HANDOVERS`, D-11).
 [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#letters-at-a-tool-event) owns the cost per tool call and how it is measured, and [agent-hooks.md](agent-hooks.md) each script's and hook's part.
-The pending retry, the oldest-first order with `외 N통`, the three bell attempts, the three tool handovers above and the 60-minute deadline are the whole of it; a letter a working agent never reaches a gap for is belled or handed over once it rests, as before.
+The pending retry, the oldest-first order with the count of letters waiting, the three bell attempts, the three tool handovers above and the 60-minute deadline are the whole of it; a letter a working agent never reaches a gap for is belled or handed over once it rests, as before.
 The verdict's reasons are `working`, `blocked`, `awaiting_operator`, `session_unread`, `draft`, `quiet_period`, `kind_not_belled`, `session_changed`, `pane_unavailable`, `status_not_at_rest` and `core_pending` (a core on a move's copy types into no pane until the move's link commits it, [ARCHITECTURE.md](ARCHITECTURE.md#moving-the-core)).
 Between the verdict and the input the doorbell asks Herdr again and checks its own memory last, and each refusal there has its own reason: `launch_pending` and `not_ready` (Herdr's readiness), `identity_changed` (Herdr's agent in the pane has another name, kind or native session), `sequence_moved` (Herdr's status or state sequence moved), `input_after_verdict` (hide routed input to the pane) and `letter_changed` (the letter was confirmed, cancelled, expired or reserved meanwhile).
 A letter refused there is tried again in the same pane episode after 5 seconds, then 10, 20, 40 and 80, then every two minutes, because readiness and the letter are facts the pane episode does not carry; a change of the pane's status, sequence, input or session tries it at once.
@@ -248,14 +248,27 @@ A swallowed bell moves no observed state, so `Rung` prevents another ring in tha
 
 ### The bell line
 
-The doorbell submits one line through Herdr's `agent.prompt`: `🦉 <writer> <kind>: <the letter's first line>`, followed by ` · 외 N통` when N more letters wait for the same recipient, and ` · hide inbox` for a Codex or Grok recipient (the adapter's `bell_names_inbox` declaration):
+The doorbell submits one line through Herdr's `agent.prompt`: `🦉 <writer> <kind>: <the letter's first line>`, followed by how many more letters wait for the same recipient when there are any, and ` · hide inbox` for a Codex or Grok recipient (the adapter's `bell_names_inbox` declaration):
 
 ```
-🦉 label-end-fix 보고: label end 수정 PR #881을 열었습니다
+🦉 label-end-fix report: label end fix opened PR #881
 🦉 hierarchy-pen-scratch 보고: Pen 시안이 준비됐습니다 · 외 1통
 ```
 
-The kind reads 요청 for a request, 막힘 for a block, 보고 for a report, 진행 for a progress letter, 답장 for a reply and 감시 for a watch warning.
+The kind and the count are worded in the operator's interface language, the one Hide AI writes in (`Runtime::interface_language`: the language chosen in Settings, else this machine's primary language read once at launch, else English), which the doorbell reads with the recipient's connector under the runtime's lock from state the runtime holds, with no I/O.
+
+| Kind | en | ko | zh-CN | ja |
+| --- | --- | --- | --- | --- |
+| request | request | 요청 | 请求 | 依頼 |
+| block | blocked | 막힘 | 受阻 | ブロック |
+| report | report | 보고 | 报告 | 報告 |
+| progress | progress | 진행 | 进展 | 進捗 |
+| reply | reply | 답장 | 回复 | 返信 |
+| watch warning | watch | 감시 | 监视 | 監視 |
+| N more waiting | ` · and N more` | ` · 외 N통` | ` · 另有 N 封` | ` · ほか N 通` |
+
+A kind this build does not know reads as a letter (letter, 편지, 信, 手紙).
+Nothing reads the words back: a letter's turn is recognized by the whole line its ledger kept when it rang ([Recognizing the bell](#recognizing-the-bell)), so a change of language between the ring and the turn changes nothing.
 The writer is the name the sender registered under (`hide agent register`, `hide agent spawn --name`), else the title Hide's screens give it while its pane still hosts that session, else its runtime's name, such as Codex; never a pane id and never its registration id, which belong to the letter's envelope ([Names](#names-on-the-wire-and-on-screen)).
 A watch warning is named by the agent it watches, and its first line says for how long nothing moved, that the agent stopped with a question, or that it is blocked at a prompt ([Watch activity and completion](#watch-activity-and-completion)).
 Both are looked up in memory when the bell rings, on the doorbell's thread, never on the session-sync thread.
