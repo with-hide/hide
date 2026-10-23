@@ -1221,6 +1221,7 @@ dependencies = [
  "hide-memory",
  "hide-platform",
  "hide-project",
+ "hide-shell",
  "ignore",
  "libc",
  "rusqlite",
@@ -1394,6 +1395,7 @@ dependencies = [
  "hide-agent-adapter",
  "hide-platform",
  "hide-project",
+ "hide-shell",
  "libc",
  "md5",
  "percent-encoding",
@@ -1403,6 +1405,13 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "workspace-hack",
+]
+
+[[package]]
+name = "hide-shell"
+version = "0.1.0"
+dependencies = [
  "workspace-hack",
 ]
 

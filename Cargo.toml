@@ -13,6 +13,7 @@ members = [
     "hide-platform",
     "hide-project",
     "hide-session",
+    "hide-shell",
     "hided",
     "workspace-hack",
 ]

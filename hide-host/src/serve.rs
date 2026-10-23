@@ -1539,6 +1539,11 @@ pub fn handle_with_progress(
                 if let Some(cwd) = answer.facts.cwd.as_mut() {
                     *cwd = hide_platform::path::to_wire_lossy(Path::new(cwd));
                 }
+                for mark in &mut answer.facts.named {
+                    if let Some(folder) = mark.pr.folder.as_mut() {
+                        *folder = hide_platform::path::to_wire_lossy(Path::new(folder));
+                    }
+                }
             }
             to_value(answers)
         }
