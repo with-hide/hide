@@ -1579,7 +1579,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_and_agy_have_a_worktree_trusted_on_its_node_before_they_start() {
+    fn claude_agy_and_grok_have_a_worktree_trusted_on_its_node_before_they_start() {
         let home = tempfile::tempdir().unwrap();
         let agy = home.path().join(".gemini/antigravity-cli/settings.json");
         let claude = home.path().join(".claude.json");
@@ -1598,13 +1598,19 @@ mod tests {
         };
         for name in ["tree-1", "tree-2"] {
             std::fs::create_dir_all(tree(name).join(".git")).unwrap();
+            std::fs::write(tree(name).join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
         }
         std::fs::create_dir_all(tree("plain")).unwrap();
+        // Grok keeps a worktree's trust under its repository's main checkout,
+        // which `tree-1` is itself.
         trust_worktree(Some(&node), "grok", &wire("tree-1")).unwrap();
+        // Its format and spelling are `folder_trust`'s tests'.
+        let grok = std::fs::read_to_string(home.path().join(".grok/trusted_folders.toml")).unwrap();
         assert!(
-            !agy.exists() && !claude.exists(),
-            "Grok asks no folder trust"
+            grok.contains("tree-1") && grok.contains("trusted = true"),
+            "{grok}"
         );
+        assert!(!agy.exists() && !claude.exists());
         trust_worktree(Some(&node), "antigravity", &wire("tree-1")).unwrap();
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&agy).unwrap()).unwrap();
@@ -1625,7 +1631,7 @@ mod tests {
             true
         );
         // A folder that is not a worktree is never trusted.
-        for kind in ["antigravity", "claude"] {
+        for kind in ["antigravity", "claude", "grok"] {
             let refused = trust_worktree(Some(&node), kind, &wire("plain")).unwrap_err();
             assert!(refused.starts_with("agent_trust_failed"), "{refused}");
         }
