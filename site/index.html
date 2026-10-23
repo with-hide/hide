@@ -34,8 +34,7 @@
           <span>hide</span>
         </a>
         <nav aria-label="Main navigation">
-          <a class="nav-extra" href="#team">Team</a>
-          <a class="nav-extra" href="#memory">Memory</a>
+          <a class="nav-extra" href="#ai">Product</a>
           <a class="nav-extra" href="#pricing">Pricing</a>
           <a class="nav-extra" href="#faq">FAQ</a>
           <a class="nav-extra" href="https://github.com/with-hide/hide">GitHub</a>
@@ -48,8 +47,8 @@
       <section class="hero" aria-labelledby="intro-title">
         <div class="wrap hero-copy">
           <p class="label bare">The multi-agent IDE for people</p>
-          <h1 id="intro-title">Run more agents.<br> <span class="accent">Hold less.</span></h1>
-          <p class="lead">Keep running Claude Code, Codex and the rest in your terminal, as you do now. hide lets them start, watch and write to each other, remembers what they decided, and <strong>shows you only what needs a person.</strong></p>
+          <h1 id="intro-title">Run ten agents.<br> <span class="accent">See only the two that need you.</span></h1>
+          <p class="lead">Claude Code, Codex and the rest keep running in real terminals. hide reads all of them and brings you the decisions.</p>
           <div class="actions">
             <a class="button primary" id="hero-download" href="#download">Get hide <span aria-hidden="true">↓</span></a>
             <a class="button secondary" href="https://github.com/with-hide/hide">View on GitHub <span aria-hidden="true">↗</span></a>
@@ -58,43 +57,18 @@
           <p class="hero-meta"><span>Free · Apache 2.0 licensed</span><span>macOS · Windows · Linux</span><span>Built on Herdr</span></p>
         </div>
 
-        <figure class="stage wrap reveal" aria-labelledby="stage-caption">
+        <figure class="stage wrap reveal" data-tab="projects">
           <div class="window-wrap">
             <img class="peek" src="./assets/owls/owl-peek-still.svg" data-motion="./assets/owls/owl-peek.svg" width="1200" height="942" alt="">
             <div class="window">
-              <div class="panel" role="tabpanel" id="panel-needs" aria-labelledby="tab-needs" data-caption="A lead waits on its workers. The two that need you are on top.">
+              <div class="panel">
                 <picture>
                   <source media="(prefers-color-scheme: light)" srcset="./assets/shots/hero-light.webp">
-                  <img src="./assets/shots/hero-dark.webp" width="2912" height="1800" alt="The hide window. Two agents that need an answer are raised above the project tree. A lead splitting the work and the agent asking to merge two pull requests run side by side, and the PRs tool lists the two ready to merge above the ones agents are still working on.">
-                </picture>
-              </div>
-              <div class="panel" role="tabpanel" id="panel-agents" aria-labelledby="tab-agents" data-caption="The lead's tree: who it started, which agent runs each, and the one that asks." hidden>
-                <picture>
-                  <source media="(prefers-color-scheme: light)" srcset="./assets/shots/agents-light.webp">
-                  <img src="./assets/shots/agents-dark.webp" width="2912" height="1800" alt="The same window with the lead's tree open. The sidebar shows the lead with Codex workers and OpenCode helpers under it, and a popover from the lead's pane lists the helpers it started, one of them asking." loading="lazy" decoding="async">
-                </picture>
-              </div>
-              <div class="panel" role="tabpanel" id="panel-memory" aria-labelledby="tab-memory" data-caption="What sessions decided, kept as cards. One rule waits for your Promote into the docs." hidden>
-                <picture>
-                  <source media="(prefers-color-scheme: light)" srcset="./assets/shots/memory-light.webp">
-                  <img src="./assets/shots/memory-dark.webp" width="2912" height="1800" alt="The same window with the Memory tool pinned. Under To ask, a rule waits to be promoted into the docs and an agent is writing another one in. Below, the Project's cards: decisions, a lesson, a rule already in CONTRIBUTING.md and a fact." loading="lazy" decoding="async">
-                </picture>
-              </div>
-              <div class="panel" role="tabpanel" id="panel-core" aria-labelledby="tab-core" data-caption="The core on the Mac that never sleeps. A laptop, a Linux server and a phone attached." hidden>
-                <picture>
-                  <source media="(prefers-color-scheme: light)" srcset="./assets/shots/core-light.webp">
-                  <img src="./assets/shots/core-dark.webp" width="2912" height="1800" alt="Settings in hide. Devices lists the core machine, a laptop that dials in and a Linux server, all connected. Mobile shows Tailscale ready and one paired phone." loading="lazy" decoding="async">
+                  <img src="./assets/shots/hero-dark.webp" width="2912" height="1800" alt="The hide window. The sidebar's Projects list raises the two agents that need an answer above the project tree. A Claude Code lead splitting the work and a Codex agent asking to merge two pull requests run side by side, and the Project tool beside them counts the sessions, pull requests, worktrees and the last seven days' cost, with the project's to-do list under them.">
                 </picture>
               </div>
             </div>
           </div>
-          <div class="tabs" role="tablist" aria-label="What hide shows">
-            <button type="button" role="tab" id="tab-needs" aria-controls="panel-needs" aria-selected="true">Needs you</button>
-            <button type="button" role="tab" id="tab-agents" aria-controls="panel-agents" aria-selected="false" tabindex="-1">Who started whom</button>
-            <button type="button" role="tab" id="tab-memory" aria-controls="panel-memory" aria-selected="false" tabindex="-1">Memory</button>
-            <button type="button" role="tab" id="tab-core" aria-controls="panel-core" aria-selected="false" tabindex="-1">Every machine</button>
-          </div>
-          <figcaption id="stage-caption">A lead waits on its workers. The two that need you are on top.</figcaption>
         </figure>
 
         <div class="agents-strip wrap reveal">
@@ -105,231 +79,194 @@
         </div>
       </section>
 
-      <section class="section wrap" id="team" aria-labelledby="team-title">
-        <div class="section-head reveal">
-          <img class="owl" data-owl="agents" src="./assets/owls/owl-agents-still.svg" data-motion="./assets/owls/owl-agents.svg" width="720" height="575" alt="" loading="lazy">
-          <p class="label">The team</p>
-          <h2 id="team-title">One view of the whole team.<br> <span class="accent">Only decisions reach you.</span></h2>
-          <p>Every agent on every machine in one tree. They start helpers, watch them and write to each other; what they can settle stays between them.</p>
-        </div>
-        <div class="canvas team-canvas reveal">
-          <svg id="team-tree" viewBox="0 0 1100 690" role="img" aria-labelledby="team-desc">
-            <desc id="team-desc">A lead agent on this Mac starts workers from different vendors on this Mac and on a Linux server. Letters move between parents and children; only a blocked prompt and a merge question rise over the line to the person, whose list shows the two.</desc>
-            <defs>
-              <g id="t-env"><rect class="t-env" x="-10" y="-7" width="20" height="14" rx="3"/><path class="t-flap" d="M-10 -6 L0 2 L10 -6"/></g>
-              <g id="t-envq"><rect class="t-envq" x="-11" y="-8" width="22" height="16" rx="3"/><path class="t-flap" d="M-11 -7 L0 2 L11 -7"/></g>
-              <linearGradient id="t-above" x1="0" y1="0" x2="0" y2="1"><stop class="t-glow" offset="0" stop-opacity=".12"/><stop class="t-glow" offset="1" stop-opacity="0"/></linearGradient>
-            </defs>
-            <rect x="0" y="0" width="1100" height="172" fill="url(#t-above)"/>
-            <g transform="translate(330 22)">
-              <rect class="t-you" width="440" height="124" rx="16"/>
-              <circle class="t-you-dot" cx="26" cy="27" r="9"/><text class="t-you-name" x="44" y="32">You</text>
-              <text class="t-count" x="420" y="32" text-anchor="end" id="you-count">NEEDS YOU · 2</text>
-              <g id="you-rows">
-                <g transform="translate(14 46)"><rect class="t-row" width="412" height="30" rx="8"/><circle class="t-row-dot" cx="16" cy="15" r="5"/><text class="t-row-title" x="30" y="19.5">Blocked: allow a push to main?</text><text class="t-row-agent" x="398" y="19.5" text-anchor="end">Grok</text></g>
-                <g transform="translate(14 82)"><rect class="t-row" width="412" height="30" rx="8"/><circle class="t-row-dot" cx="16" cy="15" r="5"/><text class="t-row-title" x="30" y="19.5">Approve #431 and #436?</text><text class="t-row-agent" x="398" y="19.5" text-anchor="end">Claude Code</text></g>
-              </g>
-              <text class="t-calm" x="220" y="92" text-anchor="middle" id="you-calm" display="none">Nothing needs you right now.</text>
-            </g>
-            <line class="t-line" x1="40" y1="172" x2="1060" y2="172"/>
-            <text class="t-line-label" x="40" y="196">ONLY A DECISION CROSSES THIS LINE</text>
-            <rect class="t-machine" x="40" y="344" width="600" height="326" rx="18"/>
-            <text class="t-machine-label" x="62" y="654">THIS MAC</text>
-            <rect class="t-machine" x="664" y="344" width="396" height="326" rx="18"/>
-            <text class="t-machine-label" x="686" y="654">WORKBOX · LINUX</text>
-            <!-- team:start -->
-            <g class="t-edges"><path class="t-edge" data-edge="c1" d="M550 312 C550 356 150 340 150 386"/><path class="t-edge" data-edge="c2" d="M550 312 C550 356 345 340 345 386"/><path class="t-edge" data-edge="c3" d="M550 312 C550 356 535 340 535 386"/><path class="t-edge" data-edge="c4" d="M550 312 C550 356 870 340 870 386"/><path class="t-edge" data-edge="g1" d="M150 482 C150 526 150 488 150 534"/><path class="t-edge" data-edge="g2" d="M870 482 C870 526 780 488 780 534"/><path class="t-edge" data-edge="g3" d="M870 482 C870 526 960 488 960 534"/></g>
-          <g class="t-ups" fill="none" stroke="none"><path data-up="lead" d="M550 216 C550 54 550 270 550 150"/><path data-up="c1" d="M150 386 C150 224 360 270 360 150"/><path data-up="c2" d="M345 386 C345 224 360 270 360 150"/><path data-up="c3" d="M535 386 C535 224 535 270 535 150"/><path data-up="c4" d="M870 386 C870 224 740 270 740 150"/><path data-up="g1" d="M150 534 C150 372 360 270 360 150"/><path data-up="g2" d="M780 534 C780 372 740 270 740 150"/><path data-up="g3" d="M960 534 C960 372 740 270 740 150"/></g>
-          <g class="t-nodes"><g class="t-node" data-id="lead" data-state="blocked" transform="translate(550 244)"><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">CC</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Split the invoice export</text><text class="t-name" y="64">Claude Code</text></g><g class="t-node" data-id="c1" data-state="working" transform="translate(150 414)"><circle class="t-pulse" r="24" style="animation-delay:-0.7s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">CX</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Sort by date</text><text class="t-name" y="64">Codex</text></g><g class="t-node" data-id="c2" data-state="working" transform="translate(345 414)"><circle class="t-pulse" r="24" style="animation-delay:-1.4s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">CX</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Export as CSV</text><text class="t-name" y="64">Codex</text></g><g class="t-node" data-id="c3" data-state="working" transform="translate(535 414)"><circle class="t-pulse" r="24" style="animation-delay:-2.1s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">AG</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Write the tests</text><text class="t-name" y="64">Antigravity</text></g><g class="t-node" data-id="c4" data-state="working" transform="translate(870 414)"><circle class="t-pulse" r="24" style="animation-delay:-0.4s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">OC</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Check #431 and #436</text><text class="t-name" y="64">OpenCode</text></g><g class="t-node" data-id="g1" data-state="done" transform="translate(150 562)"><circle class="t-pulse" r="24" style="animation-delay:-1.1s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">PI</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Find the slow query</text><text class="t-name" y="64">Pi</text></g><g class="t-node" data-id="g2" data-state="working" transform="translate(780 562)"><circle class="t-pulse" r="24" style="animation-delay:-1.8s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">OM</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Review the diff</text><text class="t-name" y="64">omp</text></g><g class="t-node" data-id="g3" data-state="blocked" transform="translate(960 562)"><circle class="t-pulse" r="24" style="animation-delay:-0.1s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">GK</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Draft release notes</text><text class="t-name" y="64">Grok</text></g></g>
-          <g class="t-letters"></g>
-            <!-- team:end -->
-          </svg>
-        </div>
-        <div class="trio reveal">
-          <div><b>See every agent</b>One tree across machines and vendors, each with a title Hide AI wrote.</div>
-          <div><b>They handle each other</b>A parent hears within a minute when its child stops; a letter reaches a working agent within five minutes.</div>
-          <div class="you"><b>You get the decisions</b>A blocked prompt, or a question the parent did not answer, comes up on every screen.</div>
-        </div>
-      </section>
-
-      <section class="section wrap" id="any" aria-labelledby="any-title">
-        <div class="anygrid">
-          <div>
-            <div class="section-head reveal">
-              <p class="label">Your setup</p>
-              <h2 id="any-title">Whatever you run,<br> <span class="accent">run it here.</span></h2>
-              <p>Your agent, your skills and slash commands, an orchestrator that starts its own helpers: type the command you type today. hide adds hooks and a skill, never a wrapper.</p>
-            </div>
-            <div class="stack reveal" id="stack">
-              <div class="layer"><h3>Your agent</h3><div class="opts" id="opt-agents"><span>Claude Code</span><span>Codex</span><span>Antigravity</span><span>OpenCode</span><span>Grok</span><span>Pi</span><span>omp</span></div></div>
-              <div class="layer"><h3>Your harness</h3><div class="opts" id="opt-harness"><span>Plain CLI</span><span>Skills and slash commands</span><span>Subagents and orchestrators</span><span>Your own scripts</span></div></div>
-              <div class="layer hide"><h3>hide</h3><div class="opts"><span>One view</span><span>Letters</span><span>Project Memory</span><span>Hide AI</span></div></div>
-              <div class="layer"><h3>Your terminal</h3><div class="opts"><span>Herdr panes, as you use them</span><span>Your shell and its config</span></div></div>
-            </div>
-          </div>
-          <div class="any-side reveal">
-            <div class="term" aria-label="A terminal pane running Claude Code" role="img">
-              <div class="term-bar"><span class="term-ring"></span><b>Claude Code</b><span id="term-title">· Split the invoice export in three</span></div>
-              <pre class="term-body" id="term-body">~/billing-app (main) $ claude
-&gt; Split the invoice export in three, one Codex worker each
-● Bash(hide agent spawn …)  Sort the export by date
-● Bash(hide agent spawn …)  Export invoices as CSV
-● Waiting on 3 workers…</pre>
-            </div>
-            <div class="herdr">
-              <b>Already on Herdr?</b>
-              <p>hide is built on Herdr and opens on your running server. Your workspaces, panes and agents are there on first launch, and nothing is stopped or replaced. No Herdr yet? hide brings its own.</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="section wrap" id="memory" aria-labelledby="memory-title">
-        <div class="section-head reveal">
-          <p class="label">Project Memory</p>
-          <h2 id="memory-title">Say it once.<br> <span class="accent">Every next agent knows.</span></h2>
-          <p>Hide AI turns what you decide in a session into a card, checks it against the repository and hands it to the next agents, whichever vendor runs them. A rule worth keeping comes back as a suggestion for your docs, written in one pull request.</p>
-        </div>
-        <div class="canvas timeline reveal" tabindex="0" aria-label="Six sessions of one project, left to right">
-          <div class="tl" id="timeline">
-            <!-- timeline:start -->
-            <div></div><div class="colhead">Session 1</div><div class="colhead">Session 2</div><div class="colhead">Session 3</div><div class="colhead">Session 4</div><div class="colhead">Session 5</div><div class="colhead">Session 6</div>
-            <div class="rowlab">You</div><div class="cell" data-col="0"><div class="say">“Use pnpm, never npm.”</div></div><div class="cell" data-col="1"><span class="quiet">nothing to repeat</span></div><div class="cell" data-col="2"><div class="say">“Keep exports in UTC.”</div></div><div class="cell" data-col="3"><span class="quiet">nothing to repeat</span></div><div class="cell" data-col="4"><span class="quiet">nothing to repeat</span></div><div class="cell" data-col="5"><span class="quiet">nothing to repeat</span></div>
-            <div class="rowlab">Agent</div><div class="cell" data-col="0"><div class="who">Claude Code</div><div class="chips"><span class="quiet">starts empty</span></div></div><div class="cell" data-col="1"><div class="who">Codex</div><div class="chips"><span class="quiet">starts with</span><i>m13</i></div></div><div class="cell" data-col="2"><div class="who">OpenCode</div><div class="chips"><span class="quiet">starts with</span><i>m13</i></div></div><div class="cell" data-col="3"><div class="who">Antigravity</div><div class="chips"><span class="quiet">starts with</span><i>m13</i><i>m14</i></div></div><div class="cell" data-col="4"><div class="who">Pi</div><div class="chips"><span class="quiet">starts with</span><i>m13</i><i>m14</i></div></div><div class="cell" data-col="5"><div class="who">Codex</div><div class="chips"><span class="quiet">starts with</span><i>m13 → doc</i><i>m14</i></div></div>
-            <div class="rowlab">Memory</div><div class="cell" data-col="0"><div class="card"><code>m13</code>Use pnpm, never npm<small>new</small></div></div><div class="cell" data-col="1"><div class="card"><code>m13</code>checked against the repo<small>✓</small></div></div><div class="cell" data-col="2"><div class="card"><code>m14</code>Exports stay in UTC<small>new</small></div></div><div class="cell" data-col="3"><div class="card"><code>m13</code>not in your docs yet</div></div><div class="cell" data-col="4"><div class="card"><code>m13</code>suggested for your docs</div></div><div class="cell" data-col="5"><div class="card"><code>m13</code>points to CONTRIBUTING.md</div></div>
-            <div class="rowlab">Docs</div><div class="cell" data-col="0"></div><div class="cell" data-col="1"></div><div class="cell" data-col="2"></div><div class="cell" data-col="3"></div><div class="cell" data-col="4"><div class="ask">Add m13 to your docs?<span class="pill">Promote</span></div></div><div class="cell" data-col="5"><div class="doc"><span>CONTRIBUTING.md</span><div class="add">+ Use pnpm, never npm.</div></div></div>
-            <!-- timeline:end -->
-          </div>
-        </div>
-        <div class="trio reveal">
-          <div><b>Cards, not transcripts</b>Decisions, rules and lessons, each with the words and sessions it came from.</div>
-          <div><b>Checked against the code</b>A card is checked against the repository before agents get it, and a clash with your docs is asked about.</div>
-          <div><b>You stay in charge</b>A doc change waits for your Promote and lands as one pull request. Forget or undo any card.</div>
-        </div>
-      </section>
-
       <section class="section wrap" id="ai" aria-labelledby="ai-title">
-        <div class="section-head reveal">
+        <div class="section-head center reveal">
           <img class="owl" data-owl="ai" src="./assets/owls/owl-ai-still.svg" data-motion="./assets/owls/owl-ai.svg" width="510" height="680" alt="" loading="lazy">
-          <p class="label">Hide AI</p>
-          <h2 id="ai-title">Hide AI does the reading.<br> <span class="accent">You get one line.</span></h2>
-          <p>It reads what each agent did and writes what a person needs: a title, why it stopped, what you asked and what you missed. It runs on the agent CLI you already signed in to; switch it off and every status still works.</p>
+          <p class="label bare">Hide AI</p>
+          <h2 id="ai-title">Ten logs in.<br> <span class="accent">One line out.</span></h2>
+          <p>Hide AI reads every agent's work and writes what you need to know: what the task is, and why it stopped. It runs on the agent CLI you already signed in to.</p>
         </div>
-        <div class="ai-pair reveal">
-          <div class="raw" aria-hidden="true">
-            <div class="raw-roll">
-              <p>Reading src/export/sort.ts (182 lines)</p><p>Searching for 'issued_at' in src/</p><p>  src/export/sort.ts:41  const key = row.issued_at</p><p>  src/db/invoices.sql:12  issued_at TIMESTAMPTZ NOT NULL</p><p>Editing src/export/sort.ts</p><p>  - rows.sort((a, b) =&gt; a.id - b.id)</p><p>  + rows.sort(byIssueDate)</p><p>Running pnpm test export</p><p>  ✓ sorts by issue date (4 ms)</p><p>  ✓ keeps ties in id order (2 ms)</p><p>  ✗ CSV header order (11 ms)</p><p>Reading src/export/csv.ts</p><p>Thinking about the column order…</p><p>The lead asked for CSV; the issue mentions XLSX.</p><p>Writing a question to the lead</p><p>Waiting for an answer</p>
-              <p>Reading src/export/sort.ts (182 lines)</p><p>Searching for 'issued_at' in src/</p><p>  src/export/sort.ts:41  const key = row.issued_at</p><p>  src/db/invoices.sql:12  issued_at TIMESTAMPTZ NOT NULL</p><p>Editing src/export/sort.ts</p><p>  - rows.sort((a, b) =&gt; a.id - b.id)</p><p>  + rows.sort(byIssueDate)</p><p>Running pnpm test export</p><p>  ✓ sorts by issue date (4 ms)</p><p>  ✓ keeps ties in id order (2 ms)</p><p>  ✗ CSV header order (11 ms)</p><p>Reading src/export/csv.ts</p><p>Thinking about the column order…</p><p>The lead asked for CSV; the issue mentions XLSX.</p><p>Writing a question to the lead</p><p>Waiting for an answer</p>
-            </div>
+        <figure class="ai-switch reveal" data-on="true">
+          <div class="switch-bar">
+            <span id="switch-label">Hide AI</span>
+            <button type="button" class="toggle" role="switch" aria-checked="true" aria-labelledby="switch-label"><span class="toggle-knob"></span></button>
+            <span class="switch-word" aria-hidden="true"><span class="w-on">On</span><span class="w-off">Off</span></span>
           </div>
-          <p class="ai-arrow" aria-hidden="true">Hide AI →</p>
-          <figure class="shot shot-narrow">
-            <picture>
-              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/attention-light.webp">
-              <img src="./assets/shots/attention-dark.webp" width="856" height="1480" alt="hide's sidebar. Two agents wait under Needs You, each with a title and a one-line reason Hide AI wrote. A finished fix sits under Unread. Below them, the project tree shows who is still working." loading="lazy" decoding="async">
+          <div class="shot switch-shot">
+            <picture class="s-off">
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/rows-off-light.webp">
+              <img src="./assets/shots/rows-off-dark.webp" width="632" height="904" alt="Hide AI off: the Tasks list names most tasks only by their vendor, Codex, Antigravity, OpenCode and Codex again; Revisit holds only the starred task, the release notes sit under Working, and only #437 shows outside the lead's task." loading="lazy" decoding="async">
             </picture>
+            <picture class="s-on">
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/rows-on-light.webp">
+              <img src="./assets/shots/rows-on-dark.webp" width="632" height="904" alt="Hide AI on: the same Tasks list reads Approve #431 and #436? and #433: CSV or XLSX for the export? under Needs You, Fix the test that broke the export under Unread, the release notes' question and a starred task under Revisit, and pull requests #438 and #439 linked to the tasks that opened them." loading="lazy" decoding="async">
+            </picture>
+          </div>
+          <figcaption><b>Off</b>, tasks called Codex and OpenCode. <b>On</b>, what each one is, the question you read and left for later, and the pull requests each agent opened.</figcaption>
+        </figure>
+        <div class="cards three">
+          <figure class="card reveal">
+            <div class="card-shot"><picture>
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/prs-list-light.webp">
+              <img src="./assets/shots/prs-list-dark.webp" width="640" height="712" alt="The sidebar's PR list: #431 and #436 under Needs You, ready to merge with checks passed; #438 and #432 under Agent is working, one with failed checks; one merged pull request folded away." loading="lazy" decoding="async">
+            </picture></div>
+            <figcaption><b>Every pull request, by who acts next.</b> Ready to merge on top, the ones an agent is still fixing below.</figcaption>
+          </figure>
+          <figure class="card reveal">
+            <div class="card-shot"><picture>
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/record-lane-light.webp">
+              <img src="./assets/shots/record-lane-dark.webp" width="1144" height="1200" alt="A session's record: working, one question waiting on you, its requests grouped as Plan the export and Check each pull request, and the pull requests its workers opened." loading="lazy" decoding="async">
+            </picture></div>
+            <figcaption><b>A session becomes a record.</b> What you asked, what it settled, what waits on you.</figcaption>
+          </figure>
+          <figure class="card reveal">
+            <div class="card-shot"><picture>
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/memory-lane-light.webp">
+              <img src="./assets/shots/memory-lane-dark.webp" width="1144" height="1200" alt="Project Memory: Auto memory on, Use pnpm, never npm waiting to be promoted to the docs, and the project's cards of decisions and lessons." loading="lazy" decoding="async">
+            </picture></div>
+            <figcaption><b>Say it once.</b> A decision becomes a card the next agent starts with, whichever vendor runs it.</figcaption>
           </figure>
         </div>
-        <p class="langs reveal">Written in English, 한국어, 日本語 or 简体中文.</p>
       </section>
 
-      <section class="section wrap" id="essentials" aria-labelledby="essentials-title">
-        <div class="section-head reveal">
-          <img class="owl" data-owl="devices" src="./assets/owls/owl-devices-still.svg" data-motion="./assets/owls/owl-devices.svg" width="633" height="583" alt="" loading="lazy">
-          <p class="label">Still an IDE</p>
-          <h2 id="essentials-title">What a team of agents needs.<br> <span class="accent">Nothing else.</span></h2>
+      <section class="section wrap" id="team" aria-labelledby="team-title">
+        <div class="section-head center reveal">
+          <img class="owl" data-owl="agents" src="./assets/owls/owl-agents-still.svg" data-motion="./assets/owls/owl-agents.svg" width="720" height="575" alt="" loading="lazy">
+          <p class="label bare">Multi-agent view</p>
+          <h2 id="team-title">Your agents work as a team.<br> <span class="accent">Watch all of it.</span></h2>
+          <p>A lead splits the work, starts workers and gets pull requests back. Press any agent and its team and its messages light up.</p>
         </div>
-        <ul class="essentials reveal">
-          <li><b>Real terminals</b>Every agent in its own Herdr pane, with its own layout and scrollback.</li>
-          <li><b>A worktree per task</b>Start an issue and get a worktree, an agent and its first prompt.</li>
-          <li><b>Files, diffs, a browser</b>They open beside the agent that named them. Agents drive the browser too.</li>
-          <li><b>Pull requests</b>Sorted by who acts next. Hand one to an agent.</li>
-          <li><b>One core, any machine</b>Put the core on the machine that never sleeps; close the laptop and nothing stops.</li>
-          <li><b>Your phone</b>Answer the one that needs you, paired by QR over your own Tailscale.</li>
-          <li><b>Guardrails</b>Guard the base branch, working folders, files and risky Git commands, per project.</li>
-          <li><b>Limits in view</b>How much of each agent's week is left, at the foot of every screen.</li>
-        </ul>
+        <figure class="shot map-shot reveal">
+          <picture>
+            <source media="(prefers-color-scheme: light)" srcset="./assets/shots/map-light.webp">
+            <img src="./assets/shots/map-dark.webp" width="2912" height="1800" alt="The Overview's work graph. Agents of three projects sit around You; lines show which agent started which and the messages between them, and the two that wait on you are drawn in amber." loading="lazy" decoding="async">
+          </picture>
+          <video class="map-video" data-dark="./assets/video/map-dark" data-light="./assets/video/map-light" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
+        </figure>
+        <div class="team-pair">
+          <figure class="card reveal">
+            <div class="card-shot"><picture>
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/team-light.webp">
+              <img src="./assets/shots/team-dark.webp" width="690" height="800" alt="The lead's pane head with its worker list open: Split the invoice export in three, eight workers under it, each with its state, agent and pull request." loading="lazy" decoding="async">
+            </picture></div>
+            <figcaption><b>In the lead's pane.</b> Every worker it started, with its state and pull request.</figcaption>
+          </figure>
+          <figure class="card reveal">
+            <div class="card-shot"><picture>
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/conductor-light.webp">
+              <img src="./assets/shots/conductor-dark.webp" width="2568" height="1080" alt="A Conductor's pane with its Mission 4/6 chip beside the mission's map: a research step, four changes with their workers and pull requests, and a check of #431 and #436 together before the report." loading="lazy" decoding="async">
+            </picture></div>
+            <figcaption><b>Conductor.</b> Hand it a mission: it plans the pull requests, starts the workers and keeps the map beside you.</figcaption>
+          </figure>
+        </div>
       </section>
 
-      <section class="section wrap" id="factory" aria-labelledby="factory-title">
-        <div class="factory reveal">
-          <img class="owl" data-owl="factory" src="./assets/owls/owl-factory-still.svg" data-motion="./assets/owls/owl-factory.svg" width="720" height="505" alt="" loading="lazy">
-          <div>
-            <p class="label bare"><span class="soon">SOON</span>Software Factory</p>
-            <h2 id="factory-title">Hand off the whole issue.<br> <span class="accent">Review the pull request.</span></h2>
-            <p class="lead">Queue issues with clear requirements. Workers take them in order, verify and merge them, and bring back only what needs a person. Cost, sign-in, deletion and anything irreversible always reach you.</p>
-            <div class="actions">
-              <a class="button primary" href="mailto:hello@withhide.dev?subject=Join%20the%20Factory%20list">Email hello@withhide.dev to join the Factory list</a>
-              <a class="button secondary" href="https://github.com/with-hide/hide">Watch releases on GitHub <span aria-hidden="true">↗</span></a>
-            </div>
-            <p class="quiet">Or watch the repository on GitHub: choose Watch, then Custom, then Releases, and GitHub tells you when the Factory ships.</p>
+      <section class="section wrap" id="herdr" aria-labelledby="herdr-title">
+        <div class="split reveal">
+          <div class="section-head">
+            <p class="label bare">Built on Herdr</p>
+            <h2 id="herdr-title">Real terminals underneath.<br> <span class="accent">Nothing to migrate.</span></h2>
+            <p>Every agent runs in a real Herdr pane, started the way you start it today: your CLI, your login, your config. hide adds hooks and a skill, never a wrapper.</p>
+            <p>Already on Herdr? hide opens on your server, with your workspaces, panes and agents already in it. <a class="text-link" href="#faq-herdr">How it fits</a></p>
           </div>
+          <ol class="layers" aria-label="What runs where">
+            <li><b>Your agents</b><span>Claude Code · Codex · Antigravity · OpenCode · Grok · Pi · omp</span></li>
+            <li class="hide"><b>hide</b><span>Reads every agent, routes messages, remembers decisions</span></li>
+            <li><b>Herdr</b><span>Real terminal panes, layouts and scrollback</span></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section wrap" id="lane" aria-labelledby="lane-title">
+        <div class="section-head center reveal">
+          <p class="label bare">Side panel</p>
+          <h2 id="lane-title">Everything opens<br> <span class="accent">beside the agent.</span></h2>
+          <p>Your agent opens the spec, the page it is testing and the file it changed next to its own pane, and drives the page while you watch. Its record, pull requests, memory and diffs open there too.</p>
+        </div>
+        <figure class="agent-stage reveal" data-step="3">
+          <div class="shot agent-page">
+            <picture class="a-spec">
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/agent-spec-light.webp">
+              <img src="./assets/shots/agent-spec-dark.webp" width="2216" height="1176" alt="Step one: a Codex pane ran hide file open docs/export-spec.pdf, and the export spec opens beside it as a PDF: the columns in order, newest first, the file name." loading="lazy" decoding="async">
+            </picture>
+            <picture class="a-page">
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/agent-page-light.webp">
+              <img src="./assets/shots/agent-page-dark.webp" width="2216" height="1176" alt="Step two: it ran hide browser open localhost:5173/invoices, and the invoices page opens in a tab beside the spec." loading="lazy" decoding="async">
+            </picture>
+            <picture class="a-click">
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/agent-click-light.webp">
+              <img src="./assets/shots/agent-click-dark.webp" width="2216" height="1176" alt="Step three: it ran hide browser click browser-1 --text Export CSV, downloaded 128 invoices, and reports that the export matches the spec." loading="lazy" decoding="async">
+            </picture>
+            <span class="agent-pointer" aria-hidden="true"><svg width="22" height="28" viewBox="0 0 22 28"><path d="M2 2 L2 22 L7.5 17 L11 25.5 L14.6 24 L11.2 15.8 L18.5 15.8 Z"/></svg></span>
+          </div>
+          <figcaption>
+            <ol class="agent-steps">
+              <li data-for="1"><code>hide file open</code><span>It reads the spec, a PDF.</span></li>
+              <li data-for="2"><code>hide browser open</code><span>It opens the page beside it.</span></li>
+              <li data-for="3"><code>hide browser click</code><span>It presses Export CSV and checks the file.</span></li>
+            </ol>
+          </figcaption>
+        </figure>
+      </section>
+
+      <section class="section wrap" id="machines" aria-labelledby="machines-title">
+        <div class="split reveal">
+          <div class="section-head">
+            <img class="owl" data-owl="devices" src="./assets/owls/owl-devices-still.svg" data-motion="./assets/owls/owl-devices.svg" width="633" height="583" alt="" loading="lazy">
+            <p class="label bare">Every machine</p>
+            <h2 id="machines-title">Every machine, one team.<br> <span class="accent">Agents talk across them.</span></h2>
+            <p>Start an agent on your laptop, a Mac mini or a Linux server. They hand work to each other across machines, the core keeps them going while the laptop sleeps, and you answer from your phone.</p>
+          </div>
+          <figure class="mesh-figure">
+            <div class="mesh" data-step="0" role="img" aria-label="Four machines around one core: Claude Code on a MacBook sends the export tests to Codex on a Linux server through the Mac mini that runs the core, the server answers that the tests pass, the laptop closes while the Mac mini keeps going, and the phone is asked to approve both pull requests.">
+              <svg class="mesh-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <line x1="24" y1="17" x2="50" y2="52"/><line x1="76" y1="17" x2="50" y2="52"/><line x1="50" y1="52" x2="50" y2="87"/>
+              </svg>
+              <div class="node laptop" aria-hidden="true"><b>MacBook</b><span class="node-tag"><span class="awake">your laptop</span><span class="lid">lid closed</span></span><span class="agent"><img src="./assets/agents/claude-code.png" width="128" height="128" alt="">Claude Code · lead</span></div>
+              <div class="node server" aria-hidden="true"><b>Linux server</b><span class="node-tag">over SSH</span><span class="agent"><img src="./assets/agents/codex.png" width="128" height="128" alt="">Codex · tests</span></div>
+              <div class="node core" aria-hidden="true"><b>Mac mini</b><span class="node-tag">core · always on</span><span class="agent"><img src="./assets/agents/codex.png" width="128" height="128" alt="">Codex · CSV export</span><span class="agent"><img src="./assets/agents/opencode.svg" width="512" height="512" alt="">OpenCode · fix</span></div>
+              <div class="node phone" aria-hidden="true"><b>Phone</b><span class="node-tag">over Tailscale</span><span class="phone-note">Approve #431 and #436?</span></div>
+              <span class="letter" aria-hidden="true"></span>
+            </div>
+            <figcaption class="mesh-caption" aria-hidden="true"><span class="mesh-route">Claude Code on MacBook → Codex on Linux server</span><span class="mesh-text">Run the export tests on the Linux box.</span></figcaption>
+          </figure>
         </div>
       </section>
 
       <section class="section wrap" id="pricing" aria-labelledby="pricing-title">
-        <div class="section-head reveal">
-          <p class="label">Pricing</p>
-          <h2 id="pricing-title">Everything you run yourself is free.</h2>
-          <p>Pay only when hide runs the work for you.</p>
+        <div class="section-head center reveal">
+          <p class="label bare">Pricing</p>
+          <h2 id="pricing-title">Free, on your own machines.</h2>
+          <p>The app, every agent, every machine and your phone. Apache 2.0, with no hosted service and no new API key.</p>
         </div>
-        <div class="plans reveal">
+        <div class="plans solo reveal">
           <article class="plan free">
             <div class="plan-top"><h3>Free</h3><span class="when">Now</span></div>
             <p class="price">$0 <small>forever · Apache 2.0</small></p>
-            <p>For anyone running agents on their own machines.</p>
             <ul>
               <li>Every agent CLI you already use</li>
               <li>Agents that hand work to each other</li>
-              <li>Every machine, and the core on your always-on Mac</li>
-              <li>Your phone, paired by QR</li>
               <li>Hide AI on the CLI you signed in to</li>
+              <li>Every machine, and your phone</li>
             </ul>
           </article>
-          <article class="plan">
-            <div class="plan-top"><h3>Pro</h3><span class="when">With the Factory</span></div>
-            <p class="price"><small>Priced when the Factory opens</small></p>
-            <p>For people who hand off whole issues.</p>
-            <ul>
-              <li>Software Factory: issue in, pull request out</li>
-              <li>The Observer keeps workers moving</li>
-              <li>Only decisions reach you</li>
-            </ul>
-          </article>
-          <article class="plan">
-            <div class="plan-top"><h3>Team</h3><span class="when">Later</span></div>
-            <p class="price"><small>Not priced yet</small></p>
-            <p>For teams that share the queue.</p>
-            <ul>
-              <li>One Factory queue for the team</li>
-              <li>Needs you sent to the right person</li>
-              <li>Review requests from teammates</li>
-            </ul>
-            <p class="plan-contact">Enterprise and teams: <a href="mailto:hello@withhide.dev">hello@withhide.dev</a></p>
-          </article>
-        </div>
-        <div class="trust reveal" aria-label="Where your work runs">
-          <div><b>On your machines</b>No hosted service. Agents, the core and Hide AI run on machines you own, and your phone reaches them over your own Tailscale.</div>
-          <div><b>Your own logins</b>Agents and Hide AI use the CLIs you already signed in to, so there is no new API key. Hide AI strips secrets on your machine before it reads.</div>
-          <div><b>Apache 2.0</b>Every line is on GitHub, and everything you run yourself stays free.</div>
+          <div class="factory-line">
+            <img class="owl" data-owl="factory" src="./assets/owls/owl-factory-still.svg" data-motion="./assets/owls/owl-factory.svg" width="720" height="505" alt="" loading="lazy">
+            <p class="quiet">Pro comes with the Software Factory: hand off a whole issue, review the pull request. <a href="mailto:hello@withhide.dev?subject=Join%20the%20Factory%20list">Join the list</a></p>
+          </div>
         </div>
       </section>
 
       <section class="section wrap" id="faq" aria-labelledby="faq-title">
-        <div class="section-head reveal">
-          <p class="label">Questions</p>
+        <div class="section-head center reveal">
+          <p class="label bare">Questions</p>
           <h2 id="faq-title">Before you install.</h2>
         </div>
         <div class="faq reveal">
-          <details open><summary>Is hide free?</summary><p>Yes. The app, every agent, every device, the core and the phone are free and Apache 2.0 licensed. The Software Factory will be a paid plan when it opens.</p></details>
-          <details><summary>How is this different from running agents in a terminal?</summary><p>You still run them in a terminal: each agent is its own CLI in a real Herdr pane, started the way you start it today. hide adds what one terminal cannot: agents that start, watch and write to each other, one list of what needs you across every machine, the titles Hide AI writes, and Project Memory the next agent starts with.</p></details>
-          <details><summary>Is hide a wrapper around my agent?</summary><p>No. hide adds its hooks to each agent's own settings and a skill the agent can call, and the vendor's CLI runs as it does without hide. Your subscription, config, skills and MCP servers stay as they are.</p></details>
-          <details><summary>Which agents work with it?</summary><p>Claude Code, Codex, Antigravity, OpenCode, Grok, Pi and omp, each with its own login. Every one gets the same status, title and place to answer. Grok takes letters only while it works and does not use Project Memory yet.</p></details>
-          <details><summary>I already use Herdr.</summary><p>hide is built on Herdr and opens on top of your running Herdr server as it is. Your workspaces, panes and agents are there on first launch, and nothing is stopped or replaced. No Herdr yet? hide brings its own.</p></details>
+          <details open><summary>Is hide a wrapper around my agent?</summary><p>No. hide adds its hooks to each agent's own settings and a skill the agent can call, and the vendor's CLI runs as it does without hide. Your subscription, config, skills and MCP servers stay as they are.</p></details>
+          <details><summary>Which agents work with it?</summary><p>Claude Code, Codex, Antigravity, OpenCode, Grok, Pi and omp, each with its own login. Every one gets the same status, title and place to answer. Grok takes messages only while it works and does not use Project Memory yet.</p></details>
+          <details id="faq-herdr"><summary>I already use Herdr.</summary><p>hide is built on Herdr and opens on the server you already run, so your workspaces, panes and agents are there on first launch. It never replaces your server on its own: when yours is an older Herdr, hide offers to move it to its own, a live handoff on macOS and Linux that keeps your panes running. No Herdr yet? hide brings its own.</p></details>
           <details><summary>Does my code leave my machines?</summary><p>Not through hide, which has no hosted service. Agents, the core and Hide AI run on machines you own, with the agent CLIs you already signed in to, so code goes only where those CLIs send it. Your phone reaches your machines over your own Tailscale.</p></details>
-          <details><summary>Do I need a second machine?</summary><p>No. Everything runs on one laptop. An always-on Mac lets your agents keep working while the laptop sleeps.</p></details>
-          <details><summary>How do I reach you?</summary><p>Email <a href="mailto:hello@withhide.dev">hello@withhide.dev</a> for questions, the Factory list, Enterprise and teams. Bugs and feature requests go to <a href="https://github.com/with-hide/hide/issues">GitHub issues <span aria-hidden="true">↗</span></a>.</p></details>
-          <details><summary>How fast is it?</summary><p>We publish every measurement with its conditions. Read the method and the results on GitHub: <a href="https://github.com/with-hide/hide/blob/main/docs/PERFORMANCE_RESULTS.md">Full results, method &amp; limitations <span aria-hidden="true">↗</span></a></p></details>
         </div>
       </section>
 
@@ -337,7 +274,7 @@
         <div class="wrap">
           <div class="closing-head reveal">
             <img class="owl owl-rest" data-owl="rest" src="./assets/owls/owl-rest-still.svg" data-motion="./assets/owls/owl-rest.svg" width="530" height="512" alt="" loading="lazy">
-            <h2 id="closing-title">Close the laptop.<br> <span class="accent">Your agents keep going.</span></h2>
+            <h2 id="closing-title">Run more agents.<br> <span class="accent">Hold less.</span></h2>
           </div>
 
           <div class="download">
