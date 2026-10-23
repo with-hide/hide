@@ -1917,7 +1917,7 @@ A HEAD that moved past its merged pull request's head is not merged, a pull requ
 Deletion still happens only when the operator confirms the reviewed rows; the Hide AI attempt retirement keeps its own rule (GitHub answering that attempt's pull request merged or closed).
 When Hide cannot read what is in use, the sheet says so above the table with a retry and every checkbox is disabled; no banner or alert appears.
 
-The bottom line reads `N칸 · X` (`N칸 · 워크트리 M · X` when a worktree is chosen, and a part that is zero is left out, so a worktree alone reads `워크트리 M · X`) and `정리` runs at once for caches and dependencies alone.
+The bottom line reads `항목 N개 · X` (`항목 N개 · 워크트리 M · X` when a worktree is chosen, and a part that is zero is left out, so a worktree alone reads `워크트리 M · X`) and `정리` runs at once for caches and dependencies alone.
 A chosen worktree whose finished agents and shells still have panes shows a terminal mark with their count beside its size, in the cell and again in the confirmation, which is the state shown instead of a sentence about it.
 With a worktree chosen a confirmation step titled `<branch> 폴더째 삭제` (`워크트리 N개 폴더째 삭제` for more than one) says only that the branch stays, lists the worktrees with their sizes and pane counts and offers `워크트리 N개와 캐시 정리` (`터미널 P개 닫고 캐시와 워크트리 N개 정리` when panes close, the same consequence-first naming as Delete worktree's `Close N panes and delete`) and `돌아가기`, neither focused; going back deletes nothing and keeps the choice.
 Cleanup deletes cache and dependency folders permanently, with no trash, and removes worktrees without force, keeping the branch.

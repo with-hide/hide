@@ -422,7 +422,7 @@ const ja = {
   "cleanup.rowLayerSize": "{{name}} {{layer}} {{size}}",
   "cleanup.folderDetail_one": "フォルダ{{count}}個 · 最大のフォルダ {{name}}",
   "cleanup.folderDetail_other": "フォルダ{{count}}個 · 最大のフォルダ {{name}}",
-  "cleanup.otherNamedFolder": "最大のフォルダ {{name}}\nHide が認識できないフォルダは削除しません",
+  "cleanup.otherNamedFolder": "最大のフォルダ {{name}}\nHideが認識できないフォルダは削除しません",
   "cleanup.clearingProgress": "削除中 · {{done}}/{{total}}",
   "cleanup.inUse.agentWaiting": "エージェントが入力を待っています",
   "cleanup.inUse.descendantBusy": "委任したエージェントが作業中です",
