@@ -1610,10 +1610,14 @@ export type FirstRunStep = "herdr" | "agents" | "devices" | "notifications" | "p
 export type FirstRun = { version: number; step: FirstRunStep };
 export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
 export type FirstRunChoices = { agents?: string[] | null; devices?: string[]; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
+export type HerdrProfileRefusal = "no_consent" | "disabled" | "invalid_target" | "discovery_pending" | "device_limit" | "profile_moved";
+
 export type HerdrProfile = {
   id: string; label: string; target: string; session: string; enabled: boolean;
   added_as: string | null; problem: string | null; device_id: string | null;
-  connect_state: string; connect_error: string | null;
+  connect_state: string;
+  /** Why Hide declined to connect it (`herdr_profile_refusal`); a tried connection that failed has none. */
+  connect_refusal: HerdrProfileRefusal | null;
 };
 export type HerdrProfiles = { state: "idle" | "loading" | "ready" | "failed"; error: string | null; profiles: HerdrProfile[]; truncated: boolean };
 
@@ -1624,9 +1628,15 @@ export const FIRST_RUN_VERSION = 1;
 export type ScreenIntro = "factory";
 
 /** One piece of an agent (its skill or its hook) on its machine. */
+/**
+ * Why a kit part or an agent's piece is in its state (`hide_kit::PartWhy`): a cause the web words, with the one
+ * value its sentence names (a path, a name, a version). Absent from a helper that predates it.
+ */
+export type KitWhy = { cause: string; value?: string };
+
 export type KitPiece = {
   state: KitComponentState;
-  reason: string | null;
+  why?: KitWhy | null;
   location: string | null;
 };
 
@@ -1682,9 +1692,12 @@ export type KitComponent = {
   id: KitComponentId;
   label: string;
   state: KitComponentState;
-  reason: string | null;
+  why?: KitWhy | null;
   location: string | null;
 };
+
+/** Why a machine's kit does not run at all (`contracts/snapshot-wire-enums.json`: `kit_unavailable`). */
+export type KitUnavailable = "standalone" | "no_consent" | "consent_outdated" | "unsupported_platform" | "installer_unavailable" | "unreadable";
 
 /**
  * A machine's install kit (PRD device-parity B7): the same parts on This Mac
@@ -1708,7 +1721,7 @@ export type KitRefusal = {
 };
 
 export type Kit = {
-  unavailable: string | null;
+  unavailable: KitUnavailable | null;
   busy: boolean;
   /** The machine's last pass or read stopped before changing anything; its parts and agents are then empty. */
   refused?: KitRefusal | null;
@@ -1774,12 +1787,11 @@ export type RemoteStatus = {
 
 /**
  * `resolving`: the helper is being asked; `ready`: every directory is
- * confirmed; `unavailable`: the helper cannot be asked and `message` says why.
+ * confirmed; `unavailable`: the helper cannot be asked now (why is in the log).
  * An unconfirmed directory is listed as its Herdr workspace alone.
  */
 export type DeviceCatalog = {
   state: "resolving" | "ready" | "unavailable";
-  message: string | null;
   refused: { path: string; message: string }[];
 };
 

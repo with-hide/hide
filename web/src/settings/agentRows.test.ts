@@ -1,9 +1,9 @@
 import { emptyScope } from "../../test/legacyAgentScope";
 import { describe, expect, it } from "vitest";
-import type { Device, KitAgent, KitPiece } from "../snapshot";
+import type { Device, Kit, KitAgent, KitPiece } from "../snapshot";
 import { agentHookWait, agentInstalled, agentLeftover, agentUnsupportedHere, systemName, checkFailedReason, docsUrl, agentMachines, agentProblems, agentStatus, installDocUrl, supportedAgents, SUPPORTED_AGENTS } from "./agentRows";
 
-const piece = (state: KitPiece["state"], reason: string | null = null): KitPiece => ({ state, reason, location: null });
+const piece = (state: KitPiece["state"], cause: string | null = null): KitPiece => ({ state, why: cause ? { cause } : null, location: null });
 const agent = (id: string, patch: Partial<KitAgent> = {}): KitAgent => ({
   id,
   label: id,
@@ -15,7 +15,7 @@ const agent = (id: string, patch: Partial<KitAgent> = {}): KitAgent => ({
   doc_url: "https://example.test",
   ...patch,
 });
-const device = (patch: Partial<Device> & { agents?: KitAgent[]; unavailable?: string | null }): Device => {
+const device = (patch: Partial<Device> & { agents?: KitAgent[]; unavailable?: Kit["unavailable"] }): Device => {
   const { agents = [], unavailable = null, ...rest } = patch;
   return { agent_scope: emptyScope(),
     id: "studio",
@@ -70,7 +70,7 @@ describe("the agents of a machine (B8, B9, D-06)", () => {
     const set = [agent("claude-code"), agent("codex", { enabled: false }), agent("pi", { availability: "not_installed", enabled: false })];
     const local = device({ id: "local", label: "mini", kind: "local", state: "local", agents: set });
     const gone = device({ id: "box", label: "Box", state: "unavailable", agents: set });
-    const noKit = device({ id: "bare", label: "Bare", unavailable: "A daemon outside the package installs nothing" });
+    const noKit = device({ id: "bare", label: "Bare", unavailable: "standalone" });
     const unread = device({ id: "new", label: "New" });
     const machines = agentMachines([local, gone, noKit, unread]);
     expect(machines.map((row) => row.device.id)).toEqual(["local", "box", "bare", "new"]);
@@ -83,7 +83,7 @@ describe("the agents of a machine (B8, B9, D-06)", () => {
   });
 
   it("reads as checking only while the core reads or before the first answer, and a machine that answered with no agent says so", () => {
-    const failed = { id: "cli", state: "failed", reason: "another Hide was still changing this account's kit after 90 seconds", location: null } as never;
+    const failed = { id: "cli", state: "failed", why: { cause: "not_changed" }, location: null } as never;
     const answered = (over: Partial<NonNullable<Device["kit"]>>): Device => {
       const base = device({ id: "box" });
       return { ...base, kit: { ...base.kit!, components: [failed], ...over } };
@@ -95,7 +95,7 @@ describe("the agents of a machine (B8, B9, D-06)", () => {
     expect(agentMachines([device({ id: "new" })])[0]).toMatchObject({ unread: true, unlisted: false });
     // A list is a list, and a kit that cannot run says why instead.
     expect(agentMachines([{ ...answered({}), kit: { ...answered({}).kit!, agents: [agent("claude-code")] } }])[0]).toMatchObject({ unread: false, unlisted: false });
-    expect(agentMachines([answered({ unavailable: "A daemon outside the package installs nothing" })])[0]).toMatchObject({ blocked: "unavailable", unread: false, unlisted: false });
+    expect(agentMachines([answered({ unavailable: "standalone" })])[0]).toMatchObject({ blocked: "unavailable", unread: false, unlisted: false });
   });
 
   it("says why a machine shows no list in the Devices tab's own words: connecting is not unreachable, and Switched off points at Devices (B11)", () => {
@@ -131,9 +131,9 @@ describe("the agents of a machine (B8, B9, D-06)", () => {
 
 describe("what a row says (B13, B14, B16, B19, B20)", () => {
   it("names the pieces a Reinstall would repair, the failed ones first, only for an agent that is on (B13, B20)", () => {
-    const row = agent("codex", { hook: piece("removed"), herdr: piece("failed", "herdr refused"), skill: piece("outdated") });
+    const row = agent("codex", { hook: piece("removed"), herdr: piece("failed", "not_changed"), skill: piece("outdated") });
     expect(agentProblems(row).map(({ part }) => part)).toEqual(["herdr", "skill", "hook"]);
-    expect(agentProblems(agent("codex", { hook: piece("absent", "no ~/.codex"), skill: piece("installed"), herdr: piece("off") }))).toEqual([]);
+    expect(agentProblems(agent("codex", { hook: piece("absent", "not_created_yet"), skill: piece("installed"), herdr: piece("off") }))).toEqual([]);
     expect(agentProblems(agent("codex", { enabled: false, skill: piece("removed") }))).toEqual([]);
     // A row from a helper whose build predates the Herdr piece has nothing there to fail.
     expect(agentProblems(agent("grok", { herdr: null }))).toEqual([]);
@@ -144,18 +144,18 @@ describe("what a row says (B13, B14, B16, B19, B20)", () => {
   });
 
   it("says why an agent's hook is not in while the agent is on and found, without a repair (opencode-plugin B14)", () => {
-    const waiting = agentHookWait(agent("opencode", { hook: piece("absent", "OpenCode has not created ~/.config/opencode yet") }));
-    expect(waiting).toEqual({ part: "plugin", piece: piece("absent", "OpenCode has not created ~/.config/opencode yet") });
-    expect(agentProblems(agent("opencode", { hook: piece("absent", "OpenCode has not created ~/.config/opencode yet") }))).toEqual([]);
-    expect(agentHookWait(agent("opencode", { enabled: false, hook: piece("absent", "no folder") }))).toBeNull();
-    expect(agentHookWait(agent("opencode", { availability: "not_installed", hook: piece("absent", "not found") }))).toBeNull();
-    expect(agentHookWait(agent("pi", { hook: piece("absent", "Pi has not created ~/.pi/agent yet") }))?.part).toBe("extension");
+    const waiting = agentHookWait(agent("opencode", { hook: piece("absent", "not_created_yet") }));
+    expect(waiting).toEqual({ part: "plugin", piece: piece("absent", "not_created_yet") });
+    expect(agentProblems(agent("opencode", { hook: piece("absent", "not_created_yet") }))).toEqual([]);
+    expect(agentHookWait(agent("opencode", { enabled: false, hook: piece("absent", "not_created_yet") }))).toBeNull();
+    expect(agentHookWait(agent("opencode", { availability: "not_installed", hook: piece("absent", "program_missing") }))).toBeNull();
+    expect(agentHookWait(agent("pi", { hook: piece("absent", "not_created_yet") }))?.part).toBe("extension");
     expect(agentHookWait(agent("cursor", { hook: piece("absent") }))).toBeNull();
     expect(agentHookWait(agent("cursor", { hook: piece("installed") }))).toBeNull();
   });
 
   it("keeps a switched-off agent whose removal did not finish from reading Off (B14)", () => {
-    expect(agentLeftover(agent("pi", { enabled: false, skill: piece("failed", "still there") }))?.reason).toBe("still there");
+    expect(agentLeftover(agent("pi", { enabled: false, skill: piece("failed", "still_in_place") }))?.why?.cause).toBe("still_in_place");
     expect(agentLeftover(agent("pi", { enabled: false }))).toBeNull();
     expect(agentLeftover(agent("pi", { enabled: true, skill: piece("failed") }))).toBeNull();
   });

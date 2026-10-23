@@ -469,6 +469,12 @@ impl Runtime {
                 return self.refresh_device_catalog(target);
             }
             Err(reason) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "device_catalog",
+                    "kind": "catalog.unavailable",
+                    "target": target,
+                    "reason": reason,
+                }));
                 self.device_facts
                     .entry(target.to_owned())
                     .or_default()
@@ -514,7 +520,14 @@ impl Runtime {
         if let Err(error) = spawned {
             let entry = self.device_facts.entry(target.to_owned()).or_default();
             entry.in_flight = None;
-            entry.unavailable = Some(format!("The catalog reader could not start: {error}"));
+            let reason = format!("The catalog reader could not start: {error}");
+            crate::diagnostic!(serde_json::json!({
+                "component": "device_catalog",
+                "kind": "catalog.unavailable",
+                "target": target,
+                "reason": reason,
+            }));
+            entry.unavailable = Some(reason);
         }
         self.refresh_device_catalog(target)
     }

@@ -15,7 +15,7 @@ vi.hoisted(() => {
   HTMLCanvasElement.prototype.getContext = () => null;
 });
 
-const piece = (state: KitPiece["state"], reason: string | null = null): KitPiece => ({ state, reason, location: null });
+const piece = (state: KitPiece["state"], cause: string | null = null): KitPiece => ({ state, why: cause ? { cause } : null, location: null });
 const LABELS: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex", grok: "Grok", opencode: "OpenCode", pi: "Pi", omp: "omp", antigravity: "Antigravity" };
 const FEATURES: KitFeatureId[] = ["skill", "guidance", "letters", "bell", "memory", "spawn_guard", "herdr_integration", "sleep", "fork", "start", "titles"];
 
@@ -143,10 +143,10 @@ it("shows a status only for an agent that is on: Ready, how many sessions run, a
 });
 
 it("shows a failed or removed part on its own row with Reinstall, and nowhere else (B13, B20)", async () => {
-  const set = [agent("claude-code", { hook: piece("removed"), herdr: piece("failed", "herdr refused") }), agent("codex")];
+  const set = [agent("claude-code", { hook: piece("removed"), herdr: piece("failed", "not_changed") }), agent("codex")];
   const { q, all, click, events, unmount } = await mount(state([device("local", { kit: kit(set) })]));
   const line = q('[data-agent-problem="local:claude-code"]')!;
-  expect(line.textContent).toContain("Herdr integration: Failed: herdr refused");
+  expect(line.textContent).toContain("Herdr integration: Failed: Hide could not install or change it.");
   expect(line.textContent).toContain("Hook: Removed");
   expect(all("[data-agent-problem]")).toHaveLength(1);
   await click(q('[data-hook-reinstall="local:claude-code"]'));
@@ -213,7 +213,7 @@ it("on a window of a node, lists the window's machine first and once, beside the
 });
 
 it("says a machine whose kit answered with no agent could not be read, with Check again, rather than checking for good", async () => {
-  const failed = { id: "cli", state: "failed", reason: "another Hide was still changing this account's kit after 90 seconds", location: null } as Kit["components"][number];
+  const failed = { id: "cli", state: "failed", why: { cause: "not_changed" }, location: null } as Kit["components"][number];
   const { q, click, events, text, unmount } = await mount(state([device("local", { kit: kit([], { components: [failed] }) })]));
   expect(q("[data-agents-unread]")).toBeNull();
   expect(q('[data-agents-unlisted="local"]')?.textContent).toBe("Hide couldn't read this machine's agents.");
@@ -231,8 +231,8 @@ it("says a machine whose kit answered with no agent could not be read, with Chec
 });
 
 it("Check again asks the kit and shows the kit's own state: under way while it reads, the old list and one reason when it failed (B10)", async () => {
-  const { q, click, events, unmount } = await mount(state([device("local", { kit: kit(SEVEN, { unavailable: "A daemon outside the package installs nothing" }) })]));
-  expect(q("[data-agents-unavailable]")?.textContent).toBe("A daemon outside the package installs nothing");
+  const { q, click, events, unmount } = await mount(state([device("local", { kit: kit(SEVEN, { unavailable: "standalone" }) })]));
+  expect(q("[data-agents-unavailable]")?.textContent).toBe("This Hide is not running from the installed app, so it installs nothing on this machine. Open the Hide app to install.");
   expect(q('[data-agent-row="local:claude-code:on"]')).not.toBeNull();
   expect(q("[data-agents-check]")?.getAttribute("data-agents-check")).toBe("idle");
   // The tab reads the kit once as it opens (the demand hook); the button asks again and keeps no clock of its own.
@@ -288,9 +288,9 @@ it("keeps a recorded-on agent with no program under Installed with its switch, f
         availability: "not_installed",
         enabled: true,
         chosen,
-        skill: { state: "absent", reason: "`" + id + "` is not found", location: null },
-        hook: { state: "absent", reason: "`" + id + "` is not found", location: null },
-        herdr: { state: "absent", reason: null, location: null },
+        skill: { state: "absent", why: { cause: "program_missing", value: id }, location: null },
+        hook: { state: "absent", why: { cause: "program_missing", value: id }, location: null },
+        herdr: { state: "absent", why: null, location: null },
         partial: false,
         features: FEATURES.map((feature) => ({ id: feature, supported: true })),
         sessions: 0,

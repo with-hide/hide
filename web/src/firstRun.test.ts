@@ -8,7 +8,7 @@ const agent = (id: string, overrides: Partial<KitAgent> = {}): KitAgent => ({
   availability: "available",
   enabled: false,
   chosen: false,
-  skill: { state: "off", reason: null, location: `/home/me/.${id}/skills/hide` },
+  skill: { state: "off", why: null, location: `/home/me/.${id}/skills/hide` },
   hook: null,
   doc_url: "https://example.test",
   ...overrides,
@@ -46,12 +46,12 @@ describe("a tile's line (B8, B9)", () => {
 
 describe("What changes (B11)", () => {
   it("lists each place for the agents on, one row per place naming every agent that shares it, skips a piece the agent lacks, and ends with the hide link", () => {
-    const kit = { components: [{ id: "cli", label: "hide", state: "off", reason: null, location: "/home/me/.local/bin/hide" }] } as unknown as Kit;
-    const shared = { state: "off" as const, reason: null, location: "/home/me/.agents/skills/hide/SKILL.md" };
+    const kit = { components: [{ id: "cli", label: "hide", state: "off", why: null, location: "/home/me/.local/bin/hide" }] } as unknown as Kit;
+    const shared = { state: "off" as const, why: null, location: "/home/me/.agents/skills/hide/SKILL.md" };
     const agents = [
-      agent("claude-code", { hook: { state: "off", reason: null, location: "/home/me/.claude/settings.json" }, herdr: { state: "absent", reason: "none", location: null } }),
-      agent("codex", { skill: shared, hook: { state: "off", reason: null, location: "/home/me/.codex/hooks.json" } }),
-      agent("opencode", { label: "OpenCode", skill: shared, hook: { state: "off", reason: null, location: "/home/me/.config/opencode/plugins/hide.js" } }),
+      agent("claude-code", { hook: { state: "off", why: null, location: "/home/me/.claude/settings.json" }, herdr: { state: "absent", why: { cause: "agent_absent" }, location: null } }),
+      agent("codex", { skill: shared, hook: { state: "off", why: null, location: "/home/me/.codex/hooks.json" } }),
+      agent("opencode", { label: "OpenCode", skill: shared, hook: { state: "off", why: null, location: "/home/me/.config/opencode/plugins/hide.js" } }),
       agent("pi", { skill: shared }),
     ];
     expect(whatChanges(agents, new Set(["claude-code", "codex", "opencode"]), kit)).toEqual({
@@ -73,8 +73,8 @@ describe("What changes (B11)", () => {
     expect(underHome("C:\\Users\\me\\.codex\\hooks.json", "C:\\Users\\me")).toBe("~\\.codex\\hooks.json");
     expect(underHome("/Users/alice/.claude", "/Users/al")).toBe("/Users/alice/.claude");
     expect(underHome("/opt/hide", "/Users/me")).toBe("/opt/hide");
-    const kit = { components: [{ id: "cli", label: "hide", state: "off", reason: null, location: "/Users/me/.local/bin/hide" }] } as unknown as Kit;
-    const herdr = agent("claude-code", { skill: { state: "off", reason: null, location: "/Users/me/.claude/skills/hide" }, herdr: { state: "off", reason: null, location: "/Users/me/.config/herdr/integrations/claude" } });
+    const kit = { components: [{ id: "cli", label: "hide", state: "off", why: null, location: "/Users/me/.local/bin/hide" }] } as unknown as Kit;
+    const herdr = agent("claude-code", { skill: { state: "off", why: null, location: "/Users/me/.claude/skills/hide" }, herdr: { state: "off", why: null, location: "/Users/me/.config/herdr/integrations/claude" } });
     expect(whatChanges([herdr], new Set(["claude-code"]), kit, "/Users/me")).toEqual({
       rows: [
         { path: "~/.claude/skills/hide", labels: ["claude-code"], part: "skill" },
@@ -87,8 +87,8 @@ describe("What changes (B11)", () => {
 
 describe("a failed agent (B12)", () => {
   it("is a chosen agent that is on with a failed piece, named with the kit's reason", () => {
-    const agents = [agent("claude-code", { enabled: true, hook: { state: "failed", reason: "read-only file", location: "/x" } }), agent("codex", { enabled: true, skill: { state: "failed", reason: "denied", location: "/y" } })];
-    expect(failedAgents(agents, ["claude-code"])).toEqual([{ id: "claude-code", label: "claude-code", reason: "read-only file" }]);
+    const agents = [agent("claude-code", { enabled: true, hook: { state: "failed", why: { cause: "not_changed" }, location: "/x" } }), agent("codex", { enabled: true, skill: { state: "failed", why: { cause: "not_changed" }, location: "/y" } })];
+    expect(failedAgents(agents, ["claude-code"])).toEqual([{ id: "claude-code", label: "claude-code", why: { cause: "not_changed" } }]);
   });
 });
 

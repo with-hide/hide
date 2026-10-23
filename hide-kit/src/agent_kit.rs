@@ -32,13 +32,35 @@ use crate::agents::{
 use crate::herdr_integration::{self, Integration, Statuses};
 use crate::record::Record;
 use crate::{
-    ComponentId, ComponentState, KitTarget, Observed, RemoveOutcome, Retirement, Scope,
-    retired_agents,
+    ComponentId, ComponentState, KitTarget, Observed, PartCause, PartWhy, Reason, RemoveOutcome,
+    Retirement, Scope, retired_agents,
 };
 
-/// A kit part's id, state, reason and location, as the agent whose hook it
-/// is reports it.
-pub(crate) type PartView = (ComponentId, ComponentState, Option<String>, Option<String>);
+/// A kit part's id, state, reason, why and location, as the agent whose hook
+/// it is reports it.
+pub(crate) type PartView = (
+    ComponentId,
+    ComponentState,
+    Option<String>,
+    Option<PartWhy>,
+    Option<String>,
+);
+
+/// One piece as the report states it, its reason split into the sentence
+/// and the cause.
+fn piece_report(
+    state: ComponentState,
+    reason: Option<Reason>,
+    location: Option<String>,
+) -> PieceReport {
+    let (reason, why) = Reason::split(reason);
+    PieceReport {
+        state,
+        reason,
+        why,
+        location,
+    }
+}
 
 fn hook_code(adapter: &AgentAdapter) -> String {
     format!("hook:{}", adapter.id)
@@ -127,42 +149,59 @@ fn helper(target: &KitTarget) -> std::path::PathBuf {
 fn observe_guidance(target: &KitTarget, adapter: &AgentAdapter, agent: GuidanceAgent) -> Observed {
     use hide_agent_hooks::guidance;
     if let Err(why) = agent.supported_here() {
-        return Observed::Unsupported(format!(
-            "{}'s hook is not written here: {why}",
-            adapter.label
+        return Observed::Unsupported(Reason::new(
+            PartCause::Unsupported,
+            format!("{}'s hook is not written here: {why}", adapter.label),
         ));
     }
     let wanted = helper(target);
     let state = crate::layout::state_dir_from_process(&target.home);
     let hook_target = match HookTarget::new(&wanted, &state) {
         Ok(target) => target,
-        Err(reason) => return Observed::Blocked(reason.to_owned()),
+        Err(reason) => return Observed::Blocked(Reason::not_changed(reason)),
     };
     let observed = match guidance::status(agent, &target.home) {
         // Installed, but the agent has not made its settings folder yet; the
         // hook goes in on the pass after it has.
         HookStatus::RuntimeAbsent => {
-            return Observed::Absent(format!(
-                "{} has not created {} yet; the hook is put in once it has",
-                adapter.label,
-                agent.home_directory(&target.home).display()
+            let folder = agent.home_directory(&target.home).display().to_string();
+            return Observed::Absent(Reason::with(
+                PartCause::NotCreatedYet,
+                folder.clone(),
+                format!(
+                    "{} has not created {folder} yet; the hook is put in once it has",
+                    adapter.label
+                ),
             ));
         }
         // Reading a file never says Off: the kit's record does (`HookStatus::Off`).
         HookStatus::NotInstalled | HookStatus::Off => Observed::Missing,
-        HookStatus::Outdated { version } => Observed::Stale(format!(
-            "version {version} of the hook is there; this build writes version {}",
-            agent.version()
+        HookStatus::Outdated { version } => Observed::Stale(Reason::new(
+            PartCause::OlderVersion,
+            format!(
+                "version {version} of the hook is there; this build writes version {}",
+                agent.version()
+            ),
         )),
         HookStatus::Failed {
             reason: InstallFailure::HelperMissing { helper, .. },
-        } => Observed::Stale(format!("the hook points at {helper}, which is gone")),
-        HookStatus::Failed { reason } => return Observed::Blocked(reason.message()),
+        } => Observed::Stale(Reason::with(
+            PartCause::HelperGone,
+            helper.clone(),
+            format!("the hook points at {helper}, which is gone"),
+        )),
+        HookStatus::Failed { reason } => {
+            return Observed::Blocked(Reason::new(PartCause::Unreadable, reason.message()));
+        }
         HookStatus::Installed { .. } => {
             match guidance::installed_helper_path(agent, &target.home) {
-                Some(found) if Path::new(&found) != wanted => Observed::Stale(format!(
-                    "the hook runs {found}, not this build's {}",
-                    wanted.display()
+                Some(found) if Path::new(&found) != wanted => Observed::Stale(Reason::with(
+                    PartCause::OtherBuild,
+                    found.clone(),
+                    format!(
+                        "the hook runs {found}, not this build's {}",
+                        wanted.display()
+                    ),
                 )),
                 // Hide AI's agy folder goes in with agy's hook, so a pass
                 // after it went missing or lost agy's trust writes it again.
@@ -170,21 +209,30 @@ fn observe_guidance(target: &KitTarget, adapter: &AgentAdapter, agent: GuidanceA
                     if agent == GuidanceAgent::Antigravity
                         && hide_agent_hooks::antigravity_trust::read_only_due(&target.home) =>
                 {
-                    Observed::Stale("Hide AI's tool-free folder for agy is missing or untrusted".to_owned())
+                    Observed::Stale(Reason::new(
+                        PartCause::AiFolder,
+                        "Hide AI's tool-free folder for agy is missing or untrusted",
+                    ))
                 }
                 Some(_) if guidance::matches_install(agent, &target.home, hook_target) => {
                     Observed::Current
                 }
                 Some(_) if guidance::matches_helper(agent, &target.home, &wanted) => {
-                    Observed::Stale("the hook's captured state route changed".to_owned())
+                    Observed::Stale(Reason::new(
+                        PartCause::RouteChanged,
+                        "the hook's captured state route changed",
+                    ))
                 }
                 // Hide's marker over an entry Hide did not write: the operator
                 // edited it, and it is theirs until Reinstall.
-                Some(_) => Observed::Edited(
-                    "Hide's hook entries were edited after Hide wrote them; Reinstall puts Hide's back"
-                        .to_owned(),
-                ),
-                None => Observed::Stale("the hook's command is not one Hide wrote".to_owned()),
+                Some(_) => Observed::Edited(Reason::new(
+                    PartCause::Edited,
+                    "Hide's hook entries were edited after Hide wrote them; Reinstall puts Hide's back",
+                )),
+                None => Observed::Stale(Reason::new(
+                    PartCause::NotHides,
+                    "the hook's command is not one Hide wrote",
+                )),
             }
         }
     };
@@ -192,12 +240,18 @@ fn observe_guidance(target: &KitTarget, adapter: &AgentAdapter, agent: GuidanceA
         return observed;
     }
     if !helper(target).is_file() {
-        return Observed::Blocked(format!(
-            "this build has no hook helper at {}",
-            helper(target).display()
-        ));
+        return Observed::Blocked(no_helper(&helper(target)));
     }
     observed
+}
+
+/// This build has no hook helper for a piece to point at.
+fn no_helper(helper: &Path) -> Reason {
+    Reason::with(
+        PartCause::NoHelper,
+        helper.display().to_string(),
+        format!("this build has no hook helper at {}", helper.display()),
+    )
 }
 
 fn install_guidance(target: &KitTarget, agent: GuidanceAgent) -> Result<(), String> {
@@ -235,14 +289,14 @@ fn plugin_state(
     adapter: &AgentAdapter,
     dialect: PluginDialect,
     recorded: bool,
-) -> (ComponentState, Option<String>) {
+) -> (ComponentState, Option<Reason>) {
     let file = plugin::of(dialect);
     let noun = file.noun();
     let helper = helper(target);
     let state = crate::layout::state_dir_from_process(&target.home);
     let hook_target = match HookTarget::new(&helper, &state) {
         Ok(target) => target,
-        Err(reason) => return (ComponentState::Failed, Some(reason.to_owned())),
+        Err(reason) => return (ComponentState::Failed, Some(Reason::not_changed(reason))),
     };
     let observed = file.observe(&target.home, hook_target);
     if !matches!(
@@ -250,43 +304,51 @@ fn plugin_state(
         PluginObserved::Current | PluginObserved::ConfigAbsent | PluginObserved::Foreign(_)
     ) && !helper.is_file()
     {
-        return (
-            ComponentState::Failed,
-            Some(format!(
-                "this build has no hook helper at {}",
-                helper.display()
-            )),
-        );
+        return (ComponentState::Failed, Some(no_helper(&helper)));
     }
     match observed {
         PluginObserved::Current => (ComponentState::Installed, None),
-        PluginObserved::Stale(reason) => (ComponentState::Outdated, Some(reason)),
+        PluginObserved::Stale(reason) => (
+            ComponentState::Outdated,
+            Some(Reason::new(PartCause::OlderVersion, reason)),
+        ),
         PluginObserved::Edited => (
             ComponentState::Outdated,
-            Some(format!(
-                "the {noun} was edited after Hide wrote it; Reinstall puts Hide's back"
+            Some(Reason::new(
+                PartCause::Edited,
+                format!("the {noun} was edited after Hide wrote it; Reinstall puts Hide's back"),
             )),
         ),
-        PluginObserved::Missing if recorded => (
-            ComponentState::Removed,
-            Some("taken out after Hide installed it; Reinstall puts it back".to_owned()),
-        ),
+        PluginObserved::Missing if recorded => (ComponentState::Removed, Some(Reason::taken_out())),
         PluginObserved::Missing => (ComponentState::NotInstalled, None),
-        PluginObserved::ConfigAbsent => (
-            ComponentState::Absent,
-            Some(format!(
-                "{} has not created {} yet; the {noun} is put in once it has",
-                adapter.label,
-                file.config_directory(&target.home).display()
-            )),
-        ),
+        PluginObserved::ConfigAbsent => {
+            let folder = file.config_directory(&target.home).display().to_string();
+            (
+                ComponentState::Absent,
+                Some(Reason::with(
+                    PartCause::NotCreatedYet,
+                    folder.clone(),
+                    format!(
+                        "{} has not created {folder} yet; the {noun} is put in once it has",
+                        adapter.label
+                    ),
+                )),
+            )
+        }
         PluginObserved::Foreign(name) => (
             ComponentState::Absent,
-            Some(format!(
-                "a {noun} named {name} that Hide did not write is already there; Hide left it alone"
+            Some(Reason::with(
+                PartCause::Foreign,
+                name.clone(),
+                format!(
+                    "a {noun} named {name} that Hide did not write is already there; Hide left it alone"
+                ),
             )),
         ),
-        PluginObserved::Unreadable(reason) => (ComponentState::Failed, Some(reason)),
+        PluginObserved::Unreadable(reason) => (
+            ComponentState::Failed,
+            Some(Reason::new(PartCause::Unreadable, reason)),
+        ),
     }
 }
 
@@ -301,7 +363,9 @@ fn plugin_piece(
 ) -> PieceReport {
     let file = plugin::of(dialect);
     let location = Some(file.path(&target.home).display().to_string());
-    let failure = failures.and_then(|failures| failures.hook.get(adapter.id).cloned());
+    let failure = failures
+        .and_then(|failures| failures.hook.get(adapter.id).cloned())
+        .map(Reason::not_changed);
     let (state, reason) = if !on {
         // Hide's unedited file still there after the switch-off: the removal
         // failed or never ran, and the row must not read Off over it. An edited
@@ -311,7 +375,7 @@ fn plugin_piece(
             let state = crate::layout::state_dir_from_process(&target.home);
             let hook_target = match HookTarget::new(&helper, &state) {
                 Ok(target) => target,
-                Err(reason) => return Some(reason.to_owned()),
+                Err(reason) => return Some(Reason::not_changed(reason)),
             };
             (record.agent_choice(adapter.id) == Some(false)
                 && matches!(
@@ -319,9 +383,12 @@ fn plugin_piece(
                     PluginObserved::Current | PluginObserved::Stale(_)
                 ))
             .then(|| {
-                format!(
-                    "Hide's {} is still in place; switch the agent on and off again to remove it",
-                    file.noun()
+                Reason::new(
+                    PartCause::StillInPlace,
+                    format!(
+                        "Hide's {} is still in place; switch the agent on and off again to remove it",
+                        file.noun()
+                    ),
                 )
             })
         });
@@ -330,11 +397,7 @@ fn plugin_piece(
             None => (ComponentState::Off, None),
         }
     } else if !detection.installed(adapter) {
-        return PieceReport {
-            state: ComponentState::Absent,
-            reason: Some(not_found(adapter)),
-            location: None,
-        };
+        return piece_report(ComponentState::Absent, Some(not_found(adapter)), None);
     } else if let Some(reason) = failure {
         (ComponentState::Failed, Some(reason))
     } else {
@@ -345,65 +408,72 @@ fn plugin_piece(
             record.contains_piece(&hook_code(adapter)),
         )
     };
-    PieceReport {
-        state,
-        reason,
-        location,
-    }
+    piece_report(state, reason, location)
 }
 
 // --- One pass ------------------------------------------------------------------
 
 /// Why an agent that is on has nothing put in place: none of its programs is
 /// found here.
-fn not_found(adapter: &AgentAdapter) -> String {
+fn not_found(adapter: &AgentAdapter) -> Reason {
     let programs: Vec<String> = adapter
         .executables
         .iter()
         .map(|name| format!("`{name}`"))
         .collect();
-    format!("{} is not found on this machine", programs.join(" or "))
+    Reason::with(
+        PartCause::ProgramMissing,
+        adapter.executables.join(", "),
+        format!("{} is not found on this machine", programs.join(" or ")),
+    )
 }
 
 fn dir_state(
     observed: &SkillObserved,
     recorded: bool,
     failure: Option<String>,
-) -> (ComponentState, Option<String>) {
+) -> (ComponentState, Option<Reason>) {
     if let Some(reason) = failure {
-        return (ComponentState::Failed, Some(reason));
+        return (ComponentState::Failed, Some(Reason::not_changed(reason)));
     }
     match observed {
         SkillObserved::Current => (ComponentState::Installed, None),
         SkillObserved::Stale => (
             ComponentState::Outdated,
-            Some("an older version of the skill is there".to_owned()),
+            Some(Reason::new(
+                PartCause::OlderVersion,
+                "an older version of the skill is there",
+            )),
         ),
         SkillObserved::Edited => (
             ComponentState::Outdated,
-            Some(
-                "the skill was edited after Hide wrote it; Reinstall puts Hide's text back"
-                    .to_owned(),
-            ),
+            Some(Reason::new(
+                PartCause::Edited,
+                "the skill was edited after Hide wrote it; Reinstall puts Hide's text back",
+            )),
         ),
-        SkillObserved::Missing if recorded => (
-            ComponentState::Removed,
-            Some("taken out after Hide installed it; Reinstall puts it back".to_owned()),
-        ),
+        SkillObserved::Missing if recorded => (ComponentState::Removed, Some(Reason::taken_out())),
         SkillObserved::Missing => (ComponentState::NotInstalled, None),
         SkillObserved::Foreign(names) => (
             ComponentState::Absent,
-            Some(match names.as_slice() {
-                [name] => format!(
-                    "a skill named {name} that Hide did not write is already there; Hide left it alone"
-                ),
-                _ => format!(
-                    "skills named {} that Hide did not write are already there; Hide left them alone",
-                    sentence_list(names)
-                ),
-            }),
+            Some(Reason::with(
+                PartCause::Foreign,
+                names.join(", "),
+                match names.as_slice() {
+                    [name] => format!(
+                        "a skill named {name} that Hide did not write is already there; Hide left it alone"
+                    ),
+                    _ => format!(
+                        "skills named {} that Hide did not write are already there; Hide left them alone",
+                        sentence_list(names)
+                    ),
+                },
+            )),
         ),
-        SkillObserved::Unreadable(reason) => (ComponentState::Failed, Some(reason.clone())),
+        SkillObserved::Unreadable(reason) => (
+            ComponentState::Failed,
+            Some(Reason::new(PartCause::Unreadable, reason.clone())),
+        ),
     }
 }
 
@@ -475,27 +545,16 @@ fn report_agent(
         // is not Off: the stub is still read by the agent.
         let left = failures
             .and_then(|failures| failures.skill.get(&adapter.skill_dir).cloned())
+            .map(Reason::not_changed)
             .or_else(|| left_behind(record, adapter, dirs, &location));
         match left {
-            Some(reason) => PieceReport {
-                state: ComponentState::Failed,
-                reason: Some(reason),
-                location: Some(location),
-            },
-            None => PieceReport {
-                state: ComponentState::Off,
-                reason: None,
-                location: Some(location),
-            },
+            Some(reason) => piece_report(ComponentState::Failed, Some(reason), Some(location)),
+            None => piece_report(ComponentState::Off, None, Some(location)),
         }
     } else if !installed {
         // On, and its program is gone or was never here: a pass leaves what
         // Hide put down in place, and the switch still takes it out.
-        PieceReport {
-            state: ComponentState::Absent,
-            reason: Some(not_found(adapter)),
-            location: None,
-        }
+        piece_report(ComponentState::Absent, Some(not_found(adapter)), None)
     } else {
         let observed = dirs
             .iter()
@@ -512,35 +571,35 @@ fn report_agent(
             // cannot help until the agent has made it.
             (
                 ComponentState::Absent,
-                Some(format!(
-                    "{} has not created its own folder yet; the skill is put in once it has",
-                    adapter.label
+                Some(Reason::new(
+                    PartCause::NotCreatedYet,
+                    format!(
+                        "{} has not created its own folder yet; the skill is put in once it has",
+                        adapter.label
+                    ),
                 )),
             )
         } else {
             dir_state(&observed, recorded, failure)
         };
-        PieceReport {
+        piece_report(
             state,
             reason,
-            location: Some(skill_location(adapter.skill_dir, &target.home)),
-        }
+            Some(skill_location(adapter.skill_dir, &target.home)),
+        )
     };
     let hook = match adapter.hook {
         HookSupport::None => None,
         HookSupport::Part(part) => {
             let found = parts.iter().find(|(id, ..)| *id == part);
             Some(match found {
-                Some((_, state, reason, location)) => PieceReport {
+                Some((_, state, reason, why, location)) => PieceReport {
                     state: *state,
                     reason: reason.clone(),
+                    why: why.clone(),
                     location: location.clone(),
                 },
-                None => PieceReport {
-                    state: ComponentState::Absent,
-                    reason: None,
-                    location: None,
-                },
+                None => piece_report(ComponentState::Absent, None, None),
             })
         }
         HookSupport::Guidance(agent) => Some(guidance_piece(
@@ -592,12 +651,10 @@ fn herdr_piece(
         Some(Ok(statuses)) => statuses.of(integration.target),
         _ => None,
     };
-    let piece = |state, reason: Option<String>| PieceReport {
-        state,
-        reason,
-        location: location.clone(),
-    };
-    let failure = failures.and_then(|failures| failures.herdr.get(adapter.id).cloned());
+    let piece = |state, reason: Option<Reason>| piece_report(state, reason, location.clone());
+    let failure = failures
+        .and_then(|failures| failures.herdr.get(adapter.id).cloned())
+        .map(Reason::not_changed);
     if !on {
         // Hide's own integration is still there after the switch-off: the
         // removal failed or never ran, and the row must not read Off over it.
@@ -606,7 +663,10 @@ fn herdr_piece(
                 && recorded
                 && matches!(listed, Some(Integration::Current | Integration::Outdated)))
             .then(|| {
-                "Hide's Herdr integration is still in place; switch the agent on and off again to remove it".to_owned()
+                Reason::new(
+                    PartCause::StillInPlace,
+                    "Hide's Herdr integration is still in place; switch the agent on and off again to remove it",
+                )
             })
         });
         return match left {
@@ -615,11 +675,7 @@ fn herdr_piece(
         };
     }
     if !detection.installed(adapter) {
-        return PieceReport {
-            state: ComponentState::Absent,
-            reason: Some(not_found(adapter)),
-            location: None,
-        };
+        return piece_report(ComponentState::Absent, Some(not_found(adapter)), None);
     }
     if let Some(reason) = failure {
         return piece(ComponentState::Failed, Some(reason));
@@ -627,22 +683,35 @@ fn herdr_piece(
     match herdr {
         None => piece(
             ComponentState::Absent,
-            Some("Herdr is not found on this machine".to_owned()),
+            Some(Reason::new(
+                PartCause::HerdrAbsent,
+                "Herdr is not found on this machine",
+            )),
         ),
-        Some(Err(reason)) => piece(ComponentState::Failed, Some(reason.clone())),
+        Some(Err(reason)) => piece(
+            ComponentState::Failed,
+            Some(Reason::new(PartCause::Unreadable, reason.clone())),
+        ),
         Some(Ok(_)) if !folder.is_dir() => piece(
             ComponentState::Absent,
-            Some(format!(
-                "{} has not created its own folder yet; Herdr's integration is put in once it has",
-                adapter.label
+            Some(Reason::with(
+                PartCause::NotCreatedYet,
+                folder.display().to_string(),
+                format!(
+                    "{} has not created its own folder yet; Herdr's integration is put in once it has",
+                    adapter.label
+                ),
             )),
         ),
         Some(Ok(_)) => match listed {
             None => piece(
                 ComponentState::Absent,
-                Some(format!(
-                    "this Herdr has no integration for {}; update Herdr to get it",
-                    adapter.label
+                Some(Reason::new(
+                    PartCause::UpdateHerdr,
+                    format!(
+                        "this Herdr has no integration for {}; update Herdr to get it",
+                        adapter.label
+                    ),
                 )),
             ),
             Some(Integration::Current) => piece(ComponentState::Installed, None),
@@ -651,12 +720,14 @@ fn herdr_piece(
             Some(Integration::Outdated) if !recorded => piece(ComponentState::Installed, None),
             Some(Integration::Outdated) => piece(
                 ComponentState::Outdated,
-                Some("an older version of Herdr's integration is there".to_owned()),
+                Some(Reason::new(
+                    PartCause::OlderVersion,
+                    "an older version of Herdr's integration is there",
+                )),
             ),
-            Some(Integration::Missing) if recorded => piece(
-                ComponentState::Removed,
-                Some("taken out after Hide installed it; Reinstall puts it back".to_owned()),
-            ),
+            Some(Integration::Missing) if recorded => {
+                piece(ComponentState::Removed, Some(Reason::taken_out()))
+            }
             Some(Integration::Missing) => piece(ComponentState::NotInstalled, None),
         },
     }
@@ -670,7 +741,7 @@ fn left_behind(
     adapter: &AgentAdapter,
     dirs: &[(SkillDir, SkillObserved, bool)],
     location: &str,
-) -> Option<String> {
+) -> Option<Reason> {
     if record.agent_choice(adapter.id) != Some(false)
         || !record.contains_piece(&skill_code(adapter.skill_dir))
     {
@@ -678,8 +749,11 @@ fn left_behind(
     }
     let (_, observed, wanted) = dirs.iter().find(|(dir, _, _)| *dir == adapter.skill_dir)?;
     (!wanted && matches!(observed, SkillObserved::Current | SkillObserved::Stale)).then(|| {
-        format!(
-            "Hide's skill is still in {location}; switch the agent on and off again to remove it"
+        Reason::new(
+            PartCause::StillInPlace,
+            format!(
+                "Hide's skill is still in {location}; switch the agent on and off again to remove it"
+            ),
         )
     })
 }
@@ -697,48 +771,39 @@ fn guidance_piece(
     if !on {
         let left = failures
             .and_then(|failures| failures.hook.get(adapter.id).cloned())
+            .map(Reason::not_changed)
             .or_else(|| {
                 matches!(
                     hide_agent_hooks::guidance::status(agent, &target.home),
                     HookStatus::Installed { .. } | HookStatus::Outdated { .. }
                 )
                 .then(|| {
-                    "Hide's entry is still in the file; switch the agent on and off again to remove it"
-                        .to_owned()
+                    Reason::new(
+                        PartCause::StillInPlace,
+                        "Hide's entry is still in the file; switch the agent on and off again to remove it",
+                    )
                 })
             });
         return match left {
-            Some(reason) => PieceReport {
-                state: ComponentState::Failed,
-                reason: Some(reason),
-                location,
-            },
-            None => PieceReport {
-                state: ComponentState::Off,
-                reason: None,
-                location,
-            },
+            Some(reason) => piece_report(ComponentState::Failed, Some(reason), location),
+            None => piece_report(ComponentState::Off, None, location),
         };
     }
     if !detection.installed(adapter) {
-        return PieceReport {
-            state: ComponentState::Absent,
-            reason: Some(not_found(adapter)),
-            location: None,
-        };
+        return piece_report(ComponentState::Absent, Some(not_found(adapter)), None);
     }
     let recorded = record.contains_piece(&hook_code(adapter));
     let (state, reason) = match failures.and_then(|failures| failures.hook.get(adapter.id)) {
-        Some(reason) => (ComponentState::Failed, Some(reason.clone())),
+        Some(reason) => (
+            ComponentState::Failed,
+            Some(Reason::not_changed(reason.clone())),
+        ),
         None => match observe_guidance(target, adapter, agent) {
             Observed::Current => (ComponentState::Installed, None),
             Observed::Stale(reason) | Observed::Edited(reason) => {
                 (ComponentState::Outdated, Some(reason))
             }
-            Observed::Missing if recorded => (
-                ComponentState::Removed,
-                Some("taken out after Hide installed it; Reinstall puts it back".to_owned()),
-            ),
+            Observed::Missing if recorded => (ComponentState::Removed, Some(Reason::taken_out())),
             Observed::Missing => (ComponentState::NotInstalled, None),
             Observed::Blocked(reason) => (ComponentState::Failed, Some(reason)),
             Observed::Absent(reason) | Observed::Unsupported(reason) => {
@@ -746,11 +811,7 @@ fn guidance_piece(
             }
         },
     };
-    PieceReport {
-        state,
-        reason,
-        location,
-    }
+    piece_report(state, reason, location)
 }
 
 /// Why a piece that was tried failed, by agent and folder.
@@ -1251,6 +1312,7 @@ pub(crate) fn part_views(components: &[crate::ComponentReport]) -> Vec<PartView>
                 part.id,
                 part.state,
                 part.reason.clone(),
+                part.why.clone(),
                 part.location.clone(),
             )
         })

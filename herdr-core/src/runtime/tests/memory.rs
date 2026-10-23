@@ -552,6 +552,7 @@ fn turning_memory_on_updates_the_hooks_first_and_then_turns_it_on() {
                 id: hide_kit::ComponentId::CodexHook,
                 state: hide_kit::ComponentState::NotInstalled,
                 reason: None,
+                why: None,
                 location: None,
             }],
             agents: Vec::new(),

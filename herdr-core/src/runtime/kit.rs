@@ -15,7 +15,7 @@ use hide_kit::{ComponentId, KitReport, Scope};
 
 use super::Runtime;
 use super::hosts::HostPhase;
-use crate::model::{CodexDaemonOffSnapshot, KitSnapshot};
+use crate::model::{CodexDaemonOffSnapshot, KitSnapshot, KitUnavailable};
 use crate::node_access::NodeLink;
 
 /// How often this Mac's kit is read again while Settings is on screen, so a
@@ -111,19 +111,15 @@ pub(super) enum KitDeclined {
     /// that build put there may still be in place.
     ConsentOutdated,
     /// This build has no helper for the device's platform.
-    Unsupported(String),
+    Unsupported,
 }
 
 impl KitDeclined {
-    fn reason(self) -> String {
+    fn cause(&self) -> KitUnavailable {
         match self {
-            Self::NoConsent => {
-                "Hide installs its kit here once you allow its helper on this device".to_owned()
-            }
-            Self::ConsentOutdated => {
-                "Hide needs your permission again before it installs its kit here".to_owned()
-            }
-            Self::Unsupported(message) => message,
+            Self::NoConsent => KitUnavailable::NoConsent,
+            Self::ConsentOutdated => KitUnavailable::ConsentOutdated,
+            Self::Unsupported => KitUnavailable::UnsupportedPlatform,
         }
     }
 
@@ -176,9 +172,19 @@ impl Runtime {
 
     /// This Mac cannot run the kit at all, and its row says why (B11); a
     /// first-run Continue waiting for that pass learns it did not run.
-    pub(crate) fn set_local_kit_unavailable(&mut self, reason: &str) {
+    /// `detail` is what went wrong in the operator's terms; it goes to the
+    /// log, and the row words `cause`.
+    pub(crate) fn set_local_kit_unavailable(&mut self, cause: KitUnavailable, detail: &str) {
         let node = self.node.clone();
-        self.set_kit_state(node.as_str(), KitSnapshot::unavailable(reason));
+        if self.set_kit_state(node.as_str(), KitSnapshot::unavailable(cause)) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "kit.unavailable",
+                "device_id": node.as_str(),
+                "cause": cause.as_str(),
+                "detail": detail,
+            }));
+        }
         self.settle_first_run_apply();
     }
 
@@ -289,6 +295,78 @@ impl Runtime {
         }
     }
 
+    /// The kit's own sentence for each part and piece whose state or cause
+    /// changed since the machine's last report: the screen words the cause,
+    /// and this is where the path, the version or the io error is kept.
+    fn diagnose_kit_reasons(&self, device_id: &str, report: &KitReport) {
+        let before = self.kit_states.get(device_id);
+        for part in &report.components {
+            let Some(reason) = part.reason.as_deref() else {
+                continue;
+            };
+            let unchanged = before.is_some_and(|before| {
+                before.components.iter().any(|known| {
+                    known.id == part.id && known.state == part.state && known.why == part.why
+                })
+            });
+            if !unchanged {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "kit",
+                    "kind": "part.reason",
+                    "device_id": device_id,
+                    "part": part.id.code(),
+                    "state": part.state,
+                    "cause": part.why.as_ref().map(|why| why.cause),
+                    "reason": reason,
+                }));
+            }
+        }
+        for agent in &report.agents {
+            let known =
+                before.and_then(|before| before.agents.iter().find(|row| row.id == agent.id));
+            let pieces = [
+                (
+                    "skill",
+                    Some(&agent.skill),
+                    known.map(|row| Some(&row.skill)),
+                ),
+                (
+                    "hook",
+                    agent.hook.as_ref(),
+                    known.map(|row| row.hook.as_ref()),
+                ),
+                (
+                    "herdr",
+                    agent.herdr.as_ref(),
+                    known.map(|row| row.herdr.as_ref()),
+                ),
+            ];
+            for (name, piece, known) in pieces {
+                let Some(piece) = piece else {
+                    continue;
+                };
+                let Some(reason) = piece.reason.as_deref() else {
+                    continue;
+                };
+                let unchanged = known
+                    .flatten()
+                    .is_some_and(|known| known.state == piece.state && known.why == piece.why);
+                if !unchanged {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "kit",
+                        "kind": "part.reason",
+                        "device_id": device_id,
+                        "agent": agent.id,
+                        "piece": name,
+                        "state": piece.state,
+                        "cause": piece.why.as_ref().map(|why| why.cause),
+                        "reason": reason,
+                    }));
+                }
+            }
+        }
+    }
+
     /// Stores what a check or an install found on one machine. A report that
     /// lands while an install is queued for that machine keeps it busy.
     pub(crate) fn ingest_kit_report(&mut self, device_id: &str, report: &KitReport) -> bool {
@@ -319,6 +397,7 @@ impl Runtime {
             }));
         }
         let mut snapshot = KitSnapshot::from_report(report);
+        self.diagnose_kit_reasons(device_id, report);
         snapshot.busy = self.kit_install_queued(device_id);
         // A refusal reaches the operator once per change, not on every read
         // while Settings is open: the kit's own words go to the log, and the
@@ -682,8 +761,8 @@ impl Runtime {
             return true;
         }
         let state = self.kit_view(device_id);
-        if let Some(reason) = state.unavailable {
-            self.set_error("kit.unavailable", reason, false);
+        if let Some(cause) = state.unavailable {
+            self.set_error("kit.unavailable", cause.as_str(), false);
             return true;
         }
         // A pass that stopped judged nothing, so there is nothing to name:
@@ -748,8 +827,8 @@ impl Runtime {
             return true;
         }
         let state = self.kit_view(device_id);
-        if let Some(reason) = state.unavailable {
-            self.set_error("kit.unavailable", reason, false);
+        if let Some(cause) = state.unavailable {
+            self.set_error("kit.unavailable", cause.as_str(), false);
             return true;
         }
         let Some(now) = state.agents.iter().find(|row| row.id == agent) else {
@@ -821,8 +900,8 @@ impl Runtime {
             return true;
         }
         let state = self.kit_view(device_id);
-        if let Some(reason) = state.unavailable {
-            self.set_error("kit.unavailable", reason, false);
+        if let Some(cause) = state.unavailable {
+            self.set_error("kit.unavailable", cause.as_str(), false);
             return true;
         }
         if state.codex_daemon_off == Some(CodexDaemonOffSnapshot::Pending) {
@@ -1159,9 +1238,7 @@ impl Runtime {
                 state.checking = false;
                 state.check_failed = Some(crate::model::KitCheckFailure::ReadFailed);
                 if state.components.is_empty() {
-                    state.unavailable = Some(format!(
-                        "Hide could not read its kit on this device: {reason}"
-                    ));
+                    state.unavailable = Some(KitUnavailable::Unreadable);
                 }
                 // Only the call that carried the current request ends it.
                 if current && state.codex_daemon_off == Some(CodexDaemonOffSnapshot::Pending) {
@@ -1445,7 +1522,7 @@ impl Runtime {
             return self.kit_state(device_id);
         }
         let mut view = match self.device_kit_declined(device_id) {
-            Some(declined) => KitSnapshot::unavailable(declined.reason()),
+            Some(declined) => KitSnapshot::unavailable(declined.cause()),
             None => self.kit_state(device_id),
         };
         view.shares_account_with = self
@@ -1465,9 +1542,7 @@ impl Runtime {
         match (host.consent.as_str(), host.state.as_str()) {
             ("none", _) => Some(KitDeclined::NoConsent),
             ("outdated", _) => Some(KitDeclined::ConsentOutdated),
-            (_, "unsupported") => Some(KitDeclined::Unsupported(host.message.unwrap_or_else(
-                || "This Hide build does not support this device's platform".to_owned(),
-            ))),
+            (_, "unsupported") => Some(KitDeclined::Unsupported),
             _ => None,
         }
     }
@@ -1572,6 +1647,7 @@ mod tests {
             skill: hide_kit::PieceReport {
                 state: hide_kit::ComponentState::Installed,
                 reason: None,
+                why: None,
                 location: None,
             },
             hook: None,

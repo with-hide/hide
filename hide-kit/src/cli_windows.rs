@@ -95,13 +95,17 @@ fn owned_or_missing(target: &KitTarget) -> Result<(), String> {
 
 pub(crate) fn observe(target: &KitTarget) -> Observed {
     if !wanted(target).is_file() {
-        return Observed::Blocked(format!(
-            "this build has no hide command at {}",
-            wanted(target).display()
+        return Observed::Blocked(crate::Reason::with(
+            crate::PartCause::NoHelper,
+            wanted(target).display().to_string(),
+            format!(
+                "this build has no hide command at {}",
+                wanted(target).display()
+            ),
         ));
     }
     if let Err(reason) = owned_or_missing(target) {
-        return Observed::Blocked(reason);
+        return Observed::Blocked(crate::Reason::new(crate::PartCause::OtherProgram, reason));
     }
     if !link_path(target).is_file() {
         return Observed::Missing;
@@ -109,7 +113,10 @@ pub(crate) fn observe(target: &KitTarget) -> Observed {
     if link::is_link_to(&junction(target), &target.kit_dir) {
         Observed::Current
     } else {
-        Observed::Stale("Hide's command junction is missing or points at an older package".into())
+        Observed::Stale(crate::Reason::new(
+            crate::PartCause::OtherBuild,
+            "Hide's command junction is missing or points at an older package",
+        ))
     }
 }
 

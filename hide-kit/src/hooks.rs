@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use hide_agent_hooks::route::HookTarget;
 use hide_agent_hooks::{AgentRuntime, HookStatus, InstallFailure, MemoryCompatibility};
 
-use crate::{KitTarget, Observed, RemoveOutcome};
+use crate::{KitTarget, Observed, PartCause, Reason, RemoveOutcome};
 
 fn helper(target: &KitTarget) -> PathBuf {
     target.kit_dir.join(hide_agent_hooks::HELPER_BINARY_NAME)
@@ -23,23 +23,35 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
     let state = crate::layout::state_dir_from_process(&target.home);
     let hook_target = match HookTarget::new(&wanted, &state) {
         Ok(target) => target,
-        Err(reason) => return Observed::Blocked(reason.to_owned()),
+        Err(reason) => return Observed::Blocked(Reason::not_changed(reason)),
     };
     let status = hide_agent_hooks::install::status(runtime, &target.home);
     let observed = match status {
         HookStatus::RuntimeAbsent => {
-            return Observed::Absent(format!("{} is not set up on this machine", runtime.label()));
+            return Observed::Absent(Reason::new(
+                PartCause::AgentAbsent,
+                format!("{} is not set up on this machine", runtime.label()),
+            ));
         }
         // Reading a file never says Off: the kit's record does (`HookStatus::Off`).
         HookStatus::NotInstalled | HookStatus::Off => Observed::Missing,
-        HookStatus::Outdated { version } => Observed::Stale(format!(
-            "version {version} of the hook is there; this build writes version {}",
-            hide_agent_hooks::HOOK_ENTRY_VERSION
+        HookStatus::Outdated { version } => Observed::Stale(Reason::new(
+            PartCause::OlderVersion,
+            format!(
+                "version {version} of the hook is there; this build writes version {}",
+                hide_agent_hooks::HOOK_ENTRY_VERSION
+            ),
         )),
         HookStatus::Failed {
             reason: InstallFailure::HelperMissing { helper, .. },
-        } => Observed::Stale(format!("the hook points at {helper}, which is gone")),
-        HookStatus::Failed { reason } => return Observed::Blocked(reason.message()),
+        } => Observed::Stale(Reason::with(
+            PartCause::HelperGone,
+            helper.clone(),
+            format!("the hook points at {helper}, which is gone"),
+        )),
+        HookStatus::Failed { reason } => {
+            return Observed::Blocked(Reason::new(PartCause::Unreadable, reason.message()));
+        }
         HookStatus::Installed { .. } => {
             match hide_agent_hooks::installed_helper_path(runtime, &target.home) {
                 Some(found) if Path::new(&found) == wanted => {
@@ -54,19 +66,29 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
                         &target.home,
                         &wanted,
                     ) {
-                        Observed::Stale("the hook's captured state route changed".to_owned())
+                        Observed::Stale(Reason::new(
+                            PartCause::RouteChanged,
+                            "the hook's captured state route changed",
+                        ))
                     } else {
-                        Observed::Edited(
-                            "Hide's hook entries were edited; Reinstall puts Hide's back"
-                                .to_owned(),
-                        )
+                        Observed::Edited(Reason::new(
+                            PartCause::Edited,
+                            "Hide's hook entries were edited; Reinstall puts Hide's back",
+                        ))
                     }
                 }
-                Some(found) => Observed::Stale(format!(
-                    "the hook runs {found}, not this build's {}",
-                    wanted.display()
+                Some(found) => Observed::Stale(Reason::with(
+                    PartCause::OtherBuild,
+                    found.clone(),
+                    format!(
+                        "the hook runs {found}, not this build's {}",
+                        wanted.display()
+                    ),
                 )),
-                None => Observed::Stale("the hook's command is not one Hide wrote".to_owned()),
+                None => Observed::Stale(Reason::new(
+                    PartCause::NotHides,
+                    "the hook's command is not one Hide wrote",
+                )),
             }
         }
     };
@@ -74,9 +96,13 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
         return observed;
     }
     if !helper(target).is_file() {
-        return Observed::Blocked(format!(
-            "this build has no hook helper at {}",
-            helper(target).display()
+        return Observed::Blocked(Reason::with(
+            PartCause::NoHelper,
+            helper(target).display().to_string(),
+            format!(
+                "this build has no hook helper at {}",
+                helper(target).display()
+            ),
         ));
     }
     // Only a CLI that answers with a version older than the hook needs is a
@@ -87,9 +113,13 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
         minimum_version,
     } = hide_agent_hooks::runtime_compatibility(runtime, &target.home)
     {
-        return Observed::Blocked(format!(
-            "{} {installed} is older than {minimum_version}, which Hide's hook needs; update it",
-            runtime.label()
+        return Observed::Blocked(Reason::with(
+            PartCause::UpdateAgent,
+            minimum_version.to_string(),
+            format!(
+                "{} {installed} is older than {minimum_version}, which Hide's hook needs; update it",
+                runtime.label()
+            ),
         ));
     }
     observed

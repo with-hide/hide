@@ -73,7 +73,7 @@ describe("a Project's Overview", () => {
 
     const catalog = {
       navigator: { devices: [{ id: "mini", kind: "remote", label: "mini" }], workspaces: [] },
-      status: { remote: [{ target_id: "mini", state: "connected", catalog: { state: "unavailable", message: "helper refused" }, session: { workspaces: [project("m", "mini")], agents: [] } }] },
+      status: { remote: [{ target_id: "mini", state: "connected", catalog: { state: "unavailable" }, session: { workspaces: [project("m", "mini")], agents: [] } }] },
     } as unknown as SnapshotRest;
     expect(overviewProject(catalog, [], "m")?.availability).toEqual({ state: "unavailable", text: "Projects could not be read", retry: "helper" });
   });

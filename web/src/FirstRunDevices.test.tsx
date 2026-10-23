@@ -12,7 +12,7 @@ import type { DispatchFn } from "./ws";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 
-const profile = (id: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label: id, target: `${id}@server.example`, session: "work", enabled: true, added_as: null, problem: null, device_id: null, connect_state: "saved", connect_error: null, ...patch });
+const profile = (id: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label: id, target: `${id}@server.example`, session: "work", enabled: true, added_as: null, problem: null, device_id: null, connect_state: "saved", connect_refusal: null, ...patch });
 
 async function mount(profiles: HerdrProfiles, devices: string[] = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -81,7 +81,7 @@ it("keeps loading and a failed read distinct from an empty result, and Retry onl
 });
 
 it("keeps a successful device while Retry sends only the failed selected profile", async () => {
-  const rows = [profile("ok", { device_id: "dev-ok", added_as: "OK", connect_state: "connected" }), profile("bad", { device_id: "dev-bad", added_as: "Bad", connect_state: "failed", connect_error: "SSH refused" })];
+  const rows = [profile("ok", { device_id: "dev-ok", added_as: "OK", connect_state: "connected" }), profile("bad", { device_id: "dev-bad", added_as: "Bad", connect_state: "failed" })];
   const view = await mount({ state: "ready", error: null, profiles: rows, truncated: false }, ["ok", "bad"]);
   await act(async () => useShellStore.setState({ revision: 2, rest: { ui_state: { first_run_choices: { devices: ["ok", "bad"] } }, status: { herdr_profiles: { state: "ready", profiles: rows }, remote: [{ target_id: "dev-ok", state: "connected" }, { target_id: "dev-bad", state: "error" }] }, navigator: { devices: [{ id: "dev-ok", kit: { agents: [], components: [], busy: false } }] } } } as never));
   expect(document.querySelector('[data-first-run-device="ok"]')?.getAttribute("data-device-state")).toBe("connected");
@@ -92,7 +92,7 @@ it("keeps a successful device while Retry sends only the failed selected profile
 });
 
 it("follows a recovered live connection over an earlier profile failure while keeping current failures actionable", async () => {
-  const row = profile("recovered", { device_id: "dev", added_as: "Recovered", connect_state: "failed", connect_error: "Earlier SSH failure" });
+  const row = profile("recovered", { device_id: "dev", added_as: "Recovered", connect_state: "failed" });
   const profiles: HerdrProfiles = { state: "ready", error: null, profiles: [row], truncated: false };
   const view = await mount(profiles, [row.id]);
   const update = async (remoteState: string, failedKit = false) => act(async () => useShellStore.setState((current) => ({
@@ -117,5 +117,13 @@ it("follows a recovered live connection over an earlier profile failure while ke
   expect(shown()).toBe("failed");
   expect(document.querySelector('[data-first-run-device-retry="recovered"]')).not.toBeNull();
   expect(view.events).toEqual([]);
+  await view.unmount();
+});
+
+it("words Hide's own refusal to connect a profile from its code", async () => {
+  const row = profile("full", { connect_state: "failed", connect_refusal: "device_limit" });
+  const view = await mount({ state: "ready", error: null, profiles: [row], truncated: false }, [row.id]);
+  const text = document.querySelector('[data-first-run-device="full"]')?.textContent ?? "";
+  expect(text).toContain("Hide already keeps as many devices as it can. Remove one you no longer use, then connect.");
   await view.unmount();
 });

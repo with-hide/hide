@@ -358,14 +358,14 @@ describe("deviceCatalogLine", () => {
   });
 
   it("never presents projects the helper has not confirmed as confirmed", () => {
-    expect(line(status("connected", session(), { state: "resolving", message: null, refused: [] }))?.state).toBe("resolving");
-    expect(line(status("connected", session(), { state: "unavailable", message: "Allow the helper in Settings", refused: [] }))?.text).toBe("Projects on Studio are listed by workspace until its helper can confirm them.");
-    expect(line(status("connected", session(), { state: "ready", message: null, refused: [{ path: "/gone", message: "missing" }] }))?.state).toBe("partial");
-    expect(line(status("connected", session(), { state: "ready", message: null, refused: [] }))).toBeNull();
+    expect(line(status("connected", session(), { state: "resolving", refused: [] }))?.state).toBe("resolving");
+    expect(line(status("connected", session(), { state: "unavailable", refused: [] }))?.text).toBe("Projects on Studio are listed by workspace until its helper can confirm them.");
+    expect(line(status("connected", session(), { state: "ready", refused: [{ path: "/gone", message: "missing" }] }))?.state).toBe("partial");
+    expect(line(status("connected", session(), { state: "ready", refused: [] }))).toBeNull();
   });
 
   it("words the line in the interface language, a folder count included", () => {
-    const refused = (count: number) => status("connected", session(), { state: "ready", message: null, refused: Array.from({ length: count }, (_, index) => ({ path: `/gone${index}`, message: "missing" })) });
+    const refused = (count: number) => status("connected", session(), { state: "ready", refused: Array.from({ length: count }, (_, index) => ({ path: `/gone${index}`, message: "missing" })) });
     expect(line(refused(1))?.text).toBe("1 folder on Studio could not be read and is listed by workspace.");
     expect(line(refused(2))?.text).toBe("2 folders on Studio could not be read and are listed by workspace.");
     expect(deviceCatalogLine({ device, status: refused(2), session: session() }, [device], korean)?.text).toBe("Studio의 폴더 2개를 읽지 못해 작업공간별로 보여 줘요.");

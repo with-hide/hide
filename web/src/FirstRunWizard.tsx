@@ -14,6 +14,7 @@
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ComponentProps, type KeyboardEvent, type ReactNode } from "react";
 import { create } from "zustand";
+import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { AddProjectViews } from "./AddProjectDialog";
 import { agentLogo, monogram } from "./agentLogos";
@@ -22,7 +23,7 @@ import { Note, Status } from "./components/settings-rows";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Kbd } from "./components/ui/kbd";
-import { accountHome, failedAgents, firstRunStep, firstStartAgent, noAgentInstalled, SUGGESTED_INSTALLS, tileStatus, whatChanges, wizardSteps, type TileStatus, type WizardStep } from "./firstRun";
+import { accountHome, failedAgents, firstRunStep, type FailedAgent, firstStartAgent, noAgentInstalled, SUGGESTED_INSTALLS, tileStatus, whatChanges, wizardSteps, type TileStatus, type WizardStep } from "./firstRun";
 import { FirstRunDevices } from "./FirstRunDevices";
 import { FirstRunHerdr } from "./HerdrTakeover";
 import { herdrStepShown } from "./herdrTakeoverRules";
@@ -33,6 +34,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import type { MessageKey } from "./i18n/catalogs";
 import { cn } from "./lib/utils";
 import { NotificationLine, useNotificationControl, usePermission } from "./NotificationControls";
+import { kitUnavailableText, kitWhyText } from "./kitWhy";
 import { kitRefusalLine } from "./settings";
 import { NotOnSystem } from "./settings/AgentRow";
 import { installDocUrl, machineSystem, supportedAgents, type AgentPart } from "./settings/agentRows";
@@ -299,7 +301,7 @@ function AgentsStep({ actions, reopened, desktop, primary, chosen, onChoose, onN
         <p className="text-caption text-muted-foreground">{t("onboarding.devices")}</p>
         {unavailable ? (
           <Note tone="error" data-first-run-unavailable="true">
-            <Status tone="error">{t("firstRun.agents.unavailable", { reason: unavailable })}</Status>
+            <Status tone="error">{t("firstRun.agents.unavailable", { reason: kitUnavailableText(unavailable, t) })}</Status>
           </Note>
         ) : null}
         {refused ? (
@@ -309,7 +311,7 @@ function AgentsStep({ actions, reopened, desktop, primary, chosen, onChoose, onN
         ) : null}
         {failures.map((failure) => (
           <Note key={failure.id} tone="error" data-first-run-failed={failure.id}>
-            <Status tone="error">{failure.reason ? t("firstRun.agents.failed", { agent: failure.label, reason: failure.reason }) : t("firstRun.agents.failedNoReason", { agent: failure.label })}</Status>
+            <Status tone="error">{failureLine(failure, t)}</Status>
           </Note>
         ))}
       </DialogBody>
@@ -520,4 +522,10 @@ function ProjectStep({ actions, reopened, onBack }: { actions: Actions; reopened
       </DialogFooter>
     </>
   );
+}
+
+/** A chosen agent that did not go in, with why when this build can word it. */
+function failureLine(failure: FailedAgent, t: TFunction<"translation">): string {
+  const reason = kitWhyText(failure.why, t);
+  return reason ? t("firstRun.agents.failed", { agent: failure.label, reason }) : t("firstRun.agents.failedNoReason", { agent: failure.label });
 }

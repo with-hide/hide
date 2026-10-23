@@ -6,7 +6,7 @@ import { AGENT_ADAPTERS } from "./agentAdapters";
 import type { ProviderKind } from "./agentPicker";
 import type { NotificationPermission } from "./host";
 import { hookPart, type AgentPart } from "./settings/agentRows";
-import { FIRST_RUN_VERSION, type AiProvider, type FirstRunStep, type HerdrProfiles, type Kit, type KitAgent, type KitPiece, type SnapshotRest } from "./snapshot";
+import { FIRST_RUN_VERSION, type AiProvider, type FirstRunStep, type HerdrProfiles, type Kit, type KitAgent, type KitPiece, type KitWhy, type SnapshotRest } from "./snapshot";
 
 /** The desktop route includes saved devices; a browser tab has its first step alone. */
 export type WizardStep = Exclude<FirstRunStep, "done">;
@@ -104,14 +104,14 @@ export function whatChanges(agents: readonly KitAgent[], on: ReadonlySet<string>
 }
 
 /** A chosen agent whose piece failed to go in, with the first reason the kit gave (B12). */
-export type FailedAgent = { id: string; label: string; reason: string | null };
+export type FailedAgent = { id: string; label: string; why: KitWhy | null };
 
 /** The chosen agents that are on and have a failed piece: the step stays and names them (the core keeps it on the same rule). */
 export function failedAgents(agents: readonly KitAgent[], chosen: readonly string[]): FailedAgent[] {
   return agents.flatMap((agent) => {
     if (!agent.enabled || !chosen.includes(agent.id)) return [];
     const failed = [agent.hook, agent.skill, agent.herdr ?? null].find((piece) => piece?.state === "failed");
-    return failed ? [{ id: agent.id, label: agent.label, reason: failed.reason }] : [];
+    return failed ? [{ id: agent.id, label: agent.label, why: failed.why ?? null }] : [];
   });
 }
 

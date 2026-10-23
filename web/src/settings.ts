@@ -6,6 +6,7 @@ import type { TFunction } from "i18next";
 import type { DaemonInfo } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
 import type { AccentName } from "./theme";
+import { kitWhyText } from "./kitWhy";
 import type { AgentRow, CoreDiagnostic, Device, DeviceHost, EnvironmentStatus, GithubFailureCategory, HerdrStatus, KitComponent, KitRefusal, RemoteStatus, TaskSource, Workspace } from "./snapshot";
 import { readsHere } from "./devices";
 import { registeredName } from "./screenMachine";
@@ -344,9 +345,10 @@ export function kitPartNeedsReinstall(part: Pick<KitComponent, "state">): boolea
  * agent is not there says so once ("Not on this machine"), never again as a
  * reason that repeats it.
  */
-export function kitPartText(part: Pick<KitComponent, "state" | "reason">, t: Translate): string {
+export function kitPartText(part: Pick<KitComponent, "state" | "why">, t: Translate): string {
   const line = kitPartLine(part, t);
-  return part.reason && part.state !== "absent" && part.state !== "installed" ? `${line.text}: ${part.reason}` : line.text;
+  const why = part.state !== "absent" && part.state !== "installed" ? kitWhyText(part.why, t) : null;
+  return why ? `${line.text}: ${why}` : line.text;
 }
 
 /**

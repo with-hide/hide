@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::KitTarget;
 #[cfg(not(windows))]
-use crate::{Observed, RemoveOutcome};
+use crate::{Observed, PartCause, Reason, RemoveOutcome};
 
 #[cfg(windows)]
 #[path = "cli_windows.rs"]
@@ -71,40 +71,58 @@ fn hides_own(target: &KitTarget, destination: &Path) -> bool {
 pub(crate) fn observe(target: &KitTarget) -> Observed {
     let link = link_path(target);
     if !wanted(target).is_file() {
-        return Observed::Blocked(format!(
-            "this build has no hide command at {}",
-            wanted(target).display()
+        return Observed::Blocked(Reason::with(
+            PartCause::NoHelper,
+            wanted(target).display().to_string(),
+            format!(
+                "this build has no hide command at {}",
+                wanted(target).display()
+            ),
         ));
     }
     let metadata = match std::fs::symlink_metadata(&link) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Observed::Missing,
         Err(error) => {
-            return Observed::Blocked(format!(
-                "{} could not be inspected: {error}",
-                link.display()
+            return Observed::Blocked(Reason::with(
+                PartCause::Unreadable,
+                link.display().to_string(),
+                format!("{} could not be inspected: {error}", link.display()),
             ));
         }
     };
     if !metadata.file_type().is_symlink() {
-        return Observed::Blocked(format!(
-            "{} is another program's file; Hide left it",
-            link.display()
+        return Observed::Blocked(Reason::with(
+            PartCause::OtherProgram,
+            link.display().to_string(),
+            format!("{} is another program's file; Hide left it", link.display()),
         ));
     }
     match std::fs::read_link(&link) {
         Ok(destination) if destination == wanted(target) => Observed::Current,
-        Ok(destination) if hides_own(target, &destination) => Observed::Stale(format!(
-            "{} points at an older Hide, {}",
-            link.display(),
-            destination.display()
+        Ok(destination) if hides_own(target, &destination) => Observed::Stale(Reason::with(
+            PartCause::OtherBuild,
+            destination.display().to_string(),
+            format!(
+                "{} points at an older Hide, {}",
+                link.display(),
+                destination.display()
+            ),
         )),
-        Ok(destination) => Observed::Blocked(format!(
-            "{} already points at {}; Hide left it",
-            link.display(),
-            destination.display()
+        Ok(destination) => Observed::Blocked(Reason::with(
+            PartCause::OtherProgram,
+            link.display().to_string(),
+            format!(
+                "{} already points at {}; Hide left it",
+                link.display(),
+                destination.display()
+            ),
         )),
-        Err(error) => Observed::Blocked(format!("{} could not be read: {error}", link.display())),
+        Err(error) => Observed::Blocked(Reason::with(
+            PartCause::Unreadable,
+            link.display().to_string(),
+            format!("{} could not be read: {error}", link.display()),
+        )),
     }
 }
 

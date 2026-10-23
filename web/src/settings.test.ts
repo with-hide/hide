@@ -30,7 +30,7 @@ import {
   unstoredDeviceDrafts,
 } from "./settings";
 import { redact } from "./redact";
-import type { Device, DeviceHost, KitComponent, RemoteStatus } from "./snapshot";
+import type { Device, DeviceHost, Kit, KitComponent, RemoteStatus } from "./snapshot";
 
 // The English strings are what the sheet shipped with; the rules read the same under them.
 const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
@@ -47,7 +47,7 @@ const herdrLine = (herdr: Parameters<typeof herdrLineIn>[0]) => herdrLineIn(herd
 const herdrProtocolText = (herdr: Parameters<typeof herdrProtocolTextIn>[0]) => herdrProtocolTextIn(herdr, t);
 const hostLine = (host: DeviceHost | undefined) => hostLineIn(host, t);
 const kitPartLine = (part: KitComponent) => kitPartLineIn(part, t);
-const kitPartText = (part: Pick<KitComponent, "state" | "reason">) => kitPartTextIn(part, t);
+const kitPartText = (part: Pick<KitComponent, "state" | "why">) => kitPartTextIn(part, t);
 const socketProblem = (path: string) => socketProblemIn(path, t);
 
 const device = (patch: Partial<Device>): Device => ({ agent_scope: emptyScope(),
@@ -261,8 +261,8 @@ describe("unstoredDeviceDrafts (S5.5 B26, B44)", () => {
 });
 
 describe("the install kit rows (PRD device-parity B7, B8, B27)", () => {
-  const part = (id: KitComponent["id"], state: KitComponent["state"]): KitComponent => ({ id, label: id, state, reason: null, location: null });
-  const kit = (components: KitComponent[], unavailable: string | null = null) => ({ unavailable, busy: false, components, agents: [], offers_reinstall: false, shares_account_with: null });
+  const part = (id: KitComponent["id"], state: KitComponent["state"]): KitComponent => ({ id, label: id, state, why: null, location: null });
+  const kit = (components: KitComponent[], unavailable: Kit["unavailable"] = null) => ({ unavailable, busy: false, components, agents: [], offers_reinstall: false, shares_account_with: null });
 
   it("offers Reinstall only for a part a reinstall would change", () => {
     const offered = (["installed", "outdated", "not_installed", "removed", "failed", "absent", "off"] as const).filter((state) => kitPartNeedsReinstall(part("cli", state)));
@@ -272,14 +272,18 @@ describe("the install kit rows (PRD device-parity B7, B8, B27)", () => {
   });
 
   it("mentions only the parts that need the operator, and a part that is not on the machine says so once", () => {
-    const withReason = (id: KitComponent["id"], state: KitComponent["state"], reason: string | null): KitComponent => ({ ...part(id, state), reason });
-    const healthy = kit([part("cli", "installed"), withReason("codex_hook", "absent", "Codex is not set up on this machine"), part("claude_code_hook", "off")]);
+    const withReason = (id: KitComponent["id"], state: KitComponent["state"], cause: string): KitComponent => ({ ...part(id, state), why: { cause } });
+    const healthy = kit([part("cli", "installed"), withReason("codex_hook", "absent", "agent_absent"), part("claude_code_hook", "off")]);
     expect(kitProblems(healthy)).toEqual([]);
-    const broken = kit([part("cli", "installed"), withReason("codex_hook", "failed", "settings.json is not valid JSON"), part("claude_code_hook", "removed")]);
+    const broken = kit([part("cli", "installed"), withReason("codex_hook", "failed", "unreadable"), part("claude_code_hook", "removed")]);
     expect(kitProblems(broken).map((problem) => problem.id)).toEqual(["codex_hook", "claude_code_hook"]);
-    expect(kitProblems(kit([part("cli", "failed")], "A daemon outside the package installs nothing"))).toEqual([]);
-    expect(kitPartText(withReason("codex_hook", "absent", "Codex is not set up on this machine"))).toBe("Not on this machine");
-    expect(kitPartText(withReason("codex_hook", "failed", "settings.json is not valid JSON"))).toBe("Failed: settings.json is not valid JSON");
+    expect(kitProblems(kit([part("cli", "failed")], "standalone"))).toEqual([]);
+    expect(kitPartText(withReason("codex_hook", "absent", "agent_absent"))).toBe("Not on this machine");
+    expect(kitPartText(withReason("codex_hook", "failed", "unreadable"))).toBe("Failed: Hide could not read what is there.");
+    expect(kitPartText({ state: "outdated", why: { cause: "other_build", value: "/opt/hide/bin/hide-agent-hooks" } })).toBe("Outdated: It runs another Hide build: /opt/hide/bin/hide-agent-hooks");
+    // A cause a newer helper named, or one sent without the value its sentence needs, leaves the state alone.
+    expect(kitPartText({ state: "failed", why: { cause: "from_a_newer_helper" } })).toBe("Failed");
+    expect(kitPartText({ state: "outdated", why: { cause: "other_build" } })).toBe("Outdated");
   });
 
   it("reads an off part as neutral", () => {
