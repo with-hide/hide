@@ -2343,6 +2343,7 @@ With no shell answering, the chapters still play and the list says `진행 기�
 In the desktop app the window has no preload: it stands in for the desktop host from its address (`host=electron&platform=…`), so its keyboard runs the desktop chords, and a menu command while it holds the keyboard is dropped rather than sent to the main window's shell; it closes with the main window.
 
 Chapter 2, going back and forth fast (`chapters/switch.ts`), plays on two invented projects: ⌃⇥ (`recent_area_tab`) goes back to the agent used before through the shell's own switcher, ⌥⇥ (`recent_project`) to the project used before, and ⌘P finds a file of the project by name and opens it in the lane's View beside the agent.
+The agent step ends on whichever agent the switcher stopped on and the project step on the other project, and a palette closed with Esc comes back with ⏎.
 
 ### Adding a chapter
 
