@@ -17,6 +17,40 @@ pub trait HerdrTakeover: Send + Sync {
     /// Has the server hand its panes to this app's Herdr and confirms it
     /// runs it afterwards (`server.live_handoff`, Unix only).
     fn hand_over(&self) -> Moved;
+    /// The Herdr this app ships and the operator's own `herdr`, as Settings >
+    /// About names them; asked beside each look.
+    fn versions(&self) -> Versions;
+}
+
+/// What this machine's Herdr programs say about themselves.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Versions {
+    /// The release this app ships; `None` where the daemon has no Herdr of
+    /// its package's own.
+    pub hide: Option<String>,
+    /// The `herdr` the operator's terminal finds; `None` when there is none.
+    pub path_herdr: Option<PathHerdr>,
+}
+
+/// The operator's own `herdr`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PathHerdr {
+    pub version: String,
+    /// The protocol it speaks (`herdr status client --json`); `None` for a
+    /// release older than 0.7.5, which has no such read and speaks an older
+    /// protocol than any this build reads.
+    pub protocol: Option<u64>,
+    /// The one command that brings it to the Herdr this app ships without
+    /// touching a running server: the package manager's own upgrade where
+    /// one installed it, else a copy of this app's Herdr over it.
+    pub update: String,
+}
+
+impl PathHerdr {
+    /// Whether its commands are refused by a server on this build's protocol.
+    pub fn behind(&self) -> bool {
+        self.protocol != Some(hide_herdr_client::HERDR_PROTOCOL_REVISION)
+    }
 }
 
 /// One look at the server.
@@ -61,6 +95,9 @@ pub enum OfferKind {
     Restart,
     /// A newer protocol than this build speaks: only a newer Hide reads it.
     UpdateHide,
+    /// The server could not be read while Hide cannot use it: the step says
+    /// so and offers to look again (B8).
+    Look,
 }
 
 impl OfferKind {
@@ -69,6 +106,7 @@ impl OfferKind {
             Self::Move => "move",
             Self::Restart => "restart",
             Self::UpdateHide => "update_hide",
+            Self::Look => "look",
         }
     }
 }

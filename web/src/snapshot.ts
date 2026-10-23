@@ -1845,17 +1845,31 @@ export type HerdrStatus = {
 /**
  * The operator's own older Herdr server on this machine and how far moving it
  * went (PRD herdr-takeover): `kind` is `move`, `restart` (Herdr cannot hand it
- * over here) or `update_hide` (a newer protocol); `stage` is `offered`,
- * `moving`, `failed`, or `moved` while the operator's own `herdr` is behind.
+ * over here), `update_hide` (a newer protocol) or `look` (a server Hide cannot
+ * use could not be read: always `failed`, with no versions); `stage` is
+ * `offered`, `moving`, `failed`, or `moved` while the operator's own `herdr`
+ * is behind.
  */
 export type HerdrTakeover = {
-  kind: "move" | "restart" | "update_hide";
+  kind: "move" | "restart" | "update_hide" | "look";
   stage: "offered" | "moving" | "failed" | "moved";
   server_version: string;
   version: string;
   same_protocol: boolean;
   failure: "refused" | "not_confirmed" | "unreadable" | "stop_failed" | null;
   path_herdr_behind: string | null;
+};
+
+/**
+ * The Herdr this app ships and the operator's own `herdr`, as Settings > About
+ * names them; `path_herdr` is null when the operator's terminal finds none.
+ * `behind` says its commands are refused by a server on Hide's protocol, and
+ * `update_command` is the one command that brings it up, for the operator to
+ * copy and run (Hide never runs it).
+ */
+export type HerdrVersions = {
+  hide: string;
+  path_herdr: { version: string; behind: boolean; update_command: string } | null;
 };
 
 export type EnvironmentStatus = {
@@ -2429,6 +2443,7 @@ export type SnapshotRest = {
     herdr?: HerdrStatus;
     /** What Hide offers for the operator's own older Herdr server on this machine (PRD herdr-takeover); absent when nothing. */
     herdr_takeover?: HerdrTakeover | null;
+    herdr_versions?: HerdrVersions | null;
     remote?: RemoteStatus[];
     environment?: EnvironmentStatus[];
     agent_hooks?: AgentHooks;

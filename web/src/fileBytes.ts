@@ -173,7 +173,7 @@ export async function downloadFile(path: string, source: FileSource = null): Pro
   // Its protocol read cap is explicit; a failure is shown beside the button.
   const bytes = await requestFileBytes(path, undefined, source).catch((error: unknown) => {
     if (error instanceof Error && error.message === "too_large") {
-      throw new Error("Use a browser with a file save picker for files over 256 MiB.");
+      throw new Error("needs_save_picker");
     }
     throw error;
   });

@@ -209,7 +209,7 @@ test("a Grok file the operator removed or edited shows on its row until Reinstal
     const edited = read(grokFile(home)).replace("--event Stop", "--event Stop --verbose");
     fs.writeFileSync(grokFile(home), edited);
     await list.locator("[data-agents-check]").click();
-    await expect(problem).toContainText("edited after Hide wrote them", { timeout: 60_000 });
+    await expect(problem).toContainText("Edited after Hide wrote it", { timeout: 60_000 });
     await expect(list.locator("[data-agent-problem]")).toHaveCount(1);
     expect(read(grokFile(home))).toBe(edited);
     await problem.locator("[data-hook-reinstall]").click();

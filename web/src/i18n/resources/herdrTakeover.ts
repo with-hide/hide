@@ -1,9 +1,10 @@
 import type { Catalog, Catalogs } from "../schema";
 
-// Moving the operator's own older Herdr server onto Hide's Herdr (PRD
-// herdr-takeover): the first-run step, Help > Set up Hide's, and Overview's
-// Herdr place. No count is shown (D-22): Hide cannot read an older server's
-// workspaces, and an agent's conversation resuming was never measured.
+// The operator's own Herdr server on this machine (PRD herdr-takeover): the
+// first-run step, Help > Set up Hide's, the screen that holds Hide while the
+// server speaks another protocol, and the line a move leaves. No count is
+// shown (D-22): Hide cannot read an older server's workspaces, and an agent's
+// conversation resuming was never measured.
 export const herdrTakeoverEnglish = {
   "herdrTakeover.move.title": "Move your running Herdr to Hide",
   "herdrTakeover.move.description": "Your work keeps running; only Herdr changes to the version Hide works with.",
@@ -26,7 +27,9 @@ export const herdrTakeoverEnglish = {
   "herdrTakeover.stopYourself": "Or stop Herdr yourself and open Hide again.",
   "herdrTakeover.moved.title": "Herdr moved",
   "herdrTakeover.moved.description": "Your work is running on Herdr {{version}}.",
-  "herdrTakeover.moved.pathBehind": "Your installed herdr is {{version}}, so herdr commands in your terminal and from agents in existing panes fail. Updating it with --handoff fixes both and keeps your work running.",
+  "herdrTakeover.moved.pathBehind": "The herdr in your terminal is still {{version}}, so its commands are refused. Hide keeps working.",
+  "herdrTakeover.pathCommand.copy": "Replaces it with Hide's herdr {{version}}",
+  "herdrTakeover.pathCommand.brew": "Updates it with Homebrew",
   "herdrTakeover.copy": "Copy",
   "herdrTakeover.copied": "Copied",
   "herdrTakeover.continue": "Continue",
@@ -39,12 +42,16 @@ export const herdrTakeoverEnglish = {
   "herdrTakeover.restart.button": "Restart Herdr",
   "herdrTakeover.restart.restarting": "Restarting…",
   "herdrTakeover.restart.desktopOnly": "Restart Herdr from the Hide desktop app.",
-  "herdrTakeover.overview.mismatch": "This Herdr isn't compatible with Hide",
-  "herdrTakeover.overview.moveHint": "Moving keeps your work and switches to Hide's Herdr {{version}}.",
-  "herdrTakeover.overview.restartHint": "Restarting brings your workspaces and panes back on Hide's Herdr {{version}}.",
-  "herdrTakeover.overview.update": "Update Hide",
-  "herdrTakeover.overview.updateHint": "The running Herdr is newer than this Hide.",
-  "herdrTakeover.overview.checkUpdates": "Check for updates",
+  "herdrTakeover.look.title": "Couldn't read Herdr",
+  "herdrTakeover.look.description": "Your Herdr and its work are unchanged. You can also stop Herdr yourself and open Hide again.",
+  "herdrTakeover.mismatch.title": "This Herdr isn't compatible with Hide",
+  "herdrTakeover.mismatch.description": "Stop this Herdr when your work is safe, then open Hide again.",
+  "herdrTakeover.newer.title": "Herdr is newer than Hide",
+  "herdrTakeover.newer.description": "Wait for a Hide update made for the new Herdr. Until then Hide stays off this Herdr and leaves it running as it is.",
+  "herdrTakeover.newer.hideKnows": "Hide works with {{version}}",
+  "herdrTakeover.checkUpdates": "Check for updates",
+  "herdrTakeover.viewLog": "View log",
+  "herdrTakeover.quit": "Quit Hide",
 } as const;
 
 const ko = {
@@ -66,10 +73,12 @@ const ko = {
   "herdrTakeover.failure.not_confirmed": "옮기기를 끝내지 못했어요. 실행 중인 Herdr가 Hide의 Herdr가 아니에요.",
   "herdrTakeover.failure.unreadable": "실행 중인 Herdr를 읽지 못했어요.",
   "herdrTakeover.failure.stop_failed": "Herdr를 멈추지 못해 아무것도 바뀌지 않았어요.",
-  "herdrTakeover.stopYourself": "또는 Herdr를 직접 끄고 Hide를 다시 여세요.",
+  "herdrTakeover.stopYourself": "또는 Herdr를 직접 끄고 Hide를 다시 열어 주세요.",
   "herdrTakeover.moved.title": "Herdr를 옮겼어요",
   "herdrTakeover.moved.description": "Herdr {{version}}에서 기존 작업이 그대로 실행 중이에요.",
-  "herdrTakeover.moved.pathBehind": "설치된 herdr는 {{version}} 버전이라, 셸에서도 이미 열린 터미널의 에이전트에서도 herdr 명령이 실패해요. --handoff 옵션으로 업데이트하면 작업을 멈추지 않고 둘 다 고칠 수 있어요.",
+  "herdrTakeover.moved.pathBehind": "터미널에 깔린 herdr는 아직 {{version}} 버전이라 명령이 거절돼요. Hide는 그대로 써도 돼요.",
+  "herdrTakeover.pathCommand.copy": "Hide에 든 herdr {{version}} 버전으로 바꿔요",
+  "herdrTakeover.pathCommand.brew": "Homebrew로 업데이트해요",
   "herdrTakeover.copy": "복사",
   "herdrTakeover.copied": "복사됨",
   "herdrTakeover.continue": "계속",
@@ -78,16 +87,20 @@ const ko = {
   "herdrTakeover.restart.description": "이 Herdr는 실행 중인 그대로 옮길 수 없어요.",
   "herdrTakeover.restart.restores": "작업공간과 터미널 복원",
   "herdrTakeover.restart.ends": "터미널에서 실행 중인 명령 종료",
-  "herdrTakeover.restart.note": "실행 중인 빌드나 서버가 있다면 끝난 뒤에 다시 시작하세요.",
+  "herdrTakeover.restart.note": "실행 중인 빌드나 서버가 있다면 끝난 뒤에 다시 시작해 주세요.",
   "herdrTakeover.restart.button": "Herdr 다시 시작",
   "herdrTakeover.restart.restarting": "다시 시작하는 중…",
-  "herdrTakeover.restart.desktopOnly": "Hide 데스크톱 앱에서 Herdr를 다시 시작하세요.",
-  "herdrTakeover.overview.mismatch": "이 Herdr는 Hide와 호환되지 않아요",
-  "herdrTakeover.overview.moveHint": "옮겨도 작업은 그대로이고, Herdr는 Hide의 {{version}} 버전으로 바뀌어요.",
-  "herdrTakeover.overview.restartHint": "다시 시작하면 Hide의 Herdr {{version}}에서 작업공간과 터미널이 복원돼요.",
-  "herdrTakeover.overview.update": "Hide를 업데이트하세요",
-  "herdrTakeover.overview.updateHint": "실행 중인 Herdr가 이 Hide보다 새 버전이에요.",
-  "herdrTakeover.overview.checkUpdates": "업데이트 확인",
+  "herdrTakeover.restart.desktopOnly": "Hide 데스크톱 앱에서 Herdr를 다시 시작해 주세요.",
+  "herdrTakeover.look.title": "Herdr를 읽지 못했어요",
+  "herdrTakeover.look.description": "쓰던 Herdr와 작업은 그대로예요. 직접 Herdr를 멈추고 Hide를 다시 열어도 돼요.",
+  "herdrTakeover.mismatch.title": "이 Herdr는 Hide와 호환되지 않아요",
+  "herdrTakeover.mismatch.description": "작업이 안전할 때 이 Herdr를 멈추고 Hide를 다시 열어 주세요.",
+  "herdrTakeover.newer.title": "Herdr가 Hide보다 새 버전이에요",
+  "herdrTakeover.newer.description": "새 Herdr에 맞춘 Hide 업데이트를 기다려 주세요. 그때까지 Hide는 이 Herdr에 연결하지 않고, 쓰던 Herdr는 그대로 둬요.",
+  "herdrTakeover.newer.hideKnows": "Hide가 아는 {{version}}",
+  "herdrTakeover.checkUpdates": "업데이트 확인",
+  "herdrTakeover.viewLog": "로그 보기",
+  "herdrTakeover.quit": "Hide 종료",
 } satisfies Catalog<typeof herdrTakeoverEnglish>;
 
 const zhCN = {
@@ -112,7 +125,9 @@ const zhCN = {
   "herdrTakeover.stopYourself": "或者自行停止 Herdr，然后重新打开 Hide。",
   "herdrTakeover.moved.title": "Herdr 已迁移",
   "herdrTakeover.moved.description": "你的工作正在 Herdr {{version}} 上继续运行。",
-  "herdrTakeover.moved.pathBehind": "已安装的 herdr 是 {{version}}，终端和现有窗格中智能体的 herdr 命令会失败。使用 --handoff 更新可同时修复，且工作不会中断。",
+  "herdrTakeover.moved.pathBehind": "终端中的 herdr 仍是 {{version}}，其命令会被拒绝。Hide 可以照常使用。",
+  "herdrTakeover.pathCommand.copy": "替换为 Hide 内置的 herdr {{version}}",
+  "herdrTakeover.pathCommand.brew": "使用 Homebrew 更新",
   "herdrTakeover.copy": "复制",
   "herdrTakeover.copied": "已复制",
   "herdrTakeover.continue": "继续",
@@ -125,12 +140,16 @@ const zhCN = {
   "herdrTakeover.restart.button": "重新启动 Herdr",
   "herdrTakeover.restart.restarting": "正在重新启动…",
   "herdrTakeover.restart.desktopOnly": "请在 Hide 桌面应用中重新启动 Herdr。",
-  "herdrTakeover.overview.mismatch": "此 Herdr 与 Hide 不兼容",
-  "herdrTakeover.overview.moveHint": "迁移会保留工作，并切换到 Hide 的 Herdr {{version}}。",
-  "herdrTakeover.overview.restartHint": "重新启动后，工作区和窗格会在 Hide 的 Herdr {{version}} 上恢复。",
-  "herdrTakeover.overview.update": "请更新 Hide",
-  "herdrTakeover.overview.updateHint": "正在运行的 Herdr 比此 Hide 更新。",
-  "herdrTakeover.overview.checkUpdates": "检查更新",
+  "herdrTakeover.look.title": "无法读取 Herdr",
+  "herdrTakeover.look.description": "Herdr 和工作保持不变。你也可以自行停止 Herdr，然后重新打开 Hide。",
+  "herdrTakeover.mismatch.title": "此 Herdr 与 Hide 不兼容",
+  "herdrTakeover.mismatch.description": "在工作安全时停止此 Herdr，然后重新打开 Hide。",
+  "herdrTakeover.newer.title": "Herdr 比 Hide 更新",
+  "herdrTakeover.newer.description": "请等待适配新版 Herdr 的 Hide 更新。在此之前，Hide 不会连接此 Herdr，并让它照常运行。",
+  "herdrTakeover.newer.hideKnows": "Hide 支持 {{version}}",
+  "herdrTakeover.checkUpdates": "检查更新",
+  "herdrTakeover.viewLog": "查看日志",
+  "herdrTakeover.quit": "退出 Hide",
 } satisfies Catalog<typeof herdrTakeoverEnglish>;
 
 const ja = {
@@ -155,7 +174,9 @@ const ja = {
   "herdrTakeover.stopYourself": "または Herdr を自分で止めてから Hide を開き直してください。",
   "herdrTakeover.moved.title": "Herdr を移しました",
   "herdrTakeover.moved.description": "作業は Herdr {{version}} でそのまま動いています。",
-  "herdrTakeover.moved.pathBehind": "インストール済みの herdr が {{version}} のため、ターミナルと既存ペイン内のエージェントからの herdr コマンドが失敗します。--handoff 付きで更新すると、作業を止めずに両方直ります。",
+  "herdrTakeover.moved.pathBehind": "ターミナルの herdr はまだ {{version}} のため、コマンドが拒否されます。Hide はそのまま使えます。",
+  "herdrTakeover.pathCommand.copy": "Hide に入っている herdr {{version}} に置き換えます",
+  "herdrTakeover.pathCommand.brew": "Homebrew で更新します",
   "herdrTakeover.copy": "コピー",
   "herdrTakeover.copied": "コピーしました",
   "herdrTakeover.continue": "続ける",
@@ -168,12 +189,16 @@ const ja = {
   "herdrTakeover.restart.button": "Herdr を再起動",
   "herdrTakeover.restart.restarting": "再起動しています…",
   "herdrTakeover.restart.desktopOnly": "Hide のデスクトップアプリで Herdr を再起動してください。",
-  "herdrTakeover.overview.mismatch": "この Herdr は Hide と合っていません",
-  "herdrTakeover.overview.moveHint": "移すと作業はそのままで、Hide の Herdr {{version}} に切り替わります。",
-  "herdrTakeover.overview.restartHint": "再起動すると、Hide の Herdr {{version}} でワークスペースとペインが復元されます。",
-  "herdrTakeover.overview.update": "Hide を更新してください",
-  "herdrTakeover.overview.updateHint": "実行中の Herdr はこの Hide より新しいバージョンです。",
-  "herdrTakeover.overview.checkUpdates": "アップデートを確認",
+  "herdrTakeover.look.title": "Herdr を読み取れませんでした",
+  "herdrTakeover.look.description": "Herdr と作業はそのままです。Herdr を自分で止めて Hide を開き直すこともできます。",
+  "herdrTakeover.mismatch.title": "この Herdr は Hide と互換性がありません",
+  "herdrTakeover.mismatch.description": "作業が安全なときにこの Herdr を止めて、Hide を開き直してください。",
+  "herdrTakeover.newer.title": "Herdr が Hide より新しいバージョンです",
+  "herdrTakeover.newer.description": "新しい Herdr に対応した Hide のアップデートをお待ちください。それまで Hide はこの Herdr に接続せず、そのまま動かしておきます。",
+  "herdrTakeover.newer.hideKnows": "Hide が対応する {{version}}",
+  "herdrTakeover.checkUpdates": "アップデートを確認",
+  "herdrTakeover.viewLog": "ログを表示",
+  "herdrTakeover.quit": "Hide を終了",
 } satisfies Catalog<typeof herdrTakeoverEnglish>;
 
 export const herdrTakeoverCatalogs = { en: herdrTakeoverEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof herdrTakeoverEnglish>;

@@ -27,7 +27,7 @@ let replayAttachments = false;
 let lastNativeEpoch: string | undefined;
 const bridge: HostBridge = {
   kind: "electron", platform: "darwin", onCommand: () => () => {}, reportBindings() {}, reportLanguage() {},
-  revealPath() {}, pickFolder: async () => null, probePaths: async () => [], openPath() {}, notify() {}, onNotificationOpen: () => () => {}, withdrawNotifications() {}, notificationPermission: async () => "unsupported", onWindowChrome: () => () => undefined, editorAvailable: async () => false, openInEditor: () => undefined, restartHerdr: async () => "unavailable", openNotificationSettings() {}, reportBadge() {},
+  revealPath() {}, quit() {}, pickFolder: async () => null, probePaths: async () => [], openPath() {}, notify() {}, onNotificationOpen: () => () => {}, withdrawNotifications() {}, notificationPermission: async () => "unsupported", onWindowChrome: () => () => undefined, editorAvailable: async () => false, openInEditor: () => undefined, restartHerdr: async () => "unavailable", openNotificationSettings() {}, reportBadge() {},
   updates: { onStatus: () => () => {}, check() {}, restart() {}, setPrerelease() {} },
   browser: {
     sync: (state: BrowserSync) => {
