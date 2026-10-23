@@ -222,5 +222,4 @@ export const SWITCH_WORLD: PracticeWorld<SwitchModel> = {
   snapshot,
   panes: (model) => model.desks.flatMap((one) => one.model.panes.map((pane) => pane.id)),
   screen,
-  lane: false,
 };
