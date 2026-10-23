@@ -177,14 +177,34 @@ async function chooseFromMenu(menu: PracticeMenu, follow: (point: Point | null) 
   follow(null);
 }
 
-/** Where the `예시` mark of each element `selector` matches goes: just past the end of its text, so it covers none. */
-function examplesOf(selectors: readonly string[] | undefined): Point[] {
+/** The first words `element` shows: a row's title before its subtitle, a card's heading. */
+function firstWords(element: Element): Text | null {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, { acceptNode: (node) => (node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP) });
+  return walker.nextNode() as Text | null;
+}
+
+/**
+ * Where the `예시` mark of each element `selector` matches goes: just past the
+ * end of the first words it shows, so it covers none of them, and never past
+ * the element's own right edge (`reach`, the mark's width from where it is
+ * put), so it covers nothing beside the element either.
+ */
+function examplesOf(selectors: readonly string[] | undefined, reach: number): Point[] {
   return (selectors ?? []).flatMap((selector) => [...document.querySelectorAll(selector)].flatMap((element) => {
+    const words = firstWords(element);
+    if (!words) return [];
     const range = document.createRange();
-    range.selectNodeContents(element);
+    range.selectNodeContents(words);
     const end = [...range.getClientRects()].filter((box) => box.width && box.height).at(-1);
-    return end ? [{ x: end.right, y: end.top + end.height / 2 }] : [];
+    if (!end) return [];
+    return [{ x: Math.min(end.right, element.getBoundingClientRect().right - reach), y: end.top + end.height / 2 }];
   }));
+}
+
+/** How far a drawn `예시` mark reaches right of the point it is put at; none is drawn yet before the first. */
+function markReach(): number {
+  const mark = document.querySelector<HTMLElement>("[data-practice-example]");
+  return mark ? mark.getBoundingClientRect().right - parseFloat(mark.style.left) : 0;
 }
 
 /** One box around every element `selector` matches. */
@@ -311,7 +331,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
         return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
       });
-      const marks = examplesOf(chapter.world.examples);
+      const marks = examplesOf(chapter.world.examples, markReach());
       setExamples((before) => (marks.length === before.length && marks.every((at, i) => Math.abs(at.x - before[i]!.x) < 0.5 && Math.abs(at.y - before[i]!.y) < 0.5) ? before : marks));
       const covering = shellLayerOpen(useUiStore.getState()) ? rectOf(SHELL_LAYERS) : null;
       setPaletteBox((before) => (same(before, covering) ? before : covering));
