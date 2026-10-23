@@ -1,24 +1,11 @@
-import type { InterfaceLanguage } from "../locale";
-import type { Catalog, Catalogs, MessageSchema } from "../schema";
+import type { Catalog, Catalogs } from "../schema";
 
 // Practice mode: the guide over the real shell. Each chapter's words are a
-// file of their own in `practice/`, named like the chapter, every key under
-// `practice.<chapter>.`; they join the catalog here without being listed.
+// file of their own in `practice/`, which the practice window adds when its
+// chapters load (`web/src/practice/words.ts`); the desktop host and the shell
+// never show them.
 
-const chapterFiles = import.meta.glob<Catalogs<MessageSchema>>("./practice/*.ts", { eager: true, import: "default" });
-
-/** Every chapter file's words in `language`; a key outside its file's chapter would overwrite another's. */
-function chapterWords(language: InterfaceLanguage): Record<string, string> {
-  return Object.assign({}, ...Object.entries(chapterFiles).map(([path, catalogs]) => {
-    const prefix = `practice.${path.slice(path.lastIndexOf("/") + 1, -".ts".length)}.`;
-    const words = catalogs[language];
-    const stray = Object.keys(words).find((key) => !key.startsWith(prefix));
-    if (stray) throw new Error(`Practice words ${stray} are in ${path}`);
-    return words;
-  }));
-}
-
-const common = {
+export const practiceEnglish = {
   "practice.mode": "Practice · Chapter {{number}} {{title}}",
   "practice.count": "{{index}} / {{total}}",
   "practice.next": "Next",
@@ -55,8 +42,6 @@ const common = {
   "practice.zone.projectSub": "Status · To do · Files",
 };
 
-export const practiceEnglish: typeof common = { ...common, ...chapterWords("en") };
-
 const ko = {
   "practice.mode": "연습 모드 · {{number}}편 {{title}}",
   "practice.count": "{{index}} / {{total}}",
@@ -92,7 +77,6 @@ const ko = {
   "practice.zone.workSub": "에이전트 터미널",
   "practice.zone.project": "③ 프로젝트와 그 작업",
   "practice.zone.projectSub": "현황 · 할 일 · 파일",
-  ...chapterWords("ko"),
 } satisfies Catalog<typeof practiceEnglish>;
 
 const zhCN = {
@@ -130,7 +114,6 @@ const zhCN = {
   "practice.zone.workSub": "智能体终端",
   "practice.zone.project": "③ 项目与工作",
   "practice.zone.projectSub": "概况 · 待办 · 文件",
-  ...chapterWords("zh-CN"),
 } satisfies Catalog<typeof practiceEnglish>;
 
 const ja = {
@@ -168,7 +151,6 @@ const ja = {
   "practice.zone.workSub": "エージェントのターミナル",
   "practice.zone.project": "③ プロジェクトとその作業",
   "practice.zone.projectSub": "状況 · やること · ファイル",
-  ...chapterWords("ja"),
 } satisfies Catalog<typeof practiceEnglish>;
 
 export const practiceCatalogs = { en: practiceEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof practiceEnglish>;

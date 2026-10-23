@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CHAPTER_WORDS } from "../practice/words";
 import { catalogs, english } from "./catalogs";
 import { commandsEnglish } from "./resources/commands";
 import { agentSessionsEnglish } from "./resources/agentSessions";
@@ -35,6 +36,10 @@ import { validateCatalogs } from "./schema";
 describe("interface resources", () => {
   it("provides every key and insertion in all four languages", () => {
     expect(() => validateCatalogs(english, catalogs)).not.toThrow();
+  });
+
+  it("keeps the practice chapters' words apart from every catalog key", () => {
+    expect(Object.keys(CHAPTER_WORDS.en).filter((key) => key in english)).toEqual([]);
   });
 
   it("gives every agent status word its own text in each language", () => {
