@@ -81,6 +81,67 @@ async function chooseTheme(page: Page, theme: "light" | "dark"): Promise<void> {
   await animationsFinished(page);
 }
 
+test("a delegated-child-only checkout follows the front checkout across project reopening", async ({ page }) => {
+  const herdr = await startHerdr();
+  let daemon: Daemon | null = null;
+  try {
+    const repo = path.join(herdr.root, "repo");
+    fs.mkdirSync(repo);
+    git(repo, ["init"]);
+    git(repo, ["commit", "--allow-empty", "-m", "initial"]);
+    const worktree = path.join(herdr.root, "repo-rows");
+    git(repo, ["worktree", "add", "-b", "feature/sidebar-rows", worktree]);
+    const notes = path.join(herdr.root, "notes");
+    fs.mkdirSync(notes);
+    const mainPane = await workspaceAt(herdr, repo, "메인 체크아웃 정리");
+    const rowsPane = await workspaceAt(herdr, worktree, "사이드바 행 구현");
+    await workspaceAt(herdr, notes, "회의록 요약 정리");
+    daemon = await startHided(herdr, "sidebar-child-only");
+    const last = new Map<string, Record<string, unknown>>();
+    countSent(page, last);
+    await open(page, daemon);
+    const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
+    const primary = project.locator('[data-checkout][aria-label^="main"]');
+    const feature = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="feature/sidebar-rows"]') });
+    const toggle = project.locator("[data-project-toggle]");
+    const projectRow = project.locator("[data-project-row]");
+    await feature.locator("[data-checkout]").click();
+    await expect(feature.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
+    const featureId = await feature.locator("[data-checkout]").getAttribute("data-checkout");
+    await page.locator('[data-project] [data-checkout][aria-label^="notes"]').click();
+    declareParent(herdr, rowsPane, mainPane);
+    const parentRow = project.locator(`[data-pane="${mainPane}"]`);
+    const chevron = parentRow.locator(`[data-tree-chevron="${mainPane}"]`);
+    await expect(chevron).toBeVisible();
+    await expect(feature).toHaveCount(0);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await open(page, daemon);
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await projectRow.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(last.get("focus_checkout")?.checkout_id).toBe(featureId);
+    // Reopening returns to the last checkout: the front exception keeps its line.
+    await expect(feature).toHaveCount(1);
+    await expect(feature.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
+    await expect(page.locator(`nav[data-sidebar] [data-pane="${rowsPane}"]`)).toHaveCount(0);
+    // Returning to its parent hides the clean child-only checkout again.
+    await primary.click();
+    await expect(primary).toHaveAttribute("aria-current", "true");
+    await expect(feature).toHaveCount(0);
+    await chevron.click();
+    const child = parentRow.locator("xpath=..").locator(`[data-pane="${rowsPane}"]`);
+    await expect(child).toHaveAttribute("data-depth", "1");
+    await child.locator("[data-agent-open]").click();
+    await expect(page.locator(`[data-pane-view="${rowsPane}"]`)).toBeVisible();
+    await expect(feature.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
+    await screenshot(page, "sidebar-child-only-front");
+  } finally {
+    daemon?.stop();
+    herdr.stop();
+  }
+});
+
 test("the sidebar: kind, age, status badges, opened checkouts and folded projects", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   const herdr = await startHerdr();
@@ -99,7 +160,6 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     git(repo, ["config", "branch.feature/sidebar-rows.description", "Projects 탭 행 다시 그리기"]);
     const emptyTree = path.join(herdr.root, "repo-empty");
     git(repo, ["worktree", "add", "-b", "empty", emptyTree]);
-    await workspaceAt(herdr, emptyTree, null);
     const notes = path.join(herdr.root, "notes");
     fs.mkdirSync(notes);
 
@@ -345,6 +405,8 @@ test("the sidebar: kind, age, status badges, opened checkouts and folded project
     expect(await page.locator("[data-workspace-screen]").count()).toBe(screenBefore);
     await expect(folderRow).toHaveAttribute("aria-current", "true");
 
+    // Reopen this project on its parent, so the child-only checkout stays in the background.
+    await primary.locator("[data-checkout]").click();
     // Folding the project hides its checkouts; both folds survive a reload.
     await projectToggle.click();
     await expect(projectToggle).toHaveAttribute("aria-expanded", "false");
