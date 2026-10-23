@@ -1,3 +1,5 @@
+import { ExternalDisplay } from "./ExternalDisplay";
+import { useExternalGrant } from "./externalFiles";
 import { GlobeIcon, Link2Icon, LoaderCircleIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
@@ -162,6 +164,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
 function DisplayBody({ display, workspace, actions }: { display: ViewDisplaySnapshot; workspace: ViewWorkspace; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   if (display.kind === "browser") return <BrowserDisplay display={display} workspace={workspace} actions={actions} />;
+  if (display.kind === "external") return <ExternalDisplay display={display} workspace={workspace} actions={actions} />;
   if (display.state === "open") {
     return <DisplayEditor display={display} workspace={workspace} placeKey={placeKey(workspaceKey(workspace), display)} actions={actions} />;
   }
@@ -192,6 +195,9 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
   const dirty = useShellStore((s) => editorTabFor(s.editor, display.tab_id)?.dirty ?? false);
   const saving = useShellStore((s) => display.tab_id !== null && s.savingTabs.has(display.tab_id));
   const tabOnly = useShellStore((s) => display.tab_id !== null && s.bufferWarnings.has(display.tab_id));
+  // An outside file's tab is dimmed in a window that holds no grant for it (PRD outside-path-in-hide B19).
+  const outside = useExternalGrant(display.external?.grant ?? "", display.kind === "external");
+  const elsewhere = display.kind === "external" && outside === null;
   const unavailable = display.state === "unavailable";
   const attached = useBrowserStore((s) => display.kind === "browser" && workspace !== undefined && s.attached[hostKey(workspaceKey(workspace), display.id)] === true);
   const state = saving ? t("documents.tabSaving") : dirty ? t("documents.unsaved") : null;
@@ -224,6 +230,7 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
       data-tab-only={tabOnly ? "true" : "false"}
       data-unavailable={unavailable ? "true" : "false"}
       data-view-state={display.state}
+      data-external={display.kind === "external" ? (elsewhere ? "elsewhere" : "held") : undefined}
       className={`group relative flex min-w-0 flex-1 cursor-default select-none items-center gap-xs ${fit.tab} text-caption outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
         selected ? `text-foreground ${areaActive ? "bg-background" : "bg-secondary"}` : "text-subtle-foreground hover:bg-accent"
       } ${interaction.dragging ? "opacity-[var(--opacity-dimmed)]" : ""}`}
@@ -239,7 +246,7 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
         }
       }}
     >
-      <span className={`relative flex size-(--size-icon) shrink-0 items-center justify-center ${unavailable ? "text-muted-foreground opacity-[var(--opacity-dimmed)]" : ""}`}>
+      <span className={`relative flex size-(--size-icon) shrink-0 items-center justify-center ${unavailable || elsewhere ? "text-muted-foreground opacity-[var(--opacity-dimmed)]" : ""}`}>
         {interaction.fit === "marks" ? collapsedDisplayMark(display) : displayMark(display)}
         {interaction.fit === "marks" && (saving || dirty || tabOnly) ? (
           saving ? <LoaderCircleIcon aria-hidden="true" data-view-save-mark="saving" className="absolute size-(--size-icon) animate-spin bg-inherit text-muted-foreground" />
@@ -247,11 +254,12 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
         ) : null}
       </span>
       {attached ? <Badge aria-hidden="true" data-browser-attached="true"><Link2Icon /></Badge> : null}
-      <span className={`min-w-0 flex-1 truncate ${fit.title} ${display.preview ? "italic" : ""} ${unavailable ? "text-muted-foreground line-through" : ""}`}>
+      <span className={`min-w-0 flex-1 truncate ${fit.title} ${display.preview ? "italic" : ""} ${unavailable ? "text-muted-foreground line-through" : ""} ${elsewhere ? "text-muted-foreground opacity-[var(--opacity-dimmed)]" : ""}`}>
         {display.label}
         {saving ? <span className="text-muted-foreground"> {t("documents.tabSaving")}</span> : dirty ? <span className="text-warning"> ●</span> : null}
         {tabOnly ? <span className="text-muted-foreground"> {t("documents.tabOnly")}</span> : null}
       </span>
+      {display.kind === "external" && fit.title !== "hidden" ? <ExternalBadge path={outside?.path ?? null} /> : null}
       <CommentCount display={display} />
       <Hint label={closeLabel}>
         <Button
@@ -271,6 +279,22 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
       </Hint>
       {selected && areaActive ? <span className="absolute inset-x-0 bottom-0 h-[var(--size-tab-indicator)] bg-primary" /> : null}
     </div>
+    </Hint>
+  );
+}
+
+/**
+ * The one mark an outside file's tab carries (PRD outside-path-in-hide B1,
+ * B11, D-04): "External", whose hint is the file's whole path in the window
+ * that holds it, and that it is shown only there in any other.
+ */
+function ExternalBadge({ path }: { path: string | null }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <Hint label={path ?? t("documents.external.elsewhereTab")}>
+      <Badge variant="secondary" className="shrink-0" data-external-badge={path ? "held" : "elsewhere"}>
+        {t("documents.external.badge")}
+      </Badge>
     </Hint>
   );
 }

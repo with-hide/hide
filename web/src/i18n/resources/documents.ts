@@ -138,6 +138,10 @@ export const documentsEnglish = {
   "documents.view.waitingPath": "Waiting to read {{path}}.",
   "documents.view.unavailable": "{{path}} is unavailable.",
   "documents.view.unavailableReason": "{{path}} is unavailable: {{reason}}",
+  "documents.external.badge": "External",
+  "documents.external.identity": "Outside file: {{path}}",
+  "documents.external.elsewhereTab": "Shown only in the window that opened it",
+  "documents.external.elsewhere": "This file is shown only in the Hide window that opened it: {{name}}",
 } as const;
 
 const ko = {
@@ -278,6 +282,10 @@ const ko = {
   "documents.view.waitingPath": "불러올 수 있을 때까지 기다리는 중이에요: {{path}}",
   "documents.view.unavailable": "열 수 없어요: {{path}}",
   "documents.view.unavailableReason": "열 수 없어요: {{path}} ({{reason}})",
+  "documents.external.badge": "외부",
+  "documents.external.identity": "외부 파일: {{path}}",
+  "documents.external.elsewhereTab": "연 창에서만 열림",
+  "documents.external.elsewhere": "이 파일은 연 Hide 창에서만 볼 수 있어요: {{name}}",
 } satisfies Catalog<typeof documentsEnglish>;
 
 const zhCN = {
@@ -418,6 +426,10 @@ const zhCN = {
   "documents.view.waitingPath": "正在等待读取 {{path}}。",
   "documents.view.unavailable": "{{path}} 不可用。",
   "documents.view.unavailableReason": "{{path}} 不可用：{{reason}}",
+  "documents.external.badge": "外部",
+  "documents.external.identity": "外部文件：{{path}}",
+  "documents.external.elsewhereTab": "仅在打开它的窗口中显示",
+  "documents.external.elsewhere": "此文件仅在打开它的 Hide 窗口中显示：{{name}}",
 } satisfies Catalog<typeof documentsEnglish>;
 
 const ja = {
@@ -558,6 +570,10 @@ const ja = {
   "documents.view.waitingPath": "{{path}}の読み取りを待っています。",
   "documents.view.unavailable": "{{path}}は利用できません。",
   "documents.view.unavailableReason": "{{path}}は利用できません: {{reason}}",
+  "documents.external.badge": "外部",
+  "documents.external.identity": "外部ファイル：{{path}}",
+  "documents.external.elsewhereTab": "開いたウィンドウでのみ表示",
+  "documents.external.elsewhere": "このファイルは開いた Hide ウィンドウでのみ表示されます：{{name}}",
 } satisfies Catalog<typeof documentsEnglish>;
 
 export const documentsCatalogs = { en: documentsEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof documentsEnglish>;

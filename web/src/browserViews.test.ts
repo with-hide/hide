@@ -63,6 +63,17 @@ describe("placing pages", () => {
     expect(sized[1]).not.toHaveProperty("device");
   });
 
+  it("names an outside HTML file's page by its grant and no address, and no other outside file (PRD outside-path-in-hide)", () => {
+    const grant = "0123456789abcdef0123456789abcdef";
+    const outside = {
+      root: { area: { id: "a1", active: "e1", displays: [
+        { id: "e1", kind: "external", path: "", load: 2, external: { grant, name: "index.html", kind: "html" } },
+        { id: "e2", kind: "external", path: "", load: 1, external: { grant: "f".repeat(32), name: "shot.png", kind: "image" } },
+      ] } },
+    } as unknown as ViewLayoutSnapshot;
+    expect(browserDisplays(outside)).toEqual([{ id: "e1", area_id: "a1", url: "", load: 2, grant }]);
+  });
+
   it("reads back the Workspace a host key names", () => {
     const workspace = { device_id: "local", path: "/Users/example/project" };
     expect(parseWorkspaceKey(workspaceKey(workspace))).toEqual(workspace);

@@ -181,6 +181,7 @@ section!(RestSections, Snapshot, s, {
     workspace_view: Option<WorkspaceViewSnapshot> => s.workspace_view,
     browser_views: Vec<BrowserViewInventoryRow> => s.browser_views; generation s.browser_views_revision,
     browser_scopes: Vec<BrowserAreaScopeRow> => s.browser_scopes; generation s.browser_views_revision,
+    external_grants: Vec<String> => s.external_grants; generation s.browser_views_revision,
 }, {
     navigator: NavigatorSections => s.navigator,
     terminal: TerminalSections => s.terminal,

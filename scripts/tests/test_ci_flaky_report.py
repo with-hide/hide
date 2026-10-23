@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+import zipfile
 from urllib.parse import parse_qs, urlsplit
 
 SCRIPT = Path(__file__).parents[1] / "ci-flaky-report.py"
@@ -791,6 +792,465 @@ class Gh(unittest.TestCase):
             )
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("filed https://example/50 for ⌘D splits the pane", done.stdout)
+
+
+HISTORY_ENV = {
+    **ENV, "GITHUB_RUN_ATTEMPT": "2", "GITHUB_WORKFLOW_REF": "o/r/.github/workflows/pr.yml@refs/pull/9/merge",
+    "GITHUB_WORKFLOW_SHA": "b" * 40,
+}
+
+
+def history_playwright(passed=False):
+    # Located expect messages and errors[] are retained by real Playwright
+    # 1.63 JSON; status/retry alone also describe a worker exit (review #1648).
+    def failure(retry, message):
+        error = {"message": f"Error: expect(received).toBe(expected) // Object.is equality\n\n{message}",
+                 "location": {"file": "/fixture/a.spec.ts", "line": 42, "column": 1}}
+        return {"status": "failed", "retry": retry, "error": error, "errors": [dict(error)]}
+
+    return {"suites": [{"title": "a.spec.ts", "specs": [{
+        "file": "a.spec.ts", "title": "opens the checkout", "line": 42,
+        "tests": [{"projectId": "chromium", "projectName": "chromium", "expectedStatus": "passed",
+                   "status": "expected" if passed else "unexpected",
+                   "results": ([{"status": "passed", "retry": 0}] if passed else [
+                       failure(0, "original first failure"), failure(1, "last retry failed"),
+                   ])}],
+    }]}]}
+
+
+class RetryGitHub:
+    """The attempt/jobs/artifacts/issues boundary, including immutable old reports."""
+    def __init__(self):
+        self.jobs, self.records, self.reports = {}, {}, {}
+        self.issues, self.comments, self.writes, self.reads = [], [], [], []
+        for attempt in (1, 2):
+            self.jobs[attempt] = [{
+                "id": attempt * 10, "run_id": 77, "run_attempt": attempt, "status": "completed",
+                "name": "web e2e / web e2e linux 1/6", "runner_name": "runner-1",
+                "conclusion": "failure" if attempt == 1 else "success",
+                "started_at": f"2026-10-05T{attempt + 9:02}:00:10Z",
+                "completed_at": f"2026-10-05T{attempt + 9:02}:01:10Z",
+                "html_url": f"https://github.com/o/r/actions/runs/77/job/{attempt * 10}",
+                "steps": [{"name": "End-to-end", "conclusion": "failure" if attempt == 1 else "success"}],
+            }]
+            self.records[attempt] = {
+                "version": 1, "repository": "o/r", "run_id": 77, "attempt": attempt,
+                "workflow_ref": HISTORY_ENV["GITHUB_WORKFLOW_REF"], "workflow_sha": "b" * 40,
+                "tested_sha": "a" * 40, "system": "Linux", "suite": "web",
+                "job_name": "web e2e linux 1/6", "runner_name": "runner-1", "has_report": True,
+            }
+            self.reports[attempt] = history_playwright(passed=attempt == 2)
+
+    def __call__(self, args, body=None):
+        path = args[0]
+        self.reads.append(path)
+        page = int(parse_qs(urlsplit(path).query).get("page", [1])[0])
+        if body is not None:
+            self.writes.append((path, body))
+            if path.endswith("/issues"):
+                issue = {**body, "number": 50 + len(self.issues), "html_url": "https://example/issue"}
+                self.issues.append(issue)
+                return issue
+            self.comments.append(body)
+            return body
+        if "/issues?" in path:
+            return self.issues[(page - 1) * 100:page * 100]
+        if "/comments?" in path:
+            return self.comments[(page - 1) * 100:page * 100]
+        match = re.search(r"/attempts/(\d+)(/jobs)?", path)
+        if match:
+            attempt = int(match[1])
+            if match[2]:
+                return {"jobs": self.jobs[attempt] if page == 1 else []}
+            return {"id": 77, "run_attempt": attempt, "run_started_at": f"2026-10-05T{attempt + 9:02}:00:00Z"}
+        if "/artifacts?" in path:
+            return {"artifacts": [{"id": n, "name": f"ci-test-history-web-linux-1-attempt-{n}",
+                                   "expired": False, "size_in_bytes": 1000} for n in self.records] if page == 1 else []}
+        raise AssertionError(path)
+
+    def download(self, args):
+        attempt = int(args[0].split("/")[-2])
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("record.json", json.dumps(self.records[attempt]))
+            if self.reports[attempt] is not None:
+                archive.writestr("report.json", json.dumps(self.reports[attempt]))
+        return data.getvalue()
+
+
+class RetryHistory(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.summary = Path(folder.name) / "summary"
+        saved = dict(os.environ)
+        os.environ["GITHUB_STEP_SUMMARY"] = str(self.summary)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
+
+    def collect(self, github, env=HISTORY_ENV):
+        with contextlib.redirect_stdout(io.StringIO()):
+            r.retry_history(env, github, github.download)
+
+    def test_unexpected_then_expected_files_first_failure_at_actual_merge_checkout(self):
+        github = RetryGitHub()
+        self.collect(github)
+        self.assertEqual(len(github.writes), 1)
+        issue = github.writes[0][1]
+        self.assertEqual(issue["labels"], ["quarantine", "bug"])
+        body = issue["body"]
+        self.assertIn("across job attempts", body)
+        self.assertIn("original first failure", body)
+        self.assertNotIn("last retry failed", body)
+        self.assertIn("a" * 40, body)
+        self.assertNotIn(ENV["GITHUB_SHA"], body)
+        for link in ("/job/10", "/job/20", "/attempts/1", "/attempts/2"):
+            self.assertIn(link, body)
+        self.assertIn("60 runner seconds", body)
+        self.assertIn("not PR wall latency", body)
+        self.assertEqual(github.reports[1], history_playwright())
+
+    def test_web_and_desktop_jobs_on_every_os_keep_their_own_provenance(self):
+        for suite, step in (("web", "End-to-end"), ("desktop", "Desktop app end-to-end")):
+            for system in ("Linux", "Windows", "macOS"):
+                with self.subTest(suite=suite, system=system):
+                    github = RetryGitHub()
+                    for attempt in (1, 2):
+                        name = f"{suite} e2e platform 1/1"
+                        github.records[attempt].update(suite=suite, system=system, job_name=name)
+                        github.jobs[attempt][0]["name"] = f"platform / {name}"
+                        github.jobs[attempt][0]["steps"][0]["name"] = step
+                    self.collect(github)
+                    self.assertEqual(len(github.writes), 1)
+                    self.assertIn(f"- System: {system}", github.writes[0][1]["body"])
+                    self.assertIn(f"`{suite}/e2e/a.spec.ts`", github.writes[0][1]["body"])
+
+    def test_repeated_collection_and_later_reruns_do_not_repeat_external_effects(self):
+        github = RetryGitHub()
+        self.collect(github)
+        self.collect(github)
+        self.assertEqual(len(github.writes), 1)
+        github.jobs[3] = [{**github.jobs[2][0], "id": 30, "run_attempt": 3,
+                           "started_at": "2026-10-05T12:00:10Z", "completed_at": "2026-10-05T12:01:10Z"}]
+        github.records[3] = {**github.records[2], "attempt": 3}
+        github.reports[3] = history_playwright(True)
+        self.collect(github, {**HISTORY_ENV, "GITHUB_RUN_ATTEMPT": "3"})
+        self.assertEqual(len(github.writes), 1)
+
+    def test_existing_issue_gets_one_history_comment_and_retains_its_deadline(self):
+        github = RetryGitHub()
+        github.issues = [{"number": 49, "body": '`web/e2e/a.spec.ts` "opens the checkout"\n- Expires: 2020-01-01'}]
+        self.collect(github)
+        self.collect(github)
+        self.assertEqual(len(github.writes), 1)
+        self.assertIn("/49/comments", github.writes[0][0])
+        self.assertIn("past its expiry", github.writes[0][1]["body"])
+        self.assertIn("original first failure", github.writes[0][1]["body"])
+
+    def test_several_failed_job_attempts_retain_the_earliest_failure(self):
+        github = RetryGitHub()
+        github.jobs[3] = [{**github.jobs[2][0], "id": 30, "run_attempt": 3,
+                           "html_url": "https://github.com/o/r/actions/runs/77/job/30",
+                           "started_at": "2026-10-05T12:00:10Z", "completed_at": "2026-10-05T12:01:10Z"}]
+        github.records[3] = {**github.records[2], "attempt": 3}
+        github.reports[3] = history_playwright(True)
+        github.jobs[2][0].update(conclusion="failure", steps=[{"name": "End-to-end", "conclusion": "failure"}])
+        github.reports[2] = history_playwright()
+        result = github.reports[2]["suites"][0]["specs"][0]["tests"][0]["results"][0]
+        result["error"]["message"] = "Error: expect(received).toBe(expected)\n\nlater failure"
+        result["errors"][0]["message"] = result["error"]["message"]
+        self.collect(github, {**HISTORY_ENV, "GITHUB_RUN_ATTEMPT": "3"})
+        body = github.writes[0][1]["body"]
+        self.assertIn("original first failure", body)
+        self.assertNotIn("later failure", body)
+        self.assertIn("/job/10", body)
+        self.assertIn("/job/30", body)
+
+    def test_different_sha_os_file_title_or_project_never_link(self):
+        for field, value in (("tested_sha", "c" * 40), ("system", "Windows"), ("file", "other.spec.ts"),
+                             ("title", "another test"), ("projectId", "firefox"), ("projectName", "other")):
+            with self.subTest(field=field):
+                github = RetryGitHub()
+                if field in github.records[2]:
+                    github.records[2][field] = value
+                else:
+                    spec = github.reports[2]["suites"][0]["specs"][0]
+                    (spec if field in ("file", "title") else spec["tests"][0])[field] = value
+                self.collect(github)
+                self.assertEqual(github.writes, [])
+
+    def test_missing_or_foreign_provenance_refuses_before_writing(self):
+        for field, value in (("tested_sha", ""), ("workflow_ref", "another workflow"), ("workflow_sha", "c" * 40),
+                             ("run_id", 88), ("attempt", 3), ("runner_name", "unknown runner"), ("system", "unknown")):
+            with self.subTest(field=field):
+                github = RetryGitHub()
+                github.records[2][field] = value
+                with self.assertRaises((RuntimeError, KeyError)):
+                    self.collect(github)
+                self.assertEqual(github.writes, [])
+
+    def test_missing_report_or_missing_artifact_is_not_a_pass(self):
+        for missing in ("report", "artifact"):
+            with self.subTest(missing=missing):
+                github = RetryGitHub()
+                if missing == "report":
+                    github.reports[2] = None
+                    github.records[2]["has_report"] = False
+                else:
+                    del github.records[2]
+                self.collect(github)
+                self.assertEqual(github.writes, [])
+                self.assertIn("Not measured", self.summary.read_text())
+
+    def test_runner_setup_failure_is_not_a_test_failure(self):
+        github = RetryGitHub()
+        github.jobs[1][0]["steps"] = [{"name": "Install Chromium", "conclusion": "failure"}]
+        self.collect(github)
+        self.assertEqual(github.writes, [])
+
+    def test_worker_generic_missing_or_mixed_errors_never_prove_an_assertion_flake(self):
+        worker = {"message": "Error: worker process exited unexpectedly (code=137, signal=null)"}
+        generic = {"message": "Error: service unavailable", "location": {"file": "/fixture/a.spec.ts", "line": 42}}
+        for kind in ("worker", "generic", "missing", "mixed", "retry", "location", "custom"):
+            with self.subTest(kind=kind):
+                github = RetryGitHub()
+                github.reports[1]["errors"] = []  # A real worker exit has no top-level error.
+                results = github.reports[1]["suites"][0]["specs"][0]["tests"][0]["results"]
+                for result in results:
+                    if kind in ("worker", "generic"):
+                        error = worker if kind == "worker" else generic
+                        result.update(error=error, errors=[error])
+                    elif kind == "missing":
+                        result.pop("error")
+                        result.pop("errors")
+                    elif kind == "mixed":
+                        result["errors"].append(generic)
+                    elif kind == "retry" and result["retry"] == 1:
+                        result.update(error=worker, errors=[worker])
+                    elif kind == "location":
+                        result["error"].pop("location")
+                        result["errors"][0].pop("location")
+                    elif kind == "custom":
+                        result["error"]["message"] = "custom assertion failed"
+                        result["errors"][0]["message"] = "custom assertion failed"
+                self.collect(github)
+                self.assertEqual(github.writes, [])
+                self.assertIn("Not measured", self.summary.read_text())
+
+    def test_report_errors_or_errors_on_a_pass_are_not_complete_evidence(self):
+        for attempt, field in ((1, "report"), (2, "report"), (2, "error"), (2, "errors")):
+            with self.subTest(attempt=attempt, field=field):
+                github = RetryGitHub()
+                if field == "report":
+                    github.reports[attempt]["errors"] = [{"message": "global teardown failed"}]
+                else:
+                    result = github.reports[attempt]["suites"][0]["specs"][0]["tests"][0]["results"][0]
+                    result[field] = {"message": "error on pass"} if field == "error" else [{"message": "error on pass"}]
+                self.collect(github)
+                self.assertEqual(github.writes, [])
+                self.assertIn("Not measured", self.summary.read_text())
+
+    def test_unknown_failure_beside_a_supported_assertion_is_reported_separately(self):
+        github = RetryGitHub()
+        specs = github.reports[1]["suites"][0]["specs"]
+        unknown = json.loads(json.dumps(specs[0]))
+        unknown["title"] = "worker lost"
+        for result in unknown["tests"][0]["results"]:
+            result.update(error={"message": "worker unavailable"}, errors=[{"message": "worker unavailable"}])
+        specs.append(unknown)
+        self.collect(github)
+        self.assertEqual(len(github.writes), 1)
+        self.assertIn("Not measured", self.summary.read_text())
+        self.assertIn("worker lost", self.summary.read_text())
+
+    def test_copied_success_with_new_id_and_attempt_but_old_times_is_not_executed(self):
+        github = RetryGitHub()
+        # GitHub returned copies with new IDs and run_attempt=2 in the observed
+        # API. ID deduplication alone would charge these a second time.
+        github.jobs[2].append({**github.jobs[2][0], "id": 999,
+                               "started_at": "2026-10-05T10:00:10Z", "completed_at": "2026-10-05T10:16:49Z"})
+        self.collect(github)
+        self.assertEqual(len(github.writes), 1)
+        self.assertIn("60 runner seconds", github.writes[0][1]["body"])
+        github = RetryGitHub()
+        github.jobs[2][0]["started_at"] = "2026-10-05T10:00:10Z"
+        with self.assertRaisesRegex(RuntimeError, "provenance"):
+            self.collect(github)
+        self.assertEqual(github.writes, [])
+
+    def test_unavailable_job_duration_says_not_measured(self):
+        github = RetryGitHub()
+        del github.jobs[2][0]["completed_at"]
+        self.collect(github)
+        self.assertIn("Additional runner time: not measured", github.writes[0][1]["body"])
+
+    def test_skipped_expected_failure_interrupted_or_implicit_pass_prove_nothing(self):
+        for change in ({"status": "skipped"}, {"expectedStatus": "failed"}, {"results": []},
+                       {"results": [{"status": "interrupted", "retry": 0}]},
+                       {"results": [{"status": "passed"}]}, {"projectId": None}):
+            with self.subTest(change=change):
+                github = RetryGitHub()
+                test = github.reports[2]["suites"][0]["specs"][0]["tests"][0]
+                test.update(change)
+                if change == {"projectId": None}:
+                    del test["projectId"]
+                self.collect(github)
+                self.assertEqual(github.writes, [])
+
+    def test_a_flaky_retry_in_later_job_stays_the_within_job_reporters_responsibility(self):
+        github = RetryGitHub()
+        test = github.reports[2]["suites"][0]["specs"][0]["tests"][0]
+        test["status"] = "flaky"
+        test["results"] = [{"status": "failed", "retry": 0}, {"status": "passed", "retry": 1}]
+        self.collect(github)
+        self.assertEqual(github.writes, [])
+
+    def test_duplicate_job_or_test_is_ambiguous_and_writes_nothing(self):
+        for duplicate in ("job", "test"):
+            with self.subTest(duplicate=duplicate):
+                github = RetryGitHub()
+                if duplicate == "job":
+                    github.jobs[2].append({**github.jobs[2][0], "id": 21})
+                else:
+                    specs = github.reports[2]["suites"][0]["specs"]
+                    specs.append(specs[0])
+                with self.assertRaisesRegex(RuntimeError, "ambiguous"):
+                    self.collect(github)
+                self.assertEqual(github.writes, [])
+
+    def test_attempt_cap_and_incomplete_pagination_refuse_instead_of_guessing(self):
+        github = RetryGitHub()
+        with self.assertRaisesRegex(RuntimeError, "at most 5"):
+            self.collect(github, {**HISTORY_ENV, "GITHUB_RUN_ATTEMPT": "6"})
+        self.assertEqual(github.reads, [])
+        original = github.__call__
+        def infinite(args, body=None):
+            if "/jobs?" in args[0]:
+                return {"jobs": github.jobs[1] * 100}
+            return original(args, body)
+        with self.assertRaisesRegex(RuntimeError, "more than 1000"):
+            r.retry_history(HISTORY_ENV, infinite, github.download)
+        self.assertEqual(github.writes, [])
+
+    def test_archive_with_extra_files_or_excess_expansion_is_refused(self):
+        for extra, content in (("unrelated.txt", "not a report"), ("report.json", " " * (r.HISTORY_BYTES + 1))):
+            data = io.BytesIO()
+            with zipfile.ZipFile(data, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("record.json", "{}")
+                archive.writestr(extra, content)
+            github = RetryGitHub()
+            with self.assertRaises(RuntimeError):
+                r.retry_history(HISTORY_ENV, github, lambda args: data.getvalue())
+            self.assertEqual(github.writes, [])
+
+    def test_artifact_and_test_count_caps_stop_before_filing(self):
+        for kind in ("artifacts", "tests"):
+            github = RetryGitHub()
+            if kind == "artifacts":
+                original = github.__call__
+                def call(args, body=None):
+                    if "/artifacts?" in args[0]:
+                        return {"artifacts": [{"name": f"ci-test-history-{n}"} for n in range(81)]}
+                    return original(args, body)
+            else:
+                specs = github.reports[2]["suites"][0]["specs"]
+                template = specs.pop()
+                specs.extend({**template, "title": f"test {n}"} for n in range(10001))
+                call = github
+            with self.subTest(kind=kind), self.assertRaisesRegex(RuntimeError, "exceeds"):
+                r.retry_history(HISTORY_ENV, call, github.download)
+            self.assertEqual(github.writes, [])
+
+    def test_artifact_download_refuses_oversized_stdout_and_stderr(self):
+        for stream, limit in (("stdout", r.HISTORY_BYTES), ("stderr", 4096)):
+            with self.subTest(stream=stream), tempfile.TemporaryDirectory() as folder:
+                fake = Path(folder) / "gh"
+                fake.write_text(f'#!{sys.executable}\nimport sys\n'
+                                'if sys.argv[1] == "--version": print("gh version 2.97.0")\n'
+                                f'else: sys.{stream}.buffer.write(b"x" * {limit + 1})\n')
+                fake.chmod(0o755)
+                Gh.use_gh(self, folder)
+                with self.assertRaisesRegex(RuntimeError, "exceeds|failed"):
+                    r.artifact_bytes(["repos/o/r/actions/artifacts/1/zip"])
+
+    def test_checkout_record_reads_git_instead_of_the_pr_head_and_keeps_raw_report(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "playwright.json"
+            source.write_text(json.dumps(history_playwright()), encoding="utf-8")
+            env = {**HISTORY_ENV, "RUNNER_NAME": "runner-1", "GITHUB_SHA": "d" * 40}
+            r.history_record(root / "saved", source.read_bytes(), "web", "web e2e linux 1/6", "Linux", env)
+            record = json.loads((root / "saved/record.json").read_text())
+            actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+            self.assertEqual(record["tested_sha"], actual)
+            self.assertNotEqual(record["tested_sha"], env["GITHUB_SHA"])
+            self.assertEqual((root / "saved/report.json").read_bytes(), source.read_bytes())
+            source.unlink()
+            r.history_record(root / "saved", None, "web", "web e2e linux 1/6", "Linux", env)
+            self.assertFalse(json.loads((root / "saved/record.json").read_text())["has_report"])
+            self.assertFalse((root / "saved/report.json").exists())
+
+    def test_cli_bounds_the_report_before_parsing_with_or_without_history(self):
+        # The caller must stop on cap+1, not warn then fall through to a
+        # second unbounded load. Below/at the cap still preserves the raw JSON.
+        for history in (False, True):
+            for size in (r.HISTORY_BYTES - 1, r.HISTORY_BYTES, r.HISTORY_BYTES + 1):
+                with self.subTest(history=history, size=size), tempfile.TemporaryDirectory() as folder:
+                    root = Path(folder)
+                    source = root / "report.json"
+                    prefix, suffix = b'{"suites": [], "padding": "', b'"}'
+                    source.write_bytes(prefix + b"x" * (size - len(prefix) - len(suffix)) + suffix)
+                    args = [sys.executable, str(SCRIPT), "--suite", "web", "--playwright", str(source)]
+                    if history:
+                        args += ["--history-record", str(root / "saved"), "--job-name", "web e2e linux 1/6"]
+                        (root / "saved").mkdir()
+                        (root / "saved/report.json").write_text("stale report")
+                        (root / "saved/record.json").write_text("stale record")
+                    summary = root / "summary"
+                    done = subprocess.run(args, capture_output=True, text=True, timeout=15,
+                                          env={**os.environ, **HISTORY_ENV, "RUNNER_NAME": "fixture",
+                                               "GITHUB_STEP_SUMMARY": str(summary)})
+                    if size > r.HISTORY_BYTES:
+                        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+                        self.assertIn(f"exceeds {r.HISTORY_BYTES} bytes", done.stdout)
+                        self.assertNotIn("no flaky test", done.stdout)
+                        self.assertIn("not measured", summary.read_text())
+                        self.assertFalse((root / "saved/report.json").exists())
+                        self.assertFalse((root / "saved/record.json").exists())
+                    else:
+                        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                        self.assertIn("no flaky test", done.stdout)
+                        if history:
+                            self.assertEqual((root / "saved/report.json").read_bytes(), source.read_bytes())
+
+    def test_cli_reports_invalid_json_without_falling_through_or_preserving_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "report.json"
+            source.write_text('{"suites":')
+            done = subprocess.run([sys.executable, str(SCRIPT), "--suite", "web", "--playwright", str(source),
+                                   "--history-record", str(root / "saved"), "--job-name", "web e2e linux 1/6"],
+                                  capture_output=True, text=True, timeout=15,
+                                  env={**os.environ, **HISTORY_ENV, "RUNNER_NAME": "fixture"})
+            self.assertEqual(done.returncode, 1)
+            self.assertIn("could not read Playwright report", done.stdout)
+            self.assertNotIn("no flaky test", done.stdout)
+            self.assertNotIn("Traceback", done.stderr)
+            self.assertFalse((root / "saved/record.json").exists())
+
+    def test_cli_history_metadata_failure_keeps_the_existing_failed_test_annotation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "report.json"
+            source.write_text(json.dumps(history_playwright()))
+            env = {**os.environ, **HISTORY_ENV, "RUNNER_NAME": "fixture"}
+            del env["GITHUB_WORKFLOW_REF"]
+            done = subprocess.run([sys.executable, str(SCRIPT), "--suite", "web", "--playwright", str(source),
+                                   "--history-record", str(root / "saved"), "--job-name", "web e2e linux 1/6"],
+                                  capture_output=True, text=True, timeout=15, env=env)
+            self.assertEqual(done.returncode, 1)
+            self.assertIn("could not preserve job test history", done.stdout)
+            self.assertIn("title=Failed test", done.stdout)
+            self.assertIn("last retry failed", done.stdout)
 
 
 if __name__ == "__main__":
