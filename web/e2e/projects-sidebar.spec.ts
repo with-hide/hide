@@ -11,6 +11,7 @@ import { startHided, type Daemon } from "./hided-fixture";
 import { countSent, keyboardFocus, rest, rowGeometry, screenshot, sendEvent, sidebarColumns, sidebarOverflow, sidebarRowsFit } from "./wire";
 import { chord } from "./chords";
 import { animationsFinished, quietFor } from "./wait";
+import { afterCleanup } from "./worker-owned";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -136,10 +137,11 @@ test("a delegated-child-only checkout follows the front checkout across project 
     await expect(page.locator(`[data-pane-view="${rowsPane}"]`)).toBeVisible();
     await expect(feature.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
     await screenshot(page, "sidebar-child-only-front");
-  } finally {
-    daemon?.stop();
-    herdr.stop();
+  } catch (error) {
+    throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => herdr.stop());
   }
+  try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => herdr.stop()); }
+  herdr.stop();
 });
 
 test("the sidebar: kind, age, status badges, opened checkouts and folded projects", async ({ page }) => {
