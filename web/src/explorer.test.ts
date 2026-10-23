@@ -286,17 +286,17 @@ describe("the Explorer's Git status mark (S5.5 B20, B22)", () => {
   const base = { root_path: "/repo", entries: [], committed: [], selected_path: null, diff: null } as unknown as ChangesSnapshot;
   it("says a failed read is unavailable or out of date and never draws it as current", () => {
     expect(explorerGitMark(null, t)).toEqual({ state: "loading", text: "Loading Git status" });
-    expect(explorerGitMark({ ...base, unavailable_reason: "git is not installed" }, t)?.text).toBe("Git status unavailable: git is not installed");
-    expect(explorerGitMark({ ...base, stale_reason: "git status timed out" }, t)?.state).toBe("stale");
+    expect(explorerGitMark({ ...base, unavailable_reason: "changes.git_failed" }, t)?.text).toBe("Git status unavailable: Git could not read this repository");
+    expect(explorerGitMark({ ...base, stale_reason: "link.unknown" }, t)?.state).toBe("stale");
     expect(explorerGitMark(base, t)).toBeNull();
   });
 
   it("draws nothing for a folder that is not a repository", () => {
-    expect(explorerGitMark({ ...base, unavailable_reason: "/plain is not inside a Git repository", not_a_repository: true }, t)).toBeNull();
+    expect(explorerGitMark({ ...base, unavailable_reason: "changes.not_a_repository", not_a_repository: true }, t)).toBeNull();
   });
 
   it("words the mark's sentence in the chosen language", () => {
-    expect(explorerGitMark({ ...base, unavailable_reason: "git is not installed" }, ko)?.text).toBe("Git 상태를 읽지 못했어요: git is not installed");
+    expect(explorerGitMark({ ...base, unavailable_reason: "link.not_connected" }, ko)?.text).toBe("Git 상태를 읽지 못했어요: 기기가 연결돼 있지 않아요");
   });
 });
 

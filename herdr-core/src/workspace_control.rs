@@ -297,7 +297,7 @@ impl ActionSource {
                 path,
             });
         }
-        let changes = changes::read(&ChangesRequest {
+        let (changes, _) = changes::read(&ChangesRequest {
             root_path: self.root.path.clone(),
             root: self.root,
             channel: Ok(ChannelRef(self.channel)),

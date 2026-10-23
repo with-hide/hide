@@ -4634,6 +4634,7 @@ impl Runtime {
             return false;
         }
         let mut changes = answer.changes;
+        let detail = answer.detail;
         // A failed read of the checkout already on screen keeps the list its
         // last successful read confirmed, marked stale with the reason,
         // rather than replacing it with nothing (S5.5 B22).
@@ -4688,6 +4689,7 @@ impl Runtime {
                 "not_a_repository": changes.not_a_repository,
                 "stale": changes.stale_reason.is_some(),
                 "error": error,
+                "reason": detail,
             }));
         }
         self.snapshot.changes.set(changes);

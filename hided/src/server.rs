@@ -3174,19 +3174,30 @@ fn device_file_index(state: &AppState, device: &str, root: &str, query: &str) ->
     }
     let core = Arc::clone(&state.core);
     let (walk_device, walk_root) = (device.to_owned(), root.to_owned());
+    // A walk that failed answers the code the palette words; the helper's
+    // sentence goes to the log.
     let answer = state.index.query(device, root, query, move || {
-        let channel = core.node_link(&walk_device)?;
-        herdr_core::node_access::index_root(channel.as_ref(), &walk_root).map_err(|error| {
+        let log = |code: &str, message: String| {
             eprintln!(
                 "{}",
                 json!({
                     "component": "hided",
                     "kind": "device.index_unavailable",
                     "device": walk_device,
-                    "message": error.to_string(),
+                    "code": code,
+                    "message": message,
                 })
             );
-            error.to_string()
+            code.to_owned()
+        };
+        let channel = core
+            .node_link(&walk_device)
+            .map_err(|message| log("link.not_connected", message))?;
+        herdr_core::node_access::index_root(channel.as_ref(), &walk_root).map_err(|error| {
+            log(
+                &herdr_core::node_access::link_failure_code(&error),
+                error.to_string(),
+            )
         })
     });
     index_result(device, root, query, answer, |relative| {

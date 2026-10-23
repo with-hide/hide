@@ -34,7 +34,7 @@ import {
 } from "./explorer";
 import { windowDeviceId } from "./screenMachine";
 import { changesFor, explorerContext, localDeviceId } from "./snapshot";
-import { fileFailureText, listingFailure } from "./fileFailure";
+import { fileFailureText, listingFailure, readFailureText } from "./fileFailure";
 import { useShellStore } from "./store";
 import { useUiStore, type ExplorerDraft } from "./ui";
 import { captureDrop, carriesOsFiles } from "./explorerDrop";
@@ -527,7 +527,7 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
   const filterNote = !filtering
     ? null
     : answer?.unavailable
-      ? t("documents.filesUnavailable", { reason: answer.unavailable })
+      ? t("documents.filesUnavailable", { reason: readFailureText(answer.unavailable, t) })
       : answer?.indexing && rows.length === 0
         ? t("documents.indexing")
         : answer && rows.length === 0
@@ -648,7 +648,7 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
       ) : null}
       {refused ? (
         <div className="border-b border-border px-md py-sm text-caption text-destructive" data-explorer-refusal={refused}>
-          {refused}
+          {t("explorer.listingFailed", { name: t("explorer.thisCheckout"), reason: readFailureText(`path.${refused}`, t) })}
         </div>
       ) : null}
       {unavailable ? (

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileFailureText, listingFailure } from "./fileFailure";
+import { downloadFailureText, fileFailureText, listingFailure, readFailureText } from "./fileFailure";
 import { initializeInterfaceI18n } from "./i18n/instance";
 
 const english = initializeInterfaceI18n("en").getFixedT(null, "translation");
@@ -20,5 +20,12 @@ describe("a file change or listing the core or a device refused by code", () => 
     expect(fileFailureText(listing("refused", "permission_denied"), english)).toBe("Permission denied");
     expect(fileFailureText(listing("not_ready", null), english)).toBe("The device is not connected");
     expect(fileFailureText(listing("unknown", null), korean)).toBe("기기가 제때 답하지 않았어요");
+  });
+
+  it("words a read and a download by their code, and an unknown one says only that it was not read", () => {
+    expect(readFailureText("changes.git_failed", korean)).toBe("Git이 이 저장소를 읽지 못했어요");
+    expect(readFailureText("host.from_a_newer_helper", english)).toBe("Hide could not read it");
+    expect(downloadFailureText("too_large", english)).toBe("The file is too large to download");
+    expect(downloadFailureText("outside_checkout", english)).toBe("The path is outside this checkout");
   });
 });

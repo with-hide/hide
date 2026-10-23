@@ -975,7 +975,7 @@
       }
     },
     "fileIndexResult": {
-      "description": "Payload of a file_index_result frame: the device and root that were searched, the query, the ranked files, whether the index is truncated, whether the walk is still running, and why a device walk was unavailable.",
+      "description": "Payload of a file_index_result frame: the device and root that were searched, the query, the ranked files, whether the index is truncated, whether the walk is still running, and why a device walk was unavailable, as a code the palette words (`host.<code>` for the helper's refusal, `link.not_connected`, `link.busy` or `link.unknown`); the helper's sentence goes to hided's `device.index_unavailable` log line.",
       "type": "object",
       "additionalProperties": false,
       "required": ["device_id", "root_path", "query", "files", "truncated", "indexing"],

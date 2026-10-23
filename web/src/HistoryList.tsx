@@ -1,4 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { readFailureText } from "./fileFailure";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { fileIcon } from "./fileIcons";
@@ -123,10 +124,10 @@ export function HistoryList({ actions }: { actions: Actions }) {
   if (!changes) return <p className="px-md py-sm text-caption text-muted-foreground" data-history-state="loading">{t("history.reading")}</p>;
   // The core's own reason, which names what to do where there is something
   // to do (allow the helper, install Git); History reads again on its own.
-  if (changes.unavailable_reason) return <p className="break-words px-md py-sm text-caption text-warning" data-history-state="unavailable">{t("history.unavailable", { reason: changes.unavailable_reason })}</p>;
+  if (changes.unavailable_reason) return <p className="break-words px-md py-sm text-caption text-warning" data-history-state="unavailable">{t("history.unavailable", { reason: readFailureText(changes.unavailable_reason, t) })}</p>;
   const stale = changes.stale_reason ? (
     <p className="break-words px-md py-xs text-caption text-warning" data-history-state="stale">
-      {t("history.stale", { reason: changes.stale_reason })}
+      {t("history.stale", { reason: readFailureText(changes.stale_reason, t) })}
     </p>
   ) : null;
   if (items.length === 0) {

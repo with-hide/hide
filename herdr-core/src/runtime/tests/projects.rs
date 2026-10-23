@@ -134,7 +134,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
     assert_eq!(request.root_path, registered);
     assert_eq!(request.root.path, repository.to_string_lossy());
     let key = request.key();
-    let listed = crate::changes::read(&request);
+    let listed = crate::changes::read(&request).0;
     assert_eq!(
         listed
             .entries
@@ -168,6 +168,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
             .is_none()
     );
     assert!(runtime.ingest_changes(crate::changes::ChangesAnswer {
+        detail: None,
         key: Some(key),
         selection: request.selection(),
         changes: listed,
@@ -182,6 +183,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
         ..Default::default()
     };
     assert!(runtime.ingest_changes(crate::changes::ChangesAnswer {
+        detail: None,
         key: runtime.changes_key(),
         selection: (None, false),
         changes: failed,
@@ -193,6 +195,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
         Some("The device is busy")
     );
     assert!(runtime.ingest_changes(crate::changes::ChangesAnswer {
+        detail: None,
         key: runtime.changes_key(),
         selection: (None, false),
         changes: confirmed.clone(),
@@ -205,7 +208,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
         .into_owned();
     let event = serde_json::to_vec(&serde_json::json!({"schema_version":2,"kind":"changes_select","payload":{"path":selected,"committed":true,"preview":true}})).unwrap();
     assert!(runtime.dispatch_json(&event));
-    let selected = crate::changes::read(&runtime.changes_request().unwrap());
+    let selected = crate::changes::read(&runtime.changes_request().unwrap()).0;
     let diff = selected.diff.expect("in-scope branch diff");
     assert!(diff.text.contains("outside source content"));
     assert!(!diff.text.contains("outside-source.txt"));
@@ -218,7 +221,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
     let mut request = runtime.changes_request().unwrap();
     request.selected_path = Some(deleted);
     request.selected_committed = false;
-    let deleted = crate::changes::read(&request).diff.unwrap();
+    let deleted = crate::changes::read(&request).0.diff.unwrap();
     assert!(deleted.text.contains("deleted content"));
 
     // A focus event publishes its new History identity in the same frame.
@@ -260,7 +263,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
         device.channel.is_err(),
         "a device without a ready helper is read by nothing on this machine"
     );
-    assert!(crate::changes::read(&device).unavailable_reason.is_some());
+    assert!(crate::changes::read(&device).0.unavailable_reason.is_some());
     assert_eq!(
         runtime.snapshot.changes,
         crate::model::ChangesSnapshot::default()
