@@ -119,7 +119,7 @@ async function captureSettings(page: Page, name: string) {
 async function openMemory(page: Page) {
   await page.keyboard.press("Escape");
   await showProjectMemory(page);
-  const memory = page.locator('[data-lane="project"]');
+  const memory = page.locator('[data-lane="memory"]');
   await expect(memory.locator('[data-memory-switch="off"]')).toBeEnabled({ timeout: 20_000 });
   await memory.locator('[data-memory-switch="off"]').click();
   await expect(memory.locator('[data-memory-switch="on"]')).toBeVisible({ timeout: 20_000 });
@@ -132,7 +132,7 @@ async function captureMemory(page: Page, name: string) {
     await page.locator("[data-open-settings]").click();
     await chooseTheme(page, theme);
     await page.keyboard.press("Escape");
-    await expect(page.locator('[data-lane="project"]')).toBeVisible();
+    await expect(page.locator('[data-lane="memory"]')).toBeVisible();
     await settle(page);
     await screenshot(page, `usage-limit-${name}-${theme}`);
   }

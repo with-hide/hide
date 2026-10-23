@@ -90,7 +90,7 @@ function scene(state: string, now: number): { mission: Mission; rest: SnapshotRe
       { id: "pi", label: "Pi", availability: "available", enabled: true },
       { id: "grok", label: "Grok", availability: "not_installed", enabled: false },
     ] } }], workspaces: [] },
-    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [{ device_id: "local", pane_id: SCREEN_PANE, session_digest: "scene-screen", launch_model: "Sol" }] },
+    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [{ device_id: "local", pane_id: SCREEN_PANE, session_digest: "scene-screen", launch_model: "Sol", launch_effort: null }] },
     status: { remote: [], background_ai: { enabled: true, providers: [
       { agent: "claude-code", state: "ready", models: ["Opus 5.5", "Sonnet 5.5", "Haiku 5.5"] },
       { agent: "codex", state: "ready", models: ["GPT-6-Astra", "GPT-5.6-Sol"] },

@@ -36,6 +36,8 @@ pub struct GraphSession {
     pub session_digest: String,
     /// The explicit choice Hide launched, never a claim about a later native model switch.
     pub launch_model: Option<String>,
+    /// The effort of that same launch choice, under the same proof.
+    pub launch_effort: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

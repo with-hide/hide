@@ -721,6 +721,9 @@ pub(super) struct UiStateUpdatePayload {
     pub(super) sidebar_width: Option<u32>,
     #[serde(default)]
     pub(super) font_size: Option<f32>,
+    /// Absent keeps the size: only Appearance's Terminal text slider sends it.
+    #[serde(default)]
+    pub(super) terminal_font_size: Option<f32>,
     /// Ephemeral observation hints for the core-owned provider usage timer.
     /// They ride the existing UI-state event but are never persisted.
     #[serde(default)]
@@ -4257,6 +4260,24 @@ impl Runtime {
                         None => current.sidebar_width,
                     },
                     font_size: payload.font_size.unwrap_or(current.font_size),
+                    // A size outside the slider's range keeps the last one,
+                    // as the sidebar width does; the slider never sends it.
+                    terminal_font_size: match payload.terminal_font_size {
+                        Some(size) if crate::model::terminal_font_size_fits(size) => size,
+                        Some(size) => {
+                            self.push_diagnostic(
+                                "ui_state.terminal_font_size_out_of_range",
+                                format!(
+                                    "Terminal font size {size} is outside {}..={}; kept {}",
+                                    crate::model::TERMINAL_FONT_SIZE_MIN,
+                                    crate::model::TERMINAL_FONT_SIZE_MAX,
+                                    current.terminal_font_size
+                                ),
+                            );
+                            current.terminal_font_size
+                        }
+                        None => current.terminal_font_size,
+                    },
                     // The zoom chords own this map; a navigator or keyboard
                     // save must not erase it, for the same reason the pet
                     // fields above are carried through.

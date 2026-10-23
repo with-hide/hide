@@ -451,9 +451,9 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
             </button>
             {parts ? <PartsMark parts={parts} /> : null}
             <MissionChip agent={{ session: root.session }} onOpen={(id) => actions.openMission(id)} />
-            <span className="relative flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
-              <Elapsed since={row.archived_at_unix_ms} className="pointer-events-none text-micro text-muted-foreground tabular-nums hoverless:hidden" />
-              <span data-row-actions="" className={cn(FLOATING_ACTIONS, revealed(open))}>
+            <span className="flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
+              <Elapsed since={row.archived_at_unix_ms} className={cn("text-micro text-muted-foreground tabular-nums", resting(open))} />
+              <span data-row-actions="" className={cn("items-center gap-xxs", revealed(open))}>
                 <EntryDropdown label={label} title={root.title} items={items} onSelect={select} onOpenChange={setOpen} data-archived-menu={row.id}
                   trigger={
                     <button type="button" aria-label={label} data-archived-more={row.id} className="rounded-xs p-xxs text-muted-foreground outline-none hover:bg-secondary focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary">
@@ -536,28 +536,26 @@ function RevisitButton({ agent, on, disabled, actions }: { agent: AgentRow; on: 
 }
 
 /**
- * A row's buttons under the pointer or focus, floating over the end of its
- * line on the row's own fill, so a row keeps only its time's width for them.
- * They stand above a PR mark's raised hover target, and a selected row's
- * translucent fill is laid on the sidebar's so nothing shows through. An
- * input with no hover always shows them, in the line in place of the time.
+ * A row's buttons take the time's place in the line under the pointer or
+ * focus, and while their menu is open: at rest the row keeps only its time's
+ * width, and on hover the title gives way, so the buttons never cover the PR
+ * mark or mission chip the pointer is heading for. An input with no hover
+ * always shows the buttons.
  */
-const FLOATING_ACTIONS =
-  "absolute top-1/2 right-0 z-20 flex -translate-y-1/2 items-center gap-xxs rounded-xs bg-accent pl-xs group-data-[selected=true]/task:bg-[linear-gradient(var(--color-selected),var(--color-selected)),linear-gradient(var(--color-sidebar),var(--color-sidebar))] hoverless:static hoverless:translate-y-0 hoverless:bg-none hoverless:bg-transparent hoverless:pl-0";
-
-const revealed = (open: boolean) => (open ? "opacity-100" : "opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100 hoverless:opacity-100");
+const revealed = (open: boolean) => (open ? "flex" : "hidden group-hover/task:flex group-focus-within/task:flex hoverless:flex");
+const resting = (open: boolean) => (open ? "hidden" : "group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden");
 
 /**
- * The time, and floating over the end of the line under the pointer or focus
- * the record button and `⋯` (B15, B18).
+ * The time, and in its place under the pointer or focus the record button
+ * and `⋯` (B15, B18).
  */
 function TimeSlot({ agent, record, menu, revisit }: { agent: AgentRow; record: (() => void) | null; menu: TaskMenu; revisit?: { on: boolean; disabled: boolean; actions: Actions } }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
   return (
-    <span className="relative flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
-      <Elapsed since={agent.last_prompt_at_unix_ms} data-agent-elapsed="true" className="pointer-events-none text-micro text-muted-foreground tabular-nums hoverless:hidden" />
-      <span data-row-actions="" className={cn(FLOATING_ACTIONS, revealed(open))}>
+    <span className="flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
+      <Elapsed since={agent.last_prompt_at_unix_ms} data-agent-elapsed="true" className={cn("text-micro text-muted-foreground tabular-nums", resting(open))} />
+      <span data-row-actions="" className={cn("items-center gap-xxs", revealed(open))}>
         {revisit ? <RevisitButton agent={agent} {...revisit} /> : null}
         {record ? (
           <Hint label={t("taskLens.menu.record")} shortcut="Space">

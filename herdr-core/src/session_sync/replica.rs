@@ -649,6 +649,10 @@ impl SessionReplica {
                             .worktree
                             .as_ref()
                             .is_some_and(|worktree| worktree.is_linked_worktree),
+                        herdr_repo_root: workspace
+                            .worktree
+                            .as_ref()
+                            .map(|worktree| worktree.repo_root.clone()),
                         exists: !path.is_empty(),
                         temporary: false,
                         // A remote checkout carries no worktree, pull-request,

@@ -21,7 +21,7 @@ const ko = {
   "agentActionRefusal.unsupported": "이 에이전트는 재울 수 없어요",
   "agentActionRefusal.core_machine_only": "이 에이전트는 core가 실행되는 기기에서만 재울 수 있어요",
   "agentActionRefusal.asleep": "이미 자고 있어요",
-  "agentActionRefusal.working": "일하는 중이에요",
+  "agentActionRefusal.working": "작업 중이에요",
   "agentActionRefusal.waiting_for_you": "내 답을 기다리는 중이에요",
   "agentActionRefusal.unknown_activity": "하는 일을 알 수 없어요",
   "agentActionRefusal.no_conversation": "Herdr가 이 에이전트의 대화를 아직 알려 주지 않았어요",

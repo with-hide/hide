@@ -401,7 +401,7 @@ fn reconciling_with_a_precomputed_catalog_runs_no_git() {
     .expect("three-tab payload");
     let spaces = Runtime::session_spaces(
         &payload,
-        &workspace::paths_here(Runtime::session_cwds(&payload)),
+        &workspace::paths_here(Runtime::session_paths(&payload)),
     );
     let catalog = session_sync::PrecomputedCatalog {
         worktrees: no_worktrees(),
@@ -417,7 +417,7 @@ fn reconciling_with_a_precomputed_catalog_runs_no_git() {
             spaces
                 .iter()
                 .flat_map(|space| space.cwds.clone())
-                .chain(Runtime::session_cwds(&payload)),
+                .chain(Runtime::session_paths(&payload)),
         )),
     };
     let mut runtime = runtime();
@@ -502,7 +502,7 @@ fn a_stale_precomputed_catalog_keeps_the_last_accepted_one() {
     };
     let spaces = Runtime::session_spaces(
         &payload(),
-        &workspace::paths_here(Runtime::session_cwds(&payload())),
+        &workspace::paths_here(Runtime::session_paths(&payload())),
     );
     let fresh = session_sync::PrecomputedCatalog {
         worktrees: no_worktrees(),
@@ -518,7 +518,7 @@ fn a_stale_precomputed_catalog_keeps_the_last_accepted_one() {
             spaces
                 .iter()
                 .flat_map(|space| space.cwds.clone())
-                .chain(Runtime::session_cwds(&payload())),
+                .chain(Runtime::session_paths(&payload())),
         )),
     };
     let mut runtime = runtime();
@@ -2439,6 +2439,7 @@ fn a_pane_in_a_second_directory_projects_into_its_own_project() {
     // each keyed by its own path. (A real worktree folds into its main
     // repository's project; `workspace::tests` covers that with git.)
     let spaces = vec![workspace::SessionSpace {
+        checkout: None,
         id: "w3M".to_owned(),
         label: "hide".to_owned(),
         purpose: None,
@@ -2492,7 +2493,7 @@ fn a_pane_in_a_second_directory_projects_into_its_own_project() {
             spaces
                 .iter()
                 .flat_map(|space| space.cwds.clone())
-                .chain(Runtime::session_cwds(&payload)),
+                .chain(Runtime::session_paths(&payload)),
         )),
     };
 
@@ -2528,12 +2529,14 @@ fn another_workspace_layout_does_not_steal_the_selected_checkout_projection() {
     let checkout_path = "/private/tmp/hide-selected-checkout";
     let spaces = vec![
         workspace::SessionSpace {
+            checkout: None,
             id: "w3P".to_owned(),
             label: "other".to_owned(),
             purpose: None,
             cwds: vec![checkout_path.to_owned()],
         },
         workspace::SessionSpace {
+            checkout: None,
             id: "w3Z".to_owned(),
             label: "selected".to_owned(),
             purpose: None,
@@ -2645,6 +2648,7 @@ fn another_workspace_layout_does_not_steal_the_selected_checkout_projection() {
 fn a_registration_herdr_already_has_a_workspace_for_is_listed_once() {
     let checkout_path = "/private/tmp/hide-duplicate-registration";
     let spaces = vec![workspace::SessionSpace {
+        checkout: None,
         id: "w41".to_owned(),
         label: "duplicate".to_owned(),
         purpose: None,
@@ -2685,6 +2689,7 @@ fn closing_the_last_pane_keeps_an_unregistered_project_listed() {
     let mut runtime = runtime();
     let checkout_path = "/private/tmp/hide-retain-project";
     let spaces = vec![workspace::SessionSpace {
+        checkout: None,
         id: "w5".to_owned(),
         label: "hide main".to_owned(),
         purpose: None,
@@ -2726,7 +2731,7 @@ fn closing_the_last_pane_keeps_an_unregistered_project_listed() {
             spaces
                 .iter()
                 .flat_map(|space| space.cwds.clone())
-                .chain(Runtime::session_cwds(&occupied)),
+                .chain(Runtime::session_paths(&occupied)),
         )),
     };
     runtime.restore_hint_pending = false;

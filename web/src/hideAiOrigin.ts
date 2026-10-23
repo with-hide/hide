@@ -59,7 +59,7 @@ export function drawnInTree(listed: readonly HideAiCheckout[] | undefined, works
   return front || holdsAgent || !hideAiCheckoutOf(listed, workspace, checkout);
 }
 
-/** Where a Needs You row its home owns opens: the Memory tab of its Project, expanded on its attempt's row (B11); null when the core has not named them. */
+/** Where a Needs You row its home owns opens: the Memory tool of its Project, expanded on its attempt's row (B11); null when the core has not named them. */
 export function homeOpening(rest: SnapshotRest | null, agent: Pick<AgentRow, "hide_ai"> | undefined): { deviceId: string; workspaceId: string; number: number } | null {
   const hideAi = agent?.hide_ai;
   const card = /^m(\d+)$/.exec(hideAi?.task?.target ?? "");

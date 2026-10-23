@@ -1896,6 +1896,12 @@ pub struct CheckoutSnapshot {
     /// own value: see `head_sha`.
     #[serde(skip_serializing)]
     pub head_oid: Option<String>,
+    /// The repository Herdr reports the checkout it attached a device's
+    /// workspace to in (`workspace.worktree.repo_root`), on that device's raw
+    /// row. Core only: the device's grouping places a folder its helper can
+    /// no longer read by it (`device_catalog::recorded_place`).
+    #[serde(skip_serializing)]
+    pub herdr_repo_root: Option<String>,
     pub github: GithubStatusSnapshot,
     pub agent_summary: CheckoutAgentSummary,
     pub id: String,
@@ -3985,13 +3991,16 @@ pub struct UiStateSnapshot {
     /// existed loads at the default.
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: u32,
-    /// The interface font size, in points, that the Appearance slider sets.
-    /// It scales the shell's own chrome - every `hideFont` call site - and
-    /// nothing else. A pane's terminal bytes are sized by `pane_text_scales`
-    /// and the editor's code by `editor_text_scale`, so no two of the three
-    /// ever apply to the same text.
+    /// The interface font size, in points, that Appearance's Interface text
+    /// slider sets. It scales the shell's own text, the sidebar included, and
+    /// no terminal or editor text.
     #[serde(default = "default_font_size")]
     pub font_size: f32,
+    /// Every terminal's base font size, in CSS pixels, that Appearance's
+    /// Terminal text slider sets. A pane's own `pane_text_scales` entry
+    /// multiplies it, so the chords keep zooming one pane on top of it.
+    #[serde(default = "default_terminal_font_size")]
+    pub terminal_font_size: f32,
     /// Text scale for one pane's own content, keyed by pane id. A pane at the
     /// default scale is absent rather than present at 1.0, so the map stays
     /// the size of what the user actually changed.
@@ -4821,6 +4830,7 @@ impl Default for UiStateSnapshot {
             screen_intros_seen: BTreeSet::new(),
             sidebar_width: default_sidebar_width(),
             font_size: default_font_size(),
+            terminal_font_size: default_terminal_font_size(),
             pane_text_scales: BTreeMap::new(),
             editor_text_scale: DEFAULT_PANE_TEXT_SCALE,
             conversation_pane_ids: BTreeSet::new(),
@@ -5018,6 +5028,20 @@ pub(crate) fn sidebar_width_fits(width: u32) -> bool {
 
 pub(crate) fn default_font_size() -> f32 {
     13.0
+}
+
+/// The bounds of Appearance's Terminal text slider, in CSS pixels; the
+/// default is the `--text-terminal-base` token every terminal drew before
+/// the setting existed.
+pub const TERMINAL_FONT_SIZE_MIN: f32 = 10.0;
+pub const TERMINAL_FONT_SIZE_MAX: f32 = 24.0;
+
+pub(crate) fn default_terminal_font_size() -> f32 {
+    14.0
+}
+
+pub(crate) fn terminal_font_size_fits(size: f32) -> bool {
+    (TERMINAL_FONT_SIZE_MIN..=TERMINAL_FONT_SIZE_MAX).contains(&size)
 }
 
 pub(crate) fn default_panel_visible() -> bool {

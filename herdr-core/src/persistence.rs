@@ -13,7 +13,7 @@ use crate::model::{
     PracticeProgress, RightPanelSection, SidebarLens, SidebarProject, TaskView, ThemePreference,
     UiStateSnapshot, WorkspaceRegistration, default_accent_hex, default_font_size,
     default_pane_text_scale, default_panel_visible, default_sidebar_width,
-    practice_chapter_id_valid,
+    default_terminal_font_size, practice_chapter_id_valid,
 };
 
 const UI_STATE_SCHEMA_VERSION: u32 = 1;
@@ -168,6 +168,10 @@ struct StoredUiState {
     sidebar_width: u32,
     #[serde(default = "default_font_size")]
     font_size: f32,
+    /// Absent in a store from before the Terminal text slider: every
+    /// terminal keeps the size it drew.
+    #[serde(default = "default_terminal_font_size")]
+    terminal_font_size: f32,
     #[serde(default)]
     pane_text_scales: BTreeMap<String, f32>,
     /// Absent in a store written while the editor's zoom still lived in
@@ -593,6 +597,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             screen_intros_seen: stored.screen_intros_seen,
             sidebar_width: stored.sidebar_width,
             font_size: stored.font_size,
+            terminal_font_size: stored.terminal_font_size,
             pane_text_scales: stored.pane_text_scales,
             editor_text_scale: stored.editor_text_scale,
             conversation_pane_ids: Default::default(),
@@ -774,6 +779,7 @@ pub fn save(
         screen_intros_seen: state.screen_intros_seen.clone(),
         sidebar_width: state.sidebar_width,
         font_size: state.font_size,
+        terminal_font_size: state.terminal_font_size,
         pane_text_scales: state.pane_text_scales.clone(),
         editor_text_scale: state.editor_text_scale,
         pane_read_records: state.pane_read_records.clone(),

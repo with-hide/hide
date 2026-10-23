@@ -225,9 +225,9 @@
   --size-checkout-row: 32px;
   --size-checkout-row-detailed: 48px;
   --size-project-row: 32px;
-  --size-sidebar-line: 20px;
-  --size-sidebar-line-detail: 16px;
-  --size-sidebar-section-header: 26px;
+  --size-sidebar-line: calc(20px * var(--interface-scale, 1));
+  --size-sidebar-line-detail: calc(16px * var(--interface-scale, 1));
+  --size-sidebar-section-header: calc(26px * var(--interface-scale, 1));
   --size-sidebar-search: 28px;
   --size-overview-group-header: 52px;
   --size-checkout-icon: 14px;
@@ -359,9 +359,9 @@
   --size-overview-graph-compact-group-width: 168px;
   --size-overview-graph-compact-group-height: 96px;
   --size-overview-graph-root-width: 140px;
-  --size-overview-graph-root-height: 112px;
+  --size-overview-graph-root-height: 144px;
   --size-overview-graph-child-width: 120px;
-  --size-overview-graph-child-height: 72px;
+  --size-overview-graph-child-height: 112px;
   --size-overview-graph-group-width: 200px;
   --size-overview-graph-group-height: 96px;
   --size-overview-graph-header: 96px;
@@ -369,23 +369,13 @@
   --size-overview-graph-gap: 12px;
   --size-overview-graph-project-gap: 40px;
   --size-overview-graph-root-orb: 44px;
-  --size-overview-graph-child-orb: 12px;
+  --size-overview-graph-child-orb: 28px;
   --size-checkout-header-commit-min: 540px;
   --size-checkout-header-time-min: 800px;
   --size-practice-bubble: 340px;
   --size-practice-quest: 280px;
   --size-practice-hub: 720px;
   --size-practice-flash-key: 56px;
-}
-
-.interface-scale-exempt {
-  --interface-scale: 1;
-  --text-micro: 10px;
-  --text-caption: 11px;
-  --text-body: 12px;
-  --text-subhead: 13px;
-  --text-title: 14px;
-  --text-headline: 18px;
 }
 
 /* `.light` and `.dark` also scope a subtree, so one page can show both (the dev gallery). */

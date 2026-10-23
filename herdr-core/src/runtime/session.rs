@@ -199,7 +199,7 @@ impl Runtime {
             &[],
             &self.worktree_catalog,
         );
-        wanted.extend(Self::session_cwds(payload));
+        wanted.extend(Self::session_paths(payload));
         wanted.extend(
             self.created_tab_checkouts
                 .values()
@@ -249,19 +249,31 @@ impl Runtime {
         }
     }
 
-    /// Every directory the session's panes occupy, as Herdr reported it: what
-    /// the core's own node is asked about before a catalog is built.
-    pub(crate) fn session_cwds(payload: &SessionSnapshotPayload) -> BTreeSet<String> {
+    /// Every directory the session's panes occupy, and each checkout Herdr
+    /// attached a workspace to with the repository it reports it in, as
+    /// Herdr reported them: what the core's own node is asked about before a
+    /// catalog is built.
+    pub(crate) fn session_paths(payload: &SessionSnapshotPayload) -> BTreeSet<String> {
         payload
             .layouts
             .iter()
             .flat_map(|layout| &layout.panes)
             .filter_map(|pane| Self::pane_cwd(payload, &pane.pane_id))
+            .chain(
+                payload
+                    .workspaces
+                    .iter()
+                    .filter_map(|workspace| workspace.worktree.as_ref())
+                    .flat_map(|worktree| {
+                        [worktree.checkout_path.clone(), worktree.repo_root.clone()]
+                    }),
+            )
             .collect()
     }
 
     /// The session's Herdr workspaces with the directories their panes
-    /// occupy, each in comparison form as `paths` gives it.
+    /// occupy and the checkout Herdr attached each to, each in comparison
+    /// form as `paths` gives it.
     pub fn session_spaces(
         payload: &SessionSnapshotPayload,
         paths: &workspace::PathIndex,
@@ -285,19 +297,26 @@ impl Runtime {
                         .filter(|label| !label.is_empty())
                         .unwrap_or(layout.workspace_id.as_str())
                         .to_owned();
+                    let herdr_workspace = payload
+                        .workspaces
+                        .iter()
+                        .find(|workspace| workspace.workspace_id == layout.workspace_id);
                     spaces.push(workspace::SessionSpace {
                         id: layout.workspace_id.clone(),
                         label,
                         cwds: Vec::new(),
-                        purpose: payload
-                            .workspaces
-                            .iter()
-                            .find(|workspace| workspace.workspace_id == layout.workspace_id)
+                        purpose: herdr_workspace
                             .and_then(|workspace| workspace.tokens.get("purpose"))
                             .and_then(serde_json::Value::as_str)
                             .map(str::trim)
                             .filter(|purpose| !purpose.is_empty())
                             .map(str::to_owned),
+                        checkout: herdr_workspace
+                            .and_then(|workspace| workspace.worktree.as_ref())
+                            .map(|worktree| workspace::HerdrCheckout {
+                                path: paths.comparison(&worktree.checkout_path),
+                                repository: paths.comparison(&worktree.repo_root),
+                            }),
                     });
                     spaces.len() - 1
                 }

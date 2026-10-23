@@ -155,6 +155,17 @@ export function usableFontSize(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= FONT_SIZE_MIN && value <= FONT_SIZE_MAX ? value : null;
 }
 
+/** The terminal font sizes Appearance offers, in pixels; the core refuses anything else. */
+export const TERMINAL_FONT_SIZE_MIN = 10;
+export const TERMINAL_FONT_SIZE_MAX = 24;
+/** The size a terminal is drawn at when the setting is untouched, the `--text-terminal-base` token. */
+export const TERMINAL_FONT_SIZE_BASE = 14;
+
+/** The stored terminal size when it is inside the offered range; anything else leaves the token's size. */
+export function usableTerminalFontSize(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= TERMINAL_FONT_SIZE_MIN && value <= TERMINAL_FONT_SIZE_MAX ? value : null;
+}
+
 const isReported = (value: string | number | null | undefined): value is string | number => value !== null && value !== undefined && value !== "";
 
 /** A value the daemon or core did not report reads as unavailable, never as a guess; the copied diagnostics keep that word as data. */

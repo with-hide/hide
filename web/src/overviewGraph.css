@@ -88,26 +88,24 @@
 .og-session-drag { cursor: grab; }
 .og-session-drag:active { cursor: grabbing; }
 .og-orb-state { position: absolute; right: calc(-1 * var(--spacing-xxs)); bottom: 0; display: flex; border-radius: 50%; background: var(--card); padding: var(--size-hairline); }
+/* A delegated circle's corner mark is smaller, so it does not cover the logo. */
+.og-session[data-root="false"] .og-orb-state { right: calc(-1 * var(--spacing-xxs) - var(--size-hairline)); bottom: calc(-1 * var(--size-hairline)); transform: scale(0.75); transform-origin: bottom right; }
 /* Lines pass behind a circle's words: the title and line sit on the canvas colour. */
 .og-session-title, .og-session-line { max-width: 100%; padding-inline: var(--spacing-xxs); border-radius: var(--radius-sm); background: var(--background); }
 .og-session-title { font-size: var(--text-caption); font-weight: 500; line-height: 1.4; }
 .og-session-title [data-agent-title] { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; text-align: center; }
 .og-session[data-root="true"] .og-session-title { font-size: var(--text-body); font-weight: 600; }
+/* The model and effort Hide launched the session with, quiet under its title. */
+.og-session-launch { max-width: 100%; overflow: hidden; padding-inline: var(--spacing-xxs); border-radius: var(--radius-sm); background: var(--background); color: var(--subtle-foreground); font-size: var(--text-micro); line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+/* A worktree's branch, named once per team: the top session working in that checkout. */
+.og-session-branch { display: inline-flex; max-width: 100%; align-items: center; gap: var(--size-hairline); overflow: hidden; padding: 0 var(--spacing-xxs); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-sm); background: var(--background); color: var(--muted-foreground); font-size: var(--text-micro); line-height: 1.3; }
+.og-session-branch svg { width: 1em; height: 1em; flex-shrink: 0; }
+.og-session-branch span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .og-session-line { justify-content: center; font-size: var(--text-caption); line-height: 1.4; color: var(--subtle-foreground); }
 .og-session-line.og-asking { color: var(--warning); }
 .og-session[data-context="true"] .og-session-target, .og-session[data-muted="true"] .og-session-target { opacity: var(--opacity-dimmed); }
 .og-session[data-highlighted="true"] .og-orb { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
 .og-session[data-current="true"] .og-orb { outline: var(--size-hairline) dashed var(--primary); outline-offset: var(--spacing-xs); }
-/* A delegated session is a small dot filled with its state's color. */
-.og-dot { display: block; flex-shrink: 0; width: var(--og-orb-size); height: var(--og-orb-size); margin-bottom: var(--spacing-xxs); border-radius: 50%; background: var(--muted-foreground); }
-.og-session[data-mark="going"] .og-dot, .og-session[data-mark="waiting"] .og-dot { background: var(--agent-working); }
-.og-session[data-mark="turn"] .og-dot { background: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--background), 0 0 0 calc(var(--size-hairline) * 3) var(--warning); }
-.og-session[data-mark="done"] .og-dot { background: var(--success); }
-.og-session[data-mark="unread"] .og-dot { background: var(--foreground); }
-.og-session[data-mark="quiet"] .og-dot, .og-session[data-mark="asleep"] .og-dot { opacity: var(--opacity-dimmed); }
-.og-session-target:hover .og-dot, .og-session[data-selected="true"] .og-dot { outline: var(--size-hairline) solid var(--foreground); outline-offset: var(--size-hairline); }
-.og-session[data-highlighted="true"] .og-dot { outline: var(--size-hairline) solid var(--ring); outline-offset: var(--spacing-xxs); }
-.og-session[data-current="true"] .og-dot { outline: var(--size-hairline) dashed var(--primary); outline-offset: var(--spacing-xs); }
 /* A team root carries its fold: the descendant count, and when folded the states folded away. */
 .og-team-chip { position: absolute; top: 0; left: calc(50% + var(--og-orb-size) / 2 + var(--spacing-xxs)); display: inline-flex; align-items: center; gap: var(--spacing-xxs); padding: 0 var(--spacing-xs); border: var(--size-hairline) solid var(--border); border-radius: var(--radius-lg); background: var(--card); color: var(--muted-foreground); font-size: var(--text-micro); font-variant-numeric: tabular-nums; cursor: pointer; pointer-events: auto; }
 .og-team-chip[data-folded="true"] { color: var(--foreground); }

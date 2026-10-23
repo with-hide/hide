@@ -86,14 +86,16 @@ Only when the window's frame itself cannot draw does the line take the whole win
 The Workspace body, under the top row, is Agent Views (the Agent area), one right lane, and the tool rail, 48px wide, at the window's right edge.
 The lane has two columns (PRD lane-two-columns B1): the viewing column on the agents' side, which holds the checkout's documents (the View areas) or the 보기 slot, and the tool column beside the rail, which holds one tool; both, or one alone, are drawn, and with neither the lane is closed.
 The rail's top is the viewing column's: the 보기 button, while the slot holds something, with the mark of what it holds (a pull request as its PR mark in its state's icon and colour, a record or a mission as a page, a project's worktrees as a Git folder, its cost as coins), then the documents button (a file icon) with a badge counting the open views, shown or folded, also given as its accessible description; with no document the button is off, still answering a hover or the keyboard with its hint `No open document` (B2).
-Below a short rule the rail lists the tools, Project, Explorer and Changes from the top, the Project's tool before the checkout's, each an icon alone (a dashboard, a folder tree, a file diff) whose name, scope and chord are its hint on hover (`Project · herdr-ide`, `Explorer · settings-ui  ⇧⌘E`, `Changes · settings-ui  ⇧⌘G`) and whose name is its accessible name (B3; PRD lane-two-columns B25).
-There is no Work tool, no Files tool and no Memory or PRs tool: the Sessions list is the sidebar's 태스크 list, the pull requests are the sidebar's PR list, Memory is the Project tool's Memory tab (PRD lane-two-columns D-20), and what Files held is split between the documents and the Explorer (D-03).
-A second short rule between Project and Explorer marks where the Project's tools end and the checkout's begin (PRD work-tab-pr-lens D-37); it is derived from each tool's scope, so a tool of the other scope moves it.
+Below a short rule the rail lists the tools, Project, Memory, Explorer and Changes from the top, the Project's tools before the checkout's, each an icon alone (a briefcase, a brain, an open folder, a file diff) whose name, scope and chord are its hint on hover (`Project · herdr-ide`, `Memory · herdr-ide`, `Explorer · settings-ui  ⇧⌘E`, `Changes · settings-ui  ⇧⌘G`) and whose name is its accessible name (B3; PRD lane-two-columns B25).
+There is no Work tool, no Files tool and no PRs tool: the Sessions list is the sidebar's 태스크 list, the pull requests are the sidebar's PR list, and what Files held is split between the documents and the Explorer (D-03).
+Memory is a tool of its own beside the Project tool, not a tab inside it, so what waits on the operator now and what Memory asks to be tidied each have their own icon and number (operator decision 2026-10-23, replacing PRD lane-two-columns D-20).
+A second short rule between Memory and Explorer marks where the Project's tools end and the checkout's begin (PRD work-tab-pr-lens D-37); it is derived from each tool's scope, so a tool of the other scope moves it.
 A rail button is drawn pressed, with a primary bar at the rail's edge, while its column shows it: a tool icon while the tool column shows that tool, the documents or 보기 button while the viewing column draws it.
 Pressing a tool icon opens the tool column on that tool, or swaps the tool it shows; pressing the pressed one closes the tool column, and the viewing column stays (B14).
 Pressing the documents or 보기 button brings it to the front of the viewing column; pressed while it is in front, it folds the viewing column, and pressing it again brings the same content back (B11).
 The Project icon is a briefcase and the Explorer icon an open folder, so neither repeats the Overview's dashboard mark or the other's folder.
-The Project icon carries a warning-coloured number counting its project's 할 일 plus what its Memory asks (`처리할 것`, see The Project tool), no number at 0, and its hint names each part, such as `할 일 2 · Memory: 처리할 것 4`; worktrees to remove, memory to move into documents and bots' pull requests are never in it (B38).
+The Project icon carries a warning-coloured number counting its project's 할 일, no number at 0, its hint ending in it, such as `할 일 2`; worktrees to remove, memory to move into documents and bots' pull requests are never in it (B38).
+The Memory icon carries the same warning-coloured number counting what the Project's Memory asks (`처리할 것`, see Project Memory: the Memory tool), none at 0 or while Memory is off, its hint ending in `처리할 것 4`.
 At the rail's bottom, just above its `…`, the pin is an icon of its own, in the same place whether the lane is up or closed and whichever column it shows: an empty pin while unpinned, a filled pin drawn pressed while pinned, and its hint says what a press does (B15).
 The rail's `…` menu holds Expand, which moves both columns together, and with the lane closed the `…` is off (B15).
 A Workspace seen for the first time shows Agent Views alone, its lane closed.
@@ -125,8 +127,8 @@ Select in File Tree, a reveal, or a terminal link that names a folder turns the 
 A pull request's card, a session's record, a mission's map, or a project's worktree table or cost opens in the 보기 slot, in front of the documents in the viewing column, and leaves the tool column as it is; the documents stay on the rail's documents button, and `←` steps back through the items opened before (B9).
 A changed file pressed on a card opens its diff among the documents in the viewing column, the card staying on the rail's 보기 button, which brings it back (B10).
 Closing a document tab closes that view alone, the unsaved-draft protection as it was; closing the last one closes the viewing column, the lane staying while it has a tool column and closing otherwise, and the 보기 slot never comes forward on its own (B12).
-⇧⌘E (`Toggle Explorer tool`) and ⇧⌘G (`Toggle Changes tool`) press that tool's rail icon: the tool column opens on it, swaps to it, or closes when it already shows it (PRD lane-two-columns D-08; sidebar-task-lens D-19, D-29); `Toggle Project tool` does the same for the Project icon and has no chord until one is bound.
-⇧⌘L (`Open Project Memory`) opens the Project tool on its Memory tab, and ⇧⌘R (`Open PR list`) turns the sidebar to its PR list, the whole device's, showing the sidebar when it is hidden; neither closes what it opened when pressed again (B25).
+⇧⌘E (`Toggle Explorer tool`) and ⇧⌘G (`Toggle Changes tool`) press that tool's rail icon: the tool column opens on it, swaps to it, or closes when it already shows it (PRD lane-two-columns D-08; sidebar-task-lens D-19, D-29); `Toggle Project tool` and `Toggle Memory tool` do the same for the Project and Memory icons and have no chord until one is bound.
+⇧⌘L (`Open Project Memory`) opens the Memory tool, and ⇧⌘R (`Open PR list`) turns the sidebar to its PR list, the whole device's, showing the sidebar when it is hidden; neither closes what it opened when pressed again (B25).
 `Toggle documents` presses the documents button and has no chord until one is bound.
 On Windows and Linux these chords are Alt+Shift+E, L, R and G; in a browser tab Chrome keeps ⇧⌘R for reload, so the PR list is ⌥⇧R there, and ⌥⌘1-4 do nothing anywhere.
 A chord the operator had bound to `Toggle Memory tool` or `Toggle PRs tool` runs `Open Project Memory` or `Open PR list` instead, unless that command has a chord of its own (B25).
@@ -149,7 +151,7 @@ The lane has a divider at its left edge, docked or over the agents, and one betw
 A divider shows its grip on hover, keyboard focus and while dragging; a drag moves a guide with the pointer and lands once on release, and a focused divider moves one 32px step per arrow key, each a separator that reports its width.
 Fast arrow presses retain every step before the preceding width has been confirmed, and reloading restores the final width.
 The column divider trades width between the viewing column and the tool column, so the lane and Agent Views keep theirs; the lane's divider changes the width of the column at the lane's edge, against Agent Views when docked, and over them otherwise, where it may reach the body's left edge.
-The lane keeps four widths (D-09): the documents start at 520px and are never narrower than 360px, the 보기 slot the same, the Explorer starts at 240px and is never narrower than 180px, and the Project tool and Changes share one width that starts at 400px and is never narrower than 360px; Agent Views keep 480px beside a docked lane.
+The lane keeps four widths (D-09): the documents start at 520px and are never narrower than 360px, the 보기 slot the same, the Explorer starts at 240px and is never narrower than 180px, and the Project tool, Memory and Changes share one width that starts at 400px and is never narrower than 360px; Agent Views keep 480px beside a docked lane.
 The widths are the Workspace's and the same over the agents and docked, so a width dragged over the agents is the width the pin docks at, and documents widened to read a page leave the 보기 slot and the tools as they were.
 A web page opened into the lane widens the documents, when they are narrower than 900px, to 900px, so a site lays out its desktop screen: an open from the Explorer, a terminal link, `hide browser open` from the operator's pane, History, Recent Panels or a page's own new tab that puts a page in front of its area (PRD browser-width-zoom B1-B5; lane-two-columns B18).
 It widens over the agents and docked alike only as far as Agent Views keeps 480px beside both columns, so a narrow window gives the page less than 900px, and it never narrows wider documents.
@@ -546,7 +548,7 @@ A press while the lane already draws that record turns the lane back to its tool
 Whether the lane draws that record is read from the slot's front item and the lane's tool, both of which the core keeps.
 A plain shell, and an agent pane whose session is not known yet, keeps the plain head with nothing to press; the head becomes the button in place once the session is known, on a device's pane as on this Mac's (B24).
 Over a narrow window the record shows in the lane floating over the panes (`web/src/PaneHeaderBand.tsx`, `PaneRecordButton`).
-The provider logo is drawn on a pane's own header, and in the heads and places that are about the agent or its provider itself: the start picker, Settings, the footer's usage chips and the Usage pages, the session record's head, the tree popover's head, the last-words popover's head, the phone's detail head, the Memory tab's Hide AI chip, the first-run tiles, and the selected View's toolbar ([View openers and comments](#view-openers-and-comments)).
+The provider logo is drawn on a pane's own header, and in the heads and places that are about the agent or its provider itself: the start picker, Settings, the footer's usage chips and the Usage pages, the session record's head, the tree popover's head, the last-words popover's head, the phone's detail head, the Memory tool's Hide AI chip, the first-run tiles, and the selected View's toolbar ([View openers and comments](#view-openers-and-comments)).
 The sidebar's 프로젝트 and 태스크 rows and the Agent tabs draw it only by the operator's choice or while ⌥ is held ([Agent logo view mode](#agent-logo-view-mode)); ⌘K and the recent-pane list and the phone's list lead with the status mark alone in both modes (PRD agent-mark-quiet); a session record's children, the PR card's session rows and the child tree popover's rows draw the logo after the status mark in both modes (PRD record-card-readability D-06, D-09).
 A pane header draws exactly one logo, the pane's own agent, for each of the seven supported agents: Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity, the same logo Settings and the first-run choice draw.
 A row without a logo names its agent by product name (`Claude Code`, `Codex`, the adapter's label, never the raw kind) in its hover hint and its accessible name, and the pane header's logo and title say it the same way.
@@ -683,7 +685,7 @@ Web owners: `web/src/PaneView.tsx`, `web/src/PaneHeaderBand.tsx`, `web/src/PaneR
 ### Work Hide AI does for a home
 
 Hide AI starts agents for the operator by itself (today a Memory card's `반영하기`), and the work belongs to a screen, its home, not to the operator's agent lists (PRD hide-ai-work-home).
-The Memory tab's To resolve row is the home of a promotion: it shows the progress, the pull request, the failure and the agent link, and it is where the work is read and acted on.
+The Memory tool's To resolve row is the home of a promotion: it shows the progress, the pull request, the failure and the agent link, and it is where the work is read and acted on.
 The fact that Hide AI started an agent comes only from the coordination record of the spawn (`docs/delivery.md`), never from a branch or worktree name: a checkout the operator made by hand on a branch called `hide-memory-m9` is an ordinary checkout.
 The work is named in words, `Memory 반영하기 · m72`, and never by an icon of its own, because Hide AI will start other work, each kind with its own home.
 `docs/status-model.md`, Work Hide AI does for a home, owns the ownership value, the group rule and the turn table; this section owns what the screen draws.
@@ -699,9 +701,9 @@ The home has a turn: the attempt's pull request is open, ready, passing or unche
 A draft, running checks and a requested change are the author's turn and draw nothing.
 A row has one line, and its second line is the agent's ask or its block's cause, then `CI 실패`, then `PR #n 리뷰`; the core decides the turn and the screen only words it.
 The row's accessible name carries `Hide AI`, the task and the turn (`Hide AI · Memory 반영하기 · m72 · PR #924 리뷰`).
-An attempt with no live agent (a failure with no pull request, an open pull request after the operator closed the pane) never has a row; the Memory tab alone shows it, as it did.
+An attempt with no live agent (a failure with no pull request, an open pull request after the operator closed the pane) never has a row; the Memory tool alone shows it, as it did.
 
-Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the lane on the Project tool's Memory tab of the row's Project with that attempt's To resolve row open, and the `Agent ↗` link there opens the pane.
+Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the lane on the Memory tool of the row's Project with that attempt's To resolve row open, and the `Agent ↗` link there opens the pane.
 A row whose Project the core has not yet named opens the pane as any row does.
 The phone's Needs You row opens the agent's detail.
 The digits that number agent rows follow the drawn order, so a Hide AI row is numbered with the Needs You rows above the tree and no checkout of its own takes a digit.
@@ -817,10 +819,9 @@ Web owner: `web/src/terminalLinks.ts` (detection), `web/src/terminalLinkProvider
 
 Web owner: `web/src/ProjectTool.tsx`, `web/src/projectStatus.ts` and `web/src/ProjectDetail.tsx` (the worktree table and the cost in the 보기 slot); core owner: `herdr-core/src/agent_state/tally/project_status.rs` (the 현황 counts and the 할 일) and `herdr-core/src/usage_ledger/project_cost.rs` (the cost).
 The Project tool is the rail's first tool and is about the project of the checkout in front (PRD lane-two-columns D-14, B26).
-Its head names the project, then its repository, path and machine on one dim line, then ⚙, which opens Project Settings, and `✕`, which closes the tool column; under it two tabs, `현황` and `Memory`, the Memory tab dotted while Memory has something to handle.
-The page keeps the tab chosen; ⇧⌘L and a Memory link elsewhere open the tool on Memory.
+Its head names the project, then its repository, path and machine on one dim line, then ⚙, which opens Project Settings, and `✕`, which closes the tool column; under it 현황, the tool's only page, since Memory is a tool of its own (see Project Memory: the Memory tool).
 
-현황 is four tiles, then 할 일, then the recent memory (D-15).
+현황 is four tiles, then 할 일 (D-15).
 Each tile says where it goes at its top right, `사이드바` or `보기`, and `닫기 ✕` while the viewing column shows what it opened, which a second press folds (B32).
 A tile's number is a quiet bar until the core has answered, and a 0 is drawn as 0; nothing the system did not make is drawn (B33).
 
@@ -835,21 +836,20 @@ A tile's number is a quiet bar until the core has answered, and a 0 is drawn as 
   An agent with a call Hide has no price for is named `가격 없음` apart, those calls in no amount, and when its other calls are priced the total reads `≥`.
   Before the core's first reading the tile is the quiet bar and the page a placeholder; a reading that found no priced call is `$0.00`; when no reading has succeeded, the usage store failing to open included, the tile reads `–` and the page says so, and after a later failure the page keeps the last amounts and says they are the last read.
 
-현황's parts below the tiles, 할 일 and the recent memory, each open with the same head: the part's name one size above its rows and bold, 할 일 with its count; a group inside a part keeps a smaller muted head, so the screen reads in three steps, part, group, row.
+할 일 opens with a head one size above its rows and bold, with its count; a group inside it keeps a smaller muted head, so the screen reads in three steps, part, group, row.
 할 일 holds only what stops without the operator (D-16, B34-B37).
 Its first group, `나를 기다리는 에이전트`, lists the questions and decisions not read yet, then `다시 볼 것`, the read and unanswered questions and the ★ tasks, the rows of the sidebar's 태스크 Needs You and 다시 볼 것; a live session whose record still holds an open question joins them though its row asks nothing now, as a new ask while unread and under 다시 볼 것 once read, one line per pane; reading an ask moves its row down and keeps the count, answering it or lifting the ★ takes it out.
 Its second group, `내 PR · 내 리뷰`, lists the project's pull requests the PR list puts in Needs You, the team's review asks and bots' left out; one opened from a Memory card wears `◆ Memory에서`, and a review left on GitHub or a moved state takes it out on the next read.
 A row has no button: an agent's row says `pane` and brings that pane forward with the keyboard, a pull request's says `보기` and opens its card in the viewing column (B36).
 Past five rows the list shows five in that order and `+N 더`, which shows the rest the core sent; past the core's 64 rows a last line sends each kind left over to the sidebar list that holds it, narrowed to the project: `나머지 N개는 사이드바 태스크에서` for the agents' rows and `나머지 PR N개는 사이드바 PR 목록에서` for the pull requests, one link per kind there is; with nothing to do its head reads `할 일 0` over a dim `없음`.
 
-The recent memory is the five newest cards of all Memory holds, a search in Memory narrowing only that tab, each title with its date, `처리할 것 N` at its head while Memory asks something, and `Memory에서 더 보기 ›`; a card or the chip opens Memory at its place, and with no card the part is not drawn (B39).
-
 The core derives the counts and the 할 일 only on a publish whose inputs moved, and nothing on that path reads a file or runs a process (B42; [ARCHITECTURE.md](ARCHITECTURE.md#project-status-and-cost)).
 
-## Project Memory: the Memory tab
+## Project Memory: the Memory tool
 
 Web owner: `web/src/MemoryTab.tsx`, `web/src/memoryList.ts`; core owner: `herdr-core/src/runtime/project_memory.rs`, `herdr-core/src/runtime/memory_promotion.rs`.
-Memory is the Project tool's Memory tab and shows the Project of the checkout in front, with what the Memory tool held: what to handle, what is in progress, the cards and the search (PRD project-memory-v2 D-17, B19-B32; lane-two-columns B40).
+Memory is a rail tool of its own, under the Project tool, and shows the Project of the checkout in front: what to handle, what is in progress, the cards and the search (PRD project-memory-v2 D-17, B19-B32; operator decision 2026-10-23, replacing lane-two-columns D-20 and B39-B40).
+Its header reads `Memory · <project>` behind the Project's folder icon and ends with `✕`, which closes the tool column.
 The core opens one Project's Memory per daemon; the rail, whatever the lane holds, names its Project when it shows, when the front Project changes and when its window comes forward after another window named another Project, so the Memory icon's dot is current, and the tool reads until the core answers for its own.
 Its head is the `Auto memory 사용` switch and the Hide AI chip, the agent Hide AI asks now with its logo (the listed agent standing in while Runs on is past the usage limit or cannot answer); with Memory off, one line says what is sent where and a `데이터 삭제` link sits under it while the Project has cards.
 Turning the switch on when this Mac's agent hooks do not carry Memory yet updates them first and turns it on once they land.
@@ -858,7 +858,7 @@ While a pass analyzes the Project, a small `분석 중` chip sits beside the swi
 A Project on any linked device shows the same Memory controls and cards as this machine's Projects, read from the core's store with the device's own Project identity.
 The disclosure says cards stay in Hide's Memory, and the delete confirmation removes them from this Project's Memory; neither claims the screen's device owns the store.
 An unavailable link or Memory reader uses the existing unreadable state; its reason is recorded in the diagnostic log.
-`처리할 것` appears, and the tab's name carries a dot, while the Project has a suggestion, an unresolved document comparison, a failed placement or a decision nothing builds yet.
+`처리할 것` appears, and the rail's Memory icon carries its count, while the Project has a suggestion, an unresolved document comparison, a failed placement or a decision nothing builds yet.
 Each compact row has a one-line title and one-line reason, truncating long text; `Compare` reads and opens the document excerpt and original operator words with their dates only when requested.
 A confirmed enduring operator correction offers `Fix the doc` and `Card is wrong`; unresolved authority first offers `Card is right` and `Doc is right`, and cannot be selected until answered.
 Dates remain provenance and never decide authority.
@@ -1029,7 +1029,7 @@ Selection, the project search, the graph/list choice and the camera are not reme
 
 The graph is a force map centred on the operator, the way Obsidian's graph view is drawn (PRD overview-main-map D-01, D-20): a `나` circle is fixed at the centre, and every session without a lineage parent (a root) is held loosely toward it by a faint line.
 Each project gathers around its own place on an ellipse around the operator, so a project's sessions settle as one cluster apart from the others.
-A delegated session is a small dot in its state colour, tied short to its parent by a faint line, and a grandchild sits outside its parent the same way (D-02).
+A delegated session is the root's circle drawn smaller: its agent's logo, its state on the ring and the corner mark, tied short to its parent by a faint line, and a grandchild sits outside its parent the same way (D-02).
 Behind each project's cluster is a soft glow in the project's accent colour, and its name sits in bold, larger than a session's title, in that colour above the cluster; there is no band or box (D-17).
 The accent is one of sky, violet, lime and amber, chosen by a stable hash of the project's id.
 Pointing at a project's name or its row in the side column, focusing either from the keyboard, or choosing one of its sessions so its details open, makes that project's glow and name clearly stronger, and they return when the pointer leaves or the choice closes; the current pane's highlight at entry lights nothing, and reduced motion changes them without a transition (B21).
@@ -1038,7 +1038,9 @@ Status, labels, letters, filters, selection, hiding and folding never enter the 
 When a session appears, every placed session holds still while only the new one finds a place beside its parent or in its project; a session that leaves takes only itself away.
 Admission keeps the map within the 400-node budget (below); a map the layout cannot place fails into the existing Retry and session list.
 A root's circle shows its title and its sidebar second line (what it is doing, what it asks, what it waits for); a descendant shows only its title, plus what it asks in amber while it is the operator's turn.
-Provider, proved launch model, state words and judged tasks are not drawn under circles; the accessible name still reads title, state, provider and proved launch model.
+Under every circle's title, the model and effort Hide proved it launched the session with sit in one small quiet line (`opus · high`), as the start chose them; a session Hide did not start, or one whose conversation has changed since, shows no line rather than a guess.
+Under that, a session working in a linked worktree carries a small branch chip (the folder's name for a detached one), but only where its lineage parent works in another checkout, so a team inside one worktree names it once on its top session and a session in the main checkout has none; the project stays the repository, never the worktree.
+State words and judged tasks are not drawn under circles; the accessible name reads title, state, provider and the launch choice.
 The ring colour and shape of each circle encode its mark (working, waiting, my turn, unread result, quiet), with the StatusMark beside it and a dashed outline on the current pane's session.
 
 Lines carry no words.
@@ -1067,7 +1069,7 @@ Folding a team leaves its root circle with a chip that counts its descendants an
 Folding a project, from the faint fold button beside its name in the map (clear while the name is pointed at), turns its cluster into one circle in the project's place, filled faintly and bordered in the project's colour, keeping the project's glow and its emphasis, with its name at the expanded name's size and colour, its session count and nonzero counts; a line between that project and another ends on the circle, and choosing the circle unfolds the cluster to its old shape; both places share one fold state, and the button never starts a project drag (B25).
 Fold all folds every project into its circle and leaves each team's own fold as it was; Unfold all opens every project and every team; both sit in the toolbar of the graph view (B26).
 A project folds and unfolds only on the map: its name's fold button, its folded circle, and Fold all or Unfold all; the side column does not fold (PRD overview-graph-remembered D-03).
-Choosing a session by click, Enter or Space replaces the column with its panel: title, state, project and branch, provider and proved launch model, what it does now, what it asks the operator when it asks, its team (every descendant with its state; choosing one selects it), its counterparts with sent and received counts only, and `세션 열기 · 기록 보기`.
+Choosing a session by click, Enter or Space replaces the column with its panel: title, state, project and branch, provider and proved launch model and effort, what it does now, what it asks the operator when it asks, its team (every descendant with its state; choosing one selects it), its counterparts with sent and received counts only, and `세션 열기 · 기록 보기`.
 Below the Overview breakpoint the panel overlays the graph; Escape closes the panel first, and changing filter or scope clears a selection that no longer matches.
 Hover and keyboard focus outline the pointed session and its counterparts and never open details.
 
@@ -1271,7 +1273,7 @@ A press or Enter goes to the task's Workspace, tab and pane; the arrows, Home an
 The row of the pane with the keyboard, or its nearest drawn ancestor while folded away, carries the sidebar's selected fill and `aria-current`; the list scrolls only as far as brings a newly selected row into view, and never while the operator's scroll position holds the selected row unchanged (B13).
 While ⌥ is held (Alt on Windows and Linux) each task row carries its number at its top right, as the 프로젝트 tree's roots and the Agent tabs do (PRD electron-digit-shortcuts-hints): the rows are counted top to bottom as the list draws them, a group's rows then the rows of a fold the operator opened, a task's children never, nine at most, and ⌥1 to ⌥9 open that row's task the way a press does.
 The `프로젝트 | 태스크` switch decides which list ⌥n counts, so on 태스크 the numbers are this list's and on 프로젝트 the tree's, whether or not the sidebar is shown.
-Under the pointer or focus the small ★ after the title is not drawn and a ☆/★ button, the record button and `⋯` float over the end of the first line on the row's fill, so the row keeps no room for them beyond its time (an input with no hover draws them in the line in place of the time); `⋯` offers `기록 보기` (Space), `터미널로 이동` (↩), on a task `다시 볼 것으로 표시` or, on one in 다시 볼 것 or starred, `다시 볼 것에서 빼기`, then Resolve (not while the agent works or waits, or an approval prompt holds it) and, on a task, `세션 보관`, offered and disabled as the pane menu's Archive session is; a right-click on the row opens the same menu (B15, B18; PRD session-archive B1, D-27; PRD revisit-group B8, B9).
+Under the pointer or focus the small ★ after the title is not drawn and a ☆/★ button, the record button and `⋯` take the time's place in the first line, and the title gives way for them, so they never cover the PR mark or mission chip; at rest the row keeps no room for them beyond its time (an input with no hover always draws them); `⋯` offers `기록 보기` (Space), `터미널로 이동` (↩), on a task `다시 볼 것으로 표시` or, on one in 다시 볼 것 or starred, `다시 볼 것에서 빼기`, then Resolve (not while the agent works or waits, or an approval prompt holds it) and, on a task, `세션 보관`, offered and disabled as the pane menu's Archive session is; a right-click on the row opens the same menu (B15, B18; PRD session-archive B1, D-27; PRD revisit-group B8, B9).
 ☆ stars the task and ★ is `다시 볼 것에서 빼기`, which takes the ★ and puts the read ask away so the task rests until something new; a root agent's pane menu offers the same item before Archive session, the 프로젝트 tree, Overview's list and its detail head draw a starred task's small ★, an archived row keeps its ★, the phone lists the same group between 읽을 것 and 작업 중, and a ★ or 다시 볼 것에서 빼기 that could not be saved, or a ★ past 256, leaves the row as it was and says so once (PRD revisit-group B10, B11, B15, B19, B20, B22, B23).
 `세션 보관` closes the task's root and every descendant pane with it and keeps their conversations: a session that is not working, or only waits on the operator, goes at once, and one with work running first asks `작업을 멈추고 보관할까요?`, listing the agents working now, with `작업 멈추고 보관` and `취소`, neither holding the keyboard (B5-B7).
 The row leaves the open groups for 보관됨 once every pane closed; a save that fails closes nothing, and a close some agents refuse keeps the session as it was, with one notice, the members that did close listed in its record, and `세션 보관` again finishing the same archive; the notice says whether a close was refused, timed out or lost its device, and once that root closes some other way its archived members stand in 보관됨 as their own row (B8-B12, B24).
@@ -1696,7 +1698,7 @@ A project's block is set off from the one above it by a hairline at its top and 
 A project row and a one-line plain folder are 32 high, a checkout row 32 or 48 with its second line, an agent row 28 or 44.
 A checkout name mutes its prefix up to and including the first slash (`prd/`), so the part that tells checkouts apart reads first; a name with no slash, or one that starts or ends with it, has no prefix.
 The checkout whose Workspace is in front turns its name 500 and nothing else about the row.
-The sidebar keeps these sizes at every Appearance font size, because its rows are scanned, not read; the font size scales the rest of the interface.
+These are the sizes at the default Interface text; the sidebar follows Appearance's Interface text with the rest of the interface, its rows growing with their text so every row still holds it.
 The sidebar's right edge sets the width of its content column, the lists right of the device rail while one shows (see Device rail): under the pointer it shows a line and a column cursor, a drag moves the sidebar over the center between 220 and 440 and stops at either bound, and the release stores the width in the core's ui state, where it survives a reload and a relaunch; the center and its terminals take the new width once, on the release, never on each pointer move.
 A double-click on the edge returns the width to 292, and a press that does not move changes nothing.
 A width outside the bounds is refused into the diagnostic log: a sent one leaves the width as it was, and a stored one opens the sidebar at 292.
@@ -1709,6 +1711,8 @@ Focus visibility uses current header geometry, so a row under a header is reveal
 This is the 프로젝트 list; the `프로젝트 | 태스크` switch above it, ⇧⌘B, and the 태스크 list are in [The sidebar's 태스크 list](#the-sidebars-태스크-list) (PRD sidebar-task-lens B1-B3).
 The sidebar hierarchy is Project > Workspace > Group > Tab > Agents; a Workspace corresponds to one checkout path, including a plain folder.
 Two checkouts of one repository share a project cycle.
+A project is always a repository and a worktree is always a checkout under it: a worktree whose folder was removed while a pane still sits in it, or that a registration still names, stays a row of its repository, drawn as a missing folder, and is never a project of its own.
+Only a folder that neither its node, Git's worktree list nor Herdr's record of the checkout places in a repository is a project row of its own ([ARCHITECTURE.md](ARCHITECTURE.md), Workspaces in the web shell).
 Each checkout row shows a kind glyph: home for the stored primary checkout, otherwise the pull-request lifecycle icon when current GitHub data has a pull request, then branch, commit for detached HEAD, or folder for a plain folder.
 A project row with checkouts draws no glyph of its own: its name starts on the row's inset and its checkouts' kind glyphs stand on that same column under it, one step shallower than a project glyph would put them (PRD sidebar-quiet-mark-indent D-06); its type is the block's label and the hairline above an open block is what tells it from the project above, while a folded project is one line set off by a small gap and no hairline; a plain folder's row keeps its folder glyph, which says its checkout's kind (D-07).
 The primary choice belongs to the registered project and survives restart; a registration without a choice defaults to its root checkout.
@@ -1884,7 +1888,7 @@ Search continues to index the complete project tree; choosing a folded result br
 
 ### Tools and Overview
 
-The rail's tools are the Project tool, the Explorer and Changes (History), with the documents button and, while it holds something, the 보기 slot's button above them (PRD lane-two-columns B2, B3); the device's task list is the sidebar's, described in [The sidebar's 태스크 list](#the-sidebars-태스크-list).
+The rail's tools are the Project tool, Memory, the Explorer and Changes (History), with the documents button and, while it holds something, the 보기 slot's button above them (PRD lane-two-columns B2, B3); the device's task list is the sidebar's, described in [The sidebar's 태스크 list](#the-sidebars-태스크-list).
 The top row's Overview button opens [Overview](#overview), `Work · Projects · Backlog · History · Usage`, with device and optional project scope for the four device views and global core-machine scope for Usage.
 
 
@@ -2485,13 +2489,13 @@ A refusal reaches only the agent, as an English reason naming the protection and
 The group promises a guardrail, not security (B28).
 
 Memory uses the existing consent and kit; its row shows hook preparation, pending writes and project-scoped failure with Retry, while retaining the confirmed value.
-That Retry applies only to enabling or disabling Memory; card actions stay in the Memory tab with their existing confirmations.
+That Retry applies only to enabling or disabling Memory; card actions stay in the Memory tool with their existing confirmations.
 Memory promotion PR rows retain their original repository-qualified link after Connections changes; checks, status and agent identity join only that exact URL.
 A legacy promotion whose original repository cannot be proven shows PR verification unavailable and keeps its PR button disabled.
 Turning it off keeps existing cards.
 While the dialog is open its project owns the daemon's single Memory read slot, and the tool rail's project is restored when it closes.
-Open project Memory is one scoped navigation intent that closes the dialog and opens that project's usable checkout with the right lane on the Project tool's Memory tab; a delayed remote focus changes the lane only on arrival, and refusal leaves the earlier checkout's lane unchanged.
-The shell waits for both the target checkout and its Project tool; the core's lane call then brings the lane forward, over the agents in a narrow window.
+Open project Memory is one scoped navigation intent that closes the dialog and opens that project's usable checkout with the right lane on the Memory tool; a delayed remote focus changes the lane only on arrival, and refusal leaves the earlier checkout's lane unchanged.
+The shell waits for both the target checkout and its Memory tool; the core's lane call then brings the lane forward, over the agents in a narrow window.
 A newer explicit navigation cancels the delayed Memory choice so its later arrival cannot take the screen back.
 Without a usable checkout it gives a local recovery reason.
 All pages use the four interface languages, existing settings rows, system controls, dialog keyboard containment and theme tokens.
@@ -2514,7 +2518,11 @@ Settings opens on General unless the way in names a page: Explorer's and a devic
 ### General
 
 General has the Appearance group.
-Appearance contains Language, Color theme, Mode, Accent and Interface text; Accent shows its swatches and no hex value, and Interface text carries one note that the sidebar keeps its own sizes (PRD settings-left-nav B5; hide-color-theme B1).
+Appearance contains Language, Color theme, Mode, Accent, Interface text and Terminal text; Accent shows its swatches and no hex value (PRD settings-left-nav B5; hide-color-theme B1).
+Interface text, 11 to 17 pt with 13 the default, sizes every text outside the terminals and the editor's code, the sidebar included.
+Terminal text, 10 to 24 pt with 14 the default, is every terminal's size; it carries one note that a single pane is sized with Larger text and Smaller text in that pane (⌘= and ⌘- on macOS) and the editor's text with the same keys in a document.
+A pane's own size multiplies Terminal text, so moving the slider resizes every terminal and keeps a zoomed pane that much larger than the rest; each terminal takes its new rows and columns at once.
+The core keeps both sizes in its ui state, where they survive a reload and a relaunch, and refuses a size outside its range into the diagnostic log, keeping the last one.
 Color theme chooses the palette every window draws in, Hide or Neutral, as a segmented toggle like Mode's, each name led by a small swatch of its brand color, the same in Light and Dark (Hide the owl mark's blue-grey, Neutral a grey), and no color code; it waits for a live connection, as Language does.
 Hide is the landing page's Owl Field palette and the default, including for an install that never chose; Neutral is the grey chrome.
 Both have their own sixteen terminal colors, each readable at 4.5:1 on its background, and the choice changes the sidebar, tabs, pane headers, terminals, editors, sheets and popovers at once, keeping a terminal's content, scroll position, half-typed line and selection.
@@ -2898,6 +2906,7 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Toggle device rail | none | none | none | none |
 | Toggle right lane | `⌘E` | `Ctrl+Shift+E` | `⌘E` | `Ctrl+Shift+E` |
 | Toggle Project tool | none | none | none | none |
+| Toggle Memory tool | none | none | none | none |
 | Open Project Memory | `⇧⌘L` | `Alt+Shift+L` | `⇧⌘L` | `Alt+Shift+L` |
 | Open PR list | `⇧⌘R` | `Alt+Shift+R` | `⌥⇧R` | `Alt+Shift+R` |
 | Toggle documents | none | none | none | none |

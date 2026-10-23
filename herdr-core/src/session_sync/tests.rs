@@ -3572,3 +3572,85 @@ fn an_agent_at_rest_with_its_start_pending_is_read_until_herdr_settles_it() {
     drop(server);
     remove_fixture(folder, runtime);
 }
+
+#[test]
+fn the_checkout_herdr_attached_a_workspace_to_places_its_panes_in_that_repository() {
+    let mut value = snapshot();
+    value["workspaces"][0]["worktree"] = json!({
+        "repo_key": "/repo/.git", "repo_name": "repo", "repo_root": "/repo",
+        "checkout_path": "/worktrees/topic", "is_linked_worktree": true
+    });
+    value["panes"][0]["cwd"] = json!("/worktrees/topic/src");
+    let projected = SessionReplica::from_snapshot(&value)
+        .expect("snapshot")
+        .project();
+
+    let asked = Runtime::session_paths(&projected);
+    let spaces = Runtime::session_spaces(&projected, &workspace::PathIndex::NONE);
+    let catalog = workspace::build_catalog(
+        &crate::node::test_node(),
+        &[],
+        &spaces,
+        &crate::model::WorktreeCatalogSnapshot::default(),
+        &workspace::PathIndex::NONE,
+    );
+
+    assert!(asked.contains("/worktrees/topic") && asked.contains("/repo"));
+    assert_eq!(
+        spaces[0].checkout,
+        Some(workspace::HerdrCheckout {
+            path: "/worktrees/topic".to_owned(),
+            repository: "/repo".to_owned(),
+        })
+    );
+    assert_eq!(catalog.len(), 1);
+    assert_eq!(catalog[0].path, "/repo");
+    assert_eq!(catalog[0].checkouts[0].path, "/worktrees/topic");
+    assert!(catalog[0].checkouts[0].is_worktree);
+}
+
+#[test]
+fn a_devices_removed_worktree_stays_under_the_repository_herdr_recorded() {
+    use crate::device_catalog::{DeviceFacts, Fact};
+    let mut value = snapshot();
+    value["workspaces"][0]["worktree"] = json!({
+        "repo_key": "/repo/.git", "repo_name": "repo", "repo_root": "/repo",
+        "checkout_path": "/worktrees/topic", "is_linked_worktree": true
+    });
+    value["panes"][0]["cwd"] = json!("/worktrees/topic");
+    let replica = SessionReplica::from_snapshot(&value).expect("snapshot");
+    let (raw, _) = replica
+        .project_remote("mini", replica.project())
+        .expect("remote session");
+    let repository = hide_project::ProjectFacts {
+        root: "/repo".into(),
+        checkout_root: "/repo".into(),
+        kind: hide_project::ProjectKind::Git,
+        branch: Some("main".into()),
+        linked_worktree: false,
+    };
+    let facts = DeviceFacts {
+        facts: [
+            ("/repo".to_owned(), Fact::Known(repository)),
+            (
+                "/worktrees/topic".to_owned(),
+                Fact::Refused("missing".to_owned()),
+            ),
+        ]
+        .into(),
+        ..DeviceFacts::default()
+    };
+
+    let asked = crate::device_catalog::needed_paths(&raw);
+    let grouped = crate::device_catalog::group("mini", &raw, &facts, None);
+
+    assert!(
+        asked.contains("/repo"),
+        "Herdr's repository is asked of the helper"
+    );
+    assert_eq!(grouped.workspaces.len(), 1);
+    assert_eq!(grouped.workspaces[0].path, "/repo");
+    let row = &grouped.workspaces[0].checkouts[0];
+    assert_eq!(row.path, "/worktrees/topic");
+    assert!(row.is_worktree && !row.exists && !row.unconfirmed);
+}

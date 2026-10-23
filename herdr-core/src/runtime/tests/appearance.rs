@@ -885,3 +885,59 @@ fn a_ui_state_update_never_changes_the_agent_logo_mode() {
         AgentLogoMode::Shown
     );
 }
+
+/// Appearance's Terminal text slider: a size inside 10..=24 is kept across a
+/// restart and a save that does not name it, and one outside is refused into
+/// the diagnostic log while the rest of the event applies.
+#[test]
+fn the_terminal_font_size_is_kept_and_an_out_of_range_one_is_refused() {
+    let (_state, path) = state_path("terminal-font-size");
+    let mut runtime = runtime_at(&path);
+    assert_eq!(runtime.snapshot().ui_state.terminal_font_size, 14.0);
+    let event = ui_state_update(&runtime, serde_json::json!({"terminal_font_size": 18.0}));
+    assert!(runtime.dispatch_json(&event));
+    let other = ui_state_update(&runtime, serde_json::json!({"font_size": 15.0}));
+    runtime.dispatch_json(&other);
+    assert_eq!(
+        runtime.snapshot().ui_state.terminal_font_size,
+        18.0,
+        "a save without it keeps it"
+    );
+    let error_before = runtime.snapshot().status.last_error.clone();
+    for size in [9.0, 25.0] {
+        let event = ui_state_update(
+            &runtime,
+            serde_json::json!({"terminal_font_size": size, "font_size": 16.0}),
+        );
+        runtime.dispatch_json(&event);
+        assert_eq!(
+            runtime.snapshot().ui_state.terminal_font_size,
+            18.0,
+            "{size} is refused"
+        );
+        assert!(
+            runtime
+                .snapshot()
+                .status
+                .diagnostics
+                .iter()
+                .any(|entry| entry.kind == "ui_state.terminal_font_size_out_of_range"),
+            "{size} is recorded"
+        );
+    }
+    assert_eq!(
+        runtime.snapshot().ui_state.font_size,
+        16.0,
+        "the rest of the event applies"
+    );
+    assert_eq!(
+        runtime.snapshot().status.last_error,
+        error_before,
+        "nothing is presented"
+    );
+    drop(runtime);
+    assert_eq!(
+        runtime_at(&path).snapshot().ui_state.terminal_font_size,
+        18.0
+    );
+}

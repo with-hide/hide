@@ -2099,6 +2099,26 @@ impl Runtime {
             });
             snapshot.ui_state.sidebar_width = crate::model::default_sidebar_width();
         }
+        // The same for a stored terminal size the slider could not have set.
+        if !crate::model::terminal_font_size_fits(snapshot.ui_state.terminal_font_size) {
+            let message = format!(
+                "Stored terminal font size {} is outside {}..={}; the default was used",
+                snapshot.ui_state.terminal_font_size,
+                crate::model::TERMINAL_FONT_SIZE_MIN,
+                crate::model::TERMINAL_FONT_SIZE_MAX
+            );
+            crate::diagnostic!(serde_json::json!({
+                "component": "ui_state",
+                "kind": "ui_state.terminal_font_size_out_of_range",
+                "message": message,
+            }));
+            snapshot.status.diagnostics.push(DiagnosticSnapshot {
+                kind: "ui_state.terminal_font_size_out_of_range".to_owned(),
+                message,
+                occurred_at: unix_milliseconds(),
+            });
+            snapshot.ui_state.terminal_font_size = crate::model::default_terminal_font_size();
+        }
         let workspace_views = options.workspace_views_path.as_ref().map(|path| {
             let (store, diagnostics) = WorkspaceViewStore::open(
                 PathBuf::from(path),

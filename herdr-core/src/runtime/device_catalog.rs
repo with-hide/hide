@@ -30,7 +30,8 @@ impl Runtime {
     ) -> RemoteSessionSnapshot {
         let empty = DeviceFacts::default();
         let facts = self.device_facts.get(target).unwrap_or(&empty);
-        let mut session = device_catalog::group(target, raw, facts);
+        let mut session =
+            device_catalog::group(target, raw, facts, self.device_worktrees.get(target));
         device_catalog::apply_registrations(
             target,
             &mut session,

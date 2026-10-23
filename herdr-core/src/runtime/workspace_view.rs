@@ -188,7 +188,7 @@ pub(super) struct WorkspaceViewPayload {
     /// the viewing column.
     #[serde(default)]
     pub(super) documents: Option<bool>,
-    /// `project`, `explorer` or `changes` shows that tool in the tool
+    /// `project`, `memory`, `explorer` or `changes` shows that tool in the tool
     /// column, a call the page shows even when the tool was already there;
     /// `null` closes the tool column alone (B14). The viewing column is
     /// left as it is.
@@ -678,7 +678,7 @@ impl Runtime {
         if let Some(store) = self.workspace_views.as_mut() {
             let entry = store.views.entry(&key.0, &key.1);
             let before = (entry.open, entry.tool);
-            entry.show_tool(Tool::Project);
+            entry.show_tool(Tool::Memory);
             let changed = before != (entry.open, entry.tool);
             store.call_lane(key, LaneCallSide::Tool);
             if changed {
@@ -769,7 +769,7 @@ impl Runtime {
                     self.set_error(
                         "workspace_view.unknown_tool",
                         format!(
-                            "{value} is not a lane tool; expected project, explorer or changes"
+                            "{value} is not a lane tool; expected project, memory, explorer or changes"
                         ),
                         false,
                     );
@@ -1271,8 +1271,9 @@ impl Runtime {
             let (visible, section) = match view.tool.filter(|_| view.open) {
                 Some(Tool::Explorer) => (true, RightPanelSection::Explorer),
                 Some(Tool::Changes) => (true, RightPanelSection::Changes),
-                // The Project tool shows its Memory, which no reader gates on.
-                Some(Tool::Project) => (true, RightPanelSection::Memory),
+                // The Project tool and Memory both project as `Memory`, which no
+                // reader gates on; `Overview` would start the disk and Git reads.
+                Some(Tool::Project | Tool::Memory) => (true, RightPanelSection::Memory),
                 None => (false, self.snapshot.ui_state.right_panel_section),
             };
             self.snapshot.ui_state.right_panel_visible = visible;

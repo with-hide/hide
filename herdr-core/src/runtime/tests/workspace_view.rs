@@ -538,8 +538,8 @@ fn a_file_open_shows_the_documents_and_an_agent_choice_moves_no_lane_state() {
 }
 
 /// PRD lane-two-columns D-20: a tool this build does not know, the removed
-/// Memory, PRs and Work tools' names included, is refused with the lane
-/// unchanged.
+/// PRs and Work tools' names included, is refused with the lane unchanged;
+/// Memory is a tool again (operator decision 2026-10-23).
 #[test]
 fn a_removed_tool_is_refused_and_the_lane_stays() {
     let (runtime, _checkout_id, directory) = strip_checkout("lane-work");
@@ -548,7 +548,7 @@ fn a_removed_tool_is_refused_and_the_lane_stays() {
     with_tabs(&mut runtime, &directory);
     layout(&mut runtime, serde_json::json!({"tool": "project"}));
     assert_eq!(lane(&runtime).2, Some(Tool::Project));
-    for retired in ["work", "memory", "prs"] {
+    for retired in ["work", "prs"] {
         runtime.snapshot.status.last_error = None;
         runtime.dispatch_json(&explorer_event(
             "workspace_view",
@@ -561,6 +561,8 @@ fn a_removed_tool_is_refused_and_the_lane_stays() {
             "a refused call changes nothing, the tool included"
         );
     }
+    layout(&mut runtime, serde_json::json!({"tool": "memory"}));
+    assert_eq!(lane(&runtime).2, Some(Tool::Memory));
 }
 
 /// PRD right-lane D-12, B2, B5, B7, B11, B20; lane-two-columns B14, B15,
@@ -924,6 +926,8 @@ fn the_lane_drives_the_panel_the_readers_gate_on() {
     layout(&mut runtime, serde_json::json!({"tool": "changes"}));
     assert_eq!(panel(&runtime), (true, RightPanelSection::Changes));
     layout(&mut runtime, serde_json::json!({"tool": "project"}));
+    assert_eq!(panel(&runtime), (true, RightPanelSection::Memory));
+    layout(&mut runtime, serde_json::json!({"tool": "memory"}));
     assert_eq!(panel(&runtime), (true, RightPanelSection::Memory));
     layout(&mut runtime, serde_json::json!({"tool": "explorer"}));
     assert_eq!(panel(&runtime), (true, RightPanelSection::Explorer));

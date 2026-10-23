@@ -1489,7 +1489,7 @@ fn publish_replica(
     // The reader owns the only blocking work. Its answer describes facts,
     // never a session to replay; build from the current replica below.
     let mut wanted = workspace::PathIndex::wanted(&node, &registrations, &[], &worktrees);
-    wanted.extend(Runtime::session_cwds(&payload));
+    wanted.extend(Runtime::session_paths(&payload));
     wanted.extend(created_tab_clamps.iter().map(|clamp| clamp.path.clone()));
     let reader = catalog_cache
         .reader
@@ -2432,7 +2432,7 @@ mod worktree_observer_tests {
             .expect("focused project input");
             let spaces = Runtime::session_spaces(
                 &payload,
-                &workspace::paths_here(Runtime::session_cwds(&payload)),
+                &workspace::paths_here(Runtime::session_paths(&payload)),
             );
             let precomputed = PrecomputedCatalog {
                 registrations: Vec::new(),
@@ -2448,7 +2448,7 @@ mod worktree_observer_tests {
                     spaces
                         .iter()
                         .flat_map(|space| space.cwds.clone())
-                        .chain(Runtime::session_cwds(&payload)),
+                        .chain(Runtime::session_paths(&payload)),
                 )),
             };
             runtime.ingest_session_with_catalog(Ok(payload), Some(precomputed));

@@ -17,7 +17,7 @@
 //   conductor  the lead's pane conducting its mission, with the mission's map in the lane
 //   attention  the sidebar with the Needs You and Unread groups raised above the project tree
 //   plain      the attention shot with Agent summaries off: provider names and native questions only
-//   memory     the lead beside a wide Project tool on its Memory tab
+//   memory     the lead beside a wide Memory tool
 //   browser-spec  a Codex worker beside the export spec it opened, a PDF
 //   browser-page  the same, with the invoices page it opened in front
 //   browser    the same after it pressed Export CSV and reported back
@@ -120,12 +120,12 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
       return { ...none, ...landingBrowser(now, SIDEBAR_WIDTH[shot], step) };
     }
     if (shot === "memory") {
-      // The lead alone beside a Project tool as wide as the lane shots' slot, so the page can crop the lane at one size.
+      // The lead alone beside the Memory tool as wide as the lane shots' slot, so the page can crop the lane at one size.
       const scene = landingWorkspace(now, SIDEBAR_WIDTH.memory);
       const rest = structuredClone(scene.rest);
       const project = rest.navigator!.workspaces!.find((row) => row.id === "hide")!;
       const tab = project.checkouts[0]!.tabs[0]!;
-      rest.workspace_view = { ...rest.workspace_view!, panel_width: DETAIL_WIDTH.pr };
+      rest.workspace_view = { ...rest.workspace_view!, tool: "memory", panel_width: DETAIL_WIDTH.pr };
       rest.pane_layouts = [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: LEAD_PANE, zoomed: false, root: { type: "pane", pane_id: LEAD_PANE } }];
       return { ...none, rest, agents: scene.agents, usage: landingUsage(now), memory: landingMemory(now, "hide") };
     }
@@ -154,7 +154,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
 
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, mobile: fixture.mobile, usage: fixture.usage ? { nodes: [fixture.usage] } : null, memory: { project: fixture.memory }, connection: "live", linkPanel: fixture.linkPanel, sessionRecord: fixture.sessionRecord, ...(fixture.editor ? { editor: fixture.editor, documents: fixture.documents } : {}) });
-    useUiStore.setState({ screen: { kind: workspace ? "workspace" : "main" }, overviewOpen: false, laneShown: workspace, projectTab: shot === "memory" ? "memory" : "status", stackFront: "view", ...(shot === "map" ? { mainView: "work" as const } : shot === "projects" ? { mainView: "projects" as const } : {}) });
+    useUiStore.setState({ screen: { kind: workspace ? "workspace" : "main" }, overviewOpen: false, laneShown: workspace, stackFront: "view", ...(shot === "map" ? { mainView: "work" as const } : shot === "projects" ? { mainView: "projects" as const } : {}) });
     const root = document.documentElement;
     root.classList.toggle("dark", theme === "dark");
     root.classList.toggle("light", theme === "light");
