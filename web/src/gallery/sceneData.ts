@@ -86,11 +86,11 @@ type AgentSpec = Partial<AgentRow> & Pick<AgentRow, "pane_id" | "group" | "mark"
 
 const UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
 
-function agent({ elapsed, ...spec }: AgentSpec): AgentRow {
+export function agent({ elapsed, ...spec }: AgentSpec): AgentRow {
   const unit = UNIT_MS[elapsed.slice(-1)] ?? 0;
   const changed = Date.now() - Number(elapsed.slice(0, -1)) * unit;
   return {
-    state: galleryAgentState(spec.pane_id, spec.detail, changed),
+    state: spec.state ?? galleryAgentState(spec.pane_id, spec.detail, changed),
     id: spec.pane_id,
     identity_label: spec.pane_id,
     agent_kind: "claude",
