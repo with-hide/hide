@@ -5,7 +5,8 @@ import { Group, Note, Row } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { IssueSettings } from "../snapshot";
 import { useShellStore } from "../store";
-import { useErrorSince } from "./useErrorSince";
+import { coreErrorText } from "../coreError";
+import { useErrorSince } from "../errorSince";
 
 /** How work starts from an issue (PRD settings-cleanup B24): the pull request body links the issue. */
 export function StartingWorkGroup({ actions }: { actions: Actions }) {
@@ -31,7 +32,7 @@ export function StartingWorkGroup({ actions }: { actions: Actions }) {
       ) : (
         <Row label={<Note>{t("settings.notRead")}</Note>} />
       )}
-      {error ? <Row label={<Note tone="error" data-issue-settings-error="true">{t("settings.notSaved", { reason: error })}</Note>} /> : null}
+      {error ? <Row label={<Note tone="error" data-issue-settings-error="true" data-core-error={error.kind}>{coreErrorText(error, t, "coreError.settings.notSaved")}</Note>} /> : null}
     </Group>
   );
 }

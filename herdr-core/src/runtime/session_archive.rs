@@ -1038,9 +1038,10 @@ impl Runtime {
                                     since_unix_ms: now,
                                 }),
                                 (_, Some("failed")) => Some(Resume::Failed {
-                                    reason: operation.agent_message.clone().unwrap_or_else(|| {
-                                        "The saved conversation could not be resumed".into()
-                                    }),
+                                    reason: operation
+                                        .agent_reason
+                                        .clone()
+                                        .unwrap_or_else(|| "agent_start.failed".into()),
                                     pane_id: operation.pane_id.clone(),
                                 }),
                                 (_, Some("unknown")) => Some(Resume::Unknown {
@@ -1386,7 +1387,13 @@ impl Runtime {
             launch.resume_reference = member.source_reference.clone();
         }
         if let Err(message) = live::spawn_task_agent_start(context, id) {
-            self.ingest_task_agent_result(id, live::TaskAgentOutcome::Failed(message));
+            self.ingest_task_agent_result(
+                id,
+                live::TaskAgentOutcome::Failed(live::AgentFailure::with_detail(
+                    "agent_start.worker_unavailable",
+                    message,
+                )),
+            );
         }
         Ok(id)
     }

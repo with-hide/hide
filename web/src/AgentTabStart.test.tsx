@@ -86,7 +86,7 @@ describe("inline tab start (group-tabs B7–B9, B22, B27)", () => {
     const message = "The original start is not yet confirmed. Retry confirmation; no second process was started.";
     for (const taskId of [42, 43]) {
       const rest = useShellStore.getState().rest!;
-      await act(async () => useShellStore.setState({ rest: { ...rest, task_operation: { id: taskId, kind: "agent_start", phase: "failed", repository_root: "/fixture", branch: null, base_branch: null, path: "/fixture", pane_id: null, agent_kind: provider === "terminal" ? null : provider, message, agent_phase: null, agent_message: null, request_id: original.request_id } } }));
+      await act(async () => useShellStore.setState({ rest: { ...rest, task_operation: { id: taskId, kind: "agent_start", phase: "failed", repository_root: "/fixture", branch: null, base_branch: null, path: "/fixture", pane_id: null, agent_kind: provider === "terminal" ? null : provider, message, agent_phase: null, agent_reason: null, agent_line: null, request_id: original.request_id } } }));
       expect(container.querySelector('[role="alert"]')?.textContent).toBe(message);
       const confirm = [...container.querySelectorAll("button")].find((row) => row.textContent === "Check start status")!;
       expect(confirm).toBeDefined();
@@ -105,7 +105,7 @@ describe("inline tab start (group-tabs B7–B9, B22, B27)", () => {
     await publishReceipts(target, [receipt]);
     if (phase === "agent_failed") {
       const rest = useShellStore.getState().rest!;
-      useShellStore.setState({ rest: { ...rest, task_operation: { id: 42, kind: "agent_start", phase: "ready", repository_root: "/fixture", branch: null, base_branch: null, path: "/fixture", pane_id: "pane-1", agent_kind: "claude", message: null, agent_phase: "failed", agent_message: "Enter the replacement instruction", request_id: receipt.request_id } } });
+      useShellStore.setState({ rest: { ...rest, task_operation: { id: 42, kind: "agent_start", phase: "ready", repository_root: "/fixture", branch: null, base_branch: null, path: "/fixture", pane_id: "pane-1", agent_kind: "claude", message: null, agent_phase: "failed", agent_reason: "Enter the replacement instruction", agent_line: null, request_id: receipt.request_id } } });
     }
     await mount();
     const field = container.querySelector("textarea")!;

@@ -16,39 +16,39 @@ impl IssueReference {
         let (repository, number) = if let Some(path) = value.strip_prefix("https://github.com/") {
             let (repository, number) = path
                 .split_once("/issues/")
-                .ok_or("이슈 URL을 입력하세요.")?;
+                .ok_or("a GitHub URL that is not an issue URL")?;
             (repository, number.trim_end_matches('/'))
         } else if let Some((repository, number)) = value.split_once('#') {
             (
                 if repository.is_empty() {
                     current_repository
-                        .ok_or("현재 저장소를 확인할 수 없습니다. owner/repo#번호를 입력하세요.")?
+                        .ok_or("#N needs the current repository, which is not known")?
                 } else {
                     repository
                 },
                 number,
             )
         } else {
-            return Err("owner/repo#번호, #번호 또는 이슈 URL을 입력하세요.".into());
+            return Err("not owner/repo#N, #N or an issue URL".into());
         };
         Self::validated(repository, number)
     }
 
     fn validated(repository: &str, number: &str) -> Result<Self, String> {
         if !is_repository(repository) {
-            return Err("owner/repo 형식의 저장소를 입력하세요.".into());
+            return Err("the repository is not owner/repo".into());
         }
         let number = number
             .parse::<u32>()
             .ok()
             .filter(|n| *n > 0)
-            .ok_or("양수 이슈 번호를 입력하세요.")?;
+            .ok_or("the issue number is not a positive number")?;
         let reference = Self {
             repository: repository.to_owned(),
             number,
         };
         if reference.token().chars().count() > 80 {
-            return Err("이슈 연결은 80자 이하여야 합니다.".into());
+            return Err("the issue reference is over 80 characters".into());
         }
         Ok(reference)
     }
@@ -137,6 +137,8 @@ pub struct SubIssueSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IssueLinkSnapshot {
     pub issue: IssueSnapshot,
+    /// Where the link came from, as a code: `manual`, `pane_token`,
+    /// `branch_setting`, `pr_body` or `branch_name`.
     pub source: String,
 }
 

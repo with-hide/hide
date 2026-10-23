@@ -125,9 +125,9 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     await expect(field).toHaveValue("~/");
     await field.fill("~/projects/app");
     await field.press("Enter");
-    await expect(alert).toHaveAttribute("data-registration-reason", "core");
+    await expect(alert).toHaveAttribute("data-registration-reason", "workspace.create_unavailable");
     await expect(alert).toHaveAttribute("data-registration-path", "~/projects/app");
-    await expect(alert).toContainText("needs its connection");
+    await expect(alert).toContainText("This device is not connected");
     await captureWindow(app, page, "add-project-device");
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
@@ -166,13 +166,13 @@ test("Create new project makes a Git repository and adds it; a name already take
     await dialog.locator('[data-add-project-way="create"]').click();
     await expect(view.getByRole("heading", { name: "Create a new project" })).toBeVisible();
     await expect(name).toBeFocused();
-    await expect(location).toContainText("Git repository in ~");
+    await expect(location).toContainText("Will be created in ~");
     await expect(submit).toBeDisabled();
 
     // The location row opens the native picker; the full path follows the name as it is typed.
     await stubPicker(app, [{ canceled: false, filePaths: [projects] }]);
     await location.click();
-    await expect(location).toContainText("Git repository in ~/projects");
+    await expect(location).toContainText("Will be created in ~/projects");
     await expect(preview).toHaveAttribute("data-create-project-path", toPage(path.join(projects, "project-name")));
     await name.fill("taken");
     await expect(problem).toHaveAttribute("data-create-project-problem", "already_exists");
@@ -197,7 +197,7 @@ test("Create new project makes a Git repository and adds it; a name already take
     // The next create starts beside it, and the same name again is the project already added.
     await page.keyboard.press(chord("new_workspace", "electron"));
     await dialog.locator('[data-add-project-way="create"]').click();
-    await expect(location).toContainText("Git repository in ~/projects");
+    await expect(location).toContainText("Will be created in ~/projects");
     await name.fill("fresh");
     await expect(problem).toHaveAttribute("data-create-project-problem", "already_registered");
     await expect(submit).toBeDisabled();

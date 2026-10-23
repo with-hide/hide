@@ -39,7 +39,7 @@ describe("selectionOf", () => {
   it("names the core's machine as its system does, in the phone's language", () => {
     const home = catalog.targets[0]!;
     expect(targetText(english, home, "windows x86_64")).toBe("This PC · Home");
-    expect(targetText(korean, home, "windows x86_64")).toBe("내 PC · 홈");
+    expect(targetText(korean, home, "windows x86_64")).toBe("이 PC · 홈");
     expect(targetText(korean, home, "linux x86_64")).toBe("이 컴퓨터 · 홈");
     // A registered device keeps the name it was registered under.
     expect(targetText(korean, catalog.targets[2]!, "windows x86_64")).toBe("mini · 홈");
@@ -77,10 +77,10 @@ describe("startProblem", () => {
 
 describe("startFailure", () => {
   it("names the core's refusals and never shows a raw kind", () => {
-    expect(noticeText(korean, startFailure("task_operation.busy"))).toContain("진행 중");
+    expect(noticeText(korean, startFailure("task_operation.busy"))).toContain("시작하는 중");
     expect(noticeText(korean, startFailure("home.conflict"))).toContain("~/hide");
-    expect(noticeText(korean, startFailure("something.new"))).toBe("시작하지 못했어요. 다시 시작하세요.");
-    expect(noticeText(korean, startFailure(null))).toBe("시작하지 못했어요. 다시 시작하세요.");
+    expect(noticeText(korean, startFailure("something.new"))).toBe("시작하지 못했어요. 다시 시도하세요.");
+    expect(noticeText(korean, startFailure(null))).toBe("시작하지 못했어요. 다시 시도하세요.");
   });
 });
 

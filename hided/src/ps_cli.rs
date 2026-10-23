@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 pub const USAGE: &str = "hide ps [--all] [--here] [--json]";
 
 const UNREADABLE: &str =
-    "Run the hide that came with the running Hide, whose answer this build can read";
+    "This hide cannot read the running Hide's answer. Use the hide that came with the running Hide";
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Options {
@@ -68,8 +68,8 @@ pub fn run(env: &Env, options: &Options) -> Result<(), String> {
             return refusal(code, &message);
         }
         Err(code) => {
-            let message = code.clone();
-            return refusal(code, &message);
+            let message = crate::cli::request_next_action(&code);
+            return refusal(code, message);
         }
     };
     let value = match select(value, options.here) {
@@ -394,7 +394,7 @@ fn draw(answer: &Answer) -> String {
         out.push('\n');
         lines(&project.children, "", &mut out);
     }
-    for (title, ended) in [("not in a pane", false), ("ended", true)] {
+    for (title, ended) in [("Agents not in a pane", false), ("Ended agents", true)] {
         let rows: Vec<Node> = answer
             .agents
             .iter()
@@ -414,12 +414,10 @@ fn draw(answer: &Answer) -> String {
         }
     }
     if out.is_empty() {
-        out.push_str("no live panes\n");
+        out.push_str("No live panes.\n");
     }
     if answer.missions_unreadable {
-        out.push_str(
-            "missions: the mission record could not be read, so no row names its mission\n",
-        );
+        out.push_str("Missions are not shown: Hide could not read the mission record.\n");
     }
     out
 }
@@ -583,15 +581,15 @@ mod tests {
         value["agents"][1]["state"] = json!("ended");
         assert_eq!(
             draw(&read(&value).unwrap()),
-            "not in a pane\n\
+            "Agents not in a pane\n\
              └─ w4:p1  asleep [agent-4]  claude  asleep  \"asleep task\"  /p/hide/main\n\
-             ended\n\
+             Ended agents\n\
              └─ w5:p1  gone [agent-5]  claude  ended  \"gone task\"  /p/hide/main\n\
-             missions: the mission record could not be read, so no row names its mission\n"
+             Missions are not shown: Hide could not read the mission record.\n"
         );
         assert_eq!(
             draw(&read(&json!({"panes": [], "agents": [], "missions_unreadable": false})).unwrap()),
-            "no live panes\n"
+            "No live panes.\n"
         );
         assert!(read(&json!({"panes": [{}], "agents": [], "missions_unreadable": false})).is_err());
     }

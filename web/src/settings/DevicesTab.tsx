@@ -19,7 +19,8 @@ import { askMove, CoreMoveDialog, requestOfView, type MoveRequest } from "./Core
 import { DeviceDetails } from "./DeviceDetails";
 import { DeviceRow, type DeviceRowHandlers } from "./DeviceRow";
 import { KitTerms } from "./MachineKit";
-import { useErrorSince } from "./useErrorSince";
+import { coreErrorText } from "../coreError";
+import { useErrorSince } from "../errorSince";
 
 export function DevicesTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -129,7 +130,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
           />
         ))}
         {remoteRows.length === 0 ? <Row label={<Note>{t("devices.noRemote")}</Note>} /> : null}
-        {deviceError ? <Row label={<Note tone="error" data-device-error="true">{deviceError}</Note>} /> : null}
+        {deviceError ? <Row label={<Note tone="error" data-device-error="true" data-core-error={deviceError.kind}>{coreErrorText(deviceError, t)}</Note>} /> : null}
       </Group>
       {adding !== null ? (
         <Dialog open onOpenChange={(next) => { if (!next) setAdding(null); }}>

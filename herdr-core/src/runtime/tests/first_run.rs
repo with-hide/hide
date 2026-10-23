@@ -16,6 +16,7 @@ pub(super) fn agent(id: &str, enabled: bool, skill: ComponentState) -> AgentRepo
         skill: PieceReport {
             state: skill,
             reason: (skill == ComponentState::Failed).then(|| "permission denied".to_owned()),
+            why: None,
             location: None,
         },
         hook: None,
@@ -224,7 +225,8 @@ fn a_pass_that_did_not_run_keeps_the_first_step_and_continue_again_sends_it() {
             panic!("Continue queues an install on this Mac");
         };
         if not_run == "link failed" {
-            runtime.set_local_kit_unavailable("timed out");
+            runtime
+                .set_local_kit_unavailable(crate::model::KitUnavailable::Unreadable, "timed out");
         } else {
             report_here(&mut runtime, &pass(true, Vec::new()));
         }
@@ -275,7 +277,7 @@ fn try_again_while_the_kit_cannot_run_records_nothing_and_reads_the_agents_again
         version: crate::model::FIRST_RUN_VERSION,
         step: FirstRunStep::Done,
     });
-    reopened.set_local_kit_unavailable("timed out");
+    reopened.set_local_kit_unavailable(crate::model::KitUnavailable::Unreadable, "timed out");
     assert!(reopened.dispatch_json(&event(
         "agent_onboarding_apply",
         serde_json::json!({"agents": []}),
@@ -289,7 +291,7 @@ fn try_again_while_the_kit_cannot_run_records_nothing_and_reads_the_agents_again
     for finish in [false, true] {
         let mut runtime = runtime();
         report_here(&mut runtime, &first_run_pass());
-        runtime.set_local_kit_unavailable("timed out");
+        runtime.set_local_kit_unavailable(crate::model::KitUnavailable::Unreadable, "timed out");
         assert!(runtime.dispatch_json(&event(
             "agent_onboarding_apply",
             serde_json::json!({"agents": [], "finish": finish}),
@@ -976,7 +978,7 @@ fn a_saved_profile_keeps_the_devices_route_even_when_disabled() {
             problem: Some("disabled".to_owned()),
             device_id: None,
             connect_state: "saved".to_owned(),
-            connect_error: None,
+            connect_refusal: None,
         });
     runtime.dispatch_json(&event(
         "agent_onboarding_apply",

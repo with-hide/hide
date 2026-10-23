@@ -399,7 +399,7 @@ fn old_pr_body_answer_cannot_link_same_number_in_new_repository() {
         issue_key: Some(crate::tasks::github_key(&reference)),
         issue_id: Some("#7".into()),
         created: false,
-        message: None,
+        failure: None,
     });
     assert!(runtime.finish_pr_body("old-intent", &reference, Ok(true)));
     assert!(

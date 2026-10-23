@@ -25,6 +25,7 @@ import { IssueLabelDot, IssueLabelView } from "./issueMarks";
 import { useIssueDetail } from "./issueDetails";
 import { MarkdownText } from "./MarkdownText";
 import { toggledFold, useUiStore, type OverviewPanel } from "./ui";
+import { issueSourceName } from "./settings";
 
 const LINK = "inline-flex whitespace-nowrap items-center gap-xxs rounded-xs px-xxs text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring";
 
@@ -125,7 +126,7 @@ function BacklogSection({ project, actions, filters, selected }: { project: Work
         <span className="ml-auto text-micro text-muted-foreground">{t("backlogView.counts", { github: rows.filter((row) => !row.local).length, local: rows.filter((row) => row.local).length })}</span>
       </h3>
     </td></tr>
-    {sources.map((source) => source.failure || source.reading ? <tr key={source.kind}><td colSpan={6} className="px-lg py-xs">{source.failure ? <p role="status" className="flex flex-wrap items-center gap-xs text-caption text-warning" data-backlog-read-failed={source.kind}><TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" /><span>{source.label} · {t("backlog.readFailed", { reason: source.failure })}</span>{source.kind === "github" ? <button type="button" className={cn(LINK, "underline")} onClick={() => actions.openSettings("github")}>{t("backlog.readFix")}</button> : null}</p> : <p role="status" className="text-caption text-muted-foreground">{source.label} · {t("backlogView.reading")}</p>}</td></tr> : null)}
+    {sources.map((source) => source.failure || source.reading ? <tr key={source.kind}><td colSpan={6} className="px-lg py-xs">{source.failure ? <p role="status" className="flex flex-wrap items-center gap-xs text-caption text-warning" data-backlog-read-failed={source.kind}><TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" /><span>{issueSourceName(source, t)} · {t("backlog.readFailed", { reason: source.failure })}</span>{source.kind === "github" ? <button type="button" className={cn(LINK, "underline")} onClick={() => actions.openSettings("github")}>{t("backlog.readFix")}</button> : null}</p> : <p role="status" className="text-caption text-muted-foreground">{issueSourceName(source, t)} · {t("backlogView.reading")}</p>}</td></tr> : null)}
     {!folded ? <>
       {pending.length ? <tr><td colSpan={6} className="px-sm py-xs"><ul>{pending.map((item) => <PendingRow key={item.intent} item={item} project={project} actions={actions} />)}</ul></td></tr> : null}
       {shown.map((row) => <ItemRow key={row.key} row={row} project={project} actions={actions} />)}

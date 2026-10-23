@@ -28,7 +28,7 @@ import { useUiStore } from "./ui";
 // list oldest first, each row in the sidebar's agent-row shape, joined by one
 // rail behind the marks (PRD record-card-readability D-09). A live row
 // that asks keeps `Answer` under its line; every other row shows its buttons
-// (`Go to pane`, `View conversation`, `Resume`) only while the pointer or the
+// (`Go to terminal`, `View conversation`, `Resume`) only while the pointer or the
 // keyboard is on it. The record's failure, its first read and its empty line stand in
 // the section's own place; the rest of the card never moves.
 
@@ -158,7 +158,7 @@ function MilestoneRow({ milestone }: { milestone: Milestone }) {
   );
 }
 
-/** `지금` at the end of an open pull request (B6; PRD record-card-readability D-12, B21): one line, `지금 · 검사 N개 도는 중` with the dashed ring of proven work it waits on while checks run (status-marks D-06, D-25), otherwise `지금` and an empty slot. */
+/** `지금` at the end of an open pull request (B6; PRD record-card-readability D-12, B21): one line, `지금 · 검사 N개 실행 중` with the dashed ring of proven work it waits on while checks run (status-marks D-06, D-25), otherwise `지금` and an empty slot. */
 function NowRow({ running, pr }: { running: number; pr: PullRequest | null }) {
   const { t } = useInterfaceTranslation();
   const summary = pr?.work?.check_counts ? checkSummary(pr) : null;

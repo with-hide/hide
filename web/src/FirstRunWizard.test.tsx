@@ -21,7 +21,7 @@ const agent = (id: string, label: string, availability: KitAgent["availability"]
   availability,
   enabled: false,
   chosen: false,
-  skill: { state: "off", reason: null, location: null },
+  skill: { state: "off", why: null, location: null },
   hook: null,
   doc_url: "https://example.test",
 });
@@ -34,7 +34,7 @@ const state = (pending: boolean, agents: KitAgent[], providers: ReturnType<typeo
   revision,
   rest: {
     ui_state: { agent_onboarding: pending ? "pending" : "done", first_run: { version: 1, step: pending ? "agents" : "done" } },
-    navigator: { devices: [{ id: "local", kit: { agents, components: [{ id: "cli", label: "hide", state: "off", reason: null, location: "/Users/me/.local/bin/hide" }], busy: kit.busy ?? false } }] },
+    navigator: { devices: [{ id: "local", kit: { agents, components: [{ id: "cli", label: "hide", state: "off", why: null, location: "/Users/me/.local/bin/hide" }], busy: kit.busy ?? false } }] },
     status: { background_ai: { provider: null, chosen: false, providers } },
   },
 });
@@ -162,17 +162,17 @@ it("holds Continue while its pass runs, and names a failed agent with its reason
   await act(async () => { continueButton().click(); });
   await act(async () => { useShellStore.setState(state(true, AGENTS, [], { busy: true }, 2) as never); });
   expect(continueButton().disabled).toBe(true);
-  const failed = AGENTS.map((entry) => (entry.id === "codex" ? { ...entry, enabled: true, skill: { state: "failed" as const, reason: "permission denied", location: "/x" } } : { ...entry, enabled: entry.availability === "available" }));
+  const failed = AGENTS.map((entry) => (entry.id === "codex" ? { ...entry, enabled: true, skill: { state: "failed" as const, why: { cause: "not_changed" }, location: "/x" } } : { ...entry, enabled: entry.availability === "available" }));
   await act(async () => { useShellStore.setState(state(true, failed, [], { busy: false }, 3) as never); });
   expect(continueButton().disabled).toBe(false);
-  expect(document.querySelector('[data-first-run-failed="codex"]')?.textContent).toContain("Codex was not set up: permission denied");
+  expect(document.querySelector('[data-first-run-failed="codex"]')?.textContent).toContain("Codex was not set up: Hide could not install or change it.");
   expect(continueButton().textContent).toBe("Try again");
   expect(choices(events).filter((event) => event.kind === "agent_onboarding_apply")).toHaveLength(1);
   await unmount();
 });
 
 it("lists under What changes where Hide writes for each agent left on, and the hide command's link (B11)", async () => {
-  const located = AGENTS.map((entry) => ({ ...entry, skill: { state: "off" as const, reason: null, location: `/Users/me/.${entry.id}/skills/hide` } }));
+  const located = AGENTS.map((entry) => ({ ...entry, skill: { state: "off" as const, why: null, location: `/Users/me/.${entry.id}/skills/hide` } }));
   const { unmount } = await mount(state(true, located));
   await act(async () => { (document.querySelector("[data-first-run-what-changes]") as HTMLElement).click(); });
   const rows = () => [...document.querySelectorAll("[data-first-run-change]")].map((row) => row.getAttribute("data-first-run-change"));
@@ -205,10 +205,10 @@ it("reopened from Help, starts from the agents switched on now, closes with Esca
 
 it("reopened from Help while the kit cannot run, stays on its first step with the reason and only has the agents read again (B12, B44)", async () => {
   const next = state(false, []);
-  (next.rest.navigator.devices[0]!.kit as { unavailable?: string }).unavailable = "timed out";
+  (next.rest.navigator.devices[0]!.kit as { unavailable?: string }).unavailable = "unreadable";
   const { events, unmount } = await mount(next);
   await act(async () => { useSetupWalk.getState().open(); });
-  expect(document.querySelector("[data-first-run-unavailable]")?.textContent).toContain("timed out");
+  expect(document.querySelector("[data-first-run-unavailable]")?.textContent).toContain("Hide could not read its kit on this device.");
   await act(async () => { continueButton().click(); });
   expect(choices(events)).toEqual([{ schema_version: 2, kind: "agent_onboarding_apply", payload: { agents: [], finish: false } }]);
   expect(useSetupWalk.getState().step).toBe("agents");
@@ -281,10 +281,10 @@ it("says why when its pass could not run here, and Try again has the agents read
   // The kit link failed: the core keeps the step, its row is unavailable and lists no agent.
   await act(async () => {
     const next = state(true, []);
-    (next.rest.navigator.devices[0]!.kit as { unavailable?: string }).unavailable = "timed out";
+    (next.rest.navigator.devices[0]!.kit as { unavailable?: string }).unavailable = "unreadable";
     useShellStore.setState({ ...next, revision: 2 } as never);
   });
-  expect(document.querySelector("[data-first-run-unavailable]")?.textContent).toContain("Hide could not set up agents on this Mac: timed out");
+  expect(document.querySelector("[data-first-run-unavailable]")?.textContent).toContain("Could not set up agents on this device: Hide could not read its kit on this device.");
   // An unread kit is not a Mac with no agent installed.
   expect(document.querySelector("[data-first-run-no-agent]")).toBeNull();
   expect(continueButton().textContent).toContain("Try again");
@@ -298,9 +298,9 @@ it("says why when its pass could not run here, and Try again has the agents read
 
 it("says why the kit could not run here before anything is pressed, as after a relaunch", async () => {
   const next = state(true, []);
-  (next.rest.navigator.devices[0]!.kit as { unavailable?: string }).unavailable = "timed out";
+  (next.rest.navigator.devices[0]!.kit as { unavailable?: string }).unavailable = "standalone";
   const { unmount } = await mount(next);
-  expect(document.querySelector("[data-first-run-unavailable]")?.textContent).toContain("timed out");
+  expect(document.querySelector("[data-first-run-unavailable]")?.textContent).toContain("This Hide is not running from the installed app");
   expect(document.querySelector("[data-first-run-no-agent]")).toBeNull();
   expect(continueButton().disabled).toBe(false);
   await unmount();

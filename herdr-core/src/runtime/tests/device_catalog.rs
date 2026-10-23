@@ -249,10 +249,6 @@ fn a_directory_the_helper_has_not_confirmed_is_shown_as_its_workspace_and_says_w
     facts.unavailable = Some("The device helper is not allowed".to_owned());
     let state = device_catalog::catalog_state(&raw, &facts);
     assert_eq!(state.state, "unavailable");
-    assert_eq!(
-        state.message.as_deref(),
-        Some("The device helper is not allowed")
-    );
 
     facts.unavailable = None;
     facts
@@ -872,7 +868,14 @@ fn a_device_whose_helper_is_not_allowed_shows_its_workspaces_unconfirmed() {
     );
     let status = &runtime.snapshot.status.remote[0];
     assert_eq!(status.catalog.state, "unavailable");
-    assert!(status.catalog.message.is_some());
+    // Why goes to the log; the web words the state alone.
+    assert!(
+        !serde_json::to_value(&status.catalog)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("message")
+    );
     assert_eq!(
         status.session.as_ref().unwrap().workspaces[0].id,
         "remote:mini:workspace:w1"
@@ -1062,8 +1065,10 @@ fn a_device_folder_outside_its_home_is_refused_by_its_helper() {
         serde_json::json!({"device_id": TARGET, "path": t.other, "label": "Other", "initialize_git": false}),
     );
 
+    // Named by the helper's code, so the shell words it as it words this
+    // Mac's refusal; the helper's sentence stays for the diagnostic log.
     let error = runtime.snapshot.status.last_error.clone().unwrap();
-    assert_eq!(error.kind, "workspace.create_refused");
+    assert_eq!(error.kind, "workspace.create_refused.outside_root");
     assert!(
         error.message.contains("inside the home folder"),
         "{}",
@@ -1084,7 +1089,7 @@ fn a_new_project_folder_on_a_device_is_refused_before_the_helper() {
         serde_json::json!({"device_id": TARGET, "path": t.other, "label": "Other", "initialize_git": true, "new_folder": true}),
     );
     let error = runtime.snapshot.status.last_error.clone().unwrap();
-    assert_eq!(error.kind, "workspace.create_refused");
+    assert_eq!(error.kind, "workspace.create_local_only");
     assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
 }
 
@@ -1806,6 +1811,7 @@ fn regrouping_a_device_session_keeps_its_agents_lineage() {
                 id: hide_kit::ComponentId::ClaudeCodeHook,
                 state: hide_kit::ComponentState::Installed,
                 reason: None,
+                why: None,
                 location: None,
             }],
             agents: Vec::new(),
@@ -1927,6 +1933,7 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
                 id: hide_kit::ComponentId::ClaudeCodeHook,
                 state: hide_kit::ComponentState::Installed,
                 reason: None,
+                why: None,
                 location: None,
             }],
             agents: Vec::new(),

@@ -6,7 +6,8 @@ import type { TFunction } from "i18next";
 import type { DaemonInfo } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
 import type { AccentName } from "./theme";
-import type { AgentRow, CoreDiagnostic, Device, DeviceHost, EnvironmentStatus, GithubFailureCategory, HerdrStatus, KitComponent, KitRefusal, RemoteStatus, Workspace } from "./snapshot";
+import { kitWhyText } from "./kitWhy";
+import type { AgentRow, CoreDiagnostic, Device, DeviceHost, EnvironmentStatus, GithubFailureCategory, HerdrStatus, KitComponent, KitRefusal, RemoteStatus, TaskSource, Workspace } from "./snapshot";
 import { readsHere } from "./devices";
 import { registeredName } from "./screenMachine";
 import { redact } from "./redact";
@@ -96,6 +97,11 @@ export function githubAccessLine(access: GithubAccess, t: Translate, coreMachine
 
 export type IssueSourceChoice = "auto" | "github" | "local";
 
+/** An issue source's name in the viewer's language: the core labels the local source in English. */
+export function issueSourceName(source: Pick<TaskSource, "kind" | "label">, t: Translate): string {
+  return source.kind === "local" ? t("issueSettings.local") : source.label;
+}
+
 /**
  * A local project's issue source choices and the one in force. Auto names
  * the source it resolves to only where the core's answer shows it: the
@@ -110,7 +116,7 @@ export function issueSourceChoices(
   t: Translate,
 ): { value: IssueSourceChoice; options: { id: IssueSourceChoice; label: string }[] } {
   const source = workspace.tasks?.source ?? null;
-  const resolved = source && (!source.chosen || !workspace.is_git) ? source.label : null;
+  const resolved = source && (!source.chosen || !workspace.is_git) ? issueSourceName(source, t) : null;
   const repository = source?.kind === "github" ? source.name : (workspace.home_issues?.repository ?? null);
   const options: { id: IssueSourceChoice; label: string }[] = [
     { id: "auto", label: resolved ? t("issueSettings.autoResolved", { source: resolved }) : t("issueSettings.auto") },
@@ -339,9 +345,10 @@ export function kitPartNeedsReinstall(part: Pick<KitComponent, "state">): boolea
  * agent is not there says so once ("Not on this machine"), never again as a
  * reason that repeats it.
  */
-export function kitPartText(part: Pick<KitComponent, "state" | "reason">, t: Translate): string {
+export function kitPartText(part: Pick<KitComponent, "state" | "why">, t: Translate): string {
   const line = kitPartLine(part, t);
-  return part.reason && part.state !== "absent" && part.state !== "installed" ? `${line.text}: ${part.reason}` : line.text;
+  const why = part.state !== "absent" && part.state !== "installed" ? kitWhyText(part.why, t) : null;
+  return why ? `${line.text}: ${why}` : line.text;
 }
 
 /**

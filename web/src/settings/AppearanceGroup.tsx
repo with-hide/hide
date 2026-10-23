@@ -13,7 +13,8 @@ import { ACCENT_CHOICES, FONT_SIZE_BASE, FONT_SIZE_MAX, FONT_SIZE_MIN, usableAcc
 import { commandLabel } from "../shortcutLabels";
 import { useShellStore } from "../store";
 import { COLOR_THEMES, THEME_CHOICES, accentNameOf, readColorTheme, readTheme, type AccentName, type ThemeChoice } from "../theme";
-import { useErrorSince } from "./useErrorSince";
+import { coreErrorText } from "../coreError";
+import { useErrorSince } from "../errorSince";
 
 /** The displayed choice always comes from the core, never an optimistic edit. */
 function LanguageRow({ actions }: { actions: Actions }) {
@@ -23,7 +24,7 @@ function LanguageRow({ actions }: { actions: Actions }) {
   const [changedAt, setChangedAt] = useState<number | null>(null);
   const error = useErrorSince(changedAt, ["interface_language."]);
   return (
-    <Row label={t("common.language")} data-appearance-row="language" detail={error ? <Note tone="error">{t("settings.notSaved", { reason: error })}</Note> : null}>
+    <Row label={t("common.language")} data-appearance-row="language" detail={error ? <Note tone="error" data-core-error={error.kind}>{coreErrorText(error, t, "coreError.settings.notSaved")}</Note> : null}>
       <Select
         value={choice ?? "system"}
         disabled={!connected}
@@ -127,7 +128,7 @@ export function AppearanceGroup({ actions }: { actions: Actions }) {
           ))}
         </ToggleGroup>
       </Row>
-      <Row label={t("settings.accent")} data-appearance-row="accent" detail={error ? <Note tone="error" data-appearance-error="true">{t("settings.notSaved", { reason: error })}</Note> : null}>
+      <Row label={t("settings.accent")} data-appearance-row="accent" detail={error ? <Note tone="error" data-appearance-error="true" data-core-error={error.kind}>{coreErrorText(error, t, "coreError.settings.notSaved")}</Note> : null}>
         <RadioGroup
           aria-label={t("settings.accent")}
           value={chosenAccent ?? ""}

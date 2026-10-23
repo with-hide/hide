@@ -264,7 +264,7 @@ pub fn funnel_on(serve: &Value, dns_name: &str) -> bool {
 }
 
 /// The line Settings > Mobile shows while Funnel is on for this address.
-pub const FUNNEL_MESSAGE: &str = "Tailscale Funnel이 이 주소를 인터넷에 공개하고 있어요. hide는 tailnet 안에서만 열리므로 Funnel을 끄면 이어집니다.";
+pub const FUNNEL_MESSAGE: &str = "Tailscale Funnel publishes this address to the internet; Hide opens only inside the tailnet, so turning Funnel off lets it continue";
 
 /// Reads `serve status --json` for port 443 of `dns_name`: hide's entry is
 /// the `/` handler proxying to the recorded port; anything else there, and a

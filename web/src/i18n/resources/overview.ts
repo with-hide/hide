@@ -42,7 +42,7 @@ const ko = {
   "overview.agents": "에이전트",
   "overview.projects": "프로젝트",
   "overview.issues": "이슈",
-  "overview.projectMissing": "이 프로젝트는 더 이상 목록에 없습니다.",
+  "overview.projectMissing": "이 프로젝트는 이제 목록에 없어요.",
   "overview.location": "위치",
   "overview.projects_one": "프로젝트 {{count}}개",
   "overview.projects_other": "프로젝트 {{count}}개",
@@ -57,11 +57,11 @@ const ko = {
   "overview.justNow": "방금",
   "overview.availability.connectingHerdr": "Herdr에 연결하는 중…",
   "overview.availability.herdrState": "Herdr 상태: {{state}}",
-  "overview.availability.agentCountsLater": "{{reason}}. 응답하면 에이전트 수가 표시되며, Hide가 계속 시도합니다.",
+  "overview.availability.agentCountsLater": "{{reason}}. 응답하면 에이전트 수가 보여요. Hide가 계속 시도해요.",
   "overview.availability.deviceState": "{{device}}: {{state}}",
-  "overview.availability.deviceStale": "{{device}}에 연결되어 있지 않습니다. 마지막으로 보고한 내용을 표시합니다",
+  "overview.availability.deviceStale": "{{device}}에 연결되어 있지 않아요. 마지막으로 받은 내용을 보여 줘요",
   "overview.availability.readingProjects": "프로젝트를 읽는 중…",
-  "overview.availability.projectsUnreadable": "프로젝트를 읽지 못했습니다",
+  "overview.availability.projectsUnreadable": "프로젝트를 읽지 못했어요",
 } satisfies Catalog<typeof overviewEnglish>;
 
 const zhCN = {
@@ -105,7 +105,7 @@ const ja = {
   "overview.viewLabel": "概要の表示",
   "overview.agents": "エージェント",
   "overview.projects": "プロジェクト",
-  "overview.issues": "課題",
+  "overview.issues": "Issue",
   "overview.projectMissing": "このプロジェクトは一覧にありません。",
   "overview.location": "場所",
   "overview.projects_one": "プロジェクト {{count}} 件",

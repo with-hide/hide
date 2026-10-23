@@ -11,7 +11,7 @@ const THIS_MACHINE: Record<string, string> =
   process.platform === "darwin"
     ? { en: "This Mac", ko: "이 Mac", "zh-CN": "此 Mac", ja: "この Mac" }
     : process.platform === "win32"
-      ? { en: "This PC", ko: "내 PC", "zh-CN": "此电脑", ja: "PC" }
+      ? { en: "This PC", ko: "이 PC", "zh-CN": "此电脑", ja: "この PC" }
       : { en: "This computer", ko: "이 컴퓨터", "zh-CN": "此计算机", ja: "このコンピューター" };
 
 async function openSettings(page: Page, daemon: Daemon) {

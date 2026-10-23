@@ -289,7 +289,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     contexts.push(stale.context());
     await stale.goto(firstUrl);
     await stale.locator('[data-phone-pair="true"]').tap();
-    await expect(stale.locator('[data-phone-guidance="code_expired"]')).toHaveText("코드가 만료됐어요. 맥에서 QR을 다시 여세요.", { timeout: 20_000 });
+    await expect(stale.locator('[data-phone-guidance="code_expired"]')).toHaveText("코드가 만료됐어요. Mac에서 QR을 다시 여세요.", { timeout: 20_000 });
 
     // Agent states before the phone opens: one asks, two works.
     await ask(herdr, one, "배포 전에 테스트를 다시 돌릴까요?");

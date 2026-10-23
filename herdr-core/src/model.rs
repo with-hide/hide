@@ -881,13 +881,47 @@ pub struct HerdrBehindSnapshot {
     pub cause: hide_kit::device_herdr::BehindCause,
 }
 
+/// Why the kit does not run on a machine at all, as a code the web words
+/// (`contracts/snapshot-wire-enums.json`: `kit_unavailable`); what went wrong
+/// in the operator's terms goes to the `kit.unavailable` diagnostic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KitUnavailable {
+    /// This daemon is not running from the installed app, so it installs
+    /// nothing here; opening the app installs.
+    Standalone,
+    /// The operator has not allowed Hide's helper on the device.
+    NoConsent,
+    /// The consent was given to an older build's kit; Hide asks again.
+    ConsentOutdated,
+    /// This build has no helper for the device's platform.
+    UnsupportedPlatform,
+    /// Hide could not start the worker that runs its installer.
+    InstallerUnavailable,
+    /// The machine did not answer the kit's call; the log says why.
+    Unreadable,
+}
+
+impl KitUnavailable {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Standalone => "standalone",
+            Self::NoConsent => "no_consent",
+            Self::ConsentOutdated => "consent_outdated",
+            Self::UnsupportedPlatform => "unsupported_platform",
+            Self::InstallerUnavailable => "installer_unavailable",
+            Self::Unreadable => "unreadable",
+        }
+    }
+}
+
 /// One machine's install kit as Settings shows it (PRD device-parity B7, B8).
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct KitSnapshot {
     /// Why the kit does not run on this machine at all: a daemon outside the
     /// app, a device with no consent or an unsupported platform. The parts
     /// are then empty and no Reinstall is offered.
-    pub unavailable: Option<String>,
+    pub unavailable: Option<KitUnavailable>,
     /// An install is running for this machine; Reinstall shows its progress.
     pub busy: bool,
     /// Every part, in the kit's own order; empty until the machine was first
@@ -991,7 +1025,9 @@ pub struct KitComponentSnapshot {
     pub id: hide_kit::ComponentId,
     pub label: String,
     pub state: hide_kit::ComponentState,
-    pub reason: Option<String>,
+    /// Why the part is in its state, as a cause the app words; the kit's own
+    /// sentence goes to the `kit` / `part.reason` diagnostic.
+    pub why: Option<hide_kit::PartWhy>,
     pub location: Option<String>,
 }
 
@@ -1056,7 +1092,8 @@ impl KitAgentSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct KitPieceSnapshot {
     pub state: hide_kit::ComponentState,
-    pub reason: Option<String>,
+    /// As [`KitComponentSnapshot::why`].
+    pub why: Option<hide_kit::PartWhy>,
     pub location: Option<String>,
 }
 
@@ -1064,7 +1101,7 @@ impl From<&hide_kit::PieceReport> for KitPieceSnapshot {
     fn from(piece: &hide_kit::PieceReport) -> Self {
         Self {
             state: piece.state,
-            reason: piece.reason.clone(),
+            why: piece.why.clone(),
             location: piece.location.clone(),
         }
     }
@@ -1079,7 +1116,7 @@ impl KitSnapshot {
                 id: part.id,
                 label: part.id.label().to_owned(),
                 state: part.state,
-                reason: part.reason.clone(),
+                why: part.why.clone(),
                 location: part.location.clone(),
             })
             .collect::<Vec<_>>();
@@ -1151,9 +1188,9 @@ impl KitSnapshot {
         }
     }
 
-    pub fn unavailable(reason: impl Into<String>) -> Self {
+    pub fn unavailable(cause: KitUnavailable) -> Self {
         Self {
-            unavailable: Some(reason.into()),
+            unavailable: Some(cause),
             ..Self::default()
         }
     }
@@ -1576,7 +1613,43 @@ pub struct AgentSleepSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AgentSleepActionSnapshot {
     pub available: bool,
-    pub reason: Option<String>,
+    pub reason: Option<AgentActionRefusal>,
+}
+
+/// Why the pane menu's Sleep agent or Fork cannot run now, as a code the web
+/// words (`contracts/snapshot-wire-enums.json`: `agent_action_refusal`); the
+/// English `detail` is for the log and a refused request's diagnostic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentActionRefusal {
+    /// An agent on another device.
+    Device,
+    /// This agent's reader cannot sleep it.
+    Unsupported,
+    /// This agent sleeps only on the machine the core runs on.
+    CoreMachineOnly,
+    Asleep,
+    Working,
+    WaitingForYou,
+    /// Hide cannot tell what the agent is doing.
+    UnknownActivity,
+    /// Herdr has not reported the agent's conversation yet.
+    NoConversation,
+}
+
+impl AgentActionRefusal {
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::Device => "Agents on another device cannot sleep",
+            Self::Unsupported => "This agent's reader does not support sleep",
+            Self::CoreMachineOnly => "This agent sleeps only on the machine Hide's core runs on",
+            Self::Asleep => "This agent is already asleep",
+            Self::Working => "This agent is working",
+            Self::WaitingForYou => "This agent is waiting for the operator",
+            Self::UnknownActivity => "Hide cannot tell what this agent is doing",
+            Self::NoConversation => "Herdr has not reported this agent's conversation",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -2589,7 +2662,7 @@ pub struct ForkSourceSnapshot {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct PaneForkSnapshot {
     pub available: bool,
-    pub reason: Option<String>,
+    pub reason: Option<AgentActionRefusal>,
     /// Present when this pane is a fork, as its row's `forked_from`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<ForkSourceSnapshot>,
@@ -4462,7 +4535,35 @@ pub struct IssueUpdateSnapshot {
     pub task_key: String,
     /// `ready` or `failed`.
     pub phase: String,
-    pub message: Option<String>,
+    pub failure: Option<CodedFailure>,
+}
+
+/// Why an operation failed, as a code the web words (`local_issue.*`,
+/// `pr_link.*`, `explorer.*`, `host.*`, `link.*`) with the one limit its
+/// sentence names; the core's own words go to that operation's diagnostic.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CodedFailure {
+    pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+impl CodedFailure {
+    pub fn new(code: &str) -> Self {
+        Self {
+            code: code.to_owned(),
+            limit: None,
+        }
+    }
+}
+
+impl From<crate::local_issues::LocalIssueError> for CodedFailure {
+    fn from(error: crate::local_issues::LocalIssueError) -> Self {
+        Self {
+            code: format!("local_issue.{}", error.code()),
+            limit: error.limit(),
+        }
+    }
 }
 
 /// The Overview's pull-request work in flight (PRD overview-lenses-prs):
@@ -4579,7 +4680,7 @@ pub struct PrLinkSnapshot {
     pub issue_id: Option<String>,
     /// The issue was made by this request.
     pub created: bool,
-    pub message: Option<String>,
+    pub failure: Option<CodedFailure>,
 }
 
 /// One failed check of a pull request, by the name GitHub shows and the page
@@ -5634,7 +5735,13 @@ pub struct TaskOperationSnapshot {
     /// when Herdr did not answer and the pane has to be looked at. `None`
     /// when the task started no agent.
     pub agent_phase: Option<String>,
-    pub agent_message: Option<String>,
+    /// Why the agent did not start, when `agent_phase` is `failed` or
+    /// `unknown`: a code the start surfaces word (`agent_start.*`, or a
+    /// session check's own code), never a sentence.
+    pub agent_reason: Option<String>,
+    /// The last line of the pane's screen for an `agent_start.shell_starting`
+    /// failure, quoted as the terminal showed it.
+    pub agent_line: Option<String>,
     /// The id the start surface sent with the request, so it follows its own
     /// task and never another window's or phone's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5652,8 +5759,8 @@ pub struct TaskOperationSnapshot {
 /// refused, and the same URL and folder sent again joins the one running.
 /// The URL is not here, because it can carry credentials; `host` is what the
 /// shell shows. `phase` is `cloning`, `cancelling`, then `finished` (the
-/// folder is registered through `create_workspace`), `failed` with `message`,
-/// or `cancelled`.
+/// folder is registered through `create_workspace`), `failed` with the
+/// `failure` code the shell words, or `cancelled`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RepositoryCloneSnapshot {
     pub id: u64,
@@ -5664,7 +5771,12 @@ pub struct RepositoryCloneSnapshot {
     /// Git's own stage, `Receiving objects` and the like, once it names one.
     pub stage: Option<String>,
     pub percent: Option<u8>,
-    pub message: Option<String>,
+    /// `CloneFailure::code` of a failed clone (`authentication`, `not_found`,
+    /// `git`, ...); its sentence is the diagnostic log's.
+    pub failure: Option<String>,
+    /// Git's own last `fatal:` line, credentials removed, when `failure` is
+    /// `git`: the shell quotes it as what Git said.
+    pub git_line: Option<String>,
 }
 
 /// The explorer's most recent filesystem change and how far it got.
@@ -5685,7 +5797,9 @@ pub struct ExplorerOperationSnapshot {
     /// The item's path once the change has landed; equal to `path` for a
     /// creation.
     pub destination: String,
-    pub message: Option<String>,
+    /// Why it failed, or why a created file did not open, as a code the
+    /// tree words (`explorer.*`, `host.*`, `link.*`).
+    pub failure: Option<CodedFailure>,
 }
 
 /// One repository's worktrees.
@@ -5915,7 +6029,31 @@ pub struct HerdrProfileSnapshot {
     pub problem: Option<String>,
     pub device_id: Option<String>,
     pub connect_state: String,
-    pub connect_error: Option<String>,
+    /// Why Hide itself declined to connect the profile, as a code the web
+    /// words (`contracts/snapshot-wire-enums.json`: `herdr_profile_refusal`).
+    /// A connection that was tried and failed has none: its row reads the
+    /// device's connection state.
+    pub connect_refusal: Option<HerdrProfileRefusal>,
+}
+
+/// Why Hide declined to connect a saved Herdr profile, one per thing the
+/// operator does next.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HerdrProfileRefusal {
+    /// The helper installation was not allowed.
+    NoConsent,
+    /// The profile is turned off in Herdr.
+    Disabled,
+    /// The profile's SSH target or session cannot be used.
+    InvalidTarget,
+    /// The saved profiles are still being read.
+    DiscoveryPending,
+    /// As many devices as Hide keeps are registered.
+    DeviceLimit,
+    /// The profile now names another server than the device registered
+    /// for it.
+    ProfileMoved,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -6229,13 +6367,13 @@ pub struct RemoteStatusSnapshot {
 /// How far a device's projects are confirmed by its helper (PRD S5.5 B3,
 /// B4). `resolving`: the helper is being asked; `ready`: every directory the
 /// device's Herdr names has the helper's answer; `unavailable`: the helper
-/// cannot be asked now and `message` says why. A directory the helper has not
+/// cannot be asked now, and why goes to the `device_catalog` diagnostics, not
+/// the wire (the web words the state). A directory the helper has not
 /// answered for is shown as its Herdr workspace alone, never grouped by a
 /// guess and never read on this machine.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DeviceCatalogSnapshot {
     pub state: String,
-    pub message: Option<String>,
     /// Directories the helper answered with a refusal (missing, unreadable),
     /// each with its reason; their workspaces stay ungrouped.
     pub refused: Vec<DeviceCatalogRefusal>,
@@ -6245,7 +6383,6 @@ impl Default for DeviceCatalogSnapshot {
     fn default() -> Self {
         Self {
             state: "resolving".to_owned(),
-            message: None,
             refused: Vec::new(),
         }
     }
@@ -7637,6 +7774,132 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "kit_refusal_cause", &refusal_causes);
         checked.insert("kit_refusal_cause");
+
+        let part_causes = [
+            hide_kit::PartCause::TakenOut,
+            hide_kit::PartCause::OlderVersion,
+            hide_kit::PartCause::Edited,
+            hide_kit::PartCause::HelperGone,
+            hide_kit::PartCause::RouteChanged,
+            hide_kit::PartCause::OtherBuild,
+            hide_kit::PartCause::NotHides,
+            hide_kit::PartCause::NoHelper,
+            hide_kit::PartCause::Unreadable,
+            hide_kit::PartCause::OtherProgram,
+            hide_kit::PartCause::Foreign,
+            hide_kit::PartCause::AgentAbsent,
+            hide_kit::PartCause::NotCreatedYet,
+            hide_kit::PartCause::ProgramMissing,
+            hide_kit::PartCause::Unsupported,
+            hide_kit::PartCause::UpdateAgent,
+            hide_kit::PartCause::AiFolder,
+            hide_kit::PartCause::StillInPlace,
+            hide_kit::PartCause::NotChanged,
+            hide_kit::PartCause::CodexUntrusted,
+            hide_kit::PartCause::RecordUnsaved,
+            hide_kit::PartCause::HerdrAbsent,
+            hide_kit::PartCause::UpdateHerdr,
+            hide_kit::PartCause::RetirementPending,
+            hide_kit::PartCause::Other,
+        ];
+        for variant in part_causes {
+            match variant {
+                hide_kit::PartCause::TakenOut
+                | hide_kit::PartCause::OlderVersion
+                | hide_kit::PartCause::Edited
+                | hide_kit::PartCause::HelperGone
+                | hide_kit::PartCause::RouteChanged
+                | hide_kit::PartCause::OtherBuild
+                | hide_kit::PartCause::NotHides
+                | hide_kit::PartCause::NoHelper
+                | hide_kit::PartCause::Unreadable
+                | hide_kit::PartCause::OtherProgram
+                | hide_kit::PartCause::Foreign
+                | hide_kit::PartCause::AgentAbsent
+                | hide_kit::PartCause::NotCreatedYet
+                | hide_kit::PartCause::ProgramMissing
+                | hide_kit::PartCause::Unsupported
+                | hide_kit::PartCause::UpdateAgent
+                | hide_kit::PartCause::AiFolder
+                | hide_kit::PartCause::StillInPlace
+                | hide_kit::PartCause::NotChanged
+                | hide_kit::PartCause::CodexUntrusted
+                | hide_kit::PartCause::RecordUnsaved
+                | hide_kit::PartCause::HerdrAbsent
+                | hide_kit::PartCause::UpdateHerdr
+                | hide_kit::PartCause::RetirementPending
+                | hide_kit::PartCause::Other => {}
+            }
+        }
+        assert_wire(&contract, "kit_part_cause", &part_causes);
+        checked.insert("kit_part_cause");
+
+        let unavailable = [
+            KitUnavailable::Standalone,
+            KitUnavailable::NoConsent,
+            KitUnavailable::ConsentOutdated,
+            KitUnavailable::UnsupportedPlatform,
+            KitUnavailable::InstallerUnavailable,
+            KitUnavailable::Unreadable,
+        ];
+        for variant in unavailable {
+            match variant {
+                KitUnavailable::Standalone
+                | KitUnavailable::NoConsent
+                | KitUnavailable::ConsentOutdated
+                | KitUnavailable::UnsupportedPlatform
+                | KitUnavailable::InstallerUnavailable
+                | KitUnavailable::Unreadable => {}
+            }
+        }
+        assert_wire(&contract, "kit_unavailable", &unavailable);
+        checked.insert("kit_unavailable");
+
+        let profile_refusals = [
+            HerdrProfileRefusal::NoConsent,
+            HerdrProfileRefusal::Disabled,
+            HerdrProfileRefusal::InvalidTarget,
+            HerdrProfileRefusal::DiscoveryPending,
+            HerdrProfileRefusal::DeviceLimit,
+            HerdrProfileRefusal::ProfileMoved,
+        ];
+        for variant in profile_refusals {
+            match variant {
+                HerdrProfileRefusal::NoConsent
+                | HerdrProfileRefusal::Disabled
+                | HerdrProfileRefusal::InvalidTarget
+                | HerdrProfileRefusal::DiscoveryPending
+                | HerdrProfileRefusal::DeviceLimit
+                | HerdrProfileRefusal::ProfileMoved => {}
+            }
+        }
+        assert_wire(&contract, "herdr_profile_refusal", &profile_refusals);
+        checked.insert("herdr_profile_refusal");
+
+        let action_refusals = [
+            AgentActionRefusal::Device,
+            AgentActionRefusal::Unsupported,
+            AgentActionRefusal::CoreMachineOnly,
+            AgentActionRefusal::Asleep,
+            AgentActionRefusal::Working,
+            AgentActionRefusal::WaitingForYou,
+            AgentActionRefusal::UnknownActivity,
+            AgentActionRefusal::NoConversation,
+        ];
+        for variant in action_refusals {
+            match variant {
+                AgentActionRefusal::Device
+                | AgentActionRefusal::Unsupported
+                | AgentActionRefusal::CoreMachineOnly
+                | AgentActionRefusal::Asleep
+                | AgentActionRefusal::Working
+                | AgentActionRefusal::WaitingForYou
+                | AgentActionRefusal::UnknownActivity
+                | AgentActionRefusal::NoConversation => {}
+            }
+        }
+        assert_wire(&contract, "agent_action_refusal", &action_refusals);
+        checked.insert("agent_action_refusal");
 
         let state_variables = [
             hide_kit::layout::StateVariable::HideStateDir,

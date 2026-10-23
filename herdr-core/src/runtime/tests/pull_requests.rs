@@ -166,12 +166,12 @@ fn a_github_issue_links_the_branch_and_its_body_write_settles_the_request() {
         ),
         ("body", "failed", Some("#3"))
     );
-    assert!(failed.message.unwrap().contains("No worker"));
+    assert_eq!(failed.failure.unwrap().code, "pr_link.worker_unavailable");
 
     // The retry's worker answers: the body now closes #3.
     runtime.snapshot.pr_work.link = Some(crate::model::PrLinkSnapshot {
         phase: "working".into(),
-        message: None,
+        failure: None,
         ..link(&runtime)
     });
     assert!(runtime.finish_pr_body("r1", &reference(3), Ok(false)));
@@ -214,7 +214,7 @@ fn a_new_github_issue_stays_when_the_body_write_fails() {
     // The worker's answer: the issue was made, the body write was refused.
     runtime.snapshot.pr_work.link = Some(crate::model::PrLinkSnapshot {
         phase: "working".into(),
-        message: None,
+        failure: None,
         ..link(&runtime)
     });
     assert!(runtime.ingest_pr_issue_created(
@@ -285,7 +285,7 @@ fn a_local_issue_is_linked_in_hide_only() {
     )));
     runtime.snapshot.pr_work.link = Some(crate::model::PrLinkSnapshot {
         phase: "working".into(),
-        message: None,
+        failure: None,
         ..link(&runtime)
     });
     runtime.pr_link_checkout = Some("c".into());

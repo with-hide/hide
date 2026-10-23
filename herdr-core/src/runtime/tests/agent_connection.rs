@@ -96,7 +96,7 @@ pub(super) fn kit_rows(runtime: &mut Runtime, codex_daemon_on: Option<bool>) {
         .map(|adapter| {
             let piece = crate::model::KitPieceSnapshot {
                 state: hide_kit::ComponentState::Installed,
-                reason: None,
+                why: None,
                 location: None,
             };
             crate::model::KitAgentSnapshot {
@@ -802,7 +802,10 @@ fn an_unread_codex_is_logged_once_with_its_machine_cause_and_exit_code() {
 #[test]
 fn a_machine_with_no_kit_or_no_such_device_refuses_the_request_with_an_error() {
     let mut runtime = runtime();
-    runtime.set_local_kit_unavailable("standalone daemon");
+    runtime.set_local_kit_unavailable(
+        crate::model::KitUnavailable::Standalone,
+        "standalone daemon",
+    );
     assert!(disable(&mut runtime, crate::node::TEST_NODE));
     assert_eq!(
         runtime

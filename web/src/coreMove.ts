@@ -5,7 +5,6 @@
 // window asks with one `core_move` event and draws what the frames say.
 
 import type { TFunction } from "i18next";
-import { takesEuro } from "./i18n/koParticle";
 
 export type MoveState =
   | "idle"
@@ -158,8 +157,6 @@ export function movingStripText(view: MoveView, machines: MoveMachines, t: TFunc
       ? t("coreMove.strip.rollingBack", values)
       : view.direction === "back"
         ? t("coreMove.strip.movingBack", values)
-        : takesEuro(machines.to)
-          ? t("coreMove.strip.movingEuro", values)
-          : t("coreMove.strip.moving", values);
+        : t("coreMove.strip.moving", values);
   return t("coreMove.strip.line", { title, index, total: MOVE_STEPS.length, step: t(`coreMove.step.${step}`, values) });
 }

@@ -33,7 +33,8 @@ import {
 import { bindingProblemText, sheetRowTitle } from "../shortcutLabels";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
-import { useRefusalSince } from "./useErrorSince";
+import { coreErrorText } from "../coreError";
+import { useRefusalSince } from "../errorSince";
 
 export function ShortcutsTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -125,7 +126,7 @@ export function ShortcutsTab({ actions }: { actions: Actions }) {
       </Group>
       {diagnostic ? <Note tone="warn" data-shortcut-diagnostic="true">{diagnostic}</Note> : null}
       {saving ? <Note tone="pending">{t("workspace.saving")}</Note> : null}
-      {saveError ? <Note tone="error" data-shortcut-save-error="true">{t("settings.notSaved", { reason: saveError })}</Note> : null}
+      {saveError ? <Note tone="error" data-shortcut-save-error="true" data-core-error={saveError.kind}>{coreErrorText(saveError, t, "coreError.settings.notSaved")}</Note> : null}
       <div className="mt-sm flex justify-end">
         <Button variant="secondary" disabled={!stored || Object.keys(stored).length === 0} onClick={() => apply({})} data-shortcut-reset-all="true">
           {t("settings.shortcuts.restoreDefaults")}

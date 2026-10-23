@@ -2288,8 +2288,8 @@ impl Runtime {
                 {
                     if payload.new_folder {
                         self.set_error(
-                            "workspace.create_refused",
-                            "A new project can be created on this Mac only",
+                            "workspace.create_local_only",
+                            "A new project can be created on the core's own machine only",
                             false,
                         );
                         return true;

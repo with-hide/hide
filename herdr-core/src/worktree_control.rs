@@ -99,8 +99,8 @@ impl TabTarget {
     }
 
     fn check_current(&self, id: u64) -> Result<(), String> {
-        let runtime = self.runtime.upgrade().ok_or("runtime stopped")?;
-        let runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
+        let runtime = self.runtime.upgrade().ok_or(TASK_GONE)?;
+        let runtime = runtime.lock().map_err(|_| TASK_GONE)?;
         self.check_current_in(&runtime, id)
     }
 
@@ -1053,9 +1053,43 @@ pub struct PendingAgentStart {
 pub enum TaskAgentOutcome {
     Started,
     /// Herdr refused, or the agent is not installed; nothing started.
-    Failed(String),
+    Failed(AgentFailure),
     /// Herdr did not answer; the agent may be running. The pane says which.
-    Unknown(String),
+    Unknown(AgentFailure),
+}
+
+/// Why a task's agent did not start, as the snapshot carries it: `reason` is
+/// the code every start surface words in the window's language (`agent_start.*`,
+/// or a session check's own code such as `session_route_unconfirmed`);
+/// `detail` is the sentence the diagnostic log keeps (Herdr's answer, a link
+/// error), which no screen draws; `line` is the last line of the pane's
+/// screen when its shell had not finished starting, which the screen quotes
+/// and the log never keeps, because it is the operator's terminal content.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentFailure {
+    pub reason: String,
+    pub detail: Option<String>,
+    pub line: Option<String>,
+}
+
+impl AgentFailure {
+    /// A failure its code says all of.
+    pub fn reason(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            detail: None,
+            line: None,
+        }
+    }
+
+    /// A failure with the sentence the log keeps beside its code.
+    pub fn with_detail(reason: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            detail: Some(detail.into()),
+            line: None,
+        }
+    }
 }
 
 /// `agent.start` waits up to this long for the pane's shell; the read waits a
@@ -1099,12 +1133,12 @@ fn start_task_agent(
     // a long start line asks whether the pane's shell is reading.
     let pane_node = task_session_node(&runtime, id, &start.kind).ok();
     let outcome = match reader {
-        Err(reason) => TaskAgentOutcome::Failed(reason),
+        Err(reason) => TaskAgentOutcome::Failed(AgentFailure::reason(reason)),
         Ok(reader) => {
             let expected = start.clone();
             let current_intent = || -> Result<Option<crate::start_claim::BoundPane>, String> {
                 current()?;
-                let guard = runtime.lock().map_err(|_| "runtime unavailable")?;
+                let guard = runtime.lock().map_err(|_| TASK_GONE)?;
                 if !guard.task_session_control_is_current(id, connector, generation)
                     || !guard.group_start_target_is_current(id)
                 {
@@ -1124,16 +1158,19 @@ fn start_task_agent(
             };
             let current_start = || {
                 if let Some(binding) = current_intent()? {
-                    let node = pane_node.as_ref().ok_or_else(|| {
-                        "The terminal's device is unavailable. Reconnect and check this start's status.".to_owned()
-                    })?;
+                    let node = pane_node
+                        .as_ref()
+                        .ok_or_else(|| "agent_start.terminal_device_unavailable".to_owned())?;
                     let actual: hide_node_link::panes::PaneIdentity = crate::node_access::call_as(
                         node.as_ref(),
-                        hide_node_link::protocol::Call::PaneInspect { pane_id: binding.pane_id.clone() },
+                        hide_node_link::protocol::Call::PaneInspect {
+                            pane_id: binding.pane_id.clone(),
+                        },
                         Duration::from_secs(5),
-                    ).map_err(|_| "The original terminal identity could not be checked. Reconnect and check this start's status.".to_owned())?;
+                    )
+                    .map_err(|_| "agent_start.terminal_unchecked".to_owned())?;
                     if binding.pane_id != expected.pane_id || actual != binding.identity {
-                        return Err("The original terminal changed. Inspect its tab before starting another agent.".into());
+                        return Err("agent_start.terminal_changed".into());
                     }
                     if current_intent()? != Some(binding)
                         || !Arc::ptr_eq(&task_session_node(&runtime, id, &expected.kind)?, node)
@@ -1208,9 +1245,9 @@ fn launch_with_prompt_checked(
     // is none for a device, whose own Herdr answers for its PATH, and a
     // device's worktree still needs its trust recorded there.
     if let Some(path) = made_worktree.as_deref()
-        && let Err(reason) = crate::agent_start::trust_worktree(pane_node, &kind, path)
+        && let Err(refusal) = crate::agent_start::trust_worktree(pane_node, &kind, path)
     {
-        return TaskAgentOutcome::Failed(reason);
+        return TaskAgentOutcome::Failed(AgentFailure::with_detail(refusal.code, refusal.detail));
     }
     if hide_agent_adapter::adapter(&kind)
         .filter(|adapter| {
@@ -1224,15 +1261,20 @@ fn launch_with_prompt_checked(
             .as_ref()
             .is_some_and(|scope| args.get(1) == Some(&scope.id))
     {
-        return TaskAgentOutcome::Failed("session_resume_scope_required".into());
+        return TaskAgentOutcome::Failed(AgentFailure::reason("session_resume_scope_required"));
     }
     let Some(dialect) = hide_agent_adapter::adapter(&kind).and_then(|row| row.start) else {
-        return TaskAgentOutcome::Failed("This agent has no supported start dialect".to_owned());
+        return TaskAgentOutcome::Failed(AgentFailure::reason("agent_start.no_start_dialect"));
     };
     if let Some(prompt) = prompt {
         match prompt_argument(&prompt) {
             Ok(argument) => args.extend([dialect.prompt_flag().to_owned(), argument]),
-            Err(message) => return TaskAgentOutcome::Failed(message),
+            Err(message) => {
+                return TaskAgentOutcome::Failed(AgentFailure::with_detail(
+                    "agent_start.invalid_prompt",
+                    message,
+                ));
+            }
         }
     }
     launch_agent(
@@ -1327,10 +1369,7 @@ pub fn spawn_task_agent_start(context: WorktreeTarget, id: u64) -> Result<(), St
                 {
                     runtime.ingest_task_agent_result(
                         id,
-                        TaskAgentOutcome::Failed(
-                            "The agent start could not be saved. Retry the agent in this pane."
-                                .into(),
-                        ),
+                        TaskAgentOutcome::Failed(AgentFailure::reason("agent_start.not_saved")),
                     );
                 }
                 context.notifier.notify();
@@ -1349,24 +1388,19 @@ pub fn spawn_task_agent_start(context: WorktreeTarget, id: u64) -> Result<(), St
         .map_err(|error| format!("agent start worker could not be started: {error}"))
 }
 
-/// How one `agent.start` ended; a refusal keeps Herdr's code so a caller can
-/// tell a refusal that typed nothing and can be asked differently.
+/// How one `agent.start` ended.
 enum Launch {
     Started,
-    Failed(String),
-    Refused { code: String, message: String },
-    Unknown(String),
+    Failed(AgentFailure),
+    Unknown(AgentFailure),
 }
 
 impl From<Launch> for TaskAgentOutcome {
     fn from(launch: Launch) -> Self {
         match launch {
             Launch::Started => TaskAgentOutcome::Started,
-            Launch::Failed(message) => TaskAgentOutcome::Failed(message),
-            Launch::Refused { code, message } => {
-                TaskAgentOutcome::Failed(format!("Agent could not start: {code}: {message}"))
-            }
-            Launch::Unknown(message) => TaskAgentOutcome::Unknown(message),
+            Launch::Failed(failure) => TaskAgentOutcome::Failed(failure),
+            Launch::Unknown(failure) => TaskAgentOutcome::Unknown(failure),
         }
     }
 }
@@ -1385,7 +1419,7 @@ fn launch_agent(
     check: &dyn Fn() -> Result<(), String>,
 ) -> Launch {
     if let Err(reason) = check() {
-        return Launch::Failed(reason);
+        return Launch::Failed(AgentFailure::reason(reason));
     }
     // Herdr would type the command into the pane's shell and wait for an
     // agent that can never appear; say so before asking it. A device's PATH
@@ -1400,13 +1434,15 @@ fn launch_agent(
         ) {
             Ok(true) => {}
             Ok(false) => {
-                return Launch::Failed(format!(
-                    "{kind} is not installed on the daemon's PATH. Install it, then retry."
+                return Launch::Failed(AgentFailure::with_detail(
+                    "agent_start.not_installed",
+                    format!("{kind} is not installed on the daemon's PATH"),
                 ));
             }
             Err(error) => {
-                return Launch::Failed(format!(
-                    "Could not check whether {kind} is installed ({error}). Retry."
+                return Launch::Failed(AgentFailure::with_detail(
+                    "agent_start.install_check_failed",
+                    format!("Could not check whether {kind} is installed ({error})"),
                 ));
             }
         }
@@ -1414,7 +1450,13 @@ fn launch_agent(
     let name = crate::fork::task_agent_name(kind, pane_id);
     let params = match wire::agent_start_params(pane_id, &name, kind, args, codex_daemon) {
         Ok(params) => params,
-        Err(message) => return Launch::Failed(message),
+        // An unread Codex is named by its own code; the rest is a wire fault.
+        Err(code) if code == crate::codex_launch::CAPABILITY_UNKNOWN => {
+            return Launch::Failed(AgentFailure::reason(code));
+        }
+        Err(message) => {
+            return Launch::Failed(AgentFailure::with_detail("agent_start.failed", message));
+        }
     };
     match crate::agent_start::start_at_shell_checked(
         connector,
@@ -1428,19 +1470,33 @@ fn launch_agent(
     ) {
         Ok(value) => match wire::started_agent(value) {
             Ok(_) => Launch::Started,
-            Err(message) => Launch::Unknown(format!(
-                "Herdr answered the agent start in an unexpected shape ({message}). Check the pane before retrying."
+            Err(message) => Launch::Unknown(AgentFailure::with_detail(
+                "agent_start.unconfirmed",
+                format!("Herdr answered the agent start in an unexpected shape ({message})"),
             )),
         },
-        Err(StartError::NotStarted(message)) => Launch::Failed(message),
-        Err(StartError::ShellStarting(screen)) => Launch::Failed(
-            crate::agent_start::shell_starting_message(screen.as_deref()),
-        ),
-        Err(StartError::Herdr(ApiError::Remote { code, message })) => {
-            Launch::Refused { code, message }
+        Err(StartError::NotStarted { reason, detail }) => {
+            Launch::Failed(AgentFailure::with_detail(reason, detail))
         }
-        Err(StartError::Herdr(error)) => Launch::Unknown(format!(
-            "Herdr did not confirm the agent start ({error}). Check the pane before retrying."
+        // The screen's last line is the operator's terminal content: the
+        // screen quotes it, and no log keeps it.
+        Err(StartError::ShellStarting(line)) => Launch::Failed(AgentFailure {
+            reason: crate::agent_start::SHELL_STARTING_REASON.to_owned(),
+            detail: None,
+            line,
+        }),
+        // Hide's own check refused in Herdr's place, before Herdr was asked.
+        Err(StartError::Herdr(ApiError::Remote { code, message }))
+            if message == crate::live::SESSION_CHANGED =>
+        {
+            Launch::Failed(AgentFailure::reason(code))
+        }
+        Err(StartError::Herdr(ApiError::Remote { code, message })) => Launch::Failed(
+            AgentFailure::with_detail("agent_start.refused_by_herdr", format!("{code}: {message}")),
+        ),
+        Err(StartError::Herdr(error)) => Launch::Unknown(AgentFailure::with_detail(
+            "agent_start.unconfirmed",
+            format!("Herdr did not confirm the agent start ({error})"),
         )),
     }
 }
@@ -1649,10 +1705,18 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         if let Some(runtime) = target.runtime.upgrade()
             && let Ok(mut runtime) = runtime.lock()
         {
-            let outcome = match request.start.as_ref().and_then(|start| start.agent_phase.as_deref()) {
+            let outcome = match request
+                .start
+                .as_ref()
+                .and_then(|start| start.agent_phase.as_deref())
+            {
                 Some("started") => TaskAgentOutcome::Started,
-                Some("failed") | None => TaskAgentOutcome::Failed("The original pane was restored. Enter a task and start the agent in this pane.".into()),
-                _ => TaskAgentOutcome::Unknown("The original pane was restored. Inspect it before starting another agent.".into()),
+                Some("failed") | None => {
+                    TaskAgentOutcome::Failed(AgentFailure::reason("agent_start.pane_restored"))
+                }
+                _ => TaskAgentOutcome::Unknown(AgentFailure::reason(
+                    "agent_start.pane_restored_unconfirmed",
+                )),
             };
             runtime.ingest_task_agent_result(request.id, outcome);
         }
@@ -1671,9 +1735,7 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
             {
                 runtime.ingest_task_agent_result(
                     request.id,
-                    TaskAgentOutcome::Failed(
-                        "The agent start could not be saved. Retry the agent in this pane.".into(),
-                    ),
+                    TaskAgentOutcome::Failed(AgentFailure::reason("agent_start.not_saved")),
                 );
             }
             target.notifier.notify();
@@ -1736,13 +1798,13 @@ fn task_session_node(
     id: u64,
     kind: &str,
 ) -> Result<Arc<dyn crate::node_access::NodeLink>, String> {
-    let mut runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
+    let mut runtime = runtime.lock().map_err(|_| TASK_GONE)?;
     let operation = runtime
         .snapshot()
         .task_operation
         .as_ref()
         .filter(|operation| operation.id == id)
-        .ok_or("task superseded")?;
+        .ok_or(TASK_GONE)?;
     if operation.agent_kind.as_deref() != Some(kind) {
         return Err("session_resume_intent_changed".into());
     }
@@ -1754,9 +1816,14 @@ fn task_pane_node(
     runtime: &Arc<Mutex<Runtime>>,
     id: u64,
 ) -> Result<Arc<dyn crate::node_access::NodeLink>, String> {
-    let mut runtime = runtime.lock().map_err(|_| "runtime unavailable")?;
+    let mut runtime = runtime.lock().map_err(|_| TASK_GONE)?;
     task_node(&mut runtime, id)
 }
+
+/// The reason a start worker gives when its runtime stopped or another task
+/// took the slot: no screen is left to read it, and the plain "the agent did
+/// not start" is what one would show.
+const TASK_GONE: &str = "agent_start.failed";
 
 fn task_node(
     runtime: &mut Runtime,
@@ -1767,12 +1834,23 @@ fn task_node(
         .task_operation
         .as_ref()
         .filter(|operation| operation.id == id)
-        .ok_or("task superseded")?;
+        .ok_or(TASK_GONE)?;
     let device = operation
         .device_id
         .clone()
         .unwrap_or_else(|| runtime.node().as_str().into());
-    runtime.node_link(&device)
+    // The helper's own words name its state, for the log; the start names
+    // the device as unreachable.
+    runtime.node_link(&device).map_err(|message| {
+        crate::diagnostic!(serde_json::json!({
+            "component": "task_operation",
+            "kind": "agent.node_unavailable",
+            "id": id,
+            "device_id": device,
+            "message": message,
+        }));
+        "agent_start.terminal_device_unavailable".to_owned()
+    })
 }
 
 /// How long the helper may take to bring a Home in step: a stat per
@@ -4089,13 +4167,13 @@ mod tests {
         let server = server(vec![]);
         assert_eq!(
             launch_with_prompt(&server, Some(&node), 7, make()),
-            TaskAgentOutcome::Failed("session_route_unconfirmed".into())
+            TaskAgentOutcome::Failed(AgentFailure::reason("session_route_unconfirmed"))
         );
         let mut missing_scope = make();
         missing_scope.resume_scope = None;
         assert_eq!(
             launch_with_prompt(&server, Some(&node), 7, missing_scope),
-            TaskAgentOutcome::Failed("session_resume_scope_required".into())
+            TaskAgentOutcome::Failed(AgentFailure::reason("session_resume_scope_required"))
         );
         std::fs::remove_file(folder.join("duplicate.jsonl")).unwrap();
         let other_history = format!(
@@ -4106,7 +4184,7 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         assert_eq!(
             launch_with_prompt(&server, Some(&node), 7, make()),
-            TaskAgentOutcome::Failed("session_route_unconfirmed".into())
+            TaskAgentOutcome::Failed(AgentFailure::reason("session_route_unconfirmed"))
         );
         assert_eq!(
             std::fs::read_to_string(folder.join("other.jsonl")).unwrap(),
@@ -4116,14 +4194,14 @@ mod tests {
         std::fs::write(&path, header.replace("native-pi", "native-pi-prefix")).unwrap();
         assert_eq!(
             launch_with_prompt(&server, Some(&node), 7, make()),
-            TaskAgentOutcome::Failed("session_route_unconfirmed".into())
+            TaskAgentOutcome::Failed(AgentFailure::reason("session_route_unconfirmed"))
         );
         std::fs::write(&path, &header).unwrap();
         assert_eq!(
             launch_with_prompt_checked(&server, Some(&node), Some(&node), 7, make(), &|| Err(
                 "session_resume_intent_changed".into()
             )),
-            TaskAgentOutcome::Failed("session_resume_intent_changed".into())
+            TaskAgentOutcome::Failed(AgentFailure::reason("session_resume_intent_changed"))
         );
         assert!(requests_of(&server).is_empty());
         assert_eq!(std::fs::read_to_string(path).unwrap(), header);
@@ -4231,7 +4309,7 @@ mod tests {
         else {
             panic!("a start without the pane's machine went ahead")
         };
-        assert!(reason.starts_with("agent_trust_unavailable"), "{reason}");
+        assert_eq!(reason.reason, "agent_trust_unavailable", "{reason:?}");
         assert!(requests_of(&server).is_empty());
     }
 
@@ -4257,7 +4335,7 @@ mod tests {
         let TaskAgentOutcome::Failed(reason) = outcome else {
             panic!("start succeeded")
         };
-        assert_eq!(reason, crate::codex_launch::CAPABILITY_UNKNOWN);
+        assert_eq!(reason.reason, crate::codex_launch::CAPABILITY_UNKNOWN);
         assert!(requests_of(&server).is_empty());
     }
 
@@ -4296,9 +4374,10 @@ mod tests {
         );
         assert_eq!(
             outcome,
-            TaskAgentOutcome::Failed(
-                "claude is not installed on the daemon's PATH. Install it, then retry.".into()
-            )
+            TaskAgentOutcome::Failed(AgentFailure::with_detail(
+                "agent_start.not_installed",
+                "claude is not installed on the daemon's PATH"
+            ))
         );
         assert_eq!(
             *node.0.lock().unwrap(),
@@ -4402,7 +4481,11 @@ mod tests {
         let TaskAgentOutcome::Failed(message) = outcome else {
             panic!("expected a failed start, got {outcome:?}");
         };
-        assert!(message.contains("U+0007"), "{message}");
+        assert_eq!(message.reason, "agent_start.invalid_prompt");
+        assert!(
+            message.detail.as_deref().unwrap().contains("U+0007"),
+            "{message:?}"
+        );
         assert!(requests_of(&server).is_empty());
     }
 
@@ -4432,7 +4515,11 @@ mod tests {
         let TaskAgentOutcome::Failed(message) = outcome else {
             panic!("expected a failed start, got {outcome:?}");
         };
-        assert!(message.contains("64 KB"), "{message}");
+        assert_eq!(message.reason, "agent_start.invalid_prompt");
+        assert!(
+            message.detail.as_deref().unwrap().contains("64 KB"),
+            "{message:?}"
+        );
         assert!(requests_of(&server).is_empty());
     }
 
@@ -4463,7 +4550,15 @@ mod tests {
         let TaskAgentOutcome::Failed(message) = outcome else {
             panic!("expected a failed start, got {outcome:?}");
         };
-        assert!(message.contains("invalid_agent_argument"), "{message}");
+        assert_eq!(message.reason, "agent_start.refused_by_herdr");
+        assert!(
+            message
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("invalid_agent_argument"),
+            "{message:?}"
+        );
         assert_eq!(
             methods_of(&requests_of(&server)),
             ["pane.process_info", "agent.start"]

@@ -671,11 +671,13 @@ fn find(args: &[String]) -> Option<&'static Spec> {
 /// either. The parser still checks the values.
 pub fn admit(args: &[String]) -> Result<(), String> {
     let Some(spec) = find(args) else {
-        return match args.first() {
-            Some(topic) if TOPICS.contains(&topic.as_str()) => Err(format!(
-                "unknown command: hide {}",
-                args.iter().take(2).cloned().collect::<Vec<_>>().join(" ")
-            )),
+        return match args {
+            [topic] if TOPICS.contains(&topic.as_str()) => {
+                Err(format!("hide {topic} needs a subcommand"))
+            }
+            [topic, verb, ..] if TOPICS.contains(&topic.as_str()) => {
+                Err(format!("unknown command: hide {topic} {verb}"))
+            }
             _ => Ok(()),
         };
     };
@@ -691,7 +693,7 @@ pub fn admit(args: &[String]) -> Result<(), String> {
             .options
             .iter()
             .find(|option| option.name == arg)
-            .ok_or_else(|| format!("Unknown flag for hide {}: {arg}", spec.words.join(" ")))?;
+            .ok_or_else(|| format!("unknown flag for hide {}: {arg}", spec.words.join(" ")))?;
         if option.value.is_some() {
             rest.next();
         }

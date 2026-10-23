@@ -14,7 +14,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { MemorySettings, useMemoryProject } from "./MemoryTab";
 import { guardPartOf, ProjectGuardrails, pathRefusalKey, type GuardPart } from "./ProjectGuardrails";
 import { guardedBase, projectBaseBranch, projectGuardrails, projectIssueSource, projectRepository, projectSettings, readableSettings, refusedForGood, unguardedAgents, type Guardrails, type ProjectSettingsPatch, type ProjectSettingsTarget } from "./projectSettings";
-import { issueSourceChoices } from "./settings";
+import { issueSourceChoices, issueSourceName } from "./settings";
 import { catalogWorkspaces } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -139,7 +139,7 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
                 <Group title={t("issueSettings.sourceMenu")}>
                   <Row label={t("issueSettings.sourceMenu")} detail={<>
                     <Note tone={resolvedSource?.failure ? "error" : undefined}>
-                      {resolvedSource ? resolvedSource.failure ? t("board.sourceReadFailed", { source: resolvedSource.label }) : resolvedSource.reading ? t("board.reading") : resolvedSource.kind === "local" ? t("issueSettings.local") : resolvedSource.label : t(available ? "board.reading" : "settings.unavailable")}
+                      {resolvedSource ? resolvedSource.failure ? t("board.sourceReadFailed", { source: issueSourceName(resolvedSource, t) }) : resolvedSource.reading ? t("board.reading") : issueSourceName(resolvedSource, t) : t(available ? "board.reading" : "settings.unavailable")}
                     </Note>
                     {resolvedSource?.failure ? <Button size="sm" variant="ghost" disabled={!available} onClick={() => actions.refreshProjectOverview(target.workspaceId)}>{t("projectSettings.retry")}</Button> : null}
                     {workspace?.checkouts.some((checkout) => checkout.github?.failure_category === "not_logged_in") ? <Button size="sm" variant="ghost" onClick={() => actions.openSettings("github")}>{t("projectSettings.accountSettings")}</Button> : null}

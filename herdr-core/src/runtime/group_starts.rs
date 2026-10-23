@@ -645,7 +645,7 @@ impl Runtime {
             .and_then(|start| start.effect.as_ref())
             .and_then(|effect| effect.binding.clone())
             .map(Some)
-            .ok_or_else(|| "The original terminal identity is not confirmed. Check this start's status before starting its agent.".into())
+            .ok_or_else(|| "agent_start.terminal_unconfirmed".into())
     }
 
     pub(crate) fn group_start_target_is_current(&self, task: u64) -> bool {

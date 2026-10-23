@@ -62,8 +62,8 @@ describe("the pane menu's Fork agent items", () => {
   });
 
   it("draws both disabled with the core's reason on an agent that cannot fork yet", () => {
-    const reason = "This agent has not reported its conversation yet";
-    expect(forkItems({ available: false, reason })).toMatchObject([{ unavailable: reason }, { unavailable: reason }]);
+    const reason = "Herdr has not reported this agent's conversation yet";
+    expect(forkItems({ available: false, reason: "no_conversation" })).toMatchObject([{ unavailable: reason }, { unavailable: reason }]);
   });
 
   it("offers neither on a shell and on an agent with no fork command", () => {

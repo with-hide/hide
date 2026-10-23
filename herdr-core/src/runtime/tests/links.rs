@@ -1143,11 +1143,11 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
                 operation.agent_phase.as_deref(),
                 Some("started"),
                 "current archive start failed: {:?}",
-                operation.agent_message
+                operation.agent_reason
             );
         } else {
             let reason = operation
-                .agent_message
+                .agent_reason
                 .as_deref()
                 .or(operation.message.as_deref())
                 .expect("retired execution must refuse the start");

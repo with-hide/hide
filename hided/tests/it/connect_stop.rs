@@ -201,7 +201,7 @@ fn status_reads_the_idle_time_and_names_it_when_invalid() {
     unrelated_invalid(&mut ignored, &home);
     let (code, out, err) = finished(&mut ignored);
     assert_eq!(code, Some(0), "status refused: {err}");
-    assert_eq!(out.trim(), "hided is not running");
+    assert_eq!(out.trim(), "Hide is not running");
 
     let mut refused = isolated(&home, &state);
     refused.arg("status").env("HIDE_IDLE_SECS", "0");

@@ -43,7 +43,18 @@ Where `UI_BEHAVIOR.md` quotes shipped Korean wording (`요청`, `정리`, `맡�
 The core sends a code, never an English sentence, for what the screen words: an agent's `status_code` (`working`, `question`, `sleep_failed`, ...) is named by `agents.status.*` through `statusText` in `web/src/agentStatus.ts`, a GitHub `failure_category` by `issueSettings.gh*`, and the machine the core runs on as a device row with no `label` and its system in `host.platform`, which every shell words as This Mac, This PC or This computer (`systemMachineKey` in `web/src/screenMachine.ts`), the phone's start sheet included, which reads a null `place` as Home and a null `device_label` as that machine, named from the catalog's `core_platform`.
 A delivery notice for a person is a `HumanNoticeKind` plus the names it concerns: the phone words it from its state key (`mobile.notice.*`, relayed to the service worker with the other notification words), while Herdr's own notification, which has no translating screen, shows the English title and body whose tail names the `hide request show` command.
 Where the core still sends a sentence as data (a `reason` or `message` in a snapshot), the client does not translate it; each such family stays a boundary until it is converted to a code the catalogs can name, and a family's conversion removes its English from the wire in the same change.
-A code the web does not know (a daemon of another build) is shown as the code itself rather than hidden.
+A failure the core publishes as `last_error` is worded by its `kind` through `coreErrorText` in `web/src/coreError.ts`, with the catalog sentences in `web/src/i18n/resources/coreErrors.ts`; the same module words this machine's `status.herdr.state` and a device's `RemoteStatus.state`, and `web/src/startReason.ts` words the codes an agent start's reason carries.
+The `message` beside a kind, Herdr's `message` and a device's `message` are diagnostic detail (Herdr's protocol answer, a socket path, an io error): the store's diagnostics, Settings' Recent list and the core's `error.reported` log keep them, the About tab's details show them untranslated, and no other screen draws them (design principle 13).
+Hide's install kit sends each part's and each agent piece's `why` (`hide_kit::PartWhy`: a cause, and the one path, name or version its sentence names) and a machine's `unavailable` as a code; `web/src/kitWhy.ts` words them from `web/src/i18n/resources/kitReasons.ts`, along with a saved Herdr profile's `connect_refusal`, and the kit's English `reason` stays in its report for the log and the `hide` CLI, never on the snapshot.
+
+A Local issue that was not made, changed or read, and a pull request's issue that was not made or linked, carry an `IssueFailure` (`local_issue.*` or `pr_link.*`, with the limit its sentence names) on `issue_work.update` and `pr_work.link`, and a Local issue's read failure is a `local_issue.*` code in `issue_work.detail.message`; `web/src/issueFailure.ts` words them from `web/src/i18n/resources/issueReasons.ts`, an unknown code leaves the headline alone, and the core's English reason goes to the `pr_link.failed` and issue diagnostics.
+⌘K's GitHub search answers with a code (`github_search.failed`, `github_search.query_empty`, `github_search.query_too_long`) or, beside results that skipped repositories, `github_search.partial`, and a checkout's issue link names where it came from as a code (`manual`, `pane_token`, `branch_setting`, `pr_body`, `branch_name`).
+Why the pane menu's Sleep agent or Fork is disabled comes as an `agent_action_refusal` code in `sleep_action.reason` and `fork.reason`, worded from `web/src/i18n/resources/agentActionReasons.ts`; a code this build does not word shows the item's general unavailable line.
+An Explorer change that failed carries a `CodedFailure` in `explorer_operation.failure`: `explorer.*` for what the core refused, `host.<code>` for the checkout host's refusal (`hide_node_link::ErrorCode`) and `link.*` for the link (`node_access::link_failure_code`), and a device folder that could not be listed carries the same host code as `directory_unavailable.reason`; `web/src/fileFailure.ts` words them from `web/src/i18n/resources/fileReasons.ts`, and the host's sentence stays in the log.
+History's `unavailable_reason` and `stale_reason`, the file index's `unavailable` and a download's failure reason are codes too (`changes.*`, `host.*`, `link.*`, `file_bytes_error` and `path_refused` reasons), worded by `readFailureText` and `downloadFailureText` in the same file; a read code this build does not word says only that it was not read.
+A device's project catalog sends only its state; why its helper could not be asked goes to the `catalog.unavailable` diagnostic.
+A kit cause this build does not know shows the part's state alone.
+A code the web does not know (a daemon of another build) is not hidden and not shown as the code: the surface shows its own general sentence (`coreError.other`, or the dialog's own fallback such as `workspace.createFailed`), and the code goes to the log and to the element's `data-core-error` attribute.
 The desktop host draws its native menu, its role items (Undo, Quit, Services and the rest, labeled explicitly because the system's own follow the OS language), the connection screen, the folder picker and the browser display dialogs from the same catalogs (`native.*`, `commands.*`).
 It keeps only the last core-confirmed explicit choice in its profile (`interface-language.json`) and resolves an unset choice on its own host, as this document requires of any native or closed-window consumer; `ARCHITECTURE.md`, The desktop host, owns the details.
 The phone app (`web/src/mobile/`) draws every sentence from the same catalogs.
@@ -58,6 +69,73 @@ Hide AI is a closed-window reader in the core: what it writes for a person (agen
 The request carries that language and the Hide AI system prompt names it; no prompt names a language of its own ([AI_PROVIDERS.md](AI_PROVIDERS.md#the-output-language)), and a text already written keeps its language after the choice changes.
 Git branch and worktree names Hide suggests stay lowercase ASCII in every language.
 The manifest has no description, since a static file cannot follow the language.
+
+## Writing the copy
+
+A catalog value is the screen's own sentence in that language, not a translation of the English key.
+Write what happens on the screen first, then put it into English and into the other three languages one at a time.
+A Korean value that reads as the English sentence with Korean words in it (`Hide가 자기 항목을 더해, 에이전트가 나를 부르는 순간을 알아챕니다`) fails this section even when every word is correct.
+The rules below came from an audit of every catalog value, the native menus and dialogs, the `hide` command's sentences and the sentences the core sends as data.
+
+### Korean
+
+- **Register.** Guidance and errors end in 해요체 (`읽지 못했어요`), a request in `-세요` (`다시 시도하세요`), and a button, a status chip or a label in a noun or a short verb form (`계속`, `연결됨`, `알림 켜기`). 합니다체 and 반말 (`-다`, `-않는다`) are not used for screen text. One screen, one wizard and one dialog keep one register.
+- **No particle after an inserted value.** A value is any name, number, path, branch, device or agent, so its last sound is not known. Never write `{{x}}` followed by 은, 는, 이, 가, 을, 를, 과, 와, 으로, 로 or 이라, and never write the pairs `을(를)`, `이(가)`, `은(는)`. Put a fixed noun after the value (`{{name}} 프로젝트를`, `{{device}} 기기가`, `{{agent}} 설정에`), use a particle that does not change (`에`, `에서`, `의`, `도`, `만`), or write the sentence so the value ends it (`선택한 기기: {{device}}`). A `*Euro` or `*Eun` key pair is not added for a new sentence.
+- **No subject that does not act.** `Hide가`, `에이전트가` and `이 폴더는` open a sentence only when the sentence is about them. Say what the person sees (`저장하지 못했어요`), not what the product does (`Hide가 저장하지 못했습니다`). No personified verbs (알아챈다, 받아들인다, 부른다, 시킨다).
+- **A button is quoted by its label.** `‘계속’을 누르기 전에는`, with the label copied from the button's own key.
+- **The subtitle of a choice ends in a verb.** Two choices whose subtitles are both noun phrases read as the same choice (`인터넷에 있는 Git 저장소를 이 기기의 새 폴더로 내려받아요` / `빈 폴더를 만들고 Git 저장소로 시작해요`).
+- **English only for names, commands, keys and paths.** Product names (Claude Code, Codex, Grok, OpenCode, Pi, omp, Antigravity, GitHub, Herdr, Hide, Tailscale, Git), commands, file names, shortcut keys and identifiers stay as they are. A general English word (`worktree`, `checkout`, `hook`, `pane`, `diff`, `Merge`, `Local`) is written in Korean or as the glossary says.
+- **Product name.** `Hide` in a sentence, `hide` for the command, `hide.app` for the bundle; `BRAND.md` keeps the lowercase wordmark beside the mark.
+
+### All languages
+
+- **A value is words, never a code.** `{{state}}`, `{{reason}}` and `{{message}}` hold a sentence that is already in the viewer's language, not a status code (`not_installed`), not an English sentence and not a protocol answer. The core sends a code and the catalog words it (the boundary above). A failure the person cannot act on goes to the diagnostic log, not into a message.
+- **The same thing has one name** in a language, from the glossary below. A new word for an existing thing is added to the glossary in the same change.
+- **A sentence quoted in `UI_BEHAVIOR.md` changes with it.** `rg` the old text in `docs/UI_BEHAVIOR.md` and in `web/e2e`, `desktop/e2e` and the unit tests, and change those lines in the same pull request.
+- **A message for an agent is not screen copy.** A prompt Hide types into an agent (`issue.prompt.*`), a hook line and a comment an agent leaves on GitHub are read by agents and by the people who later read their record; they are written in English, except where the operator's language is the point, and they are outside the register rule above.
+- **English** is plain and short: the sentence a person would say, in the active voice, without a question the screen does not ask. **Japanese** uses です・ます for sentences and a noun phrase for labels, without 〜を行います or 〜することができます where 〜します works, and writes Latin letters beside kana without a space. **Simplified Chinese** uses 你, a full-width punctuation mark after Chinese text and a half-width one after Latin text, and avoids 进行… and 被… where a plain verb works.
+
+### Glossary
+
+One row is one thing the screen names. A word in the last column is not used for it.
+
+| Thing | en | ko | ja | zh-CN | Not |
+| --- | --- | --- | --- | --- | --- |
+| A machine running Herdr | device | 기기 | デバイス | 设备 | 디바이스, 장치, マシン (the platform names `This Mac`, `This PC` and `This computer` stay as `common.*` says; Korean writes `Mac` in Latin letters) |
+| One terminal of a tab | pane | 터미널 (`pane` only in `pane ID` and commands) | ペイン | 窗格 | 페인, pane in a sentence, 패널, 面板 |
+| A project's folder on a device | checkout | 체크아웃 | チェックアウト | 检出目录 | checkout, 작업 폴더 |
+| Herdr's workspace | workspace | 작업공간 (the tab named `Workspace` keeps its name) | ワークスペース | 工作区 | 워크스페이스 |
+| Git worktree | worktree | 워크트리 | ワークツリー | 工作树 | worktree |
+| An agent started by another | child agent | 자식 에이전트 (count: 개) | 子エージェント | 子智能体 | 하위, 형제 as a heading |
+| A tab's document or browser page | view | 뷰 | ビュー | 视图 | 화면 |
+| Folder | folder | 폴더 | フォルダ | 文件夹 | フォルダー |
+| An agent the operator put to sleep | asleep | 재움 (action: 재우기) | 休止 | 休眠 | 휴면, 잠자기 |
+| Copy of a session that goes on separately | fork | 포크 | フォーク | 分叉 | 분기 |
+| The first agent of a delegation chain | root session | 맨 위 세션 | 最上位セッション | 根会话 | 루트 |
+| Another machine's Hide | other Hide | 다른 Hide | 別の Hide | 另一个 Hide | 호스트 |
+| An agent below a child | descendant session | 하위 세션 | 下位セッション | 下级会话 | 后代会话 |
+| An agent is busy | working | 작업 중 | 作業中 | 工作中 | 일하는 중 |
+| A unit of work in the sidebar | task | 태스크 | タスク | 任务 | 일감 |
+| GitHub issue | issue | 이슈 | Issue | 议题 | 課題 |
+| Pull request | PR | PR | PR | PR | 풀 리퀘스트, プルリクエスト, 拉取请求 |
+| Merge | merge | 머지 | マージ | 合并 | Merge, 병합 |
+| Copy a repository from a URL | clone | 클론 | クローン | 克隆 | 복제 |
+| Join an issue to a PR | link | 연결 | 関連付け | 关联 | 잇기 |
+| Revoke a paired phone | disconnect | 연결 해제 | 解除 | 解除 | 해지 |
+| Read a QR code | scan | 스캔 | スキャン | 扫描 | 찍기 |
+| The file Hide adds to an agent | agent setup | 연동 설정 | 連携設定 | 集成配置 | hook, 훅 in a sentence (a file named `hooks.json` stays) |
+| Hide's helper on a device | helper | 헬퍼 | ヘルパー | 辅助程序 | 연결 도구 |
+| The `hide` command | command | 명령 | コマンド | 命令 | 명령어 |
+| Messages between agents | letter | 편지 | レター | 信件 | 手紙 |
+| A phone | phone | 폰 | スマートフォン | 手机 | 모바일, 휴대폰 (the tab named `모바일` keeps its name) |
+| The panel to the right of the tabs | lane | 레인 | レーン | 右侧面板 | 侧栏 for the lane (it names the sidebar) |
+| The device list beside the sidebar | device rail | 기기 목록 | デバイス一覧 | 设备栏 | 레일 |
+| An issue source kept on this device | local | 로컬 | ローカル | 本地 | Local |
+| The feature that keeps cards for agents | Memory | Memory | Memory | Memory | 기억, メモリ, 记忆 |
+| Agent family names | Claude Code, Codex, Grok, OpenCode, Pi, omp, Antigravity | as written | as written | as written | 代理 for an agent in zh |
+| Reasoning level | effort | effort | effort | effort | translated |
+
+Words that stay in English on purpose: `core`, `stack`, `effort`, `Conductor`, `Hide AI`, `Memory` (tab name), `Factory`.
 
 ## Hardcoded text guard
 

@@ -691,8 +691,24 @@ fn a_task_prompt_is_handed_to_its_agent_start_and_kept_for_a_retry() {
     let pending = runtime.pending_task_agent_start(id).unwrap();
     assert_eq!(pending.prompt.as_deref(), Some("Issue #192를 해결해줘"));
     assert_eq!(pending.args, ["--model", "opus"]);
-    assert!(
-        runtime.ingest_task_agent_result(id, live::TaskAgentOutcome::Failed("no claude".into()))
+    // A shell stopped at a question: the screen's last line is quoted
+    // beside the code, and a later start clears both.
+    assert!(runtime.ingest_task_agent_result(
+        id,
+        live::TaskAgentOutcome::Failed(live::AgentFailure {
+            reason: "agent_start.shell_starting".into(),
+            detail: None,
+            line: Some("Update oh-my-zsh now? [Y/n]".into()),
+        })
+    ));
+    let failed = runtime.snapshot().task_operation.clone().unwrap();
+    assert_eq!(
+        failed.agent_reason.as_deref(),
+        Some("agent_start.shell_starting")
+    );
+    assert_eq!(
+        failed.agent_line.as_deref(),
+        Some("Update oh-my-zsh now? [Y/n]")
     );
     assert!(runtime.task_agent_launch.is_some(), "kept for Retry");
     runtime
@@ -705,7 +721,8 @@ fn a_task_prompt_is_handed_to_its_agent_start_and_kept_for_a_retry() {
     assert!(runtime.task_agent_launch.is_none());
     let operation = runtime.snapshot().task_operation.clone().unwrap();
     assert_eq!(operation.agent_phase.as_deref(), Some("started"));
-    assert_eq!(operation.agent_message, None);
+    assert_eq!(operation.agent_reason, None);
+    assert_eq!(operation.agent_line, None);
 }
 
 /// A runtime whose project reads Local issues and holds one, `L-1`.
@@ -963,7 +980,7 @@ fn a_local_issue_edit_changes_its_title_and_body_and_answers_the_request() {
         (
             update.request_id.as_str(),
             update.phase.as_str(),
-            update.message
+            update.failure
         ),
         ("r1", "ready", None)
     );
@@ -1000,7 +1017,7 @@ fn a_refused_issue_edit_keeps_the_issue_and_says_why() {
         (update.request_id.as_str(), update.phase.as_str()),
         ("r2", "failed")
     );
-    assert!(update.message.unwrap().contains("제목"));
+    assert_eq!(update.failure.unwrap().code, "local_issue.title_empty");
     assert_eq!(
         runtime.snapshot().navigator.workspaces[0].tasks.tasks[0].title,
         "로컬 이슈"
@@ -1157,7 +1174,7 @@ fn a_search_covers_each_local_github_repository_once() {
     let (targets, note) = runtime.github_search_targets();
     assert_eq!(targets.len(), 20);
     assert_eq!(targets[19].repository.as_deref(), Some("acme/r19"));
-    assert_eq!(note.as_deref(), Some("저장소 25개 중 20개만 검색했습니다."));
+    assert_eq!(note.as_deref(), Some("github_search.partial"));
 }
 
 /// A core built without a worker says so, and the next search is not wedged
@@ -1188,7 +1205,7 @@ fn a_refused_query_fails_in_the_slot_and_drops_the_pending_request() {
     assert!(runtime.dispatch_json(&search_event("s3", "   ")));
     let (id, _, phase, message) = search_slot(&runtime);
     assert_eq!((id.as_str(), phase.as_str()), ("s3", "failed"));
-    assert!(message.unwrap().contains("검색어"));
+    assert_eq!(message.as_deref(), Some("github_search.query_empty"));
     assert!(runtime.github_search.pending.is_none());
 
     let long = "가".repeat(201);
@@ -1351,11 +1368,11 @@ fn a_failed_search_says_it_failed_and_keeps_the_reason_out_of_the_slot() {
         (slot.request_id.as_str(), slot.phase.as_str()),
         ("s1", "failed")
     );
-    assert_eq!(slot.message.as_deref(), Some("GitHub 검색에 실패했습니다."));
+    assert_eq!(slot.message.as_deref(), Some("github_search.failed"));
     assert!(slot.results.is_empty());
 
     searching(&mut runtime, 2, "s2", "reader");
-    runtime.github_search.active.as_mut().unwrap().note = Some("일부만 검색했습니다.".into());
+    runtime.github_search.active.as_mut().unwrap().note = Some("github_search.partial".into());
     assert!(runtime.ingest_github_search(2, Ok(Vec::new())));
     let slot = runtime.snapshot().issue_work.search.clone().unwrap();
     assert_eq!(
@@ -1364,7 +1381,7 @@ fn a_failed_search_says_it_failed_and_keeps_the_reason_out_of_the_slot() {
             slot.message.as_deref(),
             slot.results.len()
         ),
-        ("ready", Some("일부만 검색했습니다."), 0)
+        ("ready", Some("github_search.partial"), 0)
     );
 }
 

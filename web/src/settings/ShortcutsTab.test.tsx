@@ -45,13 +45,13 @@ it("keeps a refused save visible, and not as saving, after the core clears last_
   expect(events.filter((event) => event.kind === "ui_state_update")).toHaveLength(1);
   expect(saving()).toBe(true);
 
-  const refused = { kind: "ui_state.invalid", message: "the store is read-only", retryable: false, occurred_at: Date.now() + 1000 };
+  const refused = { kind: "ui_state.shortcuts_invalid", message: "Shortcuts were not saved: too many or too long", retryable: false, occurred_at: Date.now() + 1000 };
   await publish({ status: { last_error: refused } });
-  expect(q("[data-shortcut-save-error]")?.textContent).toContain("the store is read-only");
+  expect(q("[data-shortcut-save-error]")?.textContent).toBe("The shortcuts were not saved: there are too many, or one is too long.");
   expect(saving()).toBe(false);
 
   await publish({ status: { last_error: null } });
-  expect(q("[data-shortcut-save-error]")?.textContent).toContain("the store is read-only");
+  expect(q("[data-shortcut-save-error]")?.textContent).toBe("The shortcuts were not saved: there are too many, or one is too long.");
   expect(saving()).toBe(false);
   expect(q("[data-shortcut-reset-all]")?.hasAttribute("disabled")).toBe(false);
 

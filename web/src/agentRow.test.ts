@@ -220,7 +220,7 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
       return lineText(t, agent, sidebarLine(agent)!);
     };
     expect(waiting("checks", 12)).toBe("대기 · CI · PR #12");
-    expect(waiting("children")).toBe("대기 · 자식 2명 작업 중");
+    expect(waiting("children")).toBe("대기 · 자식 에이전트 2개 작업 중");
     expect(waiting("background")).toBe("대기 · 백그라운드 작업");
     expect(waiting("reply")).toBe("대기 · 답장");
   });

@@ -388,16 +388,16 @@ describe("footer (B13, B16, B17, B18)", () => {
 
   it("says there is nothing to clear when no cell can be ticked", () => {
     const nothing = ready([checkout("main", { main: true, build: 0, deps: 0 })]);
-    expect(footerOf(nothing, EMPTY_SELECTION)).toMatchObject({ empty: true, summary: "비울 캐시가 없다" });
+    expect(footerOf(nothing, EMPTY_SELECTION)).toMatchObject({ empty: true, summary: "비울 캐시가 없어요" });
   });
 
   it("asks for a choice when cells exist but none is ticked", () => {
-    expect(footerOf(rows, EMPTY_SELECTION)).toMatchObject({ empty: true, summary: "고른 칸 없음" });
+    expect(footerOf(rows, EMPTY_SELECTION)).toMatchObject({ empty: true, summary: "고른 항목 없음" });
   });
 
   it("says only how many cells and how much, with no explaining sentence", () => {
     const selection = toggleBundle(EMPTY_SELECTION, bundleRefs(rows, EMPTY_SELECTION, ["build_cache", "dependencies"]));
-    expect(footerOf(rows, selection)).toEqual({ empty: false, summary: "3칸 · 6.0 GB" });
+    expect(footerOf(rows, selection)).toEqual({ empty: false, summary: "항목 3개 · 6.0 GB" });
     expect(needsConfirm(planOf(rows, selection))).toBe(false);
   });
 
@@ -405,7 +405,7 @@ describe("footer (B13, B16, B17, B18)", () => {
     const pending = sheetModel(workspace([checkout("a")], { phase: "loading", usage_ready: false }), null);
     expect(footerOf(pending.rows, EMPTY_SELECTION, pending.state).summary).toBe("검토하는 중…");
     const unreadable = sheetModel(workspace([checkout("a")], { usage_error: "no herdr" }), null);
-    expect(footerOf(unreadable.rows, EMPTY_SELECTION, unreadable.state).summary).toBe("쓰는 중인지 확인해야 고를 수 있다");
+    expect(footerOf(unreadable.rows, EMPTY_SELECTION, unreadable.state).summary).toBe("쓰는 중인지 확인해야 고를 수 있어요");
   });
 
   it("adds the worktree count only when a worktree is ticked, and asks the confirmation", () => {
@@ -413,7 +413,7 @@ describe("footer (B13, B16, B17, B18)", () => {
     expect(footerOf(rows, one).summary).toBe("워크트리 1 · 4.0 GB");
     expect(needsConfirm(planOf(rows, one))).toBe(true);
     const withCache = toggleCell(one, { path: "/r/done-2", column: "build_cache" });
-    expect(footerOf(rows, withCache).summary).toBe("1칸 · 워크트리 1 · 6.0 GB");
+    expect(footerOf(rows, withCache).summary).toBe("항목 1개 · 워크트리 1 · 6.0 GB");
     const both = toggleBundle(EMPTY_SELECTION, bundleRefs(rows, EMPTY_SELECTION, ["worktree"]));
     expect(footerOf(rows, both).summary).toBe("워크트리 2 · 6.0 GB");
     expect(footerOf(rows, both)).not.toHaveProperty("destructive");
@@ -466,13 +466,13 @@ describe("reasons in the operator's words (B15, B22)", () => {
     const codes: [CleanupExclusionCode, string][] = [
       ["locked", "잠김"],
       ["current", "지금 보고 있는 체크아웃"],
-      ["pane_open", "이 체크아웃 것이 아닌 pane이 열려 있음"],
+      ["pane_open", "이 체크아웃에 속하지 않은 터미널이 열려 있음"],
       ["dirty", "바뀐 파일 있음"],
       ["not_merged", "기본 브랜치에 머지되지 않음"],
       ["merge_unverified", "머지를 확인하지 못함"],
-      ["nested_repository", "안에 다른 저장소"],
-      ["detached", "브랜치 없이 떨어진 HEAD"],
-      ["contains_worktree", "다른 워크트리를 품고 있음"],
+      ["nested_repository", "안에 다른 저장소가 있음"],
+      ["detached", "분리된 HEAD (브랜치 없음)"],
+      ["contains_worktree", "안에 다른 워크트리가 있음"],
       ["unverified", "확인하지 못함"],
       ["main_unavailable", "기본 브랜치를 읽을 수 없음"],
       ["alias", "폴더를 읽을 수 없음"],
@@ -487,22 +487,22 @@ describe("reasons in the operator's words (B15, B22)", () => {
   });
 
   it("words every result code of a worktree that stayed", () => {
-    expect(reasonText("changed")).toBe("확인 사이에 바뀜");
+    expect(reasonText("changed")).toBe("확인한 뒤에 바뀜");
     expect(reasonText("not_found")).toBe("이미 없음");
     expect(reasonText("unverified")).toBe("확인하지 못함");
-    expect(reasonText("close_refused")).toBe("pane을 닫지 못함");
+    expect(reasonText("close_refused")).toBe("터미널을 닫지 못함");
     expect(reasonText("remove_refused")).toBe("Git이 워크트리를 지우지 못함");
     // A code this build does not know reads as a plain refusal, never as the raw code.
     expect(reasonText("from_a_newer_core" as CleanupExclusionCode)).toBe("지울 수 없음");
   });
 
   it("words every cell code the core sends and the in-use kinds", () => {
-    const cells = { in_use: "확인 사이에 쓰는 중이 됨", changed: "확인 사이에 바뀜", tracked_files: "추적 파일이 있음", nested_repository: "안에 다른 저장소", symlink: "심링크라 건너뜀", not_found: "이미 없음", unverified: "확인하지 못함", io: "폴더를 지우지 못함" } as const;
+    const cells = { in_use: "확인한 뒤에 쓰는 중이 됨", changed: "확인한 뒤에 바뀜", tracked_files: "추적 파일이 있음", nested_repository: "안에 다른 저장소가 있음", symlink: "심볼릭 링크라 건너뜀", not_found: "이미 없음", unverified: "확인하지 못함", io: "폴더를 지우지 못함" } as const;
     for (const [code, text] of Object.entries(cells)) expect(cellReasonText(code as keyof typeof cells), code).toBe(text);
     const inUse = (code: CleanupInUse["code"], name: string | null = null, port: number | null = null) => exclusionText(core("/r/x", { in_use: { code, name, port } }));
     expect(inUse("agent_working")).toBe("에이전트 작업 중");
     expect(inUse("agent_waiting")).toBe("에이전트가 입력을 기다림");
-    expect(inUse("descendant_busy")).toBe("위임한 에이전트가 일하는 중");
+    expect(inUse("descendant_busy")).toBe("자식 에이전트가 작업 중");
     expect(inUse("process", "cargo")).toBe("터미널에서 cargo 실행 중");
     expect(inUse("port", null, 5173)).toBe("포트 5173 서버");
     expect(inUse("unverified")).toBe("쓰는 중인지 확인하지 못함");
@@ -545,7 +545,7 @@ describe("result (B22)", () => {
     const lines = resultLines(cleanup);
     const by = (key: string) => lines.find((line) => line.key === key);
     expect(by("cells:/r/a:removed")).toMatchObject({ label: "feat/a", what: "빌드 캐시 · 의존성", bytes: 9 * GB, reason: null });
-    expect(by("cells:/r/b:skipped")).toMatchObject({ outcome: "skipped", reason: "확인 사이에 쓰는 중이 됨", bytes: null });
+    expect(by("cells:/r/b:skipped")).toMatchObject({ outcome: "skipped", reason: "확인한 뒤에 쓰는 중이 됨", bytes: null });
     expect(by("cells:/r/c:failed")).toMatchObject({ outcome: "failed", reason: "폴더를 지우지 못함" });
     // A cell that emptied some folders and kept one says so beside what it removed.
     expect(by("cells:/r/d:removed")).toMatchObject({ bytes: 1 * GB, reason: "추적 파일이 있음" });
@@ -560,7 +560,7 @@ describe("result (B22)", () => {
   it("tells a skipped worktree from one Git refused", () => {
     const lines = resultLines(cleanup);
     const by = (key: string) => lines.find((line) => line.key === key);
-    expect(by("worktree:/r/kept")).toMatchObject({ outcome: "skipped", reason: "확인 사이에 바뀜", bytes: null });
+    expect(by("worktree:/r/kept")).toMatchObject({ outcome: "skipped", reason: "확인한 뒤에 바뀜", bytes: null });
     expect(by("worktree:/r/dirty")).toMatchObject({ outcome: "skipped", reason: "바뀐 파일 2" });
     expect(by("worktree:/r/refused")).toMatchObject({ outcome: "failed", reason: "Git이 워크트리를 지우지 못함" });
   });

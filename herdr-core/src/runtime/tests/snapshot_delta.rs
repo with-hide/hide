@@ -314,6 +314,7 @@ fn a_changes_read_resends_the_section_only_when_it_differs() {
     fn answer(runtime: &Runtime, files: &[&str]) -> crate::changes::ChangesAnswer {
         let root = "/private/tmp/hide-changes-edit";
         crate::changes::ChangesAnswer {
+            detail: None,
             key: runtime.changes_key(),
             selection: (None, false),
             changes: crate::model::ChangesSnapshot {

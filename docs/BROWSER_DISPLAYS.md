@@ -499,7 +499,7 @@ When every side that fits meets a page it keeps its own side and is drawn under 
 The toolbar holds Back, Forward, Reload (Stop while the page loads), the address, shown without a web scheme until it is focused, so a narrow area still shows the host, with the zoom badge at its right end while the page is not at 100%, the device size button and Comment.
 A page that cannot load says so in its slot with the address and Chromium's reason, and Reload loads its address again.
 A page whose renderer stopped says the same with the reason.
-In a plain browser tab a browser display shows its address on the toolbar row and reads `Pages open in the hide desktop app.` below it, and a web address gets Open in browser, which opens it in a new tab.
+In a plain browser tab a browser display shows its address on the toolbar row and reads `Pages open in the Hide desktop app.` below it, and a web address gets Open in browser, which opens it in a new tab.
 
 ## Verification
 

@@ -258,7 +258,7 @@ export function withoutHideAi(scene: { rest: SnapshotRest; agents: AgentRow[] })
 const NOW_SKEW = 90_000;
 
 const MACHINE = (platform: string): NonNullable<Device["host"]> => ({ consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: "~/.local/bin", contract: 3, bound_identity: "SHA256:example", granted_at_unix_ms: 1, state: "ready", message: null, platform, helper_path: "~/.hide/host-helper/current/hided" });
-const KIT: NonNullable<Device["kit"]> = { unavailable: null, busy: false, components: [{ id: "cli", label: "hide command", state: "installed", reason: null, location: "~/.local/bin/hide" }], agents: [], offers_reinstall: false, shares_account_with: null };
+const KIT: NonNullable<Device["kit"]> = { unavailable: null, busy: false, components: [{ id: "cli", label: "hide command", state: "installed", why: null, location: "~/.local/bin/hide" }], agents: [], offers_reinstall: false, shares_account_with: null };
 
 /** The sidebar of the attention shot with two more machines registered beside the core's, and one paired phone. */
 export function landingDevices(nowMs: number, width: number): { rest: SnapshotRest; agents: AgentRow[]; mobile: MobileState } {

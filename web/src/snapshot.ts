@@ -269,13 +269,16 @@ export type ForkSource = { pane_id?: string | null; label?: string | null };
  * `available` offers Fork agent and Fork agent to the side, `reason` says why a
  * forkable agent cannot fork yet, and `forked_from` is present on a fork.
  */
-export type PaneFork = { available: boolean; reason?: string | null; forked_from?: ForkSource | null };
+/** Why Sleep agent or Fork is disabled now, as a code (`AgentActionRefusal`); the web words it by `agentActionRefusal.<code>`. */
+export type AgentActionRefusal = "device" | "unsupported" | "core_machine_only" | "asleep" | "working" | "waiting_for_you" | "unknown_activity" | "no_conversation";
+
+export type PaneFork = { available: boolean; reason?: AgentActionRefusal | null; forked_from?: ForkSource | null };
 
 /** Where the pane menu's fork puts the fork: its own tab, or beside the source. */
 export type ForkPlacement = "tab" | "side";
 
 /** The pane menu's Sleep agent item (`AgentSleepActionSnapshot`); absent where it does not apply. */
-export type AgentSleepAction = { available: boolean; reason?: string | null };
+export type AgentSleepAction = { available: boolean; reason?: AgentActionRefusal | null };
 
 export type DescendantCounts = { error: number; approval: number; question: number; working: number; done: number };
 
@@ -443,6 +446,7 @@ export type Issue = {
 };
 
 /** The issue a checkout is linked to and where the link came from (`IssueLinkSnapshot`). */
+/** `source` is where the link came from, as a code (`manual`, `pane_token`, `branch_setting`, `pr_body`, `branch_name`). */
 export type IssueLink = { issue: Issue; source: string };
 
 /** A project's open issues, capped by the core (`ProjectIssuesSnapshot`). */
@@ -570,7 +574,7 @@ export type IssueWork = {
   detail: IssueDetail | null;
   name: { request_id: string; phase: "working" | "ready" | "failed"; name: string | null; message: string | null } | null;
   /** The answer to a Local issue's edit, by the web's request id. */
-  update?: { request_id: string; task_key: string; phase: "ready" | "failed"; message: string | null } | null;
+  update?: { request_id: string; task_key: string; phase: "ready" | "failed"; failure: CodedFailure | null } | null;
   /** ⌘K's explicit GitHub search, by the web's request id (`github_search`). */
   search?: GithubSearch | null;
 };
@@ -630,6 +634,9 @@ export type GithubSearch = {
   message: string | null;
 };
 
+/** Why an operation failed (`CodedFailure`): a code the web words (`local_issue.*`, `pr_link.*`, `explorer.*`, `host.*`, `link.*`) and the limit its sentence names. */
+export type CodedFailure = { code: string; limit?: number };
+
 /** A pull request linked to an issue (`PrLinkSnapshot`): the issue made, Hide's link, then `Closes #N` in the body. */
 export type PrLink = {
   request_id: string;
@@ -643,7 +650,8 @@ export type PrLink = {
   issue_id: string | null;
   /** This request made the issue. */
   created: boolean;
-  message: string | null;
+  /** Why it failed, as a code the web words (`issueFailure.ts`). */
+  failure: CodedFailure | null;
 };
 
 /** A pull request's body, failed checks and standing change requests, read for a new issue made from it or an agent's first prompt (`PrFeedbackSnapshot`). */
@@ -1065,7 +1073,8 @@ export type ExplorerOperation = {
   phase: string;
   path: string;
   destination: string;
-  message: string | null;
+  /** Why it failed, as a code `fileFailure.ts` words (`explorer.*`, `host.*`, `link.*`). */
+  failure: CodedFailure | null;
 };
 
 export type WorkspaceRegistration = {
@@ -1610,10 +1619,14 @@ export type FirstRunStep = "herdr" | "agents" | "devices" | "notifications" | "p
 export type FirstRun = { version: number; step: FirstRunStep };
 export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
 export type FirstRunChoices = { agents?: string[] | null; devices?: string[]; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
+export type HerdrProfileRefusal = "no_consent" | "disabled" | "invalid_target" | "discovery_pending" | "device_limit" | "profile_moved";
+
 export type HerdrProfile = {
   id: string; label: string; target: string; session: string; enabled: boolean;
   added_as: string | null; problem: string | null; device_id: string | null;
-  connect_state: string; connect_error: string | null;
+  connect_state: string;
+  /** Why Hide declined to connect it (`herdr_profile_refusal`); a tried connection that failed has none. */
+  connect_refusal: HerdrProfileRefusal | null;
 };
 export type HerdrProfiles = { state: "idle" | "loading" | "ready" | "failed"; error: string | null; profiles: HerdrProfile[]; truncated: boolean };
 
@@ -1624,9 +1637,15 @@ export const FIRST_RUN_VERSION = 1;
 export type ScreenIntro = "factory";
 
 /** One piece of an agent (its skill or its hook) on its machine. */
+/**
+ * Why a kit part or an agent's piece is in its state (`hide_kit::PartWhy`): a cause the web words, with the one
+ * value its sentence names (a path, a name, a version). Absent from a helper that predates it.
+ */
+export type KitWhy = { cause: string; value?: string };
+
 export type KitPiece = {
   state: KitComponentState;
-  reason: string | null;
+  why?: KitWhy | null;
   location: string | null;
 };
 
@@ -1682,9 +1701,12 @@ export type KitComponent = {
   id: KitComponentId;
   label: string;
   state: KitComponentState;
-  reason: string | null;
+  why?: KitWhy | null;
   location: string | null;
 };
+
+/** Why a machine's kit does not run at all (`contracts/snapshot-wire-enums.json`: `kit_unavailable`). */
+export type KitUnavailable = "standalone" | "no_consent" | "consent_outdated" | "unsupported_platform" | "installer_unavailable" | "unreadable";
 
 /**
  * A machine's install kit (PRD device-parity B7): the same parts on This Mac
@@ -1708,7 +1730,7 @@ export type KitRefusal = {
 };
 
 export type Kit = {
-  unavailable: string | null;
+  unavailable: KitUnavailable | null;
   busy: boolean;
   /** The machine's last pass or read stopped before changing anything; its parts and agents are then empty. */
   refused?: KitRefusal | null;
@@ -1774,12 +1796,11 @@ export type RemoteStatus = {
 
 /**
  * `resolving`: the helper is being asked; `ready`: every directory is
- * confirmed; `unavailable`: the helper cannot be asked and `message` says why.
+ * confirmed; `unavailable`: the helper cannot be asked now (why is in the log).
  * An unconfirmed directory is listed as its Herdr workspace alone.
  */
 export type DeviceCatalog = {
   state: "resolving" | "ready" | "unavailable";
-  message: string | null;
   refused: { path: string; message: string }[];
 };
 
@@ -1942,7 +1963,10 @@ export type TaskOperation = {
   message: string | null;
   /** `starting`, `started`, `failed` or `unknown`; null when no agent was chosen. */
   agent_phase: string | null;
-  agent_message: string | null;
+  /** Why the agent did not start: a code (`agent_start.*`, or a session check's), worded by `agentFailure`. */
+  agent_reason: string | null;
+  /** The pane screen's last line for `agent_start.shell_starting`, quoted as the terminal showed it. */
+  agent_line: string | null;
   /** The id the start surface sent (`agent_start_in_checkout.request_id`), so each surface reads only its own answer. */
   request_id?: string | null;
 };
@@ -1961,7 +1985,10 @@ export type RepositoryClone = {
   /** Git's own stage, `Receiving objects` and the like. */
   stage: string | null;
   percent: number | null;
-  message: string | null;
+  /** Why a `failed` clone failed (`authentication`, `not_found`, `git`, ...), worded by the shell. */
+  failure: string | null;
+  /** Git's own last `fatal:` line when `failure` is `git`, quoted as what Git said. */
+  git_line: string | null;
 };
 
 /** One worktree deletion: `checking` before any close, `closing` panes, `removing` on the core's worker, then `finished` or `failed`. */

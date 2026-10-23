@@ -16,7 +16,7 @@ vi.hoisted(() => {
   HTMLCanvasElement.prototype.getContext = () => null;
 });
 
-const part = (id: KitComponent["id"], state: KitComponent["state"], over: Partial<KitComponent> = {}): KitComponent => ({ id, label: id === "codex_hook" ? "Codex hook" : id === "claude_code_hook" ? "Claude Code hook" : "hide command", state, reason: null, location: "~/somewhere", ...over });
+const part = (id: KitComponent["id"], state: KitComponent["state"], over: Partial<KitComponent> = {}): KitComponent => ({ id, label: id === "codex_hook" ? "Codex hook" : id === "claude_code_hook" ? "Claude Code hook" : "hide command", state, why: null, location: "~/somewhere", ...over });
 
 const kit = (components: KitComponent[], over: Partial<Kit> = {}): Kit => ({ unavailable: null, busy: false, components, agents: [], offers_reinstall: components.some((c) => ["outdated", "not_installed", "removed", "failed"].includes(c.state)), shares_account_with: null, ...over });
 
@@ -71,10 +71,10 @@ it("says nothing about a healthy kit on a device row, and names the device by al
 });
 
 it("grows one line under the device for a failed part, with Reinstall, and the line is gone once the kit is whole again (B54)", async () => {
-  const broken = remote("mini", { kit: kit([part("cli", "installed"), part("codex_hook", "failed", { reason: "hooks.json is not valid JSON" })]) });
+  const broken = remote("mini", { kit: kit([part("cli", "installed"), part("codex_hook", "failed", { why: { cause: "unreadable", value: "~/.codex/hooks.json" } })]) });
   const first = await mount(state([broken]));
   const line = first.q('[data-kit-problem="mini"]')!;
-  expect(line.textContent).toBe("✕Hide's kit: Codex hook: Failed: hooks.json is not valid JSON" + "Reinstall");
+  expect(line.textContent).toBe("✕Hide's kit: Codex hook: Failed: Hide could not read what is there: ~/.codex/hooks.json" + "Reinstall");
   await act(async () => { first.q('[data-kit-reinstall="mini"]')?.click(); });
   expect(sent(first.events, "kit_reinstall")).toHaveLength(1);
   await first.unmount();
@@ -133,7 +133,7 @@ it("says in one line when a device's Herdr stays older than Hide's, with the ste
 });
 
 it("does not call a part that is not on the machine, or one the operator switched off, a problem, and never repeats its reason (B56)", async () => {
-  const quiet = remote("mini", { kit: kit([part("cli", "installed"), part("codex_hook", "absent", { reason: "Codex is not set up on this machine" }), part("claude_code_hook", "off")]) });
+  const quiet = remote("mini", { kit: kit([part("cli", "installed"), part("codex_hook", "absent", { why: { cause: "agent_absent" } }), part("claude_code_hook", "off")]) });
   const { row, unmount } = await mount(state([quiet]));
   expect(row("mini")!.textContent).not.toContain("Not on this machine");
   expect(row("mini")!.textContent).not.toContain("Coordination");
