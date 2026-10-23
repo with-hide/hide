@@ -8,10 +8,9 @@
 // the decision and goes on. The map edits nothing: the mission changes only
 // by what is said to its Conductor, as in Hide.
 
-import type { AgentScope, AgentTreeScope } from "../../agentScope";
-import type { AgentRow, AgentState, DetailItem, Mission, MissionNode, PaneHeader, SnapshotRest } from "../../snapshot";
+import type { AgentRow, AgentState, DetailItem, Mission, MissionNode, PaneHeader } from "../../snapshot";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
-import { agent, applyDesk, deskSnapshot, shellScreen, type DeskModel, type PracticePlace } from "./kit";
+import { agent, applyDesk, counted, deskSnapshot, keyText, shellScreen, typed, withLineage, type DeskModel, type PracticePlace } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 
@@ -216,23 +215,6 @@ function submit(model: MissionModel): MissionModel {
   }
 }
 
-const decode = (base64: string) => new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)));
-
-/** The prompt after the keys `text`: ⌃U clears it, ⌫ takes a character back, ⏎ sends it; an arrow or other escape sequence moves nothing. */
-function typed(model: MissionModel, text: string): MissionModel {
-  let next = model;
-  let escape = false;
-  for (const char of text) {
-    if (escape) escape = !/[A-Za-z~]/.test(char);
-    else if (char === "\x1b") escape = true;
-    else if (char === "\r") next = submit(next);
-    else if (char === "\x15") next = { ...next, draft: "" };
-    else if (char === "\x7f") next = { ...next, draft: [...next.draft].slice(0, -1).join("") };
-    else if (char >= " ") next = { ...next, draft: next.draft + char };
-  }
-  return next;
-}
-
 // --- The events --------------------------------------------------------------------------
 
 function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
@@ -240,7 +222,7 @@ function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
   switch (event.kind) {
     // Only the Conductor is talked to here; keys typed into another pane reach no one.
     case "key":
-      return p.pane_id === CONDUCTOR && typeof p.bytes_base64 === "string" ? typed(model, decode(p.bytes_base64)) : null;
+      return p.pane_id === CONDUCTOR && typeof p.bytes_base64 === "string" ? typed(model, keyText(p.bytes_base64), submit) : null;
     // The map opens in the 보기 slot as a lane call, the way the core numbers one; a record or a card this world keeps none of.
     case "detail_open": {
       const item = p.item as DetailItem;
@@ -262,59 +244,6 @@ function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
 
 // --- The snapshot ------------------------------------------------------------------------
 
-/** How the one root stands: at rest, asking its decision, or at work. */
-type RootLook = "seen" | "needs_you" | "working";
-
-/**
- * Every agent scope in `rest` as the core counts it: the Conductor the one
- * root where its row stands, and once the mission runs its worker one level
- * under it, working. The kit counts every row as a working root.
- */
-function scoped(rest: SnapshotRest, look: RootLook, child: boolean): SnapshotRest {
-  const nest = (tree: AgentTreeScope): AgentTreeScope => {
-    const rows = tree.rows.filter((row) => row.pane_id !== WORKER).flatMap((row) => (row.pane_id === CONDUCTOR && child ? [row, { pane_id: WORKER, occurrence: 0, depth: 1 }] : [row]));
-    return { ...tree, rows, visible_rows: rows, needs_you: look === "needs_you" };
-  };
-  const asks = look === "needs_you" ? 1 : 0;
-  const works = (look === "working" ? 1 : 0) + (child ? 1 : 0);
-  const scope = (one: AgentScope): AgentScope => ({
-    ...one,
-    roots: one.roots.filter((row) => row.pane_id !== WORKER),
-    children: child ? { [CONDUCTOR]: [WORKER] } : {},
-    descendants: child ? { [CONDUCTOR]: 1 } : {},
-    overview_needs_you: asks, has_working: works > 0,
-    groups: { needs_you: asks, done: 0, working: works, seen: look === "seen" ? 1 : 0 },
-    marks: { turn: asks, going: works, done: 0, unread: 0 },
-    buckets: { turn: asks, working: works, delegating: 0, resting: look === "seen" ? 1 : 0 },
-    turns: { ...one.turns, question: asks },
-    tree: nest(one.tree),
-    sidebar_tree: nest(one.sidebar_tree),
-    global_tree: nest(one.global_tree),
-  });
-  const navigator = rest.navigator!;
-  return {
-    ...rest,
-    navigator: {
-      ...navigator,
-      agent_scope: navigator.agent_scope && scope(navigator.agent_scope),
-      devices: navigator.devices?.map((device) => ({ ...device, agent_scope: scope(device.agent_scope) })),
-      workspaces: navigator.workspaces?.map((workspace) => ({
-        ...workspace,
-        agent_scope: scope(workspace.agent_scope),
-        agent_presence: { working: works > 0 },
-        checkouts: workspace.checkouts.map((checkout) => ({
-          ...checkout,
-          agent_scope: scope(checkout.agent_scope),
-          agent_summary: checkout.agent_summary && {
-            ...checkout.agent_summary, needs_you: asks, working: works, seen: look === "seen" ? 1 : 0,
-            marks: { ...checkout.agent_summary.marks, turn: asks, going: works },
-          },
-        })),
-      })),
-    },
-  };
-}
-
 /** The Conductor pane's head as the core sends it: at rest, asking on its second row, or at work on the answer. */
 function conductorHeader(model: MissionModel): PaneHeader {
   if (model.stage === 1) return { working: false, notice: null, band: { kind: "answer", reason: DECISION, since_unix_ms: model.startedAt, read: false, action: null, more: 0 } };
@@ -322,11 +251,11 @@ function conductorHeader(model: MissionModel): PaneHeader {
   return { working: false, notice: null, band: null };
 }
 
-const LOOK: Record<MissionStage, RootLook> = { 0: "seen", 1: "needs_you", 2: "working" };
-
 function snapshot(model: MissionModel, nowMs: number): WorldSnapshot {
   const drawn = deskSnapshot([{ place: PLACE, model: model.desk }], PLACE.project, nowMs);
-  const base = scoped(drawn.rest, LOOK[model.stage], model.stage >= 1);
+  // Once the mission runs, its worker is drawn under the Conductor; the Conductor rests before it and asks while the decision waits.
+  const lineage = model.stage >= 1 ? withLineage(drawn.rest, CONDUCTOR, [WORKER]) : drawn.rest;
+  const base = model.stage === 2 ? lineage : counted(lineage, model.stage === 1 ? "needs_you" : "seen");
   const shown = model.detailShown && model.detail.length > 0;
   const current = mission(model);
   const headers: Record<string, PaneHeader> = { [CONDUCTOR]: conductorHeader(model) };
