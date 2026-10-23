@@ -245,7 +245,8 @@ export function missionMiniGraph(mission: Mission): { done: number; graph: Layer
  */
 export function firstPlans(before: SnapshotRest | null | undefined, after: SnapshotRest | null | undefined): Mission[] {
   const previous = before?.missions;
-  if (!previous || previous.failed) return [];
+  // A frame that left the missions alone keeps their section as it was.
+  if (!previous || previous.failed || previous === after?.missions) return [];
   const known = new Map(previous.items.map((mission) => [mission.id, mission]));
   return (after?.missions?.items ?? []).filter((mission) => mission.nodes.length > 0 && (known.get(mission.id)?.nodes.length ?? 0) === 0);
 }

@@ -9,8 +9,8 @@ import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover"
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { useWorkerRow } from "./MissionMap";
+import { allAgents } from "./paneAgents";
 import { MINI_REPORT, missionMiniGraph, missionOfPane, missionOpen, nodeMark, paneChipWords, type MiniCard } from "./missions";
-import { usePaneAgents } from "./PaneHeaderBand";
 import { PanePlanChip, usePaneChipPopover } from "./PanePlanChip";
 import { machineName } from "./screenMachine";
 import type { Mission, MissionNode } from "./snapshot";
@@ -27,8 +27,7 @@ const DONE_DOTS = 10;
 
 /** The mission the pane's session conducts, as its sidebar row finds it; none while the record cannot be read. */
 export function usePaneMission(paneId: string): Mission | null {
-  const agents = usePaneAgents();
-  return useShellStore((s) => missionOfPane(s.rest, agents, paneId));
+  return useShellStore((s) => missionOfPane(s.rest, allAgents(s.agents, s.rest?.status?.remote), paneId));
 }
 
 /** The pane head's work chip: the mission chip on a Conductor's pane, its own plan chip on any other (D-07). */
@@ -40,9 +39,10 @@ export function PaneWorkChip({ paneId, actions }: { paneId: string; actions: Act
 const CHIP_TONE: Record<ReturnType<typeof paneChipWords>["state"], string> = {
   planning: "",
   running: "text-foreground",
-  decision: "border-warning text-warning",
+  // The state keeps its colour while the map is open, over the open chip's ring (approved board 3).
+  decision: "border-warning text-warning data-[state=open]:border-warning data-[state=open]:text-warning",
   merge_wait: "text-foreground",
-  done: "border-success text-success",
+  done: "border-success text-success data-[state=open]:border-success data-[state=open]:text-success",
   cancelled: "",
 };
 
@@ -61,7 +61,7 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
           data-pane-mission-chip={mission.id}
           data-mission-chip-state={words.state}
           className={cn(
-            "flex h-(--size-sidebar-line-detail) min-w-0 shrink-0 items-center gap-xxs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground",
+            "flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground",
             CHIP_TONE[words.state],
           )}
         >
@@ -136,7 +136,7 @@ export function MiniMap({ paneId, mission, onLarge, onConversation, onRecord }: 
             {mission.decision}
           </span>
           <button type="button" className="shrink-0 rounded-xs px-xs py-xxs text-foreground outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" onClick={onConversation} data-mission-mini-conversation="true">
-            {t("mission.toConversation")}
+            {t("mission.mini.conversation")}
           </button>
         </div>
       ) : null}
@@ -205,8 +205,10 @@ function MiniFace({ mission, card }: { mission: Mission; card: MiniCard }) {
   if (card.kind === "report") return <ReportFace mission={mission} />;
   const titles = card.nodes.map((node) => node.title).join(", ");
   return (
-    <span data-dependency-node={card.key} data-mission-mini-more={card.nodes.length} className={cn(FACE, card.nodes.every(pending) && PENDING)} title={titles} aria-label={`${t("mission.mini.more", { count: card.nodes.length })}: ${titles}`}>
+    <span data-dependency-node={card.key} data-mission-mini-more={card.nodes.length} className={cn(FACE, card.nodes.every(pending) && PENDING)} title={titles}>
       <span className="min-w-0 flex-1 truncate">{t("mission.mini.more", { count: card.nodes.length })}</span>
+      {/* The folded titles, read out where the pointer's title cannot reach. */}
+      <span className="sr-only">: {titles}</span>
     </span>
   );
 }

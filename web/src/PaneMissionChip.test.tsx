@@ -30,6 +30,7 @@ afterEach(() => {
   useShellStore.setState(savedShell, true);
   useUiStore.setState(savedUi, true);
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
 });
@@ -98,6 +99,9 @@ it("reads each state in words beside the waypoints mark, in the plan chip's plac
     const view = await mount([mission(extra)], { plans: [plan()] });
     try {
       expect([view.chip()?.dataset.missionChipState, view.chip()?.textContent]).toEqual([state, text]);
+      // A decision and a done mission keep their colour while the map is open.
+      if (state === "decision") expect(view.chip()?.className).toContain("data-[state=open]:text-warning");
+      if (state === "done") expect(view.chip()?.className).toContain("data-[state=open]:text-success");
       expect(view.chip()?.getAttribute("aria-label")).toMatch(/^Mission Ship the API · /);
       expect(view.container.querySelector("[data-pane-plan-chip]")).toBeNull();
     } finally { await view.unmount(); }
@@ -183,7 +187,7 @@ it("leads with the decision and its way to the conversation, which brings the Co
     await act(async () => view.actions.togglePlanChip());
     const map = view.popover()!;
     expect(map.querySelector("[data-mission-mini-head]")?.textContent).toBe("Mission1/3 · 1 to decide");
-    expect(map.querySelector("[data-mission-mini-decision]")?.textContent).toBe("! Which base for the screen PR?Go to conversation");
+    expect(map.querySelector("[data-mission-mini-decision]")?.textContent).toBe("! Which base for the screen PR?To conversation");
     await view.press("[data-mission-mini-conversation]");
     expect(view.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "p1" } });
     expect(view.popover()).toBeNull();
@@ -201,7 +205,7 @@ it("shows one 계획 중 line before the first plan, and a +N card for a row of 
   try {
     await act(async () => wide.actions.togglePlanChip());
     const more = wide.popover()!.querySelector<HTMLElement>("[data-mission-mini-more]");
-    expect([more?.textContent, more?.getAttribute("aria-label")]).toEqual(["+3 more", "+3 more: b title, c title, d title"]);
+    expect(more?.textContent).toBe("+3 more: b title, c title, d title");
   } finally { await wide.unmount(); }
 });
 
@@ -209,9 +213,11 @@ it("opens the map pinned once when the first plan lands on the pane the operator
   const view = await mount([mission({ status: "planning", nodes: [] })]);
   try {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
     useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false });
-    const land = (before: Mission, after: Mission, extra: Partial<ReturnType<typeof useShellStore.getState>> = {}) => {
-      const previous = { ...useShellStore.getState(), rest: snapshot([before]) };
+    type Shell = ReturnType<typeof useShellStore.getState>;
+    const land = (before: Mission, after: Mission, extra: Partial<Shell> = {}, was: Partial<Shell> = {}) => {
+      const previous: Shell = { ...useShellStore.getState(), connection: "live", rest: snapshot([before]), ...was };
       revealFirstPlan({ ...previous, rest: snapshot([after]), ...extra }, previous);
     };
     const empty = mission({ status: "planning", nodes: [] });
@@ -221,6 +227,14 @@ it("opens the map pinned once when the first plan lands on the pane the operator
     expect(useUiStore.getState().planPane).toBeNull();
     // A full snapshot, as after a reconnect, is no plan landing.
     land(empty, planned, { viewGeneration: useShellStore.getState().viewGeneration + 1 });
+    expect(useUiStore.getState().planPane).toBeNull();
+    // A browser tab that does not hold the keyboard, though it never sent a blur.
+    focus.mockReturnValue(false);
+    land(empty, planned);
+    expect(useUiStore.getState().planPane).toBeNull();
+    focus.mockReturnValue(true);
+    // The first frame after a reconnect resumes as a delta, applied before the link reads live again.
+    land(empty, planned, {}, { connection: "reconnecting" });
     expect(useUiStore.getState().planPane).toBeNull();
     // The Overview over the Workspace.
     useUiStore.setState({ overviewOpen: true });

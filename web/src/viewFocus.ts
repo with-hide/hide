@@ -23,8 +23,12 @@ let inputRevision = 0;
 let windowActive = true;
 let returningFocus = false;
 export function keyboardInputRevision(): number { return inputRevision; }
-/** Whether this window holds the operator's keyboard: the browser tab's focus, or the desktop host's report. */
-export function windowIsActive(): boolean { return windowActive; }
+/**
+ * Whether this window holds the operator's keyboard: the desktop host's
+ * report, or a browser tab's own focus, which is read now because a tab
+ * that never held focus has sent no blur to correct `windowActive`.
+ */
+export function windowIsActive(): boolean { return browserBridge() ? windowActive : windowActive && document.hasFocus(); }
 /** A layer returning borrowed focus is not a new input choice by the operator. */
 export function returnKeyboardFocus(restore: () => void): void {
   const previous = returningFocus;
