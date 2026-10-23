@@ -20,9 +20,7 @@ export const ACCENTS = 'web/src/generated/accents.ts';
 /** The class that selects the Hide color theme; the web shell's `theme.ts` names the same class. */
 export const PALETTE_HIDE = 'palette-hide';
 
-/** The interface text sizes Settings > Appearance > Interface font scales; terminal and editor text do not. */
-/** The class a subtree carries to draw the interface text at its own size whatever the Appearance scale. */
-export const SCALE_EXEMPT = 'interface-scale-exempt';
+/** The interface text sizes Settings > Appearance > Interface text scales; terminal and editor text do not. */
 
 export const INTERFACE_TEXT = ['--text-micro', '--text-caption', '--text-body', '--text-subhead', '--text-title', '--text-headline'];
 
@@ -49,7 +47,7 @@ export function generate(root = process.cwd()) {
   if (overviewPanel?.type !== 'number') throw new Error('Expected numeric --size-overview-panel-breakpoint');
   const paneBreakpoint = tokens['--size-pane-parent-breakpoint'];
   if (paneBreakpoint?.type !== 'number') throw new Error('Expected numeric --size-pane-parent-breakpoint');
-  const theme = [], mapped = [], light = [], dark = [], hideLight = [], hideDark = [], rest = [], fixed = [];
+  const theme = [], mapped = [], light = [], dark = [], hideLight = [], hideDark = [], rest = [];
   for (const [name, token] of Object.entries(tokens)) {
     if (token.type === 'color') {
       if (!token.light) throw new Error(`${name} has no Light value`);
@@ -72,7 +70,6 @@ export function generate(root = process.cwd()) {
       mapped.push(`  --color-${name.slice(2)}: var(${name});`);
     } else if (INTERFACE_TEXT.includes(name)) {
       theme.push(`  ${name}: calc(${plain(token)} * var(--interface-scale, 1));`);
-      fixed.push(`  ${name}: ${plain(token)};`);
     } else if (name.startsWith('--spacing-') || name.startsWith('--radius-')) {
       theme.push(`  ${name}: ${plain(token)};`);
     } else {
@@ -102,15 +99,6 @@ export function generate(root = process.cwd()) {
     '',
     ':root {',
     ...rest,
-    '}',
-    '',
-    // The sidebar does not follow Settings > Appearance > Interface font
-    // (PRD sidebar-typography D-05). A custom property resolves its var()
-    // where it is declared, so the scaled sizes above are already fixed at
-    // :root; a subtree that opts out declares the sizes again.
-    `.${SCALE_EXEMPT} {`,
-    '  --interface-scale: 1;',
-    ...fixed,
     '}',
     '',
     '/* `.light` and `.dark` also scope a subtree, so one page can show both (the dev gallery). */',

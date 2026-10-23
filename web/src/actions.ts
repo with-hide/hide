@@ -1215,6 +1215,10 @@ export function createActions(send: DispatchFn) {
       updateUiState({ font_size: size });
     },
 
+    setTerminalFontSize(size: number) {
+      updateUiState({ terminal_font_size: size });
+    },
+
     /** The width a sidebar drag or its reset lands on, sent once per gesture (PRD sidebar-typography D-09). */
     setSidebarWidth(width: number) {
       updateUiState({ sidebar_width: width });

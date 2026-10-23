@@ -361,16 +361,6 @@
   --size-checkout-header-time-min: 800px;
 }
 
-.interface-scale-exempt {
-  --interface-scale: 1;
-  --text-micro: 10px;
-  --text-caption: 11px;
-  --text-body: 12px;
-  --text-subhead: 13px;
-  --text-title: 14px;
-  --text-headline: 18px;
-}
-
 /* `.light` and `.dark` also scope a subtree, so one page can show both (the dev gallery). */
 :root,
 .light {

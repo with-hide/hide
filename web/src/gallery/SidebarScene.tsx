@@ -22,7 +22,7 @@ export type SceneParams = {
   theme: "light" | "dark";
   /** The sidebar's width in CSS pixels, seeded as the core's `ui_state.sidebar_width`; absent, the sidebar's default. */
   width: number | null;
-  /** The interface text scale the Appearance font size sets (`--interface-scale`); the sidebar itself does not follow it (PRD sidebar-typography D-05). */
+  /** The interface text scale the Appearance font size sets (`--interface-scale`); the sidebar follows it with the rest of the interface. */
   scale: number;
   content: SceneContent;
   /** One device, the two-device fixture, or that fixture with a busy `mini`; the rail shows in all three. */
