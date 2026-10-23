@@ -1,5 +1,5 @@
 import { ServerIcon } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { EntryContextMenu, type MenuEntry } from "./components/entry-menu";
 import { Button } from "./components/ui/button";
@@ -169,15 +169,19 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const documentsUp = up && drawnView === "documents";
   const displays = view?.layout?.display_count ?? 0;
   const shownBefore = useRef({ up, documentsUp });
-  useEffect(() => {
+  useLayoutEffect(() => {
     const before = shownBefore.current;
     shownBefore.current = { up, documentsUp };
     const owner = keyboardOwner();
     const lost = (before.up && !up && (owner.kind === "view" || owner.kind === "tool" || owner.kind === "detail")) || (before.documentsUp && !documentsUp && displays > 0 && owner.kind === "view");
-    if (!lost) return;
+    if (!lost || owner.workspace !== checkoutId) return;
     const paneId = useShellStore.getState().focusedPaneId;
+    // A native page can report its focus after a menu command ran. The
+    // shell's textarea can already be active, so focus() then emits no DOM
+    // event. Retire the hidden owner with the drawing, independently of it.
+    noteKeyboardOwner(paneId && checkoutId ? { kind: "pane", workspace: checkoutId, paneId } : { kind: "none" });
     if (paneId) focusTerminal(paneId);
-  }, [up, documentsUp, displays]);
+  }, [up, documentsUp, displays, checkoutId]);
   if (!checkout || !view) return null;
   return (
     <section
