@@ -10,8 +10,9 @@ import type { MessageKey } from "../i18n/catalogs";
 import { commandLabel } from "../shortcutLabels";
 import { hostChord, hostRegistry, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
+import { pasteText, terminalFor } from "../terminals";
 import { useUiStore } from "../ui";
-import type { PracticeChapter, PracticeDrag, PracticeStep } from "./chapter";
+import type { PracticeChapter, PracticeDrag, PracticeMenu, PracticeStep, PracticeTyping } from "./chapter";
 import { COACH_CSS } from "./coachStyle";
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -81,6 +82,99 @@ function dragPane(drag: PracticeDrag, follow: (point: Point | null) => void) {
   window.setTimeout(() => requestAnimationFrame(glide), 250);
 }
 
+/** How long typed words stay in the prompt before ⏎ sends them, so the learner reads what was said. */
+const READ_MS = 700;
+/** How long each letter typed into a field waits, so the field is seen answering as it is typed. */
+const LETTER_MS = 90;
+
+/**
+ * Types `typing.text` as the learner would. Into a pane: the terminal takes
+ * the words, after ⌃U clears whatever the learner had typed there, then ⏎;
+ * a practice terminal reaches no program. Into a field: letter by letter, in
+ * place of what it held, each letter an input the field's own handler hears.
+ */
+function typeInto(typing: PracticeTyping): Promise<void> {
+  if ("input" in typing) return typeInField(typing.input, typing.text);
+  if (!terminalFor(typing.pane)) throw new Error(`Practice step types into ${typing.pane}, which has no terminal on screen`);
+  pasteText(typing.pane, `\x15${typing.text}`);
+  return new Promise((resolve) => window.setTimeout(() => {
+    pasteText(typing.pane, "\r");
+    resolve();
+  }, READ_MS));
+}
+
+async function typeInField(selector: string, text: string): Promise<void> {
+  const field = document.querySelector<HTMLInputElement>(selector);
+  if (!field) throw new Error(`Practice step types into ${selector}, which is not on screen`);
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  field.focus();
+  for (let at = 0; at <= text.length; at += 1) {
+    setValue.call(field, text.slice(0, at));
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    await pause(LETTER_MS);
+  }
+}
+
+const middle = (element: Element): Point => {
+  const box = element.getBoundingClientRect();
+  return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+};
+
+/** The element `selector` marks, once it is on screen; a menu draws its items a frame or two after it opens. */
+function appeared(selector: string): Promise<HTMLElement> {
+  const began = performance.now();
+  return new Promise((resolve, reject) => requestAnimationFrame(function look() {
+    const found = document.querySelector<HTMLElement>(selector);
+    if (found) return resolve(found);
+    if (performance.now() - began > 3000) return reject(new Error(`Practice menu item ${selector} never appeared`));
+    requestAnimationFrame(look);
+  }));
+}
+
+/** Moves the hand from `from` to `to` over `ms`, eased, and resolves where it stops. */
+function glide(from: Point, to: Point, ms: number, follow: (point: Point | null) => void): Promise<Point> {
+  const began = performance.now();
+  return new Promise((resolve) => requestAnimationFrame(function step(now) {
+    const t = Math.min(1, (now - began) / ms);
+    const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+    follow({ x: from.x + (to.x - from.x) * eased, y: from.y + (to.y - from.y) * eased });
+    if (t < 1) requestAnimationFrame(step);
+    else resolve(to);
+  }));
+}
+
+const pause = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+/** Right-clicks what `menu.at` marks as a hand would, so the shell opens its own menu, then presses each of `menu.path` in turn. */
+async function chooseFromMenu(menu: PracticeMenu, follow: (point: Point | null) => void): Promise<void> {
+  const marked = document.querySelector<HTMLElement>(menu.at);
+  if (!marked) throw new Error(`Practice menu target ${menu.at} is not on screen`);
+  let hand = middle(marked);
+  follow(hand);
+  await pause(250);
+  const element = document.elementsFromPoint(hand.x, hand.y).find((hit) => marked.contains(hit)) ?? marked;
+  element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true, button: 2, buttons: 2, clientX: hand.x, clientY: hand.y }));
+  for (const selector of menu.path) {
+    const item = await appeared(selector);
+    await pause(300);
+    hand = await glide(hand, middle(item), 450, follow);
+    await pause(200);
+    item.click();
+  }
+  await pause(250);
+  follow(null);
+}
+
+/** Where the `예시` mark of each element `selector` matches goes: just past the end of its text, so it covers none. */
+function examplesOf(selectors: readonly string[] | undefined): Point[] {
+  return (selectors ?? []).flatMap((selector) => [...document.querySelectorAll(selector)].flatMap((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const end = [...range.getClientRects()].filter((box) => box.width && box.height).at(-1);
+    return end ? [{ x: end.right, y: end.top + end.height / 2 }] : [];
+  }));
+}
+
 /** One box around every element `selector` matches. */
 function rectOf(selector: string | null | undefined): Rect | null {
   const elements = selector ? [...document.querySelectorAll(selector)] : [];
@@ -146,6 +240,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const [ring, setRing] = useState<Rect | null>(null);
   const [zones, setZones] = useState<(Rect | null)[]>([]);
   const [hand, setHand] = useState<Point | null>(null);
+  const [examples, setExamples] = useState<Point[]>([]);
   const step = chapter.steps[index]!;
   const last = index === chapter.steps.length - 1;
   // A command the host has no chord for is taught by pressing what the step marks.
@@ -181,12 +276,14 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
         return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
       });
+      const marks = examplesOf(chapter.world.examples);
+      setExamples((before) => (marks.length === before.length && marks.every((at, i) => Math.abs(at.x - before[i]!.x) < 0.5 && Math.abs(at.y - before[i]!.y) < 0.5) ? before : marks));
       const box = bubble.current;
       if (box) setSize((before) => (before.w === box.offsetWidth && before.h === box.offsetHeight ? before : { w: box.offsetWidth, h: box.offsetHeight }));
       frame = requestAnimationFrame(follow);
     });
     return () => cancelAnimationFrame(frame);
-  }, [step]);
+  }, [chapter.world.examples, step]);
 
   const advance = useCallback(() => {
     if (!last) return setIndex((value) => value + 1);
@@ -194,13 +291,27 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     else onHub();
   }, [last, next, onNext, onHub]);
 
+  // A gesture that takes a while plays once: ⏎ pressed again meanwhile waits for it.
+  const playing = useRef(false);
+  const play = useCallback((gesture: Promise<void>) => {
+    playing.current = true;
+    void gesture.finally(() => {
+      playing.current = false;
+    });
+  }, []);
+
   const perform = useCallback(() => {
+    if (playing.current) return;
     if (!step.done) return advance();
+    // A field the step types into is opened first by the step's command: ⌘K, then the words.
+    if (step.gesture && "type" in step.gesture && "input" in step.gesture.type && !document.querySelector(step.gesture.type.input) && step.command) return pressCommand(step.command);
+    if (step.gesture && "type" in step.gesture) return play(typeInto(step.gesture.type));
+    if (step.gesture && "menu" in step.gesture) return play(chooseFromMenu(step.gesture.menu, setHand));
     if (step.gesture && "drag" in step.gesture) return dragPane(step.gesture.drag, setHand);
     if (step.gesture && "click" in step.gesture) return document.querySelector<HTMLElement>(step.target ?? "")?.click();
     if (pressed) return pressTarget(step.target);
     if (step.command) pressCommand(step.command);
-  }, [advance, pressed, step]);
+  }, [advance, play, pressed, step]);
 
   useEffect(() => {
     if (index >= resume) return undefined;
@@ -215,7 +326,9 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!event.isTrusted || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.isComposing) return;
-      if (useUiStore.getState().overlay !== "none") return;
+      // A step that types into the palette's field keeps ⏎: the palette's own ⏎ would open its first row.
+      const typesInPalette = step.gesture && "type" in step.gesture && "input" in step.gesture.type;
+      if (useUiStore.getState().overlay !== "none" && !(typesInPalette && event.key === "Enter")) return;
       if (event.key === "Enter" || (event.key === "ArrowRight" && !step.done)) {
         event.preventDefault();
         event.stopPropagation();
@@ -234,7 +347,9 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const via: ReactNode = pressed ? say("practice.via.press")
     : step.command && step.gesture && "click" in step.gesture ? <WithKeys id={step.command} text={say("practice.via.buttonOrKey", { keys: KEYS_MARK })} />
     : step.command ? <WithKeys id={step.command} text={say("practice.via.key", { keys: KEYS_MARK })} />
-    : step.gesture && "drag" in step.gesture ? say("practice.via.drag") : null;
+    : step.gesture && "drag" in step.gesture ? say("practice.via.drag")
+    : step.gesture && "type" in step.gesture ? say("input" in step.gesture.type ? "practice.via.typeField" : "practice.via.type")
+    : step.gesture && "menu" in step.gesture ? say("practice.via.menu") : null;
   const go = last ? (next ? say("practice.toChapter", { number: next.number }) : say("practice.toHub")) : step.done ? say("practice.try") : say("practice.next");
   const place = bubblePlace(ring, step.side, size);
   const title = say(`practice.${chapter.id}.title`);
@@ -266,6 +381,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         </div>
       </div>
       {flash ? <div className="pc-flash">{keyParts(flash).map((part, at) => <span key={at} className="pc-kc">{part}</span>)}</div> : null}
+      {examples.map((at, i) => <span key={i} className="pc-example" style={{ left: at.x, top: at.y }} data-practice-example>{say("practice.example")}</span>)}
       {hand ? <svg className="pc-hand" style={{ left: hand.x - 3, top: hand.y - 2 }} width="24" height="24" viewBox="0 0 18 18" aria-hidden="true"><path d="M1 1l6 15 2.2-6.3L15.5 7.5z" /></svg> : null}
       {chapter.quest ? <QuestCard chapter={chapter} index={index} title={title} say={say} onRestart={onRestart} /> : null}
     </div>

@@ -55,9 +55,13 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   useEffect(() => installKeyboard(actions), [actions]);
 
   useLayoutEffect(() => {
-    const { rest, agents, focused, usage } = chapter.world.snapshot(model, Date.now());
+    const { rest, agents, focused, usage, frames } = chapter.world.snapshot(model, Date.now());
     const ui_state = { ...rest.ui_state, ...operator };
-    useShellStore.setState({ rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null });
+    // A frame the world does not send is empty, so one chapter's records never show in the next.
+    useShellStore.setState({
+      rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,
+      sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
+    });
   }, [chapter, model, operator]);
 
   useLayoutEffect(() => {

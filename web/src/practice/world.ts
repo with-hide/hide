@@ -3,11 +3,14 @@
 // leaves the page: no daemon, no Herdr, no agent.
 
 import type { NodeUsage } from "../generated/hided-ws";
-import type { AgentRow, SnapshotRest } from "../snapshot";
+import type { AgentRow, LinkPanel, SessionRecordSection, SessionWorkSearch, SnapshotRest } from "../snapshot";
 
 export type CoreEvent = { kind: string; payload: Record<string, unknown> };
 
-export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null };
+/** What the core sends beside the snapshot: ⌘K's session search, the record and the link record the lane's 보기 slot shows. */
+export type WorldFrames = { sessionWorkSearch?: SessionWorkSearch | null; sessionRecord?: SessionRecordSection | null; linkPanel?: LinkPanel | null };
+
+export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null; frames?: WorldFrames };
 
 export type PracticeWorld<M> = {
   initial: () => M;
@@ -19,4 +22,10 @@ export type PracticeWorld<M> = {
   screen: (model: M, paneId: string, cols: number) => string;
   /** Whether the right lane is open on this world's screen. */
   lane: boolean;
+  /**
+   * What on the screen is an invented record that could pass for a real one
+   * (a pull request's title): the coach marks each match `예시`, so the
+   * shell's own components stay as they are.
+   */
+  examples?: string[];
 };
