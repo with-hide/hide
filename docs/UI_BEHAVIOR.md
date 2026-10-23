@@ -2335,6 +2335,7 @@ It opens on the chapter list: each chapter's number, title, one line of what it 
 ↑ and ↓ choose a chapter and ⏎ plays it; the first chapter not yet seen is chosen at first.
 `이어서` plays the steps before the stopping point again on its own, quickly, the way ⏎ would, so the screen reaches the state that step needs.
 A chapter seen once stays seen when it is played again.
+Every start of a chapter, from the list, from `처음부터`, or the next chapter after the last step, begins on the shell screen as the page first loaded it: an overlay, a focus, a relationship move still waiting or a copy left by the run before never carries into it (`freshShell` in `PracticeApp.tsx`).
 
 A chapter playing dims everything but what its step marks, rings that, and puts a light bubble beside it with what happens and how: the command's chord as keycaps (`Or press ⌘D`), `Press the button, or ⇧⌘↩` for a step with a button, or `Press where it's marked` where this host has no chord for the command (⌥1 in a browser tab).
 ⏎ performs the step in the learner's place, pressing the chord, the button, dragging the pane with a hand cursor, typing what the learner would say into an agent's prompt and sending it (words the learner wrote there themselves are sent as they are, for the world to judge; the example is typed only into an empty prompt), or right-clicking and choosing from the shell's own menu with the hand; a held chord (⌃⇥, ⌥⇥) is let go a moment later, so the shell's own switcher is seen before it lands.
