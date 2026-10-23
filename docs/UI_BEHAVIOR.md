@@ -2335,7 +2335,7 @@ A chapter is three new files and no change to a shared one, so chapters written 
   `practice.ts` keeps the guide's own words and joins every file there, refusing a key outside its file's chapter; the catalog checks read them like any other words.
 - `web/src/practice/worlds/<id>.ts`, when no world there fits: the world the chapter plays in.
 
-A step names what it rings (`target`, a selector into the shell), where the bubble sits (`side`), the command it teaches (`command`, never a chord), a `gesture` when ⏎ should press a button or drag a pane instead of pressing the chord, and `done`, which reads the world; a step without `done` is a look.
+A step names what it rings (`target`, a selector into the shell), where the bubble sits (`side`), the command it teaches (`command`, never a chord), a `gesture` when ⏎ should press a button or drag a pane instead of pressing the chord, and `done`, which reads the world, or `shown`, a selector whose appearance finishes a step that opens a card, a popover or a page with no core event behind it; a step with neither is a look.
 A world (`web/src/practice/world.ts`) gives the first state, answers the core events the chapter's steps dispatch as the core would (an event it does not need answers nothing), and draws the snapshot and each pane's screen.
 `worlds/kit.ts` holds what several worlds build with: a checkout's desk of tabs, panes and groups and the events that change it (`applyDesk`), agent rows (`agent`, with a parent named as the core names it), and the snapshot of one or more projects' desks (`deskSnapshot`).
 A tool only one chapter needs stays in that chapter's world file, and moves to `kit.ts` when a second chapter needs it.

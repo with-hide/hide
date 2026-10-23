@@ -138,6 +138,9 @@ type Props = {
 /** How long the coach waits before playing the next step it replays, so the learner sees where they are going. */
 const REPLAY_MS = 120;
 
+/** Whether a step waits for something to happen, rather than being a look the learner presses on from. */
+const acts = (step: PracticeStep) => !!(step.done || step.shown);
+
 export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, onRestart, onHub }: Props) {
   const { t } = useInterfaceTranslation();
   const say = (key: string, values?: Record<string, unknown>) => t(key as MessageKey, values as never) as string;
@@ -177,6 +180,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     let frame = requestAnimationFrame(function follow() {
       const marked = rectOf(step.target);
       setRing((before) => (same(before, marked) ? before : marked));
+      if (step.shown && rectOf(step.shown)) setIndex((value) => (value === index ? value + 1 : value));
       setZones((before) => {
         const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
         return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
@@ -186,7 +190,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
       frame = requestAnimationFrame(follow);
     });
     return () => cancelAnimationFrame(frame);
-  }, [step]);
+  }, [index, step]);
 
   const advance = useCallback(() => {
     if (!last) return setIndex((value) => value + 1);
@@ -195,7 +199,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   }, [last, next, onNext, onHub]);
 
   const perform = useCallback(() => {
-    if (!step.done) return advance();
+    if (!acts(step)) return advance();
     if (step.gesture && "drag" in step.gesture) return dragPane(step.gesture.drag, setHand);
     if (step.gesture && "click" in step.gesture) return document.querySelector<HTMLElement>(step.target ?? "")?.click();
     if (pressed) return pressTarget(step.target);
@@ -208,7 +212,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     return () => window.clearTimeout(timer);
   }, [index, perform, resume]);
 
-  const back = index > 0 && !step.done && !chapter.steps[index - 1]!.done;
+  const back = index > 0 && !acts(step) && !acts(chapter.steps[index - 1]!);
 
   // ⏎ and → perform the step, ← goes back over a look; every other key reaches the shell untouched,
   // and while a palette the shell opened is up, every key is the palette's.
@@ -216,7 +220,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     const onKey = (event: KeyboardEvent) => {
       if (!event.isTrusted || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.isComposing) return;
       if (useUiStore.getState().overlay !== "none") return;
-      if (event.key === "Enter" || (event.key === "ArrowRight" && !step.done)) {
+      if (event.key === "Enter" || (event.key === "ArrowRight" && !acts(step))) {
         event.preventDefault();
         event.stopPropagation();
         perform();
@@ -235,7 +239,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     : step.command && step.gesture && "click" in step.gesture ? <WithKeys id={step.command} text={say("practice.via.buttonOrKey", { keys: KEYS_MARK })} />
     : step.command ? <WithKeys id={step.command} text={say("practice.via.key", { keys: KEYS_MARK })} />
     : step.gesture && "drag" in step.gesture ? say("practice.via.drag") : null;
-  const go = last ? (next ? say("practice.toChapter", { number: next.number }) : say("practice.toHub")) : step.done ? say("practice.try") : say("practice.next");
+  const go = last ? (next ? say("practice.toChapter", { number: next.number }) : say("practice.toHub")) : acts(step) ? say("practice.try") : say("practice.next");
   const place = bubblePlace(ring, step.side, size);
   const title = say(`practice.${chapter.id}.title`);
 
