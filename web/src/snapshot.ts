@@ -1530,7 +1530,10 @@ export type ViewSplitSnapshot = import("./areaLayout").AreaSplit<ViewDisplaySnap
 export type ViewNode = import("./areaLayout").AreaNode<ViewDisplaySnapshot>;
 export type ViewLayoutSnapshot = import("./areaLayout").AreaLayout<ViewDisplaySnapshot>;
 
-export type DiffSnapshot = { path: string; committed: boolean; text: string; notice: string | null };
+/** Why a diff is short or absent (`DiffNotice`); `diffNotice.ts` words it. */
+export type DiffNotice = { code: string; limit_kb?: number; root?: string };
+
+export type DiffSnapshot = { path: string; committed: boolean; text: string; notice: DiffNotice | null };
 
 /** The six working-tree states the core presents (ChangedFileStatus). */
 export type ChangedFileStatus = "modified" | "added" | "deleted" | "untracked" | "renamed" | "conflict";
@@ -1559,7 +1562,7 @@ export type ChangesSnapshot = {
   selected_path: string | null;
   selected_committed: boolean;
   /** The selected diff of a client without View areas; the web shell reads `diffs`. */
-  diff: { path: string; text: string; notice: string | null } | null;
+  diff: { path: string; text: string; notice: DiffNotice | null } | null;
   /** One bounded patch per visible diff display of the front Workspace (S7 contract 3.2); absent when none shows. */
   diffs?: DiffSnapshot[];
   unavailable_reason: string | null;

@@ -5127,9 +5127,10 @@ pub struct ChangedFileSnapshot {
 pub struct ChangedFileDiffSnapshot {
     pub path: String,
     pub text: String,
-    /// Set when the diff was cut short, naming the limit that cut it. A
-    /// silently truncated diff would read as a complete one.
-    pub notice: Option<String>,
+    /// Set when the diff was cut short, naming the limit that cut it, or
+    /// could not be taken; the page words it. A silently truncated diff
+    /// would read as a complete one.
+    pub notice: Option<hide_node_link::git::DiffNotice>,
 }
 
 /// A diff a View display shows: the file, the group it is taken in, and the
@@ -5140,8 +5141,8 @@ pub struct ViewDiffSnapshot {
     pub committed: bool,
     pub text: String,
     /// Set when the diff was cut short, or when the file is no longer in
-    /// its group, naming why.
-    pub notice: Option<String>,
+    /// its group or outside the folder History reads, naming why.
+    pub notice: Option<hide_node_link::git::DiffNotice>,
 }
 
 /// What a branch's pull request is, reduced to the five values the row badge
