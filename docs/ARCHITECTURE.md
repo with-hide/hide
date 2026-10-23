@@ -619,10 +619,11 @@ What a type's default application does differs from Mac to Mac, so the host open
 The line a link names travels page-local (`web/src/editor/lineRequest.ts`) to the editor that opens the file, because the core's file events carry no position.
 A page without the desktop host, and a pane on an SSH device, resolve no paths and link URLs only ([UI_BEHAVIOR.md: Terminal links](UI_BEHAVIOR.md#terminal-links)).
 
-A spawned child does not split the operator's pane.
+A spawned child does not split the operator's pane, unless the agent that spawned it asked for that with `hide agent spawn --beside` ([delivery.md](delivery.md#agent-registration-and-spawning)).
 Herdr owns split geometry and the PTY size, so a delegated child pane is really moved out - `pane.move` to a new tab in the workspace it is already in - rather than left undrawn; a tab holding nothing but delegated children then stays out of the tab strip while remaining in the checkout.
 A move stays in flight until the published layout shows the child in its own tab, not only until Herdr acknowledges it: the move's events arrive after the answer, and asking again before they did moved the pane out of the tab the first move had made, so no layout ever landed and the moves repeated; `RELOCATION_RETRY_INTERVAL_MS` bounds a move whose events never come.
 Detection is the same on every pass, so a child that arrives while Hide is running and one already split when Hide started take the same path, and a refusal is retried on a fixed interval rather than assumed to have worked.
+A child whose spawn record says `beside` is left where it is: the exemption is keyed by the spawn's child registration, not by a pane or terminal id, so a restarted Hide or Herdr that binds the child to its pane again keeps it beside its caller, and a pane the operator moved by hand follows the operator as every manually placed pane does (`Runtime::beside_spawned_panes`).
 Herdr reports a refusal as an unchanged move with a reason rather than as an error, so the decision reads `changed` instead of trusting a successful request.
 Machine-qualified lineage is resolved before tab ownership is projected; local snapshots, remote snapshots and machine identity changes all update the tab strip and Agent area membership in the same transition.
 A disconnected parent restores its unresolved local child to normal placement, and reconnecting removes it from the bar while preserving sidebar selection as a delegated canvas.

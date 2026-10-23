@@ -23,7 +23,7 @@ Only checkouts in the current connected catalog contribute to that inventory; a 
 
 ## Opening a page
 
-- `hide browser open <url-or-path> [--wait] [--request-id <id>]` from a shell the daemon can bind to a checkout: a connected Herdr pane, or a local process whose working directory is inside a registered checkout (`docs/ARCHITECTURE.md`, hided and the WebSocket boundary).
+- `hide browser open <url-or-path> [--beside] [--wait] [--request-id <id>]` from a shell the daemon can bind to a checkout: a connected Herdr pane, or a local process whose working directory is inside a registered checkout (`docs/ARCHITECTURE.md`, hided and the WebSocket boundary).
   The CLI resolves a relative file on the calling machine, gives loopback hosts `http` and other hosts `https`, and submits one action scoped to the caller's checkout with no Workspace override.
   The core checks an HTML file against that checkout on its own device and reads it outside the core lock before placing its Browser View.
   The action result confirms View placement, while `hide view status <view-id>` returns `pending`, `loading`, `loaded`, `failed`, `disconnected`, or `unsupported` for its native page.
@@ -32,6 +32,7 @@ Only checkouts in the current connected catalog contribute to that inventory; a 
   Another pane there, of the same tab or another, adds its page to the checkout's one list, in the area it lands in and behind the one in front, and moves no tab, checkout or keyboard; the same address opened from two tabs is one page, so the operator's page and load stay unchanged.
   On a checkout not on screen, a pane of its active tab brings its page to the front of that checkout, where it loads and can be driven, and a pane of another tab adds it behind; neither calls the lane or moves the screen.
   A shell bound only to the checkout counts as another pane on the checkout on screen and as its active tab on one that is not.
+  `--beside` places the page as a file's Open to the side does ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#opening-preview-and-open-to-the-side)): in the area next to the active one, trying right, left, below and above, or a new area to its right; a page of the same address already in that area is brought forward and loaded again rather than opened twice, and with no room for another area the open is refused with the next action to close a View or open without `--beside`.
   The desktop window's gateway, acting for a CDP client that creates a page, brings that page forward, since a page loads only in front; it acts as `gateway:<key>:<path>`, one key per window, so the core tells it from a checkout shell (`gateway_caller_id`).
   A new page that is not in front can stay pending until it first appears.
   An agent reads the checkout's Views (`hide view list`, `hide view status`, select, close, `--wait`) from any of its tabs, even when its tab is not the Workspace's active tab and the Workspace was never in front: every caller sees the same list, so such a page is listed as `pending` rather than missing.

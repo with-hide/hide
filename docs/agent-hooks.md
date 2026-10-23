@@ -64,7 +64,8 @@ After that daemon ends, the next pass may take ownership and refresh the entries
 Development and QA candidates use a private HOME as well as a private state folder, because changing only the state folder still shares the account's hook files.
 Before that pass, an unavailable old folder leaves mail pending and records the existing throttled `intake.failed` diagnostic with code `unavailable` in the helper's private delivery diagnostics; an invalid captured argument records `record` instead.
 
-The shared SessionStart guidance is English.
+The shared SessionStart guidance is English and begins with an intent table that turns what the operator asks for into its command: a file, diff or web page beside you (`hide file|diff|browser open … --beside`), an agent beside you (`hide agent spawn --beside …`, own checkout only), work handed to an agent whose result you collect (`--parent here`) and independent work (no `--parent`), with a line that forbids starting an agent with `"${HERDR_BIN_PATH:-herdr}" pane split` or `agent start` directly.
+The table is one literal (`hide_agent_hooks::intent_table!`) at the front of `PURPOSE_CONTEXT`, so every runtime's SessionStart, `hide guide` and the `hide` skill (version 2) carry the same text, and a version 1 skill is replaced at the next kit pass.
 It distinguishes Herdr's direct terminal input and control from Hide letters' stored delivery, replies and retry management.
 `herdr agent prompt` may yield a passive observation but creates no Hide letter, watch or parent relationship.
 Supervised delegation uses `hide agent spawn --parent here` to record responsibility and start the automatic watch.

@@ -1090,7 +1090,8 @@ pub fn refusal_reason(delegation: &str, handoff: &str) -> String {
          Choose who will handle the work, filling in what is in angle brackets:\n\n\
          Delegate work you will supervise (parent relationship and automatic watch):\n{delegation}\n\n\
          Hand off independent work to the operator (root agent, no automatic watch):\n{handoff}\n\n\
-         Both modes record you as origin and open a separate tab without changing the current screen or keyboard focus. \
+         Both modes record you as origin and open the agent in a tab of its own without changing the current screen or keyboard focus; \
+         add --beside to open it in the right half of your pane instead, for your own checkout only. \
          If this call held other commands, run them separately."
     )
 }
@@ -1669,6 +1670,8 @@ mod tests {
         assert!(reason.contains("hide agent spawn --parent here ..."));
         assert!(reason.contains("hide agent spawn ..."));
         assert!(reason.contains("root agent, no automatic watch"));
+        assert!(reason.contains("in a tab of its own"));
+        assert!(reason.contains("add --beside to open it in the right half of your pane"));
         assert!(!reason.contains('\u{2014}'), "no em dash");
     }
 

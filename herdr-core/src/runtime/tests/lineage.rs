@@ -3098,3 +3098,33 @@ fn a_hide_started_row_follows_its_attempts_pull_request_into_and_out_of_needs_yo
     runtime.apply_homes(HashMap::new());
     assert_eq!(state(&runtime), ("seen".into(), None, None));
 }
+
+/// A child a spawn opened beside its caller (`hide agent spawn --beside`)
+/// stays in the caller's tab, while a delegated child an ordinary spawn left
+/// there is still moved to a tab of its own (PRD agent-beside B3, B5).
+#[test]
+fn a_child_spawned_beside_its_caller_stays_in_the_callers_tab() {
+    let moved = |beside: bool| {
+        let mut runtime = super::live_runtime();
+        let mut ledger = crate::delivery::ledger::Ledger::default();
+        ledger.agents.push(serde_json::from_value(serde_json::json!({
+                "id": "agent-2", "name": "Implementor", "machine": crate::node::TEST_NODE,
+                "host_scope": "fixture", "native_machine": "fixture", "session": "child",
+                "instance": "w1:p2", "pane": "w1:p2", "parent": "agent-1", "project": "/fixture",
+                "actor": {"pane_id": "w1:p2", "name": "Implementor", "kind": "claude",
+                          "device_id": crate::node::TEST_NODE, "session": null},
+                "ended": false,
+        })).expect("child record"));
+        ledger.spawns.push(serde_json::from_value(serde_json::json!({
+                "id": "spawn-3", "parent": "agent-1", "mode": "delegation", "intent": "implement",
+                "name": "Implementor", "kind": "claude", "repo": "/fixture", "branch": "main",
+                "requested_path": null, "args": [], "path": "/fixture", "pane": "w1:p2",
+                "child": "agent-2", "completed": true, "beside": beside,
+        })).expect("spawn record"));
+        runtime.publish_delivery(Arc::new(ledger), false);
+        runtime.ingest_session(Ok(split_lineage_payload()));
+        runtime.pane_relocations_in_flight.contains_key("w1:p2")
+    };
+    assert!(moved(false), "an ordinary delegated child is moved");
+    assert!(!moved(true), "a child spawned beside its caller stays");
+}
