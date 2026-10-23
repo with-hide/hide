@@ -193,7 +193,7 @@ Keep the command/binary hash, OS, load, sample count, warm-up exclusions, failur
 The ordinary shell-call, Herdr-mention, stand-in refusal and real-daemon refusal rows are separate workloads.
 Helper return time does not prove the agent's time to first token or its runtime's hook scheduling latency.
 Observe the actual supported runtimes separately when claiming native behavior.
-Regression owners are `hide-agent-hooks/tests/it/spawn_guard.rs` (nothing spawned for a payload without `herdr`, a slow `hide` stays under the budget) and the parser tests in `src/spawn_guard.rs`.
+Regression owners are `hide-agent-hooks/tests/it/spawn_guard.rs` (nothing spawned for a payload without `herdr`, a slow `hide` stays under the budget) and the parser tests in `src/spawn_guard.rs` (the parser is `hide-shell`).
 
 
 ## Letters at a tool event

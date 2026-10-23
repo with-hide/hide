@@ -103,6 +103,11 @@ pub enum Command {
         /// intent like `args`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         brief: Option<String>,
+        /// The child's pane opens beside the caller's, in the caller's tab,
+        /// instead of in a tab of its own; only for the caller's own checkout
+        /// on the caller's own device. Part of the intent like `brief`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        beside: bool,
         /// The mission this spawn starts a worker of, and its cap (PRD
         /// software-factory-conductor D-45). Only the core sets it, from the
         /// caller's mission; no command names it.
@@ -434,6 +439,11 @@ pub struct SpawnRecord {
     /// never submits it twice (engineering #11).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub briefed: bool,
+    /// The child's pane was split beside the caller's (`Command::Spawn::
+    /// beside`), part of the intent. Delegated-child relocation leaves the
+    /// child of such a spawn in the caller's tab.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub beside: bool,
     /// When the spawn was reserved; a record written before it existed has
     /// 0.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -897,6 +907,7 @@ pub(crate) fn apply(
                 launch,
                 task,
                 brief,
+                beside,
                 mission,
                 ..
             } = command
@@ -980,6 +991,7 @@ pub(crate) fn apply(
                     || record.args != *args
                     || record.launch != *launch
                     || record.brief != *brief
+                    || record.beside != *beside
                     || !task_agrees
                 {
                     return Err("intent_conflict".into());
@@ -1029,6 +1041,7 @@ pub(crate) fn apply(
                 mission: mission.as_ref().map(|admission| admission.mission.clone()),
                 brief: brief.clone(),
                 briefed: false,
+                beside: *beside,
                 reserved_at_unix_ms: now,
             };
             ledger.spawns.push(record.clone());
@@ -1820,6 +1833,7 @@ mod tests {
             launch: Default::default(),
             task: None,
             brief: None,
+            beside: false,
         }
     }
     fn register_as(

@@ -205,10 +205,11 @@ class Selection(unittest.TestCase):
             {"rust", "os-contract", "os-contract-macos", "windows-check", "windows-e2e", "web-e2e", "desktop-e2e", "remote-mailbox"}
             <= set(result["lanes"])
         )
-        # The data-only adapter is independent, and workspace-hack depends on no member;
-        # every other crate consumes the platform layer.
+        # The data-only adapter and the text-only shell reader are independent, and
+        # workspace-hack depends on no member; every other crate consumes the platform layer.
         self.assertEqual(result["rust_packages"],
-                         [name for name in EVERY_PACKAGE if name not in ("hide-agent-adapter", "workspace-hack")])
+                         [name for name in EVERY_PACKAGE
+                          if name not in ("hide-agent-adapter", "hide-shell", "workspace-hack")])
         self.assertFalse(result["full"])
 
     def test_an_adapter_change_tests_its_real_consumers_and_compiles_on_windows(self):

@@ -21,6 +21,8 @@ export const MAX_LIVE_VIEWS = 12;
 /** Popup windows open at once across every page; a page asking for one more is refused. */
 export const MAX_POPUPS = 4;
 const MAX_TEXT = 8192;
+/** Outside-file grants one sync may name: the host holds at most 32 (`MAX_EXTERNAL_GRANTS`), and the shell's opens on their way add a few. */
+const MAX_EXTERNAL_LISTED = 256;
 const MAX_EXTENT = 100_000;
 const COMMANDS: ReadonlySet<string> = new Set<BrowserCommand>(["back", "forward", "reload", "stop", "focus", "zoom_in", "zoom_out", "zoom_reset"]);
 /** The widest viewport a device size may ask for, in CSS pixels. */
@@ -56,6 +58,11 @@ function workspaceIdentity(value: unknown): value is string {
   return at > 0 && at < value.length - 1 && value.indexOf("\u0000", at + 1) === -1;
 }
 
+/** The shape of a grant id `ExternalFiles` mints: 128 random bits in lower-case hex. */
+function externalGrant(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{32}$/.test(value);
+}
+
 function rect(value: unknown): BrowserRect | null | undefined {
   if (value === null) return null;
   if (typeof value !== "object") return undefined;
@@ -78,7 +85,8 @@ function device(value: unknown): BrowserDevicePlacement | null | undefined {
 /** A sync message, or null when any part of it is out of shape. */
 export function parseSync(value: unknown): BrowserSync | null {
   if (typeof value !== "object" || value === null) return null;
-  const { workspace, displays, retained, attachment_epoch, authorized_scopes, node } = value as Record<string, unknown>;
+  const { workspace, displays, retained, attachment_epoch, authorized_scopes, node, external_grants } = value as Record<string, unknown>;
+  if (external_grants !== undefined && (!Array.isArray(external_grants) || external_grants.length > MAX_EXTERNAL_LISTED || !external_grants.every(externalGrant))) return null;
   if (attachment_epoch !== undefined && (typeof attachment_epoch !== "string" || attachment_epoch.length === 0 || attachment_epoch.length > 64 || /[^A-Za-z0-9-]/.test(attachment_epoch))) return null;
   if (workspace !== null && !workspaceIdentity(workspace)) return null;
   if (node !== undefined && !identity(node)) return null;
@@ -113,13 +121,15 @@ export function parseSync(value: unknown): BrowserSync | null {
   const ids = new Set<string>();
   for (const entry of displays as unknown[]) {
     if (typeof entry !== "object" || entry === null) return null;
-    const { id, area_id, url, load, visible } = entry as Record<string, unknown>;
+    const { id, area_id, url, load, visible, grant } = entry as Record<string, unknown>;
     const placed = rect((entry as Record<string, unknown>).rect);
     const size = device((entry as Record<string, unknown>).device);
-    if (!identity(id) || !identity(area_id) || ids.has(id) || !text(url) || typeof load !== "number" || !Number.isSafeInteger(load) || load < 0) return null;
+    // An outside file names its grant and no address (PRD outside-path-in-hide).
+    const address = grant === undefined ? text(url) : externalGrant(grant) && url === "";
+    if (!identity(id) || !identity(area_id) || ids.has(id) || !address || typeof load !== "number" || !Number.isSafeInteger(load) || load < 0) return null;
     if (placed === undefined || size === undefined || typeof visible !== "boolean") return null;
     ids.add(id);
-    parsed.push({ id, area_id, url, load, rect: placed, visible, ...(size ? { device: size } : {}) });
+    parsed.push({ id, area_id, url: url as string, load, rect: placed, visible, ...(size ? { device: size } : {}), ...(grant === undefined ? {} : { grant: grant as string }) });
   }
   if (workspace === null && parsed.length > 0) return null;
   if (workspace && parsed.some((display) => ownedAreas.get(viewKey(workspace, display.id)) !== display.area_id)) return null;
@@ -130,6 +140,7 @@ export function parseSync(value: unknown): BrowserSync | null {
     ...(attachment_epoch === undefined ? {} : { attachment_epoch }),
     ...(authorized_scopes === undefined ? {} : { authorized_scopes: scopes }),
     ...(node === undefined ? {} : { node: node as string }),
+    ...(external_grants === undefined ? {} : { external_grants: external_grants as string[] }),
   };
 }
 

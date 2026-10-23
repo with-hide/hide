@@ -50,9 +50,18 @@ pub(crate) fn is_reserved(label: &str) -> bool {
     marker(label).is_some()
 }
 
+/// The label a spawn beside its caller gives the pane it split, so an
+/// attempt whose reply was lost finds that pane instead of splitting again.
+/// Like a creation descriptor it is never shown as the pane's name.
+pub(crate) fn spawn_label(spawn: &str) -> String {
+    format!("{SPAWN_PREFIX}{spawn}")
+}
+
+const SPAWN_PREFIX: &str = "hide-spawn:v1:";
+
 pub(crate) fn public_label(label: Option<&str>) -> Option<String> {
     label
-        .filter(|label| !is_reserved(label))
+        .filter(|label| !is_reserved(label) && !label.starts_with(SPAWN_PREFIX))
         .filter(|label| !label.trim().is_empty())
         .map(str::to_owned)
 }

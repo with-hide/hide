@@ -9,16 +9,20 @@ import { restoreFocus } from "../../terminals";
 import { useUiStore } from "../../ui";
 import { returnKeyboardFocus } from "../../viewFocus";
 
-/** While `open`, Escape runs `close` before any layer opened earlier. */
-export function useEscapeLayer(open: boolean, close: () => void, base = false) {
+/**
+ * While `open`, Escape runs `close` before any layer opened earlier. An
+ * `inline` layer (a filter or a field inside what is drawn) is passed by the
+ * close chords, which close only what covers the screen.
+ */
+export function useEscapeLayer(open: boolean, close: () => void, base = false, inline = false) {
   const latest = useRef(close);
   useEffect(() => {
     latest.current = close;
   });
   useEffect(() => {
     if (!open) return;
-    return useUiStore.getState().pushEscape(() => latest.current(), base);
-  }, [open, base]);
+    return useUiStore.getState().pushEscape(() => latest.current(), base, inline);
+  }, [open, base, inline]);
 }
 
 /**

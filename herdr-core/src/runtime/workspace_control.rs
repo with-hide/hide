@@ -444,6 +444,7 @@ impl Runtime {
             url,
             area_id,
             new_target,
+            beside,
         } = action
         {
             if !crate::view_layout::browser_address(url) {
@@ -459,8 +460,26 @@ impl Runtime {
                 });
             }
             let load = self.next_browser_load();
-            let view_id = self
-                .change_view_layout(key, |layout, stamp| {
+            let view_id = if *beside && area_id.is_none() {
+                self.change_view_layout(key, |layout, stamp| {
+                    super::view_areas::place_page_beside(layout, url, load, stamp)
+                        .map(|id| (id, true))
+                })
+                .map_err(|error| Refusal {
+                    reason: error.kind(),
+                    next_action: match error {
+                        crate::view_layout::LayoutError::AreaLimit
+                        | crate::view_layout::LayoutError::DepthLimit => {
+                            "There is no room for another View area beside this one; close an area's last View with hide view close <view-id>, or open without --beside, and retry"
+                        }
+                        crate::view_layout::LayoutError::DisplayLimit => {
+                            "The Workspace holds as many Views as it can; close one with hide view close <view-id> and retry"
+                        }
+                        _ => "Run hide view list, choose an available View or area, and retry",
+                    },
+                })?
+            } else {
+                self.change_view_layout(key, |layout, stamp| {
                     let existing = if *new_target {
                         None
                     } else {
@@ -488,7 +507,8 @@ impl Runtime {
                     layout.insert(&area_id, display, stamp)?;
                     Ok((id, true))
                 })
-                .map_err(layout_refusal)?;
+                .map_err(layout_refusal)?
+            };
             let area_id = self
                 .view_layout_of(key)
                 .and_then(|layout| layout.area_of(&view_id))
@@ -854,7 +874,11 @@ impl Runtime {
                             DisplayKind::File => "file",
                             DisplayKind::Diff => "diff",
                             DisplayKind::Browser => "browser",
+                            DisplayKind::External => "external",
                         },
+                        // An outside file's path stays in the operator's
+                        // window; an agent reads that a View is there and
+                        // nothing of the file (PRD outside-path-in-hide D-09).
                         target: display.url.as_ref().unwrap_or(&display.path).clone(),
                         selected: area.active.as_deref() == Some(display.id.as_str()),
                         active_area: layout.active_area().id == area.id,

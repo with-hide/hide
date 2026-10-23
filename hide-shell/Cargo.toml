@@ -1,0 +1,11 @@
+[package]
+name = "hide-shell"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

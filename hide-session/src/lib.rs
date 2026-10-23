@@ -37,6 +37,7 @@ mod grok;
 mod label_owner;
 pub mod label_transcript;
 pub mod links;
+mod named_prs;
 mod native_file;
 pub mod opencode;
 mod refusal;
@@ -48,6 +49,7 @@ pub mod turns;
 pub mod usage;
 
 pub use envelope::{envelope_from_operator, envelope_header, envelope_names, envelope_sender};
+pub use named_prs::NamedPr;
 pub use refusal::ReadRefusal;
 pub use sightings::{
     MAX_SIGHTINGS_PER_OUTPUT, PrSighting, issue_addresses, pull_request_addresses,

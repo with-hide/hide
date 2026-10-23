@@ -282,7 +282,20 @@ jobs:
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci-flaky-report.py --suite web --playwright web/e2e-report.json
+        run: |
+          python3 scripts/ci-flaky-report.py --suite web --playwright web/e2e-report.json \
+            --history-record agents/runs/ci-test-history \
+            --job-name "web e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}"
+      - name: Keep this job attempt's test report
+        continue-on-error: true
+        timeout-minutes: 2
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-test-history-web-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: agents/runs/ci-test-history/
+          if-no-files-found: error
+          retention-days: 7
       - name: Keep the e2e run's logs
         # The daemon, Herdr server and PTY input logs behind a failed flow
         # (with the screenshots the specs take, under the same directory),
@@ -294,7 +307,7 @@ jobs:
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-web-e2e-logs-${{ inputs.lane }}-${{ matrix.shard }}
+          name: hide-web-e2e-logs-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/hide-e2e
             web/test-results

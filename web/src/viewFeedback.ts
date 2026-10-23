@@ -27,6 +27,8 @@ export type CommentSurface = "lines" | "browser" | "region";
 /** Which way a View takes comments, or none for one that takes none (a video, a binary, a new tab). */
 export function commentSurface(display: Pick<ViewDisplaySnapshot, "kind" | "url">, documentKind: string | null): CommentSurface | null {
   if (display.kind === "browser") return display.url ? "browser" : null;
+  // An outside file takes no comments: a comment carries its path to an agent (PRD outside-path-in-hide).
+  if (display.kind === "external") return null;
   if (display.kind === "diff") return "lines";
   if (documentKind === "text" || documentKind === "markdown") return "lines";
   if (documentKind === "image" || documentKind === "pdf") return "region";

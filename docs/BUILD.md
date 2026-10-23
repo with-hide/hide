@@ -138,10 +138,16 @@ Each adds `--locked`, reuses the installed toolchain, clears inherited Herdr and
 Scoped modes accept at most 128 arguments and refuse `--target-dir`, `--manifest-path` and `--config`; an unknown mode exits 2.
 The sealed `test`, `lint`, `release` and `cli` invocations keep their existing behavior.
 `verify-web.sh install [--ignore-scripts]` locks dependency installation; `verify-web.sh <web|desktop> <typecheck|lint|test|build>` runs one package step.
-`web e2e` runs Playwright against the web output already built; `desktop e2e` rebuilds the desktop host before Playwright.
+`web build` includes its typecheck before Vite bundles, so the no-argument gate and CI's web checks run it once before lint and unit tests, with no separate web typecheck over the same inputs.
+Desktop build uses esbuild without typechecking, so its separate typecheck remains required.
+Standalone package `build` and `e2e` commands keep their preparation: web build typechecks, web package e2e builds the shell, and desktop e2e builds the host.
+`web e2e` through this wrapper runs Playwright against the web output already built; `desktop e2e` always rebuilds the desktop host before Playwright, including a direct local invocation.
 Both forward the test arguments and their exit status, so a missing test filter fails the caller.
+`<web|desktop> e2e-list [args...]` only discovers tests (`playwright test --list`); it needs no app build and cannot execute tests.
+The desktop CI job uses it for the complete and filtered shard lists, then uses `desktop e2e` for execution: one fresh host build per job instead of one for each list and another for execution.
+There is no skip-build flag, freshness marker or reuse of a previous job's desktop output.
 `playwright-install` installs Chromium for web or desktop; `desktop package` packages this runner's app.
-An invalid package/action pair or more than 128 trailing arguments exits 2; the no-argument full web gate stays unchanged.
+An invalid package/action pair or more than 128 trailing arguments exits 2; the no-argument gate retains both packages' typecheck, lint, unit tests and build coverage.
 `test_ci_verification_entrypoints.py` checks this external command boundary without building or installing; it complements the real build tests below.
 
 The build regression tests in `test_verification_builds.py` use a tiny real Cargo workspace, not compiler mocks.
