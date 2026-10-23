@@ -43,6 +43,8 @@ export type SwitchModel = {
   front: string;
   /** Agent panes, the one the keyboard was in last first, as the core keeps `recent_pane_ids`. */
   recent: string[];
+  /** The project in front when the keyboard first left the pane it started in, however far back it went. */
+  left: string | null;
   /** The palette's last question, once the index has answered one. */
   index: { root: string; query: string } | null;
   opened: Opened | null;
@@ -77,6 +79,7 @@ function initial(): SwitchModel {
     ],
     front: APP.project,
     recent: ["pay", "login", "docs"],
+    left: null,
     index: null,
     opened: null,
     calls: 0,
@@ -91,7 +94,7 @@ function withDesk(model: SwitchModel, project: string, next: DeskModel): SwitchM
 }
 
 /** The pane the keyboard is in on the desk in front. */
-export function frontPane(model: SwitchModel): string {
+function frontPane(model: SwitchModel): string {
   const shown = model.desks.find((one) => one.place.project === model.front)!.model;
   return shown.tabs.find((tab) => tab.id === shown.activeTab)!.focused;
 }
@@ -102,7 +105,16 @@ function visited(model: SwitchModel, pane: string): SwitchModel {
   return { ...model, recent: [pane, ...model.recent.filter((id) => id !== pane)] };
 }
 
+/** The pane the keyboard starts the chapter in. */
+const START = "pay";
+
 function apply(model: SwitchModel, event: CoreEvent): SwitchModel | null {
+  const after = move(model, event);
+  if (!after || after.left !== null || frontPane(after) === START) return after;
+  return { ...after, left: after.front };
+}
+
+function move(model: SwitchModel, event: CoreEvent): SwitchModel | null {
   const p = event.payload;
   switch (event.kind) {
     case "focus_pane": {
