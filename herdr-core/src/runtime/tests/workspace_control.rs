@@ -934,7 +934,7 @@ fn a_browser_open_beside_uses_the_neighbouring_area_and_its_page() {
         .unwrap()
         .context;
     let key = (expected.device_id.clone(), expected.checkout_path.clone());
-    let mut act = |runtime: &mut Runtime, id: &str, action: serde_json::Value| {
+    let act = |runtime: &mut Runtime, id: &str, action: serde_json::Value| {
         runtime
             .workspace_control_action(
                 crate::node::TEST_NODE,
