@@ -44,9 +44,13 @@ function practiceState(page: Page): Promise<string> {
  */
 async function pasteByHand(practice: Page): Promise<void> {
   const lead = practice.locator('[data-pane-view="w1:p1"] .xterm');
-  await lead.click({ button: "right" });
+  // The guide's bubble sits inside the pane; its lower left corner is the terminal's own.
+  const box = await lead.boundingBox();
+  if (!box) throw new Error("the lead pane's terminal is not on screen");
+  const corner = { x: 24, y: box.height - 24 };
+  await lead.click({ button: "right", position: corner });
   await practice.locator('[role="menu"] [data-menu-item="paste"]').click();
-  await lead.click();
+  await lead.click({ position: corner });
   await practice.keyboard.type(" update the signup copy");
   await practice.keyboard.press("Enter");
   // The world took the request only if it named the copied ID.
