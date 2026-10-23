@@ -25,6 +25,11 @@ export function recentCards(project: ProjectMemory): MemoryRow[] {
   return memoryCards({ ...project, search: null }).sort((a, b) => b.updated_at_unix_ms - a.updated_at_unix_ms).slice(0, RECENT_CARDS);
 }
 
+/** What the project's Memory asks the operator (its 처리할 것), 0 while Memory is off or holds another project. */
+export function memoryAsks(memory: ProjectMemory | null | undefined, projectId: string): number {
+  return memory?.enabled && memory.workspace_id === projectId ? memory.questions.length : 0;
+}
+
 /** The Project of the checkout in front, or null at Home or in a device's Home folder. */
 export function frontProject(rest: SnapshotRest | null): Workspace | null {
   const front = frontCheckout(rest);

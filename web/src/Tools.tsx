@@ -1,4 +1,4 @@
-import { EllipsisIcon, FileDiffIcon, FilesIcon, FolderIcon, FolderTreeIcon, GitBranchIcon, LayoutDashboardIcon, XIcon, type LucideIcon } from "lucide-react";
+import { BriefcaseIcon, EllipsisIcon, FileDiffIcon, FilesIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, XIcon, type LucideIcon } from "lucide-react";
 import { Fragment, useState } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -9,7 +9,7 @@ import { ExplorerTree } from "./ExplorerTree";
 import { HistoryList } from "./HistoryList";
 import { useMemoryProject } from "./MemoryTab";
 import { ProjectTool } from "./ProjectTool";
-import { frontProject } from "./projectStatus";
+import { frontProject, memoryAsks } from "./projectStatus";
 import { DetailIcon, DetailPanel, useDetailTitle } from "./DetailPanel";
 import { DividerGuide, LaneDivider } from "./LaneDivider";
 import { commandLabel } from "./shortcutLabels";
@@ -36,7 +36,7 @@ import type { MessageKey } from "./i18n/catalogs";
 // are this page's (`ui.ts`).
 
 const TOOL_NAMES = { explorer: "panes.lane.explorer", changes: "panes.lane.changes", project: "projectTool.title" } as const satisfies Record<Tool, MessageKey>;
-const TOOL_ICONS: Record<Tool, LucideIcon> = { explorer: FolderTreeIcon, changes: FileDiffIcon, project: LayoutDashboardIcon };
+const TOOL_ICONS: Record<Tool, LucideIcon> = { explorer: FolderOpenIcon, changes: FileDiffIcon, project: BriefcaseIcon };
 /** The command whose chord the rail icon's hint shows (D-08). */
 const LANE_TOOL_COMMAND = { project: "toggle_lane_project", explorer: "toggle_lane_explorer", changes: "toggle_lane_changes" } as const satisfies Record<Tool, CommandId>;
 
@@ -66,8 +66,8 @@ function useScope(checkout: Checkout | null): (tool: Tool | "documents") => stri
  * folding the column when pressed again; below it one icon per tool, its
  * name, scope and chord in its hint, pressed while the tool column shows
  * it, opening the tool column on it or closing the column when it already
- * shows it. The Project tool counts its project's 할 일 (B38), no number at
- * 0. With no document the documents button is off and says so.
+ * shows it. The Project tool counts its project's 할 일 and what its Memory
+ * asks (B38), no number at 0. With no document the documents button is off and says so.
  */
 export function ToolRail({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -75,6 +75,10 @@ export function ToolRail({ actions }: { actions: Actions }) {
   const views = useShellStore((s) => (s.rest?.workspace_view as WorkspaceView | undefined)?.layout?.display_count ?? 0);
   const drawn = useUiStore((s) => s.drawnLane);
   const todo = useShellStore((s) => frontProject(s.rest)?.agent_scope.status?.todo_total ?? 0);
+  const asks = useShellStore((s) => {
+    const project = frontProject(s.rest);
+    return project ? memoryAsks(s.memory?.project, project.id) : 0;
+  });
   const scope = useScope(checkout);
   const uiState = useShellStore((s) => s.rest?.ui_state);
   const up = laneUp(drawn.mode);
@@ -112,19 +116,21 @@ export function ToolRail({ actions }: { actions: Actions }) {
         const Icon = TOOL_ICONS[tool];
         const pressed = up && drawn.tool === tool;
         const name = t(TOOL_NAMES[tool]);
-        const needs = tool === "project" ? todo : 0;
+        const needs = tool === "project" ? todo + asks : 0;
+        // What the number adds up, in the hint and for a reader: the 할 일, then what Memory asks.
+        const needsWords = needs > 0 ? [todo > 0 ? t("projectTool.todoCount", { count: todo }) : null, asks > 0 ? t("projectTool.memoryAsks", { count: asks }) : null].filter(Boolean).join(" · ") : "";
         // One short rule where the Project's tools end and the checkout's begin (D-37).
         const before = TOOLS[index - 1];
         const boundary = before !== undefined && TOOL_SCOPES[before] !== TOOL_SCOPES[tool];
         return (
           <Fragment key={tool}>
           {boundary ? <span aria-hidden="true" className="my-xs h-(--size-hairline) w-(--size-icon-lg) shrink-0 bg-border" data-tool-rail-divider="true" /> : null}
-          <Hint label={`${name} · ${scope(tool)}`} shortcut={commandLabel(LANE_TOOL_COMMAND[tool], uiState) || undefined} side="left">
+          <Hint label={needsWords ? `${name} · ${scope(tool)} · ${needsWords}` : `${name} · ${scope(tool)}`} shortcut={commandLabel(LANE_TOOL_COMMAND[tool], uiState) || undefined} side="left">
             <button
               type="button"
               aria-pressed={pressed}
               aria-label={name}
-              aria-description={needs > 0 ? t("projectTool.todoCount", { count: needs }) : undefined}
+              aria-description={needsWords || undefined}
               className={cn(RAIL_BUTTON, pressed ? "bg-secondary font-medium text-foreground" : "text-muted-foreground")}
               data-lane-tool={tool}
               onClick={() => actions.toggleTool(tool)}
