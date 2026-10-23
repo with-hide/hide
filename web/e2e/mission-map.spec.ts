@@ -135,10 +135,10 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(map).toBeVisible();
     await expect(map.locator("[data-mission-node]")).toHaveCount(4);
 
-    // Settings › Conductor writes the cap the Conductor reads.
-    await page.locator("[data-open-settings]").click();
+    // The map head's gear opens Settings on its Conductor page, which writes the cap the Conductor reads.
+    await map.locator("[data-detail-conductor-settings]").click();
     const sheet = page.locator('[data-settings="true"]');
-    await sheet.locator('[data-settings-tab="conductor"]').click();
+    await expect(sheet.locator('[data-settings-page-title="conductor"]')).toBeVisible();
     await sheet.locator("[data-conductor-cap]").click();
     await page.getByRole("option", { name: "6", exact: true }).click();
     await expect(sheet.locator("[data-conductor-cap]")).toHaveAttribute("data-conductor-cap", "6");

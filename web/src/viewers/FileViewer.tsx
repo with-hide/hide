@@ -61,8 +61,16 @@ function useBlob(state: FileBytesState, type: string): string | null {
 }
 
 function ImageView({ path, displayId, comments }: { path: string; displayId: string; comments?: ViewerComments }) {
+  return <ImageBody path={path} state={useFileBytes(path)} displayId={displayId} comments={comments} />;
+}
+
+/**
+ * An image drawn from bytes already read: a checkout file's through hided,
+ * or an outside file's through the desktop host (PRD outside-path-in-hide),
+ * which takes no comments. `path` names it for its alt text and comments.
+ */
+export function ImageBody({ path, state, displayId, comments }: { path: string; state: FileBytesState; displayId: string; comments?: ViewerComments }) {
   const { t } = useInterfaceTranslation();
-  const state = useFileBytes(path);
   const url = useBlob(state, "image/*");
   const [natural, setNatural] = useState<Size | null>(null);
   const [decodeFailed, setDecodeFailed] = useState(false);
@@ -157,8 +165,12 @@ function usePan(scroller: HTMLElement | null, pannable: boolean) {
 }
 
 function VideoView({ path }: { path: string }) {
+  return <VideoBody path={path} state={useFileBytes(path)} />;
+}
+
+/** A video played from bytes already read; `path` names its type. */
+export function VideoBody({ path, state }: { path: string; state: FileBytesState }) {
   const { t } = useInterfaceTranslation();
-  const state = useFileBytes(path);
   const [playbackFailed, setPlaybackFailed] = useState(false);
   const url = useBlob(state, videoMime(path));
   if (state.status === "failed") return <ViewerNotice state="video-failed" reason={t("documents.videoUnavailable", { reason: state.reason })} />;
@@ -179,8 +191,12 @@ function VideoView({ path }: { path: string }) {
 type PdfDocument = { pages: PDFPageProxy[]; sizes: Size[] };
 
 function PdfView({ path, displayId, comments }: { path: string; displayId: string; comments?: ViewerComments }) {
+  return <PdfBody path={path} state={useFileBytes(path)} displayId={displayId} comments={comments} />;
+}
+
+/** A PDF drawn from bytes already read; `path` names it for its comments. */
+export function PdfBody({ path, state, displayId, comments }: { path: string; state: FileBytesState; displayId: string; comments?: ViewerComments }) {
   const { t } = useInterfaceTranslation();
-  const state = useFileBytes(path);
   const [pdf, setPdf] = useState<PdfDocument | null>(null);
   const [renderFailed, setRenderFailed] = useState(false);
 

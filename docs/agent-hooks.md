@@ -64,7 +64,8 @@ After that daemon ends, the next pass may take ownership and refresh the entries
 Development and QA candidates use a private HOME as well as a private state folder, because changing only the state folder still shares the account's hook files.
 Before that pass, an unavailable old folder leaves mail pending and records the existing throttled `intake.failed` diagnostic with code `unavailable` in the helper's private delivery diagnostics; an invalid captured argument records `record` instead.
 
-The shared SessionStart guidance is English.
+The shared SessionStart guidance is English and begins with an intent table that turns what the operator asks for into its command: a file, diff or web page beside you (`hide file|diff|browser open … --beside`), an agent beside you (`hide agent spawn --beside …`, own checkout only), work handed to an agent whose result you collect (`--parent here`) and independent work (no `--parent`), with a line that forbids starting an agent with `"${HERDR_BIN_PATH:-herdr}" pane split` or `agent start` directly.
+The table is one literal (`hide_agent_hooks::intent_table!`) at the front of `PURPOSE_CONTEXT`, so every runtime's SessionStart, `hide guide` and the `hide` skill (version 2) carry the same text, and a version 1 skill is replaced at the next kit pass.
 It distinguishes Herdr's direct terminal input and control from Hide letters' stored delivery, replies and retry management.
 `herdr agent prompt` may yield a passive observation but creates no Hide letter, watch or parent relationship.
 Supervised delegation uses `hide agent spawn --parent here` to record responsibility and start the automatic watch.
@@ -353,7 +354,7 @@ Claude Code and Codex share one deny envelope, `hookSpecificOutput.permissionDec
 
 Each refusal appends one JSON line (pane id, agent kind, shape, runtime; never the command text, and the same file holds the `daemon.unreachable` lines) to `~/.hide/agent-hooks/spawn-guard.log` (private, capped at 256 KiB with one rotation) and echoes it on standard error, where a hook run by hand shows it.
 The per-call cost is what an ordinary shell call pays: the payload is read within 0.5 seconds and a byte test for `herdr` over the whole payload runs before anything is parsed or spawned, so a call whose payload does not mention `herdr` (its working directory and transcript path included) costs one process start and the [project guardrails](#project-guardrails)' policy read; a path containing `herdr` pays one JSON parse and the lexer as well (numbers in [PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#the-spawn-guard-hook-on-a-shell-call)).
-`hide-agent-hooks/tests/it/spawn_guard.rs` runs the helper beside a stand-in `hide` for each outcome above, and `src/spawn_guard.rs` holds the parser's table tests.
+`hide-agent-hooks/tests/it/spawn_guard.rs` runs the helper beside a stand-in `hide` for each outcome above, and `src/spawn_guard.rs` holds the parser's table tests; the parser itself is `hide-shell`.
 
 ## Folder trust for the worktrees Hide makes
 
@@ -485,7 +486,7 @@ It refuses three things and lets everything else run, reading and searching incl
 - `gh pr merge` by a worker of a mission that goes up to pull requests (`mission_merge`);
 - `git push` with `--force`, `--force-with-lease`, a short flag holding `f` or a `+` refspec, and `git rebase` other than `--abort` or `--quit`, in any pane with a record (`history_rewrite`).
 
-The shell words are read the way the spawn guard reads them (`spawn_guard::shell_line`), each command of a line on its own, so `cd repo && git commit` is seen; a write a script or `bash -c` makes is not, as the guardrails say of theirs.
+The shell words are read the way the spawn guard reads them (`hide_shell::shell_line`), each command of a line on its own, so `cd repo && git commit` is seen; a write a script or `bash -c` makes is not, as the guardrails say of theirs.
 OpenCode's plugin and the Pi and omp extension send a file tool to the helper only while a project guardrail is on, so on those agents the write refusal of a plan under review holds only then; their shell calls reach the helper and are refused the same way ([INSTALL.md](INSTALL.md#what-each-system-supports)).
 `tests/it/plan_record.rs` runs the compiled hook beside a stand-in `hide` that records every call: the prompt hook's one letter pull writes the record, and the pre-tool hook then refuses a write and a commit and lets `git status` and a read run with no further call.
 

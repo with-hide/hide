@@ -36,6 +36,12 @@ export type BrowserPlacement = {
    * viewport applies). Null, or absent from an older shell, fits the slot.
    */
   device?: BrowserDevicePlacement | null;
+  /**
+   * An outside HTML file's grant (PRD outside-path-in-hide): the host loads
+   * the file it granted, and `url` is empty, since the path never leaves the
+   * host.
+   */
+  grant?: string;
 };
 
 /** A device size as the host emulates it. */
@@ -57,6 +63,12 @@ export type BrowserSync = {
   authorized_scopes?: { workspace: string; area_id: string; incarnation: number }[];
   /** The core's own node id, whose pages load this computer's loopback directly; absent until the snapshot names it. */
   node?: string;
+  /**
+   * Every outside-file grant a tab stands on, the core's and the opens still
+   * on their way; the host lets go of every other one. Absent until the shell
+   * has the core's tabs, so a reload lets go of nothing (PRD outside-path-in-hide B15).
+   */
+  external_grants?: string[];
 };
 
 /** `zoom_in`, `zoom_out` and `zoom_reset` step the page's zoom the way Chrome's ⌘= / ⌘- / ⌘0 do, without moving the keyboard. */
@@ -81,10 +93,11 @@ export type BrowserPageState = {
 
 export type BrowserHostEvent =
   | { kind: "window-focus"; focused: boolean }
-  | { kind: "state"; workspace: string; id: string; load: number; state: BrowserPageState }
+  /** `external` marks an outside file's page, whose address is a path the core never holds (PRD outside-path-in-hide). */
+  | { kind: "state"; workspace: string; id: string; load: number; state: BrowserPageState; external?: true }
   /** Actual debugger ownership, scoped to `device_id + NUL + checkout_path`. */
   | { kind: "attached"; workspace: string; id: string; attached: boolean }
-  | { kind: "gone"; workspace: string; id: string; load: number; url: string }
+  | { kind: "gone"; workspace: string; id: string; load: number; url: string; external?: true }
   /** The page opened a tab: it becomes another browser display, beside the page `id`. */
   | { kind: "open"; workspace: string; id: string; url: string }
   /** The operator clicked or tabbed into the page. */
@@ -108,6 +121,30 @@ export type HerdrRestart = "restarted" | "stop_failed" | "failed" | "unavailable
 /** A path on this computer as the host found it: its physical path in the wire spelling (`/` between names, `C:/...` on Windows) and whether it is a folder; null when it does not exist. */
 export type ProbedPath = { real: string; kind: "file" | "directory" } | null;
 
+/** Which viewer an outside file opens in (PRD outside-path-in-hide D-02). */
+export type ExternalKind = "text" | "image" | "pdf" | "video" | "html";
+/** An outside file this window's host granted: never its path, which only `describe` gives this window. */
+export type ExternalGrant = { id: string; name: string; kind: ExternalKind };
+/** A granted file's read: its bytes, a text past the tab's size, or why it could not be read. */
+export type ExternalRead = { bytes: Uint8Array } | { preview_only: true } | { failure: string };
+
+/** The outside files this window may show (PRD outside-path-in-hide); only a desktop window has them. */
+export type ExternalBridge = {
+  /**
+   * Grants the clicked file at `path` (its physical wire spelling) to this
+   * window for its viewer, `source` asking for an HTML file's text; null
+   * when the host handed it to the system instead (a program, audio, a
+   * folder, past the size, or the grants are full).
+   */
+  open(path: string, mode: "auto" | "source"): Promise<ExternalGrant | null>;
+  /** The granted file's bytes, read from the disk now. */
+  read(grant: string): Promise<ExternalRead>;
+  /** The granted file's path and kind for this window's badge; null when this window's host does not hold it. */
+  describe(grant: string): Promise<{ path: string; name: string; kind: ExternalKind } | null>;
+  /** Every grant the host holds now. */
+  live(): Promise<string[]>;
+};
+
 export type HostBridge = {
   kind: "electron";
   /** The host's OS as Node names it (`process.platform`): what the OS file manager is called. */
@@ -126,6 +163,8 @@ export type HostBridge = {
   probePaths(paths: string[]): Promise<ProbedPath[]>;
   /** Hands an absolute path, in the wire spelling, to the system: its default application, a folder window, or a file manager reveal when opening would run it. */
   openPath(path: string): void;
+  /** Outside files shown in Hide; absent from an older host. */
+  external?: ExternalBridge;
   /**
    * Shows a system notification about one Factory item (PRD factory-observer
    * D-50) or agent (PRD first-run-onboarding D-10) while the app runs; a

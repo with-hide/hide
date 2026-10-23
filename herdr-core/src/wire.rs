@@ -1004,6 +1004,13 @@ pub(crate) fn tab_target_params(id: &str) -> Result<Value, String> {
 pub(crate) fn pane_target_params(id: &str) -> Result<Value, String> {
     params(req::PaneTarget { pane_id: id.into() })
 }
+/// Names a pane; `None` clears its label.
+pub(crate) fn pane_rename_params(id: &str, label: Option<&str>) -> Result<Value, String> {
+    params(req::PaneRenameParams {
+        pane_id: id.into(),
+        label: label.map(str::to_owned),
+    })
+}
 pub(crate) fn pane_scroll_params(pane_id: &str, offset_from_bottom: u64) -> Result<Value, String> {
     params(req::PaneScrollParams {
         pane_id: pane_id.into(),

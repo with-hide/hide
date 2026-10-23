@@ -34,7 +34,7 @@ Nothing in this repository checks an incoming wire value against this file from 
 The web shell (`web/src/snapshot.ts`) types these fields with TypeScript, which is a compile-time check only and does not reject an unrecognized value at runtime; a field the core stops emitting, or emits a new value for, is not caught by a test today.
 
 `workspace_view.tool` (`files`, `changes`, `work`, `memory`, or null while the lane is closed) is not listed here.
-Neither is the View area layout inside `workspace_view`: a split's `axis` (`row`, `column`), a display's `kind` (`file`, `diff`, `browser`, `pull_request`), and a display's `state` (`open`, `opening`, `waiting`, `unavailable`).
+Neither is the View area layout inside `workspace_view`: a split's `axis` (`row`, `column`), a display's `kind` (`file`, `diff`, `browser`, `pull_request`, `external`), and a display's `state` (`open`, `opening`, `waiting`, `unavailable`).
 Neither is `ui_state.theme` (`system`, `light`, `dark`); the web shell reads a value it does not know as Dark rather than failing.
 List an enum here, with a Rust-side pin and a reading-side check for it, in the change that adds one.
 

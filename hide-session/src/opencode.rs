@@ -631,9 +631,22 @@ pub(crate) fn read_as(
     request: &LabelTranscriptRequest,
     owner: Owner<'_>,
 ) -> Result<(LabelTranscript, Proven), ReadRefusal> {
+    read_links(home, request, owner).map(|(transcript, proven, _)| (transcript, proven))
+}
+
+/// The pull requests each tool call of a read named, with the call's time.
+pub(crate) type NamedCalls = Vec<(u64, Vec<crate::NamedPr>)>;
+
+/// [`read_as`] with the pull requests the read's tool calls named, for the
+/// link reader.
+pub(crate) fn read_links(
+    home: &Path,
+    request: &LabelTranscriptRequest,
+    owner: Owner<'_>,
+) -> Result<(LabelTranscript, Proven, NamedCalls), ReadRefusal> {
     Ok(with_read(home, |connection, schema| {
         read_connection(connection, schema, request, owner)
-            .map(|page| (page.transcript, page.proven))
+            .map(|page| (page.transcript, page.proven, page.named))
     })??)
 }
 
@@ -681,6 +694,7 @@ struct Page {
     read_bytes: u64,
     /// When each of `transcript.memory_receipts`' messages was written.
     receipt_times: Vec<u64>,
+    named: NamedCalls,
 }
 
 impl Page {
@@ -784,6 +798,7 @@ fn read_connection(
         events: Vec::new(),
         sightings: Vec::new(),
         issue_sightings: Vec::new(),
+        named: Vec::new(),
         receipts: Vec::new(),
         receipt_times: Vec::new(),
         skipped: std::collections::BTreeMap::new(),
@@ -854,6 +869,7 @@ fn read_connection(
         .map(|(reason, count)| (reason.to_owned(), count))
         .collect();
     let receipt_times = transcript.receipt_times;
+    let named = transcript.named;
     let transcript = LabelTranscript {
         confirmed: proven.confirmed(session_id)?,
         events: transcript.events,
@@ -876,6 +892,7 @@ fn read_connection(
         proven,
         read_bytes: spent,
         receipt_times,
+        named,
     })
 }
 
@@ -1168,6 +1185,8 @@ struct Read {
     events: Vec<LabelEvent>,
     sightings: Vec<PrSighting>,
     issue_sightings: Vec<PrSighting>,
+    /// The pull requests each tool call named ([`crate::named_prs`]).
+    named: NamedCalls,
     receipts: Vec<MemoryReceiptPart>,
     /// When each receipt's message was written, beside `receipts`.
     receipt_times: Vec<u64>,
@@ -1281,6 +1300,11 @@ impl Read {
     }
 
     fn tool(&mut self, part: &Value, message_at: u64) {
+        let called = part
+            .pointer("/state/time/start")
+            .and_then(Value::as_u64)
+            .unwrap_or(message_at);
+        self.note_call(part.pointer("/state/input"), called);
         let Some(output) = part.pointer("/state/output").and_then(Value::as_str) else {
             return;
         };
@@ -1289,6 +1313,23 @@ impl Read {
             .and_then(Value::as_u64)
             .unwrap_or(message_at);
         self.note_sightings(output, at);
+    }
+
+    /// The pull requests a tool call's input named, as of `at`.
+    fn note_call(&mut self, input: Option<&Value>, at: u64) {
+        let Some(input) = input else {
+            return;
+        };
+        let named = crate::named_prs::tool_call(input, None);
+        if named.is_empty() {
+            return;
+        }
+        let held: usize = self.named.iter().map(|(_, named)| named.len()).sum();
+        if held + named.len() > crate::links::NAMED_PER_READ {
+            self.skip("named_pr_capacity");
+            return;
+        }
+        self.named.push((at, named));
     }
 
     /// The pull requests and issues a tool's output printed, as of `at`.

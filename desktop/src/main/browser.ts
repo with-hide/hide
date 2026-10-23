@@ -20,7 +20,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell, WebC
 import fs from "node:fs";
 import path from "node:path";
 import type { TFunction } from "i18next";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { BrowserDevicePlacement, BrowserHostEvent, BrowserPageState, BrowserPlacement, BrowserRect } from "../../../web/src/host";
 import { hostChord, isCycleCommand, keySystemOf, matchHost, releaseModifier, systemRegistry, type Command, type CommandId } from "../../../web/src/shortcuts";
 import { BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL } from "../channel";
@@ -29,6 +29,7 @@ import { nextZoomFactor, type PageZoom } from "../../../web/src/zoomSteps";
 import type { HostLog } from "./log";
 import type { CdpPage, CdpRetirement, CdpScope } from "./browserCdp";
 import { accelerator } from "./menu";
+import { errorCode, externalPartition, type ExternalFiles } from "./externalFiles";
 
 /** Page state reports coalesce to one per view in this window, so a title ticking every frame costs one event. */
 const REPORT_COALESCE_MS = 100;
@@ -86,6 +87,12 @@ type Page = {
   readonly fileRefusals: Set<FileRefusal>;
   /** A local file page's checkout, resolved once: what its files may load from. */
   checkoutRoot?: string | null;
+  /**
+   * An outside HTML file's grant (PRD outside-path-in-hide): the page loads
+   * the granted file in a session of its own and its files from the grant's
+   * folder alone, and it never enters CDP or reports its address to the core.
+   */
+  readonly grant?: string;
   /** What each public name a local file page asked for resolved to, bounded. */
   readonly hostVerdicts: Map<string, boolean>;
 };
@@ -162,7 +169,9 @@ export class BrowserViews {
     for (const page of this.pages.values()) {
       const area_id = this.cdpAreas.get(page.key);
       const contents = page.view.webContents;
-      if (!area_id || contents.isDestroyed()) continue;
+      // An outside file is the operator's alone: no capability, Comment's
+      // included, ever reaches it (B18).
+      if (!area_id || contents.isDestroyed() || page.grant) continue;
       if (!page.fileRestricted) result.push({ workspace: page.workspace, area_id, id: page.id, local: true, contents });
       else if (!isFileAddress(page.state.url) && !isFileAddress(page.route?.source_url ?? "") && !isFileAddress(contents.getURL())
         && !page.cdpFileFrame) {
@@ -231,6 +240,8 @@ export class BrowserViews {
     private readonly present: (window: BrowserWindow, focus: boolean) => void,
     /** The host's translator in the language in effect now; asked for at each use, since the language can change while a page is open. */
     private readonly words: () => TFunction<"translation">,
+    /** The outside files this window's operator granted. */
+    private readonly externals: ExternalFiles,
   ) {
     ipcMain.on(BROWSER_CYCLE_END_CHANNEL, (event, cycleId: unknown) => {
       if (!this.trusted(event)) return this.log.event("browser.ipc_refused", { channel: "cycle_end" });
@@ -245,6 +256,7 @@ export class BrowserViews {
       // shared contract lands; older shells have no replay epoch.
       const authority = sync as typeof sync & { attachment_epoch?: string; authorized_scopes?: { workspace: string; area_id: string; incarnation?: number }[] };
       this.sync(sync.workspace, sync.displays, sync.retained, authority.attachment_epoch, authority.authorized_scopes);
+      if (sync.external_grants) this.keepGrants(new Set(sync.external_grants));
     });
     ipcMain.handle(BROWSER_CAPTURE_CHANNEL, async (event, value: unknown) => {
       if (!this.trusted(event)) return null;
@@ -455,12 +467,12 @@ export class BrowserViews {
         continue;
       }
       if (!page) page = this.create(window, workspace ?? "", display);
-      else if (page.partition !== browserPartition(page.workspace, display.url, this.node)) {
+      else if (page.partition !== this.partitionOf(workspace ?? "", display)) {
         this.destroy(page, "replaced");
         page = this.create(window, workspace ?? "", display);
       } else if (display.load > page.applied) {
         page.applied = display.load;
-        this.load(page, display.url);
+        this.load(page, this.addressOf(display));
       }
       const bounds = toBounds(display.rect, zoom);
       page.view.setBounds(bounds);
@@ -482,8 +494,49 @@ export class BrowserViews {
     }
   }
 
+  /**
+   * An outside file's own session, kept in memory and shared with no other
+   * page (B4); every other page's from its address (`browserPartition`).
+   */
+  private partitionOf(workspace: string, display: BrowserPlacement): string {
+    return display.grant ? (this.externals.partition(display.grant) ?? GONE_GRANT_PARTITION) : browserPartition(workspace, display.url, this.node);
+  }
+
+  /** What a display loads: its address, or the file its grant names, which only this process knows. */
+  private addressOf(display: BrowserPlacement): string {
+    return display.grant ? (this.externals.pageUrl(display.grant) ?? "") : display.url;
+  }
+
+  /**
+   * Lets go of every grant no tab stands on (`ExternalFiles.keep`). A page
+   * of one is closed with it and its session's storage cleared, so the page
+   * reads nothing more from the folder (B14).
+   */
+  private keepGrants(named: ReadonlySet<string>): void {
+    const gone = this.externals.keep(named);
+    if (gone.length === 0) return;
+    const ids = new Set(gone.map((released) => released.id));
+    for (const page of [...this.pages.values()]) if (page.grant && ids.has(page.grant)) this.destroy(page, "closed");
+    for (const { id, slot } of gone) {
+      if (slot === null) continue;
+      const partition = externalPartition(slot);
+      if (!this.configuredSessions.has(partition)) {
+        this.externals.slotCleared(slot);
+        continue;
+      }
+      // The session keeps its handlers, which name no grant, so a page reusing
+      // the slot adds none; a slot whose storage or cache could not be
+      // cleared is never handed out again, so no later page reads it.
+      const pageSession = session.fromPartition(partition);
+      void Promise.all([pageSession.clearStorageData(), pageSession.clearCache()]).then(
+        () => this.externals.slotCleared(slot),
+        (error: unknown) => this.log.event("external.storage_clear_failed", { grant: id, reason: errorCode(error) }),
+      );
+    }
+  }
+
   private create(window: BrowserWindow, workspace: string, display: BrowserPlacement): Page {
-    const partition = browserPartition(workspace, display.url, this.node);
+    const partition = this.partitionOf(workspace, display);
     const view = new WebContentsView({
       webPreferences: { session: this.sessionFor(partition), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true },
     });
@@ -503,18 +556,19 @@ export class BrowserViews {
       report: null,
       route: null,
       partition,
-      fileRestricted: !partition.startsWith("persist:hide-browser-file-"),
+      fileRestricted: !partition.startsWith("persist:hide-browser-file-") && !display.grant,
       cdpRestricted: false,
       cdpDownloadRefused: false,
       cdpFileFrame: false,
       fileRefusals: new Set(),
       hostVerdicts: new Map(),
+      ...(display.grant ? { grant: display.grant } : {}),
     };
     view.setVisible(false);
     window.contentView.addChildView(view);
     this.pages.set(page.key, page);
     this.watch(page);
-    this.load(page, display.url);
+    this.load(page, this.addressOf(display));
     this.log.event("browser.view_created", { live: this.pages.size });
     return page;
   }
@@ -588,8 +642,13 @@ export class BrowserViews {
     }, () => refuse("local_network"));
   }
 
-  /** Whether `file` is in the page's checkout, symbolic links resolved, so a link out of it does not carry a read out. */
+  /**
+   * Whether `file` is in the page's checkout, symbolic links resolved, so a
+   * link out of it does not carry a read out; for an outside file, in its
+   * grant's folder while the grant lasts (D-03, B14).
+   */
   private insideCheckout(page: Page, file: string): boolean {
+    if (page.grant) return this.externals.inside(page.grant, file);
     if (page.checkoutRoot === undefined) {
       const root = page.workspace.split("\u0000")[1];
       try { page.checkoutRoot = root ? fs.realpathSync.native(root) : null; } catch { page.checkoutRoot = null; }
@@ -599,6 +658,15 @@ export class BrowserViews {
     try { real = fs.realpathSync.native(file); } catch { /* a file that is not there answers 404 inside the folder it names */ }
     const relative = path.relative(page.checkoutRoot, real);
     return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  }
+
+  /** Whether a `file:` address is a file of an outside page's grant folder. */
+  private insideGrant(page: Page, url: string): boolean {
+    try {
+      return this.insideCheckout(page, fileURLToPath(url));
+    } catch {
+      return false;
+    }
   }
 
   private fileRefused(page: Page, category: FileRefusal, resourceType?: Electron.OnBeforeRequestListenerDetails["resourceType"]): void {
@@ -619,13 +687,15 @@ export class BrowserViews {
     }
     const stamp = page.applied;
     this.update(page, { url, loading: true, failure: null });
-    void this.resolve(page.workspace, page.id, stamp).then((route) => {
+    // An outside file's route is its own file, which no daemon may name.
+    const resolved = page.grant ? Promise.resolve<ResolvedPage>({ url, source_url: url, load: stamp }) : this.resolve(page.workspace, page.id, stamp);
+    void resolved.then((route) => {
       // The core can canonicalize a checked file address while the loading
       // report is in flight. The load stamp binds this answer to its intent;
       // spelling changes within that generation must not strand the load.
       if (this.pages.get(page.key) !== page || page.applied !== stamp || route.load !== stamp) return;
       if (!loadable(route.url)) throw new Error("Resolved page address cannot be loaded");
-      if (browserPartition(page.workspace, route.source_url, this.node) !== page.partition) throw new Error("Resolved page requires a different browser partition");
+      if (!page.grant && browserPartition(page.workspace, route.source_url, this.node) !== page.partition) throw new Error("Resolved page requires a different browser partition");
       page.route = route;
       return page.view.webContents.loadURL(route.url).catch((error: unknown) => {
         // did-fail-load reports it; a load a newer one replaced is not a failure.
@@ -697,6 +767,15 @@ export class BrowserViews {
     contents.on("did-navigate", forget);
     contents.once("destroyed", forget);
     const navigation = (event: { preventDefault(): void }, url: string) => {
+      // An outside file's page moves within its folder; a file anywhere else
+      // is not the operator's to show (B5).
+      if (page.grant && isFileAddress(url)) {
+        if (!this.insideGrant(page, url)) {
+          event.preventDefault();
+          this.log.event("browser.navigation_refused", { reason: "external_folder_boundary", grant: page.grant });
+        }
+        return;
+      }
       if (page.fileRestricted && isFileAddress(url)) {
         event.preventDefault();
         this.fileRefused(page, "navigation");
@@ -727,6 +806,13 @@ export class BrowserViews {
    * features) is another browser display, which the core opens.
    */
   private openWindow(page: Page, contents: WebContents, url: string, popup: boolean, referrer: string): WindowOpenHandlerResponse {
+    // An outside file's link to another file of its folder opens in its own
+    // tab, since no other display may name the file (B5).
+    if (page.grant && isFileAddress(url)) {
+      if (this.insideGrant(page, url)) void contents.loadURL(url).catch(() => undefined);
+      else this.log.event("browser.window_open_refused", { reason: "external_folder_boundary", grant: page.grant });
+      return { action: "deny" };
+    }
     if (page.fileRestricted && isFileAddress(url)) {
       this.fileRefused(page, "popup");
       return { action: "deny" };
@@ -916,7 +1002,7 @@ export class BrowserViews {
     page.report = setTimeout(() => {
       page.report = null;
       if (this.pages.get(page.key) !== page) return;
-      this.emit({ kind: "state", workspace: page.workspace, id: page.id, load: page.applied, state: page.state });
+      this.emit({ kind: "state", workspace: page.workspace, id: page.id, load: page.applied, state: page.state, ...(page.grant ? { external: true as const } : {}) });
       this.publishCdp();
     }, REPORT_COALESCE_MS);
   }
@@ -967,12 +1053,13 @@ export class BrowserViews {
   }
 
   private destroy(page: Page, reason: CdpRetirement["reason"]): void {
-    if (reason === "evicted") this.emit({ kind: "gone", workspace: page.workspace, id: page.id, load: page.applied, url: page.state.url });
+    if (reason === "evicted") this.emit({ kind: "gone", workspace: page.workspace, id: page.id, load: page.applied, url: page.state.url, ...(page.grant ? { external: true as const } : {}) });
     if (this.cycleInput?.page === page) this.cancelCycle();
     if (this.returnTo === page) this.returnTo = null;
     this.pages.delete(page.key);
     this.publishCdp({ contentsId: page.view.webContents.id, reason });
-    this.release(page.workspace, page.id, page.applied);
+    // An outside file's page resolved no route, so the daemon has none to let go.
+    if (!page.grant) this.release(page.workspace, page.id, page.applied);
     if (page.report) clearTimeout(page.report);
     const window = this.window;
     if (window && !window.isDestroyed()) window.contentView.removeChildView(page.view);
@@ -1016,3 +1103,6 @@ function menuHas(items: readonly MenuItem[], accelerator: string): boolean {
 function isFileAddress(url: string): boolean {
   return protocolOf(url) === "file:";
 }
+
+/** The session of a page whose grant is gone, which loads nothing and shares nothing (a grant's own come from `ExternalFiles.partition`). */
+const GONE_GRANT_PARTITION = "hide-browser-external-gone";

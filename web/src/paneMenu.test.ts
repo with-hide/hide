@@ -26,10 +26,18 @@ describe("a right-click in a terminal", () => {
 
   it("lets an HTML link open its rendered page, its source, its default app or its file manager", () => {
     const items = terminalMenuItems(pane, "reviewer", context({
-      link: { target: { kind: "path", path: "report.HTML", line: 12, column: null }, found: { real: "/project/report.HTML", kind: "file" }, inCheckout: true },
+      link: { target: { kind: "path", path: "report.HTML", line: 12, column: null }, found: { real: "/project/report.HTML", kind: "file" }, inCheckout: true, sourceInHide: true },
       reveal: { label: "explorer.revealFinder" },
     }));
     expect(items.slice(0, 5).map((item) => item.label)).toEqual(["Open in browser", "Open source", "Open in default application", "Reveal in Finder", "Copy path"]);
+  });
+
+  it("offers an outside HTML file's page and source in Hide where this window shows outside files (PRD outside-path-in-hide B9)", () => {
+    const link = { target: { kind: "path" as const, path: "/tmp/preview.html", line: null, column: null }, found: { real: "/tmp/preview.html", kind: "file" as const }, inCheckout: false };
+    const shown = terminalMenuItems(pane, "reviewer", context({ link: { ...link, sourceInHide: true }, reveal: { label: "explorer.revealFinder" } }));
+    expect(shown.slice(0, 5).map((item) => item.label)).toEqual(["Open in browser", "Open source", "Open in default application", "Reveal in Finder", "Copy path"]);
+    const elsewhere = terminalMenuItems(pane, "reviewer", context({ link: { ...link, sourceInHide: false }, reveal: { label: "explorer.revealFinder" } }));
+    expect(elsewhere.some((item) => item.id === "link_source")).toBe(false);
   });
 
   it("treats a directory named .html as a folder and names the host's actual file manager", () => {

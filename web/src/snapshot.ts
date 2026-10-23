@@ -1413,11 +1413,11 @@ export type ViewDisplaySnapshot = {
   id: string;
   /** The editor tab (document buffer) it shows; null while it is opening or waiting. */
   tab_id: string | null;
-  /** The file or diff it shows; empty for a browser display. */
+  /** The file or diff it shows; empty for a browser display and an outside file. */
   path: string;
-  /** The document's name, or a browser page's title (its host until it has one). */
+  /** The document's name, a browser page's title (its host until it has one), or an outside file's name. */
   label: string;
-  kind: "file" | "diff" | "browser";
+  kind: "file" | "diff" | "browser" | "external";
   /** Which History group a diff shows; null for a file. */
   committed: boolean | null;
   preview: boolean;
@@ -1435,6 +1435,8 @@ export type ViewDisplaySnapshot = {
   /** Its unsent comments, and of those the ones whose letter expired (B14, B29); absent for none. */
   comments?: number;
   not_delivered?: number;
+  /** An outside file's desktop grant, name and viewer (PRD outside-path-in-hide); absent for every other kind. */
+  external?: { grant: string; name: string; kind: import("./host").ExternalKind };
 };
 
 /** An agent that opened a View (`ViewOpenerSnapshot`). */
@@ -2504,6 +2506,8 @@ export type SnapshotRest = {
   browser_views?: { device_id: string; path: string; view_id: string; area_id: string }[];
   /** Positive connected Workspace area authority from the core, including empty areas; incarnation changes on revoke/regrant. */
   browser_scopes?: { device_id: string; path: string; area_id: string; incarnation: number }[];
+  /** The desktop grants every outside file's tab stands on, across every Workspace; absent while none does. */
+  external_grants?: string[];
 };
 
 /**

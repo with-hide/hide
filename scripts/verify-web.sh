@@ -2,7 +2,7 @@
 # The web and desktop entrypoint for verification, as plain argv.
 #
 # Usage: verify-web.sh [install [--ignore-scripts] | PACKAGE ACTION [args...]]
-# PACKAGE: web, desktop. ACTION: typecheck, lint, test, build, e2e,
+# PACKAGE: web, desktop. ACTION: typecheck, lint, test, build, e2e, e2e-list,
 # playwright-install, package and electron-install (desktop only).
 #
 # Runs the web shell and desktop app typecheck, lint, unit tests and build.
@@ -47,6 +47,11 @@ if (( $# > 0 )); then
             fi
             exec pnpm --dir "$directory" exec playwright test "$@"
             ;;
+        e2e-list)
+            # Discovery imports specs, but never launches the built app. Keep
+            # preparation in e2e, which always builds desktop before execution.
+            exec pnpm --dir "$directory" exec playwright test --list "$@"
+            ;;
         playwright-install)
             [[ $# == 0 ]] || { printf 'invalid playwright-install arguments\n' >&2; exit 2; }
             exec pnpm --dir "$directory" exec playwright install chromium
@@ -66,8 +71,15 @@ fi
 pnpm install --frozen-lockfile
 
 for package in web desktop; do
-    pnpm --dir "$package" typecheck
+    # Web build already typechecks before bundling. Desktop's esbuild does not.
+    if [[ "$package" == web ]]; then
+        pnpm --dir "$package" build
+    else
+        pnpm --dir "$package" typecheck
+    fi
     pnpm --dir "$package" lint
     pnpm --dir "$package" test
-    pnpm --dir "$package" build
+    if [[ "$package" == desktop ]]; then
+        pnpm --dir "$package" build
+    fi
 done
