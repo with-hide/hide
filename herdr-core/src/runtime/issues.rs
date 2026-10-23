@@ -631,16 +631,18 @@ pub(super) struct IssueWritePending {
 }
 
 /// A Local issue as its panel reads it: the body and when it was made, from
-/// the store the runtime already holds, so the read needs no worker.
+/// the store the runtime already holds, so the read needs no worker. A
+/// failure is a `local_issue.<code>` the panel words; why the store could not
+/// be read was logged when it was loaded.
 fn local_issue_detail(
     store: &Result<crate::local_issues::LocalIssueStore, String>,
     node: Option<&str>,
     key: &str,
 ) -> Result<crate::tasks::TaskDetail, String> {
     let (path, number) =
-        crate::tasks::parse_local_key(key).ok_or_else(|| format!("{key} is not a local issue"))?;
+        crate::tasks::parse_local_key(key).ok_or_else(|| "local_issue.not_local".to_owned())?;
     match store {
-        Err(reason) => Err(reason.clone()),
+        Err(_) => Err("local_issue.store_unreadable".to_owned()),
         Ok(store) => store
             .issue(node, path, number)
             .map(|issue| crate::tasks::TaskDetail {
@@ -648,12 +650,7 @@ fn local_issue_detail(
                 created_at_unix_ms: Some(issue.created_at_unix_ms),
                 ..Default::default()
             })
-            .ok_or_else(|| {
-                format!(
-                    "로컬 이슈 {}가 없습니다.",
-                    crate::local_issues::display_id(number)
-                )
-            }),
+            .ok_or_else(|| "local_issue.missing".to_owned()),
     }
 }
 
@@ -862,14 +859,17 @@ impl Runtime {
         project_path: &str,
         title: &str,
         body: &str,
-    ) -> Result<u32, String> {
+    ) -> Result<u32, (crate::model::IssueFailure, String)> {
         let number = match self.local_issues.as_mut() {
             Err(reason) => {
-                return Err(format!(
-                    "로컬 이슈 파일을 읽지 못해 새 이슈를 만들 수 없습니다: {reason}"
+                return Err((
+                    crate::model::IssueFailure::new("local_issue.store_unreadable"),
+                    format!("the local issue file could not be read: {reason}"),
                 ));
             }
-            Ok(store) => store.create(node, project_path, title, body, unix_milliseconds())?,
+            Ok(store) => store
+                .create(node, project_path, title, body, unix_milliseconds())
+                .map_err(|error| (error.into(), error.to_string()))?,
         };
         self.persist_local_issues();
         self.refresh_issue_rows(node);
@@ -1577,26 +1577,36 @@ impl Runtime {
         let now = unix_milliseconds();
         let key = crate::tasks::parse_local_key(&payload.task_key);
         let node = key.map(|(path, _)| self.local_issue_project(&payload.workspace_id, path));
+        use crate::model::IssueFailure;
         let updated = match (key, node.clone(), self.local_issues.as_mut()) {
-            (None, _, _) | (_, None, _) => Err("Only a local issue is edited in Hide".to_owned()),
-            (_, Some(Err(message)), _) => Err(message),
-            (Some(_), _, Err(reason)) => Err(format!(
-                "로컬 이슈 파일을 읽지 못해 고칠 수 없습니다: {reason}"
+            (None, _, _) | (_, None, _) => Err((
+                IssueFailure::new("local_issue.not_local"),
+                "only a local issue is edited in Hide".to_owned(),
             )),
-            (Some((path, number)), Some(Ok(node)), Ok(store)) => store.update(
-                node.as_deref(),
-                path,
-                number,
-                &payload.title,
-                &payload.body,
-                now,
-            ),
+            (_, Some(Err(message)), _) => {
+                Err((IssueFailure::new("local_issue.project_unknown"), message))
+            }
+            (Some(_), _, Err(reason)) => Err((
+                IssueFailure::new("local_issue.store_unreadable"),
+                format!("the local issue file could not be read: {reason}"),
+            )),
+            (Some((path, number)), Some(Ok(node)), Ok(store)) => store
+                .update(
+                    node.as_deref(),
+                    path,
+                    number,
+                    &payload.title,
+                    &payload.body,
+                    now,
+                )
+                .map_err(|error| (error.into(), error.to_string())),
         };
         crate::diagnostic!(serde_json::json!({
             "component": "issues", "kind": "local_issue.update",
             "request": payload.request_id, "task": payload.task_key, "ok": updated.is_ok(),
+            "reason": updated.as_ref().err().map(|(_, detail)| detail),
         }));
-        if updated == Ok(true) {
+        if matches!(updated, Ok(true)) {
             self.persist_local_issues();
             let node = node.and_then(Result::ok).flatten();
             self.refresh_issue_rows(node.as_deref());
@@ -1605,7 +1615,7 @@ impl Runtime {
             request_id: payload.request_id,
             task_key: payload.task_key,
             phase: if updated.is_ok() { "ready" } else { "failed" }.into(),
-            message: updated.err(),
+            failure: updated.err().map(|(failure, _)| failure),
         });
         true
     }

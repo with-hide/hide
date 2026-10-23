@@ -2147,7 +2147,7 @@ fn a_node_pull_request_links_its_github_issue_on_the_node_and_closes_it_by_name(
             "issue_key": "github:acme/app#12"}),
     );
     let link = pr_link(&shared);
-    assert_eq!(link.phase, "ready", "{:?}", link.message);
+    assert_eq!(link.phase, "ready", "{:?}", link.failure);
     let calls = own.gh_calls();
     assert!(
         calls
@@ -2215,7 +2215,7 @@ fn a_node_pull_request_s_new_local_issue_is_made_under_the_node() {
         (link.phase.as_str(), link.issue_id.as_deref(), link.created),
         ("ready", Some("L-5"), true),
         "{:?}",
-        link.message
+        link.failure
     );
     let runtime = shared.lock().unwrap();
     let store = runtime.local_issues.as_ref().unwrap();

@@ -570,7 +570,7 @@ export type IssueWork = {
   detail: IssueDetail | null;
   name: { request_id: string; phase: "working" | "ready" | "failed"; name: string | null; message: string | null } | null;
   /** The answer to a Local issue's edit, by the web's request id. */
-  update?: { request_id: string; task_key: string; phase: "ready" | "failed"; message: string | null } | null;
+  update?: { request_id: string; task_key: string; phase: "ready" | "failed"; failure: IssueFailure | null } | null;
   /** ⌘K's explicit GitHub search, by the web's request id (`github_search`). */
   search?: GithubSearch | null;
 };
@@ -630,6 +630,9 @@ export type GithubSearch = {
   message: string | null;
 };
 
+/** Why a Local issue or a pull request's issue failed (`IssueFailure`): a `local_issue.*` or `pr_link.*` code and the limit its sentence names. */
+export type IssueFailure = { code: string; limit?: number };
+
 /** A pull request linked to an issue (`PrLinkSnapshot`): the issue made, Hide's link, then `Closes #N` in the body. */
 export type PrLink = {
   request_id: string;
@@ -643,7 +646,8 @@ export type PrLink = {
   issue_id: string | null;
   /** This request made the issue. */
   created: boolean;
-  message: string | null;
+  /** Why it failed, as a code the web words (`issueFailure.ts`). */
+  failure: IssueFailure | null;
 };
 
 /** A pull request's body, failed checks and standing change requests, read for a new issue made from it or an agent's first prompt (`PrFeedbackSnapshot`). */

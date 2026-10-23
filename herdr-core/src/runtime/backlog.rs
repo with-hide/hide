@@ -503,13 +503,15 @@ impl Runtime {
             at_unix_ms: unix_milliseconds(),
         };
         let made = match self.local_issues.as_mut() {
-            Ok(store) => store.create_once(
-                job.node.as_deref(),
-                &job.project,
-                &intent,
-                &job.title,
-                unix_milliseconds(),
-            ),
+            Ok(store) => store
+                .create_once(
+                    job.node.as_deref(),
+                    &job.project,
+                    &intent,
+                    &job.title,
+                    unix_milliseconds(),
+                )
+                .map_err(|error| error.to_string()),
             Err(_) => Err("The memo store is unavailable".to_owned()),
         };
         match made {
@@ -577,7 +579,9 @@ impl Runtime {
     fn unmake_memo(&mut self, intent: &str, node: Option<&str>, key: &str) {
         if let Some((path, number)) = crate::tasks::parse_local_key(key) {
             let deleted = match self.local_issues.as_mut() {
-                Ok(store) => store.delete(node, path, number),
+                Ok(store) => store
+                    .delete(node, path, number)
+                    .map_err(|error| error.to_string()),
                 Err(reason) => Err(reason.clone()),
             };
             match deleted {
@@ -987,7 +991,9 @@ impl Runtime {
                     .refuse_backlog("backlog.undo_elsewhere", "The memo is not this project's");
             }
             let deleted = match self.local_issues.as_mut() {
-                Ok(store) => store.delete(node.as_deref(), path, number),
+                Ok(store) => store
+                    .delete(node.as_deref(), path, number)
+                    .map_err(|error| error.to_string()),
                 Err(reason) => Err(reason.clone()),
             };
             match deleted {

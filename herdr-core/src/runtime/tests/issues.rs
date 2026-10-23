@@ -980,7 +980,7 @@ fn a_local_issue_edit_changes_its_title_and_body_and_answers_the_request() {
         (
             update.request_id.as_str(),
             update.phase.as_str(),
-            update.message
+            update.failure
         ),
         ("r1", "ready", None)
     );
@@ -1017,7 +1017,7 @@ fn a_refused_issue_edit_keeps_the_issue_and_says_why() {
         (update.request_id.as_str(), update.phase.as_str()),
         ("r2", "failed")
     );
-    assert!(update.message.unwrap().contains("제목"));
+    assert_eq!(update.failure.unwrap().code, "local_issue.title_empty");
     assert_eq!(
         runtime.snapshot().navigator.workspaces[0].tasks.tasks[0].title,
         "로컬 이슈"

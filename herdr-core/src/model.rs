@@ -4499,7 +4499,37 @@ pub struct IssueUpdateSnapshot {
     pub task_key: String,
     /// `ready` or `failed`.
     pub phase: String,
-    pub message: Option<String>,
+    pub failure: Option<IssueFailure>,
+}
+
+/// Why a local issue's change or a pull request's issue link failed, as the
+/// code the web words (`localIssue.<code>` for `local_issue.<code>`,
+/// `prLink.<code>` for `pr_link.<code>`) with the one limit its sentence
+/// names; the core's own words go to the `pr_link.failed` and
+/// `local_issue.update` diagnostics.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct IssueFailure {
+    pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+impl IssueFailure {
+    pub fn new(code: &str) -> Self {
+        Self {
+            code: code.to_owned(),
+            limit: None,
+        }
+    }
+}
+
+impl From<crate::local_issues::LocalIssueError> for IssueFailure {
+    fn from(error: crate::local_issues::LocalIssueError) -> Self {
+        Self {
+            code: format!("local_issue.{}", error.code()),
+            limit: error.limit(),
+        }
+    }
 }
 
 /// The Overview's pull-request work in flight (PRD overview-lenses-prs):
@@ -4616,7 +4646,7 @@ pub struct PrLinkSnapshot {
     pub issue_id: Option<String>,
     /// The issue was made by this request.
     pub created: bool,
-    pub message: Option<String>,
+    pub failure: Option<IssueFailure>,
 }
 
 /// One failed check of a pull request, by the name GitHub shows and the page

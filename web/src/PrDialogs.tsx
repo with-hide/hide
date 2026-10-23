@@ -23,6 +23,7 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { taskFor } from "./workspaceManage";
 import { coreErrorKey, coreErrorText, type CoreError } from "./coreError";
+import { issueFailureText } from "./issueFailure";
 import { useErrorSince } from "./errorSince";
 import { fieldLabel } from "./shortcutLabels";
 
@@ -85,9 +86,9 @@ function LinkFailure({ answer, refused }: { answer: PrLink | null; refused: Core
   const headline = answer ? failureHeadline(answer, t) : t("prWork.linkFailed");
   // A refusal under the headline says only what this build words; the headline already says it failed.
   const known = refused ? coreErrorKey(refused.kind) : null;
-  const reason = answer?.message ?? (known ? t(known) : null);
+  const reason = issueFailureText(answer?.failure, t) ?? (known ? t(known) : null);
   return (
-    <Note tone="error" data-pr-link-failure={answer?.step ?? "refused"} data-core-error={refused?.kind}>
+    <Note tone="error" data-pr-link-failure={answer?.step ?? "refused"} data-core-error={answer?.failure?.code ?? refused?.kind}>
       <span className="block">{headline}</span>
       {reason ? <span className="line-clamp-2 block break-words text-caption text-muted-foreground">{reason}</span> : null}
     </Note>
