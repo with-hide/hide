@@ -20,6 +20,17 @@ export const PROBE_PATHS_CHANNEL = "hide:probe-paths";
 export const OPEN_PATH_CHANNEL = "hide:open-path";
 
 /**
+ * Files outside every checkout shown in Hide (PRD outside-path-in-hide): a
+ * clicked file granted to this window or handed to the system (invoke), the
+ * granted file's bytes for its viewer, what a grant names for its tab's badge,
+ * and every grant held, which the core is told when the window attaches.
+ */
+export const EXTERNAL_OPEN_CHANNEL = "hide:external-open";
+export const EXTERNAL_READ_CHANNEL = "hide:external-read";
+export const EXTERNAL_DESCRIBE_CHANNEL = "hide:external-describe";
+export const EXTERNAL_LIVE_CHANNEL = "hide:external-live";
+
+/**
  * System notifications (PRD first-run-onboarding D-10): the shell asks
  * for a notification about one agent
  * (renderer -> main), and a click on it hands that id back (main -> renderer).

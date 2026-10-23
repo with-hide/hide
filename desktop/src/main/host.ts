@@ -16,7 +16,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notif
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type HerdrRestart } from "../../../web/src/host";
 import type { MenuCommand } from "./menu";
-import { BINDINGS_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, PICK_FOLDER_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { BINDINGS_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpScope } from "./browserCdp";
 import {
@@ -49,6 +49,7 @@ import { ChildRunner, executableFile, startDetached, type ChildResult } from "./
 import { fallbackScreen, fallbackScript, statusPageFile } from "./statusPage";
 import { MIN_SIZE, readWindowState, restoreBounds, windowStatePath, writeWindowState } from "./windowState";
 import { openRoute, probe, probeRequest } from "./localPath";
+import { ExternalFiles, externalRoute } from "./externalFiles";
 import { revealTarget } from "./reveal";
 import { badgeRequest, ClickGate, KeptNotifications, launchedId, notifyRequest, OVERLAY_SIZE, overlayDot, toastXml, withdrawRequest } from "./notify";
 import { Editor } from "./editor";
@@ -158,6 +159,8 @@ export class DesktopHost {
   private quitting = false;
   /** The pages of browser displays; made once the app is ready, since a session needs it. */
   private browsers: BrowserViews | null = null;
+  /** Outside files this window's operator clicked open in Hide (PRD outside-path-in-hide). */
+  private readonly externals = new ExternalFiles((event, fields) => this.log.event(event, fields));
   private browserCdp: BrowserCdpGateway | null = null;
   private browserControlAddress: { endpoint: string; token: string } | null = null;
   private browserControlRegistration: { daemon: Attached; credential: string } | null = null;
@@ -219,6 +222,7 @@ export class DesktopHost {
       // activating the app, behind the operator's windows under the test switch.
       (window, focus) => (focus || this.showInactive ? this.present(window, focus) : window.showInactive()),
       () => this.language.t,
+      this.externals,
     );
     this.startBrowserControl(this.browsers);
     this.listenReveal();
@@ -746,27 +750,87 @@ export class DesktopHost {
         this.log.event("open_path.refused", { reason: "path" });
         return;
       }
-      void openRoute(target).then(async (route) => {
-        if (route.action === "refuse") {
-          this.log.event("open_path.refused", { reason: route.reason });
+      this.openWithSystem(target);
+    });
+    this.listenExternalFiles();
+  }
+
+  /** Hands `target` (a physical path) to the system: its default application, or the file manager when opening would run it. */
+  private openWithSystem(target: string): void {
+    void openRoute(target).then(async (route) => {
+      if (route.action === "refuse") {
+        this.log.event("open_path.refused", { reason: route.reason });
+        return;
+      }
+      if (route.action === "reveal") shell.showItemInFolder(target);
+      else {
+        // Judged a moment ago; a link swapped in since is refused, not followed.
+        if ((await fs.promises.realpath(target).catch(() => null)) !== target) {
+          this.log.event("open_path.refused", { reason: "not_physical" });
           return;
         }
-        if (route.action === "reveal") shell.showItemInFolder(target);
-        else {
-          // Judged a moment ago; a link swapped in since is refused, not followed.
-          if ((await fs.promises.realpath(target).catch(() => null)) !== target) {
-            this.log.event("open_path.refused", { reason: "not_physical" });
-            return;
-          }
-          const failure = await shell.openPath(target);
-          if (failure) {
-            this.log.event("open_path.failed", { kind: route.kind });
-            return;
-          }
+        const failure = await shell.openPath(target);
+        if (failure) {
+          this.log.event("open_path.failed", { kind: route.kind });
+          return;
         }
-        this.log.event(`open_path.${route.action}`, { kind: route.kind, reason: route.reason });
-      }).catch(() => this.log.event("open_path.failed", {}));
+      }
+      this.log.event(`open_path.${route.action}`, { kind: route.kind, reason: route.reason });
+    }).catch(() => this.log.event("open_path.failed", {}));
+  }
+
+  /**
+   * Outside files (PRD outside-path-in-hide): an open grants a clicked file to
+   * this window, or hands it to the system as `OPEN_PATH_CHANNEL` does when it
+   * is not one a viewer shows or the grants are full; a read gives a granted
+   * file's bytes; a describe gives a tab's badge its path; live lists the
+   * grants for the core. Only this window's shell is heard; the log names
+   * grants and kinds, never paths (`externalFiles.ts`).
+   */
+  private listenExternalFiles(): void {
+    ipcMain.handle(EXTERNAL_OPEN_CHANNEL, async (event: IpcMainInvokeEvent, reported: unknown, mode: unknown) => {
+      if (!this.fromShell(event)) {
+        this.log.event("external.refused", { reason: "sender" });
+        return null;
+      }
+      const asked = fromPage(reported);
+      if (asked === null) {
+        this.log.event("external.refused", { reason: "path" });
+        return null;
+      }
+      // The shell sends the physical path it probed; a path that resolves
+      // elsewhere now was swapped for a link since, and is not followed.
+      const real = await fs.promises.realpath(asked).catch(() => null);
+      if (real !== asked) {
+        this.log.event("external.refused", { reason: real === null ? "not_found" : "not_physical" });
+        return null;
+      }
+      const route = await externalRoute(real, mode === "source");
+      if (route.action === "grant") {
+        const granted = this.externals.grant(real, route.kind);
+        if (granted) return granted;
+      } else {
+        this.log.event("external.routed", { action: route.action, reason: route.reason });
+      }
+      if (route.action === "reveal") shell.showItemInFolder(real);
+      else this.openWithSystem(real);
+      return null;
     });
+    ipcMain.handle(EXTERNAL_READ_CHANNEL, (event: IpcMainInvokeEvent, id: unknown) => {
+      if (!this.fromShell(event) || typeof id !== "string") return { failure: "refused" };
+      return this.externals.read(id);
+    });
+    ipcMain.handle(EXTERNAL_DESCRIBE_CHANNEL, (event: IpcMainInvokeEvent, id: unknown) => {
+      if (!this.fromShell(event) || typeof id !== "string") return null;
+      const held = this.externals.get(id);
+      if (!held) return null;
+      try {
+        return { path: toPage(held.real), name: held.name, kind: held.kind };
+      } catch {
+        return null;
+      }
+    });
+    ipcMain.handle(EXTERNAL_LIVE_CHANNEL, (event: IpcMainInvokeEvent) => (this.fromShell(event) ? this.externals.live() : []));
   }
 
   /** An app-menu click, delivered to the shell only while it is loaded. */
