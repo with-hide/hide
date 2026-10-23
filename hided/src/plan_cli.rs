@@ -85,7 +85,7 @@ fn flags(args: &[String], valued: &[&str]) -> Result<Flags, String> {
             }
             at += 2;
         } else if arg.starts_with('-') {
-            return Err(format!("Unknown flag: {arg}"));
+            return Err(format!("unknown flag for hide plan: {arg}"));
         } else {
             positional.push(arg.to_owned());
             at += 1;
@@ -107,7 +107,7 @@ fn agent(positional: Vec<String>) -> Result<Option<String>, String> {
 }
 
 fn plan_input(text: &str) -> Result<PlanInput, String> {
-    serde_json::from_str(text).map_err(|error| format!("the plan is not a plan: {error}"))
+    serde_json::from_str(text).map_err(|error| format!("the plan is not valid plan JSON: {error}"))
 }
 
 /// Where `set` takes the plan from.
@@ -301,6 +301,8 @@ pub fn run(env: &Env, command: PlanCli) -> Result<(), String> {
         Err(reason) => {
             let next = if reason == "request_timeout" {
                 "The command may have been applied; run hide plan show before running it again"
+            } else if crate::cli::bootstrap_refused(&reason) {
+                crate::cli::request_next_action(&reason)
             } else {
                 next_action(&reason)
             };

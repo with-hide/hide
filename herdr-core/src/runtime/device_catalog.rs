@@ -469,6 +469,12 @@ impl Runtime {
                 return self.refresh_device_catalog(target);
             }
             Err(reason) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "device_catalog",
+                    "kind": "catalog.unavailable",
+                    "target": target,
+                    "reason": reason,
+                }));
                 self.device_facts
                     .entry(target.to_owned())
                     .or_default()
@@ -514,7 +520,14 @@ impl Runtime {
         if let Err(error) = spawned {
             let entry = self.device_facts.entry(target.to_owned()).or_default();
             entry.in_flight = None;
-            entry.unavailable = Some(format!("The catalog reader could not start: {error}"));
+            let reason = format!("The catalog reader could not start: {error}");
+            crate::diagnostic!(serde_json::json!({
+                "component": "device_catalog",
+                "kind": "catalog.unavailable",
+                "target": target,
+                "reason": reason,
+            }));
+            entry.unavailable = Some(reason);
         }
         self.refresh_device_catalog(target)
     }
@@ -1022,10 +1035,7 @@ impl Runtime {
                 hide_node_link::protocol::Call::Registrable { path: path.clone() },
                 REGISTRABLE_TIMEOUT,
             )
-            .map_err(|error| match error {
-                LinkError::Refused(error) => error.message,
-                other => other.to_string(),
-            })
+            .map_err(|error| (registration_refusal_kind(&error), error.to_string()))
         };
         let Some(context) = self.worker_context.clone() else {
             let answer = ask();
@@ -1062,7 +1072,7 @@ impl Runtime {
         &mut self,
         device: &str,
         label: String,
-        answer: Result<hide_node_link::register::Registrable, String>,
+        answer: Result<hide_node_link::register::Registrable, (&'static str, String)>,
     ) -> bool {
         // A device removed while its helper judged the folder takes no
         // registration from that late answer.
@@ -1076,12 +1086,12 @@ impl Runtime {
         }
         let registrable = match answer {
             Ok(registrable) => registrable,
-            Err(message) => {
+            Err((kind, message)) => {
                 crate::diagnostic!(serde_json::json!({
                     "component": "registration", "kind": "create.refused",
                     "target": device, "message": message,
                 }));
-                self.set_error("workspace.create_refused", message, false);
+                self.set_error(kind, message, false);
                 return true;
             }
         };
@@ -1125,5 +1135,23 @@ impl Runtime {
         self.request_device_facts(device);
         self.refresh_device_catalog(device);
         true
+    }
+}
+
+/// The `last_error` kind for a device's refusal of a folder to register, by
+/// the helper's code: the shell words a missing folder, a file and a folder
+/// outside the home folder as the same sentences this Mac's refusals use
+/// (`create_workspace`'s `path_refused`), and the helper's sentence, with the
+/// device's paths in it, is the diagnostic log's.
+fn registration_refusal_kind(error: &LinkError) -> &'static str {
+    match error {
+        LinkError::Refused(refused) => match refused.code {
+            hide_node_link::ErrorCode::NotFound => "workspace.create_refused.not_found",
+            hide_node_link::ErrorCode::NotADirectory => "workspace.create_refused.not_a_directory",
+            hide_node_link::ErrorCode::OutsideRoot => "workspace.create_refused.outside_root",
+            _ => "workspace.create_refused",
+        },
+        LinkError::NotConnected(_) => "workspace.create_unavailable",
+        _ => "workspace.create_failed",
     }
 }

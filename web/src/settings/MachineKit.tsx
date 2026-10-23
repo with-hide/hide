@@ -3,6 +3,7 @@ import { Button } from "../components/ui/button";
 import { Note, Status } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import { kitConsentTerms, kitPartLine, kitPartText, kitProblems, kitRefusalLine } from "../settings";
+import { kitUnavailableText, kitWhyText } from "../kitWhy";
 import type { Device } from "../snapshot";
 
 export function KitTerms({ helperRoot, cliDir }: { helperRoot: string | null; cliDir: string | null }) {
@@ -31,7 +32,7 @@ export function KitProblem({ device, actions, onAct }: { device: Device; actions
   if (kit.unavailable) {
     return (
       <div data-machine-kit={`${device.id}:unavailable`}>
-        <Note>{kit.unavailable}</Note>
+        <Note data-kit-unavailable={kit.unavailable}>{kitUnavailableText(kit.unavailable, t)}</Note>
       </div>
     );
   }
@@ -95,7 +96,7 @@ export function KitParts({ device }: { device: Device }) {
   const { t } = useInterfaceTranslation();
   const kit = device.kit;
   if (!kit) return null;
-  if (kit.unavailable) return <Note>{kit.unavailable}</Note>;
+  if (kit.unavailable) return <Note data-kit-unavailable={kit.unavailable}>{kitUnavailableText(kit.unavailable, t)}</Note>;
   if (kit.refused) return <Status tone="error">{kitRefusalLine(kit.refused, t)}</Status>;
   if (kit.components.length === 0) return <Status tone="pending">{kit.busy ? t("devices.installingKit") : t("devices.kitOnConnection")}</Status>;
   return (
@@ -114,7 +115,7 @@ export function KitParts({ device }: { device: Device }) {
             <span className="min-w-0 break-words text-subtle-foreground">
               {part.state === "installed" ? <span className="break-all font-mono">{part.location}</span> : kitPartText(part, t)}
               {/* An installed part can still carry a reason, such as a setting that applies to newly opened sessions. */}
-              {part.state === "installed" && part.reason ? <span className="block text-muted-foreground" data-kit-part-note="">{part.reason}</span> : null}
+              {part.state === "installed" && kitWhyText(part.why, t) ? <span className="block text-muted-foreground" data-kit-part-note={part.why?.cause}>{kitWhyText(part.why, t)}</span> : null}
             </span>
           </div>
         );

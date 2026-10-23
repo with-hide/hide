@@ -13,12 +13,12 @@ export const boardEnglish = {
 } as const;
 
 const ko = {
-  "board.reading": "읽는 중…",
-  "board.empty": "열린 이슈가 없습니다",
+  "board.reading": "불러오는 중…",
+  "board.empty": "열린 이슈가 없어요",
   "board.review.required": "리뷰 필요",
   "board.review.changes": "변경 요청",
   "board.review.approved": "승인됨",
-  "board.sourceReadFailed": "{{source}} 읽기 실패",
+  "board.sourceReadFailed": "{{source}} 불러오기 실패",
   "board.prLineage": "이 PR의 이슈와 에이전트 계보",
   "board.showOnPrsTab": "PR 카드 열기",
   "board.openPr": "PR 열기",
@@ -38,12 +38,12 @@ const zhCN = {
 
 const ja = {
   "board.reading": "読み込み中…",
-  "board.empty": "オープンな課題はありません",
+  "board.empty": "オープンなIssueはありません",
   "board.review.required": "レビューが必要",
   "board.review.changes": "変更をリクエスト",
   "board.review.approved": "承認済み",
   "board.sourceReadFailed": "{{source}}の読み込みに失敗",
-  "board.prLineage": "この PR の課題とエージェントの系譜",
+  "board.prLineage": "この PR の Issue とエージェントの系譜",
   "board.showOnPrsTab": "PR カードを開く",
   "board.openPr": "PR を開く",
 } satisfies Catalog<typeof boardEnglish>;

@@ -1082,6 +1082,7 @@ fn machine_kit(cli: hide_kit::ComponentState) -> hide_kit::KitReport {
         skill: hide_kit::PieceReport {
             state: hide_kit::ComponentState::Installed,
             reason: None,
+            why: None,
             location: None,
         },
         hook: None,

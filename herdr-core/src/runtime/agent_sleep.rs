@@ -388,7 +388,9 @@ impl Runtime {
             {
                 Some("This agent is already asleep")
             }
-            Some(agent) => crate::agent_sleep::sleep_refusal(agent, machine),
+            Some(agent) => {
+                crate::agent_sleep::sleep_refusal(agent, machine).map(|refusal| refusal.detail())
+            }
         };
         if let Some(reason) = refusal {
             self.set_error("agent_sleep.refused", reason, false);

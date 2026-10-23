@@ -31,14 +31,3 @@ export function appliedAgents(agents: readonly KitAgent[], flipped: ReadonlySet<
   const on = selection(agents, flipped, start);
   return agents.filter((agent) => on.has(agent.id)).map((agent) => agent.id);
 }
-
-/**
- * Agents whose Korean reading ends in a consonant (Grok, 그록): the object
- * particle after their name is 을 where every other supported name takes 를.
- */
-const KOREAN_FINAL_CONSONANT: ReadonlySet<string> = new Set(["grok"]);
-
-/** The first-run Hide AI line for the agent the rule picked, in the form that agrees with the name's last sound (B46). */
-export function hideAiFirstRunKey(agentId: string): "hideAi.firstRun" | "hideAi.firstRunConsonant" {
-  return KOREAN_FINAL_CONSONANT.has(agentId) ? "hideAi.firstRunConsonant" : "hideAi.firstRun";
-}

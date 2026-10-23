@@ -5,6 +5,7 @@
 // slot are all testable without a browser.
 
 import { fileIcon, folderIcon, type FileIcon } from "./fileIcons";
+import { readFailureText } from "./fileFailure";
 import type { ChangedFileStatus, ChangesSnapshot, DeviceHost } from "./snapshot";
 import type { DirectoryList } from "./store";
 import type { MenuEntry } from "./components/entry-menu";
@@ -115,8 +116,8 @@ function higherRisk(current: ChangedFileStatus | undefined, candidate: ChangedFi
 export function explorerGitMark(changes: ChangesSnapshot | null, t: TFunction<"translation">): { state: "loading" | "unavailable" | "stale"; text: string } | null {
   if (!changes) return { state: "loading", text: t("explorer.gitLoading") };
   if (changes.not_a_repository) return null;
-  if (changes.unavailable_reason) return { state: "unavailable", text: t("explorer.gitUnavailable", { reason: changes.unavailable_reason }) };
-  if (changes.stale_reason) return { state: "stale", text: t("explorer.gitStale", { reason: changes.stale_reason }) };
+  if (changes.unavailable_reason) return { state: "unavailable", text: t("explorer.gitUnavailable", { reason: readFailureText(changes.unavailable_reason, t) }) };
+  if (changes.stale_reason) return { state: "stale", text: t("explorer.gitStale", { reason: readFailureText(changes.stale_reason, t) }) };
   return null;
 }
 

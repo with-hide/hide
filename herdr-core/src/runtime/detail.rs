@@ -94,7 +94,7 @@ impl Runtime {
             self.set_error(
                 "task_view.unknown",
                 format!(
-                    "{} is not a 태스크 view; expected status or project",
+                    "{} is not a task view; expected status or project",
                     payload.view
                 ),
                 false,

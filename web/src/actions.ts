@@ -2040,7 +2040,7 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "revisit_star", payload: { pane_id: paneId } });
     },
 
-    /** 다 봤음: the ★ goes and the read ask standing now is put away (D-05). */
+    /** 다시 볼 것에서 빼기: the ★ goes and the read ask standing now is put away (D-05). */
     finishRevisit(paneId: string) {
       dispatch({ schema_version: 2, kind: "revisit_done", payload: { pane_id: paneId } });
     },
@@ -2727,7 +2727,7 @@ export function createActions(send: DispatchFn) {
       if (lane) dispatch({ schema_version: 2, kind: "session_record_open", payload: { session: lane } });
       else dispatch({ schema_version: 2, kind: "session_record_close", payload: {} });
     },
-    /** `lane에서 보기` (B18): the Overview closes, the checkout opens and the 보기 slot shows the same record. */
+    /** `레인에서 보기` (B18): the Overview closes, the checkout opens and the 보기 slot shows the same record. */
     viewRecordInLane(deviceId: string, workspaceId: string, checkoutId: string, session: import("./snapshot").WorkSession) {
       this.closeOverview();
       this.openWorkspace(deviceId, workspaceId, checkoutId);

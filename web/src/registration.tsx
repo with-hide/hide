@@ -2,8 +2,8 @@
 // way of adding (Browse folder, a device's path, Create new project) sends one
 // `create_workspace` and reads the answer the same way: the registrations
 // growing closes the dialog, and a refusal (hided's `path_refused`, the core's
-// error, or the one the shell can see itself) stays inside it, naming the
-// folder.
+// error, worded by its kind, or the one the shell can see itself) stays inside
+// it, naming the folder.
 
 import { useEffect, useState } from "react";
 import { folderLabel, refusalText } from "./addProject";
@@ -12,7 +12,8 @@ import { Status } from "./components/settings-rows";
 import type { WorkspaceRegistration } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
-import { useErrorSince } from "./WorkspaceDialogs";
+import { coreErrorText } from "./coreError";
+import { useErrorSince } from "./errorSince";
 
 /**
  * A folder sent as `create_workspace`, with the ids of its device's projects
@@ -42,8 +43,7 @@ export function useRegistration(registrations: readonly WorkspaceRegistration[])
   const pathRefusal = useShellStore((s) => s.pathRefusal);
   const [sent, setSent] = useState<Sent | null>(null);
   const [shellRefusal, setShellRefusal] = useState<{ path: string; reason: string } | null>(null);
-  const coreError = useErrorSince(sent?.at ?? null, ["workspace.create", "workspace.remove_in_flight"]);
-  const coreKind = useShellStore((s) => s.rest?.status?.last_error?.kind ?? null);
+  const coreError = useErrorSince(sent?.at ?? null, ["workspace.create", "workspace.remove_in_flight", "workspace.control_unavailable"]);
   const added = sent !== null && registrations.some((row) => row.device_id === sent.device && !sent.known.has(row.id));
 
   const hidedReason = sent && pathRefusal?.kind === "create_workspace" && pathRefusal.path === sent.path ? pathRefusal.reason : null;
@@ -52,9 +52,9 @@ export function useRegistration(registrations: readonly WorkspaceRegistration[])
     : sent && hidedReason
       ? { path: sent.path, reason: hidedReason, text: refusalText(hidedReason, t) }
       : sent && coreError
-        ? coreKind === "workspace.create_registered"
+        ? coreError.kind === "workspace.create_registered"
           ? { path: sent.path, reason: "already_registered", text: refusalText("already_registered", t) }
-          : { path: sent.path, reason: "core", text: coreError }
+          : { path: sent.path, reason: coreError.kind, text: coreErrorText(coreError, t, "coreError.project.addFailed") }
         : null;
 
   // The project appearing is the answer; the dialog closes on it.

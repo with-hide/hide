@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn an_unread_capability_or_an_unavailable_kit_refuses_the_common_start_boundary() {
         let mut unavailable = kit(Some(true));
-        unavailable.unavailable = Some("no kit here".to_owned());
+        unavailable.unavailable = Some(crate::model::KitUnavailable::Standalone);
         for kit in [kit(None), unavailable, KitSnapshot::default()] {
             for args in [vec![], strings(&["resume", "a"]), strings(&["--no-daemon"])] {
                 let error = crate::wire::agent_start_params(

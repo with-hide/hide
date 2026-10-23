@@ -72,7 +72,7 @@ test("attach: the app starts hided, shows the shell, and runs the native chords 
       bridge: Object.keys(window.hideHost ?? {}).sort(),
       kind: window.hideHost?.kind,
     })),
-  ).toEqual({ require: "undefined", process: "undefined", bridge: ["browser", "editorAvailable", "kind", "notificationPermission", "notify", "onCommand", "onNotificationOpen", "onWindowChrome", "openInEditor", "openNotificationSettings", "openPath", "pickFolder", "platform", "probePaths", "reportBadge", "reportBindings", "reportLanguage", "restartHerdr", "revealPath", "updates", "withdrawNotifications"], kind: "electron" });
+  ).toEqual({ require: "undefined", process: "undefined", bridge: ["browser", "editorAvailable", "kind", "notificationPermission", "notify", "onCommand", "onNotificationOpen", "onWindowChrome", "openInEditor", "openNotificationSettings", "openPath", "pickFolder", "platform", "probePaths", "quit", "reportBadge", "reportBindings", "reportLanguage", "restartHerdr", "revealPath", "updates", "withdrawNotifications"], kind: "electron" });
   // sidebar-titlebar-refresh B17, B23: the host says what its frame takes of the shell's top row, traffic lights on macOS only, and the row keeps their room.
   const chrome = await page.evaluate(() => new Promise((resolve) => window.hideHost!.onWindowChrome(resolve)));
   expect(chrome).toEqual({ trafficLights: process.platform === "darwin", fullscreen: false });
@@ -367,7 +367,7 @@ test("failure: an attached node whose core update failed shows both builds, and 
     ({ app } = await launch({ ...run.env, HIDE_CLI_PATH: cli }));
     const page = await app.firstWindow();
     await expect(page.locator("h1")).toHaveText("The core was not updated", { timeout: 20_000 });
-    await expect(page.locator("#reason")).toHaveText("The core on Mac mini runs its previous build. Retry to try once more, or update hide on Mac mini.");
+    await expect(page.locator("#reason")).toHaveText("The core on Mac mini is still running its previous build. Retry, or update Hide on Mac mini.");
     await expect(page.locator("#builds")).toHaveText("core 0.4.1 (b520d6e) · this app 0.4.2 (3f1c2a9)");
     await screenshot(page, "desktop-update-failed");
     const connects = () => fs.readFileSync(runs, "utf8").trim().split("\n").length;

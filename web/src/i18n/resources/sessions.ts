@@ -7,7 +7,7 @@ export const sessionsEnglish = {
 } as const;
 
 const ko = {
-  "sessions.copyFailed": "복사하지 못했습니다",
+  "sessions.copyFailed": "복사하지 못했어요",
 } satisfies Catalog<typeof sessionsEnglish>;
 
 const zhCN = {

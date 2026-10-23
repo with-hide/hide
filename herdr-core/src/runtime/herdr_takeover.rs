@@ -15,8 +15,8 @@ use std::thread;
 
 use super::Runtime;
 use crate::handle::ChangeNotifier;
-use crate::herdr_takeover::{HerdrTakeover, Look, Moved, OfferKind};
-use crate::model::{FirstRunStep, HerdrTakeoverSnapshot};
+use crate::herdr_takeover::{HerdrTakeover, Look, Moved, OfferKind, Versions};
+use crate::model::{FirstRunStep, HerdrTakeoverSnapshot, HerdrVersionsSnapshot, PathHerdrSnapshot};
 
 /// The installed takeover and the one call it is making.
 #[derive(Default)]
@@ -120,9 +120,11 @@ impl Runtime {
         let spawned = thread::Builder::new()
             .name("herdr-core-herdr-takeover-look".into())
             .spawn(move || {
-                let look = bounded_look(&worker.takeover, LOOK_WITHIN);
+                let (look, versions) = bounded_look(&worker.takeover, LOOK_WITHIN);
                 answer(&worker, |runtime| {
-                    runtime.ingest_herdr_look_from(epoch, look)
+                    let versions_changed =
+                        versions.is_some_and(|versions| runtime.ingest_herdr_versions(versions));
+                    runtime.ingest_herdr_look_from(epoch, look) | versions_changed
                 });
             });
         if let Err(error) = spawned {
@@ -152,6 +154,33 @@ impl Runtime {
         takeover.answered = true;
         let current = self.snapshot.status.herdr_takeover.clone();
         let next = match &look {
+            // A server Hide cannot use and could not read says so, with a
+            // look again, rather than leaving the wizard as if there were
+            // nothing to move (B8); one Hide reads keeps the log line alone.
+            Look::Unreadable { .. }
+                if !self.herdr_usable()
+                    && current.as_ref().is_none_or(|shown| shown.stage != "moved") =>
+            {
+                Some(HerdrTakeoverSnapshot {
+                    kind: OfferKind::Look.as_str().to_owned(),
+                    stage: "failed".to_owned(),
+                    server_version: String::new(),
+                    version: self
+                        .snapshot
+                        .status
+                        .herdr_versions
+                        .as_ref()
+                        .map(|versions| versions.hide.clone())
+                        .unwrap_or_default(),
+                    same_protocol: false,
+                    failure: Some(
+                        crate::herdr_takeover::FailureCause::Unreadable
+                            .as_str()
+                            .to_owned(),
+                    ),
+                    path_herdr_behind: None,
+                })
+            }
             Look::Nothing | Look::Unreadable { .. } => {
                 // Only a server that is gone takes a restart's stop failure
                 // with it; one that did not answer in time may still be there.
@@ -205,6 +234,34 @@ impl Runtime {
         }
         changed |= self.settle_first_run_herdr();
         changed
+    }
+
+    /// What a look read about this machine's Herdr programs, for Settings >
+    /// About; a daemon without a Herdr of its package's own names none.
+    pub(super) fn ingest_herdr_versions(&mut self, versions: Versions) -> bool {
+        let next = versions.hide.map(|hide| HerdrVersionsSnapshot {
+            hide,
+            path_herdr: versions.path_herdr.map(|path| PathHerdrSnapshot {
+                behind: path.behind(),
+                version: path.version,
+                update_command: path.update,
+            }),
+        });
+        if self.snapshot.status.herdr_versions == next {
+            return false;
+        }
+        self.snapshot.status.herdr_versions = next;
+        true
+    }
+
+    /// Hide reads the server on this machine's socket: its snapshot answers
+    /// on this build's protocol, or the last one that did is on screen while
+    /// the stream reconnects.
+    fn herdr_usable(&self) -> bool {
+        matches!(
+            self.snapshot.status.herdr.state.as_str(),
+            "connected" | "stale"
+        )
     }
 
     pub(super) fn herdr_takeover_action(&mut self, action: TakeoverAction) -> bool {
@@ -263,8 +320,12 @@ impl Runtime {
                 }))
             }
             TakeoverAction::Later => {
-                let movable = [OfferKind::Move.as_str(), OfferKind::Restart.as_str()]
-                    .contains(&shown.kind.as_str());
+                let movable = [
+                    OfferKind::Move.as_str(),
+                    OfferKind::Restart.as_str(),
+                    OfferKind::Look.as_str(),
+                ]
+                .contains(&shown.kind.as_str());
                 if !movable
                     || self.herdr_takeover.moving
                     || shown.stage == "moved"
@@ -379,8 +440,12 @@ impl Runtime {
             .as_ref()
             .is_some_and(|shown| {
                 shown.stage == "moved"
-                    || [OfferKind::Move.as_str(), OfferKind::Restart.as_str()]
-                        .contains(&shown.kind.as_str())
+                    || [
+                        OfferKind::Move.as_str(),
+                        OfferKind::Restart.as_str(),
+                        OfferKind::Look.as_str(),
+                    ]
+                    .contains(&shown.kind.as_str())
             })
     }
 
@@ -415,34 +480,42 @@ impl Runtime {
 /// The failure of a restart whose stop did not end the server.
 const STOP_FAILED: &str = "stop_failed";
 
-/// How long a look may take before it counts as one that found nothing to
-/// move: the wizard waits on its Herdr step for it, and a server that does
-/// not answer must not hold it there (engineering rule 10). Each of the
-/// look's own reads is bounded at 5 s; two in a row are the slow case.
+/// How long a look may take before it counts as one that could not read the
+/// server: the wizard waits on its Herdr step for it, and a server that does
+/// not answer must not hold it there with nothing to press (engineering rule
+/// 10). Each of the look's own reads is bounded at 5 s; two in a row are the
+/// slow case.
 const LOOK_WITHIN: std::time::Duration = std::time::Duration::from_secs(8);
 
-/// The takeover's look, or `Unreadable` once `within` has passed; a
-/// look that answers later is dropped with its thread.
-pub(super) fn bounded_look(takeover: &Arc<dyn HerdrTakeover>, within: std::time::Duration) -> Look {
+/// The takeover's look and the versions read beside it, or `Unreadable`
+/// with no versions once `within` has passed; a look that answers later is
+/// dropped with its thread.
+pub(super) fn bounded_look(
+    takeover: &Arc<dyn HerdrTakeover>,
+    within: std::time::Duration,
+) -> (Look, Option<Versions>) {
     let (sender, receiver) = std::sync::mpsc::channel();
     let takeover = Arc::clone(takeover);
     let spawned = thread::Builder::new()
         .name("herdr-core-herdr-takeover-read".into())
         .spawn(move || {
-            let _ = sender.send(takeover.look());
+            let look = takeover.look();
+            let _ = sender.send((look, Some(takeover.versions())));
         });
     if let Err(error) = spawned {
-        return Look::Unreadable {
+        let look = Look::Unreadable {
             stage: "worker".into(),
             detail: error.to_string(),
         };
+        return (look, None);
     }
-    receiver
-        .recv_timeout(within)
-        .unwrap_or_else(|_| Look::Unreadable {
+    receiver.recv_timeout(within).unwrap_or_else(|_| {
+        let look = Look::Unreadable {
             stage: "timeout".into(),
             detail: format!("the look at the server took longer than {within:?}"),
-        })
+        };
+        (look, None)
+    })
 }
 
 /// Hands a worker's result to the runtime and announces it.

@@ -130,7 +130,7 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await expect(page.locator('[data-sidebar-lens="tasks"]')).toBeVisible();
     await showProjects(page);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${parent}"]`).first()).toBeVisible();
-    // Its worktree has no unresolved agent, so it stands in the `No agents` fold, where the resolved row is dimmed under its tab.
+    // Its worktree has no unresolved agent, so it stands in the `Worktrees with no agents` fold, where the resolved row is dimmed under its tab.
     await page.locator("nav[data-sidebar] [data-empty-worktrees]").click();
     await expect(page.locator(`nav[data-sidebar] [data-pane="${stopped}"]`).first()).toHaveClass(/opacity-\(--opacity-dimmed\)/);
     await showTasks(page);

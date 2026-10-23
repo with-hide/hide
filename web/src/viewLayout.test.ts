@@ -21,7 +21,7 @@ import {
   type ViewAreaStep,
   viewGeometry,
   viewLayoutPayload,
-  viewRefusal,
+  isViewRefusal,
   type LayoutSizes,
   type Rect,
   type TabSlot,
@@ -231,14 +231,13 @@ describe("the Workspace an action names (contract 4.1)", () => {
     });
   });
 
-  it("tells the operator every View refusal in the core's words, except one for a Workspace no longer in front", () => {
-    const told = (kind: string) => viewRefusal({ kind, message: `reason for ${kind}` });
-    expect(told("view_layout.display_limit")).toBe("reason for view_layout.display_limit");
-    expect(told("view_layout.unsaved")).toBe("reason for view_layout.unsaved");
-    expect(told("view_layout.unknown_display")).toBe("reason for view_layout.unknown_display");
-    expect(told("view_layout.stale_workspace")).toBeNull();
-    expect(told("file.save_failed")).toBeNull();
-    expect(viewRefusal(null)).toBeNull();
+  it("tells the operator every View refusal, except one for a Workspace no longer in front", () => {
+    expect(isViewRefusal({ kind: "view_layout.display_limit" })).toBe(true);
+    expect(isViewRefusal({ kind: "view_layout.unsaved" })).toBe(true);
+    expect(isViewRefusal({ kind: "agent_layout.display_limit" })).toBe(true);
+    expect(isViewRefusal({ kind: "view_layout.stale_workspace" })).toBe(false);
+    expect(isViewRefusal({ kind: "file.save_failed" })).toBe(false);
+    expect(isViewRefusal(null)).toBe(false);
   });
 });
 

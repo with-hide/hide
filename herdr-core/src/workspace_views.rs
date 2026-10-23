@@ -552,7 +552,7 @@ pub fn load(path: &Path, now_unix_ms: u64) -> (WorkspaceViews, LoadOutcome) {
                         && let LoadOutcome::Loaded { repairs, .. } = &mut outcome
                     {
                         repairs.push(format!(
-                            "{dropped} pull request cards stored as views were dropped; a card opens in the lane's 보기 slot"
+                            "{dropped} pull request cards stored as views were dropped; a card opens in the lane's View slot"
                         ));
                     }
                     return (views, outcome);
@@ -600,7 +600,7 @@ pub fn load(path: &Path, now_unix_ms: u64) -> (WorkspaceViews, LoadOutcome) {
 }
 
 /// Takes out every display an older build stored as a pull request's card
-/// (PRD sidebar-task-lens B51, D-50): a card opens in the lane's 보기 slot
+/// (PRD sidebar-task-lens B51, D-50): a card opens in the lane's View slot
 /// now and is no kind of View. The other displays of the same area, and
 /// their arrangement, stay; an area left empty is collapsed by `settle`'s
 /// repair like any other. Returns how many it took out.

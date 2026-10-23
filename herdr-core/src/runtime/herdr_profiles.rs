@@ -2,7 +2,7 @@
 //! One request joins one owned, cancelable worker; no polling or SSH probes.
 
 use super::*;
-use crate::model::{HerdrProfileSnapshot, HerdrProfilesSnapshot};
+use crate::model::{HerdrProfileRefusal, HerdrProfileSnapshot, HerdrProfilesSnapshot};
 use hide_node_link::device::HerdrProfileListing;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -116,10 +116,10 @@ impl Runtime {
                                 .and_then(|endpoint| endpoint.as_ref().err())
                                 .map(|_| "invalid_target".to_owned())
                         };
-                        let (connect_state, connect_error) = device_id
+                        let connect_state = device_id
                             .as_deref()
                             .map(|device| self.profile_connection(device))
-                            .unwrap_or_else(|| ("saved".to_owned(), None));
+                            .unwrap_or_else(|| "saved".to_owned());
                         HerdrProfileSnapshot {
                             id: profile.id,
                             label: profile.label,
@@ -130,7 +130,7 @@ impl Runtime {
                             problem,
                             device_id,
                             connect_state,
-                            connect_error,
+                            connect_refusal: None,
                         }
                     })
                     .collect();
@@ -169,7 +169,7 @@ impl Runtime {
             })
     }
 
-    fn profile_connection(&self, device: &str) -> (String, Option<String>) {
+    fn profile_connection(&self, device: &str) -> String {
         match self
             .snapshot
             .status
@@ -177,17 +177,17 @@ impl Runtime {
             .iter()
             .find(|r| r.target_id == device)
         {
-            Some(status) if status.state == "connected" => ("connected".to_owned(), None),
+            Some(status) if status.state == "connected" => "connected".to_owned(),
             Some(status)
                 if status.state == "error"
                     || status.state == "action_required"
                     || status.state == "unreachable"
                     || status.state == "stale" =>
             {
-                ("failed".to_owned(), status.message.clone())
+                "failed".to_owned()
             }
-            Some(status) if status.state == "connecting" => ("connecting".to_owned(), None),
-            _ => ("added".to_owned(), None),
+            Some(status) if status.state == "connecting" => "connecting".to_owned(),
+            _ => "added".to_owned(),
         }
     }
 
@@ -209,20 +209,20 @@ impl Runtime {
         };
         let profile = self.snapshot.status.herdr_profiles.profiles[index].clone();
         let refusal = if !consent {
-            Some("Review and allow the helper installation before connecting")
+            Some(HerdrProfileRefusal::NoConsent)
         } else if !profile.enabled {
-            Some("This profile is disabled in Herdr. Enable it there and retry discovery")
+            Some(HerdrProfileRefusal::Disabled)
         } else if profile.problem.is_some() {
-            Some("Fix the saved SSH target in Herdr or SSH configuration and retry discovery")
+            Some(HerdrProfileRefusal::InvalidTarget)
         } else if self.snapshot.status.herdr_profiles.state != "ready" {
-            Some("Wait for saved machine discovery, then retry")
+            Some(HerdrProfileRefusal::DiscoveryPending)
         } else {
             None
         };
-        if let Some(reason) = refusal {
+        if let Some(refusal) = refusal {
             let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
             row.connect_state = "failed".to_owned();
-            row.connect_error = Some(reason.to_owned());
+            row.connect_refusal = Some(refusal);
             return true;
         }
         let registration = self
@@ -232,7 +232,7 @@ impl Runtime {
             Some(registration) => {
                 // Re-entry is inert. Only a failed connection or an absent
                 // consent is an explicit retry of the selected device.
-                let (state, _) = self.profile_connection(&registration.id);
+                let state = self.profile_connection(&registration.id);
                 // Explicit import also protects a pre-existing default-session
                 // registration on subsequent automatic kit work and reconnects.
                 if registration.herdr_session.is_none() {
@@ -274,10 +274,7 @@ impl Runtime {
                 if self.snapshot.ui_state.device_registrations.len() >= 64 {
                     let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
                     row.connect_state = "failed".to_owned();
-                    row.connect_error = Some(
-                        "The device limit is reached. Remove an unused device before connecting"
-                            .to_owned(),
-                    );
+                    row.connect_refusal = Some(HerdrProfileRefusal::DeviceLimit);
                     return true;
                 }
                 use sha2::{Digest, Sha256};
@@ -292,7 +289,7 @@ impl Runtime {
                 {
                     let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
                     row.connect_state = "failed".to_owned();
-                    row.connect_error = Some("This saved profile now points to another server. Remove its previous device registration before importing it again".to_owned());
+                    row.connect_refusal = Some(HerdrProfileRefusal::ProfileMoved);
                     return true;
                 }
                 let registration = crate::model::DeviceRegistration {
@@ -337,13 +334,13 @@ impl Runtime {
             })
             .map(|(index, _)| index)
             .collect();
-        let (state, error) = self.profile_connection(&registration.id);
+        let state = self.profile_connection(&registration.id);
         for index in same {
             let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
             row.device_id = Some(registration.id.clone());
             row.added_as = Some(registration.label.clone());
             row.connect_state = state.clone();
-            row.connect_error = error.clone();
+            row.connect_refusal = None;
         }
         true
     }

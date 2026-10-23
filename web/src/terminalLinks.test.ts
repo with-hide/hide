@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CellRow } from "./selection";
-import { linkCandidates, osc8Target, parseToken, type LinkCandidate } from "./terminalLinks";
+import { linkCandidates, osc8Target, parseToken, TOKEN_CANDIDATES, type LinkCandidate } from "./terminalLinks";
 
 /** A row of `width` cells holding `text`, padded with written spaces the way a Herdr frame draws it. */
 function row(text: string, width: number): CellRow {
@@ -153,18 +153,20 @@ describe("bounded Korean interpretations", () => {
     }
   });
 
-  it("preserves all six composite spellings, including raw leading and closing punctuation", () => {
+  it("offers every spelling between the token's edges, longest first, and reads a location only where the spelling reads as a link", () => {
     const [group] = linkCandidates([row("(src/a.ts:12:5)에", 40)], 0);
+    const name = (path: string) => ({ kind: "path", path, line: null, column: null });
     expect(group!.map((candidate) => [candidate.text, candidate.target])).toEqual([
-      ["(src/a.ts:12:5)에", { kind: "path", path: "(src/a.ts:12:5)에", line: null, column: null }],
-      ["src/a.ts:12:5)에", { kind: "path", path: "src/a.ts:12:5)에", line: null, column: null }],
-      ["(src/a.ts:12:5)", { kind: "path", path: "(src/a.ts:12:5)", line: null, column: null }],
-      ["src/a.ts:12:5)", { kind: "path", path: "src/a.ts:12:5)", line: null, column: null }],
-      ["src/a.ts:12:5", { kind: "path", path: "src/a.ts:12:5", line: null, column: null }],
+      ["(src/a.ts:12:5)에", name("(src/a.ts:12:5)에")],
+      ["(src/a.ts:12:5)", name("(src/a.ts:12:5)")],
+      ["src/a.ts:12:5)에", name("src/a.ts:12:5)에")],
+      ["(src/a.ts:12:5", name("(src/a.ts:12:5")],
+      ["src/a.ts:12:5)", name("src/a.ts:12:5)")],
+      ["src/a.ts:12:5", name("src/a.ts:12:5")],
       ["src/a.ts:12:5", { kind: "path", path: "src/a.ts", line: 12, column: 5 }],
     ]);
-    expect(group![2]!.spans).toEqual([{ row: 0, start: 0, end: 15 }]);
-    expect(group![4]!.spans).toEqual([{ row: 0, start: 1, end: 14 }]);
+    expect(group![1]!.spans).toEqual([{ row: 0, start: 0, end: 15 }]);
+    expect(group![5]!.spans).toEqual([{ row: 0, start: 1, end: 14 }]);
   });
 
   it("reads a particle after a URL's closing mark as prose, since a URL cannot be checked", () => {
@@ -176,10 +178,15 @@ describe("bounded Korean interpretations", () => {
   });
 
   it("never cuts a name written in those scripts or a word in another script", () => {
-    for (const token of ["docs/회의록에", "~/메모", "docs/a.md)foo", "docs/a.mdは-x"]) {
+    for (const token of ["docs/회의록에", "~/메모", "docs/a.mdは-x", "한글.md", "docs/a.mdfoo"]) {
       const [group] = linkCandidates([row(token, 40)], 0);
       expect(group!.map((candidate) => candidate.target)).toEqual([{ kind: "path", path: token, line: null, column: null }]);
     }
+  });
+
+  it("ends a path at a closing bracket whatever follows it, after the whole token", () => {
+    const [group] = linkCandidates([row("docs/a.md)foo", 40)], 0);
+    expect(group!.map((candidate) => candidate.text)).toEqual(["docs/a.md)foo", "docs/a.md"]);
   });
 
   it("excludes wrapping punctuation and wide particles from actual cell ranges", () => {
@@ -197,7 +204,7 @@ describe("bounded Korean interpretations", () => {
     expect(path.spans).toEqual([{ row: 0, start: 4, end: 15 }]);
   });
 
-  it("bounds every joined spelling to six interpretations and every hovered token to sixteen joins", () => {
+  it("bounds every hovered token to sixteen joins and a fixed number of spellings, dropping the shortest", () => {
     const rows = Array.from({ length: 7 }, (_, index) => row("docs/" + String.fromCharCode(97 + index) + ".md)에", 12));
     const groups = linkCandidates(rows, 3);
     expect(groups).toHaveLength(1);
@@ -206,8 +213,115 @@ describe("bounded Korean interpretations", () => {
     const originals = groups[0]!.filter((candidate) => candidate.original);
     expect(originals).toHaveLength(16);
     expect(new Set(originals.map((candidate) => candidate.text)).size).toBe(16);
-    expect(groups[0]).toHaveLength(48); // This fixture has three distinct stages per join.
-    expect(groups[0]!.length * 2).toBeLessThanOrEqual(192);
-    expect(groups[0]!.filter((candidate) => !candidate.original).length * 2).toBeLessThanOrEqual(160);
+    expect(groups[0]!.length).toBeLessThanOrEqual(TOKEN_CANDIDATES);
+    // A token made of nothing but edges stays within the same bound.
+    const [dense] = linkCandidates([row("(" + "[docs/a.md],".repeat(12) + ")", 200)], 0);
+    expect(dense!.length).toBeLessThanOrEqual(TOKEN_CANDIDATES);
+    const lengths = dense!.map((candidate) => candidate.text.length);
+    expect(lengths).toEqual([...lengths].sort((a, b) => b - a));
+  });
+});
+
+/**
+ * Links written against prose, by kind of mark rather than by mark: every
+ * pairing here is answered by the Unicode class of the characters around the
+ * link, so each row of these tables is a script or a mark the parser has no
+ * rule of its own for.
+ */
+describe("edges by Unicode class", () => {
+  /** A row as xterm lays it out, with a wide glyph's trailing half for each East Asian wide character. */
+  function wideRow(text: string, width: number): CellRow {
+    const cells: CellRow = [];
+    for (const char of text) {
+      cells.push(char);
+      if (/[\p{scx=Hangul}\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\u3000-\u303F\uFF01-\uFF60]/u.test(char)) cells.push(null);
+    }
+    while (cells.length < width) cells.push(" ");
+    return cells;
+  }
+
+  const PAIRS = [["(", ")"], ["[", "]"], ["{", "}"], ["<", ">"], ['"', '"'], ["'", "'"], ["`", "`"], ["“", "”"], ["‘", "’"], ["«", "»"], ["（", "）"], ["［", "］"], ["「", "」"], ["『", "』"], ["【", "】"], ["《", "》"], ["〈", "〉"], ["〔", "〕"]] as const;
+  const BEFORE = ["", "열어뒀어요", "ここに", "见"];
+  const AFTER = ["", "에서도", "を", "里"];
+  const ENDS = ["", ".", ",", "。", "、", "！", "：", "?"];
+
+  /** The URL, or the first spelling of the hovered token that is a path, read the way the provider reads it. */
+  function linked(text: string, files: string[]): { text: string; start: number; end: number } | null {
+    const cells = wideRow(text, text.length * 2 + 4);
+    for (const group of linkCandidates([cells], 0)) {
+      const hit = group.find((candidate) => candidate.target.kind === "url" || files.includes(candidate.target.path));
+      if (hit) return { text: hit.text, start: hit.spans[0]!.start, end: hit.spans.at(-1)!.end };
+    }
+    return null;
+  }
+
+  it("links a URL in any script's brackets or quotes with prose and punctuation written against either side", () => {
+    const url = "https://example.com/a/b?q=1";
+    for (const [open, close] of PAIRS) for (const before of BEFORE) for (const after of AFTER) for (const end of ENDS) {
+      const text = `${before}${open}${url}${close}${after}${end}`;
+      const found = linked(text, []);
+      expect(found?.text, text).toBe(url);
+      // The link covers exactly the URL's cells, whatever widths come before it.
+      const start = [...`${before}${open}`].reduce((width, char) => width + (wideRow(char, 0).length), 0);
+      expect(found, text).toMatchObject({ start, end: start + url.length });
+    }
+  });
+
+  it("links an existing path, with or without a location, the same way", () => {
+    for (const [written, path] of [["/Users/me/.hide/state/TerminalClipboard/hide-07c5.png", "/Users/me/.hide/state/TerminalClipboard/hide-07c5.png"], ["src/a.ts:12:5", "src/a.ts"], ["docs/한글.md", "docs/한글.md"]] as const) {
+      for (const [open, close] of PAIRS) for (const before of BEFORE) for (const after of AFTER) for (const end of ENDS) {
+        const text = `${before}${open}${written}${close}${after}${end}`;
+        expect(linked(text, [path])?.text, text).toBe(written);
+      }
+    }
+  });
+
+  it("links the address in the line that was reported, and only the address", () => {
+    const text = "브라우저 탭에 열어뒀어요(http://127.0.0.1:8391). 이전에는";
+    const groups = linkCandidates([wideRow(text, 80)], 0);
+    expect(groups.flat().map((candidate) => [candidate.text, candidate.spans])).toEqual([["http://127.0.0.1:8391", [{ row: 0, start: 25, end: 46 }]]]);
+  });
+
+  it("links prose written straight against an address with no bracket between", () => {
+    expect(linked("열어뒀어요http://127.0.0.1:8391.", [])?.text).toBe("http://127.0.0.1:8391");
+    expect(linked("见src/a.ts:3", ["src/a.ts"])?.text).toBe("src/a.ts:3");
+    expect(linked("파일은~/notes/a.md입니다", ["~/notes/a.md"])?.text).toBe("~/notes/a.md");
+  });
+
+  it("keeps a folder or file named in those scripts whole, since `/` and `.` join a name", () => {
+    expect(linked("회의록/a.md", ["/a.md", "회의록/a.md"])?.text).toBe("회의록/a.md");
+    expect(linked("회의록/a.md", ["/a.md"])).toBeNull();
+    expect(linked("docs/회의록에", ["docs/", "docs"])).toBeNull();
+  });
+
+  it("starts a value after `=`", () => {
+    expect(linked("--file=/tmp/a.png", ["/tmp/a.png"])?.text).toBe("/tmp/a.png");
+    expect(linked("https://example.com/?a=b", [])?.text).toBe("https://example.com/?a=b");
+  });
+
+  it("finds the address inside a Markdown link, a JSON field and a tool header", () => {
+    expect(linked("[the docs](https://example.com/docs)", [])?.text).toBe("https://example.com/docs");
+    expect(linked("[a.png](/tmp/a.png)", ["/tmp/a.png"])?.text).toBe("/tmp/a.png");
+    expect(linked('{"path":"/tmp/a.png"},', ["/tmp/a.png"])?.text).toBe("/tmp/a.png");
+    expect(linked("Read(web/src/a.ts)", ["web/src/a.ts"])?.text).toBe("web/src/a.ts");
+  });
+
+  it("keeps a URL's own balanced brackets and apostrophes and cuts what does not belong to it", () => {
+    expect(linked("(https://en.wikipedia.org/wiki/Mercury_(planet)).", [])?.text).toBe("https://en.wikipedia.org/wiki/Mercury_(planet)");
+    expect(linked("https://example.com/it's", [])?.text).toBe("https://example.com/it's");
+    expect(linked("'https://example.com/a'", [])?.text).toBe("https://example.com/a");
+    expect(linked("https://example.com/a…", [])?.text).toBe("https://example.com/a…");
+  });
+
+  it("takes the whole name when the brackets are part of it and never stops at an opening bracket", () => {
+    expect(linked("app/(auth)/login/page.tsx", ["app/(auth)/login/page.tsx", "app/"])?.text).toBe("app/(auth)/login/page.tsx");
+    expect(linked("app/(auth)/login/page.tsx", ["app/"])).toBeNull();
+    expect(linked("「docs/a.md」를", ["「docs/a.md」"])?.text).toBe("「docs/a.md」");
+  });
+
+  it("refuses a shortened path however it is wrapped", () => {
+    for (const text of ["…/terminals.ts", "(…/terminals.ts)", "「…/a.ts」에서"]) {
+      expect(linked(text, ["/terminals.ts", "terminals.ts", "/a.ts", "a.ts"]), text).toBeNull();
+    }
   });
 });

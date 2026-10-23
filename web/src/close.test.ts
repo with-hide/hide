@@ -197,8 +197,8 @@ describe("the close sheet's words", () => {
 
   it("keeps the Korean wording the close sheet shipped with", async () => {
     const { t } = await createInterfaceI18n("ko");
-    expect(subtreeTitle("pane", 2, t)).toBe("이 에이전트와 자식 2개를 닫을까요?");
-    expect(subtreeTitle("tab", 4, t)).toBe("이 탭과 자식 4개를 닫을까요?");
-    expect(subtreeSummaryWords({ working: 1, waiting: 1, unread: 1, unknown: 0 }, t)).toBe("답 대기 1 · 진행 중 1 · 확인 안 한 결과 1");
+    expect(subtreeTitle("pane", 2, t)).toBe("이 에이전트와 자식 에이전트 2개를 닫을까요?");
+    expect(subtreeTitle("tab", 4, t)).toBe("이 탭과 자식 에이전트 4개를 닫을까요?");
+    expect(subtreeSummaryWords({ working: 1, waiting: 1, unread: 1, unknown: 0 }, t)).toBe("답 대기 1 · 작업 중 1 · 확인 안 한 결과 1");
   });
 });

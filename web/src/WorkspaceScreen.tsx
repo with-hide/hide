@@ -407,7 +407,7 @@ function RemoteAgentArea({ actions }: { actions: Actions }) {
   const device = useShellStore((s) => focusedRemoteDevice(s.rest));
   const status = useShellStore((s) => (device ? (s.rest?.status?.remote?.find((row) => row.target_id === device.id) ?? null) : null));
   const name = useShellStore((s) => (device ? machineName(s.rest?.navigator?.devices, device.id, t) : ""));
-  // The machine this window runs on, which "Show this machine" brings forward; on a node it is not the core's.
+  // The machine this window runs on, which "Show this device" brings forward; on a node it is not the core's.
   const own = useShellStore((s) => windowDeviceId(s.rest?.navigator?.devices));
   const session = status?.session ?? null;
   const front = useShellStore((s) => s.rest?.workspace_view);

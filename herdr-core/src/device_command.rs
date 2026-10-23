@@ -100,7 +100,7 @@ pub fn next_action(code: &str) -> &'static str {
         "device_unknown" => "Run hide device list for the registered device ids",
         "device_local_remove_denied" => "The core's own machine cannot be removed",
         "device_files_open" => {
-            "Ask the operator to close the device's file tabs, or to remove it in Settings › Devices, which stores their drafts first"
+            "Ask the operator to close the device's file tabs, or to remove it in Settings > Devices, which stores their drafts first"
         }
         _ => "Retry; the reason is in Hide's diagnostic log",
     }

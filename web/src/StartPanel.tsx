@@ -8,7 +8,8 @@ import { useEscapeLayer } from "./components/ui/layer";
 import { Kbd } from "./components/ui/kbd";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "./components/ui/select";
 import { START_ANSWER_TIMEOUT_MS, startAnswer, startRequestId } from "./startAnswer";
-import { useStartPanel, startFailure } from "./startDraft";
+import { agentFailure, useStartPanel, startFailure, startRefusal } from "./startDraft";
+import { QuotedLine } from "./QuotedLine";
 import { resolveTarget, startTargets, type StartTarget } from "./startTargets";
 import { windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
@@ -42,7 +43,7 @@ function useStartAnswer() {
       const panel = useStartPanel.getState();
       if (answer.phase === "pending") return false;
       if (answer.phase === "refused" || answer.phase === "failed") {
-        panel.fail(answer.phase === "refused" ? { message: answer.message } : startFailure(answer.message));
+        panel.fail(answer.phase === "refused" ? startRefusal(answer.kind) : startFailure(answer.message));
         return true;
       }
       const ui = useUiStore.getState();
@@ -52,7 +53,7 @@ function useStartAnswer() {
       // Opening it again here would undo a newer visit made while it waited.
       // Worktree creation retains its separate open-when-listed flow.
       if (answer.paneId && requestKind === "worktree_create") ui.setFocusWhenListed(answer.paneId);
-      if (answer.agentPhase === "failed") panel.fail(startFailure(answer.agentMessage));
+      if (answer.agentPhase === "failed") panel.fail(agentFailure(answer.agentReason, answer.agentLine));
       else panel.finish(answer.agentPhase === "starting" ? answer.taskId : null);
       return true;
     };
@@ -83,7 +84,7 @@ function useSpentStart() {
     if (!spent) return;
     const panel = useStartPanel.getState();
     if (!operation || operation.id !== spent.taskId) return panel.settle();
-    if (operation.agent_phase === "failed" || operation.agent_phase === "unknown") panel.restore(startFailure(operation.agent_message));
+    if (operation.agent_phase === "failed" || operation.agent_phase === "unknown") panel.restore(agentFailure(operation.agent_reason, operation.agent_line));
     else if (operation.agent_phase !== "starting") panel.settle();
   }, [spent, operation]);
 }
@@ -200,8 +201,9 @@ function StartPanel({ actions }: { actions: Actions }) {
         }}
       />
       {failure ? (
-        <p role="alert" data-start-failure="true" className="whitespace-pre-line break-words px-md pb-xs text-caption text-destructive">
+        <p role="alert" data-start-failure="true" data-core-error={"code" in failure ? failure.code : undefined} className="whitespace-pre-line break-words px-md pb-xs text-caption text-destructive">
           {"key" in failure ? t(failure.key) : failure.message}
+          {"line" in failure && failure.line ? <QuotedLine line={failure.line} /> : null}
         </p>
       ) : null}
       {target?.kind === "worktree" ? <div className="flex flex-col gap-sm px-md py-sm" data-start-worktree="true">

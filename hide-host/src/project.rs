@@ -6,6 +6,8 @@ use std::path::Path;
 
 use hide_platform::fs::identity;
 
+use crate::error::{ErrorCode, HostError, HostResult};
+
 pub use hide_node_link::project::ProjectCreated;
 
 /// What stands at the path a new project would be created at.
@@ -56,17 +58,20 @@ pub fn folder(path: &Path) -> ProjectFolder {
 /// Makes the project at `path`. A new folder is made at the literal path,
 /// before it is resolved: resolving first would follow a symlink planted at
 /// the name since the shell checked it, and make or continue into its
-/// target, wherever that is.
-pub fn create(
-    path: &Path,
-    new_folder: bool,
-    initialize_git: bool,
-) -> Result<ProjectCreated, String> {
+/// target, wherever that is. A refusal is named by its code: `NotFound` when
+/// nothing is at an existing folder's path, `AlreadyExists` when something
+/// other than a leftover holds a new folder's name, and `Io` otherwise; the
+/// message carries the path for the diagnostic log.
+pub fn create(path: &Path, new_folder: bool, initialize_git: bool) -> HostResult<ProjectCreated> {
     if new_folder {
         make_folder(path)?;
     }
-    let real = identity::canonical(path)
-        .map_err(|_| format!("Workspace path does not exist: {}", path.display()))?;
+    let real = identity::canonical(path).map_err(|_| {
+        HostError::new(
+            ErrorCode::NotFound,
+            format!("Workspace path does not exist: {}", path.display()),
+        )
+    })?;
     let git_error = (initialize_git && hide_project::git::discover(&real).is_none())
         .then(|| crate::worktrees::git(&real, &["init"]).err())
         .flatten();
@@ -81,18 +86,23 @@ pub fn create(
 /// project is its own repository. A leftover of an earlier attempt is
 /// continued into; anything else at the path is refused and left as it is.
 /// A failure after the folder was made keeps the folder and says so.
-fn make_folder(path: &Path) -> Result<(), String> {
+fn make_folder(path: &Path) -> HostResult<()> {
     match fs::create_dir(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             if folder(path) != ProjectFolder::Leftover {
-                return Err(format!(
-                    "{} already exists; pick another name",
-                    path.display()
+                return Err(HostError::new(
+                    ErrorCode::AlreadyExists,
+                    format!("{} already exists; pick another name", path.display()),
                 ));
             }
         }
-        Err(error) => return Err(format!("{} could not be made: {error}", path.display())),
+        Err(error) => {
+            return Err(HostError::new(
+                ErrorCode::Io,
+                format!("{} could not be made: {error}", path.display()),
+            ));
+        }
     }
     if path.join(".git").exists() {
         return Ok(());
@@ -100,9 +110,12 @@ fn make_folder(path: &Path) -> Result<(), String> {
     crate::worktrees::git(path, &["init"])
         .map(|_| ())
         .map_err(|reason| {
-            format!(
-                "{reason}; the folder {} was kept, and creating it again continues there",
-                path.display()
+            HostError::new(
+                ErrorCode::Io,
+                format!(
+                    "{reason}; the folder {} was kept, and creating it again continues there",
+                    path.display()
+                ),
             )
         })
 }
@@ -162,7 +175,7 @@ mod tests {
         fs::write(taken.join("notes.md"), "mine\n").unwrap();
         assert_eq!(folder(&taken), ProjectFolder::Taken);
         let error = create(&taken, true, false).expect_err("a folder with contents is refused");
-        assert!(error.contains("already exists"), "{error}");
+        assert_eq!(error.code, ErrorCode::AlreadyExists, "{error:?}");
         assert!(!taken.join(".git").exists());
         assert_eq!(
             fs::read_to_string(taken.join("notes.md")).unwrap(),
@@ -192,6 +205,6 @@ mod tests {
         assert!(plain.join(".git").is_dir());
 
         let missing = create(&plain.join("gone"), false, true).expect_err("nothing there");
-        assert!(missing.contains("does not exist"), "{missing}");
+        assert_eq!(missing.code, ErrorCode::NotFound, "{missing:?}");
     }
 }

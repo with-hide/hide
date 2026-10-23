@@ -33,7 +33,7 @@ describe("All projects", () => {
     expect(local?.projects.map((row) => row.id)).toEqual(["b", "a"]);
     expect(local?.projects[1]?.counts?.needs_you).toBe(1);
     expect(local?.projects[1]?.workspaceCount).toBe(1);
-    expect(mini?.availability).toEqual({ state: "unavailable", text: "mini is unreachable", retry: "connect" });
+    expect(mini?.availability).toEqual({ state: "unavailable", text: "Hide cannot reach mini", retry: "connect" });
     expect(mini?.projects.map((row) => [row.id, row.counts, row.workspaceCount])).toEqual([["r", null, null]]);
     // The sidebar's All projects row counts the same list without building it.
     expect(allProjectsCount(rest)).toBe(3);
@@ -73,9 +73,9 @@ describe("a Project's Overview", () => {
 
     const catalog = {
       navigator: { devices: [{ id: "mini", kind: "remote", label: "mini" }], workspaces: [] },
-      status: { remote: [{ target_id: "mini", state: "connected", catalog: { state: "unavailable", message: "helper refused" }, session: { workspaces: [project("m", "mini")], agents: [] } }] },
+      status: { remote: [{ target_id: "mini", state: "connected", catalog: { state: "unavailable" }, session: { workspaces: [project("m", "mini")], agents: [] } }] },
     } as unknown as SnapshotRest;
-    expect(overviewProject(catalog, [], "m")?.availability).toEqual({ state: "unavailable", text: "helper refused", retry: "helper" });
+    expect(overviewProject(catalog, [], "m")?.availability).toEqual({ state: "unavailable", text: "Projects could not be read", retry: "helper" });
   });
 
   it("hands the board every agent of the device, since a descendant may work in another project", () => {
@@ -304,7 +304,7 @@ describe("an open from Main or an Overview", () => {
   it("reads a newer core error as the refusal and ignores the one from before", () => {
     const opening = { target: { checkoutId: "c2", deviceId: "local", path: "/w2" }, errorBefore: 5, failure: null };
     expect(openingProgress(rest("c1", 5), opening)).toBeNull();
-    expect(openingProgress(rest("c1", 9), opening)).toBe("Herdr refused");
+    expect(openingProgress(rest("c1", 9), opening)).toBe("This could not be done. Try again.");
   });
 });
 

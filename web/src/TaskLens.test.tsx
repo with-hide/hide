@@ -90,7 +90,7 @@ it.each(["status", "project"] as const)("in %s orders resting tasks by their dis
   expect(rows(container)).toEqual(["recent", "middle", "old", "unknown"]);
 });
 
-it("groups the device's tasks as 내 차례 (a block included), 읽을 것, 일하는 중 and 대기, drops empty groups, names each row's project, and folds the resting and cleanup ones (B4, B5, B9; status-marks B32)", async () => {
+it("groups the device's tasks as 내 차례 (a block included), 읽을 것, 작업 중 and 대기, drops empty groups, names each row's project, and folds the resting and cleanup ones (B4, B5, B9; status-marks B32)", async () => {
   const agents = [
     row("ask", { status_code: "question", state: undefined as never }, { group: "needs_you" }),
     row("stuck", { status_code: "error", demand: "error", mark: "turn" }, { group: "needs_you", line: "API 서버에 닿지 못해 멈춤" }),
@@ -99,7 +99,7 @@ it("groups the device's tasks as 내 차례 (a block included), 읽을 것, 일�
   agents[0] = { ...agents[0]!, state: { ...agents[0]!.state, ask: { verb: "answer", what: "새 언어로 다시 쓸까요?", more: 0 } } };
   const cards = [card("ask", "needs_you", "hide-main"), card("stuck", "blocked", "hide-main"), card("waits", "waiting", "site-main"), card("works", "working", "hide-main"), card("done", "done", "site-main"), card("rest", "resting", "hide-main"), card("clean", "cleanup", "hide-main")];
   const { container } = await render(snapshot(agents, cards), agents);
-  expect(heads(container)).toEqual(["내 차례2", "읽을 것1", "일하는 중1", "대기1"]);
+  expect(heads(container)).toEqual(["내 차례2", "읽을 것1", "작업 중1", "대기1"]);
   expect(rows(container)).toEqual(["ask", "stuck", "done", "works", "waits"]);
   expect(container.querySelector("[data-task-count]")?.textContent).toBe("태스크 5");
   const line = (pane: string) => container.querySelector(`[data-task-row="${pane}"] [data-task-line]`);
@@ -150,13 +150,13 @@ it("in 프로젝트별 draws one group per project, the asking project first, wi
   expect(rows(container)).toEqual(["b", "c", "a", "d"]);
   const bands = (project: string) => [...container.querySelectorAll(`[data-task-group="${project}"] [data-task-band]`)].map((band) => band.textContent);
   expect(bands("site")).toEqual(["내 차례"]);
-  expect(bands("hide")).toEqual(["읽을 것", "일하는 중", "대기"]);
+  expect(bands("hide")).toEqual(["읽을 것", "작업 중", "대기"]);
   const label = container.querySelector('[data-task-group="site"] [data-task-band]')!;
   expect(label.getAttribute("aria-hidden")).toBe("true");
   expect(label.className).toContain("text-warning");
-  expect([...container.querySelectorAll('[data-task-group="hide"] ul[aria-label]')].map((list) => list.getAttribute("aria-label"))).toEqual(["읽을 것", "일하는 중", "대기"]);
+  expect([...container.querySelectorAll('[data-task-group="hide"] ul[aria-label]')].map((list) => list.getAttribute("aria-label"))).toEqual(["읽을 것", "작업 중", "대기"]);
   expect(container.querySelector('[data-task-group-head="project"]')?.textContent).toBe("site내 차례 1");
-  expect([...container.querySelectorAll('[data-task-group-head="project"]')][1]?.textContent).toBe("herdr-ide읽을 것 1일하는 중 1대기 1");
+  expect([...container.querySelectorAll('[data-task-group-head="project"]')][1]?.textContent).toBe("herdr-ide읽을 것 1작업 중 1대기 1");
 });
 
 it("in 프로젝트별 puts a project whose only turn is a block first, as a block is the operator's turn (status-marks B32)", async () => {
@@ -251,11 +251,11 @@ it("numbers the task rows top to bottom while ⌥ is held, an opened fold's rows
 it("draws the first step when the device has no project, and New agent when it has no task (B20, B42)", async () => {
   const empty = { ...snapshot([], []), navigator: { ...snapshot([], []).navigator, workspaces: [] } } as SnapshotRest;
   const none = await render(empty, []);
-  expect(none.container.querySelector("[data-tasks-no-project]")?.textContent).toContain("Add a project to start an agent.");
+  expect(none.container.querySelector("[data-tasks-no-project]")?.textContent).toContain("프로젝트를 추가하면 에이전트를 시작할 수 있어요.");
   await cleanup?.();
   cleanup = null;
   const idle = await render(snapshot([], []), []);
-  expect(idle.container.querySelector("[data-tasks-empty]")?.textContent).toContain("진행 중인 일감 없음");
+  expect(idle.container.querySelector("[data-tasks-empty]")?.textContent).toContain("진행 중인 태스크 없음");
 });
 
 // A task row draws the row's own mark and line, as the sidebar's (status-marks D-12, D-22, D-24, B16, B33, B35).

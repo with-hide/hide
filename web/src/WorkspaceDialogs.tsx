@@ -16,7 +16,8 @@ import { Checkbox } from "./components/ui/checkbox";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import { DiskCleanupSheet } from "./DiskCleanupSheet";
-import { endedSentence, startFailure } from "./startDraft";
+import { agentFailure, endedSentence } from "./startDraft";
+import { QuotedLine } from "./QuotedLine";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Note, Status } from "./components/settings-rows";
 import { SubtreeList } from "./components/subtree-list";
@@ -24,6 +25,8 @@ import { closeScope, subtreeOf, type Subtree } from "./close";
 import { StartIssueDialog } from "./IssueDialogs";
 import { PrDelegateDialog, PrLinkDialog, PrNewIssueDialog } from "./PrDialogs";
 import { translate, useInterfaceTranslation } from "./i18n/client";
+import { coreErrorText } from "./coreError";
+import { useErrorSince } from "./errorSince";
 import { localDeviceId, type Checkout, type Workspace } from "./snapshot";
 import { machineName, windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
@@ -42,12 +45,6 @@ import {
   removalFor,
   taskFor,
 } from "./workspaceManage";
-
-export function useErrorSince(since: number | null, prefixes: readonly string[]): string | null {
-  const error = useShellStore((s) => s.rest?.status?.last_error ?? null);
-  if (since === null || !error || error.occurred_at < since) return null;
-  return prefixes.some((prefix) => error.kind.startsWith(prefix)) ? error.message : null;
-}
 
 /** The row a dialog names, among this machine's projects or a connected device's workspaces (a remote purpose). */
 function findTarget(workspaceId: string, checkoutId?: string): { workspace: Workspace; checkout: Checkout | null } | null {
@@ -223,8 +220,8 @@ function RemoveProjectDialog({ actions, workspace, listed, onClose }: { actions:
           </Status>
         ) : null}
         {refused ? (
-          <Note tone="error" data-remove-result="failed">
-            {refused}
+          <Note tone="error" data-remove-result="failed" data-core-error={refused.kind}>
+            {coreErrorText(refused, t, "coreError.project.removeFailed")}
           </Note>
         ) : null}
         {removed ? (
@@ -308,7 +305,7 @@ function NewWorktreeDialog({ actions, workspace, onClose }: { actions: Actions; 
       purpose: purpose.trim() ? normalizePurpose(purpose.trim()) : null,
     });
   };
-  const failure = task?.phase === "failed" ? (task.message ?? t("workspace.createFailed")) : refused;
+  const failure = task?.phase === "failed" ? (task.message ?? t("workspace.createFailed")) : refused ? coreErrorText(refused, t, "workspace.createFailed") : null;
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
       <DialogContent data-new-worktree={workspace.id}>
@@ -353,7 +350,7 @@ function NewWorktreeDialog({ actions, workspace, onClose }: { actions: Actions; 
             {purpose ? (
               <p className={`text-caption ${purposeIsLong(purpose) ? "text-warning" : "text-muted-foreground"}`}>{purposeCountLabel(purpose, t)}{purposeIsLong(purpose) ? ` · ${t("workspace.purposeLong")}` : ""}</p>
             ) : null}
-            {failure ? <Note tone="error" data-worktree-error="true">{failure}</Note> : null}
+            {failure ? <Note tone="error" data-worktree-error="true" data-core-error={refused?.kind}>{failure}</Note> : null}
             {working ? <Status tone="pending">{t("workspace.creatingWorktree")}</Status> : null}
           </DialogBody>
           <DialogFooter>
@@ -388,7 +385,7 @@ function PurposeDialog({ actions, checkout, deviceLabel, onClose }: { actions: A
     setRequest({ afterId: actions.taskIdNow(), at: Date.now(), text: value });
     actions.setPurpose(checkout.id, value);
   };
-  const failure = task?.phase === "failed" ? (task.message ?? t("workspace.purposeFailed")) : refused;
+  const failure = task?.phase === "failed" ? (task.message ?? t("workspace.purposeFailed")) : refused ? coreErrorText(refused, t, "workspace.purposeFailed") : null;
   const label = checkout.branch ?? checkout.label;
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
@@ -421,7 +418,7 @@ function PurposeDialog({ actions, checkout, deviceLabel, onClose }: { actions: A
               {purposeScope(deviceLabel, checkout.branch ?? null, t)}
             </p>
             {failure ? (
-              <Note tone="error" data-purpose-error="true">
+              <Note tone="error" data-purpose-error="true" data-core-error={refused?.kind}>
                 {t("workspace.purposeFailure", { message: failure })}
               </Note>
             ) : null}
@@ -467,7 +464,7 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
   const finished = removal?.phase === "finished" ? removal : null;
   // A refusal or a failed removal keeps the worktree, so the choices come
   // back under the reason and Delete tries again on the row as it is now.
-  const failure = refused ?? (removal?.phase === "failed" ? (removal.message ?? t("workspace.deleteFailed")) : null);
+  const failure = refused ? coreErrorText(refused, t, "workspace.deleteFailed") : removal?.phase === "failed" ? (removal.message ?? t("workspace.deleteFailed")) : null;
   const choosing = !!row && !!gate && !gate.blocked_reason && !inFlight && !finished;
   const branch = row?.branch ?? checkout.branch;
   const needsDiscard = !!gate?.discard_label;
@@ -506,7 +503,7 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
           </Note>
         ) : null}
         {failure ? (
-          <Note tone="error" data-delete-result="failed">
+          <Note tone="error" data-delete-result="failed" data-core-error={refused?.kind}>
             {failure}
           </Note>
         ) : null}
@@ -641,13 +638,14 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
 
   if (!task || !task.agent_phase || task.agent_phase === "started") return null;
   const dismiss = () => useUiStore.getState().setWatchedTask(null);
-  const failure = startFailure(task.agent_message);
+  const failure = agentFailure(task.agent_reason, task.agent_line);
   return (
-    <div role="status" data-task-agent={task.agent_phase} className="flex flex-wrap items-center gap-md border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground">
+    <div role="status" data-task-agent={task.agent_phase} data-core-error={"code" in failure ? failure.code : undefined} className="flex flex-wrap items-center gap-md border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground">
       <span className="min-w-0 flex-1 break-words">
         {task.agent_phase === "starting"
           ? t("workspace.startingAgent", { kind: task.agent_kind ?? t("common.agent") })
           : `${endedSentence("key" in failure ? t(failure.key) : failure.message)} ${task.kind === "worktree_create" ? t("workspace.worktreePaneKept") : t("workspace.paneKept")}`}
+        {task.agent_phase !== "starting" && "line" in failure && failure.line ? <QuotedLine line={failure.line} /> : null}
       </span>
       {task.agent_phase === "failed" ? (
         <button type="button" className="text-foreground underline" onClick={() => actions.retryTaskAgent(task.id)} data-task-agent-retry="true">

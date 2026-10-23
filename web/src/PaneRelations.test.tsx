@@ -78,7 +78,7 @@ it("names the pane as its header does while the menu is open", async () => {
 });
 
 it("offers what the core now says about the pane while the menu is open", async () => {
-  const menu = await openMenu(row({ fork: { available: false, reason: "This agent has not reported its conversation yet" } }), "Agent two");
+  const menu = await openMenu(row({ fork: { available: false, reason: "no_conversation" } }), "Agent two");
   const fork = () => document.querySelector('[data-menu-group="fork"]');
   expect(fork()?.hasAttribute("data-disabled")).toBe(true);
   await menu.render(row({ fork: { available: true } }), "Agent two");

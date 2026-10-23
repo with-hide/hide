@@ -1195,14 +1195,12 @@ fn explorer_move_relocates_the_item_and_refuses_a_name_clash() {
         .as_ref()
         .expect("a settled slot");
     assert_eq!(operation.phase, "failed");
-    assert!(
+    assert_eq!(
         operation
-            .message
-            .as_deref()
-            .unwrap_or_default()
-            .contains("already exists"),
-        "{:?}",
-        operation.message
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("host.already_exists")
     );
     assert_eq!(operation.path, lib.to_string_lossy());
     assert_eq!(std::fs::read_to_string(&lib).unwrap(), "again\n");
@@ -1350,8 +1348,11 @@ fn explorer_trash_refuses_an_item_replaced_while_the_prompt_was_open() {
     let operation = snapshot.explorer_operation.as_ref().expect("a failed slot");
     assert_eq!(operation.phase, "failed");
     assert_eq!(
-        operation.message.as_deref(),
-        Some("lib.rs changed while the prompt was open; nothing was moved")
+        operation
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("host.conflict")
     );
     assert_eq!(
         std::fs::read_to_string(&lib).expect("still there"),
@@ -1404,14 +1405,12 @@ fn explorer_trash_refuses_a_selection_inside_the_item_and_a_missing_item() {
         .as_ref()
         .expect("a refused slot");
     assert_eq!(operation.phase, "failed");
-    assert!(
+    assert_eq!(
         operation
-            .message
-            .as_deref()
-            .unwrap_or_default()
-            .contains("cannot move into the item"),
-        "{:?}",
-        operation.message
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("explorer.invalid")
     );
     assert!(src.join("lib.rs").is_file(), "nothing moved");
 
@@ -1428,8 +1427,11 @@ fn explorer_trash_refuses_a_selection_inside_the_item_and_a_missing_item() {
     let operation = snapshot.explorer_operation.as_ref().expect("a failed slot");
     assert_eq!(operation.phase, "failed");
     assert_eq!(
-        operation.message.as_deref(),
-        Some("gone.rs no longer exists")
+        operation
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("host.not_found")
     );
     assert_eq!(operation.path, gone.to_string_lossy());
     assert_eq!(
@@ -1459,14 +1461,12 @@ fn explorer_refuses_paths_outside_the_focused_checkout_without_touching_disk() {
         .as_ref()
         .expect("a refused slot");
     assert_eq!(operation.phase, "failed");
-    assert!(
+    assert_eq!(
         operation
-            .message
-            .as_deref()
-            .unwrap_or_default()
-            .contains("outside the workspace"),
-        "{:?}",
-        operation.message
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("explorer.invalid")
     );
     assert_eq!(operation.path, outside.to_string_lossy());
     assert!(!outside.join("leak").exists());
@@ -1482,14 +1482,12 @@ fn explorer_refuses_paths_outside_the_focused_checkout_without_touching_disk() {
         .as_ref()
         .expect("a refused slot");
     assert_eq!(operation.phase, "failed");
-    assert!(
+    assert_eq!(
         operation
-            .message
-            .as_deref()
-            .unwrap_or_default()
-            .contains("not the focused checkout"),
-        "{:?}",
-        operation.message
+            .failure
+            .as_ref()
+            .map(|failure| failure.code.as_str()),
+        Some("explorer.not_in_front")
     );
     assert!(!outside.join("leak").exists());
     std::fs::remove_dir_all(&outside).ok();
@@ -1556,7 +1554,7 @@ fn explorer_file_create_opens_the_created_file_as_a_tab_and_others_do_not() {
         snapshot
             .explorer_operation
             .as_ref()
-            .and_then(|operation| operation.message.as_deref()),
+            .and_then(|operation| operation.failure.as_ref()),
         None,
         "a readable created file opens without a failure reason"
     );

@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Run more agents. Hold less.</strong><br>
-  The agent development environment for Claude Code, Codex and whatever comes next.
+  The multi-agent IDE for Claude Code, Codex and whatever comes next.
 </p>
 
 <p align="center">
@@ -17,8 +17,8 @@
 </p>
 
 <p align="center">
+  <a href="https://withhide.dev"><strong>Download</strong></a> ·
   <a href="https://withhide.dev">Website</a> ·
-  <a href="#install">Install</a> ·
   <a href="docs/README.md">Docs</a> ·
   <a href="https://github.com/with-hide/hide/discussions">Discussions</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -27,76 +27,28 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/hero-light.webp">
-    <img src="site/assets/shots/hero-dark.webp" alt="The hide window. Two agents that need an answer are raised above the project tree. A lead splitting the work and the agent asking to merge two pull requests run side by side, and the PRs tool lists the two ready to merge above the ones agents are still working on.">
+    <img src="site/assets/shots/hero-dark.webp" alt="The hide window. The sidebar raises the two agents that need an answer above the project tree. A lead splitting the work and the agent asking to merge two pull requests run side by side, and the Project tool beside them counts the sessions, pull requests, worktrees and the week's cost, with the project's to-do list under them.">
   </picture>
 </p>
 
-Your team runs several coding agents at once, and someone has to watch them.
-hide lets them work as one team: they start helpers, watch them and write to each other.
-It keeps the team in one view and keeps it going after you close the laptop.
-You get the decisions; the rest stays out of the way.
+You run several coding agents at once, and someone has to keep track of them.
+hide puts every agent, task and pull request in one view, lets the agents start, watch and write to each other, and brings up only what needs a person.
+Close the laptop and the work keeps going.
 
-It works with the agent CLIs you already signed in to: **Claude Code, Codex, Antigravity, OpenCode, Grok, Pi and omp**.
-No new API key, no hosted service.
-
-## Features
-
-### Agents start, watch and write to each other
-
-A lead starts workers, a worker starts a helper, on this machine or another, and they write to each other in letters.
-Mix vendors freely: one agent writes, another checks.
-A child runs in its own tab and reports to its parent, not to you, and the tree shows who started whom on every machine.
-The agent that started a child watches it: it hears within a minute when the child stops on a question, and after 20 quiet minutes when it stalls.
-Claude Code and Codex can end a turn and wait; the letter they wait for wakes them.
+It works with the agent CLIs you already signed in to: no new API key, no hosted service.
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/agents-light.webp">
-    <img src="site/assets/shots/agents-dark.webp" alt="The hide window with the lead's tree open. The sidebar shows the lead with Codex workers and OpenCode helpers under it, and a popover from the lead's pane lists the helpers it started, one of them asking.">
-  </picture>
+  <kbd>Claude Code</kbd> <kbd>Codex</kbd> <kbd>Antigravity</kbd> <kbd>OpenCode</kbd> <kbd>Grok</kbd> <kbd>Pi</kbd> <kbd>omp</kbd>
 </p>
 
-### Only what needs you comes up
-
-Hide AI reads what each agent did and gives it a title and a one-line summary.
-Agents sort themselves into four groups, **Needs You, Unread, Working and Seen**, and the ones waiting on you sit on top of every screen.
-Hide AI runs on the agent CLI you already use.
-Each task keeps a record of what it is doing now and what you asked, ticked off as it goes.
-
-### One core, any screen
-
-Put hide's core on a machine that never sleeps.
-Projects, letters and titles live there; your laptop becomes a screen, so closing it stops nothing.
-Add any machine by its SSH alias and its agents join the same groups, and pair your phone by QR to answer the one that needs you.
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/core-light.webp">
-    <img src="site/assets/shots/core-dark.webp" alt="Settings in hide. Devices lists the core machine, a laptop that dials in and a Linux server, all connected. Mobile shows Tailscale ready and one paired phone.">
-  </picture>
-</p>
-
-### Still an IDE
-
-- **Real terminals.** Agents run in Herdr panes with their real layout, scrollback and focus, drawn in place.
-- **Files beside the work.** A path an agent names opens next to it, in an editor with a VS Code style Explorer.
-- **Diffs and pull requests.** Each checkout's changes are one click from its tab, and the PRs tool sorts pull requests by who acts next.
-- **A browser your agents can drive.** `hide browser open <url>` shows a page beside the agent, which can click, fill and screenshot it.
-- **Keyboard first.** `⌘K` goes to any agent, session, issue or pull request, and `⌘P` opens any file.
-
-### Around the agents
-
-- **Project Memory.** What one session decided reaches the next agent, and a card that disagrees with your docs comes to you as a question.
-- **Backlog.** GitHub issues and local notes sit in one list; starting one opens a worktree, an agent and its first prompt.
-- **Pull requests.** The ones waiting on you come first, and one click hands a pull request to an agent.
-
-> [!NOTE]
-> **Software Factory is coming.** Queue issues with clear requirements; workers take them in order, verify and merge them, and bring back only what needs a person.
-> Email [hello@withhide.dev](mailto:hello@withhide.dev) to join the list, or watch this repository's releases.
+> [!TIP]
+> **Already on Herdr?** hide is built on [Herdr](https://herdr.dev) and opens on the server you already run, so your workspaces, panes and agents are there on first launch.
+> It never replaces your server on its own; when yours is an older Herdr, hide offers to move it to its own, a live handoff on macOS and Linux that keeps your panes running.
+> No Herdr yet? hide brings its own.
 
 ## Install
 
-Download the package for your system from the [latest release](https://github.com/with-hide/hide/releases/latest):
+[withhide.dev](https://withhide.dev) picks the installer for your system, or download it from the [latest release](https://github.com/with-hide/hide/releases/latest):
 
 | System | Package | First launch |
 | --- | --- | --- |
@@ -140,6 +92,107 @@ To look at hide in a browser without installing the app, `bash scripts/web-dev.s
 
 </details>
 
+## Features
+
+### Every agent at a glance
+
+The sidebar shows the same work three ways: **Projects** as a tree of checkouts and the agents in them, **Tasks** grouped by who acts next, and **Pull requests** sorted by what waits on you.
+The Project tool beside your agents counts the project's sessions, pull requests, worktrees and the last seven days' cost, and lists what is yours to do.
+The Overview draws the whole night as one map: which agent started which, the letters between them, and who is waiting on you.
+
+<table>
+  <tr>
+    <td width="50%"><picture><source media="(prefers-color-scheme: light)" srcset="site/assets/shots/tasks-light.webp"><img src="site/assets/shots/tasks-dark.webp" alt="The sidebar on its Tasks list: tasks grouped as Needs You, Unread, Working, Waiting and Resting, each with its agent, its project and the pull requests it opened."></picture></td>
+    <td width="50%"><picture><source media="(prefers-color-scheme: light)" srcset="site/assets/shots/map-light.webp"><img src="site/assets/shots/map-dark.webp" alt="The Overview's work graph: agents of three projects around You, lines for who started whom and the letters between them, and the two waiting on you listed on the right."></picture></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Tasks, grouped by who acts next</sub></td>
+    <td align="center"><sub>The Overview map of who started whom</sub></td>
+  </tr>
+</table>
+
+### Agents start, watch and write to each other
+
+A lead starts workers, a worker starts a helper, on this machine or another, and they write to each other in letters.
+Mix vendors freely: one agent writes, another checks.
+A child runs in its own tab and reports to its parent, not to you.
+The agent that started a child watches it: it hears within a minute when the child stops on a question, and after 20 quiet minutes when it stalls.
+Claude Code and Codex can end a turn and wait; the letter they wait for wakes them.
+For a set of pull requests, a Conductor agent runs a **mission**: it plans the work, starts the workers and reports back.
+
+### Hide AI does the reading
+
+Hide AI reads what each agent did and writes what a person needs: a title, why it stopped, what you asked and what you missed.
+Agents sort themselves into **Needs You, Unread, Working and Seen**, and the ones waiting on you sit on top of every screen.
+**Project Memory** turns what you decide in a session into a card, checks it against the repository and hands it to the next agent, whichever vendor runs it; a rule worth keeping comes back as one pull request to your docs.
+Hide AI runs on the agent CLI you already signed in to, and every status still works with it switched off.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/attention-light.webp">
+    <img width="380" src="site/assets/shots/attention-dark.webp" alt="hide's sidebar. Two agents wait under Needs You, each with a title and a one-line reason Hide AI wrote. A finished fix sits under Unread, and the project tree below shows who is still working.">
+  </picture>
+</p>
+
+### Your agent drives the browser
+
+An agent opens the page it changed beside its pane, clicks through it and reads what it shows, so it checks its own work before it asks you.
+A file or diff it names opens next to it too.
+
+```sh
+hide browser open localhost:5173/invoices             # a page beside the agent's pane
+hide browser snapshot browser-1 --interactive          # the page as numbered elements
+hide browser click browser-1 --text "Export CSV"       # click, fill, type, press, drag, screenshot
+hide file open src/export/csv.ts                       # the file it changed, in the editor beside it
+```
+
+### One core, any screen
+
+Put hide's core on a machine that never sleeps.
+Projects, letters and titles live there; your laptop becomes a screen, so closing it stops nothing.
+Add any machine by its SSH alias and its agents join the same lists, and pair your phone by QR to answer the one that needs you, over your own Tailscale.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="site/assets/shots/core-light.webp">
+    <img src="site/assets/shots/core-dark.webp" alt="Settings in hide beside the sidebar. Devices lists the core machine, a MacBook that dials in and a Linux server, all connected. Mobile shows Tailscale ready and one paired phone.">
+  </picture>
+</p>
+
+### Still an IDE
+
+- **Real terminals.** Agents run in Herdr panes with their real layout, scrollback and focus, drawn in place.
+- **Files and diffs.** An editor with a VS Code style Explorer, and each checkout's changes one click from its tab.
+- **A worktree per task.** GitHub issues and local notes sit in one backlog; starting one opens a worktree, an agent and its first prompt.
+- **Pull requests.** The ones waiting on you come first, and one click hands a pull request to an agent.
+- **Keyboard first.** `⌘K` goes to any agent, task, issue or pull request, and `⌘P` opens any file.
+- **Guardrails.** Guard the base branch, working folders, files and risky Git commands, per project.
+- **Limits and cost in view.** How much of each agent's week is left, and each project's last seven days at API prices.
+
+> [!NOTE]
+> **Software Factory is coming.** Queue issues with clear requirements; workers take them in order, verify and merge them, and bring back only what needs a person.
+> Email [hello@withhide.dev](mailto:hello@withhide.dev) to join the list, or watch this repository's releases.
+
+## Your agents drive hide too
+
+hide installs a skill and hooks into each agent, so an agent can do from its pane what you do from the window.
+
+```sh
+hide agent spawn --parent here --name export-csv --intent export-csv --kind codex \
+  --repo ~/billing-app --branch feat/export-csv --brief "Export invoices as CSV"   # a worker it watches
+hide request send <agent> --intent review --body "Check #431 before I merge"   # a letter to another agent
+hide mission help                                                     # plan and run a set of pull requests
+hide device add workbox                                               # another machine, by SSH alias
+```
+
+`hide guide` prints how an agent works inside hide, and `hide --help` lists every command.
+
+## Start with one task
+
+1. Install hide from [withhide.dev](https://withhide.dev) or the [latest release](https://github.com/with-hide/hide/releases/latest), and sign in to the agent CLIs you use.
+2. Add a project, start an agent and give it a task; ask it to split the work across a few workers.
+3. Watch the sidebar's Tasks list and the Overview map, and answer only what reaches **Needs You**.
+
 ## Your machines, your sign-ins
 
 - **Nothing hosted.** The app, the core and Hide AI run on machines you own, so your code goes only where your agent CLIs already send it.
@@ -171,14 +224,21 @@ The core owns the state behind one snapshot boundary, and the shell only renders
 <!-- herdr-provenance:start -->
 hide distributes the [upstream Herdr release v0.9.5](https://github.com/herdrdev/herdr/releases/tag/v0.9.5).
 The bundled binary's code is not modified by hide; a macOS release replaces only its ad-hoc signature with hide's Developer ID one, which notarization requires.
-The weekly `herdr-update.yml` workflow proposes upstream stable releases with `--repo herdrdev/herdr`; updates must pass contract and runtime checks.
+The daily `herdr-update.yml` workflow proposes upstream stable releases with `--repo herdrdev/herdr`; updates must pass contract and runtime checks.
 <!-- herdr-provenance:end -->
 
 ## Performance
 
+<details>
+<summary><strong>What one machine measured</strong></summary>
+
+<br>
+
 On an M4 Pro Mac, the 2026-10-04 candidate measured **16.3 ms p95** from a renderer keydown to a complete nine-character echo in the terminal buffer, and its whole process tree held **549 MiB** idle and **622 MiB** with three busy terminals (RSS p95).
 These are one machine's numbers on macOS, taken without quiescing it: they leave out key-to-photon latency and Windows and Linux, and no other app ran the same workload, so they claim nothing about relative speed.
 [PERFORMANCE_RESULTS.md](docs/PERFORMANCE_RESULTS.md) has the method, the distributions and every limit.
+
+</details>
 
 ## Documentation
 
@@ -191,6 +251,7 @@ These are one machine's numbers on macOS, taken without quiescing it: they leave
 | [Browser displays](docs/BROWSER_DISPLAYS.md) | `hide browser` and the pages drawn beside the work |
 | [Architecture](docs/ARCHITECTURE.md) | The core, the daemon, the desktop host and the Herdr boundary |
 | [All docs](docs/README.md) | Every current guide and what owns it |
+| [llms.txt](https://withhide.dev/llms.txt) | The same guides as one index for an agent to read |
 
 ## Contributing
 

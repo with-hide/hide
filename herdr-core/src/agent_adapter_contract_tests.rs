@@ -111,6 +111,7 @@ fn a_newer_helpers_unknown_row_is_omitted_while_known_rows_keep_their_features()
         skill: hide_kit::PieceReport {
             state: hide_kit::ComponentState::Installed,
             reason: None,
+            why: None,
             location: None,
         },
         hook: None,

@@ -34,7 +34,7 @@ test("Basic chips expose three accessible groups in all four languages and retur
     for (const id of ["claude-code", "codex", "opencode", "pi", "omp", "antigravity"]) await expect(list.locator(`[data-agent-partial="${id}"]`)).toHaveCount(0);
     for (const [language, word, headings] of [
       ["en", "Basic", ["Herdr basics", "Session reading", "Multi-agent collaboration"]],
-      ["ko", "기본", ["Herdr로 되는 기본 기능", "세션 읽기", "여러 에이전트 협업"]],
+      ["ko", "기본", ["Herdr 기본 기능", "세션 읽기", "여러 에이전트 협업"]],
       ["zh-CN", "基础", ["Herdr 基础功能", "会话读取", "多智能体协作"]],
       ["ja", "基本", ["Herdr の基本機能", "セッションの読み取り", "複数エージェントの連携"]],
     ] as const) {

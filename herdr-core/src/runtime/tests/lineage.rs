@@ -1971,6 +1971,7 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
         id,
         state,
         reason: None,
+        why: None,
         location: None,
     };
     runtime.ingest_kit_report(
@@ -2063,7 +2064,10 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
     );
     assert_eq!(runtime.take_local_kit_job(std::time::Instant::now()), None);
 
-    runtime.set_local_kit_unavailable(hide_kit::STANDALONE_REASON);
+    runtime.set_local_kit_unavailable(
+        crate::model::KitUnavailable::Standalone,
+        hide_kit::STANDALONE_REASON,
+    );
     assert!(runtime.dispatch_json(&reinstall(crate::node::TEST_NODE)));
     let error = runtime
         .snapshot

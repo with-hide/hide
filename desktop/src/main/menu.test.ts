@@ -155,11 +155,11 @@ describe("the app menu (B9)", () => {
     const labels = (menu: MenuItemConstructorOptions[]): string[] =>
       menu.flatMap((item) => [...(item.label ? [item.label] : []), ...(Array.isArray(item.submenu) ? labels(item.submenu) : [])]);
     const template = menuTemplate({ appName: "hide", send: () => undefined, developer: true, system: "mac", t: korean });
-    expect(template.map((menu) => menu.label)).toEqual(["hide", "파일", "편집", "보기", "페인", "윈도우", "도움말"]);
+    expect(template.map((menu) => menu.label)).toEqual(["hide", "파일", "편집", "보기", "터미널", "윈도우", "도움말"]);
     const all = labels(template);
     expect(all).toEqual(expect.arrayContaining(["hide 정보", "hide 종료", "실행 취소", "전체 선택", "개발자 도구 열기/닫기", "전체 화면 전환", "모두 앞으로 가져오기"]));
     for (const english of ["Undo", "Select All", "Services", "Show All", "Bring All to Front", "Toggle Full Screen"]) expect(all).not.toContain(english);
     const pc = menuTemplate({ appName: "hide", send: () => undefined, developer: false, system: "pc", t: korean });
-    expect(pc.map((menu) => menu.label)).toEqual(["hide", "파일", "편집", "보기", "페인", "도움말"]);
+    expect(pc.map((menu) => menu.label)).toEqual(["hide", "파일", "편집", "보기", "터미널", "도움말"]);
   });
 });

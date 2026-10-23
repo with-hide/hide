@@ -474,9 +474,9 @@ A pane with no record, and a record of another session than the call's, gives ne
 
 The prompt hook adds the record's lines to the session context, at most three:
 
-- the plan's, `계획: 지금 <step> (n/m) · 다음 <step> · <N분 전 갱신>`, with the review's rule after it while the plan waits for review, or, when it was not updated for 30 minutes, the `hide plan node <key> --status done` command; a finished plan has none;
-- a mission worker's, `미션 <id> · 노드 <key> · 범위 <criteria or title> · 머지 금지 · 에이전트 띄우기 금지`, without `머지 금지` for a mission that goes through the merge;
-- a Conductor's, `미션 <done>/<nodes> · 일하는 중 <n> · 편지 <n>통 · 결정 기다림 <있음/없음>`.
+- the plan's, `Plan: now <step> (n/m) · next <step> · updated <N> min ago`, with the review's rule after it while the plan waits for review, or, when it was not updated for 30 minutes, the `hide plan node <key> --status done` command; a finished plan has none;
+- a mission worker's, `Mission <id> · node <key> · range <criteria or title> · no merging · no starting agents`, without `no merging` for a mission that goes through the merge;
+- a Conductor's, `Mission <done>/<nodes> · working <n> · letters <n> · decision waiting: <yes/no>`.
 
 The pre-tool hook reads only the record, after the project guardrails and before the spawn guard, and never asks the daemon; a tool call refused here is logged in the spawn guard's log as `plan.refused` with the rule, the runtime and the pane, never the command.
 It refuses three things and lets everything else run, reading and searching included:
@@ -942,7 +942,7 @@ Removing Hide's hooks leaves its trust records in `config.toml`; each one matche
 Codex's `--dangerously-bypass-hook-trust` and `bypass_hook_trust` skip the review for every hook and are not used.
 
 The app-server is one child per check, started through the one spawn helper, bounded by a 15 second overall and 5 second per-request deadline, by caps on what it may print, and by the kit's stop flag, and ended with its whole process tree on success, failure and timeout alike (a process that left that tree and holds its output open is not waited for: the reader thread ends when it lets go); it runs on the kit worker or the device helper, never under the runtime lock.
-When Codex is there and the trust cannot be recorded, the Codex hook part reads Failed with one line, "Codex has not trusted Hide's hook: …; it will ask you to review it", the cause class goes to the diagnostic log with the pass's record (`kit apply.completed` names each part's reason), Codex's own words go to the kit's standard error as `codex_trust_failed` (seen where the kit runs in a terminal, and in a device helper's log, but not from the packaged app's detached daemon), the other parts are installed as usual, and the next pass tries again.
+When Codex is there and the trust cannot be recorded, the Codex hook part reads Failed with one line, "Codex has not trusted Hide's hook yet. Review it in Codex." (the `codex_untrusted` cause; the kit's own sentence with the cause class stays in its report for the `hide` CLI), the cause class goes to the diagnostic log with the pass's record (`kit apply.completed` names each part's reason), Codex's own words go to the kit's standard error as `codex_trust_failed` (seen where the kit runs in a terminal, and in a device helper's log, but not from the packaged app's detached daemon), the other parts are installed as usual, and the next pass tries again.
 `status` runs every few seconds while Settings is open and starts no process, so it repeats what the last pass in this process found; a failure the operator fixed by approving the hook in Codex clears at the next pass or Reinstall, which Failed offers.
 `hide-agent-hooks/tests/it/codex_trust.rs` runs the module against a stand-in app-server (`tests/fixtures/fake-codex.py`), and `hide-kit`'s `codex_trust_cases` runs the passes.
 Codex's app-server interface is marked experimental; a method or field that changes ends as the Failed line above, and Codex shows its screen, never a wrong trust.

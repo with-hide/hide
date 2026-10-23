@@ -2226,14 +2226,14 @@ impl Runtime {
             return false;
         }
         if worktree.ignored_repositories != payload.expected_ignored_repositories {
-            self.set_error("worktree.remove_unaccepted", "Not deleted: the ignored repository list changed. Refresh and review every repository before choosing Discard.".to_owned(), true);
+            self.set_error("worktree.remove_ignored_changed", "Not deleted: the ignored repository list changed. Refresh and review every repository before choosing Discard.".to_owned(), true);
             return false;
         }
         if let Some(label) = worktree.deletion_gate.discard_label.as_ref()
             && !payload.discard_changes
         {
             self.set_error(
-                "worktree.remove_unaccepted",
+                "worktree.remove_discard_unconfirmed",
                 format!("Not deleted: deleting it would lose work. Tick \"{label}\" to delete it anyway."),
                 true,
             );
@@ -4634,6 +4634,7 @@ impl Runtime {
             return false;
         }
         let mut changes = answer.changes;
+        let detail = answer.detail;
         // A failed read of the checkout already on screen keeps the list its
         // last successful read confirmed, marked stale with the reason,
         // rather than replacing it with nothing (S5.5 B22).
@@ -4688,6 +4689,7 @@ impl Runtime {
                 "not_a_repository": changes.not_a_repository,
                 "stale": changes.stale_reason.is_some(),
                 "error": error,
+                "reason": detail,
             }));
         }
         self.snapshot.changes.set(changes);

@@ -1000,7 +1000,7 @@ fn a_node_s_github_project_lists_its_repository_s_issues_and_links_its_checkouts
         .find(|checkout| checkout.path == repo.linked)
         .unwrap();
     assert_eq!(linked.task_key.as_deref(), Some("github:acme/app#12"));
-    assert_eq!(linked.issue.as_ref().unwrap().source, "브랜치 이름");
+    assert_eq!(linked.issue.as_ref().unwrap().source, "branch_name");
     // The same links ask nothing again before the next re-read.
     let again = runtime.device_github_request(NODE, std::time::Instant::now());
     assert_eq!(again.projects[0].generation, first);
@@ -2147,7 +2147,7 @@ fn a_node_pull_request_links_its_github_issue_on_the_node_and_closes_it_by_name(
             "issue_key": "github:acme/app#12"}),
     );
     let link = pr_link(&shared);
-    assert_eq!(link.phase, "ready", "{:?}", link.message);
+    assert_eq!(link.phase, "ready", "{:?}", link.failure);
     let calls = own.gh_calls();
     assert!(
         calls
@@ -2215,7 +2215,7 @@ fn a_node_pull_request_s_new_local_issue_is_made_under_the_node() {
         (link.phase.as_str(), link.issue_id.as_deref(), link.created),
         ("ready", Some("L-5"), true),
         "{:?}",
-        link.message
+        link.failure
     );
     let runtime = shared.lock().unwrap();
     let store = runtime.local_issues.as_ref().unwrap();
@@ -2462,7 +2462,7 @@ fn a_node_checkout_links_the_issue_its_delegated_child_names() {
     runtime.refresh_device_catalog(NODE);
     assert_eq!(
         node_checkout_issue(&runtime, &repo.root),
-        Some((9, "pane 토큰".to_owned()))
+        Some((9, "pane_token".to_owned()))
     );
 }
 
@@ -2531,7 +2531,7 @@ fn a_failed_node_write_s_token_is_not_drawn_as_a_direct_link() {
     runtime.ingest_remote_session(NODE, Ok(workspaces(Some("acme/app#6"))));
     assert_eq!(
         node_checkout_issue(&runtime, &repo.linked),
-        Some((6, "직접 연결".to_owned()))
+        Some((6, "manual".to_owned()))
     );
 }
 

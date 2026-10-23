@@ -45,18 +45,19 @@ pub(crate) mod cleanup;
 mod checkout_start;
 #[path = "worktree_control.rs"]
 mod worktree_control;
+pub use worktree_control::{
+    AgentFailure, CheckoutTabRequest, HomeStartRequest, IssueWriteFailure, PendingAgentStart,
+    PurposeMirror, PurposeTaskOutcome, PurposeTaskRequest, TabTarget, TaskAgentOutcome,
+    WorktreeTarget, WorktreeTaskOutcome, WorktreeTaskRequest, spawn_branch_migration,
+    spawn_checkout_tab_create, spawn_existing_branch_worktree, spawn_home_link_sync,
+    spawn_home_start, spawn_purpose_write, spawn_remote_purpose_write, spawn_task_agent_start,
+    spawn_workspace_close, spawn_worktree_close, spawn_worktree_create, spawn_worktree_open,
+    spawn_worktree_preflight,
+};
 pub(crate) use worktree_control::{
     CONFIRM_TIMEOUT, ProcessWait, close_checkout_panes, prompt_argument,
 };
 pub(crate) use worktree_control::{CheckoutStart, spawn_targeted_checkout_start};
-pub use worktree_control::{
-    CheckoutTabRequest, HomeStartRequest, IssueWriteFailure, PendingAgentStart, PurposeMirror,
-    PurposeTaskOutcome, PurposeTaskRequest, TabTarget, TaskAgentOutcome, WorktreeTarget,
-    WorktreeTaskOutcome, WorktreeTaskRequest, spawn_branch_migration, spawn_checkout_tab_create,
-    spawn_existing_branch_worktree, spawn_home_link_sync, spawn_home_start, spawn_purpose_write,
-    spawn_remote_purpose_write, spawn_task_agent_start, spawn_workspace_close,
-    spawn_worktree_close, spawn_worktree_create, spawn_worktree_open, spawn_worktree_preflight,
-};
 pub(crate) use worktree_control::{GhPlace, spawn_issue_write};
 
 /// What live commands and session sync need from the live configuration.
@@ -81,6 +82,83 @@ pub struct WorkspaceCreationOutcome {
     pub session: SessionSnapshotPayload,
     pub created_pane_id: Option<String>,
     pub git_init_error: Option<String>,
+}
+
+/// Why a project's registration failed: the `last_error` kind the shell words
+/// the failure by, and the sentence the diagnostic log keeps (Herdr's protocol
+/// answer, a socket path, an io error), which no screen draws.
+#[derive(Debug)]
+pub struct WorkspaceCreationFailure {
+    pub kind: &'static str,
+    pub message: String,
+}
+
+impl WorkspaceCreationFailure {
+    /// A failure the operator meets as "the project could not be added".
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self {
+            kind: "workspace.create_failed",
+            message: message.into(),
+        }
+    }
+
+    /// The node refused to make or read the folder: a missing folder and a
+    /// taken name are the operator's to fix, anything else is the generic kind.
+    fn from_project_create(error: crate::node_access::LinkError) -> Self {
+        let kind = match &error {
+            crate::node_access::LinkError::Refused(refused) => match refused.code {
+                hide_node_link::ErrorCode::NotFound => "workspace.create_refused.not_found",
+                hide_node_link::ErrorCode::AlreadyExists => {
+                    "workspace.create_refused.already_exists"
+                }
+                _ => "workspace.create_failed",
+            },
+            _ => "workspace.create_failed",
+        };
+        Self {
+            kind,
+            message: error.to_string(),
+        }
+    }
+
+    /// Herdr could not be read: not running or unreachable is the connection's
+    /// state, which the shell words as Herdr not connected yet. The read
+    /// `after` the project's workspace was opened leaves whether it was added
+    /// unknown, so it is worded as unconfirmed rather than as a plain retry.
+    fn from_session_read(step: &str, error: &SessionFetchError) -> Self {
+        let kind = match error {
+            SessionFetchError::SocketMissing(_) | SessionFetchError::Unreachable(_)
+                if step == "after" =>
+            {
+                "workspace.create_unconfirmed"
+            }
+            SessionFetchError::SocketMissing(_) | SessionFetchError::Unreachable(_) => {
+                "workspace.control_unavailable"
+            }
+            _ => "workspace.create_failed",
+        };
+        Self {
+            kind,
+            message: format!(
+                "session.snapshot {step} workspace creation failed: {}",
+                error.message()
+            ),
+        }
+    }
+
+    /// Herdr's answer to opening the project's first workspace: a lost answer
+    /// leaves whether it was made unknown, which must not read as a refusal a
+    /// plain retry would repeat.
+    fn from_owner(error: &ControlFailure) -> Self {
+        Self {
+            kind: if error.is_ambiguous() {
+                "workspace.create_unconfirmed"
+            } else {
+                "workspace.create_failed"
+            },
+            message: error.message().to_owned(),
+        }
+    }
 }
 
 pub fn spawn_workspace_creation(
@@ -112,7 +190,7 @@ pub fn spawn_workspace_creation(
                 .unwrap_or_default();
             // The node makes the folder and the repository, and answers the
             // real path the project is registered by.
-            let made: Result<ProjectCreated, String> = call_as(
+            let made: Result<ProjectCreated, WorkspaceCreationFailure> = call_as(
                 context.node.as_ref(),
                 Call::ProjectCreate {
                     path: path.clone(),
@@ -121,11 +199,12 @@ pub fn spawn_workspace_creation(
                 },
                 PROJECT_CREATE_TIMEOUT,
             )
-            .map_err(|error| error.to_string());
+            .map_err(WorkspaceCreationFailure::from_project_create);
             let result = made
                 .and_then(|created| {
                     workspace::registration(&created.path, &label, node.as_str())
                         .map(|registration| (registration, created.git_error))
+                        .map_err(WorkspaceCreationFailure::failed)
                 })
                 .and_then(|(registration, git_init_error)| {
                     let mut registrations = base_registrations.clone();
@@ -140,13 +219,11 @@ pub fn spawn_workspace_creation(
                             workspace::PathIndex::wanted(&node, &registrations, &[], &worktrees);
                         wanted.extend(Runtime::session_cwds(session));
                         workspace::PathIndex::ask(context.node.as_ref(), wanted)
+                            .map_err(WorkspaceCreationFailure::failed)
                     };
                     let before = fetch_session_with_connector(context.api_connector.as_ref())
                         .map_err(|error| {
-                            format!(
-                                "session.snapshot before workspace creation failed: {}",
-                                error.message()
-                            )
+                            WorkspaceCreationFailure::from_session_read("before", &error)
                         })?;
                     let before_paths = ask(&before)?;
                     let before_spaces = Runtime::session_spaces(&before, &before_paths);
@@ -176,17 +253,12 @@ pub fn spawn_workspace_creation(
                                 true,
                                 Default::default(),
                             )
-                            .map_err(|error| error.message().to_owned())
+                            .map_err(|error| WorkspaceCreationFailure::from_owner(&error))
                         })
                         .transpose()?;
                     let session = if created.is_some() {
                         fetch_session_with_connector(context.api_connector.as_ref()).map_err(
-                            |error| {
-                                format!(
-                                    "session.snapshot after workspace creation failed: {}",
-                                    error.message()
-                                )
-                            },
+                            |error| WorkspaceCreationFailure::from_session_read("after", &error),
                         )?
                     } else {
                         before
@@ -2714,18 +2786,25 @@ fn start_agent_checked(
         request_id,
         pane_id,
         shell,
-        wire::agent_start_params(pane_id, name, kind, args, codex_daemon)
-            .map_err(crate::agent_start::StartError::NotStarted)?,
+        wire::agent_start_params(pane_id, name, kind, args, codex_daemon).map_err(|detail| {
+            crate::agent_start::StartError::NotStarted {
+                reason: "agent_start.failed".into(),
+                detail,
+            }
+        })?,
         Duration::from_secs(5),
         check,
     )?;
-    wire::started_agent(answer).map_err(crate::agent_start::StartError::NotStarted)
+    wire::started_agent(answer).map_err(|detail| crate::agent_start::StartError::NotStarted {
+        reason: "agent_start.unconfirmed".into(),
+        detail,
+    })
 }
 
 /// A start's failure as an operator reads it.
 fn start_error_message(error: crate::agent_start::StartError) -> String {
     match error {
-        crate::agent_start::StartError::NotStarted(message) => message,
+        crate::agent_start::StartError::NotStarted { detail, .. } => detail,
         crate::agent_start::StartError::ShellStarting(screen) => {
             crate::agent_start::shell_starting_message(screen.as_deref())
         }
@@ -3381,11 +3460,15 @@ pub(crate) struct CurrentSessionConnector<'a> {
     pub(crate) current: &'a (dyn Fn() -> Result<(), String> + Sync),
 }
 
+/// The message of the refusal [`CurrentSessionConnector`] answers in Herdr's
+/// place, before anything reached Herdr: its `code` is Hide's own check's.
+pub(crate) const SESSION_CHANGED: &str = "The session execution changed; refresh before retrying";
+
 impl CurrentSessionConnector<'_> {
     fn check(&self) -> Result<(), ApiError> {
         (self.current)().map_err(|code| ApiError::Remote {
             code,
-            message: "The session execution changed; refresh before retrying".into(),
+            message: SESSION_CHANGED.into(),
         })
     }
 }
@@ -4419,6 +4502,54 @@ mod tests {
 
     use super::*;
     use crate::fake_herdr::FakeHerdr;
+
+    #[test]
+    fn a_failed_registration_is_named_by_what_the_operator_can_do_about_it() {
+        let refused = |code| {
+            WorkspaceCreationFailure::from_project_create(crate::node_access::LinkError::Refused(
+                hide_node_link::HostError::new(code, "Workspace path does not exist: /x"),
+            ))
+            .kind
+        };
+        assert_eq!(
+            refused(hide_node_link::ErrorCode::NotFound),
+            "workspace.create_refused.not_found"
+        );
+        assert_eq!(
+            refused(hide_node_link::ErrorCode::AlreadyExists),
+            "workspace.create_refused.already_exists"
+        );
+        assert_eq!(
+            refused(hide_node_link::ErrorCode::Io),
+            "workspace.create_failed"
+        );
+        let missing =
+            SessionFetchError::SocketMissing("Herdr socket file does not exist at /x.sock".into());
+        let read = WorkspaceCreationFailure::from_session_read("before", &missing);
+        assert_eq!(read.kind, "workspace.control_unavailable");
+        // The sentence stays for the diagnostic log.
+        assert!(read.message.contains("/x.sock"));
+        assert_eq!(
+            WorkspaceCreationFailure::from_session_read("after", &missing).kind,
+            "workspace.create_unconfirmed"
+        );
+        let malformed = SessionFetchError::Malformed("bad".into());
+        assert_eq!(
+            WorkspaceCreationFailure::from_session_read("after", &malformed).kind,
+            "workspace.create_failed"
+        );
+        let lost = ControlFailure::Ambiguous("worktree.open result is unknown: timed out".into());
+        assert_eq!(
+            WorkspaceCreationFailure::from_owner(&lost).kind,
+            "workspace.create_unconfirmed"
+        );
+        let refused =
+            ControlFailure::Definite("worktree.open was refused: invalid_params: nope".into());
+        assert_eq!(
+            WorkspaceCreationFailure::from_owner(&refused).kind,
+            "workspace.create_failed"
+        );
+    }
 
     /// A restored agent resumes with the model and effort it was started
     /// with, and the new conversation that replaces a refused resume keeps

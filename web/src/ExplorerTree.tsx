@@ -34,6 +34,7 @@ import {
 } from "./explorer";
 import { windowDeviceId } from "./screenMachine";
 import { changesFor, explorerContext, localDeviceId } from "./snapshot";
+import { fileFailureText, listingFailure, readFailureText } from "./fileFailure";
 import { useShellStore } from "./store";
 import { useUiStore, type ExplorerDraft } from "./ui";
 import { captureDrop, carriesOsFiles } from "./explorerDrop";
@@ -526,7 +527,7 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
   const filterNote = !filtering
     ? null
     : answer?.unavailable
-      ? t("documents.filesUnavailable", { reason: answer.unavailable })
+      ? t("documents.filesUnavailable", { reason: readFailureText(answer.unavailable, t) })
       : answer?.indexing && rows.length === 0
         ? t("documents.indexing")
         : answer && rows.length === 0
@@ -535,11 +536,11 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
   // A rename, a move or a creation fails under the row it started from. A
   // copy or a drop fails for a whole folder, whose open rows the line would
   // cover, so its line stands under the root row and names the folder.
-  const operationFailure = operation?.phase === "failed" && operation.message ? operation : null;
-  const failure: { path: string; message: string; onRow: boolean } | null = notice
+  const operationFailure = operation?.phase === "failed" && operation.failure ? { ...operation, failure: operation.failure } : null;
+  const failure: { path: string; message: string; onRow: boolean; code?: string } | null = notice
     ? { ...notice, onRow: false }
-    : operationFailure && operationFailure.message
-      ? { path: operationFailure.path, message: operationFailure.message, onRow: operationFailure.kind !== "path_copy" && operationFailure.kind !== "path_import" }
+    : operationFailure
+      ? { path: operationFailure.path, message: fileFailureText(operationFailure.failure, t), code: operationFailure.failure.code, onRow: operationFailure.kind !== "path_copy" && operationFailure.kind !== "path_import" }
       : null;
 
   const anchorTop = (path: string): number | null => {
@@ -641,19 +642,19 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
         </Hint>
       </div>
       {failure && !failure.onRow ? (
-        <div className="break-words border-b border-border px-md py-xs text-caption text-destructive" data-explorer-failure={failure.path}>
+        <div className="break-words border-b border-border px-md py-xs text-caption text-destructive" data-explorer-failure={failure.path} data-core-error={failure.code}>
           {failure.message}
         </div>
       ) : null}
       {refused ? (
         <div className="border-b border-border px-md py-sm text-caption text-destructive" data-explorer-refusal={refused}>
-          {refused}
+          {t("explorer.listingFailed", { name: t("explorer.thisCheckout"), reason: readFailureText(`path.${refused}`, t) })}
         </div>
       ) : null}
       {unavailable ? (
         <div className="flex items-center gap-sm border-b border-border px-md py-sm text-caption text-warning" data-explorer-unavailable={unavailable.code}>
           <span className="min-w-0 flex-1 break-words">
-            {t("explorer.listingFailed", { name: unavailable.root_path === rootPath ? t("explorer.thisCheckout") : baseName(unavailable.root_path), reason: unavailable.message })}
+            {t("explorer.listingFailed", { name: unavailable.root_path === rootPath ? t("explorer.thisCheckout") : baseName(unavailable.root_path), reason: fileFailureText(listingFailure(unavailable), t) })}
           </span>
           {needsSettings ? (
             <Button
@@ -763,6 +764,7 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
               <div
                 className="absolute inset-x-0 flex items-center gap-xs pr-md text-caption text-destructive"
                 data-explorer-failure={failure.path}
+                data-core-error={failure.code}
                 style={{ top: failureTop + rowHeight(), height: "var(--size-pane-child-row)" }}
               >
                 <span className="truncate pl-md">{failure.message}</span>

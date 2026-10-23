@@ -153,7 +153,7 @@ export function agentProblems(agent: KitAgent): AgentProblem[] {
 export function agentHookWait(agent: KitAgent): AgentProblem | null {
   if (!agent.enabled || agent.availability !== "available") return null;
   const hook = agent.hook;
-  if (hook?.state !== "absent" || !hook.reason) return null;
+  if (hook?.state !== "absent" || !hook.why) return null;
   return { part: hookPart(agent), piece: hook };
 }
 

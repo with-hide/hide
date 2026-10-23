@@ -202,7 +202,7 @@ mod tests {
                 id: hide_kit::ComponentId::ClaudeCodeHook,
                 label: String::new(),
                 state,
-                reason: None,
+                why: None,
                 location: None,
             }],
             ..Default::default()
@@ -239,7 +239,7 @@ mod tests {
     fn opencode_grok_and_cursor_panes_are_judged_by_the_hook_piece_on_their_own_kit_row() {
         let piece = |state| crate::model::KitPieceSnapshot {
             state,
-            reason: None,
+            why: None,
             location: None,
         };
         let kit = |id: &str, hook| crate::model::KitSnapshot {

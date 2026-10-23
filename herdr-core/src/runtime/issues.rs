@@ -30,7 +30,7 @@ const SEARCH_REPOSITORY_LIMIT: usize = crate::github::SEARCH_REPOSITORY_LIMIT;
 const SEARCH_REQUEST_ID_LIMIT: usize = 128;
 
 /// What the web is told when a search fails; the real reason is in the log.
-const SEARCH_FAILED_MESSAGE: &str = "GitHub 검색에 실패했습니다.";
+const SEARCH_FAILED: &str = "github_search.failed";
 
 pub(super) struct SearchRequest {
     pub(super) request_id: String,
@@ -45,7 +45,8 @@ pub(super) struct ActiveSearch {
     /// The latest request the worker answers: a request for the same query
     /// joins it rather than starting another.
     pub(super) request: SearchRequest,
-    /// Said beside a `ready` answer, when the search did not cover everything.
+    /// `github_search.partial` beside a `ready` answer, when the search did
+    /// not cover every repository; the web words it.
     pub(super) note: Option<String>,
 }
 
@@ -463,7 +464,7 @@ impl Runtime {
                             (!request.purpose.is_empty()).then(|| request.purpose.clone());
                         checkout.issue = issue.clone().map(|issue| IssueLinkSnapshot {
                             issue,
-                            source: "직접 연결".into(),
+                            source: "manual".into(),
                         });
                     }
                 }
@@ -631,16 +632,18 @@ pub(super) struct IssueWritePending {
 }
 
 /// A Local issue as its panel reads it: the body and when it was made, from
-/// the store the runtime already holds, so the read needs no worker.
+/// the store the runtime already holds, so the read needs no worker. A
+/// failure is a `local_issue.<code>` the panel words; why the store could not
+/// be read was logged when it was loaded.
 fn local_issue_detail(
     store: &Result<crate::local_issues::LocalIssueStore, String>,
     node: Option<&str>,
     key: &str,
 ) -> Result<crate::tasks::TaskDetail, String> {
     let (path, number) =
-        crate::tasks::parse_local_key(key).ok_or_else(|| format!("{key} is not a local issue"))?;
+        crate::tasks::parse_local_key(key).ok_or_else(|| "local_issue.not_local".to_owned())?;
     match store {
-        Err(reason) => Err(reason.clone()),
+        Err(_) => Err("local_issue.store_unreadable".to_owned()),
         Ok(store) => store
             .issue(node, path, number)
             .map(|issue| crate::tasks::TaskDetail {
@@ -648,12 +651,7 @@ fn local_issue_detail(
                 created_at_unix_ms: Some(issue.created_at_unix_ms),
                 ..Default::default()
             })
-            .ok_or_else(|| {
-                format!(
-                    "로컬 이슈 {}가 없습니다.",
-                    crate::local_issues::display_id(number)
-                )
-            }),
+            .ok_or_else(|| "local_issue.missing".to_owned()),
     }
 }
 
@@ -862,14 +860,17 @@ impl Runtime {
         project_path: &str,
         title: &str,
         body: &str,
-    ) -> Result<u32, String> {
+    ) -> Result<u32, (crate::model::CodedFailure, String)> {
         let number = match self.local_issues.as_mut() {
             Err(reason) => {
-                return Err(format!(
-                    "로컬 이슈 파일을 읽지 못해 새 이슈를 만들 수 없습니다: {reason}"
+                return Err((
+                    crate::model::CodedFailure::new("local_issue.store_unreadable"),
+                    format!("the local issue file could not be read: {reason}"),
                 ));
             }
-            Ok(store) => store.create(node, project_path, title, body, unix_milliseconds())?,
+            Ok(store) => store
+                .create(node, project_path, title, body, unix_milliseconds())
+                .map_err(|error| (error.into(), error.to_string()))?,
         };
         self.persist_local_issues();
         self.refresh_issue_rows(node);
@@ -1237,13 +1238,11 @@ impl Runtime {
                 repository,
             });
         }
-        let total = targets.len();
-        if total <= SEARCH_REPOSITORY_LIMIT {
+        if targets.len() <= SEARCH_REPOSITORY_LIMIT {
             return (targets, None);
         }
         targets.truncate(SEARCH_REPOSITORY_LIMIT);
-        let note = format!("저장소 {total}개 중 {SEARCH_REPOSITORY_LIMIT}개만 검색했습니다.");
-        (targets, Some(note))
+        (targets, Some("github_search.partial".to_owned()))
     }
 
     /// `github_search`: pull requests and issues of this Mac's GitHub
@@ -1270,9 +1269,9 @@ impl Runtime {
             "request_id": request_id, "query_chars": query_chars,
         }));
         let refused = if query.is_empty() {
-            Some("검색어를 입력하세요.")
+            Some("github_search.query_empty")
         } else if query_chars > crate::github::SEARCH_QUERY_LIMIT {
-            Some("검색어는 200자까지 입력할 수 있습니다.")
+            Some("github_search.query_too_long")
         } else {
             None
         };
@@ -1424,7 +1423,7 @@ impl Runtime {
                 Err(_) => crate::model::GithubSearchSnapshot::failed(
                     finished.request.request_id,
                     finished.request.query,
-                    SEARCH_FAILED_MESSAGE,
+                    SEARCH_FAILED,
                 ),
             };
             *slot = answered;
@@ -1577,26 +1576,36 @@ impl Runtime {
         let now = unix_milliseconds();
         let key = crate::tasks::parse_local_key(&payload.task_key);
         let node = key.map(|(path, _)| self.local_issue_project(&payload.workspace_id, path));
+        use crate::model::CodedFailure;
         let updated = match (key, node.clone(), self.local_issues.as_mut()) {
-            (None, _, _) | (_, None, _) => Err("Only a local issue is edited in Hide".to_owned()),
-            (_, Some(Err(message)), _) => Err(message),
-            (Some(_), _, Err(reason)) => Err(format!(
-                "로컬 이슈 파일을 읽지 못해 고칠 수 없습니다: {reason}"
+            (None, _, _) | (_, None, _) => Err((
+                CodedFailure::new("local_issue.not_local"),
+                "only a local issue is edited in Hide".to_owned(),
             )),
-            (Some((path, number)), Some(Ok(node)), Ok(store)) => store.update(
-                node.as_deref(),
-                path,
-                number,
-                &payload.title,
-                &payload.body,
-                now,
-            ),
+            (_, Some(Err(message)), _) => {
+                Err((CodedFailure::new("local_issue.project_unknown"), message))
+            }
+            (Some(_), _, Err(reason)) => Err((
+                CodedFailure::new("local_issue.store_unreadable"),
+                format!("the local issue file could not be read: {reason}"),
+            )),
+            (Some((path, number)), Some(Ok(node)), Ok(store)) => store
+                .update(
+                    node.as_deref(),
+                    path,
+                    number,
+                    &payload.title,
+                    &payload.body,
+                    now,
+                )
+                .map_err(|error| (error.into(), error.to_string())),
         };
         crate::diagnostic!(serde_json::json!({
             "component": "issues", "kind": "local_issue.update",
             "request": payload.request_id, "task": payload.task_key, "ok": updated.is_ok(),
+            "reason": updated.as_ref().err().map(|(_, detail)| detail),
         }));
-        if updated == Ok(true) {
+        if matches!(updated, Ok(true)) {
             self.persist_local_issues();
             let node = node.and_then(Result::ok).flatten();
             self.refresh_issue_rows(node.as_deref());
@@ -1605,7 +1614,7 @@ impl Runtime {
             request_id: payload.request_id,
             task_key: payload.task_key,
             phase: if updated.is_ok() { "ready" } else { "failed" }.into(),
-            message: updated.err(),
+            failure: updated.err().map(|(failure, _)| failure),
         });
         true
     }
@@ -2010,13 +2019,13 @@ fn chain_link(
     }
     if local {
         let explicit = manual
-            .map(|value| (value, "직접 연결"))
-            .or_else(|| pane.map(|value| (value, "pane 토큰")))
+            .map(|value| (value, "manual"))
+            .or_else(|| pane.map(|value| (value, "pane_token")))
             .or_else(|| {
                 checkout
                     .branch_issue
                     .as_ref()
-                    .map(|value| (value, "브랜치 설정"))
+                    .map(|value| (value, "branch_setting"))
             });
         if let Some((value, source)) = explicit
             && let Ok(reference) = IssueReference::parse(value, None)
@@ -2041,19 +2050,19 @@ fn chain_link(
             .map(ChainLink::Local);
     }
     let (value, source) = manual
-        .map(|value| (value.clone(), "직접 연결".to_owned()))
-        .or_else(|| pane.map(|value| (value.clone(), "pane 토큰".into())))
+        .map(|value| (value.clone(), "manual".to_owned()))
+        .or_else(|| pane.map(|value| (value.clone(), "pane_token".into())))
         .or_else(|| {
             checkout
                 .branch_issue
                 .as_ref()
-                .map(|value| (value.clone(), "브랜치 설정".into()))
+                .map(|value| (value.clone(), "branch_setting".into()))
         })
         .or_else(|| {
             checkout.pull_request.as_ref().and_then(|pr| {
                 pr.closing_issues
                     .first()
-                    .map(|issue| (issue.token(), format!("PR #{} 본문", pr.number)))
+                    .map(|issue| (issue.token(), "pr_body".into()))
             })
         })
         .or_else(|| {
@@ -2061,7 +2070,7 @@ fn chain_link(
                 .branch
                 .as_deref()
                 .and_then(crate::issues::branch_number)
-                .map(|number| (format!("#{number}"), "브랜치 이름".into()))
+                .map(|number| (format!("#{number}"), "branch_name".into()))
         })?;
     match IssueReference::parse(&value, repository) {
         Ok(reference) => Some(ChainLink::Github(IssueCandidate { reference, source })),

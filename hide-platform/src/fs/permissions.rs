@@ -40,6 +40,15 @@ impl Permissions {
     }
 }
 
+/// Whether this account may add or replace an entry in the folder `dir`,
+/// which decides whether a command that puts a file there needs `sudo`.
+/// Unix asks the kernel (`access` for write and search); Windows has no such
+/// question short of reading the access list, so it adds and removes an empty
+/// file of its own there.
+pub fn account_can_add_to(dir: &Path) -> io::Result<bool> {
+    sys::account_can_add_to(dir)
+}
+
 /// Whether the file at `path` is one the system will run. Unix asks for an
 /// execute bit; Windows has no such bit and runs a file by its extension, so
 /// it asks for one of the extensions the shell launches.
@@ -78,6 +87,24 @@ mod sys {
 
     pub(super) fn is_executable(path: &Path) -> io::Result<bool> {
         Ok(fs::metadata(path)?.permissions().mode() & 0o111 != 0)
+    }
+
+    pub(super) fn account_can_add_to(dir: &Path) -> io::Result<bool> {
+        use std::os::unix::ffi::OsStrExt;
+        if !fs::metadata(dir)?.is_dir() {
+            return Err(io::Error::new(io::ErrorKind::NotADirectory, "not a folder"));
+        }
+        let name = std::ffi::CString::new(dir.as_os_str().as_bytes())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        // SAFETY: `name` is a NUL-terminated path that outlives the call.
+        if unsafe { libc::access(name.as_ptr(), libc::W_OK | libc::X_OK) } == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EACCES | libc::EROFS | libc::EPERM) => Ok(false),
+            _ => Err(error),
+        }
     }
 }
 
@@ -132,6 +159,26 @@ mod sys {
 
     /// The extensions `CreateProcess` and the shell run directly.
     const RUNNABLE: [&str; 6] = ["exe", "com", "bat", "cmd", "ps1", "msc"];
+
+    pub(super) fn account_can_add_to(dir: &Path) -> io::Result<bool> {
+        if !fs::metadata(dir)?.is_dir() {
+            return Err(io::Error::new(io::ErrorKind::NotADirectory, "not a folder"));
+        }
+        let probe = dir.join(format!(".hide-write-check-{}", std::process::id()));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+        {
+            Ok(file) => {
+                drop(file);
+                fs::remove_file(&probe)?;
+                Ok(true)
+            }
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
 
     pub(super) fn is_executable(path: &Path) -> io::Result<bool> {
         fs::metadata(path)?;

@@ -24,7 +24,7 @@ describe("binding problems", () => {
     const ko = (await createInterfaceI18n("ko")).t;
     const ja = (await createInterfaceI18n("ja")).t;
     const problem = { code: "conflict", chord: "⌘3", commandId: "select_device_3" } as const;
-    expect(bindingProblemText(problem, ko)).toBe("⌘3는 이미 3번 기기 선택에 사용 중입니다.");
+    expect(bindingProblemText(problem, ko)).toBe("이미 3번 기기 선택에 쓰고 있는 단축키예요: ⌘3");
     expect(bindingProblemText(problem, ja)).toBe("⌘3はすでに「デバイス3を選択」に割り当てられています。");
   });
 
