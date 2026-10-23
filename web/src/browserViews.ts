@@ -25,14 +25,18 @@ import { areasOf, workspaceKey, type ViewWorkspace } from "./viewLayout";
 
 // --- pure rules ---------------------------------------------------------------
 
-/** A browser display as the host needs it. */
-export type BrowserDisplayRow = { id: string; area_id: string; url: string; load: number };
+/** A browser display as the host needs it; an outside HTML file names its grant and no address (PRD outside-path-in-hide). */
+export type BrowserDisplayRow = { id: string; area_id: string; url: string; load: number; grant?: string };
 
-/** Every browser display of a layout, in tree order. */
+/** Every browser display of a layout, and every outside HTML file, which is a page too, in tree order. */
 export function browserDisplays(layout: ViewLayoutSnapshot | null | undefined): BrowserDisplayRow[] {
   if (!layout) return [];
   return areasOf(layout.root).flatMap((area) =>
-    area.displays.flatMap((display) => (display.kind === "browser" && display.url ? [{ id: display.id, area_id: area.id, url: display.url, load: display.load ?? 0 }] : [])),
+    area.displays.flatMap((display) => {
+      if (display.kind === "browser" && display.url) return [{ id: display.id, area_id: area.id, url: display.url, load: display.load ?? 0 }];
+      if (display.kind === "external" && display.external?.kind === "html") return [{ id: display.id, area_id: area.id, url: "", load: display.load ?? 0, grant: display.external.grant }];
+      return [];
+    }),
   );
 }
 
@@ -184,6 +188,8 @@ class BrowserSyncLoop {
   private front: Front | null = null;
   private retained: BrowserSync["retained"] = [];
   private authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]> = [];
+  /** The outside-file grants tabs stand on; null until the shell has the core's tabs. */
+  private externalGrants: string[] | null = null;
   private retainedKeys = new Set<string>();
   /** Each display's slot, the element its page is laid over, with the device size the slot draws it at. */
   private readonly slots = new Map<string, { element: HTMLElement; device: BrowserDevicePlacement | null }>();
@@ -291,7 +297,8 @@ class BrowserSyncLoop {
     return this.visible;
   }
 
-  setFront(front: Front | null, retained: BrowserSync["retained"], authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]>): void {
+  setFront(front: Front | null, retained: BrowserSync["retained"], authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]>, externalGrants: string[] | null = null): void {
+    this.externalGrants = externalGrants;
     const frontIds = new Set(front?.rows.map((row) => row.id));
     this.retainedKeys = new Set(retained
       .filter((row) => row.workspace !== front?.workspace || frontIds.has(row.id))
@@ -404,6 +411,7 @@ class BrowserSyncLoop {
       authorized_scopes: this.authorizedScopes,
       ...(this.attachmentEpoch === undefined ? {} : { attachment_epoch: this.attachmentEpoch }),
       ...nodeField(windowDeviceId(useShellStore.getState().rest?.navigator?.devices)),
+      ...(this.externalGrants === null ? {} : { external_grants: this.externalGrants }),
     };
     this.visible = sync.displays.flatMap((row) => (row.visible && row.rect ? [row.rect] : []));
     const text = JSON.stringify(sync);
@@ -537,10 +545,11 @@ function syncLoop(): BrowserSyncLoop | null {
 }
 
 /** The core's browser displays and positive area authority, whenever the snapshot changes them. */
-export function syncBrowserFront(workspace: ViewWorkspace | null, layout: ViewLayoutSnapshot | null | undefined, inventory: { device_id: string; path: string; view_id: string; area_id: string }[], scopes: NonNullable<SnapshotRest["browser_scopes"]> = []): void {
+export function syncBrowserFront(workspace: ViewWorkspace | null, layout: ViewLayoutSnapshot | null | undefined, inventory: { device_id: string; path: string; view_id: string; area_id: string }[], scopes: NonNullable<SnapshotRest["browser_scopes"]> = [], externalGrants: string[] | null = null): void {
   syncLoop()?.setFront(workspace ? { workspace: workspaceKey(workspace), rows: browserDisplays(layout) } : null,
     inventory.map((row) => ({ workspace: workspaceKey(row), id: row.view_id, area_id: row.area_id })),
-    scopes.map((row) => ({ workspace: workspaceKey(row), area_id: row.area_id, incarnation: row.incarnation })));
+    scopes.map((row) => ({ workspace: workspaceKey(row), area_id: row.area_id, incarnation: row.incarnation })),
+    externalGrants);
 }
 
 /** One controller mount and connection observer; its owner releases both on unmount. */
