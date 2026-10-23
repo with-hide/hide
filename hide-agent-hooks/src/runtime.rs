@@ -35,7 +35,7 @@ pub const HOOK_ENTRY_VERSION: u32 = 10;
 /// Both runtimes accept the same `hookSpecificOutput.additionalContext`
 /// envelope, while the runtime argument remains explicit in the installed
 /// command so a future protocol difference has one dispatch point.
-pub const PURPOSE_CONTEXT: &str = "Herdr provides direct terminal input and control. `herdr agent prompt` submits input directly; Hide may show a passive observation, but this creates no Hide letter, watch, or parent relationship. Use Hide letters for stored delivery, replies and retry management. When you create a worktree, set its one-line purpose in 40 characters or fewer by running `herdr workspace report-metadata <workspace> --source <you> --token purpose=\"…\"`. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`.";
+pub const PURPOSE_CONTEXT: &str = "Herdr provides direct terminal input and control. Call it as `\"${HERDR_BIN_PATH:-herdr}\"` (PowerShell: `& $env:HERDR_BIN_PATH`), the Herdr that serves this pane, because a `herdr` found on PATH may be an older one its server refuses. `\"${HERDR_BIN_PATH:-herdr}\" agent prompt` submits input directly; Hide may show a passive observation, but this creates no Hide letter, watch, or parent relationship. Use Hide letters for stored delivery, replies and retry management. When you create a worktree, set its one-line purpose in 40 characters or fewer by running `\"${HERDR_BIN_PATH:-herdr}\" workspace report-metadata <workspace> --source <you> --token purpose=\"…\"`. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`.";
 
 pub fn hook_stdout(runtime: AgentRuntime, event: HookEvent) -> Option<String> {
     hook_stdout_with_context(runtime, event, None)
@@ -493,8 +493,9 @@ mod tests {
             );
             assert!(PURPOSE_CONTEXT.contains("40 characters or fewer"));
             assert!(PURPOSE_CONTEXT.contains(
-                "herdr workspace report-metadata <workspace> --source <you> --token purpose=\"…\""
+                "`\"${HERDR_BIN_PATH:-herdr}\" workspace report-metadata <workspace> --source <you> --token purpose=\"…\"`"
             ));
+            assert!(!PURPOSE_CONTEXT.contains("`herdr "));
             assert!(PURPOSE_CONTEXT.contains("`hide agent spawn --parent here"));
             assert!(PURPOSE_CONTEXT.contains("`hide agent spawn …` without --parent"));
             assert!(PURPOSE_CONTEXT.contains("operator-owned root with no automatic watch"));

@@ -36,7 +36,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use herdr_core::herdr_takeover::{FailureCause, HerdrTakeover, Look, Moved, Offer, OfferKind};
+use herdr_core::herdr_takeover::{
+    FailureCause, HerdrTakeover, Look, Moved, Offer, OfferKind, PathHerdr, Versions,
+};
 use hide_kit::device_herdr::{BehindCause, HerdrUpdate};
 use hide_platform::fs::identity::file_id;
 use hide_platform::ipc::LocalStream;
@@ -348,30 +350,75 @@ impl LocalTakeover {
         )))
     }
 
-    /// The operator's own `herdr`, the one their terminal finds, when it
-    /// speaks an older protocol than the server it would talk to now: it
-    /// says so itself (`herdr status client --json`, which every release
-    /// from 0.7.5 answers with its `protocol`).
-    fn path_herdr_behind(&self) -> Option<String> {
+    /// The operator's own `herdr`, the one their terminal finds, as it names
+    /// itself: `herdr status client --json` from 0.6.2 carries its protocol,
+    /// and an older release answers only `--version`, which leaves the
+    /// protocol unknown and so behind this build's.
+    fn path_herdr(&self) -> Option<PathHerdr> {
         let herdr = match &self.operator_herdr {
             Some(herdr) => herdr.clone(),
             None => hide_platform::programs::find_cli("herdr")?,
         };
-        let mut command = hide_platform::programs::command(&herdr);
-        command.args(["status", "client", "--json"]);
-        let finished = hide_platform::process::run_to_end(
-            &mut command,
-            ASK_WITHIN,
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .ok()
-        .filter(|finished| finished.succeeded())?;
-        let answer: serde_json::Value = serde_json::from_str(finished.stdout.trim()).ok()?;
-        let protocol = answer["protocol"].as_u64()?;
-        (protocol < hide_herdr_client::HERDR_PROTOCOL_REVISION)
-            .then(|| answer["version"].as_str().map(str::to_owned))
-            .flatten()
+        let (version, protocol) = match status_client(&herdr) {
+            Ok(answer) => (
+                answer["version"].as_str()?.to_owned(),
+                answer["protocol"].as_u64(),
+            ),
+            Err(_) => (named_version(&herdr)?, None),
+        };
+        Some(PathHerdr {
+            update: update_command(&self.ours, &herdr),
+            version,
+            protocol,
+        })
     }
+}
+
+/// The command that brings the operator's `herdr` to this app's: Homebrew's
+/// own upgrade where Homebrew installed it, which refuses any other update,
+/// and otherwise a copy of this app's Herdr over the file the link points
+/// at. The copy writes a new file, so a server running the old one goes on;
+/// Hide never runs it, the operator does (letter-13293).
+fn update_command(ours: &Path, herdr: &Path) -> String {
+    let file = std::fs::canonicalize(herdr).unwrap_or_else(|_| herdr.to_owned());
+    if homebrew_keg(&file) {
+        return "brew upgrade herdr".to_owned();
+    }
+    let needs_admin = file.parent().is_some_and(|dir| {
+        !hide_platform::fs::permissions::account_can_add_to(dir).unwrap_or(true)
+    });
+    copy_command(ours, &file, needs_admin)
+}
+
+/// A file Homebrew put in its cellar (`<prefix>/Cellar/herdr/<version>/bin`).
+fn homebrew_keg(file: &Path) -> bool {
+    let names: Vec<_> = file.components().map(|part| part.as_os_str()).collect();
+    names
+        .windows(2)
+        .any(|pair| pair[0] == "Cellar" && pair[1] == "herdr")
+}
+
+#[cfg(unix)]
+fn copy_command(ours: &Path, file: &Path, needs_admin: bool) -> String {
+    let quote = |path: &Path| format!("'{}'", path.display().to_string().replace('\'', r"'\''"));
+    format!(
+        "{}install -m 755 {} {}",
+        if needs_admin { "sudo " } else { "" },
+        quote(ours),
+        quote(file)
+    )
+}
+
+/// PowerShell has no `sudo`; a folder this account cannot write asks for an
+/// administrator PowerShell, which `docs/INSTALL.md` names as a gap.
+#[cfg(windows)]
+fn copy_command(ours: &Path, file: &Path, _needs_admin: bool) -> String {
+    let quote = |path: &Path| format!("'{}'", path.display().to_string().replace('\'', "''"));
+    format!(
+        "Copy-Item -Force -LiteralPath {} -Destination {}",
+        quote(ours),
+        quote(file)
+    )
 }
 
 /// The takeover of a daemon that cannot move a server, one not run from a
@@ -384,6 +431,10 @@ impl HerdrTakeover for NoTakeover {
         Look::Nothing
     }
 
+    fn versions(&self) -> Versions {
+        Versions::default()
+    }
+
     fn hand_over(&self) -> Moved {
         Moved::Failed {
             cause: FailureCause::Unreadable,
@@ -394,6 +445,13 @@ impl HerdrTakeover for NoTakeover {
 }
 
 impl HerdrTakeover for LocalTakeover {
+    fn versions(&self) -> Versions {
+        Versions {
+            hide: self.version().ok(),
+            path_herdr: self.path_herdr(),
+        }
+    }
+
     fn look(&self) -> Look {
         match self.judge() {
             Ok(None) => Look::Nothing,
@@ -428,7 +486,14 @@ impl HerdrTakeover for LocalTakeover {
                 from_pid: pid,
                 to_pid,
                 elapsed_ms,
-                path_herdr_behind: self.path_herdr_behind(),
+                path_herdr_behind: self
+                    .path_herdr()
+                    .filter(|herdr| {
+                        herdr.protocol.is_none_or(|protocol| {
+                            protocol < hide_herdr_client::HERDR_PROTOCOL_REVISION
+                        })
+                    })
+                    .map(|herdr| herdr.version),
             },
             Err((stage, detail)) => {
                 let cause = match stage {
@@ -803,7 +868,15 @@ fn ask(
 
 /// The version this app's Herdr names for itself.
 fn version_of(herdr: &Path) -> Result<String, String> {
-    let mut command = std::process::Command::new(herdr);
+    status_client(herdr)?["version"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "herdr status client named no version".to_owned())
+}
+
+/// What a Herdr program says of itself (`herdr status client --json`).
+fn status_client(herdr: &Path) -> Result<serde_json::Value, String> {
+    let mut command = hide_platform::programs::command(herdr);
     command.args(["status", "client", "--json"]);
     let finished = hide_platform::process::run_to_end(
         &mut command,
@@ -818,12 +891,26 @@ fn version_of(herdr: &Path) -> Result<String, String> {
             finished.stderr.trim()
         ));
     }
-    let answer: serde_json::Value = serde_json::from_str(finished.stdout.trim())
-        .map_err(|error| format!("herdr status client answered no JSON: {error}"))?;
-    answer["version"]
-        .as_str()
+    serde_json::from_str(finished.stdout.trim())
+        .map_err(|error| format!("herdr status client answered no JSON: {error}"))
+}
+
+/// The release a Herdr too old for `status client` names (`herdr 0.5.12`).
+fn named_version(herdr: &Path) -> Option<String> {
+    let mut command = hide_platform::programs::command(herdr);
+    command.arg("--version");
+    let finished = hide_platform::process::run_to_end(
+        &mut command,
+        ASK_WITHIN,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .ok()
+    .filter(|finished| finished.succeeded())?;
+    finished
+        .stdout
+        .trim()
+        .strip_prefix("herdr ")
         .map(str::to_owned)
-        .ok_or_else(|| "herdr status client named no version".to_owned())
 }
 
 /// Whether this app's Herdr may take the server's panes: the same release,
@@ -1009,5 +1096,46 @@ mod tests {
         let record = dir.path().join("handoff.json");
         std::fs::write(&record, b"not json").unwrap();
         assert!(Attempts::read(&record).is_err());
+    }
+
+    #[test]
+    fn a_homebrew_herdr_is_upgraded_by_homebrew() {
+        let dir = tempfile::tempdir().unwrap();
+        let keg = dir.path().join("Cellar/herdr/0.7.5/bin");
+        std::fs::create_dir_all(&keg).unwrap();
+        std::fs::write(keg.join("herdr"), b"").unwrap();
+        assert_eq!(
+            update_command(
+                Path::new("/Applications/hide.app/herdr"),
+                &keg.join("herdr")
+            ),
+            "brew upgrade herdr"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_herdr_of_ones_own_is_replaced_by_a_copy_and_a_locked_folder_asks_for_sudo() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let own = dir.path().join("it's bin");
+        std::fs::create_dir(&own).unwrap();
+        std::fs::write(own.join("herdr"), b"").unwrap();
+        let file = std::fs::canonicalize(own.join("herdr")).unwrap();
+        let ours = Path::new("/Applications/hide.app/Contents/Resources/herdr");
+        assert_eq!(
+            update_command(ours, &own.join("herdr")),
+            format!(
+                "install -m 755 '{}' '{}'",
+                ours.display(),
+                file.display().to_string().replace('\'', r"'\''")
+            )
+        );
+        std::fs::set_permissions(&own, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let locked = update_command(ours, &own.join("herdr"));
+        std::fs::set_permissions(&own, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if unsafe { libc::geteuid() } != 0 {
+            assert!(locked.starts_with("sudo install -m 755 "), "{locked}");
+        }
     }
 }

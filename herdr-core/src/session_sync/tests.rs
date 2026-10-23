@@ -101,6 +101,43 @@ fn remote_session_sync_accepts_responses_after_the_local_read_deadline() {
     connected.subscription.stop();
 }
 
+/// A server older than 0.9 refuses the subscription before any snapshot
+/// could name its protocol; the ping it answers names it, so every older
+/// release reads as a protocol mismatch and not as a server that is not
+/// responding. A refusal from a server on this build's protocol stays the
+/// refusal.
+#[test]
+fn a_refused_subscription_reads_the_protocol_the_server_pings_with() {
+    for (protocol, state) in [
+        (17, "protocol_mismatch"),
+        (HERDR_PROTOCOL_REVISION, "unreachable"),
+    ] {
+        let herdr = crate::fake_herdr::FakeHerdr::start_with_errors(
+            "refused-subscription",
+            move |method, _| match method {
+                "events.subscribe" => Err((
+                    "invalid_request".into(),
+                    "unknown variant `pane.layout_changed`".into(),
+                )),
+                "ping" => Ok(json!({"type": "pong", "version": "0.7.5", "protocol": protocol})),
+                other => panic!("unexpected request {other}"),
+            },
+        );
+        let context = SessionSyncContext::remote(
+            "fixture-device",
+            "Fixture device",
+            Arc::new(herdr.connector()),
+            Weak::new(),
+            ChangeNotifier::noop(),
+        );
+        let (sender, _messages) = channel();
+        let Err(error) = subscription::connect(&context, &sender, &mut 0, false) else {
+            panic!("a refused subscription does not connect");
+        };
+        assert_eq!(error.state(), state, "{}", error.message());
+    }
+}
+
 #[test]
 fn unconfirmed_telemetry_preserves_identity_but_never_claims_activity_or_demand() {
     let mut value = snapshot();

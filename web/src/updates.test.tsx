@@ -22,7 +22,7 @@ function Screen() {
   return (
     <TooltipProvider>
       <HelpMenu actions={actions} />
-      <AboutTab />
+      <AboutTab actions={actions} />
     </TooltipProvider>
   );
 }

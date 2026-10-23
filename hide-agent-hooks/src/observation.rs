@@ -204,13 +204,9 @@ fn read_line(
         let written = |word: &str| literal(word).filter(|_| !conditional);
         let launch = spawn_guard::launch_of(words, env, away);
         let (words, foreign) = spawn_guard::command_words(words, env, true);
-        let herdr = words.split_first().filter(|(program, _)| {
-            let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
-            matches!(
-                name,
-                "herdr" | "herdr.exe" | "$HERDR_BIN_PATH" | "${HERDR_BIN_PATH}"
-            )
-        });
+        let herdr = words
+            .split_first()
+            .filter(|(program, _)| spawn_guard::is_herdr(program));
         let Some((_, rest)) = herdr else {
             away |= spawn_guard::aims_away(words, env);
             continue;
@@ -828,6 +824,11 @@ mod tests {
             ),
             ("cd /tmp && FOO=1 herdr agent prompt worker body", answer()),
             ("$HERDR_BIN_PATH agent prompt worker body", answer()),
+            (
+                "\"${HERDR_BIN_PATH:-herdr}\" agent prompt worker body | jq .",
+                answer(),
+            ),
+            ("/opt/herdr/bin/herdr agent prompt worker body", answer()),
         ] {
             let result = json!({"stdout":format!("{}\ndone\n", output)});
             let fact = one(observe(call(command, &result), 1, &|_| None).unwrap());

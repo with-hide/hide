@@ -5935,6 +5935,7 @@ pub struct StatusSnapshot {
     pub tab_rename: Option<TabRenameSnapshot>,
     pub herdr: ProviderStatusSnapshot,
     pub herdr_takeover: Option<HerdrTakeoverSnapshot>,
+    pub herdr_versions: Option<HerdrVersionsSnapshot>,
     pub remote: Vec<RemoteStatusSnapshot>,
     pub environment: Vec<EnvironmentStatusSnapshot>,
     pub agent_hooks: AgentHooksSnapshot,
@@ -6293,19 +6294,42 @@ pub struct ProviderStatusSnapshot {
     pub received_version: Option<String>,
 }
 
+/// What Settings > About names for this machine's Herdr programs: the
+/// release this app ships and the operator's own `herdr`. Absent where the
+/// daemon has no Herdr of its package's own (a development build).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HerdrVersionsSnapshot {
+    pub hide: String,
+    pub path_herdr: Option<PathHerdrSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PathHerdrSnapshot {
+    pub version: String,
+    /// Its protocol is not the one this build speaks, so a server Hide reads
+    /// refuses its commands.
+    pub behind: bool,
+    /// The command that brings it to this app's Herdr without touching a
+    /// running server.
+    pub update_command: String,
+}
+
 /// What Hide offers for the operator's own older Herdr server on this
 /// machine's socket, and how far the offer went (PRD herdr-takeover). Absent
 /// while there is nothing to offer.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HerdrTakeoverSnapshot {
-    /// `move`, `restart` (Herdr cannot hand over here: Windows) or
-    /// `update_hide` (a newer protocol than this build speaks).
+    /// `move`, `restart` (Herdr cannot hand over here: Windows),
+    /// `update_hide` (a newer protocol than this build speaks) or `look` (a
+    /// server Hide cannot use could not be read, so the offer is to look
+    /// again).
     pub kind: String,
     /// `offered`, `moving`, `failed`, or `moved` until the operator has read
     /// what the move left them to do.
     pub stage: String,
+    /// Empty for `look`, which read no server.
     pub server_version: String,
-    /// The release this app ships.
+    /// The release this app ships; empty for `look` when it was not read.
     pub version: String,
     /// The server speaks the protocol this build reads, so Hide works with
     /// it as it is and the operator may leave it for later (D-16).
@@ -6581,6 +6605,7 @@ impl Snapshot {
                     received_version: None,
                 },
                 herdr_takeover: None,
+                herdr_versions: None,
                 remote: Vec::new(),
                 environment: Vec::new(),
                 agent_hooks: AgentHooksSnapshot::default(),

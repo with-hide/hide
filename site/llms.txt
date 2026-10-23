@@ -1,0 +1,23 @@
+# hide
+
+> hide is the multi-agent IDE for people: Claude Code, Codex, Antigravity, OpenCode, Grok, Pi and omp run in real Herdr panes, start, watch and write to each other, and only what needs a person reaches the operator. Free and Apache 2.0 licensed, on macOS, Windows and Linux.
+
+An agent inside hide runs `hide guide` for how to work there and `hide --help` for every command.
+Each link below is the current Markdown source on the main branch.
+
+## Use hide
+
+- [README](https://raw.githubusercontent.com/with-hide/hide/main/README.md): what hide does, install, and the commands agents use
+- [Install](https://raw.githubusercontent.com/with-hide/hide/main/docs/INSTALL.md): releases, devices, moving the core, updates, uninstalling and what each system supports
+- [UI behavior](https://raw.githubusercontent.com/with-hide/hide/main/docs/UI_BEHAVIOR.md): what every screen does
+- [Status model](https://raw.githubusercontent.com/with-hide/hide/main/docs/status-model.md): how an agent's group and read state are decided
+- [Delivery](https://raw.githubusercontent.com/with-hide/hide/main/docs/delivery.md): letters, watches, spawning and lineage between agents
+- [Agent hooks](https://raw.githubusercontent.com/with-hide/hide/main/docs/agent-hooks.md): what hide writes into each agent CLI, and where
+- [Browser displays](https://raw.githubusercontent.com/with-hide/hide/main/docs/BROWSER_DISPLAYS.md): `hide browser` and the pages drawn beside the work
+- [AI providers](https://raw.githubusercontent.com/with-hide/hide/main/docs/AI_PROVIDERS.md): Hide AI on the operator's own agent CLIs
+
+## Build hide
+
+- [Architecture](https://raw.githubusercontent.com/with-hide/hide/main/docs/ARCHITECTURE.md): the core, the daemon, the desktop host and the Herdr boundary
+- [Build](https://raw.githubusercontent.com/with-hide/hide/main/docs/BUILD.md): source builds and release packaging
+- [All docs](https://raw.githubusercontent.com/with-hide/hide/main/docs/README.md): every current guide and what owns it
