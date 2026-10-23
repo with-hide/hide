@@ -86,7 +86,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   }, [chapter, model, operator]);
 
   useLayoutEffect(() => {
-    useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneShown: chapter.world.lane, laneExpanded: false, stackFront: "view" });
+    useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneExpanded: false, stackFront: "view" });
   }, [chapter]);
 
   // A pane keeps no scrollback, so a terminal a layout change re-created or
