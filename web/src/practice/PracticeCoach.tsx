@@ -389,7 +389,14 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
       // A step that types into the palette's field keeps ⏎ while the field is empty, to type its words;
       // past them ⏎ is the palette's, which opens the row it highlights.
       const types = field !== null && !fieldFilled(field);
-      if (useUiStore.getState().overlay !== "none" && !(types && event.key === "Enter")) return;
+      const open = useUiStore.getState().overlay !== "none";
+      // While the coach is still typing, the field holds only part of the words: ⏎ waits for them, here and on the step the words already finished.
+      if (open && event.key === "Enter" && playing.current !== null && playing.current !== step) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (open && !((types || playing.current === step) && event.key === "Enter")) return;
       if (event.key === "Enter" || (event.key === "ArrowRight" && !acts(step))) {
         event.preventDefault();
         event.stopPropagation();
