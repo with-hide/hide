@@ -5,7 +5,7 @@ import { PrCardView } from "../PrCard";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import type { PullRequest } from "../snapshot";
+import type { LinkedSession, PullRequest } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
@@ -33,11 +33,17 @@ export function PrCardScene({ params }: { params: URLSearchParams }) {
     project.agent_scope!.prs = { rows: [{ number: pr.number, group: failed ? "blocked" : ready || skipped ? "needs_you" : "waiting", fold: null, reason: { kind: failed ? "failed" : ready || skipped ? "merge" : "ci", count: failed ? 2 : 4, base: "main", since_unix_ms: AT }, agents: [], agent_pane: null, checkout_id: checkout.id, checkout_ids: [checkout.id], issue: null }], groups: [{ group: failed ? "blocked" : ready || skipped ? "needs_you" : "waiting", numbers: [pr.number] }], needs_you: ready || skipped ? 1 : 0 };
 
     base.rest.pr_work = { link: null, feedback: null, cards: [{ workspace_id: project.id, number: pr.number, reading: state === "loading", head: "a".repeat(40), body: "## Summary\nWindows에서 에이전트 훅이 데몬에 요청을 전달하지 못해 메모리와 편지가 프롬프트에 도달하지 않았습니다.\n\nWindows 파이프의 쓰기 제한 시간을 지키고 실패한 요청 단계를 구분하도록 변경했습니다.\n\n## Review\nWindows 파이프 연결과 실패 단계 기록을 검토합니다.\n\n## Evidence\n레이아웃 확인을 위한 예시입니다.", files: [{ path: "hide-platform/src/ipc/windows.rs", additions: 400, deletions: 100, generated: false }, { path: "hide-agent-hooks/src/client.rs", additions: 340, deletions: 101, generated: false }], files_total: 2, threads: [], merge: { can_merge: true, methods: ["merge"], queue: false }, failed: [], write: null }] };
-    return { base, project, pr };
+    // The timeline's sessions: a waiting one, an asking one and an ended one, joined to the scene's panes by session id.
+    const live = (pane: string, session: string) => { base.rest.navigator!.agents!.find((agent) => agent.pane_id === pane)!.session_id = session; };
+    live("a1c3", "s-waiting");
+    live("a3", "s-asking");
+    const session = (id: string, agent: string, started: number, ended: number | null, role: "created" | "worked"): LinkedSession => ({ agent, id, ids: [id], device_id: "local", role, pr: pr.number, request: "Windows 훅 요청 경로 고치기", started_at_unix_ms: started, ended_at_unix_ms: ended, path: `/sessions/${id}`, cwd: checkout.path, file: "present", parent: null });
+    const sessions = [session("s-ended", "codex", AT - 7_200_000, AT - 3_600_000, "created"), session("s-waiting", "claude", AT - 3_000_000, null, "worked"), session("s-asking", "claude", AT - 1_800_000, null, "worked")];
+    return { base, project, pr, sessions };
   }, [params, state]);
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: fixture.base.rest, agents: [], connection: "live", linkPanel: { workspace_id: fixture.project.id, target: { kind: "pr", number: 1372 }, loading: false, failure: null, pr: { number: 1372, branch: fixture.pr.head_branch!, title: fixture.pr.title, url: fixture.pr.url, created_at_unix_ms: AT, closed_at_unix_ms: null, merged_at_unix_ms: null, state: fixture.pr.state, issues: [], worktrees: [] }, prs: [], sessions: [], total: 0 } });
+    useShellStore.setState({ rest: fixture.base.rest, agents: [], connection: "live", linkPanel: { workspace_id: fixture.project.id, target: { kind: "pr", number: 1372 }, loading: false, failure: null, pr: { number: 1372, branch: fixture.pr.head_branch!, title: fixture.pr.title, url: fixture.pr.url, created_at_unix_ms: AT, closed_at_unix_ms: null, merged_at_unix_ms: null, state: fixture.pr.state, issues: [], worktrees: [] }, prs: [], sessions: fixture.sessions, total: fixture.sessions.length } });
     useUiStore.setState({ screen: { kind: "workspace" } });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
