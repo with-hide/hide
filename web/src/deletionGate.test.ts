@@ -19,7 +19,7 @@ describe("the Delete worktree confirmation words the core's deletion gate", () =
   });
 
   it("keeps Git's lock reason as the operator wrote it", () => {
-    expect(blockedText({ code: "locked", name: "feature", reason: "검토 중" }, english)).toContain("Worktree feature is locked: 검토 중.");
+    expect(blockedText({ code: "locked", name: "feature", reason: "검토 중" }, english)).toBe("Worktree feature is locked: 검토 중. Unlock it, then refresh its Git state before deleting: git worktree unlock");
     expect(blockedText({ code: "locked", name: "feature", reason: "" }, english)).toContain("Worktree feature is locked. Unlock");
   });
 

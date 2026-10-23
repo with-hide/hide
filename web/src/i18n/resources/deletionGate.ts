@@ -8,8 +8,8 @@ import type { Catalogs } from "../schema";
 
 export const deletionGateEnglish = {
   "deletionGate.blocked.main": "The main worktree cannot be deleted.",
-  "deletionGate.blocked.locked": "Worktree {{name}} is locked: {{reason}}. Unlock it with git worktree unlock, then refresh its Git state before deleting.",
-  "deletionGate.blocked.lockedNoReason": "Worktree {{name}} is locked. Unlock it with git worktree unlock, then refresh its Git state before deleting.",
+  "deletionGate.blocked.locked": "Worktree {{name}} is locked: {{reason}}. Unlock it, then refresh its Git state before deleting: {{command}}",
+  "deletionGate.blocked.lockedNoReason": "Worktree {{name}} is locked. Unlock it, then refresh its Git state before deleting: {{command}}",
   "deletionGate.blocked.ignoredScanUnavailable": "Hide could not finish checking the repositories inside it, so it cannot show what deleting would lose. Refresh, then try again.",
   "deletionGate.blocked.other": "This worktree cannot be deleted right now.",
   "deletionGate.warning.uncommitted_one": "{{count}} changed file not committed",
@@ -44,8 +44,8 @@ export const deletionGateEnglish = {
 
 const ko = {
   "deletionGate.blocked.main": "메인 워크트리는 삭제할 수 없어요.",
-  "deletionGate.blocked.locked": "워크트리가 잠겨 있어요 ({{name}}: {{reason}}). 삭제하려면 git worktree unlock으로 잠금을 풀고 Git 상태를 새로 고치세요.",
-  "deletionGate.blocked.lockedNoReason": "워크트리가 잠겨 있어요 ({{name}}). 삭제하려면 git worktree unlock으로 잠금을 풀고 Git 상태를 새로 고치세요.",
+  "deletionGate.blocked.locked": "워크트리가 잠겨 있어요 ({{name}}: {{reason}}). 삭제하려면 잠금을 풀고 Git 상태를 새로 고치세요: {{command}}",
+  "deletionGate.blocked.lockedNoReason": "워크트리가 잠겨 있어요 ({{name}}). 삭제하려면 잠금을 풀고 Git 상태를 새로 고치세요: {{command}}",
   "deletionGate.blocked.ignoredScanUnavailable": "안에 있는 저장소를 끝까지 확인하지 못해서 삭제하면 무엇을 잃는지 보여 줄 수 없어요. 새로 고친 뒤 다시 시도하세요.",
   "deletionGate.blocked.other": "지금은 이 워크트리를 삭제할 수 없어요.",
   "deletionGate.warning.uncommitted_one": "커밋하지 않은 파일 {{count}}개",
@@ -80,8 +80,8 @@ const ko = {
 
 const zhCN = {
   "deletionGate.blocked.main": "无法删除主工作树。",
-  "deletionGate.blocked.locked": "工作树 {{name}} 已锁定：{{reason}}。请先用 git worktree unlock 解锁，再刷新其 Git 状态后删除。",
-  "deletionGate.blocked.lockedNoReason": "工作树 {{name}} 已锁定。请先用 git worktree unlock 解锁，再刷新其 Git 状态后删除。",
+  "deletionGate.blocked.locked": "工作树 {{name}} 已锁定：{{reason}}。请先解锁并刷新其 Git 状态后再删除：{{command}}",
+  "deletionGate.blocked.lockedNoReason": "工作树 {{name}} 已锁定。请先解锁并刷新其 Git 状态后再删除：{{command}}",
   "deletionGate.blocked.ignoredScanUnavailable": "Hide 未能检查完其中的仓库，无法显示删除会丢失什么。请刷新后重试。",
   "deletionGate.blocked.other": "暂时无法删除此工作树。",
   "deletionGate.warning.uncommitted_one": "{{count}} 个更改的文件未提交",
@@ -116,8 +116,8 @@ const zhCN = {
 
 const ja = {
   "deletionGate.blocked.main": "メインのワークツリーは削除できません。",
-  "deletionGate.blocked.locked": "ワークツリー {{name}} はロックされています: {{reason}}。git worktree unlock でロックを解除し、Git の状態を更新してから削除してください。",
-  "deletionGate.blocked.lockedNoReason": "ワークツリー {{name}} はロックされています。git worktree unlock でロックを解除し、Git の状態を更新してから削除してください。",
+  "deletionGate.blocked.locked": "ワークツリー {{name}} はロックされています: {{reason}}。ロックを解除し、Git の状態を更新してから削除してください: {{command}}",
+  "deletionGate.blocked.lockedNoReason": "ワークツリー {{name}} はロックされています。ロックを解除し、Git の状態を更新してから削除してください: {{command}}",
   "deletionGate.blocked.ignoredScanUnavailable": "中にあるリポジトリを最後まで確認できなかったため、削除で失われるものを表示できません。更新してからもう一度お試しください。",
   "deletionGate.blocked.other": "このワークツリーは今は削除できません。",
   "deletionGate.warning.uncommitted_one": "未コミットの変更ファイル {{count}} 件",

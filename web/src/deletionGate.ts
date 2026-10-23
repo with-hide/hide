@@ -5,14 +5,16 @@ import type { BranchLoss, DeletionBlock, DeletionDiscard, DeletionGate, Deletion
 // decided. The gate sends codes and counts; a code this build does not know
 // gets its group's general line, and the code stays on the element's `data-`.
 
+const UNLOCK = "git worktree unlock";
+
 export function blockedText(blocked: DeletionBlock, t: TFunction<"translation">): string {
   switch (blocked.code) {
     case "main":
       return t("deletionGate.blocked.main");
     case "locked":
       return blocked.reason
-        ? t("deletionGate.blocked.locked", { name: blocked.name ?? "", reason: blocked.reason })
-        : t("deletionGate.blocked.lockedNoReason", { name: blocked.name ?? "" });
+        ? t("deletionGate.blocked.locked", { name: blocked.name ?? "", reason: blocked.reason, command: UNLOCK })
+        : t("deletionGate.blocked.lockedNoReason", { name: blocked.name ?? "", command: UNLOCK });
     case "ignored_scan_unavailable":
       return t("deletionGate.blocked.ignoredScanUnavailable");
     default:
