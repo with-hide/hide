@@ -94,6 +94,9 @@ pub enum Action {
         area_id: Option<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         new_target: bool,
+        /// Open to the side, as a file or diff `--beside` does.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        beside: bool,
     },
     Select {
         view_id: String,
@@ -362,6 +365,7 @@ mod tests {
                 url: "https://example.test/page".into(),
                 area_id: None,
                 new_target: false,
+                beside: false,
             }
         );
         assert_eq!(serde_json::to_value(action).unwrap(), legacy);
@@ -373,6 +377,7 @@ mod tests {
             url: "https://example.test/page".into(),
             area_id: Some("a1".into()),
             new_target: true,
+            beside: false,
         };
         let wire = serde_json::to_value(&action).unwrap();
         assert_eq!(wire["area_id"], "a1");

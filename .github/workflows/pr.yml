@@ -283,11 +283,11 @@ jobs:
         id: install
         run: bash scripts/verify-web.sh install
       - name: Web shell typecheck, lint, unit test, and build
+        # build includes typecheck; run it once, before the other checks.
         run: |
-          bash scripts/verify-web.sh web typecheck
+          bash scripts/verify-web.sh web build
           bash scripts/verify-web.sh web lint
           bash scripts/verify-web.sh web test
-          bash scripts/verify-web.sh web build
       - name: Desktop app typecheck, lint, and unit test
         # The menu is built from the web registry, so the plan brings this
         # lane for a registry change too. It stands on its own, so it runs
@@ -688,6 +688,10 @@ jobs:
 
   verify:
     name: verify
+    permissions:
+      contents: read
+      actions: read
+      issues: write
     needs: [plan, policy, rust, checks, os-contract, os-contract-macos, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, web-e2e, remote-mailbox, desktop-e2e, package]
     if: always()
     runs-on: ubuntu-latest
@@ -695,7 +699,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: scripts/ci-plan.py
+          sparse-checkout: |
+            scripts/ci-plan.py
+            scripts/ci-flaky-report.py
           sparse-checkout-cone-mode: false
       - name: Every planned lane succeeded and every other lane was skipped
         # A planned lane that was skipped, cancelled or failed fails here, and
@@ -704,3 +710,10 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: python3 scripts/ci-plan.py aggregate
+      - name: Connect test failures and passes across job reruns
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci-flaky-report.py --retry-history

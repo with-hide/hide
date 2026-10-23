@@ -62,7 +62,7 @@ function AncestorStep({ pane, step, actions }: { pane: PaneRow; step: NonNullabl
         disabled={pending || (failed && !progress.retryable)}
         onClick={() => actions.followRelation(pane.id, step.pane_id, step.label)}
       >
-        <span className="hidden min-w-0 max-w-(--size-pane-child-chip-max) truncate @min-[var(--size-pane-parent-breakpoint)]/pane:inline">{failed && progress.retryable ? t("common.retry") : step.label}</span>
+        <span className="hidden min-w-0 max-w-(--size-pane-child-chip-max) truncate pane-wide:inline">{failed && progress.retryable ? t("common.retry") : step.label}</span>
         <span aria-hidden="true" className="shrink-0 text-muted-foreground">{pending ? "…" : "›"}</span>
       </button>
     </Hint>

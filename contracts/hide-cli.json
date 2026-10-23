@@ -1952,6 +1952,12 @@
                     }
                 },
                 {
+                    "name": "--beside",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
                     "name": "--name",
                     "required": true,
                     "requires": [],
@@ -2069,7 +2075,11 @@
                 "codex_capability_unknown",
                 "invalid_brief",
                 "brief_not_submitted",
-                "mission_brief_missing"
+                "mission_brief_missing",
+                "beside_other_checkout",
+                "beside_other_machine",
+                "beside_needs_agent_pane",
+                "beside_pane_unavailable"
             ],
             "repeats_at_most": null,
             "rest": "the agent's own arguments"
@@ -3231,7 +3241,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:c2c2e191e7e6e3c263b55a630c11b029353c241daa2487e6673b6a751a8e63b1",
+    "digest": "sha256:91d3932f4f088b320c36963f95ce04367755cafd82fcff623e81ba63c5080c85",
     "envelopes": {
         "agent": {
             "answer": "value",
