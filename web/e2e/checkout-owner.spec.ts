@@ -151,7 +151,7 @@ test("A new tab in a linked worktree with no workspace opens one bound to it, na
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^fixture/ }) });
     const feature = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="feature"]') });
     // Session UI B9: a clean worktree with no agent starts in this fold.
-    await project.getByRole("button", { name: /^No agents/ }).click();
+    await project.getByRole("button", { name: /^Worktrees with no agents/ }).click();
     await expect(feature).toBeVisible({ timeout: 30_000 });
     const newTabHere = async () => {
       await feature.locator("[data-checkout-menu]").click({ button: "right" });
@@ -170,7 +170,7 @@ test("A new tab in a linked worktree with no workspace opens one bound to it, na
     // Opening the terminal moves the checkout out of the empty fold.
     // The next menu is opened on the current row after that transition.
     await expect(feature.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
-    await expect(project.getByRole("button", { name: /^No agents/ })).toHaveCount(0);
+    await expect(project.getByRole("button", { name: /^Worktrees with no agents/ })).toHaveCount(0);
 
     await newTabHere();
     await waitForTerminal(page);

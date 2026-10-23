@@ -1149,17 +1149,22 @@ pub fn remove(agent: GuidanceAgent, home: &Path) -> Result<RemoveOutcome, Instal
         total.removed_entries += outcome.removed_entries;
         total.preserved_entries += outcome.preserved_entries;
     }
-    // Switching agy off also takes out the folder trust Hide added (D-08)
-    // and Hide AI's folder for agy (D-09).
-    if agent == GuidanceAgent::Antigravity {
-        let forgotten = crate::folder_trust::forget_all(
-            crate::folder_trust::Agent::Antigravity,
-            home,
-            crate::folder_trust::Tools::none(),
-        )?;
-        let removed = crate::antigravity_trust::remove_read_only(home)?;
-        total.changed |= forgotten > 0 || removed;
+    // Switching agy or Grok off also takes out the folder trust Hide added
+    // (D-08), and agy's also Hide AI's folder for agy (D-09).
+    let trusted = match agent {
+        GuidanceAgent::Antigravity => Some(crate::folder_trust::Agent::Antigravity),
+        GuidanceAgent::Grok => Some(crate::folder_trust::Agent::Grok),
+        _ => None,
+    };
+    if let Some(trusted) = trusted {
+        let forgotten =
+            crate::folder_trust::forget_all(trusted, home, crate::folder_trust::Tools::none())?;
+        total.changed |= forgotten > 0;
         total.removed_entries += forgotten;
+    }
+    if agent == GuidanceAgent::Antigravity {
+        let removed = crate::antigravity_trust::remove_read_only(home)?;
+        total.changed |= removed;
     }
     Ok(total)
 }

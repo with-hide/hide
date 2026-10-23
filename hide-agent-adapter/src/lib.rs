@@ -367,10 +367,13 @@ impl LaunchDialect {
     /// before it starts the agent there: the question would otherwise hold a
     /// delegated child that nobody is watching (PRD antigravity-first-class
     /// D-08; Claude Code 2.1.302 and Codex 0.163.0 ask the same, measured
-    /// 2026-10-17; docs/agent-hooks.md, Folder trust for the worktrees Hide
-    /// makes).
+    /// 2026-10-17, and Grok 1.0.67, measured 2026-10-23; docs/agent-hooks.md,
+    /// Folder trust for the worktrees Hide makes).
     pub const fn trusts_worktrees(self) -> bool {
-        matches!(self, Self::Claude | Self::Codex | Self::Antigravity)
+        matches!(
+            self,
+            Self::Claude | Self::Codex | Self::Antigravity | Self::Grok
+        )
     }
 
     /// Whether an agent that has reported no conversation yet can still

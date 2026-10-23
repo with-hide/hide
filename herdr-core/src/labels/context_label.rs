@@ -27,7 +27,7 @@ use std::time::Duration;
 pub(crate) const FEATURE_ID: &str = "context_label";
 /// Bumped whenever a prompt or a schema changes, so a log line can be read
 /// against the pair that produced it.
-pub(crate) const SCHEMA_VERSION: &str = "context_label.v21";
+pub(crate) const SCHEMA_VERSION: &str = "context_label.v22";
 /// The effort a label asks of Codex, whether it is the first agent or the
 /// fallback (PRD label-judgment-fixes D-12): measured on gpt-5.6-luna over
 /// 104 label answers, `medium` turned no question into done, while the
@@ -66,6 +66,7 @@ const GOAL: &str = concat!(
 
 const LINE: &str = concat!(
     "Name this turn's concrete action, finding, result or dependency, including the affected part if goal is insufficient. Prefer understandable behavior, outcome, remaining work, blocker or awaited actor over internal edits/counts; retain technical names only when useful to identify or act on the issue. ",
+    "Never restate this turn's request or its summary in other words, and starting or doing a step the request already names is no new fact: 'prioritize per-OS failures from CI results' for a request to rank per-OS failures, or 'build started from latest main' for a request to build and install, says nothing new. ",
     "Preserve actual scope and pending verification: a fixture/test edit is not a finished feature; requested verification is not a passed check. No acknowledgments, generic promises or invented progress; use an empty line when there is no useful additional fact. "
 );
 
@@ -114,7 +115,7 @@ fn start_prompt(limits: LabelLimits) -> String {
         &goal(limits),
         &closed_rule(limits),
         &requests_rule(limits),
-        &format!("line is one line of at most {} characters that does not repeat goal: write what the agent is doing in this turn, and do not judge how an earlier turn ended. ", limits.line),
+        &format!("line is one line of at most {} characters that does not repeat goal: write what the events show the agent doing in this turn beyond what was asked (a first concrete step, a finding, a dependency), and do not judge how an earlier turn ended. When the events show nothing yet beyond the request, as when the turn has only just begun, leave it an empty string: the screen already shows the request, and the empty line is the expected answer then, not a failure. ", limits.line),
         LINE,
         "Even when goal is null, line says only what is being done in this conversation; when there is nothing to report, as after a plain greeting, leave it an empty string. Do not invent work that is not there or instructions for the next work. ",
         DATA,
