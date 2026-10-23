@@ -123,7 +123,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
       rest.pane_layouts = [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: LEAD_PANE, zoomed: false, root: { type: "pane", pane_id: LEAD_PANE } }];
       return { ...none, rest, agents: scene.agents, usage: landingUsage(now), memory: landingMemory(now, "hide") };
     }
-    if (shot === "quiet") return { ...none, ...withoutHideAi(landingWorkspace(now, SIDEBAR_WIDTH.quiet, [], "tasks")), usage: landingUsage(now) };
+    if (shot === "quiet") return { ...none, ...withoutHideAi(landingWorkspace(now, SIDEBAR_WIDTH.quiet, [], "tasks", false)), usage: landingUsage(now) };
     const lens = shot === "tasks" ? "tasks" : shot === "prs" ? "prs" : "projects";
     return { ...none, ...landingWorkspace(now, SIDEBAR_WIDTH[shot], [], lens), usage: landingUsage(now) };
   }, [shot]);

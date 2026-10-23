@@ -87,7 +87,23 @@ const STORY_PULLS: Record<string, [number, string, PrState] | null> = {
   a1c7: null,
   q2: [437, "Fix the test that broke the export", "merged"],
   e1: [438, "Task detail API", "pending"],
+  a2: [439, "Release notes for the CSV export", "pending"],
 };
+
+/**
+ * The pull requests only Hide AI linked: their sessions opened them outside
+ * the window the link reader matches, and the label judged that the session
+ * made them (docs/status-model.md, `created_prs`). With Hide AI off the rows
+ * do not carry them.
+ */
+const LABEL_PULLS = new Set([438, 439]);
+
+/**
+ * The roots whose question only Hide AI found, in the turn's plain text, and
+ * that the operator has read: on, they wait under Revisit; off, text alone
+ * makes no question (docs/status-model.md, With and without Hide AI).
+ */
+const READ_ASKS = ["a2"];
 
 /** One pull request a row holds the duty of, in the shape the fixture's own rows carry. */
 function storyPull(row: AgentRow, [number, title, state]: [number, string, PrState]): AgentRow {
@@ -101,11 +117,11 @@ function storyPull(row: AgentRow, [number, title, state]: [number, string, PrSta
   return { ...row, request, state: { ...row.state, pr: { count: 1, worst: state, pulls: [{ index: 0, state }] } } };
 }
 
-/** Keeps the story's pull requests on a row and drops the fixture's others. */
-function trimPulls(row: AgentRow): AgentRow {
+/** Keeps the story's pull requests on a row and drops the fixture's others, and with Hide AI off the ones only it linked. */
+function trimPulls(row: AgentRow, ai: boolean): AgentRow {
   if (!(row.pane_id in STORY_PULLS)) return row;
   const kept = STORY_PULLS[row.pane_id];
-  if (kept) return storyPull(row, kept);
+  if (kept && (ai || !LABEL_PULLS.has(kept[0]))) return storyPull(row, kept);
   return { ...row, request: row.request ? { ...row.request, pull_requests: [] } : row.request, state: { ...row.state, pr: null } };
 }
 
@@ -113,8 +129,8 @@ function trimPulls(row: AgentRow): AgentRow {
 const STARRED = ["tn1"];
 
 /** Replaces the words of one agent row and leaves everything the core decided as it was. */
-function reword(fixture: AgentRow): AgentRow {
-  const row = trimPulls(fixture);
+function reword(fixture: AgentRow, ai: boolean): AgentRow {
+  const row = trimPulls(fixture, ai);
   const words = AGENT_WORDS[row.pane_id];
   if (!words) return row;
   const request = row.request?.pull_requests?.length && words.pull
@@ -148,7 +164,7 @@ function renameProject(project: Workspace): Workspace {
 }
 
 /** The window's projects and agents for every shot: one machine, the page's story. */
-export function landingSidebar(nowMs: number, expanded: string[], width: number): { rest: SnapshotRest; agents: AgentRow[] } {
+export function landingSidebar(nowMs: number, expanded: string[], width: number, ai = true): { rest: SnapshotRest; agents: AgentRow[] } {
   const base = sidebarScene("reference", { ...REFERENCE_FOLDS, expandedAgents: expanded }, nowMs);
   const navigator = base.rest.navigator!;
   // The one worktree name the core's frozen tiers and states carry is reworded where it sits, and the project's folder is the billing-app's.
@@ -168,8 +184,12 @@ export function landingSidebar(nowMs: number, expanded: string[], width: number)
       workspace_registrations: base.rest.ui_state?.workspace_registrations?.map((registration) => ({ ...registration, pinned: false })),
     },
   });
-  const starred = (row: AgentRow): AgentRow => (STARRED.includes(row.pane_id) ? { ...row, revisit: { starred: true, read_ask: false, since_unix_ms: nowMs - 3 * 3_600_000 } } : row);
-  return { rest, agents: reworded(base.agents.map(reword).map(starred)) };
+  const revisit = (row: AgentRow): AgentRow => {
+    const starred = STARRED.includes(row.pane_id);
+    const readAsk = ai && READ_ASKS.includes(row.pane_id);
+    return starred || readAsk ? { ...row, revisit: { starred, read_ask: readAsk, since_unix_ms: nowMs - 3 * 3_600_000 } } : row;
+  };
+  return { rest, agents: reworded(base.agents.map((row) => revisit(reword(row, ai)))) };
 }
 
 /** What each kind of agent is called when nothing better names it: the provider fallback of Task identity. */
@@ -190,7 +210,7 @@ const NATIVE_QUESTIONS: Record<string, string> = {
  * are the same, since every demand in the story is a native question.
  */
 export function landingPlainSidebar(nowMs: number, width: number): { rest: SnapshotRest; agents: AgentRow[] } {
-  return withoutHideAi(landingSidebar(nowMs, [], width));
+  return withoutHideAi(landingSidebar(nowMs, [], width, false));
 }
 
 /** Any of the page's scenes with Agent summaries off, as `landingPlainSidebar` describes. */
@@ -199,7 +219,9 @@ export function withoutHideAi(scene: { rest: SnapshotRest; agents: AgentRow[] })
     const title = row.agent_kind === "claude" ? row.identity_label : PROVIDERS[row.agent_kind ?? ""] ?? row.identity_label;
     const question = NATIVE_QUESTIONS[row.pane_id];
     const line = question && row.state.line ? { ...row.state.line, text: question } : null;
-    return { ...row, identity_label: title, request: row.request ? { ...row.request, request: null } : row.request, state: { ...row.state, line } };
+    // Only the label judges a turn finished, so an unread stop keeps the plain dot.
+    const mark = row.mark === "done" ? "unread" as const : row.mark;
+    return { ...row, identity_label: title, mark, request: row.request ? { ...row.request, request: null } : row.request, state: { ...row.state, line } };
   });
   const rest: SnapshotRest = { ...scene.rest, status: { ...scene.rest.status, background_ai: { provider: null, providers: [], unavailable_reason: null, enabled: false, chosen: false, agent_summary: false } } as SnapshotRest["status"] };
   return { rest, agents };
@@ -268,8 +290,8 @@ export const HERO_PANES = ["a1", "a3"] as const;
  * tool pinned beside them with the project's 현황. The tasks and prs shots are
  * the same window with the sidebar on another list (`lens`).
  */
-export function landingWorkspace(nowMs: number, width: number, expanded: string[] = [], lens: SidebarLens = "projects"): { rest: SnapshotRest; agents: AgentRow[] } {
-  const scene = landingSidebar(nowMs, expanded, width);
+export function landingWorkspace(nowMs: number, width: number, expanded: string[] = [], lens: SidebarLens = "projects", ai = true): { rest: SnapshotRest; agents: AgentRow[] } {
+  const scene = landingSidebar(nowMs, expanded, width, ai);
   const navigator = scene.rest.navigator!;
   const project = navigator.workspaces!.find((row) => row.id === "hide")!;
   const main = project.checkouts[0]!;
@@ -300,7 +322,7 @@ export function landingWorkspace(nowMs: number, width: number, expanded: string[
   const status = { ...HERO_STATUS, git: { ...HERO_STATUS.git, dots: project.checkouts.slice(0, 6).map((checkout, index) => ({ checkout_id: checkout.id, state: HERO_DOTS[index % HERO_DOTS.length]! })) } };
   const front: Workspace = { ...project, is_git: true, pull_requests: pulls, agent_scope: { ...project.agent_scope, prs, status }, checkouts: project.checkouts.map((checkout) => (checkout === main ? { ...checkout, github, tabs: [titled] } : checkout)) };
   const workspaces = navigator.workspaces!.map((row) => (row === project ? front : row));
-  const devices = navigator.devices?.map((device, index) => (index === 0 ? { ...device, agent_scope: { ...device.agent_scope, tasks: landingTasks(scene.agents, workspaces, nowMs) } } : device));
+  const devices = navigator.devices?.map((device, index) => (index === 0 ? { ...device, agent_scope: { ...device.agent_scope, tasks: landingTasks(scene.agents, workspaces, nowMs, ai) } } : device));
   const rest: SnapshotRest = {
     ...scene.rest,
     ui_state: { ...scene.rest.ui_state!, sidebar_lens: lens },
@@ -377,7 +399,7 @@ const HERO_STATUS = {
   todo: [{ kind: "pr" as const, number: 431 }, { kind: "pr" as const, number: 436 }, { kind: "ask" as const, pane_id: "q1" }],
   todo_total: 3,
   todo_agents: 1,
-  prs: { open: 4, mergeable: 2, failed: 1, review: 0, checking: 1 },
+  prs: { open: 5, mergeable: 2, failed: 1, review: 0, checking: 2 },
   git: { worktrees: 7, behind: 0, changed: 2, unpushed: 1, removable: 1 },
 };
 const HERO_DOTS = ["clean", "changed", "changed", "unpushed", "clean", "removable"] as const;
@@ -389,15 +411,19 @@ const TASK_STATES: Record<string, { state: TaskCardScope["state"]; stage?: TaskC
   a1: { state: "waiting", stage: 2 },
   q2: { state: "done", stage: 2 },
   e1: { state: "working", stage: 1 },
-  a2: { state: "working" },
+  a2: { state: "revisit" },
   tn1: { state: "revisit" },
 };
 
+/** Where a root stands with Hide AI off instead: the release notes' question was only in plain text, so it is not waited on. */
+const TASK_STATES_WITHOUT_AI: typeof TASK_STATES = { a2: { state: "working" } };
+
 /** The device's tasks as the core lists them: each of the story's lineage roots with everything it started, in the checkouts it works in. */
-export function landingTasks(agents: AgentRow[], workspaces: Workspace[], nowMs: number): { cards: TaskCardScope[]; needs_you: number; recency: string } {
+export function landingTasks(agents: AgentRow[], workspaces: Workspace[], nowMs: number, ai = true): { cards: TaskCardScope[]; needs_you: number; recency: string } {
   const where = new Map(workspaces.flatMap((project) => project.checkouts.flatMap((checkout) => checkout.tabs.flatMap((tab) => tab.panes.map((pane) => [pane.id, checkout.id] as const)))));
   const descendants = (pane: string): string[] => agents.filter((row) => row.lineage_parent_pane_id === pane).flatMap((row) => [row.pane_id, ...descendants(row.pane_id)]);
-  const cards = Object.entries(TASK_STATES).flatMap(([root, { state, stage }], index) => {
+  const states = ai ? TASK_STATES : { ...TASK_STATES, ...TASK_STATES_WITHOUT_AI };
+  const cards = Object.entries(states).flatMap(([root, { state, stage }], index) => {
     const checkout = where.get(root);
     if (!checkout) return [];
     const members = [root, ...descendants(root)];
