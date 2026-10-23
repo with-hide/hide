@@ -2300,7 +2300,7 @@ A browser tab and the phone have no dot and no update line.
 
 ## Practice window
 
-Web owner: `web/src/practice/` (`PracticeApp.tsx` the chapter list, `PracticePlayer.tsx` a chapter playing, `PracticeCoach.tsx` the guide, `chapters.ts` the chapters, `channel.ts` what the window and the shell say to each other), `web/src/i18n/resources/practice.ts`. Desktop owner: `desktop/src/main/practice.ts`, `desktop/src/main/host.ts` (`listenPractice`, `openPractice`). Core owner: `ui_state.practice` and `practice_progress_set`.
+Web owner: `web/src/practice/` (`PracticeApp.tsx` the chapter list, `PracticePlayer.tsx` a chapter playing, `PracticeCoach.tsx` the guide, `chapters/` the chapters, `worlds/` what they play in, `channel.ts` what the window and the shell say to each other), `web/src/i18n/resources/practice.ts` and `web/src/i18n/resources/practice/`. Desktop owner: `desktop/src/main/practice.ts`, `desktop/src/main/host.ts` (`listenPractice`, `openPractice`). Core owner: `ui_state.practice` and `practice_progress_set`.
 
 The practice window teaches Hide on a practice screen: the shell's own sidebar, panes, lane and keyboard, drawn over a scripted world with no agent, project, file or Herdr behind it.
 `Practice Hide` in the Help menu and the line under Add project on the Home with no project open it; the desktop app opens one window of its own, sized like the main window, and a browser tab opens one tab of its own; asking again brings the open one forward.
@@ -2314,6 +2314,7 @@ A chapter seen once stays seen when it is played again.
 A chapter playing dims everything but what its step marks, rings that, and puts a light bubble beside it with what happens and how: the command's chord as keycaps (`Or press ⌘D`), `Press the button, or ⇧⌘↩` for a step with a button, or `Press where it's marked` where this host has no chord for the command (⌥1 in a browser tab).
 ⏎ or → performs the step in the learner's place, pressing the chord, the button, or dragging the pane with a hand cursor; ← goes back over a step that only looks.
 The learner can also do it themselves, by key, click or drag: a step that changes the screen is done when the world says so, however it was done.
+⌘K search and ⌘P Open file open over the practice screen as they do in the shell; while one is open every key is the palette's, and ⏎, → and ← go back to the guide when it closes.
 A pressed chord shows large in the middle for a moment, so the keys are seen as they are used.
 Every chord is the operator's own: the host's set, the system's, and the operator's stored bindings.
 A chapter with tasks lists them on a card in the lower left with a check as each is done and `↺ 처음부터`; the top center names the chapter and leads back to the list.
@@ -2326,10 +2327,20 @@ In the desktop app the window has no preload: it stands in for the desktop host 
 
 ### Adding a chapter
 
-A chapter is data in `web/src/practice/chapters.ts`: an `id` (its catalog prefix), a `number`, a `version`, the `world` it plays in, and its steps.
+A chapter is three new files and no change to a shared one, so chapters written side by side do not meet in a file.
+
+- `web/src/practice/chapters/<id>.ts` default-exports the chapter (`chapter()` in `chapter.ts`): its `id` (the file's name and its catalog prefix), a `number`, a `version`, the `world` it plays in, and its steps.
+  `chapters.ts` lists every file there by number and refuses a file whose chapter has another id or a number another chapter has; the next chapter is the next number there is, so a gap is allowed.
+- `web/src/i18n/resources/practice/<id>.ts` default-exports the chapter's words in every language, under `practice.<id>.title`, `practice.<id>.summary` and `practice.<id>.<step>.kick|title|text|quest`.
+  `practice.ts` keeps the guide's own words and joins every file there, refusing a key outside its file's chapter; the catalog checks read them like any other words.
+- `web/src/practice/worlds/<id>.ts`, when no world there fits: the world the chapter plays in.
+
 A step names what it rings (`target`, a selector into the shell), where the bubble sits (`side`), the command it teaches (`command`, never a chord), a `gesture` when ⏎ should press a button or drag a pane instead of pressing the chord, and `done`, which reads the world; a step without `done` is a look.
-A world (`web/src/practice/world.ts`) gives the first state, answers the core events the chapter's steps dispatch as the core would (an event it does not need answers nothing), and draws the snapshot and each pane's screen; `practiceWorld.ts` and `tourWorld.ts` are the two there are.
-The words go in `web/src/i18n/resources/practice.ts` under `practice.<id>.title`, `practice.<id>.summary` and `practice.<id>.<step>.kick|title|text|quest`, in every language.
+A world (`web/src/practice/world.ts`) gives the first state, answers the core events the chapter's steps dispatch as the core would (an event it does not need answers nothing), and draws the snapshot and each pane's screen.
+`worlds/kit.ts` holds what several worlds build with: a checkout's desk of tabs, panes and groups and the events that change it (`applyDesk`), agent rows (`agent`, with a parent named as the core names it), and the snapshot of one or more projects' desks (`deskSnapshot`).
+A tool only one chapter needs stays in that chapter's world file, and moves to `kit.ts` when a second chapter needs it.
+A world's data is the practice window's own, invented for it: no world imports the gallery's fixtures.
+`worlds/tour.ts` plays on `data/tour.json`, a whole snapshot kept with each time written as how long before now it was (`$msAgo`, `$sAgo`, `$isoAgo`, `$daysAgo`).
 Bump a chapter's `version` when its steps change, so a learner's old progress reads as `바뀜`.
 `web/e2e/practice.spec.ts` plays every chapter to its end with ⏎ alone, so a new chapter is played there without a change to the spec; a step whose ⏎ moves nothing stops it.
 
