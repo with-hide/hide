@@ -1823,6 +1823,12 @@ pub struct CheckoutSnapshot {
     /// own value: see `head_sha`.
     #[serde(skip_serializing)]
     pub head_oid: Option<String>,
+    /// The repository Herdr reports the checkout it attached a device's
+    /// workspace to in (`workspace.worktree.repo_root`), on that device's raw
+    /// row. Core only: the device's grouping places a folder its helper can
+    /// no longer read by it (`device_catalog::recorded_place`).
+    #[serde(skip_serializing)]
+    pub herdr_repo_root: Option<String>,
     pub github: GithubStatusSnapshot,
     pub agent_summary: CheckoutAgentSummary,
     pub id: String,

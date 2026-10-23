@@ -10,7 +10,11 @@
 //!
 //! A directory the helper has not answered for keeps its Herdr workspace as a
 //! row of its own and the catalog says why (`DeviceCatalogSnapshot`), so an
-//! unconfirmed grouping is never presented as a confirmed one.
+//! unconfirmed grouping is never presented as a confirmed one. A directory
+//! the helper answered it cannot read, such as a worktree whose folder was
+//! removed, is placed by the device's Git worktree list or by the repository
+//! Herdr recorded for the checkout (`recorded_place`), as on this machine;
+//! only a folder none of them places is a row of its own.
 //!
 //! Ids stay scoped to the device. A project is
 //! `remote:<device>:project:<sha256(device, root)>`, so the same path or the
@@ -22,7 +26,7 @@
 //! owner workspace (`checkout_owner`), and each tab's own id.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use hide_project::{ProjectFacts, ProjectKind};
 
@@ -82,6 +86,7 @@ pub(crate) fn needed_paths(raw: &RemoteSessionSnapshot) -> BTreeSet<String> {
         if !checkout.path.trim().is_empty() {
             paths.insert(checkout.path.clone());
         }
+        paths.extend(checkout.herdr_repo_root.iter().cloned());
         for tab in &checkout.tabs {
             let context = tab_context(tab, checkout);
             if !context.trim().is_empty() {
@@ -174,11 +179,60 @@ fn merge_checkout(project: &mut WorkspaceSnapshot, part: CheckoutSnapshot) {
     }
 }
 
+/// Where a checkout the helper answered it cannot read belongs: the deepest
+/// worktree of the device's Git worktree list holding it, else the
+/// repository Herdr recorded for it, by the helper's answer for that
+/// repository when it has one. A folder the helper has not answered for yet
+/// is not placed, so nothing is grouped before the device has spoken.
+fn recorded_place(
+    raw: &CheckoutSnapshot,
+    facts: &DeviceFacts,
+    worktrees: Option<&DeviceWorktrees>,
+) -> Option<ProjectFacts> {
+    if !matches!(facts.facts.get(&raw.path), Some(Fact::Refused(_))) {
+        return None;
+    }
+    let path = Path::new(&raw.path);
+    let listed = worktrees
+        .into_iter()
+        .flat_map(|worktrees| &worktrees.projects)
+        .flat_map(|(root, project)| {
+            project
+                .worktrees
+                .iter()
+                .map(move |worktree| (root, worktree))
+        })
+        .filter(|(_, worktree)| path.starts_with(&worktree.path))
+        .max_by_key(|(_, worktree)| worktree.path.len())
+        .map(|(root, worktree)| ProjectFacts {
+            root: PathBuf::from(root),
+            checkout_root: PathBuf::from(&worktree.path),
+            kind: ProjectKind::Git,
+            branch: worktree.branch.clone(),
+            linked_worktree: !worktree.is_main,
+        });
+    listed.or_else(|| {
+        let repository = raw.herdr_repo_root.as_deref()?;
+        let root = match facts.facts.get(repository)? {
+            Fact::Known(known) => known.root.clone(),
+            Fact::Refused(_) => PathBuf::from(repository),
+        };
+        Some(ProjectFacts {
+            root,
+            checkout_root: path.to_path_buf(),
+            kind: ProjectKind::Git,
+            branch: None,
+            linked_worktree: raw.is_worktree,
+        })
+    })
+}
+
 /// The session as the device's facts group it. See the module comment.
 pub(crate) fn group(
     target: &str,
     raw: &RemoteSessionSnapshot,
     facts: &DeviceFacts,
+    worktrees: Option<&DeviceWorktrees>,
 ) -> RemoteSessionSnapshot {
     let mut projects: Vec<WorkspaceSnapshot> = Vec::new();
     // Each checkout's candidates for the tab it brings forward: the active
@@ -196,7 +250,8 @@ pub(crate) fn group(
             .cloned()
             .unwrap_or_default();
         let raw_active = raw.active_tab_ids.get(&raw_checkout.id);
-        let Some(primary) = facts.known(&raw_checkout.path) else {
+        let recorded = recorded_place(raw_checkout, facts, worktrees);
+        let Some(primary) = facts.known(&raw_checkout.path).or(recorded.as_ref()) else {
             // Unconfirmed: the folder is a row of its own, named by the
             // folder, never grouped by a guess.
             let id = checkout_id(target, &raw_checkout.path);
@@ -326,7 +381,9 @@ pub(crate) fn group(
                 branch: facts.branch.clone(),
                 is_worktree: facts.linked_worktree,
                 is_primary: !facts.linked_worktree && facts.kind == ProjectKind::Git,
-                exists: true,
+                // A checkout only the worktree list or Herdr placed is one
+                // the helper could not read.
+                exists: index != 0 || recorded.is_none(),
                 has_panes: !tabs.is_empty(),
                 purpose: if index == 0 {
                     raw_checkout.purpose.clone()
