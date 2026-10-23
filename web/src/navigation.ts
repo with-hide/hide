@@ -138,7 +138,7 @@ export function agentPlaces(
 /**
  * Where each pane sits, as `project › branch` (Home, or the project alone for
  * a plain folder), keyed by pane id. A pane whose agent Hide AI started names
- * its task where the branch would stand (`project › Memory 올리기 · m72`).
+ * its task where the branch would stand (`project › Memory 반영하기 · m72`).
  */
 export function checkoutPlaces(workspaces: Workspace[], hideAi?: ReadonlyMap<string, HideAi>): Map<string, string> {
   const places = new Map<string, string>();

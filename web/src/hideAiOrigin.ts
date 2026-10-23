@@ -11,7 +11,7 @@ const TASK_KEYS: Record<string, MessageKey> = {
   memory_promote: "hideAi.task.memory_promote",
 };
 
-/** `Memory 올리기 · m72`: the work and what it is about; null when the core named no task (B10). */
+/** `Memory 반영하기 · m72`: the work and what it is about; null when the core named no task (B10). */
 export function taskLine(t: TFunction<"translation">, task: HideAiTask | undefined): string | null {
   if (!task) return null;
   const key = TASK_KEYS[task.kind];
@@ -37,7 +37,7 @@ export function hideAiWords(t: TFunction<"translation">, hideAi: HideAi | undefi
   return [t("hideAi.name"), task, turn].filter(Boolean).join(" · ");
 }
 
-/** The place line of a row Hide AI started: the project and the task in the branch's place (`herdr-ide › Memory 올리기 · m72`). */
+/** The place line of a row Hide AI started: the project and the task in the branch's place (`herdr-ide › Memory 반영하기 · m72`). */
 export function hideAiPlace(t: TFunction<"translation">, project: string, hideAi: HideAi): string {
   return `${project} › ${originLine(t, hideAi)}`;
 }
