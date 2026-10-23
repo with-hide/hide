@@ -164,3 +164,36 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     herdr.stop();
   }
 });
+
+test("세션 닫기 in a task's ⋯ menu closes its pane, though its checkout is not the one in front", async ({ page }) => {
+  const herdr = await startHerdr();
+  let daemon: Daemon | null = null;
+  try {
+    const repo = path.join(herdr.root, "repo");
+    const other = path.join(herdr.root, "repo-other");
+    fs.mkdirSync(repo);
+    git(repo, ["init"]);
+    git(repo, ["commit", "--allow-empty", "-m", "initial"]);
+    git(repo, ["worktree", "add", "-b", "prd/other", other]);
+    const front = await agentAt(herdr, repo);
+    labelAgent(herdr, front, { task: "앞에 있는 작업" });
+    const behind = await agentAt(herdr, other);
+    labelAgent(herdr, behind, { task: "닫을 작업", reply: "끝났어요" });
+    daemon = await startHided(herdr, "session-close");
+    const sent = countSent(page);
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await page.locator(`nav[data-sidebar] [data-agent-open="${front}"]`).first().click();
+    const tasks = await showTasks(page);
+    await openTaskFolds(page);
+    const row = tasks.locator(`[data-task-row="${behind}"]`);
+    await row.hover();
+    await tasks.locator(`[data-task-more="${behind}"]`).click();
+    await page.locator(`[data-task-menu="${behind}"] [data-menu-item="close"]`).click();
+    await expect.poll(() => sent.get("close_pane")).toBe(1);
+    await expect(row).toHaveCount(0, { timeout: 30_000 });
+    await expect(tasks.locator(`[data-task-row="${front}"]`)).toBeVisible();
+  } finally {
+    daemon?.stop();
+    herdr.stop();
+  }
+});
