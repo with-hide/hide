@@ -127,7 +127,6 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
       mainView: state === "projects" ? "projects" : (state === "work" || state === "focus") ? "work" : state === "history" ? "history" : state === "usage" ? "usage" : "backlog",
       overview: { ...OVERVIEW_ENTRY, panel: state === "home-record" ? { kind: "record", session: world.recordSession } : state === "backlog-detail" ? { kind: "item", workspaceId: "hide", taskKey: hideKey(163) } : null },
       quickAdd: state === "backlog-add" ? { returnFocus: null } : null,
-      laneShown: state === "record",
     });
     const root = document.documentElement;
     root.classList.toggle("dark", theme === "dark");

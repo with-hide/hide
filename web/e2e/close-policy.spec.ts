@@ -59,10 +59,10 @@ test("close follows the keyboard and the lane never renders an empty surface", a
     await page.keyboard.press(chord("close_tab"));
     await expect(panes).toHaveCount(2);
     await expect(editor).toBeVisible();
-    // Escape puts the overlay away; a terminal then owns close.
+    // Escape closes the overlay; a terminal then owns close.
     await editor.click();
     await page.keyboard.press("Escape");
-    await expect(screen).toHaveAttribute("data-lane-mode", "hidden");
+    await expect(screen).toHaveAttribute("data-lane-mode", "closed");
     const [first, second] = herdr.panes;
     await page.locator(`[data-terminal-host="${second}"]`).click();
     await page.keyboard.press(chord("close_tab"));

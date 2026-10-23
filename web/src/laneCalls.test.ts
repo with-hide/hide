@@ -24,12 +24,12 @@ describe("lane calls", () => {
   const publish = (next: ReturnType<typeof view>) => useShellStore.setState({ rest: { workspace_view: next } as unknown as SnapshotRest });
 
   it("draws the column the core recorded for the call, not one guessed from the tool", () => {
-    useUiStore.setState({ laneCallsSeen: NO_CALLS_SEEN, stackFront: "view", laneShown: false });
+    useUiStore.setState({ laneCallsSeen: NO_CALLS_SEEN, stackFront: "view" });
     publish(view(1, 1, "view", "explorer"));
     expect(useUiStore.getState().stackFront).toBe("view");
     // A reveal into the Explorer already shown: the tool did not change.
     publish(view(2, 2, "tool", "explorer"));
-    expect(useUiStore.getState()).toMatchObject({ stackFront: "tool", laneShown: true });
+    expect(useUiStore.getState().stackFront).toBe("tool");
     // An open with the same tool: the documents.
     publish(view(3, 3, "view", "explorer"));
     expect(useUiStore.getState().stackFront).toBe("view");

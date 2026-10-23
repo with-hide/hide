@@ -135,7 +135,6 @@ export function laneCalled(event: Parameters<DispatchFn>[0]): boolean {
 export function createActions(send: DispatchFn) {
   const dispatch: DispatchFn = (event) => {
     if (laneCalled(event)) {
-      useUiStore.getState().showLane();
       // A stacked lane draws the column the call is for (PRD lane-two-columns B19).
       const tool = event.kind === "workspace_view" && (typeof event.payload.tool === "string" || event.payload.reveal !== undefined);
       useUiStore.getState().setStackFront(tool || event.kind === "reveal_path" ? "tool" : "view");
@@ -399,8 +398,7 @@ export function createActions(send: DispatchFn) {
 
   /** Whether the lane is on screen now, as the Workspace screen draws it. */
   const laneUp = () => {
-    const { mode } = ui().drawnLane;
-    return mode !== "closed" && mode !== "hidden";
+    return ui().drawnLane.mode !== "closed";
   };
 
   /** Whether the tool column draws `tool` now, a stacked lane's back column not counted. */
@@ -416,15 +414,13 @@ export function createActions(send: DispatchFn) {
   };
 
   /**
-   * Shows one tool in the tool column (B3, B14): an unpinned lane comes up,
-   * a stacked lane draws the tool, and nothing is sent when the column
-   * already holds it. An open lane's viewing column is left as it is; a
+   * Shows one tool in the tool column (B3, B14): a stacked lane draws the
+   * tool, and nothing is sent when the column already holds it. An open lane's viewing column is left as it is; a
    * closed one the core opens on the tool alone (B15).
    */
   const showTool = (tool: Tool) => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
-    ui().showLane();
     ui().setStackFront("tool");
     if (view.tool !== tool || !view.open) setWorkspaceView({ tool });
   };
@@ -432,7 +428,6 @@ export function createActions(send: DispatchFn) {
   /** Puts `item` in the 보기 slot in front (PRD sidebar-task-lens B14, B15; lane-two-columns B9): the Workspace, its Agent tab and the keyboard stay. */
   const openDetail = (item: import("./snapshot").DetailItem) => {
     if (!workspaceViewOf(rest())) return diagnostic("detail_open: no Workspace in front");
-    ui().showLane();
     ui().setStackFront("view");
     dispatch({ schema_version: 2, kind: "detail_open", payload: { item } });
   };
@@ -440,11 +435,8 @@ export function createActions(send: DispatchFn) {
   /** Whether a Workspace is in front to draw the lane, rather than Home (B17). */
   const workspaceInFront = () => ui().screen?.kind === "workspace" && Boolean(frontCheckout(rest()) && workspaceViewOf(rest()));
 
-  /** Closes the lane (B15): ⌘E and the path's menu; both columns keep their shape for the reopen. */
-  const closeLane = () => {
-    ui().putLaneAway();
-    setWorkspaceView({ open: false });
-  };
+  /** Closes the lane (B15): ⌘E, the path's menu and Escape on an unpinned lane; both columns keep their shape for ⌘E's reopen. */
+  const closeLane = () => setWorkspaceView({ open: false });
 
   /** The tool column's ×, a pressed tool icon or its chord (B14): the tool column alone closes; the documents stay. */
   const closeTool = () => setWorkspaceView({ tool: null });
@@ -461,7 +453,6 @@ export function createActions(send: DispatchFn) {
   const showDocuments = () => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
-    ui().showLane();
     ui().setStackFront("view");
     if (!view.open || !view.documents || detailShown()) setWorkspaceView({ documents: true });
     if (view.layout && (view.layout.display_count ?? 0) > 0) {
@@ -495,9 +486,8 @@ export function createActions(send: DispatchFn) {
     }
   };
 
-  /** The pin (B5): pinned, the lane docks; unpinned, it stays up over Agent Views until the operator closes it or puts it away with Escape. */
+  /** The pin (B5): pinned, the lane docks; unpinned, it stays up over Agent Views until the operator closes it with ⌘E or Escape. */
   const setLanePinned = (pinned: boolean) => {
-    if (!pinned) ui().showLane();
     setWorkspaceView({ pinned });
   };
 
@@ -1707,7 +1697,6 @@ export function createActions(send: DispatchFn) {
       const state = ui();
       const openWorkspace = !workspaceInFront();
       if (state.overviewOpen || state.screen?.kind !== "workspace") state.setScreen({ kind: "workspace" });
-      state.showLane();
       dispatch({ schema_version: 2, kind: "pr_open", payload: { workspace_id: projectId, pr_number: number, ...(checkoutId ? { checkout_id: checkoutId } : {}), ...(openWorkspace ? { open_workspace: true } : {}) } });
     },
 
@@ -1730,7 +1719,6 @@ export function createActions(send: DispatchFn) {
         this.openWorkspace(mission.device_id, checkout.workspace_id, checkout.id);
         state.setScreen({ kind: "workspace" });
       }
-      state.showLane();
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId } } });
     },
 
@@ -1823,7 +1811,6 @@ export function createActions(send: DispatchFn) {
       if (detailShown() && viewUp("detail")) {
         return dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: false } });
       }
-      ui().showLane();
       ui().setStackFront("view");
       dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: true } });
     },
@@ -1860,7 +1847,6 @@ export function createActions(send: DispatchFn) {
       const agent = allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote).find((row) => row.pane_id === paneId);
       const session = agent ? sessionOfAgent(agent, rest()) : null;
       const inFront = workspaceInFront() && !ui().overviewOpen;
-      if (inFront && session) ui().showLane();
       dispatch({ schema_version: 2, kind: "task_reveal", payload: { pane_id: paneId, ...(inFront && session ? { session } : {}) } });
       if (!inFront && session) this.openOverview(session.device_id, { panel: { kind: "record", session } });
     },
@@ -2732,7 +2718,6 @@ export function createActions(send: DispatchFn) {
     viewRecordInLane(deviceId: string, workspaceId: string, checkoutId: string, session: import("./snapshot").WorkSession) {
       this.closeOverview();
       this.openWorkspace(deviceId, workspaceId, checkoutId);
-      ui().showLane();
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session } } });
     },
     openRecordedIssue(session: import("./snapshot").WorkSession, repository: string, number: number) {

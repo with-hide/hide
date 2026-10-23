@@ -78,7 +78,7 @@ test("⌘E reopens the tool a whole-lane close kept, and the Explorer for a lane
   }
 });
 
-test("a tool pressed into a lane ⌘E closed opens alone, and the documents wait on their rail button (B15)", async ({ page }) => {
+test("a tool pressed into a lane ⌘E or Escape closed opens alone, and the documents wait on their rail button (B15)", async ({ page }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1600, height: 900 });
   const herdr = await startHerdr({ agents: false });
@@ -112,6 +112,14 @@ test("a tool pressed into a lane ⌘E closed opens alone, and the documents wait
     await page.locator('[data-lane-tool="documents"]').click();
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
     await shows(page, "memory");
+
+    // Escape closes the unpinned lane as ⌘E does, so Memory again opens alone.
+    await page.locator("[data-editor-body] .cm-content").click();
+    await page.keyboard.press("Escape");
+    await closed(page);
+    await page.locator('[data-lane-tool="memory"]').click();
+    await shows(page, "memory");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
   } finally {
     daemon?.stop();
     herdr.stop();
