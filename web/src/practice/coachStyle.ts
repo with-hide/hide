@@ -44,7 +44,7 @@ ${ZONES}
 .pc-keys{display:inline-flex;gap:var(--spacing-xxs);vertical-align:middle}
 .pc-kc{display:inline-flex;align-items:center;justify-content:center;min-width:var(--size-control-compact);height:var(--size-control-compact);padding:0 var(--spacing-xs);border-radius:var(--radius-sm);font-size:var(--text-body);font-weight:700;background:var(--practice-keycap);color:var(--practice-keycap-ink);box-shadow:0 var(--size-hairline) 0 var(--practice-line);border:var(--size-hairline) solid var(--practice-line)}
 .pc-go .pc-kc{background:color-mix(in srgb,var(--practice-keycap) 55%,transparent);border-color:transparent;box-shadow:none}
-.pc-flash{position:absolute;left:50%;top:40%;transform:translate(-50%,-50%);display:flex;gap:var(--spacing-md);animation:pc-flash .9s ${EASE} both}
+.pc-flash{position:absolute;z-index:1;left:50%;top:40%;transform:translate(-50%,-50%);display:flex;gap:var(--spacing-md);animation:pc-flash .9s ${EASE} both}
 .pc-flash .pc-kc{min-width:var(--size-practice-flash-key);height:var(--size-practice-flash-key);font-size:var(--text-display);border-radius:var(--radius-xl);padding:0 var(--spacing-md);background:var(--practice-card);box-shadow:0 var(--spacing-xs) 0 var(--practice-line),${SHADOW}}
 @keyframes pc-flash{0%{opacity:0;transform:translate(-50%,-50%) scale(.85)}20%{opacity:1;transform:translate(-50%,-50%) scale(1)}75%{opacity:1}100%{opacity:0}}
 .pc-mode{position:absolute;left:50%;top:var(--spacing-xs);transform:translateX(-50%);display:flex;align-items:center;gap:var(--spacing-md);font-size:var(--text-body);font-weight:600;padding:var(--spacing-xxs) var(--spacing-md) var(--spacing-xxs) var(--spacing-xs);border-radius:var(--radius-xl);background:var(--practice-card);color:var(--practice-text);box-shadow:0 0 0 var(--size-hairline) var(--practice-line);pointer-events:auto}
@@ -68,9 +68,9 @@ ${ZONES}
 .pc-qf{padding:0 var(--spacing-md) var(--spacing-md);font-size:var(--text-body);color:var(--practice-mute);display:flex;justify-content:space-between}
 .pc-qf button{font:inherit;border:0;background:none;color:var(--practice-mute);cursor:pointer;padding:0}
 .pc-qf button:hover{color:var(--practice-text)}
-.pc-hand{position:absolute;filter:drop-shadow(0 var(--spacing-xxs) var(--spacing-xs) color-mix(in srgb,var(--practice-scrim) 50%,transparent))}
+.pc-hand{position:absolute;z-index:1;filter:drop-shadow(0 var(--spacing-xxs) var(--spacing-xs) color-mix(in srgb,var(--practice-scrim) 50%,transparent))}
 .pc-hand path{fill:var(--practice-card);stroke:var(--practice-keycap-ink);stroke-width:1.2}
-.pc-example{position:absolute;transform:translate(var(--spacing-xs),-50%);padding:0 var(--spacing-xs);border-radius:var(--radius-xl);border:var(--size-hairline) solid var(--practice-accent-strong);background:color-mix(in srgb,var(--practice-accent) 22%,var(--practice-card));color:var(--practice-ink);font-size:var(--text-caption);font-weight:600;line-height:1.5;white-space:nowrap}
+.pc-example{position:absolute;z-index:1;transform:translate(var(--spacing-xs),-50%);padding:0 var(--spacing-xs);border-radius:var(--radius-xl);border:var(--size-hairline) solid var(--practice-accent-strong);background:color-mix(in srgb,var(--practice-accent) 22%,var(--practice-card));color:var(--practice-ink);font-size:var(--text-caption);font-weight:600;line-height:1.5;white-space:nowrap}
 `;
 
 // The chapter list: the same soft amber on the shell's own background, so the

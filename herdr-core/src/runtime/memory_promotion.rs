@@ -2180,6 +2180,7 @@ fn spawn_agent(
                 kind: crate::coordination::TaskKind::MemoryPromote,
                 target: Some(format!("m{number}")),
             }),
+            beside: false,
         },
     )?;
     view["id"]

@@ -115,6 +115,7 @@ describe.each(CHAPTERS.map((chapter) => [chapter.id, chapter] as const))("practi
         // only a palette, a drag or typing reaches keeps the state before it.
         if (step.done && !step.done(current)) {
           const seen = new Set([key(current)]);
+          let found = false;
           let frontier: { model: unknown; path: string }[] = [{ model: current, path: step.id }];
           search: for (let depth = 0; depth < DEPTH && frontier.length; depth += 1) {
             const next: typeof frontier = [];
@@ -125,6 +126,7 @@ describe.each(CHAPTERS.map((chapter) => [chapter.id, chapter] as const))("practi
                 const there = { model: reached.model, path: `${path} > ${reached.name}` };
                 if (step.done(reached.model)) {
                   current = reached.model;
+                  found = true;
                   break search;
                 }
                 next.push(there);
@@ -132,6 +134,8 @@ describe.each(CHAPTERS.map((chapter) => [chapter.id, chapter] as const))("practi
             }
             frontier = next;
           }
+          // Not found within the bound is not the same as unreachable by the shell: say so, as the step is checked from the state before it.
+          if (!found && seen.size >= STATES) console.warn(`practice chapter ${chapter.id}: ${step.id} was not reached within ${STATES} states; checked from the state before it`);
         }
         everyInput(current, `at ${step.id}`);
       }

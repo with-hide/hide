@@ -19,6 +19,8 @@ mod agents_settings_remote;
 mod appearance;
 #[path = "tests/backlog.rs"]
 mod backlog;
+#[path = "tests/beside_spawn.rs"]
+mod beside_spawn;
 #[path = "tests/birth_cwd.rs"]
 mod birth_cwd;
 mod checkout_git;

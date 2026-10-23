@@ -8,8 +8,15 @@ import { workspaceKey } from "./viewLayout";
 import type { DispatchFn } from "./ws";
 import { FindBar } from "./Overlays";
 import { TooltipProvider } from "./components/ui/tooltip";
+import type { Checkout, SnapshotRest } from "./snapshot";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { WorkspaceScreen } from "./WorkspaceScreen";
+import { attachTerminal, terminalFor } from "./terminals";
+import { installKeyboardOwner, keyboardCommandOwner, noteCommandDelivered } from "./viewFocus";
+import { emptyScope } from "../test/legacyAgentScope";
 
-// No terminal renders here. Keep the real actions import while answering
+// jsdom has no canvas. Keep real actions and terminals while answering
 // xterm's canvas capability probe at the browser boundary.
 const browserCanvas = vi.hoisted(() => {
   const original = HTMLCanvasElement.prototype.getContext;
@@ -18,6 +25,88 @@ const browserCanvas = vi.hoisted(() => {
 });
 afterAll(() => browserCanvas.restore());
 afterEach(() => useUiStore.getState().setViewFocusRequest(null));
+
+it.each([
+  { arrival: "before", folded: false, input: "terminal" },
+  { arrival: "after", folded: false, input: "terminal" },
+  { arrival: "after", folded: true, input: "terminal" },
+  { arrival: "after", folded: true, input: "tool" },
+  { arrival: "after", folded: false, input: "popup" },
+])("returns a hidden native page's keyboard without replacing newer input ($arrival, folded=$folded, input=$input)", async ({ arrival, folded, input }) => {
+  const saved = useShellStore.getState();
+  const savedUi = useUiStore.getState();
+  const previousHost = window.hideHost;
+  const previousStyle = document.documentElement.getAttribute("style");
+  document.documentElement.style.setProperty("--text-terminal-base", "14px");
+  document.documentElement.style.setProperty("--font-mono", "monospace");
+  let nativeFocus: (event: import("./host").BrowserHostEvent) => void = () => {};
+  const workspace = { device_id: "local", path: "/repo" };
+  const scope = emptyScope();
+  scope.closes["p"] = { decision: { action: "close" }, subtree: null, subtree_all: null, stop_work: { rows: [], unknown: null } };
+  const checkout: Checkout = {
+    id: "c", workspace_id: "w", path: "/repo", label: "repo", branch: null, purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, agent_scope: scope, next_tab_label: "Tab 2",
+    tabs: [{ id: "t", workspace_id: "w", checkout_id: "c", label: "Tab 1", empty: false, delegated: false, panes: [{ id: "p", cwd: "/repo", herdr_label: null, terminal_title: null, identity_label: null, status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false }] }], active_tab_id: "t", strip: [],
+  };
+  const rest: SnapshotRest = {
+    navigator: { focused_device_id: "local", focused_checkout_id: "c", focused_workspace_id: "w", agent_scope: scope, devices: [], workspaces: [{ id: "w", label: "repo", device_id: "local", path: "/repo", registered: true, temporary: false, pinned: false, inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: scope, checkouts: [checkout] }] },
+    workspace_view: { ...workspace, open: true, documents: true, tool: folded ? "explorer" : null, pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout: { active_area: "a1", limits: { areas: 8, depth: 4, displays: 32 }, display_count: 1, root: { area: { id: "a1", active: "b", displays: [{ id: "b", tab_id: null, path: "", committed: null, preview: false, reason: null, kind: "browser", state: "open", label: "page", url: "https://page.test/" }] } } } },
+    ui_state: { detail: { items: [], shown: false } },
+  };
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  vi.stubGlobal("matchMedia", () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }));
+  const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1024);
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  Object.assign(window, { hideHost: { kind: "electron", browser: { onEvent: (listener: typeof nativeFocus) => { nativeFocus = listener; return () => {}; }, sync() {}, command() {} } } });
+  document.body.innerHTML = '<div data-workspace-screen="c"><div data-pane-view="p"></div><aside data-lane="explorer"><input data-live-tool /></aside></div><div role="dialog"><input data-popup /></div><div data-screen></div>';
+  const root = createRoot(document.querySelector("[data-screen]")!);
+  const sent: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { sent.push(event); return true; });
+  useShellStore.setState({ rest, connection: "live", focusedPaneId: "p", agents: [], editor: null });
+  useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false });
+  let detach: (() => void) | undefined;
+  let remove: (() => void) | undefined;
+  try {
+    detach = attachTerminal("p", document.querySelector("[data-pane-view]")!, (event) => { sent.push(event); return true; }, actions, 1);
+    const terminal = terminalFor("p")!.textarea!;
+    remove = installKeyboardOwner();
+    await act(async () => root.render(createElement(TooltipProvider, null, createElement(WorkspaceScreen, { actions }))));
+    expect(useUiStore.getState().drawnLane.mode).not.toBe("closed");
+    act(() => terminal.focus());
+    // Reopening the lane requested native focus, but its report has not yet
+    // reached the shell when the next menu command closes the lane.
+    const focus = () => act(() => nativeFocus({ kind: "focus", workspace: workspaceKey(workspace), id: "b" }));
+    if (arrival === "before") focus();
+    act(() => {
+      if (folded) actions.setWorkspaceView({ documents: false });
+      else actions.closeLane();
+      noteCommandDelivered();
+    });
+    if (arrival === "after") focus();
+    expect(keyboardCommandOwner()).toMatchObject({ kind: arrival === "after" ? "view" : "pane", workspace: "c" });
+    const destination = input === "terminal" ? terminal : document.querySelector<HTMLInputElement>(input === "tool" ? "[data-live-tool]" : "[data-popup]")!;
+    if (input !== "terminal") act(() => destination.focus());
+    await act(async () => useShellStore.setState({ rest: { ...rest, workspace_view: { ...rest.workspace_view!, ...(folded ? { documents: false } : { open: false }) } } }));
+    // The terminal remained the shell's active element throughout native
+    // focus. Returning it cannot depend on another DOM focus event.
+    expect(document.activeElement).toBe(destination);
+    act(() => actions.closeFocused());
+    expect(sent.filter((event) => event.kind === "close_pane")).toEqual(input === "terminal" ? [{ schema_version: 2, kind: "close_pane", payload: { pane_id: "p", confirmed: false } }] : []);
+    expect(keyboardCommandOwner()).toEqual(input === "terminal" ? { kind: "pane", workspace: "c", paneId: "p" } : input === "tool" ? { kind: "tool", workspace: "c" } : { kind: "none" });
+  } finally {
+    await act(async () => root.unmount());
+    remove?.();
+    detach?.();
+    Object.assign(window, { hideHost: previousHost });
+    useShellStore.setState(saved, true);
+    useUiStore.setState(savedUi, true);
+    document.body.innerHTML = "";
+    vi.unstubAllGlobals();
+    width.mockRestore();
+    if (previousStyle === null) document.documentElement.removeAttribute("style");
+    else document.documentElement.setAttribute("style", previousStyle);
+  }
+});
 
 describe("which pages the keyboard follows", () => {
   const workspace = { device_id: "local", path: "/repo" };

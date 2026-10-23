@@ -5,7 +5,7 @@
 // path of anyone's.
 
 import type { AgentGroup, AgentLayout } from "../../agentLayout";
-import type { AgentScope } from "../../agentScope";
+import type { AgentScope, AgentTreeScope } from "../../agentScope";
 import type { PaneMoveIntent } from "../../paneMove";
 import type { AgentRow, AgentState, AsyncOperation, Checkout, LayoutNode, SnapshotRest, Workspace } from "../../snapshot";
 import type { CoreEvent, WorldSnapshot } from "../world";
@@ -111,6 +111,30 @@ function shellPane(model: DeskModel): PracticePane {
 /** What a plain shell's terminal shows: the prompt in the desk's project. */
 export function shellScreen(place: PracticePlace): string {
   return `\x1b[32m~/${place.project}\x1b[0m \x1b[2m${place.branch}\x1b[0m\r\n$ `;
+}
+
+// --- An agent's prompt --------------------------------------------------------
+
+/** The text a terminal's `key` event carries (`bytes_base64`). */
+export const keyText = (base64: string) => new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)));
+
+/**
+ * The prompt after the keys `text`, as an agent's input line takes them: ⌃U
+ * clears it, ⌫ takes a character back, ⏎ hands it to `submit`; an arrow or
+ * other escape sequence moves nothing.
+ */
+export function typed<M extends { draft: string }>(model: M, text: string, submit: (model: M) => M): M {
+  let next = model;
+  let escape = false;
+  for (const char of text) {
+    if (escape) escape = !/[A-Za-z~]/.test(char);
+    else if (char === "\x1b") escape = true;
+    else if (char === "\r") next = submit(next);
+    else if (char === "\x15") next = { ...next, draft: "" };
+    else if (char === "\x7f") next = { ...next, draft: [...next.draft].slice(0, -1).join("") };
+    else if (char >= " ") next = { ...next, draft: next.draft + char };
+  }
+  return next;
 }
 
 // --- The core events a desk answers -----------------------------------------
@@ -456,4 +480,76 @@ export function deskSnapshot(desks: readonly PracticeDesk[], front: string, nowM
     terminal: { headers: Object.fromEntries(agents.map((row) => [row.pane_id, { working: true, notice: null, band: null }])) },
   };
   return { rest, agents, focused, usage: null };
+}
+
+// --- Lineage and where a row stands -----------------------------------------------
+
+/** `rest` with `change` made to every agent scope in it, and `workspace` to each project besides. */
+function everyScope(rest: SnapshotRest, change: (scope: AgentScope) => AgentScope, workspace: (row: Workspace) => Partial<Workspace> = () => ({})): SnapshotRest {
+  const navigator = rest.navigator!;
+  return {
+    ...rest,
+    navigator: {
+      ...navigator,
+      agent_scope: navigator.agent_scope && change(navigator.agent_scope),
+      devices: navigator.devices?.map((device) => ({ ...device, agent_scope: change(device.agent_scope) })),
+      workspaces: navigator.workspaces?.map((row) => ({
+        ...row,
+        ...workspace(row),
+        agent_scope: change(row.agent_scope),
+        checkouts: (workspace(row).checkouts ?? row.checkouts).map((checkout) => ({ ...checkout, agent_scope: change(checkout.agent_scope) })),
+      })),
+    },
+  };
+}
+
+/**
+ * Every agent scope in `rest` with `children` drawn one level under `parent`
+ * and no longer roots of their own, as the core draws a delegated child. The
+ * kit lists every agent as a root.
+ */
+export function withLineage(rest: SnapshotRest, parent: string, children: readonly string[]): SnapshotRest {
+  const nest = (tree: AgentTreeScope): AgentTreeScope => {
+    const rows = tree.rows.filter((row) => !children.includes(row.pane_id)).flatMap((row) => (row.pane_id === parent ? [row, ...children.map((pane_id) => ({ pane_id, occurrence: 0, depth: 1 }))] : [row]));
+    return { ...tree, rows, visible_rows: rows };
+  };
+  return everyScope(rest, (one) => ({
+    ...one,
+    roots: one.roots.filter((row) => !children.includes(row.pane_id)),
+    children: { [parent]: [...children] },
+    descendants: { [parent]: children.length },
+    tree: nest(one.tree),
+    sidebar_tree: nest(one.sidebar_tree),
+    global_tree: nest(one.global_tree),
+  }));
+}
+
+/**
+ * Every agent scope in `rest` with `count` of its agents, one by default,
+ * counted where their rows stand as the core counts them: Seen at rest, or
+ * waiting on the operator in Needs You. The kit counts every agent as working.
+ */
+export function counted(rest: SnapshotRest, as: "seen" | "needs_you", count = 1): SnapshotRest {
+  const asks = as === "needs_you" ? count : 0;
+  const scope = (one: AgentScope): AgentScope => ({
+    ...one,
+    overview_needs_you: one.overview_needs_you + asks, has_working: one.groups.working > count,
+    groups: { ...one.groups, [as]: one.groups[as] + count, working: one.groups.working - count },
+    marks: { ...one.marks, turn: one.marks.turn + asks, going: one.marks.going - count },
+    buckets: { ...one.buckets, [asks ? "turn" : "resting"]: one.buckets[asks ? "turn" : "resting"] + count, working: one.buckets.working - count },
+    turns: { ...one.turns, question: one.turns.question + asks },
+    tree: { ...one.tree, needs_you: one.tree.needs_you || asks > 0 },
+    sidebar_tree: { ...one.sidebar_tree, needs_you: one.sidebar_tree.needs_you || asks > 0 },
+    global_tree: { ...one.global_tree, needs_you: one.global_tree.needs_you || asks > 0 },
+  });
+  return everyScope(rest, scope, (workspace) => ({
+    agent_presence: { working: workspace.agent_scope.groups.working > count },
+    checkouts: workspace.checkouts.map((checkout) => ({
+      ...checkout,
+      agent_summary: checkout.agent_summary && {
+        ...checkout.agent_summary, [as]: checkout.agent_summary[as] + count, working: checkout.agent_summary.working - count,
+        marks: { ...checkout.agent_summary.marks, turn: checkout.agent_summary.marks.turn + asks, going: checkout.agent_summary.marks.going - count },
+      },
+    })),
+  }));
 }

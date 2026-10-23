@@ -109,6 +109,12 @@ python3 scripts/check-herdr-schema.py             # needs a Herdr CLI on PATH or
 bash scripts/verify-cargo.sh test-scoped -p hide-platform -p hide-herdr-client # the OS contract and the client's own tests; add HIDE_E2E_HERDR_BIN=<pinned herdr> and `--test it -- --ignored` to run the client against it
 ```
 
+The web build typechecks before bundling, so CI's web checks and the no-argument web gate run that build once before lint and unit tests, rather than repeating the same typecheck.
+Desktop's build does not typecheck, so its separate typecheck stays.
+For build-free discovery use `bash scripts/verify-web.sh desktop e2e-list --reporter=list` (add the same test filters as the execution).
+Desktop CI discovers and checks each shard with `e2e-list`, then executes with `desktop e2e`, which always builds the current host once before Playwright.
+Direct local `desktop e2e` and both packages' standalone build/e2e scripts keep their preparation; no command opts execution into stale desktop output.
+
 For coding-agent work, use the installed `ship` skill to open or update the pull request against `main` and answer the template.
 Use that skill for an approved merge too, subject to [Merging into main](#merging-into-main); a delegated session never merges.
 Do not open a pull request by hand with `gh pr create`: that path has skipped the `pr-assets` upload step and left UI changes without images.
