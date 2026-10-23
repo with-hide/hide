@@ -3,8 +3,8 @@
 // exists, whatever program printed it. A click opens it in the Workspace (a
 // browser display, the file in View at its line, a folder in the Explorer),
 // ⌘-click hands it to macOS, a file of another checkout opens in the Workspace
-// in front without bringing that checkout forward, a path outside every
-// checkout goes to macOS on a plain click too and a program there is only revealed, a path the terminal
+// in front without bringing that checkout forward, a program outside every
+// checkout is only revealed, a path the terminal
 // wrapped is one link, a program's own OSC 8 link opens without xterm's
 // confirm dialog, a drag across a link selects rather than opens, and no link
 // click reaches the program as a mouse click. Everything runs on a private Herdr server, hided and Electron
@@ -22,10 +22,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { linkCandidates } from "../../web/src/terminalLinks";
 import { toPage } from "../src/main/wirePath";
-import { printFileCommand, startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { countSent, enterWorkspace, setLanePinned, showExplorer } from "../../web/e2e/wire";
 import { fitWindow, hostLog, isolate, launch, screenshot, shellPage, test, type Isolated } from "./fixture";
 import { measureFor, quietFor } from "../../web/e2e/wait";
+import { cellOf, cellPoint, hoverLink, pointOf, printInPane, withProbe, type Probe } from "./terminal-probe";
 
 test.describe.configure({ timeout: 240_000 });
 test.use({ actionTimeout: 15_000 });
@@ -68,66 +69,9 @@ test.afterEach(async () => {
   scratch = null;
 });
 
-type Probe = { paneId: () => string | null; paneText: (id: string) => string; paneGrid: (id: string) => { cols: number; rows: number } | null; diagnostics?: () => string[] };
-
-/** Reloads the shell with the terminal probe, the only way to read what xterm draws through WebGL. */
-async function withProbe(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const url = new URL(location.href);
-    url.searchParams.set("probe", "1");
-    location.href = url.href;
-  });
-  await expect
-    .poll(() => page.evaluate(() => typeof (window as { __hideProbe?: unknown }).__hideProbe).catch(() => "reloading"), { timeout: 20_000 })
-    .toBe("object");
-}
-
 /** Prints `lines` in the fixture pane through a program, using the pane's shell. */
-async function print(page: Page, paneId: string, lines: string[], last: string): Promise<void> {
-  // Leave the old row before replacing its text so xterm requests fresh links
-  // when the next real hover enters it, including after an empty/error answer.
-  const grid = await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)!, paneId);
-  // The first column is covered by the pane resize grab, so use the middle.
-  const away = await cellPoint(page, paneId, { row: grid.rows - 1, column: Math.floor(grid.cols / 2) });
-  expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest(".xterm") != null, away)).toBe(true);
-  await page.mouse.move(away.x, away.y);
-  const file = path.join(herdr.root, `print-${Date.now()}.txt`);
-  fs.writeFileSync(file, `${lines.join("\n")}\n`);
-  const command = printFileCommand(herdr.shell, file);
-  const sent = spawnSync(herdr.bin, ["pane", "run", herdr.panes[0], command], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-  expect(sent.status, sent.stderr).toBe(0);
-  await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id), paneId), { timeout: 20_000 }).toContain(last);
-}
-
-/** Characters xterm draws two cells wide here: Hangul, Han, kana, CJK punctuation and fullwidth forms. */
-const WIDE = /[\p{scx=Hangul}\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\u3000-\u303F\uFF01-\uFF60]/u;
-
-/** Where `text` is on the screen of `paneId`: its row and the column of its `offset`th character. */
-async function cellOf(page: Page, paneId: string, text: string, offset = 0): Promise<{ row: number; column: number }> {
-  const lines = await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id).split("\n"), paneId);
-  const row = lines.findIndex((line) => line.includes(text));
-  expect(row, `${text} is not on the screen:\n${lines.join("\n")}`).toBeGreaterThanOrEqual(0);
-  const prefix = lines[row]!.slice(0, lines[row]!.indexOf(text)) + text.slice(0, offset);
-  const column = [...prefix].reduce((width, char) => width + (WIDE.test(char) ? 2 : 1), 0);
-  return { row, column };
-}
-
-/** The window point at the middle of a cell of `paneId`'s screen. */
-async function cellPoint(page: Page, paneId: string, cell: { row: number; column: number }): Promise<{ x: number; y: number }> {
-  const grid = await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)!, paneId);
-  const box = (await page.locator(`[data-terminal="${paneId}"] .xterm-screen`).boundingBox())!;
-  return { x: box.x + ((cell.column + 0.5) * box.width) / grid.cols, y: box.y + ((cell.row + 0.5) * box.height) / grid.rows };
-}
-
-async function pointOf(page: Page, paneId: string, text: string, { offset = 0 } = {}): Promise<{ x: number; y: number }> {
-  return cellPoint(page, paneId, await cellOf(page, paneId, text, offset));
-}
-
-/** Moves over a point and waits until xterm shows a link there. */
-async function hoverLink(page: Page, paneId: string, point: { x: number; y: number }): Promise<void> {
-  await page.mouse.move(point.x - 3, point.y);
-  await page.mouse.move(point.x, point.y);
-  await expect(page.locator(`[data-terminal="${paneId}"] .xterm-screen`)).toHaveClass(/xterm-cursor-pointer/, { timeout: 10_000 });
+function print(page: Page, paneId: string, lines: string[], last: string): Promise<void> {
+  return printInPane(herdr, page, paneId, lines, last);
 }
 
 /** A click with ⌘ held; the mouse carries no modifiers of its own. */
@@ -204,10 +148,9 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   fs.writeFileSync(path.join(checkout, "src", "linked.ts"), Array.from({ length: 60 }, (_, index) => `// line ${index + 1}`).join("\n"));
   // Short, so its line never wraps; macOS keeps /tmp at /private/tmp.
   scratch = fs.mkdtempSync("/tmp/hide-links-");
-  const outside = path.join(scratch, "o.txt");
-  fs.writeFileSync(outside, "outside every checkout");
   const program = path.join(scratch, "tool");
-  fs.writeFileSync(program, "#!/bin/sh\necho ran\n", { mode: 0o755 });
+  // A compiled program (a Mach-O header) is revealed; a `#!` script opens as text (PRD outside-path-in-hide B7).
+  fs.writeFileSync(program, new Uint8Array([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]), { mode: 0o755 });
   test.info().attach("scratch", { body: scratch });
 
   ({ app } = await launch(run.env));
@@ -246,7 +189,6 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
     [
       `url ${origin}/a.html`,
       "file src/linked.ts:42 and missing/nothing.ts",
-      `outside ${outside}`,
       `program ${program}`,
       `osc8 \u001b]8;;${origin}/b.html\u001b\\Page B link\u001b]8;;\u001b\\`,
       `osc8 \u001b]8;;file://${checkout}/src/linked.ts#L7\u001b\\Linked at 7\u001b]8;;\u001b\\`,
@@ -293,17 +235,13 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   point = await pointOf(page, paneId, "src/linked.ts:42", { offset: 2 });
   await hoverLink(page, paneId, point);
   await metaClick(page, point);
-  // A path outside every checkout goes to macOS on a plain click, and a program there is only revealed.
-  point = await pointOf(page, paneId, outside, { offset: 2 });
-  await hoverLink(page, paneId, point);
-  await page.mouse.click(point.x, point.y);
+  // A program outside every checkout is only revealed; an outside file opening in Hide is `outside-files.spec.ts`.
   point = await pointOf(page, paneId, program, { offset: 2 });
   await hoverLink(page, paneId, point);
   await page.mouse.click(point.x, point.y);
   await expect.poll(opened).toEqual([
     { how: "external", target: `${origin}/a.html` },
     { how: "open", target: path.join(checkout, "src", "linked.ts") },
-    { how: "open", target: fs.realpathSync(outside) },
     { how: "reveal", target: fs.realpathSync(program) },
   ]);
 
@@ -346,7 +284,7 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   await page.mouse.up();
   await quietFor(page, 500, "the drag selection holds");
   expect(sent.get("reveal_path")).toBe(4);
-  expect(await opened()).toHaveLength(4);
+  expect(await opened()).toHaveLength(3);
   expect(sent.get("terminal_click") ?? 0).toBe(clicksBefore);
 
   // A click on plain text is still the program's, so the counts above heard the wire.
