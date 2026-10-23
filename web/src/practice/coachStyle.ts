@@ -69,6 +69,7 @@ ${ZONES}
 .pc-qf button:hover{color:var(--practice-text)}
 .pc-hand{position:absolute;filter:drop-shadow(0 var(--spacing-xxs) var(--spacing-xs) color-mix(in srgb,var(--practice-scrim) 50%,transparent))}
 .pc-hand path{fill:var(--practice-card);stroke:var(--practice-keycap-ink);stroke-width:1.2}
+.pc-example{position:absolute;transform:translate(var(--spacing-xs),-50%);padding:0 var(--spacing-xs);border-radius:var(--radius-xl);border:var(--size-hairline) solid var(--practice-accent-strong);background:color-mix(in srgb,var(--practice-accent) 22%,var(--practice-card));color:var(--practice-ink);font-size:var(--text-caption);font-weight:600;line-height:1.5;white-space:nowrap}
 `;
 
 // The chapter list: the same soft amber on the shell's own background, so the

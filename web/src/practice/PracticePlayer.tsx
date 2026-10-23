@@ -69,10 +69,11 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   useLayoutEffect(() => {
     const { rest, agents, focused, usage, frames } = chapter.world.snapshot(model, Date.now());
     const ui_state = { ...rest.ui_state, ...operator };
-    // A frame the world does not send is empty, so one chapter's files never show in the next.
+    // A frame the world does not send is empty, so one chapter's files or records never show in the next.
     useShellStore.setState({
       rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,
       fileIndex: frames?.fileIndex ?? null, editor: frames?.editor ?? null, documents: frames?.documents ?? NO_DOCUMENTS,
+      sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
     });
   }, [chapter, model, operator]);
 
