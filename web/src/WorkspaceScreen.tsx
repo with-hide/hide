@@ -324,7 +324,7 @@ function WorkspaceTitleBar({ checkout, view, actions }: { checkout: Checkout; vi
   ];
   const select = (id: ToolbarMenuId) => {
     if (id === "lane") return actions.toggleLane();
-    if (id === "copy_path") return void navigator.clipboard?.writeText(checkout.path).catch(() => undefined);
+    if (id === "copy_path") return void actions.copyText(checkout.path, "checkout path");
   };
   const home = project?.is_home === true;
   const [headerElement, setHeaderElement] = useState<HTMLElement | null>(null);

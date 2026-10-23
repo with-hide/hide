@@ -13,19 +13,21 @@ import { OverviewModal } from "../Overview";
 import { Palette } from "../Palette";
 import type { SnapshotRest } from "../snapshot";
 import { Sidebar } from "../sidebar";
-import { useShellStore, type Documents } from "../store";
+import { useShellStore, type DirectoryList, type Documents } from "../store";
 import { feedChunks, terminalFor } from "../terminals";
 import { TitleRow } from "../TitleRow";
 import { useUiStore } from "../ui";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import type { PracticeChapter } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
+import { holdPageClipboard, practiceClipboard } from "./clipboard";
 import { holdPageOutside } from "./outside";
-import { PRACTICE_COPY, type CoreEvent } from "./world";
+import type { CoreEvent } from "./world";
 
 type UiState = NonNullable<SnapshotRest["ui_state"]>;
 
 const NO_DOCUMENTS: Documents = {};
+const NO_LISTINGS: Record<string, DirectoryList> = {};
 
 /** Home, then erase the screen and its scrollback: a screen the world changed is drawn from the top. */
 const CLEAR = "\x1b[H\x1b[2J\x1b[3J";
@@ -51,7 +53,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   const live = useRef({ world: chapter.world, model });
   live.current = { world: chapter.world, model };
 
-  const { actions, send } = useMemo(() => {
+  const { actions, clipboard, send } = useMemo(() => {
     const send = (event: CoreEvent) => {
       const after = live.current.world.apply(live.current.model, event);
       if (after) {
@@ -61,11 +63,13 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       }
       return true;
     };
-    // A copy goes to the world, never to the operator's clipboard.
-    return { actions: { ...createActions(send), copyText: (text: string, what: string) => void send({ kind: PRACTICE_COPY, payload: { text, what } }) }, send };
+    // A copy goes to the world and a paste takes the last copy back; the operator's clipboard is never read or written.
+    const clipboard = practiceClipboard(send);
+    return { actions: createActions(send, clipboard), clipboard, send };
   }, []);
 
   useEffect(() => installKeyboard(actions), [actions]);
+  useEffect(() => holdPageClipboard(clipboard), [clipboard]);
   // A link, a window, a navigation or a host call the shell would have sent off the page goes to the world instead.
   useEffect(() => holdPageOutside(send), [send]);
 
@@ -77,6 +81,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,
       fileIndex: frames?.fileIndex ?? null, editor: frames?.editor ?? null, documents: frames?.documents ?? NO_DOCUMENTS,
       sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
+      listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null,
     });
   }, [chapter, model, operator]);
 
