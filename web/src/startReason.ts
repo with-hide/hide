@@ -10,6 +10,12 @@ import type { MessageKey } from "./i18n/catalogs";
 /** The codes the core sends for a start it refused, each worded once in the catalog. */
 const REASON_KEYS = new Map<string, MessageKey>([
   ["codex_capability_unknown", "agents.codexUnread"],
+  // Why waking a sleeping agent failed (`agent_sleep_herdr::WAKE_*`).
+  ["agent_wake.folder_missing", "taskReason.folderMissing"],
+  ["agent_wake.not_resumed", "wakeReason.notResumed"],
+  ["agent_wake.not_started", "wakeReason.notStarted"],
+  ["agent_wake.not_ready", "wakeReason.notReady"],
+  ["agent_wake.launch_choice_refused", "wakeReason.launchChoiceRefused"],
   // A task that failed for a reason the core words only in its log.
   ["task_operation.failed", "workspace.agentNotStarted"],
   ["session_route_unconfirmed", "coreError.startReason.session_route_unconfirmed"],
