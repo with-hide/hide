@@ -1,5 +1,5 @@
 //! A Conductor's mission (PRD software-factory-conductor): the record its
-//! `hide mission` commands keep, the map opened once, the spawns its plan
+//! `hide mission` commands keep, a plan that opens nothing, the spawns its plan
 //! admits, the session that takes it over, the wakes its pull requests send
 //! and the record going with an archived session.
 
@@ -176,7 +176,7 @@ fn a_mission_nodes_worker_is_refused_without_its_brief() {
 }
 
 #[test]
-fn the_first_plan_opens_the_map_once_and_a_replan_does_not_open_it_again() {
+fn the_first_plan_and_a_replan_open_nothing_in_the_lane() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     let (created, changed) = command(
@@ -196,17 +196,18 @@ fn the_first_plan_opens_the_map_once_and_a_replan_does_not_open_it_again() {
         0,
         "an empty mission opens nothing"
     );
+    let detail = runtime.snapshot.ui_state.detail.clone();
 
+    // The first plan shows on the Conductor pane's chip, which the shell
+    // draws; the lane's 보기 slot stays as it was (mission-pane-chip B11).
     let (planned, _) = command(&mut runtime, "sender", plan()).unwrap();
     assert_eq!(planned["mission"]["nodes"].as_array().unwrap().len(), 2);
-    assert_eq!(mission_slot_items(&runtime), 1);
-    assert!(runtime.snapshot.ui_state.detail.shown);
+    assert_eq!(mission_slot_items(&runtime), 0);
+    assert_eq!(runtime.snapshot.ui_state.detail, detail);
 
-    // The operator closes the map; a replan leaves it closed.
-    runtime.snapshot.ui_state.detail.items.clear();
-    runtime.snapshot.ui_state.detail.shown = false;
     command(&mut runtime, "sender", plan()).unwrap();
     assert_eq!(mission_slot_items(&runtime), 0);
+    assert_eq!(runtime.snapshot.ui_state.detail, detail);
 
     runtime.refresh_missions();
     let view = &runtime.snapshot.missions.items[0];
@@ -755,6 +756,9 @@ fn a_mission_goes_with_its_conductors_deleted_session() {
             .map(|session| session.session_id.as_str()),
         Some(native.as_str())
     );
+    // The operator opened the map.
+    let id = runtime.missions.book.missions[0].id.clone();
+    runtime.open_detail(DetailItem::Mission { mission: id });
     assert_eq!(mission_slot_items(&runtime), 1);
 
     assert!(!runtime.drop_missions_of(&[(crate::node::TEST_NODE.into(), "another".into())]));
