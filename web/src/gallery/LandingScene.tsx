@@ -7,6 +7,7 @@
 //
 //   hero       the whole window: the sidebar's Projects list, a lead and the agent asking to merge side by side, and the Project tool
 //   tasks      the hero's window with the sidebar on its Tasks list, every task of the device by state
+//   quiet      the tasks shot with Agent summaries off: provider names and native questions only
 //   prs        the hero's window with the sidebar on its PR list, pull requests by who acts next
 //   map        the Overview's work graph: who started whom across the projects, and who waits on you
 //   projects   the Overview's Projects tab: each project's sessions, root tasks by state, disk and what to handle
@@ -39,12 +40,12 @@ import { useUiStore } from "../ui";
 import { workspaceKey } from "../viewLayout";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import { LEAD_PANE, laneItem, withSessions, landingMission, landingPrCard, landingPrLink, landingPrWork, landingRecord, type LandingLane } from "./landingLaneData";
-import { BROWSER_DISPLAY, BROWSER_PANE, BROWSER_TERMINAL, HERO_PANES, HERO_TERMINALS, RULE, landingBrowser, landingDevices, landingMap, landingMemory, landingPlainSidebar, landingSidebar, landingUsage, landingWorkspace } from "./landingSceneData";
+import { BROWSER_DISPLAY, BROWSER_PANE, BROWSER_TERMINAL, HERO_PANES, HERO_TERMINALS, RULE, landingBrowser, landingDevices, landingMap, landingMemory, landingPlainSidebar, landingSidebar, landingUsage, landingWorkspace, withoutHideAi } from "./landingSceneData";
 // The invoices page the agent opened, after its click: what the desktop host would show in the browser display.
 import invoicesDark from "./landing-invoices-dark.svg?url";
 import invoicesLight from "./landing-invoices-light.svg?url";
 
-export const LANDING_SHOTS = ["hero", "tasks", "prs", "map", "projects", "attention", "plain", "team", "pr", "record", "conductor", "memory", "browser", "core"] as const;
+export const LANDING_SHOTS = ["hero", "tasks", "quiet", "prs", "map", "projects", "attention", "plain", "team", "pr", "record", "conductor", "memory", "browser", "core"] as const;
 export type LandingShot = (typeof LANDING_SHOTS)[number];
 export type LandingSceneParams = { shot: LandingShot; theme: "light" | "dark" };
 
@@ -55,9 +56,9 @@ export function landingSceneParams(params: URLSearchParams): LandingSceneParams 
 }
 
 /** The sidebar's width: wide enough that the page's example titles read whole, narrower where Settings needs the room. */
-const SIDEBAR_WIDTH: Record<LandingShot, number> = { hero: 320, tasks: 320, prs: 320, map: 320, projects: 320, attention: 380, plain: 380, team: 320, pr: 300, record: 300, conductor: 300, memory: 320, browser: 300, core: 340 };
+const SIDEBAR_WIDTH: Record<LandingShot, number> = { hero: 320, tasks: 320, quiet: 320, prs: 320, map: 320, projects: 320, attention: 380, plain: 380, team: 320, pr: 300, record: 300, conductor: 300, memory: 320, browser: 300, core: 340 };
 /** The shots of a Workspace: the hero's window, and the browser shot's pane beside its View area. */
-const WORKSPACE_SHOTS: readonly LandingShot[] = ["hero", "tasks", "prs", "team", "pr", "record", "conductor", "memory", "browser"];
+const WORKSPACE_SHOTS: readonly LandingShot[] = ["hero", "tasks", "quiet", "prs", "team", "pr", "record", "conductor", "memory", "browser"];
 /** The shots whose lane shows an item in its 보기 slot. */
 const LANE_SHOTS: readonly LandingShot[] = ["pr", "record", "conductor"];
 /** The slot's width in a lane shot: room for a card, a record or a map beside the lead. */
@@ -122,6 +123,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
       rest.pane_layouts = [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: LEAD_PANE, zoomed: false, root: { type: "pane", pane_id: LEAD_PANE } }];
       return { ...none, rest, agents: scene.agents, usage: landingUsage(now), memory: landingMemory(now, "hide") };
     }
+    if (shot === "quiet") return { ...none, ...withoutHideAi(landingWorkspace(now, SIDEBAR_WIDTH.quiet, [], "tasks")), usage: landingUsage(now) };
     const lens = shot === "tasks" ? "tasks" : shot === "prs" ? "prs" : "projects";
     return { ...none, ...landingWorkspace(now, SIDEBAR_WIDTH[shot], [], lens), usage: landingUsage(now) };
   }, [shot]);

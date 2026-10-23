@@ -8,7 +8,7 @@
 
 import type { PrBoard, TaskCardScope } from "../agentScope";
 import type { NodeUsage } from "../generated/hided-ws";
-import type { AgentRow, Checkout, Device, EditorDocumentSnapshot, EditorTabSnapshot, MemoryRow, ProjectMemory, PullRequest, SidebarLens, SnapshotRest, ViewDisplaySnapshot, Workspace } from "../snapshot";
+import type { AgentRow, Checkout, Device, EditorDocumentSnapshot, EditorTabSnapshot, MemoryRow, PrState, ProjectMemory, PullRequest, SidebarLens, SnapshotRest, ViewDisplaySnapshot, Workspace } from "../snapshot";
 import type { MobileState } from "../mobileSettings";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 import { overviewWorld, type OverviewWorld } from "./overviewSceneData";
@@ -76,8 +76,45 @@ const PURPOSES: Record<string, string> = {
   "sasu:main": "Docs search",
 };
 
+/**
+ * The pull requests the story keeps: the frozen tree holds one on most of the
+ * lead's children, which reads as clutter on a task row, so the page keeps one
+ * or two per task. A pane listed with a state gains that pull request; a pane
+ * the fixture gave one and this does not list loses it.
+ */
+const STORY_PULLS: Record<string, [number, string, PrState] | null> = {
+  a1c4: null,
+  a1c7: null,
+  q2: [437, "Fix the test that broke the export", "merged"],
+  e1: [438, "Task detail API", "pending"],
+};
+
+/** One pull request a row holds the duty of, in the shape the fixture's own rows carry. */
+function storyPull(row: AgentRow, [number, title, state]: [number, string, PrState]): AgentRow {
+  const pull = {
+    number, title, url: `https://example.invalid/billing-app/pull/${number}`, badge: state === "merged" ? "merged" as const : "open" as const,
+    checks: state === "failed" ? "failed" as const : state === "pending" ? "pending" as const : "passing" as const,
+    review: state === "pending" ? "review_required" as const : "approved" as const,
+    head_branch: `agents/${number}`, closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: state === "merged" ? 0 : null,
+  };
+  const request = { verb: "working" as const, verb_since_unix_ms: 0, line: undefined, request: null, later_by: null, ...row.request, pull_requests: [pull] };
+  return { ...row, request, state: { ...row.state, pr: { count: 1, worst: state, pulls: [{ index: 0, state }] } } };
+}
+
+/** Keeps the story's pull requests on a row and drops the fixture's others. */
+function trimPulls(row: AgentRow): AgentRow {
+  if (!(row.pane_id in STORY_PULLS)) return row;
+  const kept = STORY_PULLS[row.pane_id];
+  if (kept) return storyPull(row, kept);
+  return { ...row, request: row.request ? { ...row.request, pull_requests: [] } : row.request, state: { ...row.state, pr: null } };
+}
+
+/** The roots the operator starred to come back to: the Tasks list's Revisit group (docs/status-model.md, `revisit`). */
+const STARRED = ["tn1"];
+
 /** Replaces the words of one agent row and leaves everything the core decided as it was. */
-function reword(row: AgentRow): AgentRow {
+function reword(fixture: AgentRow): AgentRow {
+  const row = trimPulls(fixture);
   const words = AGENT_WORDS[row.pane_id];
   if (!words) return row;
   const request = row.request?.pull_requests?.length && words.pull
@@ -131,7 +168,8 @@ export function landingSidebar(nowMs: number, expanded: string[], width: number)
       workspace_registrations: base.rest.ui_state?.workspace_registrations?.map((registration) => ({ ...registration, pinned: false })),
     },
   });
-  return { rest, agents: reworded(base.agents.map(reword)) };
+  const starred = (row: AgentRow): AgentRow => (STARRED.includes(row.pane_id) ? { ...row, revisit: { starred: true, read_ask: false, since_unix_ms: nowMs - 3 * 3_600_000 } } : row);
+  return { rest, agents: reworded(base.agents.map(reword).map(starred)) };
 }
 
 /** What each kind of agent is called when nothing better names it: the provider fallback of Task identity. */
@@ -152,7 +190,11 @@ const NATIVE_QUESTIONS: Record<string, string> = {
  * are the same, since every demand in the story is a native question.
  */
 export function landingPlainSidebar(nowMs: number, width: number): { rest: SnapshotRest; agents: AgentRow[] } {
-  const scene = landingSidebar(nowMs, [], width);
+  return withoutHideAi(landingSidebar(nowMs, [], width));
+}
+
+/** Any of the page's scenes with Agent summaries off, as `landingPlainSidebar` describes. */
+export function withoutHideAi(scene: { rest: SnapshotRest; agents: AgentRow[] }): { rest: SnapshotRest; agents: AgentRow[] } {
   const agents = scene.agents.map((row) => {
     const title = row.agent_kind === "claude" ? row.identity_label : PROVIDERS[row.agent_kind ?? ""] ?? row.identity_label;
     const question = NATIVE_QUESTIONS[row.pane_id];
@@ -348,7 +390,7 @@ const TASK_STATES: Record<string, { state: TaskCardScope["state"]; stage?: TaskC
   q2: { state: "done", stage: 2 },
   e1: { state: "working", stage: 1 },
   a2: { state: "working" },
-  tn1: { state: "resting" },
+  tn1: { state: "revisit" },
 };
 
 /** The device's tasks as the core lists them: each of the story's lineage roots with everything it started, in the checkouts it works in. */
