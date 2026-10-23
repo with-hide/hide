@@ -30,6 +30,7 @@ ${ZONES}
 .pc-bubble::before{content:"";position:absolute;inset:0 auto 0 0;width:var(--spacing-xs);border-radius:var(--radius-xl) 0 0 var(--radius-xl);background:var(--practice-accent)}
 .pc-arrow{position:absolute;width:var(--spacing-lg);height:var(--spacing-lg);background:var(--practice-card);transform:rotate(45deg);box-shadow:calc(var(--size-hairline) * -1) calc(var(--size-hairline) * -1) 0 var(--practice-line)}
 .pc-kick{font-size:var(--text-caption);font-weight:600;letter-spacing:.02em;color:color-mix(in srgb,var(--practice-accent-strong) 60%,var(--practice-ink));display:flex;justify-content:space-between;gap:var(--spacing-sm)}
+.pc-kick span:last-child{flex:none;white-space:nowrap}
 .pc-bubble h3{margin:var(--spacing-sm) 0 var(--spacing-xs);font-size:var(--text-headline);line-height:1.35;font-weight:600}
 .pc-bubble p{margin:0;font-size:var(--text-subhead);line-height:1.55;color:var(--practice-mute)}
 .pc-via{margin-top:var(--spacing-sm);font-size:var(--text-body);color:var(--practice-mute);display:flex;gap:var(--spacing-sm);align-items:center;flex-wrap:wrap}

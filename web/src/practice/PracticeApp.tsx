@@ -11,6 +11,7 @@ import { PALETTE_HIDE_CLASS, readColorTheme, readTheme, resolveTheme } from "../
 import type { PracticeChapter } from "./chapter";
 import { CHAPTERS, nextChapter } from "./chapters";
 import { PRACTICE_CHANNEL, type ChapterProgress, type PracticeMessage, type PracticeProgress, type ShellAnswer } from "./channel";
+import { holdPageClipboard } from "./clipboard";
 import { HUB_CSS } from "./coachStyle";
 import { PracticePlayer, type OperatorChoices } from "./PracticePlayer";
 
@@ -34,6 +35,9 @@ export function PracticeApp() {
   const [unanswered, setUnanswered] = useState(false);
   const [playing, setPlaying] = useState<Playing | null>(null);
   const channel = useRef<BroadcastChannel | null>(null);
+  // A chapter keeps the page's copy and paste on its own clipboard; the chapter list holds them with none.
+  const listing = playing === null;
+  useEffect(() => (listing ? holdPageClipboard(null) : undefined), [listing]);
 
   useEffect(() => {
     const opened = new BroadcastChannel(PRACTICE_CHANNEL);

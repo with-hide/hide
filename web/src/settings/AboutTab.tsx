@@ -25,10 +25,7 @@ export function AboutTab({ actions }: { actions: Actions }) {
   const protocol = herdrProtocolText(herdr, t);
   const copyDiagnostics = () => {
     const text = diagnosticsText(diagnosticsInputOf(useShellStore.getState(), navigator.userAgent));
-    void navigator.clipboard.writeText(text).then(
-      () => setCopy("copied"),
-      () => setCopy("failed"),
-    );
+    void actions.copyText(text, "diagnostics").then((copied) => setCopy(copied ? "copied" : "failed"));
   };
   return (
     <Group data-settings-group="about">
@@ -127,7 +124,7 @@ function HerdrRows({ actions }: { actions: Actions }) {
         ) : null}
       </Row>
       {path ? (
-        <Row label={t("settings.pathHerdr")} detail={path.behind && update ? <UpdateCommand update={update} /> : null} data-path-herdr={path.behind ? "behind" : "current"}>
+        <Row label={t("settings.pathHerdr")} detail={path.behind && update ? <UpdateCommand update={update} actions={actions} /> : null} data-path-herdr={path.behind ? "behind" : "current"}>
           {path.behind ? <Status tone="muted">{t("settings.pathHerdr.refused", { version: path.version })}</Status> : <Value>{path.version}</Value>}
         </Row>
       ) : null}

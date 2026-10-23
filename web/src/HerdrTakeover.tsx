@@ -101,13 +101,13 @@ function Failure({ takeover }: { takeover: HerdrTakeover }) {
 }
 
 /** The operator's own `herdr` is behind the moved server: what fails, and the one command that brings it up (B5). */
-function PathBehind({ version }: { version: string }) {
+function PathBehind({ version, actions }: { version: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const update = pathHerdrUpdate(useShellStore((s) => s.rest?.status?.herdr_versions));
   return (
     <div className="flex flex-col gap-sm rounded-md bg-card px-md py-sm" data-herdr-takeover-path-behind={version}>
       <span className="text-caption text-subtle-foreground">{t("herdrTakeover.moved.pathBehind", { version })}</span>
-      {update ? <UpdateCommand update={update} /> : null}
+      {update ? <UpdateCommand update={update} actions={actions} /> : null}
     </div>
   );
 }
@@ -116,11 +116,11 @@ function PathBehind({ version }: { version: string }) {
  * The command that brings the operator's own `herdr` up, with what it does and a Copy: Hide never runs it, since it
  * changes the operator's own file (and asks for `sudo` where their account cannot write the folder).
  */
-export function UpdateCommand({ update }: { update: NonNullable<ReturnType<typeof pathHerdrUpdate>> }) {
+export function UpdateCommand({ update, actions }: { update: NonNullable<ReturnType<typeof pathHerdrUpdate>>; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const [copied, setCopied] = useState(false);
   const copy = () => {
-    void navigator.clipboard?.writeText(update.command).then(() => setCopied(true), () => setCopied(false));
+    void actions.copyText(update.command, "herdr update command").then(setCopied);
   };
   return (
     <div className="flex flex-wrap items-center gap-sm" data-herdr-update-command={update.command}>
@@ -174,7 +174,7 @@ function herdrStepParts({ takeover, actions, restart, t, onLater, onMoved, deskt
     return {
       title: t("herdrTakeover.moved.title"),
       description: t("herdrTakeover.moved.description", { version: takeover.version }),
-      body: takeover.path_herdr_behind ? <PathBehind version={takeover.path_herdr_behind} /> : null,
+      body: takeover.path_herdr_behind ? <PathBehind version={takeover.path_herdr_behind} actions={actions} /> : null,
       footer: <MainButton onClick={onMoved} data-herdr-takeover-continue="true">{t("herdrTakeover.continue")}</MainButton>,
       primary: onMoved,
     };
@@ -414,7 +414,7 @@ export function HerdrMovedLine({ actions }: { actions: Actions }) {
   if (!behind || step === "herdr") return null;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-sm px-lg pt-sm" data-herdr-takeover-moved="true">
-      <div className="min-w-0 flex-1"><PathBehind version={behind} /></div>
+      <div className="min-w-0 flex-1"><PathBehind version={behind} actions={actions} /></div>
       <Button variant="ghost" size="sm" onClick={() => actions.herdrTakeover("continue")} data-herdr-takeover-done="true">{t("herdrTakeover.done")}</Button>
     </div>
   );
