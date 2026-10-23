@@ -99,13 +99,16 @@ async function print(page: Page, paneId: string, lines: string[], last: string):
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id), paneId), { timeout: 20_000 }).toContain(last);
 }
 
+/** Characters xterm draws two cells wide here: Hangul, Han, kana, CJK punctuation and fullwidth forms. */
+const WIDE = /[\p{scx=Hangul}\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\u3000-\u303F\uFF01-\uFF60]/u;
+
 /** Where `text` is on the screen of `paneId`: its row and the column of its `offset`th character. */
 async function cellOf(page: Page, paneId: string, text: string, offset = 0): Promise<{ row: number; column: number }> {
   const lines = await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id).split("\n"), paneId);
   const row = lines.findIndex((line) => line.includes(text));
   expect(row, `${text} is not on the screen:\n${lines.join("\n")}`).toBeGreaterThanOrEqual(0);
   const prefix = lines[row]!.slice(0, lines[row]!.indexOf(text)) + text.slice(0, offset);
-  const column = [...prefix].reduce((width, char) => width + (/\p{Script=Hangul}/u.test(char) ? 2 : 1), 0);
+  const column = [...prefix].reduce((width, char) => width + (WIDE.test(char) ? 2 : 1), 0);
   return { row, column };
 }
 
@@ -745,6 +748,7 @@ test("prose written straight against a bracket links only the path or address in
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.4));
   await enterWorkspace(page, "fixture");
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
+  await dockFiles(page, paneId);
   // Agents write Korean with no space before a bracket: only the path or the
   // address is the link, never the word before it or the marks around it.
   for (const [written, link] of [["캡처는(docs/README.md).", "docs/README.md"], [`열어뒀어요(${origin}/a.html). 이전에는`, `${origin}/a.html`], ["「docs/README.md」를", "docs/README.md"]] as const) {
