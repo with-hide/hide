@@ -2,10 +2,10 @@
 // finished tasks in the sidebar's 태스크 list, and a session from yesterday
 // that only search still finds, with the pull request it made. It answers
 // ⌘K's session search, the record and the card the lane's 보기 slot shows,
-// and the ★ that puts a task in 다시 볼 것.
+// the record's Restore session, and the ★ that puts a task in 다시 볼 것.
 
 import type { AgentScope } from "../../agentScope";
-import type { AgentRow, AgentState, DetailItem, LinkPanel, PrCard, PullRequest, SessionRecord, SessionWorkSearch, WorkSession } from "../../snapshot";
+import type { AgentRow, AgentState, DetailItem, LinkPanel, PrCard, PullRequest, SessionRecord, SessionWorkSearch, TaskOperation, WorkSession } from "../../snapshot";
 import type { CoreEvent, PracticeWorld } from "../world";
 import { agent, applyDesk, deskSnapshot, oneTabDesk, shellScreen, type DeskModel, type PracticePane, type PracticePlace } from "./kit";
 
@@ -16,13 +16,20 @@ const MIN_MS = 60_000;
 /** The session from yesterday: no pane holds it any more, so only search finds it. */
 export const LOGIN_SESSION: WorkSession = { device_id: "local", agent: "codex", session_id: "practice-login" };
 const LOGIN_TITLE = "Login drops after a minute";
-/** The pull request that session made; every practice pull request is an example, and its address goes nowhere. */
+/** The pull request that session made; every practice pull request is an example, at the address set aside for examples. */
 export const PR_NUMBER = 3;
 const PR_TITLE = "Fix session expiry";
-const PR_URL = `https://example.invalid/${PLACE.project}/pull/${PR_NUMBER}`;
+const PR_URL = `https://example.com/${PLACE.project}/pull/${PR_NUMBER}`;
+/** ⌘K's row for that pull request. */
+export const PR_ROW = `[data-palette-row="pr:${PLACE.project}:${PR_NUMBER}"]`;
+/** The pane yesterday's session comes back in when its record's Restore session is pressed. */
+const RESTORED_PANE = "login";
 
-/** What the world can change: the desk, what ⌘K asked last, the 보기 slot, and which tasks wear the ★. */
-export type FindModel = { desk: DeskModel; searched: boolean; query: string | null; detail: DetailItem[]; starred: string[] };
+/**
+ * What the world can change: the desk, what ⌘K asked last, the 보기 slot,
+ * which tasks wear the ★, and the start that brought yesterday's session back.
+ */
+export type FindModel = { desk: DeskModel; searched: boolean; query: string | null; detail: DetailItem[]; starred: string[]; restore: { requestId: string | null } | null };
 
 /** The 보기 slot's item in front. */
 export const shownDetail = (model: FindModel): DetailItem | null => model.detail.at(-1) ?? null;
@@ -66,22 +73,32 @@ function initial(): FindModel {
     query: null,
     detail: [],
     starred: [],
+    restore: null,
   };
 }
 
 // --- What the core answers -----------------------------------------------------
 
+/** What of yesterday's session `query` finds: its title, or the first request that holds it; null when it finds nothing. */
+function loginMatch(query: string): string | null {
+  const wanted = query.trim().toLowerCase();
+  if (!wanted || wanted.startsWith("#")) return null;
+  const said = LOGIN_REQUESTS.find(([, text]) => text.toLowerCase().includes(wanted));
+  return said ? said[1] : LOGIN_TITLE.toLowerCase().includes(wanted) ? LOGIN_TITLE : null;
+}
+
+/** Whether ⌘K's last query finds yesterday's session, whichever of its words the learner typed. */
+export const findsLogin = (model: FindModel) => model.query !== null && loginMatch(model.query) !== null;
+
 /** ⌘K's session search: the words of yesterday's session match a query its title or requests hold. */
 function sessionSearch(query: string, nowMs: number): SessionWorkSearch {
-  const wanted = query.trim().toLowerCase();
-  const said = LOGIN_REQUESTS.find(([, text]) => text.toLowerCase().includes(wanted));
-  const hit = wanted && !wanted.startsWith("#") && (LOGIN_TITLE.toLowerCase().includes(wanted) || said);
+  const matched = loginMatch(query);
   return {
     query,
     loading: false,
     failure: null,
-    results: hit ? [{
-      session: LOGIN_SESSION, title: LOGIN_TITLE, matched: said?.[1] ?? LOGIN_TITLE, at_unix_ms: nowMs - 22 * HOUR_MS, cwd: `/work/${PLACE.project}`, project_root: `/work/${PLACE.project}`,
+    results: matched ? [{
+      session: LOGIN_SESSION, title: LOGIN_TITLE, matched, at_unix_ms: nowMs - 22 * HOUR_MS, cwd: `/work/${PLACE.project}`, project_root: `/work/${PLACE.project}`,
       status: "done", match_count: 1, request_count: LOGIN_REQUESTS.length,
     }] : [],
   };
@@ -152,6 +169,32 @@ function linkPanel(nowMs: number): LinkPanel {
   };
 }
 
+/**
+ * The desk with yesterday's session back in a tab of its own and in front, as
+ * the core leaves it once Restore session's agent has started: Codex, idle on
+ * the conversation it ended with.
+ */
+function restored(desk: DeskModel): DeskModel {
+  const row: AgentRow = { ...rested(RESTORED_PANE, LOGIN_TITLE, true, 0, "Expiry follows the server's clock; test added"), agent_kind: LOGIN_SESSION.agent, session_id: LOGIN_SESSION.session_id };
+  const tab = { id: `t${desk.nextId}`, name: null, root: { type: "pane" as const, pane_id: RESTORED_PANE }, focused: RESTORED_PANE, zoomed: false };
+  return {
+    ...desk,
+    panes: [...desk.panes, { id: RESTORED_PANE, agent: row, title: LOGIN_TITLE }],
+    tabs: [...desk.tabs, tab],
+    groups: desk.groups.map((group, at) => (at === 0 ? { ...group, tabs: [...group.tabs, tab.id] } : group)),
+    activeTab: tab.id,
+    nextId: desk.nextId + 1,
+  };
+}
+
+/** The core's answer to the start Restore session sent: ready, its agent started in the pane it opened. */
+function restoreOperation(requestId: string | null): TaskOperation {
+  return {
+    id: 1, kind: "agent_start", phase: "ready", repository_root: `/work/${PLACE.project}`, branch: PLACE.branch, base_branch: null, path: `/work/${PLACE.project}`,
+    pane_id: RESTORED_PANE, agent_kind: LOGIN_SESSION.agent, message: null, agent_phase: "started", agent_reason: null, agent_line: null, request_id: requestId,
+  };
+}
+
 // --- The snapshot ---------------------------------------------------------------
 
 /** The tasks the sidebar's 태스크 list draws, in the core's order: open work first, 다시 볼 것 above the finished one. */
@@ -159,7 +202,10 @@ function tasksOf(model: FindModel, nowMs: number) {
   const revisit = (paneId: string) => paneId === "provider" || model.starred.includes(paneId);
   const card = (root: string, state: string, minutesAgo: number) => ({ root, state, members: [root], checkouts: [`${PLACE.project}:${PLACE.branch}`], recency: new Date(nowMs - minutesAgo * MIN_MS).toISOString() });
   return {
-    cards: [card("lead", "working", 2), card("provider", "revisit", 240), card("copy", revisit("copy") ? "revisit" : "done", 180)],
+    cards: [
+      card("lead", "working", 2), ...(model.restore ? [card(RESTORED_PANE, "resting", 0)] : []),
+      card("provider", "revisit", 240), card("copy", revisit("copy") ? "revisit" : "done", 180),
+    ],
     needs_you: 0,
     recency: new Date(nowMs).toISOString(),
   } as AgentScope["tasks"];
@@ -185,6 +231,7 @@ function snapshot(model: FindModel, nowMs: number) {
       navigator: { ...navigator, agents, workspaces, agent_scope: { ...navigator.agent_scope!, tasks }, devices: navigator.devices!.map(scoped) },
       ui_state: { ...base.rest.ui_state!, sidebar_lens: "tasks" as const, detail: { items: model.detail, shown: model.detail.length > 0 } },
       pr_work: { link: null, feedback: null, cards: [prCard(nowMs)] },
+      task_operation: model.restore ? restoreOperation(model.restore.requestId) : null,
       // Opening the 보기 slot opens the lane, as the core does on `detail_open`.
       workspace_view: { ...base.rest.workspace_view!, open: model.detail.length > 0 },
       // Hide AI's summaries on, so the record reads each flow's result as the operator's would.
@@ -214,6 +261,10 @@ function apply(model: FindModel, event: CoreEvent): FindModel | null {
     }
     case "pr_open":
       return p.pr_number === PR_NUMBER ? { ...model, detail: [...model.detail, { kind: "pull_request", workspace_id: PLACE.project, number: PR_NUMBER }] } : null;
+    // Restore session on yesterday's record: the session comes back once; a second press finds it running.
+    case "agent_start_in_checkout":
+      if (p.resume_session_id !== LOGIN_SESSION.session_id || model.restore) return null;
+      return { ...model, desk: restored(model.desk), restore: { requestId: typeof p.request_id === "string" ? p.request_id : null } };
     case "revisit_star":
       return model.starred.includes(String(p.pane_id)) ? null : { ...model, starred: [...model.starred, String(p.pane_id)] };
     case "revisit_done":
@@ -228,6 +279,17 @@ function apply(model: FindModel, event: CoreEvent): FindModel | null {
 /** What each pane's terminal shows: the agent at work, the two that finished, or a shell. */
 function paneScreen(pane: PracticePane): string {
   if (!pane.agent) return shellScreen(PLACE);
+  if (pane.id === RESTORED_PANE) {
+    return [
+      "\x1b[1m>_ OpenAI Codex\x1b[0m \x1b[2m(resumed)\x1b[0m",
+      "",
+      ...LOGIN_REQUESTS.map(([, text]) => `\x1b[2m›\x1b[0m ${text}`),
+      "",
+      "\x1b[32m•\x1b[0m Expiry follows the server's clock; test added.",
+      "",
+      "\x1b[2m›\x1b[0m ",
+    ].join("\r\n");
+  }
   if (pane.id === "lead") {
     return [
       "\x1b[38;5;209m✻\x1b[0m Claude Code",
@@ -250,5 +312,5 @@ export const FIND_WORLD: PracticeWorld<FindModel> = {
   panes: (model) => model.desk.panes.map((pane) => pane.id),
   screen: (model, paneId) => paneScreen(model.desk.panes.find((pane) => pane.id === paneId)!),
   lane: false,
-  examples: [`[data-pr-card="${PR_NUMBER}"] [data-pr-card-title]`, `[data-palette-row="pr:${PLACE.project}:${PR_NUMBER}"]`],
+  examples: [`[data-pr-card="${PR_NUMBER}"] [data-pr-card-title]`, PR_ROW],
 };
