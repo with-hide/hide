@@ -998,10 +998,11 @@ Regression owners are `runtime::tests::pane_move`, delivery continuity tests, `w
 ### Terminal path links
 
 `web/src/terminalLinks.ts` reads at most three rows on either side of the hovered row and retains the existing maximum of sixteen joined spellings per token.
-Each spelling offers its original path and at most five context interpretations, so a token has at most 192 logical cwd/root lookups, at most 160 beyond the original spellings.
-The six stages preserve raw and symbol-only spelling, grammar-only removal from each with literal leading/closing punctuation, the cleaned literal location spelling, then the parsed location.
-Identical text/target stages deduplicate.
-These are finite punctuation, Korean grammar and location interpretations; arbitrary Hangul is never removed character by character.
+Each joined spelling is read once, in time linear in its length: one pass finds its edges and precomputes bracket depth and the next quote for every offset, so each start's readable spellings are found without rereading.
+From at most 64 starts it reads at most 64 spellings for a path, and adds the names between its four outermost starts and ends.
+A token offers at most 96 spellings across its joins, every original among them, so it has at most 192 logical cwd/root lookups; past the bound the shortest spellings go, which loses a link and never makes a wrong one.
+Character classes come from a 128-entry ASCII table and a per-character cache of at most 4,096 entries for the rest.
+Edges come from Unicode classes, not a list of marks, and a run of Hangul, kana or Han is cut only where its script meets the link, never character by character.
 The selected range maps UTF-16 slice boundaries onto the buffer's glyph cells, retaining both halves of a wide glyph and refusing a cut inside a combining cell.
 
 `web/src/terminalLinkProvider.ts` spends one invocation's budget on originals before inferred spellings.

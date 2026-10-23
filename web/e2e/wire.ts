@@ -125,25 +125,18 @@ export async function showDocuments(page: Page): Promise<void> {
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
 }
 
-/** The pin's state as the rail's `…` menu shows it: `off`, `on` or `narrow` (PRD lane-two-columns B15, B19). */
+/** The pin's state as the rail's pin button shows it: `off`, `on` or `narrow` (PRD lane-two-columns B15, B19). */
 export async function pinState(page: Page): Promise<string | null> {
-  await page.locator("[data-lane-more]").click();
-  const state = await page.locator('[data-lane-menu-item="pin"]').getAttribute("data-lane-pin");
-  await page.keyboard.press("Escape");
-  await expect(page.locator('[role="menu"]')).toHaveCount(0);
-  return state;
+  return page.locator("[data-lane-pin]").getAttribute("data-lane-pin");
 }
 
-/** Pins or unpins the lane from the rail's `…` menu (B15). */
+/** Pins or unpins the lane with the rail's pin button (B15). */
 export async function setLanePinned(page: Page, pinned: boolean): Promise<void> {
-  await page.locator("[data-lane-more]").click();
-  const item = page.locator('[data-lane-menu-item="pin"]');
-  const on = (await item.getAttribute("data-lane-pin")) !== "off";
-  if (on === pinned) await page.keyboard.press("Escape");
-  else await item.click();
-  await expect(page.locator('[role="menu"]')).toHaveCount(0);
+  const button = page.locator("[data-lane-pin]");
+  const on = (await button.getAttribute("data-lane-pin")) !== "off";
+  if (on !== pinned) await button.click();
   // A pinned lane docks, or stays over the agents where docking has no room (B19).
-  await expect.poll(() => pinState(page)).toMatch(pinned ? /^(on|narrow)$/ : /^off$/);
+  await expect(button).toHaveAttribute("data-lane-pin", pinned ? /^(on|narrow)$/ : /^off$/);
 }
 
 /** Turns the sidebar to its 태스크 list (PRD sidebar-task-lens B1) and waits for the core's task scope. */
