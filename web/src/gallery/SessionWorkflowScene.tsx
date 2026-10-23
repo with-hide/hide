@@ -75,8 +75,9 @@ const PANE_HEADER_CASES: [string, string, Omit<PaneHeader, "working">][] = [
   ["turn-narrow", "16 · 좁은 pane · 두 줄", { ...NO_NOTICE, request: TURN_REQUEST, band: { kind: "answer", reason: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", since_unix_ms: null, read: false, action: null, more: 0 } }],
   ["turn-image", "17 · 이미지만 보낸 요청", { ...NO_NOTICE, request: { text: null, images: 2 }, progress: "보낸 화면의 여백을 맞추고 있어요" }],
   ["turn-children", "18 · 요청 → 자식 기다림", { ...NO_NOTICE, request: { text: "요청 추출 누락 원인 찾아줘", images: 0 }, waiting_on_children: 2 }],
+  ["turn-request-only", "19 · 작업 중 · 요청 말고 새 사실 없음", { ...NO_NOTICE, request: { text: "OS별 사용자 실패 경험과 개발 불편 우선순위 정리", images: 0 } }],
 ];
-const TURN_CASES = ["turn-question", "turn-working", "turn-finished", "turn-narrow", "turn-image", "turn-children"];
+const TURN_CASES = ["turn-question", "turn-working", "turn-finished", "turn-narrow", "turn-image", "turn-children", "turn-request-only"];
 
 // Frozen visual examples, not a second implementation of core judgments.
 const MARKS: [RowMark, StatusTone["kind"], RequestVerb][] = [
@@ -140,7 +141,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     const childPanes = children.map((child) => ({ ...pane, id: child.pane_id, identity_label: child.identity_label }));
     feature.tabs[0]!.panes.push(childPanes[0]!);
     checkout.tabs[0]!.panes.push(...childPanes.slice(1));
-    const headers = Object.fromEntries([...HEADERS.map(([id, header]) => [id, { ...header, working: id === "working", band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }]), ...PANE_HEADER_CASES.map(([id, , header]) => [id, { ...header, progress: id === "narrow" && content === "long" ? "헤더 상태별 표시와 요청 우선순위를 검토하고 다음 단계의 배치와 접근성까지 다시 확인하고 있어요" : header.progress, working: ["progress", "solo", "popover", "narrow", "turn-working", "turn-image"].includes(id), band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }])]);
+    const headers = Object.fromEntries([...HEADERS.map(([id, header]) => [id, { ...header, working: id === "working", band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }]), ...PANE_HEADER_CASES.map(([id, , header]) => [id, { ...header, progress: id === "narrow" && content === "long" ? "헤더 상태별 표시와 요청 우선순위를 검토하고 다음 단계의 배치와 접근성까지 다시 확인하고 있어요" : header.progress, working: ["progress", "solo", "popover", "narrow", "turn-working", "turn-image", "turn-request-only"].includes(id), band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }])]);
     // The fix and merge panes own one PR each: their header's PR chip is all
     // that says it, with no second row (B21, B22).
     const ownPr = (id: string): Pick<AgentRow, "state" | "request"> => {
