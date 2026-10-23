@@ -40,8 +40,8 @@ export function inlineStartAnswer(rest: SnapshotRest | null, requestId: string, 
     return { phase: "pending" };
   }
   if (receipt.state === "failed") return { phase: "failed", message: task?.message ?? null };
-  if (task?.phase === "ready") return { phase: "ready", taskId: task.id, paneId: receipt.pane_id, agentPhase: task.agent_phase, agentMessage: task.agent_message };
+  if (task?.phase === "ready") return { phase: "ready", taskId: task.id, paneId: receipt.pane_id, agentPhase: task.agent_phase, agentReason: task.agent_reason, agentLine: task.agent_line };
   // No task slot remains after restart. The same intent reconstructs it before retry.
   if (receipt.agent_phase && receipt.agent_phase !== "started") return { phase: "pending" };
-  return { phase: "ready", taskId: 0, paneId: receipt.pane_id, agentPhase: receipt.agent_phase, agentMessage: null };
+  return { phase: "ready", taskId: 0, paneId: receipt.pane_id, agentPhase: receipt.agent_phase, agentReason: null, agentLine: null };
 }

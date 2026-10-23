@@ -84,7 +84,7 @@
           "mission": null,
           "conductor": null
         },
-        "hint": "계획: 지금 Core events (1/4) · 다음 Web map · 5분 전 갱신\n계획 검토 기다림: 운영자가 대화에서 답하기 전에는 파일 쓰기, git commit, git push가 막힌다. 승인하면 hide plan approve, 고치라면 파일 대신 hide plan set --json '<계획>' --ask로 다시 올리고, 하지 말라면 hide plan drop.",
+        "hint": "Plan: now Core events (1/4) · next Web map · updated 5 min ago\nThe plan waits for the operator's review: writing files, git commit and git push are blocked until the operator answers in the conversation. If they approve, run hide plan approve; if they ask for changes, send the revised plan with hide plan set --json '<plan>' --ask rather than a file; if they say not to, run hide plan drop.",
         "commands": [
           {
             "tool": "shell",
@@ -173,7 +173,7 @@
           "mission": null,
           "conductor": null
         },
-        "hint": "계획: 지금 Core events (1/4) · 다음 Web map · 31분 전 갱신\n끝낸 단계는 `hide plan node core --status done`, 하는 단계는 `--status working`으로 갱신한다.",
+        "hint": "Plan: now Core events (1/4) · next Web map · updated 31 min ago\nMark a finished step with `hide plan node core --status done` and the step you are on with `--status working`.",
         "commands": [
           {
             "tool": "shell",
@@ -201,11 +201,11 @@
             "mission": "mission-3",
             "node": "core",
             "scope": "pr",
-            "range": "PR까지, 머지는 운영자"
+            "range": "up to the PR; the operator merges"
           },
           "conductor": null
         },
-        "hint": "미션 mission-3 · 노드 core · 범위 PR까지, 머지는 운영자 · 머지 금지 · 에이전트 띄우기 금지",
+        "hint": "Mission mission-3 · node core · range up to the PR; the operator merges · no merging · no starting agents",
         "commands": [
           {
             "tool": "shell",
@@ -234,7 +234,7 @@
             "decision": true
           }
         },
-        "hint": "미션 2/5 · 일하는 중 2 · 편지 1통 · 결정 기다림 있음",
+        "hint": "Mission 2/5 · working 2 · letters 1 · decision waiting: yes",
         "commands": [
           {
             "tool": "shell",

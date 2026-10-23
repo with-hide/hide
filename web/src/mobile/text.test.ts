@@ -27,7 +27,7 @@ describe("the phone's key tables", () => {
   });
 
   it("states the phone limit the Mac enforces and shows one line for each refusal", () => {
-    expect(noticeText(korean, REFUSAL_NOTICE.phone_limit)).toBe("폰은 4대까지 연결할 수 있어요. 맥의 설정 > 모바일에서 하나를 해지하세요.");
+    expect(noticeText(korean, REFUSAL_NOTICE.phone_limit)).toBe("폰은 4대까지 연결할 수 있어요. Mac의 설정 > 모바일에서 연결을 하나 해제하세요.");
     const refusals: Refusal[] = ["code_expired", "phone_limit", "revoked", "mobile_off", "no_credential"];
     expect(refusals.map((refusal) => noticeText(english, REFUSAL_NOTICE[refusal]))).toEqual([
       "The code expired. Reopen the QR code on your Mac.",

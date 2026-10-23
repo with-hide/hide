@@ -45,10 +45,10 @@ test("@platform Overview restores its exact current session and keeps map moveme
     const before = await positions();
     // B13/B14: hiding the project removes its sessions; showing it again restores the same places.
     const row = graph.locator("[data-graph-project-row]").first();
-    await row.getByRole("button", { name: /^Hide .* on the map$/ }).click();
+    await row.getByRole("button", { name: /^Hide .* from the graph$/ }).click();
     await expect(graph.locator("[data-graph-session]")).toHaveCount(0);
     await expect(row).toHaveAttribute("data-hidden", "true");
-    await row.getByRole("button", { name: /^Show .* on the map again$/ }).click();
+    await row.getByRole("button", { name: /^Show .* on the graph again$/ }).click();
     await expect(current).toHaveCount(1);
     await expect.poll(positions).toEqual(before);
     // B23: operators grab the provider circle itself; it follows the hand and stays where it is dropped.
@@ -138,12 +138,12 @@ test("Overview's work map keeps a hidden project and a dropped session across a 
     await expect.poll(place).not.toBe(fresh);
     const dropped = await place();
     const row = graph.locator("[data-graph-project-row]").first();
-    await row.getByRole("button", { name: /^Hide .* on the map$/ }).click();
+    await row.getByRole("button", { name: /^Hide .* from the graph$/ }).click();
     await expect(row).toHaveAttribute("data-hidden", "true");
     await open(true);
     await expect(row).toHaveAttribute("data-hidden", "true");
     await expect(graph.locator("[data-graph-session]")).toHaveCount(0);
-    await row.getByRole("button", { name: /^Show .* on the map again$/ }).click();
+    await row.getByRole("button", { name: /^Show .* on the graph again$/ }).click();
     await expect(current).toHaveCount(1);
     await expect.poll(place).toBe(dropped);
     await graph.getByRole("button", { name: "Reset layout", exact: true }).click();
@@ -169,7 +169,7 @@ test("a pane's Show in Overview opens Work with its session chosen and gives the
     const pane = (await current.getAttribute("data-graph-session"))!;
     // The project is hidden and another tab was last; the button opens Work and shows the project again (B4, B7).
     const row = graph.locator("[data-graph-project-row]").first();
-    await row.getByRole("button", { name: /^Hide .* on the map$/ }).click();
+    await row.getByRole("button", { name: /^Hide .* from the graph$/ }).click();
     await expect(row).toHaveAttribute("data-hidden", "true");
     await openOverview(page, "projects");
     await page.keyboard.press("Escape");

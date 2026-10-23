@@ -134,7 +134,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
     assert_eq!(request.root_path, registered);
     assert_eq!(request.root.path, repository.to_string_lossy());
     let key = request.key();
-    let listed = crate::changes::read(&request);
+    let listed = crate::changes::read(&request).0;
     assert_eq!(
         listed
             .entries
@@ -168,6 +168,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
             .is_none()
     );
     assert!(runtime.ingest_changes(crate::changes::ChangesAnswer {
+        detail: None,
         key: Some(key),
         selection: request.selection(),
         changes: listed,
@@ -182,6 +183,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
         ..Default::default()
     };
     assert!(runtime.ingest_changes(crate::changes::ChangesAnswer {
+        detail: None,
         key: runtime.changes_key(),
         selection: (None, false),
         changes: failed,
@@ -193,6 +195,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
         Some("The device is busy")
     );
     assert!(runtime.ingest_changes(crate::changes::ChangesAnswer {
+        detail: None,
         key: runtime.changes_key(),
         selection: (None, false),
         changes: confirmed.clone(),
@@ -205,7 +208,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
         .into_owned();
     let event = serde_json::to_vec(&serde_json::json!({"schema_version":2,"kind":"changes_select","payload":{"path":selected,"committed":true,"preview":true}})).unwrap();
     assert!(runtime.dispatch_json(&event));
-    let selected = crate::changes::read(&runtime.changes_request().unwrap());
+    let selected = crate::changes::read(&runtime.changes_request().unwrap()).0;
     let diff = selected.diff.expect("in-scope branch diff");
     assert!(diff.text.contains("outside source content"));
     assert!(!diff.text.contains("outside-source.txt"));
@@ -218,7 +221,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
     let mut request = runtime.changes_request().unwrap();
     request.selected_path = Some(deleted);
     request.selected_committed = false;
-    let deleted = crate::changes::read(&request).diff.unwrap();
+    let deleted = crate::changes::read(&request).0.diff.unwrap();
     assert!(deleted.text.contains("deleted content"));
 
     // A focus event publishes its new History identity in the same frame.
@@ -260,7 +263,7 @@ fn registered_subfolder_history_stays_scoped_through_runtime_selection() {
         device.channel.is_err(),
         "a device without a ready helper is read by nothing on this machine"
     );
-    assert!(crate::changes::read(&device).unavailable_reason.is_some());
+    assert!(crate::changes::read(&device).0.unavailable_reason.is_some());
     assert_eq!(
         runtime.snapshot.changes,
         crate::model::ChangesSnapshot::default()
@@ -1113,7 +1116,9 @@ fn workspace_creation_failures_retire_inflight_and_keep_partial_registration_vis
 
     assert!(runtime.ingest_workspace_creation(
         missing_path,
-        Err("Workspace path does not exist".to_owned()),
+        Err(live::WorkspaceCreationFailure::failed(
+            "Workspace path does not exist"
+        )),
         4,
     ));
     assert!(!runtime.workspace_creations_in_flight.contains(missing_path));
@@ -3368,16 +3373,23 @@ fn a_task_agent_start_reports_apart_from_the_creation_it_follows() {
 
     assert!(runtime.ingest_task_agent_result(
         id,
-        live::TaskAgentOutcome::Failed("claude is not installed".into()),
+        live::TaskAgentOutcome::Failed(live::AgentFailure::with_detail(
+            "agent_start.not_installed",
+            "claude is not installed on the daemon's PATH",
+        )),
     ));
     let operation = runtime.snapshot().task_operation.clone().unwrap();
     assert_eq!(operation.phase, "ready");
     assert_eq!(operation.pane_id.as_deref(), Some("w1:p9"));
     assert_eq!(operation.agent_phase.as_deref(), Some("failed"));
     assert_eq!(
-        operation.agent_message.as_deref(),
-        Some("claude is not installed")
+        operation.agent_reason.as_deref(),
+        Some("agent_start.not_installed")
     );
+    // The snapshot carries the code; the sentence is the log's.
+    let wire = serde_json::to_string(&operation).unwrap();
+    assert!(!wire.contains("daemon's PATH"), "{wire}");
+    assert!(wire.contains(r#""agent_line":null"#), "{wire}");
     assert_eq!(runtime.pending_task_agent_start(id), None);
 
     // The pane is not in this runtime's navigator, so the retry says so and

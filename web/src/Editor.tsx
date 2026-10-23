@@ -1,4 +1,5 @@
 import { OpenerMark } from "./ViewComments";
+import { downloadFailureText, readFailureText } from "./fileFailure";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { adoptNodeDrafts, allBuffers, bufferDecision, bufferFor, claimLegacyBuffer, deleteBuffer, draftStorageHold, flushBuffer, identity, MAX_STORED_BYTES, queueBuffer, tabBufferKey, type BufferKey } from "./buffers";
@@ -253,7 +254,7 @@ function DiffBody({ display, workspace, wrap, scale, actions }: { display: ViewD
   const { t } = useInterfaceTranslation();
   const changes = useShellStore((s) => changesFor(s.changes, s.rest?.navigator?.changes_root_path ?? null));
   if (!changes) return <Notice text={t("documents.readingDiff")} state="diff-loading" />;
-  if (changes.unavailable_reason) return <Notice text={t("documents.historyUnavailable", { reason: changes.unavailable_reason })} state="diff-unavailable" />;
+  if (changes.unavailable_reason) return <Notice text={t("documents.historyUnavailable", { reason: readFailureText(changes.unavailable_reason, t) })} state="diff-unavailable" />;
   const committed = display.committed === true;
   const diff = (changes.diffs ?? []).find((row) => row.path === display.path && row.committed === committed) ?? null;
   if (!diff) {
@@ -467,7 +468,7 @@ function PreviewOnly({ document }: { document: EditorDocumentSnapshot }) {
       >
         {t("documents.download")}
       </Button>
-      {downloadError ? <span className="text-destructive" data-editor-download-failed="true">{downloadError.reason ? t("documents.downloadFailed", { reason: downloadError.reason }) : t("documents.downloadFailedUnknown")}</span> : null}
+      {downloadError ? <span className="text-destructive" data-editor-download-failed="true">{downloadError.reason ? t("documents.downloadFailed", { reason: downloadFailureText(downloadError.reason, t) }) : t("documents.downloadFailedUnknown")}</span> : null}
     </div>
   );
 }

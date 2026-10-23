@@ -16,7 +16,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    AgentSleepActionSnapshot, AgentSleepSnapshot, AgentStatusCode, SidebarAgentSnapshot,
+    AgentActionRefusal, AgentSleepActionSnapshot, AgentSleepSnapshot, AgentStatusCode,
+    SidebarAgentSnapshot,
 };
 use crate::sidebar::{
     AgentLabel, SessionAgentPayload, SessionAgentSessionPayload, SessionSnapshotPayload,
@@ -629,26 +630,29 @@ pub(crate) fn closes_pane_when_sleeping(kind: &str) -> bool {
 /// Why this agent cannot be put to sleep now, or `None` when it can (B5,
 /// B15). The time and the screen are the automatic decision's alone; a
 /// person asking from the pane menu has already looked.
-pub fn sleep_refusal(agent: &SidebarAgentSnapshot, machine: SleepMachine) -> Option<&'static str> {
+pub fn sleep_refusal(
+    agent: &SidebarAgentSnapshot,
+    machine: SleepMachine,
+) -> Option<AgentActionRefusal> {
     if machine == SleepMachine::Device {
-        return Some("Agents on another device cannot sleep");
+        return Some(AgentActionRefusal::Device);
     }
     if !sleeps_kind(&agent.agent_kind) {
-        return Some("This agent's reader does not support sleep");
+        return Some(AgentActionRefusal::Unsupported);
     }
     // A sleep that closes the pane reopens it from the core's own catalog,
     // which holds only the core machine's folders.
     if machine == SleepMachine::Node && closes_pane_when_sleeping(&agent.agent_kind) {
-        return Some("This agent sleeps only on the machine Hide's core runs on");
+        return Some(AgentActionRefusal::CoreMachineOnly);
     }
     if agent.sleep.is_some() {
-        return Some("This agent is already asleep");
+        return Some(AgentActionRefusal::Asleep);
     }
     if let Some(reason) = crate::agent_state::rest_refusal(agent) {
         return Some(reason);
     }
     if agent.session_id.is_none() && !sleeps_without_session(&agent.agent_kind) {
-        return Some("Herdr has not reported this agent's conversation");
+        return Some(AgentActionRefusal::NoConversation);
     }
     None
 }
@@ -664,7 +668,7 @@ pub fn sleep_action(
     let reason = sleep_refusal(agent, machine);
     Some(AgentSleepActionSnapshot {
         available: reason.is_none(),
-        reason: reason.map(str::to_owned),
+        reason,
     })
 }
 
@@ -1117,7 +1121,7 @@ mod tests {
             sleep_action(&working, SleepMachine::Core),
             Some(AgentSleepActionSnapshot {
                 available: false,
-                reason: Some("This agent is working".into()),
+                reason: Some(AgentActionRefusal::Working),
             })
         );
         assert_eq!(
@@ -1143,7 +1147,7 @@ mod tests {
             sleep_action(&pi, SleepMachine::Node),
             Some(AgentSleepActionSnapshot {
                 available: false,
-                reason: Some("This agent sleeps only on the machine Hide's core runs on".into()),
+                reason: Some(AgentActionRefusal::CoreMachineOnly),
             })
         );
     }
@@ -1154,7 +1158,7 @@ mod tests {
         fresh.session_id = None;
         assert_eq!(
             sleep_refusal(&fresh, SleepMachine::Core),
-            Some("Herdr has not reported this agent's conversation")
+            Some(AgentActionRefusal::NoConversation)
         );
         assert_eq!(SleepRecord::ending(&fresh, None, 1), None);
         fresh.agent_kind = "antigravity".into();

@@ -2058,6 +2058,7 @@ mod tests {
         "screen_intros_seen",
         "sidebar_width",
         "font_size",
+        "terminal_font_size",
         "editor_text_scale",
         "agent_sleep_after_hours",
         "issue_settings",

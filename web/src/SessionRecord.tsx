@@ -35,6 +35,7 @@ import { PR_LOOK } from "./prMark";
 import { archivedChildrenOf, archivedMemberOf } from "./archive";
 import type { ArchivedMember, ArchivedSession } from "./snapshot";
 import { HighlightedRequest } from "./RequestHighlight";
+import { startReasonText } from "./startReason";
 
 type RequestLocator = { request_offset: number; query?: string };
 
@@ -268,7 +269,9 @@ function ArchivedNow({ row, member, own, connected, actions }: { row: ArchivedSe
       {resuming ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : null}{resuming ? t("archive.resuming") : t("archive.resume")}
     </Button>
   );
-  const reason = failed?.reason ?? row.reason;
+  // A resume that failed after its tab opened gives the agent start's code.
+  const sent = failed?.reason ?? row.reason;
+  const reason = sent ? startReasonText(sent, t) : null;
   return <StateBox tone={failed ? "failed" : "done"} className={cn("mb-sm", !connected && "opacity-(--opacity-disabled)")} aria-label={t("sessionWork.now")} data-record-now="archived" data-archived-phase={row.phase}>
     <div className="flex min-w-0 flex-wrap items-center gap-sm">
       <p className={cn("flex min-w-0 flex-1 items-center gap-xs font-medium", failed ? "text-destructive" : "text-foreground")}>
@@ -296,7 +299,7 @@ function ArchivedChildren({ row, members, connected, actions }: { row: ArchivedS
       const word = archivedWord(t, member.resume);
       return <li key={member.session.session_id} className="flex min-w-0 items-center gap-xs" data-record-archived-child={member.session.session_id} data-archived-resume={member.resume}>
         <AgentMark kind={member.agent_kind} />
-        <span className="min-w-0 flex-1 truncate" title={[member.title, member.reason].filter(Boolean).join("\n")}>{member.title}</span>
+        <span className="min-w-0 flex-1 truncate" title={[member.title, member.reason ? startReasonText(member.reason, t) : null].filter(Boolean).join("\n")}>{member.title}</span>
         <span className={cn("shrink-0 text-micro", member.resume === "failed" ? "text-destructive" : "text-muted-foreground")}>{word}</span>
         {member.resume === "unknown" ? (
           <Button size="sm" variant="ghost" disabled={!connected} onClick={() => actions.checkArchived(row.id)} data-record-archived-check={member.session.session_id}>{t("workspace.checkStatus")}</Button>

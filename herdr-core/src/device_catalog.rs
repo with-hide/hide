@@ -108,14 +108,13 @@ pub(crate) fn catalog_state(
         })
         .collect::<Vec<_>>();
     let missing = needed.iter().any(|path| !facts.facts.contains_key(path));
-    let (state, message) = match (missing, &facts.unavailable) {
-        (false, _) => ("ready", None),
-        (true, Some(reason)) => ("unavailable", Some(reason.clone())),
-        (true, None) => ("resolving", None),
+    let state = match (missing, &facts.unavailable) {
+        (false, _) => "ready",
+        (true, Some(_)) => "unavailable",
+        (true, None) => "resolving",
     };
     DeviceCatalogSnapshot {
         state: state.to_owned(),
-        message,
         refused,
     }
 }

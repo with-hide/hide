@@ -6,7 +6,7 @@ import type { AgentRow, PaneRow, Workspace } from "./snapshot";
 import { taskList } from "./taskList";
 
 // PRD revisit-group: 다시 볼 것 stands under 읽을 것 in both views, and the pane
-// menu offers the ★ or 다 봤음 on a root agent.
+// menu offers the ★ or 다시 볼 것에서 빼기 on a root agent.
 
 const project = { id: "p", label: "repo", device_id: "local", path: "/repo", checkouts: [{ id: "c", path: "/repo" }] } as unknown as Workspace;
 const agent = (pane: string): AgentRow => ({ pane_id: pane, identity_label: pane, agent_kind: "claude" }) as unknown as AgentRow;
@@ -16,7 +16,7 @@ describe("다시 볼 것", () => {
   const cards = [card("ask", "needs_you"), card("work", "working"), card("later", "revisit"), card("read", "done"), card("wait", "waiting")];
   const rows = new Map(cards.map((c) => [c.root, agent(c.root)]));
 
-  it("stands between 읽을 것 and 일하는 중 in 상태별 (B1)", () => {
+  it("stands between 읽을 것 and 작업 중 in 상태별 (B1)", () => {
     const list = taskList({ cards } as never, rows, [project], "status");
     expect(list.groups.map((group) => group.state)).toEqual(["needs_you", "done", "revisit", "working", "waiting"]);
     expect(list.total).toBe(5);
@@ -33,7 +33,7 @@ describe("다시 볼 것", () => {
     expect(list.groups.map((group) => group.state)).toEqual(["working"]);
   });
 
-  it("puts the ★ or 다 봤음 in the pane menu before 세션 보관 (B10)", () => {
+  it("puts the ★ or 다시 볼 것에서 빼기 in the pane menu before 세션 보관 (B10)", () => {
     const pane = { id: "w1:p1", sleep_action: null, fork: null } as unknown as PaneRow;
     const star = paneMenuItems(pane, "title", { kind: "offered", unavailable: null }, "star").map((item) => item.id);
     expect(star.indexOf("revisit")).toBeLessThan(star.indexOf("archive_session"));

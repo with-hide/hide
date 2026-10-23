@@ -482,7 +482,7 @@ test("browser: a page opens from an agent's pane, follows its area, moves withou
     await showDocuments(plain);
     await tab(plain, "Page A").click();
     // Page C, opened beside Page A, shows the same notice in its own area.
-    await expect(plain.locator(`[data-browser-display="${a}"] [data-area-empty="browser-host"]`)).toContainText("Pages open in the hide desktop app.");
+    await expect(plain.locator(`[data-browser-display="${a}"] [data-area-empty="browser-host"]`)).toContainText("Pages open in the Hide desktop app.");
     await expect(plain.locator(`[data-browser-open-external="${a}"]`)).toBeVisible();
     await screenshot(plain, "browser-plain-tab");
   } finally {

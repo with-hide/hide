@@ -381,10 +381,10 @@ it("holds one restore in flight and keeps a late launch failure on the record fo
     expect(restore().disabled).toBe(true);
     expect(text(restore())).toBe("Restoring…");
     const requestId = (starts()[0]!.payload as { request_id: string }).request_id;
-    const operation = { id: 42, kind: "agent_start" as const, phase: "ready" as const, repository_root: checkout.path, branch: null, base_branch: null, path: checkout.path, pane_id: "resumed", agent_kind: "claude", message: null, agent_phase: "starting", agent_message: null, request_id: requestId };
+    const operation = { id: 42, kind: "agent_start" as const, phase: "ready" as const, repository_root: checkout.path, branch: null, base_branch: null, path: checkout.path, pane_id: "resumed", agent_kind: "claude", message: null, agent_phase: "starting", agent_reason: null, agent_line: null, request_id: requestId };
     await act(async () => useShellStore.setState({ rest: { ...rest, task_operation: operation } }));
     expect(restore().disabled).toBe(true);
-    const failed = { ...operation, agent_phase: "failed", agent_message: "agent_not_found" };
+    const failed = { ...operation, agent_phase: "failed", agent_reason: "agent_not_found", agent_line: null };
     await act(async () => useShellStore.setState({ rest: { ...rest, task_operation: failed } }));
     expect(restore().disabled).toBe(false);
     expect(text(view.container.querySelector('[role="alert"]'))).toContain("Retry");
@@ -431,7 +431,7 @@ it("checks the same restore after a timeout instead of launching another intent"
     await act(async () => useShellStore.setState({ rest: { ...rest, status: { ...rest.status, last_error: { kind: "agent_start.confirmation_unavailable", retryable: true, occurred_at: AT, request_id: requestId, message: "The saved receipt is unavailable" } } } }));
     expect(text(restore())).toBe("Check start status");
     expect(restore().disabled).toBe(false);
-    expect(text(view.container.querySelector('[role="alert"]'))).toBe("The saved receipt is unavailable");
+    expect(text(view.container.querySelector('[role="alert"]'))).toBe("The saved start record could not be read. Check the start status again.");
     await act(async () => restore().click());
     expect(starts()).toHaveLength(3);
     expect(starts()[2]!.payload).toEqual(starts()[1]!.payload);
@@ -449,7 +449,8 @@ it("keeps a parent's failed restore out of a child opened in the Overview record
     const starts = () => view.sent.filter(event => event.kind === "agent_start_in_checkout");
     const requestId = (starts()[0]!.payload as { request_id: string }).request_id;
     await act(async () => useShellStore.setState({ rest: { ...rest, status: { ...rest.status, last_error: { kind: "fixture_refusal", retryable: true, occurred_at: AT, request_id: requestId, message: "Root restore refused" } } } }));
-    expect(text(view.container.querySelector('[role="alert"]'))).toContain("Root restore refused");
+    // A kind this build does not word is the plain "did not start"; the core's sentence is the log's.
+    expect(text(view.container.querySelector('[role="alert"]'))).toContain("The agent did not start.");
     await view.showTrail([CHILD]);
     expect(view.container.querySelector('[role="alert"]')).toBeNull();
     expect(restore().disabled).toBe(false);

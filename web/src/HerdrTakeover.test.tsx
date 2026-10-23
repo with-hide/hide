@@ -129,7 +129,7 @@ it("a server Hide reads as it is can be left from the start, without the hint to
   desktop();
   const { unmount } = await mount(state(offer({ server_version: "0.9.1", same_protocol: true }), "herdr", "connected"));
   expect(button("[data-herdr-takeover-later]")).not.toBeNull();
-  expect(document.body.textContent).not.toContain("Hide cannot read this Herdr");
+  expect(document.body.textContent).not.toContain("Hide can't read this Herdr");
   await unmount();
 });
 

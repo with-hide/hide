@@ -1875,8 +1875,9 @@ impl HistoryPump {
     fn wake(&mut self, runtime: &mut Runtime) {
         let request = runtime.changes_request().expect("History is read");
         let landed = self.inflight.take().map(|asked| {
-            let changes = crate::changes::read(&asked);
+            let changes = crate::changes::read(&asked).0;
             let answer = crate::changes::ChangesAnswer {
+                detail: None,
                 key: Some(asked.key()),
                 selection: asked.selection(),
                 changes,

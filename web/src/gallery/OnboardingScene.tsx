@@ -133,7 +133,7 @@ const PLATFORM: Record<OnboardingSystem, string> = { mac: "darwin", windows: "wi
 
 /** The kit's agents in its order, each as KitAgentSnapshot reports it on a Mac whose kit has not run. */
 function kitAgents(state: OnboardingState, system: OnboardingSystem): KitAgent[] {
-  const piece = (location: string | null, failed: string | null = null): KitPiece => ({ state: failed ? "failed" : "off", reason: failed, location });
+  const piece = (location: string | null, failed: string | null = null): KitPiece => ({ state: failed ? "failed" : "off", why: failed ? { cause: failed } : null, location });
   const shared = `${HOME}/.agents/skills/hide/SKILL.md`;
   const none = state === "agents-none";
   const row = (id: string, label: string, installed: boolean, pieces: { hook?: string; skill: string; herdr: string }, extra: Partial<KitAgent> = {}): KitAgent => ({
@@ -152,7 +152,7 @@ function kitAgents(state: OnboardingState, system: OnboardingSystem): KitAgent[]
   const pc = system !== "mac";
   return [
     row("claude-code", "Claude Code", true, { hook: `${HOME}/.claude/settings.json`, skill: `${HOME}/.claude/skills/hide/SKILL.md`, herdr: `${HOME}/.claude` }),
-    row("codex", "Codex", true, { hook: `${HOME}/.codex/hooks.json`, skill: shared, herdr: `${HOME}/.codex` }, state === "agents-failed" ? { enabled: true, chosen: true, hook: piece(`${HOME}/.codex/hooks.json`, "~/.codex/hooks.json could not be written") } : {}),
+    row("codex", "Codex", true, { hook: `${HOME}/.codex/hooks.json`, skill: shared, herdr: `${HOME}/.codex` }, state === "agents-failed" ? { enabled: true, chosen: true, hook: piece(`${HOME}/.codex/hooks.json`, "not_changed") } : {}),
     row("grok", "Grok", false, { hook: `${HOME}/.grok/hooks/hide.json`, skill: shared, herdr: `${HOME}/.grok` }),
     row("opencode", "OpenCode", true, { hook: `${HOME}/.config/opencode/plugins/hide.js`, skill: shared, herdr: `${HOME}/.config/opencode` }, pc ? { availability: "unsupported_system" } : {}),
     row("pi", "Pi", true, { hook: `${HOME}/.pi/agent/extensions/hide.ts`, skill: shared, herdr: `${HOME}/.pi/agent` }),
@@ -224,11 +224,11 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
   const agents = refused ? [] : kitAgents(state, system).map((agent) => (step === "agents" || agent.availability !== "available" ? agent : { ...agent, enabled: true, chosen: true }));
   const kit = refused
     ? { agents, components: [], busy: false, refused: { cause: "unsafe", path: system === "windows" ? "D:\\" : system === "linux" ? "/srv/team" : "/Volumes/Team", variable: "HIDE_STATE_DIR", stop: REFUSED_STOP[system] } }
-    : { agents, components: [{ id: "cli", label: "hide", state: "off", reason: null, location: system === "windows" ? `${HOME}/.local/bin/hide.cmd` : `${HOME}/.local/bin/hide` }], busy: false };
-  const profile = (id: string, label: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label, target: `${id}@work.example`, session: "work", enabled: true, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_error: null, ...patch });
+    : { agents, components: [{ id: "cli", label: "hide", state: "off", why: null, location: system === "windows" ? `${HOME}/.local/bin/hide.cmd` : `${HOME}/.local/bin/hide` }], busy: false };
+  const profile = (id: string, label: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label, target: `${id}@work.example`, session: "work", enabled: true, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
   const savedProfiles = state === "devices-long32" ? Array.from({ length: 32 }, (_, index) => profile(`research-${index}`, `연구 개발팀의 아주 긴 기기 이름 ${index + 1} · 프로젝트 빌드 서버`, { target: `developer-${index}@very-long-research-hostname.engineering.example.test:2222`, session: "research-team-project-session-with-a-long-name" }))
     : state === "devices-disabled" ? [profile("build", "Build server", { enabled: false, problem: "disabled" }), profile("existing", "Design Mac", { added_as: "Design Mac", device_id: "existing", connect_state: "added" }), profile("invalid", "Unavailable configuration", { problem: "invalid_target" })]
-    : state === "devices-partial" ? [profile("build", "Build server", { added_as: "Build server", device_id: "build", connect_state: "connected" }), profile("research", "Research server", { added_as: "Research server", device_id: "research", connect_state: "failed", connect_error: "SSH access was refused" })]
+    : state === "devices-partial" ? [profile("build", "Build server", { added_as: "Build server", device_id: "build", connect_state: "connected" }), profile("research", "Research server", { added_as: "Research server", device_id: "research", connect_state: "failed", connect_refusal: null })]
     : [profile("build", "Build server"), profile("research", "Research server", { session: "experiments" })];
   const deviceStep = state.startsWith("devices");
   return {

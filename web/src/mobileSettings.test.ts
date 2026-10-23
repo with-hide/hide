@@ -103,7 +103,7 @@ describe("phoneLine", () => {
   });
 
   it("counts the days to the seven-day revoke once away a day", () => {
-    expect(phoneLine(phone, 3 * DAY)).toBe("3일 전 · 알림 받는 중 · 4일 뒤 자동 해지");
+    expect(phoneLine(phone, 3 * DAY)).toBe("3일 전 · 알림 받는 중 · 4일 뒤 자동 연결 해제");
     expect(phoneLine({ ...phone, notifications: "unasked" }, 60 * 60 * 1000)).toBe("1시간 전");
   });
 });

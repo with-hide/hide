@@ -1406,9 +1406,10 @@ fn a_device_checkouts_history_comes_from_its_helper_and_stays_with_its_device() 
     let request = runtime.changes_request().unwrap();
     assert_eq!(request.root.device_id, DEVICE);
     let device_answer = || crate::changes::ChangesAnswer {
+        detail: None,
         key: Some(request.key()),
         selection: request.selection(),
-        changes: crate::changes::read(&request),
+        changes: crate::changes::read(&request).0,
     };
     let listed = device_answer();
     assert_eq!(listed.changes.unavailable_reason, None);
@@ -2649,7 +2650,7 @@ fn a_copy_into_a_missing_folder_fails_where_it_was_pasted_and_adds_nothing() {
     f.settled("path_copy", &f.path("a.txt"), "failed");
     let runtime = f.shared.lock().unwrap();
     let slot = runtime.snapshot.explorer_operation.as_ref().unwrap();
-    assert!(slot.message.is_some());
+    assert!(slot.failure.is_some());
     drop(runtime);
     let names: Vec<_> = std::fs::read_dir(&f.root)
         .unwrap()
@@ -2770,7 +2771,7 @@ fn a_waiting_change_whose_item_went_fails_at_its_row_and_drops_the_rest() {
         .explorer_operation
         .as_ref()
         .unwrap()
-        .message
+        .failure
         .clone();
     assert!(message.is_some(), "the failure says why");
     assert!(f.root.join("d0").is_dir());

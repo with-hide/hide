@@ -112,13 +112,13 @@ describe("Add a project", () => {
     expect(projectNameProblem(".")).toBe("addProject.name.dots");
     expect(projectNameProblem("..")).toBe("addProject.name.dots");
     expect(t("addProject.name.slash")).toBe("A name is one folder, without `/`.");
-    expect(ko("addProject.name.dots")).toBe("`.`와 `..`는 폴더 이름이 될 수 없습니다.");
+    expect(ko("addProject.name.dots")).toBe("폴더 이름으로 `.`과 `..`은 쓸 수 없어요.");
   });
 
   it("words a refusal in the operator's language, and a code it does not know with that code", () => {
     expect(refusalText("outside_home", t)).toBe("Only a folder inside your home folder can be added.");
-    expect(refusalText("outside_home", ko)).toBe("홈 폴더 안의 폴더만 추가할 수 있습니다.");
-    expect(refusalText("quota", ko)).toBe("폴더가 거부되었습니다 (quota).");
+    expect(refusalText("outside_home", ko)).toBe("홈 폴더 안에 있는 폴더만 추가할 수 있어요.");
+    expect(refusalText("quota", ko)).toBe("폴더를 추가하지 못했어요 (quota).");
   });
 
   it("previews the full path as the name is typed", () => {

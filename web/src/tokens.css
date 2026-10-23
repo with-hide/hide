@@ -212,9 +212,9 @@
   --size-checkout-row: 32px;
   --size-checkout-row-detailed: 48px;
   --size-project-row: 32px;
-  --size-sidebar-line: 20px;
-  --size-sidebar-line-detail: 16px;
-  --size-sidebar-section-header: 26px;
+  --size-sidebar-line: calc(20px * var(--interface-scale, 1));
+  --size-sidebar-line-detail: calc(16px * var(--interface-scale, 1));
+  --size-sidebar-section-header: calc(26px * var(--interface-scale, 1));
   --size-sidebar-search: 28px;
   --size-overview-group-header: 52px;
   --size-checkout-icon: 14px;
@@ -359,16 +359,6 @@
   --size-overview-graph-child-orb: 28px;
   --size-checkout-header-commit-min: 540px;
   --size-checkout-header-time-min: 800px;
-}
-
-.interface-scale-exempt {
-  --interface-scale: 1;
-  --text-micro: 10px;
-  --text-caption: 11px;
-  --text-body: 12px;
-  --text-subhead: 13px;
-  --text-title: 14px;
-  --text-headline: 18px;
 }
 
 /* `.light` and `.dark` also scope a subtree, so one page can show both (the dev gallery). */

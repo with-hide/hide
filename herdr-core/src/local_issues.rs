@@ -87,27 +87,90 @@ pub fn parse_id(value: &str) -> Option<u32> {
     digits.parse::<u32>().ok().filter(|number| *number > 0)
 }
 
+/// Why the store refused a local issue, as the code the screen words
+/// (`localIssue.<code>`) with the one limit its sentence names; `Display` is
+/// the log's English.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalIssueError {
+    TitleEmpty,
+    TitleMultiline,
+    /// The most characters a title holds.
+    TitleTooLong(usize),
+    /// The most KiB a body holds.
+    BodyTooLong(usize),
+    /// The most projects the store keeps issues for.
+    ProjectsFull(usize),
+    /// The most issues one project keeps.
+    IssuesFull(usize),
+    /// No issue of that number in the project.
+    Missing,
+}
+
+impl LocalIssueError {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::TitleEmpty => "title_empty",
+            Self::TitleMultiline => "title_multiline",
+            Self::TitleTooLong(_) => "title_too_long",
+            Self::BodyTooLong(_) => "body_too_long",
+            Self::ProjectsFull(_) => "projects_full",
+            Self::IssuesFull(_) => "issues_full",
+            Self::Missing => "missing",
+        }
+    }
+
+    pub fn limit(self) -> Option<u64> {
+        match self {
+            Self::TitleTooLong(limit)
+            | Self::BodyTooLong(limit)
+            | Self::ProjectsFull(limit)
+            | Self::IssuesFull(limit) => Some(limit as u64),
+            Self::TitleEmpty | Self::TitleMultiline | Self::Missing => None,
+        }
+    }
+}
+
+impl std::fmt::Display for LocalIssueError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TitleEmpty => write!(formatter, "the issue title is empty"),
+            Self::TitleMultiline => write!(formatter, "the issue title is more than one line"),
+            Self::TitleTooLong(limit) => {
+                write!(formatter, "the issue title is over {limit} characters")
+            }
+            Self::BodyTooLong(limit) => write!(formatter, "the issue body is over {limit} KiB"),
+            Self::ProjectsFull(limit) => {
+                write!(
+                    formatter,
+                    "local issues are kept for at most {limit} projects"
+                )
+            }
+            Self::IssuesFull(limit) => {
+                write!(formatter, "a project holds at most {limit} local issues")
+            }
+            Self::Missing => write!(formatter, "the local issue does not exist"),
+        }
+    }
+}
+
 /// A title as the store keeps it: one line, trimmed, within the limit.
-pub fn validated_title(title: &str) -> Result<String, String> {
+pub fn validated_title(title: &str) -> Result<String, LocalIssueError> {
     let title = title.trim();
     if title.is_empty() {
-        return Err("이슈 제목을 입력하세요.".into());
+        return Err(LocalIssueError::TitleEmpty);
     }
     if title.contains(['\n', '\r']) {
-        return Err("이슈 제목은 한 줄이어야 합니다.".into());
+        return Err(LocalIssueError::TitleMultiline);
     }
     if title.chars().count() > TITLE_LIMIT {
-        return Err(format!("이슈 제목은 {TITLE_LIMIT}자 이하여야 합니다."));
+        return Err(LocalIssueError::TitleTooLong(TITLE_LIMIT));
     }
     Ok(title.to_owned())
 }
 
-pub fn validated_body(body: &str) -> Result<String, String> {
+pub fn validated_body(body: &str) -> Result<String, LocalIssueError> {
     if body.len() > BODY_LIMIT {
-        return Err(format!(
-            "이슈 내용은 {} KB 이하여야 합니다.",
-            BODY_LIMIT / 1024
-        ));
+        return Err(LocalIssueError::BodyTooLong(BODY_LIMIT / 1024));
     }
     Ok(body.trim_end().to_owned())
 }
@@ -160,14 +223,12 @@ impl LocalIssueStore {
         title: &str,
         body: &str,
         now_unix_ms: u64,
-    ) -> Result<u32, String> {
+    ) -> Result<u32, LocalIssueError> {
         let title = validated_title(title)?;
         let body = validated_body(body)?;
         let held = self.projects.len() + self.devices.values().map(BTreeMap::len).sum::<usize>();
         if self.project(machine, path).is_none() && held >= PROJECTS {
-            return Err(format!(
-                "로컬 이슈는 {PROJECTS}개 프로젝트까지만 둘 수 있습니다."
-            ));
+            return Err(LocalIssueError::ProjectsFull(PROJECTS));
         }
         let projects = match machine {
             None => &mut self.projects,
@@ -175,9 +236,7 @@ impl LocalIssueStore {
         };
         let project = projects.entry(path.to_owned()).or_default();
         if project.issues.len() >= ISSUES_PER_PROJECT {
-            return Err(format!(
-                "한 프로젝트의 로컬 이슈는 {ISSUES_PER_PROJECT}개까지입니다."
-            ));
+            return Err(LocalIssueError::IssuesFull(ISSUES_PER_PROJECT));
         }
         let number = project.next_number.max(1);
         project.next_number = number + 1;
@@ -203,7 +262,7 @@ impl LocalIssueStore {
         intent: &str,
         title: &str,
         now: u64,
-    ) -> Result<u32, String> {
+    ) -> Result<u32, LocalIssueError> {
         if let Some(issue) = self.project(machine, path).and_then(|project| {
             project
                 .issues
@@ -229,12 +288,12 @@ impl LocalIssueStore {
         title: &str,
         body: &str,
         now_unix_ms: u64,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, LocalIssueError> {
         let title = validated_title(title)?;
         let body = validated_body(body)?;
         let issue = self
             .issue_mut(machine, path, number)
-            .ok_or_else(|| format!("로컬 이슈 {}가 없습니다.", display_id(number)))?;
+            .ok_or(LocalIssueError::Missing)?;
         if issue.title == title && issue.body == body {
             return Ok(false);
         }
@@ -246,14 +305,19 @@ impl LocalIssueStore {
 
     /// Removes a memo the backlog just made (`되돌리기`, PRD
     /// overview-device-tasks D-21). Its number is not given out again.
-    pub fn delete(&mut self, machine: Option<&str>, path: &str, number: u32) -> Result<(), String> {
+    pub fn delete(
+        &mut self,
+        machine: Option<&str>,
+        path: &str,
+        number: u32,
+    ) -> Result<(), LocalIssueError> {
         let project = self
             .project_mut(machine, path)
-            .ok_or_else(|| format!("로컬 이슈 {}가 없습니다.", display_id(number)))?;
+            .ok_or(LocalIssueError::Missing)?;
         let before = project.issues.len();
         project.issues.retain(|issue| issue.number != number);
         if project.issues.len() == before {
-            return Err(format!("로컬 이슈 {}가 없습니다.", display_id(number)));
+            return Err(LocalIssueError::Missing);
         }
         Ok(())
     }

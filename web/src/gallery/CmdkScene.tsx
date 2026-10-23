@@ -30,7 +30,7 @@ export function cmdkSceneParams(params: URLSearchParams): CmdkSceneParams {
 const ANSWERS: Record<CmdkGithub, (requestId: string, query: string) => GithubSearch> = {
   results: (request_id, query) => ({ request_id, query, phase: "ready", results: CMDK_RESULTS, message: null }),
   pending: (request_id, query) => ({ request_id, query, phase: "working", results: [], message: null }),
-  failed: (request_id, query) => ({ request_id, query, phase: "failed", results: [], message: "GitHub 검색에 실패했습니다" }),
+  failed: (request_id, query) => ({ request_id, query, phase: "failed", results: [], message: "github_search.failed" }),
   empty: (request_id, query) => ({ request_id, query, phase: "ready", results: [], message: null }),
 };
 

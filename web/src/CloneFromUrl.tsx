@@ -23,7 +23,9 @@ import { RegistrationStatus, useRegistration } from "./registration";
 import { localDeviceId, type RepositoryClone, type WorkspaceRegistration } from "./snapshot";
 import { useShellStore } from "./store";
 import { useInterfaceTranslation } from "./i18n/client";
-import { useErrorSince } from "./WorkspaceDialogs";
+import { cloneFailureText, cloneStageText, coreErrorText } from "./coreError";
+import { QuotedLine } from "./QuotedLine";
+import { useErrorSince } from "./errorSince";
 
 /** How long typing settles before hided is asked about the folder. */
 const TARGET_CHECK_DELAY_MS = 150;
@@ -67,7 +69,7 @@ export function CloneFromUrl({ actions, registrations, pickParent, onBack, draft
     following && "path" in following && pathRefusal?.kind === "clone_repository" && pathRefusal.path === following.path ? pathRefusal.reason : null;
   // A refusal of the clone itself (hided's, or the core's), or the core
   // unable to register the finished folder; a running clone has neither.
-  const refusal = hidedRefusal ? refusalText(hidedRefusal, t) : cloneError && !running ? cloneError : null;
+  const refusal = hidedRefusal ? refusalText(hidedRefusal, t) : cloneError && !running ? coreErrorText(cloneError, t, "addProject.clone.failed") : null;
   const ended = clone?.phase === "failed" || clone?.phase === "cancelled" || refusal !== null;
   const answer = target && name && target.parent === parentPath && target.name === name ? target : null;
   const waiting = following !== null && !ended && registration.shown === null;
@@ -168,7 +170,7 @@ export function CloneFromUrl({ actions, registrations, pickParent, onBack, draft
         </div>
         <CloneProgress clone={clone} following={following !== null} />
         {refusal ? (
-          <div role="alert" className="flex min-w-0 flex-col gap-xxs" data-clone-refused={hidedRefusal ?? "core"}>
+          <div role="alert" className="flex min-w-0 flex-col gap-xxs" data-clone-refused={hidedRefusal ?? "core"} data-core-error={hidedRefusal ? undefined : cloneError?.kind}>
             <Status tone="error">{refusal}</Status>
           </div>
         ) : clone?.phase === "finished" ? (
@@ -211,7 +213,7 @@ function CloneProgress({ clone, following }: { clone: RepositoryClone | null; fo
         </Status>
         <div
           role="progressbar"
-          aria-label={clone.stage ?? t("addProject.clone.stageFallback")}
+          aria-label={clone.stage ? cloneStageText(clone.stage, t) : t("addProject.clone.stageFallback")}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={clone.percent ?? undefined}
@@ -220,15 +222,16 @@ function CloneProgress({ clone, following }: { clone: RepositoryClone | null; fo
           <div className="h-full bg-primary transition-[width]" style={{ width: `${clone.percent ?? 0}%` }} />
         </div>
         <span className="text-caption text-muted-foreground" data-clone-stage={clone.stage ?? ""}>
-          {clone.stage ? `${clone.stage}${clone.percent === null ? "" : ` ${clone.percent}%`}` : t("settings.connection.connecting")}
+          {clone.stage ? `${cloneStageText(clone.stage, t)}${clone.percent === null ? "" : ` ${clone.percent}%`}` : t("settings.connection.connecting")}
         </span>
       </div>
     );
   }
   if (clone.phase === "failed") {
     return (
-      <div role="alert" data-clone-phase="failed">
-        <Status tone="error">{clone.message ?? t("addProject.clone.failed")}</Status>
+      <div role="alert" className="flex min-w-0 flex-col gap-xxs" data-clone-phase="failed" data-core-error={clone.failure ?? undefined}>
+        <Status tone="error">{cloneFailureText(clone.failure, t)}</Status>
+        {clone.failure === "git" && clone.git_line ? <QuotedLine line={clone.git_line} /> : null}
       </div>
     );
   }

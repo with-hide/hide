@@ -1195,7 +1195,7 @@ test("a browser without a save picker explains the 256 MiB download limit", asyn
     });
     await page.locator("[data-editor-download]").click();
     await expect(page.locator("[data-editor-download-failed]")).toContainText(
-      "Use a browser with a file save picker for files over 256 MiB.",
+      "Use a browser with a file save picker for files over 256 MiB",
     );
     const evidenceDir = process.env.HIDE_E2E_SCREENSHOT_DIR;
     if (evidenceDir) {

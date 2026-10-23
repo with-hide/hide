@@ -101,7 +101,7 @@ impl KitPump {
                         };
                         let report =
                             call_as::<hide_kit::KitReport>(link.as_ref(), kit, KIT_TIMEOUT)
-                                .map_err(|error| error.to_string());
+                                .map_err(|error| (unavailable_cause(&error), error.to_string()));
                         if let (Ok(report), KitJob::Apply(scope)) = (&report, &job) {
                             completed(node.as_str(), scope, report);
                             applied = true;
@@ -130,10 +130,10 @@ impl KitPump {
                         }
                         let mut changed = match &report {
                             Some(Ok(report)) => locked.ingest_kit_report(node.as_str(), report),
-                            Some(Err(reason)) => {
+                            Some(Err((cause, detail))) => {
                                 // The node never ran the kit: a daemon
                                 // outside the app, or a node with no home.
-                                locked.set_local_kit_unavailable(reason);
+                                locked.set_local_kit_unavailable(*cause, detail);
                                 true
                             }
                             None => false,
@@ -303,6 +303,22 @@ fn action_of(job: &KitJob) -> hide_node_link::protocol::KitAction {
             codex_daemon_off: scope.codex_daemon_off,
         },
         KitJob::Status => KitAction::Status,
+    }
+}
+
+/// Why this machine's node did not run the kit. Only a daemon outside the
+/// app refuses with the kit's own standalone sentence; anything else is a
+/// node that did not answer, and its words go to the log.
+fn unavailable_cause(error: &crate::node_access::LinkError) -> crate::model::KitUnavailable {
+    use crate::model::KitUnavailable;
+    match error {
+        crate::node_access::LinkError::Refused(refusal)
+            if refusal.code == hide_node_link::ErrorCode::Unsupported
+                && refusal.message == hide_kit::STANDALONE_REASON =>
+        {
+            KitUnavailable::Standalone
+        }
+        _ => KitUnavailable::Unreadable,
     }
 }
 

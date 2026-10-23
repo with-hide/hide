@@ -36,18 +36,18 @@ describe("a sleeping pane's words", () => {
   it("words a wake the core refused for an unread Codex in the chosen language, and keeps any other reason as sent", () => {
     const refused = { state: "failed", since_unix_ms: now, reason: "codex_capability_unknown" } as const;
     expect(wakeFailureReason(refused, t)).toBe("Hide hasn't read this machine's Codex yet. Check Codex in Settings > Agents, then try again.");
-    expect(wakeFailureReason(refused, ko)).toBe("Hide가 이 기기의 Codex를 아직 확인하지 못했습니다. 설정 > 에이전트에서 Codex를 확인한 뒤 다시 시도하세요.");
+    expect(wakeFailureReason(refused, ko)).toBe("이 기기의 Codex를 아직 확인하지 못했어요. 설정 > 에이전트에서 Codex를 확인한 뒤 다시 시도하세요.");
     expect(wakeFailureReason({ state: "failed", since_unix_ms: now, reason: "The working folder /w no longer exists." }, t)).toBe("The working folder /w no longer exists.");
     expect(wakeFailureReason({ state: "failed", since_unix_ms: now }, t)).toBeNull();
   });
 
   it("words the caption and the age line in the chosen language", () => {
-    expect(sleepCaption({ state: "sleeping", since_unix_ms: now - 22 * HOUR }, now, ko)).toEqual({ text: "휴면 중 · 22시간", moon: true });
+    expect(sleepCaption({ state: "sleeping", since_unix_ms: now - 22 * HOUR }, now, ko)).toEqual({ text: "재움 · 22시간", moon: true });
     expect(wakingLine({ state: "waking", since_unix_ms: now - 3 * 24 * HOUR }, now, ko)).toBe("3일 전 대화를 다시 시작하는 중");
   });
 
   it("leaves the age out under a minute in every language, not by comparing the word", () => {
-    expect(sleepCaption({ state: "sleeping", since_unix_ms: now - 1000 }, now, ko)).toEqual({ text: "휴면 중", moon: true });
+    expect(sleepCaption({ state: "sleeping", since_unix_ms: now - 1000 }, now, ko)).toEqual({ text: "재움", moon: true });
     expect(wakingLine({ state: "waking", since_unix_ms: now }, now, ko)).toBe("대화를 다시 시작하는 중");
   });
 });
@@ -68,7 +68,8 @@ describe("the Sleep idle agents setting and the pane menu", () => {
       ({ id: "w1:p1", sleep_action, children: null, lineage_path: [] }) as unknown as PaneRow;
     const sleepItem = (row: PaneRow) => paneMenuItems(row, "reviewer").find((item) => item.id === "sleep_agent");
     expect(sleepItem(pane({ available: true }))).toMatchObject({ label: "Sleep agent", unavailable: null });
-    expect(sleepItem(pane({ available: false, reason: "This agent is working" }))).toMatchObject({ unavailable: "This agent is working" });
+    expect(sleepItem(pane({ available: false, reason: "working" }))).toMatchObject({ unavailable: "This agent is working" });
+    expect(sleepItem(pane({ available: false, reason: "a_newer_reason" as never }))).toMatchObject({ unavailable: "This agent cannot sleep now" });
     expect(sleepItem(pane())).toBeUndefined();
   });
 });

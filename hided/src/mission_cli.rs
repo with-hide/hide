@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 
-pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review]\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id>\nhide mission show [--mission <id>]\nhide mission list\nhide mission settings\nhide agent catalog [--machine <device id>]";
+pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review]\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id>\nhide mission show [--mission <id>]\nhide mission list\nhide mission settings";
 
 /// The largest plan or report file read from disk; the daemon refuses a
 /// frame past its own limit anyway.
@@ -77,7 +77,7 @@ fn flags<'a>(
             }
             set.push(arg.to_owned());
         } else if arg.starts_with('-') {
-            return Err(format!("Unknown flag: {arg}"));
+            return Err(format!("unknown flag for hide mission: {arg}"));
         } else {
             positional.push(arg.to_owned());
         }
@@ -344,7 +344,8 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
 }
 
 fn plan_input(text: &str) -> Result<PlanInput, String> {
-    serde_json::from_str(text).map_err(|error| format!("the plan is not a mission plan: {error}"))
+    serde_json::from_str(text)
+        .map_err(|error| format!("the plan is not valid mission plan JSON: {error}"))
 }
 
 fn read_file(path: &str) -> Result<String, String> {
@@ -427,7 +428,7 @@ pub fn run_catalog(env: &Env, machine: Option<String>) -> Result<(), String> {
         Err(code) => {
             println!(
                 "{}",
-                json!({"ok":false,"error":{"code":code,"message":code}})
+                json!({"ok":false,"error":{"code":code,"message":crate::cli::request_next_action(&code)}})
             );
             Err(code)
         }
@@ -455,6 +456,8 @@ fn print_answer(answer: Result<Value, String>) -> Result<(), String> {
         Err(reason) => {
             let next = if reason == "request_timeout" {
                 "The command may have been applied; run hide mission show before running it again"
+            } else if crate::cli::bootstrap_refused(&reason) {
+                crate::cli::request_next_action(&reason)
             } else {
                 next_action(&reason)
             };

@@ -63,7 +63,7 @@ export type ProjectRowModel = {
   disk: DiskCellState;
   /** Bytes a cleanup would free (the purple share, B51). */
   reclaimable: number;
-  /** Merged checkouts left on disk (`N merged → 정리`, B49). */
+  /** Merged checkouts left on disk (`머지됨 N → 정리`, B49). */
   merged: number;
   /** Resting with nothing to clean (B50). */
   quiet: boolean;

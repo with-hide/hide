@@ -33,8 +33,8 @@ describe("a relationship focus", () => {
 
   it("names the target in the selected language when the core gave no reason", async () => {
     const ko = (await createInterfaceI18n("ko")).t;
-    expect(relationState({ ...relation, timedOut: true }, null, ko)).toEqual({ phase: "failed", message: "child task을 열지 못했습니다. Hide가 제때 응답하지 않았습니다.", retryable: true });
-    expect(relationState(relation, { request_id: "r1", target_pane_id: "child", phase: "failed", message: null, retryable: false }, ko)).toEqual({ phase: "failed", message: "child task을 열지 못했습니다", retryable: false });
+    expect(relationState({ ...relation, timedOut: true }, null, ko)).toEqual({ phase: "failed", message: "child task 에이전트를 열지 못했어요. 시간 안에 응답이 없었어요.", retryable: true });
+    expect(relationState(relation, { request_id: "r1", target_pane_id: "child", phase: "failed", message: null, retryable: false }, ko)).toEqual({ phase: "failed", message: "child task 에이전트를 열지 못했어요", retryable: false });
   });
 
   it("reads as a retryable failure when no answer arrived in time, unless the core answered", () => {

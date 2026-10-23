@@ -109,7 +109,7 @@ describe("header", () => {
 describe("rowsProblem", () => {
   it("names a closed pane and a device that is not connected (B28)", () => {
     expect(rowsProblem("ok")).toBeNull();
-    expect(noticeText(korean, rowsProblem("gone")!)).toBe("이 페인은 더 이상 열려 있지 않아요.");
+    expect(noticeText(korean, rowsProblem("gone")!)).toBe("이 터미널은 더 이상 열려 있지 않아요.");
     expect(noticeText(korean, rowsProblem("device_unreachable")!)).toBe("이 에이전트의 기기가 연결돼 있지 않아요.");
   });
 });

@@ -85,7 +85,7 @@ describe("the explicit GitHub search (B16-B19)", () => {
     expect(githubRow("sandbox", answer({ phase: "working" }), t).state).toBe("working");
     expect(githubRow("sandbox", answer({ phase: "failed" }), t)).toEqual({ state: "failed", label: "GitHub search failed · retry" });
     expect(githubRow("sandbox", answer({}), t)).toEqual({ state: "none", label: "No results on GitHub either" });
-    expect(githubRow("sandbox", answer({ message: "Searched 20 of 25 repositories." }), t).label).toBe("No results found · only some repositories searched");
+    expect(githubRow("sandbox", answer({ message: "github_search.partial" }), t).label).toBe("No results found · only some repositories searched");
     expect(githubRow("sandbox", null, ko)).toEqual({ state: "idle", label: 'GitHub에서 "sandbox" 검색' });
     expect(githubRow("sandbox", answer({ phase: "failed" }), ko)).toEqual({ state: "failed", label: "GitHub 검색 실패 · 다시 시도" });
     expect(githubRow("sandbox", answer({}), ko)).toEqual({ state: "none", label: "GitHub에도 없음" });

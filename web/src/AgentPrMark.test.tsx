@@ -58,7 +58,7 @@ it.each([
 // leaving the family's worst state as the only one a screen reader can read.
 it.each([
   ["en", ["231 CI failed", "232 CI running or review pending", "233 Mergeable"]],
-  ["ko", ["231 CI 실패", "232 CI 도는 중이거나 리뷰 대기", "233 머지 가능"]],
+  ["ko", ["231 CI 실패", "232 CI 실행 중이거나 리뷰 대기", "233 머지 가능"]],
 ] as const)("reads each family PR state in %s and selects that PR", async (language, words) => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });

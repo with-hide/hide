@@ -44,7 +44,8 @@ export type DirectoryList = {
   stale?: boolean;
 };
 /** A device folder its helper could not list now (`directory_unavailable`); the reason is the helper's. */
-export type DirectoryUnavailable = { device_id: string; root_path: string; code: string; message: string };
+/** `reason` is the helper's refusal code on `code: "refused"`, worded by `fileFailure.ts`; its sentence stays in hided's log. */
+export type DirectoryUnavailable = { device_id: string; root_path: string; code: string; reason: string | null };
 export type PathRefusal = { kind: string; path: string; reason: string };
 /** hided's answer to where a clone would land: `path` when it may, `reason` when it may not. */
 export type CloneTarget = { parent: string; name: string; path: string | null; reason: string | null };
@@ -453,7 +454,7 @@ export const useShellStore = create<Store>((set, get) => ({
           device_id: payload.device_id ?? "",
           root_path: payload.root_path ?? "",
           code: payload.code ?? "",
-          message: payload.message ?? "",
+          reason: payload.reason ?? null,
         },
       });
       return [];

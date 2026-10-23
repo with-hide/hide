@@ -13,7 +13,7 @@ describe("what Hide AI started is named from the core's codes (PRD hide-ai-origi
   it("words a known task in the interface language, and shows a task kind this build does not know as its code (version skew)", async () => {
     const ko = (await createInterfaceI18n("ko")).t;
     const en = (await createInterfaceI18n("en")).t;
-    expect(taskLine(ko, MEMORY)).toBe("Memory 올리기 · m72");
+    expect(taskLine(ko, MEMORY)).toBe("Memory 반영하기 · m72");
     expect(taskLine(en, MEMORY)).toBe("Promote Memory · m72");
     expect(taskLine(en, { kind: "label_repair" })).toBe("label_repair");
   });
@@ -28,10 +28,10 @@ describe("what Hide AI started is named from the core's codes (PRD hide-ai-origi
 
   it("puts Hide AI and the task in the row's accessible name, and nothing in an operator's row (D-09, B9)", async () => {
     const { t } = await createInterfaceI18n("ko");
-    expect(hideAiWords(t, { task: MEMORY })).toBe("Hide AI · Memory 올리기 · m72");
+    expect(hideAiWords(t, { task: MEMORY })).toBe("Hide AI · Memory 반영하기 · m72");
     expect(hideAiWords(t, {})).toBe("Hide AI");
     const base = { id: "p", pane_id: "p", identity_label: "m72 결정을 문서로 옮기기", agent_kind: "claude", status_code: "stopped", detail: null } as const;
-    expect(rowAccessibleName(t, legacyAgentRow({ ...base, hide_ai: { task: MEMORY } }), null)).toContain("Hide AI · Memory 올리기 · m72");
+    expect(rowAccessibleName(t, legacyAgentRow({ ...base, hide_ai: { task: MEMORY } }), null)).toContain("Hide AI · Memory 반영하기 · m72");
     expect(rowAccessibleName(t, legacyAgentRow({ ...base }), null)).not.toContain("Hide AI");
   });
 });
@@ -43,8 +43,8 @@ describe("what a home-owned row says and where it opens (PRD hide-ai-work-home D
     expect(homeTurnLine(ko, { kind: "pr_review", pr_number: 924 })).toBe("PR #924 리뷰");
     expect(homeTurnLine(ko, { kind: "ci_failed", pr_number: 924 })).toBe("CI 실패");
     expect(homeTurnLine(en, { kind: "pr_review", pr_number: 924 })).toBe("PR #924 review");
-    expect(hideAiWords(ko, { task: MEMORY, home: "memory", turn: { kind: "pr_review", pr_number: 924 } })).toBe("Hide AI · Memory 올리기 · m72 · PR #924 리뷰");
-    expect(hideAiWords(ko, { task: MEMORY, home: "memory" })).toBe("Hide AI · Memory 올리기 · m72");
+    expect(hideAiWords(ko, { task: MEMORY, home: "memory", turn: { kind: "pr_review", pr_number: 924 } })).toBe("Hide AI · Memory 반영하기 · m72 · PR #924 리뷰");
+    expect(hideAiWords(ko, { task: MEMORY, home: "memory" })).toBe("Hide AI · Memory 반영하기 · m72");
   });
 
   const rest = { navigator: { workspaces: [{ id: "ws-1", device_id: "mac" }] } } as unknown as SnapshotRest;

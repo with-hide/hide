@@ -4,9 +4,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { agentLogo, monogram } from "./agentLogos";
-import { appliedAgents, hideAiFirstRunKey, selection, tileSwitchable } from "./agentOnboardingRules";
+import { appliedAgents, selection, tileSwitchable } from "./agentOnboardingRules";
 import { AgentLogo } from "./components/agent-logo";
-import { catalogs } from "./i18n/catalogs";
 import type { KitAgent } from "./snapshot";
 
 const agent = (id: string, availability: KitAgent["availability"]): KitAgent => ({
@@ -15,7 +14,7 @@ const agent = (id: string, availability: KitAgent["availability"]): KitAgent => 
   availability,
   enabled: false,
   chosen: false,
-  skill: { state: "off", reason: null, location: null },
+  skill: { state: "off", why: null, location: null },
   hook: null,
   doc_url: "https://example.test",
 });
@@ -55,15 +54,5 @@ describe("the first-run agent choice", () => {
     expect(monogram("Kiro")).toBe("KI");
     expect(monogram("Factory Droid")).toBe("FD");
     expect(monogram("")).toBe("?");
-  });
-});
-
-describe("the first-run Hide AI line in Korean (B46)", () => {
-  it("takes 를 after a name that ends in a vowel sound and 을 after Grok, whose reading ends in a consonant", () => {
-    const line = (id: string) => catalogs.ko[hideAiFirstRunKey(id)].replace("{{agent}}", id);
-    for (const id of ["claude-code", "codex", "opencode", "pi", "antigravity"]) expect(line(id)).toBe(`Hide AI는 ${id}를 씁니다`);
-    expect(line("grok")).toBe("Hide AI는 grok을 씁니다");
-    // English reads the same for every agent: no particle.
-    expect(catalogs.en[hideAiFirstRunKey("grok")]).toBe(catalogs.en[hideAiFirstRunKey("codex")]);
   });
 });

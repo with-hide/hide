@@ -153,7 +153,7 @@ describe("the rows and groups (D-06, D-30, D-40)", () => {
     const rows = requestRows([lens(parent), lens(child), lens(grandchild), lens(orphan)], [parent, child, grandchild, orphan]);
     expect(rows.map((row) => row.lens.agent.pane_id)).toEqual(["parent", "orphan"]);
     expect(rows[0]!.children.map((row) => row.pane_id)).toEqual(["child", "grandchild"]);
-    expect(childrenSummary(rows[0]!, t)).toEqual({ text: "자식 2 · 일하는 중 1", asking: 2 });
+    expect(childrenSummary(rows[0]!, t)).toEqual({ text: "자식 2 · 작업 중 1", asking: 2 });
     expect(childrenSummary(rows[1]!, t)).toBeNull();
   });
 
@@ -172,7 +172,7 @@ describe("the result line (D-12, B5, B10)", () => {
 
   it("reads the label's verdict in the expanded row, and nothing without a label (B6)", () => {
     expect(verdictLine(block("answer", { end: "question", line: "어느 쪽으로 할까요?" }), t)).toBe("AI 판정 · 질문 · 어느 쪽으로 할까요?");
-    expect(verdictLine(block("stopped", { end: "unfinished" }), t)).toBe("AI 판정 · 덜 끝남");
+    expect(verdictLine(block("stopped", { end: "unfinished" }), t)).toBe("AI 판정 · 일 남음");
     expect(verdictLine(block("result"), t)).toBeNull();
     expect(verdictLine(undefined, t)).toBeNull();
   });

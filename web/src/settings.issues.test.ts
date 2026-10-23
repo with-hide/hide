@@ -74,7 +74,7 @@ describe("Issue settings", () => {
       options: [
         { id: "auto", label: "자동 (GitHub)" },
         { id: "github", label: "GitHub · acme/app" },
-        { id: "local", label: "Local" },
+        { id: "local", label: "로컬" },
       ],
     });
 
@@ -85,15 +85,15 @@ describe("Issue settings", () => {
     });
     const local = issueSourceChoices(chosenLocal, "local");
     expect(local.value).toBe("local");
-    expect(local.options.map((option) => option.label)).toEqual(["자동", "GitHub · acme/app", "Local"]);
+    expect(local.options.map((option) => option.label)).toEqual(["자동", "GitHub · acme/app", "로컬"]);
 
     // A folder is always Local; a GitHub choice it cannot take reads as Auto.
     const folder = project({ is_git: false, tasks: { source: source({ kind: "local", label: "Local", name: null, chosen: true }), tasks: [], overflow: false } });
     expect(issueSourceChoices(folder, "github")).toEqual({
       value: "auto",
       options: [
-        { id: "auto", label: "자동 (Local)" },
-        { id: "local", label: "Local" },
+        { id: "auto", label: "자동 (로컬)" },
+        { id: "local", label: "로컬" },
       ],
     });
   });

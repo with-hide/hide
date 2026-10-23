@@ -958,7 +958,7 @@ impl Runtime {
                     serde_json::json!({
                         "device": device,
                         "next_action": format!(
-                            "Ask the operator to open Settings › Devices in Hide and choose Allow and install on {name}'s row. Until then Hide installs nothing there, and the device's files, Git and terminal input wait for it."
+                            "Ask the operator to open Settings > Devices in Hide and choose Allow and install on {name}'s row. Until then Hide installs nothing there, and the device's files, Git and terminal input wait for it."
                         ),
                     }),
                     true,

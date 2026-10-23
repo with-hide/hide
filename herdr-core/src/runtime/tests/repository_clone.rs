@@ -144,7 +144,7 @@ fn a_finished_clone_is_registered_through_create_workspace() {
     assert_eq!(clone.phase, "finished", "{clone:?}");
     assert_eq!(clone.path, target.display().to_string());
     assert_eq!(clone.host, "localhost");
-    assert_eq!(clone.message, None);
+    assert_eq!(clone.failure, None);
     assert!(target.join("f0.txt").is_file());
     assert_eq!(children(&parent), ["origin"]);
     let guard = shared.lock().unwrap();
@@ -202,6 +202,25 @@ fn the_same_clone_sent_twice_runs_once_and_another_waits() {
         .filter(|diagnostic| diagnostic.kind == "workspace.create.requested")
         .count();
     assert_eq!(requested, 1, "one clone, one registration");
+}
+
+#[test]
+fn a_failed_clone_names_its_failure_by_code_and_sends_no_sentence() {
+    let (_outer, url, parent) = fixture();
+    std::fs::create_dir_all(parent.join("origin")).unwrap();
+    let shared = shared_runtime();
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .dispatch_json(&clone_event(&url, &parent, "origin"))
+    );
+    let clone = settled(&shared);
+    assert_eq!(clone.phase, "failed", "{clone:?}");
+    assert_eq!(clone.failure.as_deref(), Some("target_exists"));
+    assert_eq!(clone.git_line, None);
+    let wire = serde_json::to_value(&clone).unwrap();
+    assert!(wire.get("message").is_none(), "{wire}");
 }
 
 #[test]

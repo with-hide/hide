@@ -25,7 +25,8 @@ import { useShellStore } from "../store";
 import { HideAiFallback } from "./HideAiFallback";
 import { ProviderState, useHideAiWords } from "./hideAiParts";
 import { useAgentsDemand } from "./useAgentsDemand";
-import { useErrorSince } from "./useErrorSince";
+import { coreErrorText } from "../coreError";
+import { useErrorSince } from "../errorSince";
 
 /**
  * Hide AI: the agent Hide uses behind the scenes and the features that use it
@@ -58,8 +59,8 @@ export function HideAiTab({ actions }: { actions: Actions }) {
   const everyAgentPast = listed.length > 1 && listed.every((provider) => provider?.past_limit === true);
   const agentLines = [
     aiError ? (
-      <Note key="error" tone="error" data-ai-error="true">
-        {t("hideAi.notSaved")}
+      <Note key="error" tone="error" data-ai-error="true" data-core-error={aiError.kind}>
+        {coreErrorText(aiError, t, "hideAi.notSaved")}
       </Note>
     ) : null,
     ai?.refusal && !ai.refusal.using && refused ? (
@@ -214,8 +215,8 @@ export function HideAiTab({ actions }: { actions: Actions }) {
             label={t("hideAi.worktreeNames")}
             detail={
               namesError ? (
-                <Note tone="error" data-issue-settings-error="true">
-                  {t("settings.notSaved", { reason: namesError })}
+                <Note tone="error" data-issue-settings-error="true" data-core-error={namesError.kind}>
+                  {coreErrorText(namesError, t, "coreError.settings.notSaved")}
                 </Note>
               ) : (
                 <Note>{t("hideAi.worktreeNamesDescription")}</Note>

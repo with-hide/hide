@@ -23,7 +23,7 @@ export const NODE_DEVICE = "mini";
 
 const host = (platform: string): DeviceHost => ({ consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: "~/.local/bin", contract: 3, bound_identity: "SHA256:example", granted_at_unix_ms: 1, state: "ready", message: null, platform, helper_path: "~/.hide/host-helper/current/hided" });
 
-const quietKit: Kit = { unavailable: null, busy: false, components: [{ id: "cli", label: "hide command", state: "installed", reason: null, location: "~/.local/bin/hide" }], agents: [], offers_reinstall: false, shares_account_with: null };
+const quietKit: Kit = { unavailable: null, busy: false, components: [{ id: "cli", label: "hide command", state: "installed", why: null, location: "~/.local/bin/hide" }], agents: [], offers_reinstall: false, shares_account_with: null };
 
 /**
  * The snapshot for `side`: on the core's side This Mac runs the core and

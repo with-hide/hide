@@ -5,6 +5,7 @@ import { Note, Row, Status } from "../components/settings-rows";
 import { Button } from "../components/ui/button";
 import { Switch } from "../components/ui/switch";
 import { useInterfaceTranslation } from "../i18n/client";
+import { kitWhyText } from "../kitWhy";
 import { kitPartText } from "../settings";
 import type { Device, KitAgent } from "../snapshot";
 import { agentHookWait, agentLeftover, agentProblems, agentStatus, agentUnsupportedHere, docsUrl, installDocUrl, machineSystem } from "./agentRows";
@@ -70,6 +71,7 @@ export function AgentRow({ device, agent, actions, onAct }: { device: Device; ag
   const status = agentStatus(agent);
   const problems = agentProblems(agent);
   const leftover = agentLeftover(agent);
+  const leftoverWhy = leftover ? kitWhyText(leftover.why, t) : null;
   const waiting = agentHookWait(agent);
   const docs = docsUrl(agent.id);
   const worst = problems.some(({ piece }) => piece.state === "failed") ? "error" : "warn";
@@ -114,12 +116,12 @@ export function AgentRow({ device, agent, actions, onAct }: { device: Device; ag
           ) : null}
           {waiting ? (
             <Note data-agent-hook-wait={`${device.id}:${agent.id}`}>
-              {t("agents.problem", { part: t(`agents.part.${waiting.part}`), state: waiting.piece.reason ?? "" })}
+              {t("agents.problem", { part: t(`agents.part.${waiting.part}`), state: kitWhyText(waiting.piece.why, t) ?? "" })}
             </Note>
           ) : null}
           {leftover ? (
             <Note tone="error" data-agent-leftover={`${device.id}:${agent.id}`}>
-              {leftover.reason ? t("agents.leftover", { reason: leftover.reason }) : t("agents.leftoverNoReason")}
+              {leftoverWhy ? t("agents.leftover", { reason: leftoverWhy }) : t("agents.leftoverNoReason")}
             </Note>
           ) : null}
         </>

@@ -95,12 +95,12 @@ describe("project guardrails", () => {
   });
 
   it("names the installed agents whose Hide hook is not in place, Codex's untrusted one included (B25)", () => {
-    const installed: KitPiece = { state: "installed", reason: null, location: null };
+    const installed: KitPiece = { state: "installed", why: null, location: null };
     const agent = (id: string, label: string, over: Partial<KitAgent> = {}): KitAgent => ({ id, label, availability: "available", enabled: true, chosen: true, skill: installed, hook: installed, doc_url: "", ...over });
     expect(unguardedAgents([agent("claude-code", "Claude Code"), agent("codex", "Codex")])).toEqual([]);
     const names = unguardedAgents([
       agent("claude-code", "Claude Code"),
-      agent("codex", "Codex", { hook: { state: "failed", reason: "Codex has not trusted Hide's hook", location: null } }),
+      agent("codex", "Codex", { hook: { state: "failed", why: { cause: "codex_untrusted" }, location: null } }),
       agent("grok", "Grok", { enabled: false }),
       agent("omp", "omp", { availability: "not_installed", enabled: false, chosen: false }),
       agent("pi", "Pi", { availability: "unsupported_system" }),
