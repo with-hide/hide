@@ -59,6 +59,65 @@ The request carries that language and the Hide AI system prompt names it; no pro
 Git branch and worktree names Hide suggests stay lowercase ASCII in every language.
 The manifest has no description, since a static file cannot follow the language.
 
+## Writing the copy
+
+A catalog value is the screen's own sentence in that language, not a translation of the English key.
+Write what happens on the screen first, then put it into English and into the other three languages one at a time.
+A Korean value that reads as the English sentence with Korean words in it (`Hide가 자기 항목을 더해, 에이전트가 나를 부르는 순간을 알아챕니다`) fails this section even when every word is correct.
+The rules below came from an audit of every catalog value, the native menus and dialogs, the `hide` command's sentences and the sentences the core sends as data.
+
+### Korean
+
+- **Register.** Guidance and errors end in 해요체 (`읽지 못했어요`), a request in `-세요` (`다시 시도하세요`), and a button, a status chip or a label in a noun or a short verb form (`계속`, `연결됨`, `알림 켜기`). 합니다체 and 반말 (`-다`, `-않는다`) are not used for screen text. One screen, one wizard and one dialog keep one register.
+- **No particle after an inserted value.** A value is any name, number, path, branch, device or agent, so its last sound is not known. Never write `{{x}}` followed by 은, 는, 이, 가, 을, 를, 과, 와, 으로, 로 or 이라, and never write the pairs `을(를)`, `이(가)`, `은(는)`. Put a fixed noun after the value (`{{name}} 프로젝트를`, `{{device}} 기기가`, `{{agent}} 설정에`), use a particle that does not change (`에`, `에서`, `의`, `도`, `만`), or write the sentence so the value ends it (`선택한 기기: {{device}}`). A `*Euro` or `*Eun` key pair is not added for a new sentence.
+- **No subject that does not act.** `Hide가`, `에이전트가` and `이 폴더는` open a sentence only when the sentence is about them. Say what the person sees (`저장하지 못했어요`), not what the product does (`Hide가 저장하지 못했습니다`). No personified verbs (알아챈다, 받아들인다, 부른다, 시킨다).
+- **A button is quoted by its label.** `‘계속’을 누르기 전에는`, with the label copied from the button's own key.
+- **The subtitle of a choice ends in a verb.** Two choices whose subtitles are both noun phrases read as the same choice (`인터넷에 있는 Git 저장소를 이 기기의 새 폴더로 내려받아요` / `빈 폴더를 만들고 Git 저장소로 시작해요`).
+- **English only for names, commands, keys and paths.** Product names (Claude Code, Codex, Grok, OpenCode, Pi, omp, Antigravity, GitHub, Herdr, Hide, Tailscale, Git), commands, file names, shortcut keys and identifiers stay as they are. A general English word (`worktree`, `checkout`, `hook`, `pane`, `diff`, `Merge`, `Local`) is written in Korean or as the glossary says.
+- **Product name.** `Hide` in a sentence, `hide` for the command, `hide.app` for the bundle; `BRAND.md` keeps the lowercase wordmark beside the mark.
+
+### All languages
+
+- **A value is words, never a code.** `{{state}}`, `{{reason}}` and `{{message}}` hold a sentence that is already in the viewer's language, not a status code (`not_installed`), not an English sentence and not a protocol answer. The core sends a code and the catalog words it (the boundary above). A failure the person cannot act on goes to the diagnostic log, not into a message.
+- **The same thing has one name** in a language, from the glossary below. A new word for an existing thing is added to the glossary in the same change.
+- **A sentence quoted in `UI_BEHAVIOR.md` changes with it.** `rg` the old text in `docs/UI_BEHAVIOR.md` and in `web/e2e`, `desktop/e2e` and the unit tests, and change those lines in the same pull request.
+- **A message for an agent is not screen copy.** A prompt Hide types into an agent (`issue.prompt.*`), a hook line and a comment an agent leaves on GitHub are read by agents and by the people who later read their record; they are written in English, except where the operator's language is the point, and they are outside the register rule above.
+- **English** is plain and short: the sentence a person would say, in the active voice, without a question the screen does not ask. **Japanese** uses です・ます for sentences and a noun phrase for labels, without 〜を行います or 〜することができます where 〜します works, and writes Latin letters beside kana without a space. **Simplified Chinese** uses 你, a full-width punctuation mark after Chinese text and a half-width one after Latin text, and avoids 进行… and 被… where a plain verb works.
+
+### Glossary
+
+One row is one thing the screen names. A word in the last column is not used for it.
+
+| Thing | en | ko | ja | zh-CN | Not |
+| --- | --- | --- | --- | --- | --- |
+| A machine running Herdr | device | 기기 | デバイス | 设备 | 디바이스, 장치, マシン (the platform names `This Mac`, `This PC` and `This computer` stay as `common.*` says; Korean writes `Mac` in Latin letters) |
+| One terminal of a tab | pane | 터미널 (`pane` only in `pane ID` and commands) | ペイン | 窗格 | 페인, pane in a sentence, 패널, 面板 |
+| A project's folder on a device | checkout | 체크아웃 | チェックアウト | 检出目录 | checkout, 작업 폴더 |
+| Herdr's workspace | workspace | 작업공간 (the tab named `Workspace` keeps its name) | ワークスペース | 工作区 | 워크스페이스 |
+| Git worktree | worktree | 워크트리 | ワークツリー | 工作树 | worktree |
+| An agent started by another | child agent | 자식 에이전트 (count: 개) | 子エージェント | 子智能体 | 하위, 형제 as a heading |
+| An agent is busy | working | 작업 중 | 作業中 | 工作中 | 일하는 중 |
+| A unit of work in the sidebar | task | 태스크 | タスク | 任务 | 일감 |
+| GitHub issue | issue | 이슈 | Issue | 议题 | 課題 |
+| Pull request | PR | PR | PR | PR | 풀 리퀘스트, プルリクエスト, 拉取请求 |
+| Merge | merge | 머지 | マージ | 合并 | Merge, 병합 |
+| Copy a repository from a URL | clone | 클론 | クローン | 克隆 | 복제 |
+| Join an issue to a PR | link | 연결 | 関連付け | 关联 | 잇기 |
+| Revoke a paired phone | disconnect | 연결 해제 | 解除 | 解除 | 해지 |
+| Read a QR code | scan | 스캔 | スキャン | 扫描 | 찍기 |
+| The file Hide adds to an agent | agent setup | 연동 설정 | 連携設定 | 集成配置 | hook, 훅 in a sentence (a file named `hooks.json` stays) |
+| Hide's helper on a device | helper | 헬퍼 | ヘルパー | 辅助程序 | 연결 도구 |
+| The `hide` command | command | 명령 | コマンド | 命令 | 명령어 |
+| Messages between agents | letter | 편지 | レター | 信件 | 手紙 |
+| A phone | phone | 폰 | スマートフォン | 手机 | 모바일, 휴대폰 (the tab named `모바일` keeps its name) |
+| The device list beside the sidebar | device rail | 기기 목록 | デバイス一覧 | 设备栏 | 레일 |
+| An issue source kept on this device | local | 로컬 | ローカル | 本地 | Local |
+| The feature that keeps cards for agents | Memory | Memory | Memory | Memory | 기억, メモリ, 记忆 |
+| Agent family names | Claude Code, Codex, Grok, OpenCode, Pi, omp, Antigravity | as written | as written | as written | 代理 for an agent in zh |
+| Reasoning level | effort | effort | effort | effort | translated |
+
+Words that stay in English on purpose: `core`, `stack`, `effort`, `Conductor`, `Hide AI`, `Memory` (tab name), `Factory`.
+
 ## Hardcoded text guard
 
 Product text outside the catalogs is caught by two rules in `web/eslint.config.js`, which `pnpm lint` and the `checks` lane run on `web/src` (tests, `src/i18n` and `src/gallery` excepted).
