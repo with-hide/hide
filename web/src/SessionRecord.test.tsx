@@ -381,7 +381,7 @@ it("holds one restore in flight and keeps a late launch failure on the record fo
     expect(restore().disabled).toBe(true);
     expect(text(restore())).toBe("Restoring…");
     const requestId = (starts()[0]!.payload as { request_id: string }).request_id;
-    const operation = { id: 42, kind: "agent_start" as const, phase: "ready" as const, repository_root: checkout.path, branch: null, base_branch: null, path: checkout.path, pane_id: "resumed", agent_kind: "claude", message: null, agent_phase: "starting", agent_reason: null, agent_line: null, request_id: requestId };
+    const operation = { id: 42, kind: "agent_start" as const, phase: "ready" as const, repository_root: checkout.path, branch: null, base_branch: null, path: checkout.path, pane_id: "resumed", agent_kind: "claude", failure: null, agent_phase: "starting", agent_reason: null, agent_line: null, request_id: requestId };
     await act(async () => useShellStore.setState({ rest: { ...rest, task_operation: operation } }));
     expect(restore().disabled).toBe(true);
     const failed = { ...operation, agent_phase: "failed", agent_reason: "agent_not_found", agent_line: null };

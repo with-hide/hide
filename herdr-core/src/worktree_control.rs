@@ -126,9 +126,9 @@ impl TabTarget {
                 .map_err(|_| "runtime unavailable")?
                 .save_group_start_effect(id, effect.clone())?
         };
-        saved.recv_timeout(Duration::from_secs(10)).map_err(|_| {
-            "The terminal proof could not be saved. Check this start's status again.".to_owned()
-        })?
+        saved
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "agent_start.not_saved".to_owned())?
     }
 
     fn acquire_start_geometry(
@@ -214,9 +214,24 @@ pub fn spawn_worktree_preflight(
             Err(_) => return,
         };
         let Some(removal) = request else { return; };
-        let result = crate::node_access::call_as::<()>(target.host.as_ref(),
-            hide_node_link::protocol::Call::WorktreeRemovalCheck { removal }, HOST_REMOVE_TIMEOUT)
-            .map_err(|error| format!("{}. No panes were closed.", error.to_string().trim_end_matches('.')));
+        let result = match crate::node_access::call_as::<Option<hide_node_link::worktrees::Stopped>>(
+            target.host.as_ref(),
+            hide_node_link::protocol::Call::WorktreeRemovalCheck { removal },
+            HOST_REMOVE_TIMEOUT,
+        ) {
+            Ok(None) => Ok(()),
+            Ok(Some(stopped)) => Err(RemovalFailure::new(
+                crate::model::WorktreeRemovalNotice::Stopped { stop: stopped.stop, panes_closed: false },
+                stopped.message,
+            )),
+            Err(error) => Err(RemovalFailure::new(
+                crate::model::WorktreeRemovalNotice::HostFailed {
+                    panes_closed: false,
+                    reason: Some(crate::node_access::link_failure_code(&error)),
+                },
+                format!("{}. No panes were closed.", error.to_string().trim_end_matches('.')),
+            )),
+        };
         crate::diagnostic!(serde_json::json!({"component":"worktree_removal", "kind":"preflight_finished", "id":id, "accepted":result.is_ok()}));
         if let Ok(mut guard) = runtime.lock() {
             guard.ingest_worktree_preflight_result(id, outside, result);
@@ -235,14 +250,24 @@ pub fn spawn_worktree_close(
     thread::Builder::new()
         .name("herdr-core-worktree-close".into())
         .spawn(move || {
-            let result = close_checkout_panes(
+            let result = close_checkout_panes_for_removal(
                 context.connector.as_ref(),
                 context.host.as_ref(),
                 std::slice::from_ref(&checkout_path),
                 &pane_ids,
                 ProcessWait::for_folder_removal(context.local),
                 CONFIRM_TIMEOUT,
-            );
+            )
+            .map_err(|failure| {
+                let notice = if failure.running.is_empty() {
+                    crate::model::WorktreeRemovalNotice::CloseFailed
+                } else {
+                    crate::model::WorktreeRemovalNotice::StillRunning {
+                        programs: failure.running,
+                    }
+                };
+                RemovalFailure::new(notice, failure.message)
+            });
             // This thread is the removal's only executor: it closes the panes,
             // takes the runtime's confirmation, and runs Git itself. No shell
             // reports a completion, so a client cannot claim one.
@@ -278,7 +303,10 @@ pub fn spawn_worktree_close(
                 } else {
                     "remove_failed"
                 },
-                outcome.as_ref().err().map(String::as_str),
+                outcome
+                    .as_ref()
+                    .err()
+                    .map(|failure| failure.detail.as_str()),
             );
             match runtime.lock() {
                 Ok(mut guard) => {
@@ -305,20 +333,47 @@ pub fn spawn_worktree_close(
 fn remove_on_host(
     host: &dyn crate::node_access::NodeLink,
     removal: hide_node_link::worktrees::ConfirmedRemoval,
-) -> Result<String, String> {
+) -> Result<hide_node_link::worktrees::Removed, RemovalFailure> {
+    use crate::model::WorktreeRemovalNotice;
     let path = removal.checkout_path.clone();
     match crate::node_access::call_as::<hide_node_link::worktrees::RemovalOutcome>(
         host,
         hide_node_link::protocol::Call::WorktreeRemove { removal },
         HOST_REMOVE_TIMEOUT,
     ) {
-        Ok(outcome) if outcome.removed => Ok(outcome.message),
-        Ok(outcome) => Err(outcome.message),
-        Err(crate::node_access::LinkError::Unknown(reason)) => Err(format!(
-            "The removal of {path} was sent but its result is unknown ({reason}). Review the worktree again before retrying."
+        // A helper of an older build names no branch; it kept the branch
+        // unless the core asked, which its sentence says.
+        Ok(outcome) if outcome.removed => Ok(hide_node_link::worktrees::Removed {
+            branch: outcome
+                .branch
+                .unwrap_or(hide_node_link::worktrees::RemovalBranch::Kept),
+            message: outcome.message,
+        }),
+        Ok(outcome) => Err(RemovalFailure::new(
+            match outcome.stop {
+                Some(stop) => WorktreeRemovalNotice::Stopped {
+                    stop,
+                    panes_closed: true,
+                },
+                None => WorktreeRemovalNotice::HostFailed {
+                    panes_closed: true,
+                    reason: None,
+                },
+            },
+            outcome.message,
         )),
-        Err(error) => Err(format!(
-            "Worktree removal stopped: {error}. The worktree remains; panes already closed stay closed."
+        Err(crate::node_access::LinkError::Unknown(reason)) => Err(RemovalFailure::new(
+            WorktreeRemovalNotice::ResultUnknown,
+            format!("The removal of {path} was sent but its result is unknown ({reason})."),
+        )),
+        Err(error) => Err(RemovalFailure::new(
+            WorktreeRemovalNotice::HostFailed {
+                panes_closed: true,
+                reason: Some(crate::node_access::link_failure_code(&error)),
+            },
+            format!(
+                "Worktree removal stopped: {error}. The worktree remains; panes already closed stay closed."
+            ),
         )),
     }
 }
@@ -451,6 +506,62 @@ pub struct WorktreeTaskRequest {
     /// worktree's own machine: this one's or a node's that dials the core,
     /// never a dialed device's, which the runtime leaves this empty for.
     pub issue: Option<String>,
+}
+
+/// Why a task failed: the code the screen words and the sentence the log
+/// keeps. A worker's error arrives as text; text that is already a reason
+/// code (`agent_start.not_saved`, `session_resume_reader_changed`) is that
+/// code, and a sentence is the general `task_operation.failed` with the
+/// sentence kept for the log.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskFailure {
+    pub code: String,
+    pub detail: String,
+}
+
+impl From<String> for TaskFailure {
+    fn from(text: String) -> Self {
+        let is_code = !text.is_empty()
+            && text.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'_' | b'.' | b':' | b'-')
+            });
+        if is_code {
+            Self {
+                code: text.clone(),
+                detail: text,
+            }
+        } else {
+            Self {
+                code: "task_operation.failed".to_owned(),
+                detail: text,
+            }
+        }
+    }
+}
+
+impl From<&str> for TaskFailure {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
+    }
+}
+
+/// Why a worktree removal stopped: the notice the delete dialog words, and
+/// the sentence its diagnostic keeps.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemovalFailure {
+    pub notice: crate::model::WorktreeRemovalNotice,
+    pub detail: String,
+}
+
+impl RemovalFailure {
+    pub fn new(notice: crate::model::WorktreeRemovalNotice, detail: impl Into<String>) -> Self {
+        Self {
+            notice,
+            detail: detail.into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -828,7 +939,10 @@ fn spawn_worktree_task(
             });
             if let Some(runtime) = context.runtime.upgrade() {
                 if let Ok(mut guard) = runtime.lock() {
-                    guard.ingest_task_operation_result(request.id, result);
+                    guard.ingest_task_operation_result(
+                        request.id,
+                        result.map_err(TaskFailure::from),
+                    );
                 } else {
                     return;
                 }
@@ -1522,10 +1636,7 @@ pub(crate) fn spawn_targeted_checkout_start(
         .spawn(move || {
             let result = saved
                 .recv_timeout(Duration::from_secs(10))
-                .map_err(|_| {
-                    "The start intent could not be saved in time. Retry; nothing was started."
-                        .to_owned()
-                })
+                .map_err(|_| "agent_start.not_saved".to_owned())
                 .and_then(|result| result)
                 .and_then(|()| target.check_current(request.id));
             if let Err(message) = result {
@@ -1539,7 +1650,7 @@ pub(crate) fn spawn_targeted_checkout_start(
                             .as_ref()
                             .is_some_and(|start| start.recovery_only),
                     );
-                    runtime.ingest_task_operation_result(request.id, Err(message));
+                    runtime.ingest_task_operation_result(request.id, Err(message.into()));
                 }
                 target.notifier.notify();
                 return;
@@ -1547,7 +1658,7 @@ pub(crate) fn spawn_targeted_checkout_start(
             open_tab_and_start_agent(&target, &request);
         })
         .map(|_| ())
-        .map_err(|_| "The start worker could not run. Retry; nothing was started.".into())
+        .map_err(|_| "task_operation.worker_unavailable".into())
 }
 
 /// Opens the task's tab, publishes it, then starts the task's agent in it.
@@ -1630,11 +1741,9 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
             current: &current_geometry,
         };
         if request.start.is_some() {
-            let node = node.as_deref().ok_or_else(|| {
-                ControlFailure::Definite(
-                    "The device cannot check terminal identity. Reconnect it and retry.".into(),
-                )
-            })?;
+            let node = node
+                .as_deref()
+                .ok_or_else(|| ControlFailure::Definite("agent_start.terminal_unchecked".into()))?;
             create_checked_checkout_tab(
                 target,
                 &connector,
@@ -1681,7 +1790,7 @@ fn open_tab_and_start_agent(target: &TabTarget, request: &CheckoutTabRequest) {
         }
         guard.ingest_task_operation_result(
             request.id,
-            result.map_err(|failure| failure.message().to_owned()),
+            result.map_err(|failure| TaskFailure::from(failure.message().to_owned())),
         );
         if request
             .start
@@ -1785,10 +1894,7 @@ fn folder_present(
 ) -> Result<(), String> {
     if request.cwd != request.checkout_path && !crate::node_access::is_directory(node, &request.cwd)
     {
-        return Err(format!(
-            "The working folder {} no longer exists",
-            request.cwd
-        ));
+        return Err("agent_start.folder_missing".to_owned());
     }
     Ok(())
 }
@@ -1991,7 +2097,10 @@ pub fn spawn_branch_migration(
             );
             if let Some(runtime) = context.runtime.upgrade() {
                 if let Ok(mut guard) = runtime.lock() {
-                    guard.ingest_task_operation_result(request.id, result);
+                    guard.ingest_task_operation_result(
+                        request.id,
+                        result.map_err(TaskFailure::from),
+                    );
                 } else {
                     return;
                 }
@@ -2487,7 +2596,7 @@ fn wait_for_processes_to_end(
     held: &mut Vec<PaneProcess>,
     deadline: Instant,
     mut pause: impl FnMut(Duration),
-) -> Result<(), String> {
+) -> Result<(), CloseFailure> {
     loop {
         if !held.is_empty() {
             let starts = process_starts(node, held.iter().map(|process| process.pid).collect())?;
@@ -2503,7 +2612,7 @@ fn wait_for_processes_to_end(
                         running.push(PaneProcess { name, ..process });
                     }
                     ProcessStart::Running { .. } | ProcessStart::Gone => {}
-                    ProcessStart::Unreadable { reason } => return Err(reason),
+                    ProcessStart::Unreadable { reason } => return Err(reason.into()),
                 }
             }
             *held = running;
@@ -2512,13 +2621,22 @@ fn wait_for_processes_to_end(
             return Ok(());
         }
         let Some(left) = deadline.checked_duration_since(Instant::now()) else {
-            return Err(format!(
-                "Herdr closed the panes but their processes are still running ({}), so the folder may still be held",
-                held.iter()
-                    .map(|process| format!("{} pid {}", process.name, process.pid))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+            return Err(CloseFailure {
+                message: format!(
+                    "Herdr closed the panes but their processes are still running ({}), so the folder may still be held",
+                    held.iter()
+                        .map(|process| format!("{} pid {}", process.name, process.pid))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                running: held
+                    .iter()
+                    .map(|process| crate::model::RunningProgram {
+                        name: process.name.clone(),
+                        pid: process.pid,
+                    })
+                    .collect(),
+            });
         };
         pause(CONFIRM_POLL.min(left));
     }
@@ -2543,6 +2661,43 @@ pub(crate) fn close_checkout_panes(
     close_checkout_panes_checked(connector, node, paths, pane_ids, wait, timeout, &|_| Ok(()))
 }
 
+/// Why closing a checkout's panes failed: the programs still running in its
+/// folder when that was why, and the sentence for the log.
+#[derive(Debug)]
+pub(crate) struct CloseFailure {
+    pub running: Vec<crate::model::RunningProgram>,
+    pub message: String,
+}
+
+impl From<String> for CloseFailure {
+    fn from(message: String) -> Self {
+        Self {
+            running: Vec::new(),
+            message,
+        }
+    }
+}
+
+impl From<&str> for CloseFailure {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
+/// [`close_checkout_panes`] for a worktree deletion, which names the
+/// programs still running in the folder.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+pub(crate) fn close_checkout_panes_for_removal(
+    connector: &dyn ApiConnector,
+    node: &dyn crate::node_access::NodeLink,
+    paths: &[String],
+    pane_ids: &[String],
+    wait: ProcessWait,
+    timeout: Duration,
+) -> Result<(), CloseFailure> {
+    close_checkout_panes_detailed(connector, node, paths, pane_ids, wait, timeout, &|_| Ok(()))
+}
+
 /// Recheck the execution on both sides of the actual close connection.
 /// Herdr answers one request per connection; every other close rule stays shared.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
@@ -2555,6 +2710,28 @@ pub(crate) fn close_checkout_panes_checked(
     timeout: Duration,
     before_close: &dyn Fn(&str) -> Result<(), String>,
 ) -> Result<(), String> {
+    close_checkout_panes_detailed(
+        connector,
+        node,
+        paths,
+        pane_ids,
+        wait,
+        timeout,
+        before_close,
+    )
+    .map_err(|failure| failure.message)
+}
+
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn close_checkout_panes_detailed(
+    connector: &dyn ApiConnector,
+    node: &dyn crate::node_access::NodeLink,
+    paths: &[String],
+    pane_ids: &[String],
+    wait: ProcessWait,
+    timeout: Duration,
+    before_close: &dyn Fn(&str) -> Result<(), String>,
+) -> Result<(), CloseFailure> {
     let path = paths.join(",");
     let path = path.as_str();
     let result = (|| {
@@ -2622,7 +2799,10 @@ pub(crate) fn close_checkout_panes_checked(
         } else {
             "close_failed"
         },
-        result.as_ref().err().map(String::as_str),
+        result
+            .as_ref()
+            .err()
+            .map(|failure| failure.message.as_str()),
     );
     result
 }
@@ -2710,10 +2890,7 @@ mod tests {
         let gone = checkout.path().join("removed");
         assert_eq!(
             folder_present(&node, &request(&gone)),
-            Err(format!(
-                "The working folder {} no longer exists",
-                gone.display()
-            ))
+            Err("agent_start.folder_missing".to_owned())
         );
     }
 
@@ -3576,7 +3753,11 @@ mod tests {
         .unwrap_err();
         // The child is `sh` until it has become `sleep`, which may be after
         // the shell printed its pid; the name is the other test's subject.
-        assert!(error.contains(&format!("pid {})", tree.child)), "{error}");
+        assert!(
+            error.message.contains(&format!("pid {})", tree.child)),
+            "{}",
+            error.message
+        );
     }
 
     #[cfg(unix)]
@@ -3596,8 +3777,18 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            error.contains(&format!("still running (sleep pid {pid})")),
-            "{error}"
+            error
+                .message
+                .contains(&format!("still running (sleep pid {pid})")),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            error.running,
+            [crate::model::RunningProgram {
+                name: "sleep".to_owned(),
+                pid
+            }]
         );
     }
 

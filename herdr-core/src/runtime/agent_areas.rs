@@ -297,6 +297,17 @@ impl Runtime {
     }
 
     pub(super) fn admit_agent_tab_for_workspace(&mut self, key: &WorkspaceKey) -> bool {
+        if self.agent_tab_fits(key) {
+            return true;
+        }
+        let (kind, message) = AGENT_TAB_LIMIT;
+        self.set_error(kind, message, false);
+        false
+    }
+
+    /// Whether `key` has room for one more Agent tab, counting those placed,
+    /// arriving and still opening.
+    fn agent_tab_fits(&mut self, key: &WorkspaceKey) -> bool {
         let Some(store) = self.workspace_views.as_mut() else {
             return true;
         };
@@ -310,15 +321,7 @@ impl Runtime {
             .filter(|(id, (scope, _, _, _))| scope == key && view.agent_tab_group(id).is_none())
             .count();
         let pending = self.pending_agent_admissions(key);
-        if placed + arriving + pending < Tab::LIMITS.items {
-            return true;
-        }
-        self.set_error(
-            "agent_layout.display_limit",
-            "64 Agent tabs are placed or opening. Close a tab to make room.",
-            false,
-        );
-        false
+        placed + arriving + pending < Tab::LIMITS.items
     }
 
     pub(super) fn pending_agent_admissions(&self, key: &WorkspaceKey) -> usize {
@@ -439,20 +442,32 @@ impl Runtime {
         if self.agent_placement_capacity(None) {
             return true;
         }
-        self.set_error(
-            "agent_layout.placement_limit",
-            "64 Agent tabs are opening. Wait for them to finish before opening another.",
-            false,
-        );
+        let (kind, message) = AGENT_PLACEMENT_LIMIT;
+        self.set_error(kind, message, false);
         false
     }
 
     pub(super) fn reserve_agent_creation(&mut self, key: &WorkspaceKey) -> Option<u64> {
-        if !self.admit_agent_tab_for_workspace(key) {
-            return None;
+        match self.try_reserve_agent_creation(key) {
+            Ok(id) => Some(id),
+            Err((kind, message)) => {
+                self.set_error(kind, message, false);
+                None
+            }
         }
-        if !self.admit_agent_placement() {
-            return None;
+    }
+
+    /// Reserves a terminal's place in `key`, or says which limit refused it
+    /// for the caller to report.
+    pub(super) fn try_reserve_agent_creation(
+        &mut self,
+        key: &WorkspaceKey,
+    ) -> Result<u64, (&'static str, &'static str)> {
+        if !self.agent_tab_fits(key) {
+            return Err(AGENT_TAB_LIMIT);
+        }
+        if !self.agent_placement_capacity(None) {
+            return Err(AGENT_PLACEMENT_LIMIT);
         }
         self.next_async_operation_id = self
             .next_async_operation_id
@@ -466,7 +481,7 @@ impl Runtime {
                 .or_default()
                 .insert(format!("create:{id}"));
         }
-        Some(id)
+        Ok(id)
     }
 
     pub(super) fn finish_agent_creation(&mut self, key: &WorkspaceKey, id: u64) {
@@ -1165,3 +1180,14 @@ impl Runtime {
         }
     }
 }
+
+/// The notices for an Agent tab refused by the per-checkout and the opening
+/// limits.
+const AGENT_TAB_LIMIT: (&str, &str) = (
+    "agent_layout.display_limit",
+    "64 Agent tabs are placed or opening. Close a tab to make room.",
+);
+const AGENT_PLACEMENT_LIMIT: (&str, &str) = (
+    "agent_layout.placement_limit",
+    "64 Agent tabs are opening. Wait for them to finish before opening another.",
+);

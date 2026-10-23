@@ -441,7 +441,7 @@ impl Runtime {
                 slot.body = None;
                 slot.failed_checks.clear();
                 slot.change_requests.clear();
-                slot.message = Some("project_settings_repository_changed".into());
+                slot.failure = Some("project_settings_repository_changed".into());
             }
         }
         if after.device_id == self.node.as_str() {

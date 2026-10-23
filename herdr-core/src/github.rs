@@ -2117,7 +2117,7 @@ impl GhCheck {
             _ => return None,
         };
         Some(crate::model::PrFailedCheck {
-            name: name.clone().unwrap_or_else(|| "이름 없는 검사".to_owned()),
+            name: name.clone().filter(|name| !name.trim().is_empty()),
             url: url.clone().filter(|url| url.starts_with("https://")),
         })
     }
@@ -2810,7 +2810,8 @@ mod tests {
             "statusCheckRollup": [
                 {"__typename":"CheckRun","name":"verify","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/acme/app/actions/runs/1"},
                 {"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"SUCCESS"},
-                {"__typename":"StatusContext","context":"ci/legacy","state":"ERROR","targetUrl":"javascript:alert(1)"}
+                {"__typename":"StatusContext","context":"ci/legacy","state":"ERROR","targetUrl":"javascript:alert(1)"},
+                {"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"}
             ],
             "reviews": [
                 {"author":{"login":"ana"},"state":"CHANGES_REQUESTED","body":"old ask"},
@@ -2826,11 +2827,16 @@ mod tests {
             feedback.failed_checks,
             vec![
                 crate::model::PrFailedCheck {
-                    name: "verify".into(),
+                    name: Some("verify".into()),
                     url: Some("https://github.com/acme/app/actions/runs/1".into()),
                 },
                 crate::model::PrFailedCheck {
-                    name: "ci/legacy".into(),
+                    name: Some("ci/legacy".into()),
+                    url: None,
+                },
+                // The page words a check GitHub gives no name.
+                crate::model::PrFailedCheck {
+                    name: None,
                     url: None,
                 },
             ]
@@ -3709,7 +3715,7 @@ mod tests {
             seven
                 .failed
                 .iter()
-                .map(|check| check.name.as_str())
+                .map(|check| check.name.as_deref().unwrap_or_default())
                 .collect::<Vec<_>>(),
             ["unit", "lint"]
         );

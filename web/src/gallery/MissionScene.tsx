@@ -1,6 +1,7 @@
 // The real mission map and Settings › Conductor over invented values (PRD
 // software-factory-conductor), one state per `state` parameter: plan,
-// running, decision, stack, no-conductor, stale, failed, settings. The
+// running, decision, stack, no-conductor, stale, failed, wide (a row wider
+// than the slot, shrunk to fit), settings. The
 // Conductor pane's head with its mission chip and pinned small map (PRD
 // mission-pane-chip) is `pane-running`, `pane-decision` and `pane-first-plan`.
 // Nothing leaves this scene.
@@ -42,6 +43,18 @@ function plan(state: string, now: number): MissionNode[] {
   const planned = state === "plan";
   const done = (minutes: number, length: number) => ({ status: "done" as const, started_at_unix_ms: ago(minutes), finished_at_unix_ms: ago(minutes - length) });
   const working = (minutes: number) => ({ status: "working" as const, started_at_unix_ms: ago(minutes) });
+  if (state === "wide") {
+    // One base, then six parts side by side, each with its own review: a row wider than the slot.
+    const parts = ["목록", "검색", "설정", "알림", "단축키", "도움말"];
+    return [
+      node("base", "공용 바탕", { worker: opus("high"), ...done(40, 20), pr: 1601, pr_state: "mergeable", stage: 3 }),
+      node("base-check", "공용 바탕 리뷰", { kind: "verify", delivery: null, depends_on: ["base"], worker: astra("medium"), ...done(20, 6), line: "필수 수정 없음" }),
+      ...parts.flatMap((title, index) => [
+        node(`part-${index}`, `${title} 화면`, { depends_on: ["base-check"], worker: opus("high"), ...(index < 3 ? working(12 - index * 3) : {}), branch: index < 3 ? `part-${index + 1}` : null, stage: index < 3 ? 1 : null }),
+        node(`part-${index}-check`, `${title} 화면 리뷰`, { kind: "verify", delivery: null, depends_on: [`part-${index}`], worker: astra("medium") }),
+      ]),
+    ];
+  }
   if (planned) {
     return [
       node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus(null) }),
@@ -78,7 +91,7 @@ function scene(state: string, now: number): { mission: Mission; rest: SnapshotRe
     decision: state === "decision" ? "화면 PR 방식 선택" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
     delay: null, report: null,
     created_at_unix_ms: now - 50 * MINUTE, started_at_unix_ms: state === "plan" ? null : now - (state === "stack" ? 72 : 44) * MINUTE, closed_at_unix_ms: state === "stack" ? now : null,
-    running: state === "decision" ? 1 : state === "running" ? 4 : 0,
+    running: state === "decision" ? 1 : state === "running" || state === "wide" ? 4 : 0,
     // A device that disconnected leaves its last values, dimmed (B20).
     stale: state === "stale", github_stale: state === "stale", github_read_at_unix_ms: state === "stale" ? now - 25 * MINUTE : now,
   };

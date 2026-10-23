@@ -8,7 +8,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { installKeyboard } from "../keyboard";
-import { CycleOverlay } from "../Overlays";
+import { ConfirmClose, CycleOverlay } from "../Overlays";
 import { OverviewModal } from "../Overview";
 import { Palette } from "../Palette";
 import type { SnapshotRest } from "../snapshot";
@@ -86,7 +86,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   }, [chapter, model, operator]);
 
   useLayoutEffect(() => {
-    useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneShown: chapter.world.lane, laneExpanded: false, stackFront: "view" });
+    useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneExpanded: false, stackFront: "view" });
   }, [chapter]);
 
   // A pane keeps no scrollback, so a terminal a layout change re-created or
@@ -131,6 +131,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
         <OverviewModal actions={actions} />
         <Palette actions={actions} />
         <CycleOverlay />
+        <ConfirmClose actions={actions} />
         <PracticeCoach chapter={chapter} model={model} next={next} resume={resume} onStep={onStep} onNext={() => next && onStart(next)} onRestart={() => onStart(chapter)} onHub={onHub} />
       </div>
     </TooltipProvider>

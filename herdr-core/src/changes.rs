@@ -385,8 +385,8 @@ pub fn read(request: &ChangesRequest) -> (ChangesSnapshot, Option<String>) {
     let base_branch = committed.as_ref().and(changes.base);
     let diff = changes.diff.map(|diff| ChangedFileDiffSnapshot {
         path: absolute(&request.root_path, &diff.path),
+        notice: diff_notice(&diff),
         text: diff.text,
-        notice: diff.notice,
     });
     let diffs = changes
         .diffs
@@ -394,16 +394,16 @@ pub fn read(request: &ChangesRequest) -> (ChangesSnapshot, Option<String>) {
         .map(|shown| ViewDiffSnapshot {
             path: absolute(&request.root_path, &shown.diff.path),
             committed: shown.committed,
+            notice: diff_notice(&shown.diff),
             text: shown.diff.text,
-            notice: shown.diff.notice,
         })
         .chain(outside.into_iter().map(|target| ViewDiffSnapshot {
             path: target.path.clone(),
             committed: target.committed,
             text: String::new(),
-            notice: Some(format!(
-                "This file is outside {root_path}, the folder History reads for the Project in front; its diff shows when a Project that holds it is in front"
-            )),
+            notice: Some(hide_node_link::git::DiffNotice::Outside {
+                root: root_path.clone(),
+            }),
         }))
         .collect();
     let changes = ChangesSnapshot {
@@ -462,6 +462,24 @@ fn snapshot_of(root_path: &str, file: ChangedFile) -> ChangedFileSnapshot {
         added_lines: file.added,
         removed_lines: file.removed,
     }
+}
+
+/// What the page says about a diff that is short or absent. A helper of an
+/// older build sends only its sentence, which reads as unreadable; a diff Git
+/// could not take keeps its reason in the log.
+fn diff_notice(diff: &hide_node_link::git::Diff) -> Option<hide_node_link::git::DiffNotice> {
+    use hide_node_link::git::DiffNotice;
+    let notice = diff
+        .kind
+        .clone()
+        .or_else(|| diff.notice.as_ref().map(|_| DiffNotice::Unreadable));
+    if notice == Some(DiffNotice::Unreadable) {
+        crate::diagnostic!(serde_json::json!({
+            "component": "changes", "kind": "diff_unreadable",
+            "path": diff.path, "reason": diff.notice,
+        }));
+    }
+    notice
 }
 
 #[cfg(test)]
@@ -565,10 +583,12 @@ mod tests {
             (left.path.as_str(), left.text.as_str()),
             (outside.as_str(), "")
         );
-        let notice = left.notice.as_deref().unwrap_or_default();
-        assert!(
-            notice.contains(&*folder.to_string_lossy()),
-            "the notice names the folder History reads: {notice}"
+        assert_eq!(
+            left.notice,
+            Some(hide_node_link::git::DiffNotice::Outside {
+                root: folder.to_string_lossy().into_owned()
+            }),
+            "the notice names the folder History reads"
         );
     }
 

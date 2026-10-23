@@ -221,19 +221,23 @@ fn an_unsupported_device_preflight_never_falls_back_to_removal() {
             .is_some_and(|row| row.phase == "failed")
     });
     let runtime = shared.lock().unwrap();
-    let message = runtime
+    let notice = runtime
         .snapshot
         .worktree_removal
         .as_ref()
         .unwrap()
-        .message
-        .as_deref()
-        .unwrap();
+        .notice
+        .clone();
     assert!(
-        message.contains("Reconnect to update the device helper"),
-        "{message}"
+        matches!(
+            notice,
+            Some(crate::model::WorktreeRemovalNotice::HostFailed {
+                panes_closed: false,
+                reason: Some(_)
+            })
+        ),
+        "{notice:?}"
     );
-    assert!(message.contains("No panes were closed"), "{message}");
     assert!(Path::new(&repo.linked).exists());
     assert!(runtime.tree_closes.is_empty());
 }
@@ -269,19 +273,16 @@ fn a_new_device_lock_refuses_before_even_the_outside_descendant_close_sequence()
             .is_some_and(|row| row.phase == "failed")
     });
     let runtime = shared.lock().unwrap();
-    let message = runtime
-        .snapshot
-        .worktree_removal
-        .as_ref()
-        .unwrap()
-        .message
-        .as_deref()
-        .unwrap();
-    assert!(
-        message.contains("Worktree feature is locked: release review"),
-        "{message}"
+    assert_eq!(
+        runtime.snapshot.worktree_removal.as_ref().unwrap().notice,
+        Some(crate::model::WorktreeRemovalNotice::Stopped {
+            stop: hide_node_link::worktrees::RemovalStop::Locked {
+                name: "feature".to_owned(),
+                reason: "release review".to_owned(),
+            },
+            panes_closed: false,
+        })
     );
-    assert!(message.contains("No panes were closed"), "{message}");
     assert!(Path::new(&repo.linked).exists());
     assert!(runtime.tree_closes.is_empty());
 }
@@ -297,7 +298,7 @@ fn a_device_worktree_is_deleted_by_its_helper_whatever_this_machine_lists_at_tha
         let mut runtime = shared.lock().unwrap();
         let mut local = runtime.device_worktrees[DEVICE].projects[&repo.root].clone();
         for row in &mut local.worktrees {
-            row.deletion_gate.blocked_reason = Some("Local block".to_owned());
+            row.deletion_gate.blocked = Some(crate::model::WorktreeDeletionBlock::Main);
         }
         runtime.worktree_catalog.projects = vec![local];
     }
@@ -332,7 +333,7 @@ fn a_device_worktree_is_deleted_by_its_helper_whatever_this_machine_lists_at_tha
         .worktree_removal
         .clone()
         .unwrap();
-    assert_eq!(removal.phase, "finished", "{:?}", removal.message);
+    assert_eq!(removal.phase, "finished", "{:?}", removal.notice);
     assert_eq!(removal.device_id.as_deref(), Some(DEVICE));
     assert!(!Path::new(&repo.linked).exists());
     assert_eq!(git(&repo.root, &["branch", "--list", "feature"]), "");
@@ -374,14 +375,20 @@ fn a_dirty_device_worktree_is_deleted_only_once_the_operator_accepts_the_loss() 
             .iter()
             .find(|row| row.path == repo.linked)
             .unwrap();
-        assert!(row.deletion_gate.blocked_reason.is_none());
+        assert!(row.deletion_gate.blocked.is_none());
         assert_eq!(
-            row.deletion_gate.discard_label.as_deref(),
-            Some("Discard 1 changed file")
+            row.deletion_gate
+                .discard
+                .as_ref()
+                .and_then(|discard| discard.changed_files),
+            Some(1)
         );
         assert_eq!(
-            row.deletion_gate.branch_warning.as_deref(),
-            Some("1 commit not on main is lost with it")
+            row.deletion_gate.branch_loss,
+            Some(crate::model::WorktreeBranchLoss::Commits {
+                count: 1,
+                base: Some("main".to_owned())
+            })
         );
     }
 
@@ -416,7 +423,7 @@ fn a_dirty_device_worktree_is_deleted_only_once_the_operator_accepts_the_loss() 
         .worktree_removal
         .clone()
         .unwrap();
-    assert_eq!(removal.phase, "finished", "{:?}", removal.message);
+    assert_eq!(removal.phase, "finished", "{:?}", removal.notice);
     assert!(removal.discard_changes && removal.force_delete_branch);
     assert!(!Path::new(&repo.linked).exists());
     assert_eq!(git(&repo.root, &["branch", "--list", "feature"]), "");
@@ -452,12 +459,9 @@ fn a_device_worktree_for_a_branch_that_exists_there_is_refused_by_its_helper() {
     assert_eq!(operation.phase, "failed");
     assert_eq!(operation.device_id.as_deref(), Some(DEVICE));
     assert!(
-        operation
-            .message
-            .as_deref()
-            .is_some_and(|message| message.contains("already exists")),
+        operation.failure.as_deref() == Some("task_operation.failed"),
         "{:?}",
-        operation.message
+        operation.failure
     );
 }
 

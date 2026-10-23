@@ -52,6 +52,18 @@ describe("a mission map's top-down flow", () => {
     }
   });
 
+  it("centres a node over the row it fans out to and the card that gathers that row", async () => {
+    const parts = ["a", "b", "c", "d", "e", "f"];
+    const nodes = ["base", ...parts, "report"].map(card);
+    const edges = [...parts.map((part) => ({ from: "base", to: part })), ...parts.map((part) => ({ from: part, to: "report" }))];
+    const placement = await placeGraph(new ELK(), nodes, edges, SPACING, "down");
+    const middle = (id: string) => placement.nodes.get(id)!.x + card(id).width / 2;
+    const row = parts.map(middle);
+    const centre = (Math.min(...row) + Math.max(...row)) / 2;
+    expect(middle("base")).toBeCloseTo(centre, 0);
+    expect(middle("report")).toBeCloseTo(centre, 0);
+  });
+
   it("rounds a corner by the radius, and by half the shorter leg when a jog is shorter than that", () => {
     expect(squarePath([{ x: 0, y: 0 }, { x: 0, y: 40 }, { x: 40, y: 40 }], 8)).toBe("M 0 0 L 0 32 Q 0 40, 8 40 L 40 40");
     expect(squarePath([{ x: 0, y: 0 }, { x: 0, y: 6 }, { x: 40, y: 6 }], 8)).toBe("M 0 0 L 0 3 Q 0 6, 3 6 L 40 6");

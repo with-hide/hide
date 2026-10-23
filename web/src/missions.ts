@@ -251,16 +251,6 @@ export function firstPlans(before: SnapshotRest | null | undefined, after: Snaps
   return (after?.missions?.items ?? []).filter((mission) => mission.nodes.length > 0 && (known.get(mission.id)?.nodes.length ?? 0) === 0);
 }
 
-/** Done nodes fold away once a mission has more than this many (B19). */
-export const FOLD_DONE_OVER = 12;
-
-/** The nodes the map draws: every one, or with done ones folded when the plan is long and the operator has not opened them. */
-export function shownNodes(mission: Mission, unfolded: boolean): { nodes: MissionNode[]; folded: number } {
-  if (unfolded || mission.nodes.length <= FOLD_DONE_OVER) return { nodes: mission.nodes, folded: 0 };
-  const nodes = mission.nodes.filter((node) => node.status !== "done");
-  return { nodes, folded: mission.nodes.length - nodes.length };
-}
-
 /**
  * The agent a takeover starts (D-40, B44): the gone Conductor's own kind when
  * Hide can start it, else the start panel's remembered one, else the first
