@@ -6,10 +6,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clientI18n, useInterfaceTranslation } from "../i18n/translator";
 import { isInterfaceLanguage } from "../i18n/locale";
+import { resetRecent } from "../recent";
+import { useShellStore } from "../store";
 import { applyTerminalTheme } from "../terminals";
 import { PALETTE_HIDE_CLASS, readColorTheme, readTheme, resolveTheme } from "../theme";
-import { CHAPTERS, type PracticeChapter } from "./chapters";
+import { useUiStore } from "../ui";
+import type { PracticeChapter } from "./chapter";
+import { CHAPTERS, nextChapter } from "./chapters";
 import { PRACTICE_CHANNEL, type ChapterProgress, type PracticeMessage, type PracticeProgress, type ShellAnswer } from "./channel";
+import { holdPageClipboard } from "./clipboard";
 import { HUB_CSS } from "./coachStyle";
 import { PracticePlayer, type OperatorChoices } from "./PracticePlayer";
 
@@ -28,11 +33,27 @@ const ANSWER_WAIT_MS = 1500;
 
 type Playing = { chapter: PracticeChapter; resume: number; run: number };
 
+/**
+ * The shell's page state as the page loaded it. Its stores and its recent
+ * order are the page's, not the chapter's, so without this a chapter started
+ * over, or after another, would keep what the last run left: a relationship
+ * focus still waiting for a world that is gone, an open overlay, a focus, a
+ * copied file. The player then fills the stores from its new world.
+ */
+function freshShell() {
+  useShellStore.setState(useShellStore.getInitialState(), true);
+  useUiStore.setState(useUiStore.getInitialState(), true);
+  resetRecent();
+}
+
 export function PracticeApp() {
   const [answer, setAnswer] = useState<ShellAnswer | null>(null);
   const [unanswered, setUnanswered] = useState(false);
   const [playing, setPlaying] = useState<Playing | null>(null);
   const channel = useRef<BroadcastChannel | null>(null);
+  // A chapter keeps the page's copy and paste on its own clipboard; the chapter list holds them with none.
+  const listing = playing === null;
+  useEffect(() => (listing ? holdPageClipboard(null) : undefined), [listing]);
 
   useEffect(() => {
     const opened = new BroadcastChannel(PRACTICE_CHANNEL);
@@ -67,7 +88,11 @@ export function PracticeApp() {
   const progress: PracticeProgress = useMemo(() => answer?.progress ?? {}, [answer?.progress]);
   const operator: OperatorChoices = useMemo(() => ({ shortcut_bindings: answer?.shortcut_bindings, browser_shortcut_bindings: answer?.browser_shortcut_bindings }), [answer?.shortcut_bindings, answer?.browser_shortcut_bindings]);
 
-  const start = useCallback((chapter: PracticeChapter, resume: number) => setPlaying((before) => ({ chapter, resume, run: (before?.run ?? 0) + 1 })), []);
+  // Every start goes through here: a chapter from the list, from its start again, or the next one.
+  const start = useCallback((chapter: PracticeChapter, resume: number) => {
+    freshShell();
+    setPlaying((before) => ({ chapter, resume, run: (before?.run ?? 0) + 1 }));
+  }, []);
   const chapter = playing?.chapter;
   const onStep = useCallback((step: number, finished: boolean) => {
     if (!chapter) return;
@@ -78,7 +103,7 @@ export function PracticeApp() {
   }, [chapter, progress]);
 
   if (playing) {
-    const next = CHAPTERS.find((row) => row.number === playing.chapter.number + 1) ?? null;
+    const next = nextChapter(playing.chapter);
     return <PracticePlayer key={playing.run} chapter={playing.chapter} next={next} resume={playing.resume} operator={operator} onStep={onStep} onStart={(target) => start(target, 0)} onHub={() => setPlaying(null)} />;
   }
   return <PracticeHub progress={progress} unsaved={unanswered && !answer} onStart={start} />;
@@ -130,8 +155,8 @@ function PracticeHub({ progress, unsaved, onStart }: { progress: PracticeProgres
                 </div>
                 <span className={`ph-chip ${row.status}`}>{row.status === "paused" ? t("practice.status.paused", { index: row.step + 1, total }) : t(`practice.status.${row.status}`)}</span>
                 <div className="ph-acts">
-                  {row.status === "paused" ? <button type="button" className="ph-sub" onClick={() => play(at, true)}>{t("practice.fromStart")}</button> : null}
-                  <button type="button" className="ph-go" onClick={() => play(at, false)}>
+                  {row.status === "paused" ? <button type="button" className="ph-sub" onClick={() => play(at, true)} data-practice-from-start>{t("practice.fromStart")}</button> : null}
+                  <button type="button" className="ph-go" onClick={() => play(at, false)} data-practice-play>
                     {row.status === "paused" ? t("practice.continue") : row.status === "done" ? t("practice.replay") : t("practice.start")}
                   </button>
                 </div>

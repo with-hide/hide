@@ -2340,7 +2340,7 @@ A browser tab and the phone have no dot and no update line.
 
 ## Practice window
 
-Web owner: `web/src/practice/` (`PracticeApp.tsx` the chapter list, `PracticePlayer.tsx` a chapter playing, `PracticeCoach.tsx` the guide, `chapters.ts` the chapters, `channel.ts` what the window and the shell say to each other), `web/src/i18n/resources/practice.ts`. Desktop owner: `desktop/src/main/practice.ts`, `desktop/src/main/host.ts` (`listenPractice`, `openPractice`). Core owner: `ui_state.practice` and `practice_progress_set`.
+Web owner: `web/src/practice/` (`PracticeApp.tsx` the chapter list, `PracticePlayer.tsx` a chapter playing, `PracticeCoach.tsx` the guide, `chapters/` the chapters, `worlds/` what they play in, `channel.ts` what the window and the shell say to each other), `web/src/i18n/resources/practice.ts` and `web/src/i18n/resources/practice/`. Desktop owner: `desktop/src/main/practice.ts`, `desktop/src/main/host.ts` (`listenPractice`, `openPractice`). Core owner: `ui_state.practice` and `practice_progress_set`.
 
 The practice window teaches Hide on a practice screen: the shell's own sidebar, panes, lane and keyboard, drawn over a scripted world with no agent, project, file or Herdr behind it.
 `Practice Hide` in the Help menu and the line under Add project on the Home with no project open it; the desktop app opens one window of its own, sized like the main window, and a browser tab opens one tab of its own; asking again brings the open one forward.
@@ -2350,14 +2350,24 @@ It opens on the chapter list: each chapter's number, title, one line of what it 
 ↑ and ↓ choose a chapter and ⏎ plays it; the first chapter not yet seen is chosen at first.
 `이어서` plays the steps before the stopping point again on its own, quickly, the way ⏎ would, so the screen reaches the state that step needs.
 A chapter seen once stays seen when it is played again.
+Every start of a chapter, from the list, from `처음부터`, or the next chapter after the last step, begins on the shell screen as the page first loaded it: an overlay, a focus, a relationship move still waiting or a copy left by the run before never carries into it (`freshShell` in `PracticeApp.tsx`).
 
 A chapter playing dims everything but what its step marks, rings that, and puts a light bubble beside it with what happens and how: the command's chord as keycaps (`Or press ⌘D`), `Press the button, or ⇧⌘↩` for a step with a button, or `Press where it's marked` where this host has no chord for the command (⌥1 in a browser tab).
-⏎ or → performs the step in the learner's place, pressing the chord, the button, or dragging the pane with a hand cursor; ← goes back over a step that only looks.
+⏎ performs the step in the learner's place, pressing the chord, the button, dragging the pane with a hand cursor, typing what the learner would say into an agent's prompt and sending it (words the learner wrote there themselves are sent as they are, for the world to judge; the example is typed only into an empty prompt), or right-clicking and choosing from the shell's own menu with the hand; a held chord (⌃⇥, ⌥⇥) is let go a moment later, so the shell's own switcher is seen before it lands.
+→ moves on from a step that only looks and ← goes back over one; on a step that waits for something to happen, only ⏎ or the learner's own key, click or drag moves on.
+The window never reads or writes the operator's clipboard: a copy made there, a menu's Copy pane ID or the page's own ⌘C, goes to the practice world, and a paste, a menu's Paste or ⌘V, takes the last copy made there (nothing before the first).
+Nothing on the practice screen leaves it: a link, a window the shell would open in the system's browser (a PR card's `GitHub에서 보기`), a page navigation and a call on the desktop host (open in another app, reveal in the file manager, a notification) are held where the page meets the browser and told to the practice world (`practice/outside.ts`), and the desktop app refuses whatever gets past; a browser without the Navigation API holds all of them but a navigation the shell starts by script.
 The learner can also do it themselves, by key, click or drag: a step that changes the screen is done when the world says so, however it was done.
+⌘K search and ⌘P Open file open over the practice screen as they do in the shell.
+While one is open, or a held chord's switcher is up, everything the guide points with steps aside (the dim, the area tags, the ring, the pressed chord, the `예시` marks and the hand), and its bubble moves beside the palette without buttons; the bubble also moves beside a right-click menu it would cover.
+Every key is then the palette's but ⏎ where the guide types into the palette's field: it keeps ⏎ while the field of a step that types there is empty, to type the words, and while it is still typing them, so ⏎ opens no row on half the words ([Adding a chapter](#adding-a-chapter)); ⏎, → and ← go back to the guide when the palette closes.
 A pressed chord shows large in the middle for a moment, so the keys are seen as they are used.
 Every chord is the operator's own: the host's set, the system's, and the operator's stored bindings.
 A chapter with tasks lists them on a card in the lower left with a check as each is done and `↺ 처음부터`; the top center names the chapter and leads back to the list.
 The last step of a chapter offers the next chapter, and the last chapter's offers the list.
+
+Chapter 1 closes its working agent by mistake, through the shell's own Stop-work sheet, and brings it back with Reopen closed tab, where it stood and continuing its conversation; its world answers `close_pane` and `reopen_closed` and draws `recent_closed` the way the core does.
+The practice screen mounts the shell's close sheet, so a learner's close in any chapter asks as it would in Hide.
 
 The window holds no daemon connection and carries no token.
 It asks the shell of the same origin, over one `BroadcastChannel` (`hide-practice`), for the operator's language, chords, theme and progress, and hands each step it reaches back; the shell dispatches `practice_progress_set`, and the core keeps `ui_state.practice` like the other UI choices.
@@ -2366,12 +2376,28 @@ In the desktop app the window has no preload: it stands in for the desktop host 
 
 ### Adding a chapter
 
-A chapter is data in `web/src/practice/chapters.ts`: an `id` (its catalog prefix), a `number`, a `version`, the `world` it plays in, and its steps.
-A step names what it rings (`target`, a selector into the shell), where the bubble sits (`side`), the command it teaches (`command`, never a chord), a `gesture` when ⏎ should press a button or drag a pane instead of pressing the chord, and `done`, which reads the world; a step without `done` is a look.
-A world (`web/src/practice/world.ts`) gives the first state, answers the core events the chapter's steps dispatch as the core would (an event it does not need answers nothing), and draws the snapshot and each pane's screen; `practiceWorld.ts` and `tourWorld.ts` are the two there are.
-The words go in `web/src/i18n/resources/practice.ts` under `practice.<id>.title`, `practice.<id>.summary` and `practice.<id>.<step>.kick|title|text|quest`, in every language.
+A chapter is three new files and no change to a shared one, so chapters written side by side do not meet in a file.
+
+- `web/src/practice/chapters/<id>.ts` default-exports the chapter (`chapter()` in `chapter.ts`): its `id` (the file's name and its catalog prefix), a `number`, a `version`, the `world` it plays in, and its steps.
+  `chapters.ts` lists every file there by number and refuses a file whose chapter has another id or a number another chapter has; the next chapter is the next number there is, so a gap is allowed.
+- `web/src/i18n/resources/practice/<id>.ts` default-exports the chapter's words in every language, under `practice.<id>.title`, `practice.<id>.summary` and `practice.<id>.<step>.kick|title|text|quest`.
+  `web/src/practice/words.ts` joins every file there when the chapters load, refusing a key outside its file's chapter, and adds them to the window's words; they stay out of the shared catalog (`practice.ts` keeps only the guide's own words), because the desktop host bundles that catalog without Vite, and the catalog and copy checks read them beside it.
+- `web/src/practice/worlds/<id>.ts`, when no world there fits: the world the chapter plays in.
+
+A step names what it rings (`target`, a selector into the shell), where the bubble sits (`side`), the command it teaches (`command`, never a chord), a `gesture` when ⏎ should press a button, drag a pane, type into a pane's terminal (`type`) or choose from a right-click menu (`menu`) instead of pressing the chord, and `done`, which reads the world, or `shown`, a selector whose appearance finishes a step that opens a card, a popover or a page with no core event behind it; a step with neither is a look.
+A world (`web/src/practice/world.ts`) gives the first state, answers the core events the chapter's steps dispatch as the core would (an event it does not need answers nothing), and draws the snapshot, what the core sends beside it (`frames`: the ⌘P index's answer, the open documents, ⌘K's session search, the 보기 slot's record and link record, the Explorer's folder listings and Git changes, and the Memory tool's Project, each empty when a world sends none), and each pane's screen.
+What is typed into a terminal reaches the world as the terminal's `key` events and a copy as `practice_copy`; a pane whose screen the world changes is cleared and drawn again, so an agent's answer appears as the world writes it.
+A world whose chapter types into a pane keeps that pane's unsent words (`prompt`), which the coach reads to send the learner's own words rather than its example.
+A `type` gesture can name a field (a palette's search box) instead of a pane: ⏎ types the words in letter by letter, the coach keeping ⏎ while the palette is open until they are in, and a field the step's `command` opens is opened by the first ⏎; a field the learner typed into on that step keeps their words, which the palette answers as they are typed.
+A step done inside a palette names the command that opens it and, when the palette forgets what was typed, the words to type, so ⏎ alone reopens a palette Esc closed: it opens, then types into the empty field, then is the palette's own ⏎ once the field holds words.
+A world names in `examples` what it invented that could pass for a real record (a pull request's title), and the coach marks each `예시` just past the first words it shows (a row's title, a card's heading), never past its own right edge, so the mark covers nothing beside it; the shell's own components stay as they are.
+`worlds/kit.ts` holds what several worlds build with: a checkout's desk of tabs, panes and groups and the events that change it (`applyDesk`), agent rows (`agent`, with a parent named as the core names it), and the snapshot of one or more projects' desks (`deskSnapshot`), which leaves a tab of only delegated children off the strip and lists each pane's, tab's and desk's close consequence as the core does.
+A tool only one chapter needs stays in that chapter's world file, and moves to `kit.ts` when a second chapter needs it.
+A world's data is the practice window's own, invented for it: no world imports the gallery's fixtures.
+`worlds/tour.ts` plays on `data/tour.json`, a whole snapshot kept with each time written as how long before now it was (`$msAgo`, `$sAgo`, `$isoAgo`, `$daysAgo`).
 Bump a chapter's `version` when its steps change, so a learner's old progress reads as `바뀜`.
 `web/e2e/practice.spec.ts` plays every chapter to its end with ⏎ alone, so a new chapter is played there without a change to the spec; a step whose ⏎ moves nothing stops it.
+`web/src/practice/worlds.test.ts` sends every chapter's world, at each step the shell's commands and pane focus can reach, every command the keyboard runs and every pane focus, and fails when the world, its snapshot or a pane's screen throws; a step only a drag, typing or a palette reaches is checked from the state before it.
 
 ## Search keyboard navigation
 

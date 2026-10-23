@@ -3,7 +3,7 @@
 // shell to keep its progress.
 
 import { useLayoutEffect, useState } from "react";
-import { CHAPTERS } from "../practice/chapters";
+import { CHAPTERS, nextChapter } from "../practice/chapters";
 import { standInHost } from "../practice/mount";
 import { PracticePlayer } from "../practice/PracticePlayer";
 import { PALETTE_HIDE_CLASS } from "../theme";
@@ -23,7 +23,7 @@ export function PracticeScene({ chapter: first, theme, system }: PracticeScenePa
   if (!window.hideHost) window.hideHost = standInHost(system === "mac" ? "darwin" : "win32");
   const [playing, setPlaying] = useState({ number: first, run: 0 });
   const chapter = CHAPTERS.find((row) => row.number === playing.number)!;
-  const next = CHAPTERS.find((row) => row.number === playing.number + 1) ?? null;
+  const next = nextChapter(chapter);
 
   useLayoutEffect(() => {
     const root = document.documentElement;

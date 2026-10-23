@@ -41,6 +41,13 @@ import { useShellStore, type TerminalChunk } from "./store";
 import { outsideFilesShown } from "./externalFiles";
 import { catalogWorkspaces, type SnapshotRest } from "./snapshot";
 import type { DispatchFn } from "./ws";
+import type { ClipboardContent } from "./clipboard";
+
+/** What a terminal asks of the shell's actions: where a clicked link goes, and the clipboard its copy and paste use. */
+export type TerminalActions = TerminalLinkActions & {
+  copyText(text: string, what: string): Promise<boolean>;
+  readClipboard(what: string): Promise<ClipboardContent | null>;
+};
 
 type Instance = {
   /** Mutable routing address; Herdr may rekey it while retaining the terminal. */
@@ -51,8 +58,8 @@ type Instance = {
   /** Lives with the instance, including while parked; no retry after fallback. */
   renderer: IDisposable | null;
   dispatch: DispatchFn;
-  /** Where a clicked link goes; replaced on every attach, like `dispatch`. */
-  links: TerminalLinkActions;
+  /** Where a clicked link goes and the clipboard copy and paste use; replaced on every attach, like `dispatch`. */
+  actions: TerminalActions;
   /** Whether the pointer is over a link. */
   link: LinkState;
   scale: number;
@@ -732,19 +739,9 @@ export function pasteExplorerFile(paneId: string, item: ExplorerDrag): void {
  */
 export async function copySelection(paneId: string, where: string): Promise<boolean> {
   const text = terminalSelectionText(paneId);
-  if (text === null) return false;
-  const { noteDiagnostic } = useShellStore.getState();
-  if (!navigator.clipboard) {
-    noteDiagnostic(`${where} copy: no clipboard in this host`);
-    return false;
-  }
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    noteDiagnostic(`${where} copy: clipboard write refused`);
-    return false;
-  }
+  const instance = instances.get(paneId);
+  if (text === null || !instance) return false;
+  return instance.actions.copyText(text, `${where} selection`);
 }
 
 /**
@@ -753,20 +750,10 @@ export async function copySelection(paneId: string, where: string): Promise<bool
  * as typed input, in bracketed paste when the program asked for it.
  */
 export async function pasteClipboard(paneId: string, where: string): Promise<void> {
-  const { noteDiagnostic } = useShellStore.getState();
-  if (!navigator.clipboard) return noteDiagnostic(`${where} paste: no clipboard in this host`);
-  try {
-    for (const item of navigator.clipboard.read ? await navigator.clipboard.read() : []) {
-      const type = item.types.find((name) => name.startsWith("image/"));
-      if (!type) continue;
-      const image = await item.getType(type);
-      return void submitFiles(paneId, [new File([image], `clipboard.${type.slice("image/".length)}`, { type })], true, bracketedPaste(paneId));
-    }
-    const text = await navigator.clipboard.readText();
-    if (text && !pasteExplorerCopy(paneId, text)) pasteText(paneId, text);
-  } catch {
-    noteDiagnostic(`${where} paste: clipboard read refused`);
-  }
+  const content = await instances.get(paneId)?.actions.readClipboard(where);
+  if (!content) return;
+  if (content.kind === "image") return void submitFiles(paneId, [content.file], true, bracketedPaste(paneId));
+  if (content.text && !pasteExplorerCopy(paneId, content.text)) pasteText(paneId, content.text);
 }
 
 /** Selects the pane's whole text, for Copy to take; the pane keeps no scrollback, so that is what it shows. */
@@ -787,7 +774,7 @@ function onCopy(instance: Instance, event: ClipboardEvent) {
   event.clipboardData.setData("text/plain", text);
 }
 
-function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLinkActions, scale: number): Instance {
+function createInstance(paneId: string, dispatch: DispatchFn, actions: TerminalActions, scale: number): Instance {
   const element = document.createElement("div");
   // Its own stacking context: xterm gives its layers z-indexes up to 11 (the
   // WebGL canvases, the helpers, the scrollbar), which would otherwise paint
@@ -805,7 +792,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
     allowProposedApi: true,
     // A program's own links open like the ones found in the text, never
     // through xterm's confirm dialog.
-    linkHandler: osc8Handler(() => instance.paneId, link, () => instance.links, () => instance.term.hasSelection()),
+    linkHandler: osc8Handler(() => instance.paneId, link, () => instance.actions, () => instance.term.hasSelection()),
     // A right-click opens the pane's menu; it leaves the drag selection as it
     // was, so Copy there copies what the operator selected, not a word.
     rightClickSelectsWord: false,
@@ -819,7 +806,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
     fit,
     renderer: null,
     dispatch,
-    links,
+    actions,
     link,
     scale,
     element,
@@ -895,7 +882,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
     else instance.follow = null;
   });
   term.onData((data) => send(new TextEncoder().encode(data)));
-  const linkProvider = registerTerminalLinks(term, () => instance.paneId, link, () => instance.links);
+  const linkProvider = registerTerminalLinks(term, () => instance.paneId, link, () => instance.actions);
   const wheel = (event: WheelEvent) => onWheel(instance.paneId, instance, event);
   const down = (event: MouseEvent) => onMouseDown(instance, event);
   const up = (event: MouseEvent) => onMouseUp(instance.paneId, instance, event);
@@ -929,14 +916,14 @@ export function attachTerminal(
   paneId: string,
   host: HTMLElement,
   dispatch: DispatchFn,
-  links: TerminalLinkActions,
+  actions: TerminalActions,
   scale: number,
 ): () => void {
   reconcileTerminalIds();
   let instance = instances.get(paneId);
   const fresh = !instance;
   if (!instance) {
-    instance = createInstance(paneId, dispatch, links, scale);
+    instance = createInstance(paneId, dispatch, actions, scale);
     instances.set(paneId, instance);
   }
   if (instance.host) throw new Error(`pane ${paneId} is already shown`);
@@ -944,7 +931,7 @@ export function attachTerminal(
   host.append(shown.element);
   shown.host = host;
   shown.dispatch = dispatch;
-  shown.links = links;
+  shown.actions = actions;
   if (fresh) {
     shown.term.open(shown.element);
     // Added after xterm's own listener, so this clearing task runs right

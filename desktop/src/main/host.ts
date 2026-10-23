@@ -1556,16 +1556,18 @@ export class DesktopHost {
       if (this.practice === window) this.practice = null;
     });
     const contents = window.webContents;
-    contents.on("will-navigate", (event, target) => {
+    // Nothing on the practice page leaves it: the page holds its links and windows itself
+    // (web `practice/outside.ts`), and whatever gets past is refused here, never opened in the system's browser.
+    contents.on("will-navigate", (event) => {
       event.preventDefault();
-      if (!this.isDaemonUrl(target)) this.openExternal(target);
+      this.log.event("practice.navigation_refused", {});
     });
     contents.on("will-redirect", (event) => {
       event.preventDefault();
       this.log.event("practice.redirect_refused", {});
     });
-    contents.setWindowOpenHandler(({ url: target }) => {
-      if (!this.isDaemonUrl(target)) this.openExternal(target);
+    contents.setWindowOpenHandler(() => {
+      this.log.event("practice.window_refused", {});
       return { action: "deny" };
     });
     contents.loadURL(url).then(

@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { CHAPTER_WORDS } from "../practice/words";
 import { catalogs } from "./catalogs";
 
 // The mechanical half of "Writing the copy" in docs/LOCALIZATION.md: the rules a
 // scan can decide. Naturalness, term choice beyond the banned words and ja/zh
 // wording still need a reader.
-const ko = catalogs.ko as Record<string, string>;
-const zh = catalogs["zh-CN"] as Record<string, string>;
-const ja = catalogs.ja as Record<string, string>;
+// The practice chapters' words are copy too, kept beside the catalog (`practice/words.ts`).
+const ko: Record<string, string> = { ...catalogs.ko, ...CHAPTER_WORDS.ko };
+const zh: Record<string, string> = { ...catalogs["zh-CN"], ...CHAPTER_WORDS["zh-CN"] };
+const ja: Record<string, string> = { ...catalogs.ja, ...CHAPTER_WORDS.ja };
 
 // Prompts typed into an agent are not screen copy (docs/LOCALIZATION.md, Writing the copy).
 const AGENT_PROMPTS = new Set(["issue.prompt.local", "issue.prompt.github", "issue.prompt.closes"]);

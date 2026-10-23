@@ -45,8 +45,7 @@ async function mount(next: ReturnType<typeof signedOut>) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const copied: string[] = [];
-  const actions = createActions(() => true);
-  actions.copyText = (text: string) => { copied.push(text); };
+  const actions = createActions(() => true, { write: async (text) => { copied.push(text); return true; }, read: async () => null });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);

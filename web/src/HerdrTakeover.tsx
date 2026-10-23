@@ -102,7 +102,7 @@ function Failure({ takeover }: { takeover: HerdrTakeover }) {
 }
 
 /** The operator's own `herdr` after a move: Hide updating it, updated, or the one command left to copy (B5). */
-function MovedPath({ path }: { path: NonNullable<HerdrTakeover["path_herdr"]> }) {
+function MovedPath({ path, actions }: { path: NonNullable<HerdrTakeover["path_herdr"]>; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   if (path.stage === "updating") {
     return (
@@ -115,17 +115,17 @@ function MovedPath({ path }: { path: NonNullable<HerdrTakeover["path_herdr"]> })
   if (path.stage === "updated") {
     return <Status tone="ok" data-herdr-takeover-path={path.stage}>{t("herdrTakeover.moved.pathUpdated", { version: path.version })}</Status>;
   }
-  return <PathBehind version={path.version} />;
+  return <PathBehind version={path.version} actions={actions} />;
 }
 
 /** The operator's own `herdr` that Hide could not bring up: what fails, and the one command to copy. */
-function PathBehind({ version }: { version: string }) {
+function PathBehind({ version, actions }: { version: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const update = pathHerdrUpdate(useShellStore((s) => s.rest?.status?.herdr_versions));
   return (
     <div className="flex flex-col gap-sm rounded-md bg-card px-md py-sm" data-herdr-takeover-path="behind" data-herdr-takeover-path-behind={version}>
       <Status tone="warn">{t("herdrTakeover.moved.pathBehind", { version })}</Status>
-      {update ? <UpdateCommand update={update} caption={false} /> : null}
+      {update ? <UpdateCommand update={update} caption={false} actions={actions} /> : null}
     </div>
   );
 }
@@ -134,11 +134,11 @@ function PathBehind({ version }: { version: string }) {
  * The command that brings the operator's own `herdr` up, with a Copy, and in Settings > About what it does. Hide runs
  * it itself after a move unless it asks for `sudo`, so it is shown where Hide could not, and in About.
  */
-export function UpdateCommand({ update, caption = true }: { update: NonNullable<ReturnType<typeof pathHerdrUpdate>>; caption?: boolean }) {
+export function UpdateCommand({ update, caption = true, actions }: { update: NonNullable<ReturnType<typeof pathHerdrUpdate>>; caption?: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const [copied, setCopied] = useState(false);
   const copy = () => {
-    void navigator.clipboard?.writeText(update.command).then(() => setCopied(true), () => setCopied(false));
+    void actions.copyText(update.command, "herdr update command").then(setCopied);
   };
   return (
     <div className="flex flex-wrap items-center gap-sm" data-herdr-update-command={update.command}>
@@ -183,7 +183,7 @@ function herdrStepParts({ takeover, actions, restart, t, onLater, onMoved, deskt
     return {
       title: t("herdrTakeover.moved.title"),
       description: t("herdrTakeover.moved.description"),
-      body: takeover.path_herdr ? <MovedPath path={takeover.path_herdr} /> : null,
+      body: takeover.path_herdr ? <MovedPath path={takeover.path_herdr} actions={actions} /> : null,
       footer: <MainButton onClick={onMoved} data-herdr-takeover-continue="true">{t("herdrTakeover.continue")}</MainButton>,
       primary: onMoved,
     };
@@ -444,7 +444,7 @@ export function HerdrMovedLine({ actions }: { actions: Actions }) {
   if (!behind || step === "herdr") return null;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-sm px-lg pt-sm" data-herdr-takeover-moved="true">
-      <div className="min-w-0 flex-1"><PathBehind version={behind} /></div>
+      <div className="min-w-0 flex-1"><PathBehind version={behind} actions={actions} /></div>
       <Button variant="ghost" size="sm" onClick={() => actions.herdrTakeover("continue")} data-herdr-takeover-done="true">{t("herdrTakeover.done")}</Button>
     </div>
   );
