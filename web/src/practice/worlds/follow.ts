@@ -312,5 +312,4 @@ export const FOLLOW_WORLD: PracticeWorld<FollowModel> = {
   snapshot,
   panes: (model) => [...model.shop.panes, ...model.site.panes].map((row) => row.id),
   screen: (model, paneId) => screen(model, paneId),
-  lane: false,
 };
