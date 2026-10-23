@@ -76,7 +76,7 @@ Windows, Linux and a browser tab keep their own window frame and draw the same r
 Web owner: `web/src/RenderBoundary.tsx`, `web/src/App.tsx`.
 
 A part of the window that fails to draw takes no other part with it: the top row, each window-wide notice, the sidebar, the screen in the center, each overlay and the browser displays' bridge fail on their own, and the page keeps its connection to the core.
-The sidebar, at its own width, and the center screen show one quiet line in their place, `이 영역을 그리지 못했습니다. 다음 변경 때 다시 그립니다.`; the top row keeps an empty strip of its height the window is dragged from, and a notice, an overlay or the bridge that fails is left out.
+The sidebar, at its own width, and the center screen show one quiet line in their place, `이 영역을 표시하지 못했어요. 다음에 바뀔 때 다시 표시해요.`; the top row keeps an empty strip of its height the window is dragged from, and a notice, an overlay or the bridge that fails is left out.
 A part is drawn again on the next change to the core's snapshot or to the page's own state, a new diagnostic not counted, and nothing listens for that change while every part draws.
 The failure is a diagnostic naming the part and the error, once per error until the part draws again; there is no banner.
 Only when the window's frame itself cannot draw does the line take the whole window, under the drag strip.
@@ -171,7 +171,7 @@ The foreground process is the process-group leader, or the last returned process
 The tooltip and accessible name carry the kind, full name and agent state; widths, scrolling, truncation and close behavior stay the same.
 Every Agent tab reuses the same name and Rename field in its area menu described below.
 Rename opens an inline field with the displayed name selected: Enter saves to that host's Herdr, an empty name restores automatic naming, and Escape or blur cancels editing.
-While saving, the committed name stays unchanged; a refusal or timeout keeps the entered text with “이름을 저장하지 못했습니다 · 다시 시도” below it, Enter retries, and Escape returns to the prior name.
+While saving, the committed name stays unchanged; a refusal or timeout keeps the entered text with “이름을 저장하지 못했어요 · 다시 시도” below it, Enter retries, and Escape returns to the prior name.
 Failure details go to diagnostics, with no banner; a successful name survives reconnect while Herdr keeps the tab.
 Copy name copies the displayed name.
 A View tab carries the file-type mark, and a diff tab the comparison mark, so a kind is never told by color alone.
@@ -681,10 +681,10 @@ Web owners: `web/src/PaneView.tsx`, `web/src/PaneHeaderBand.tsx`, `web/src/PaneR
 
 ### Work Hide AI does for a home
 
-Hide AI starts agents for the operator by itself (today a Memory card's `올리기`), and the work belongs to a screen, its home, not to the operator's agent lists (PRD hide-ai-work-home).
+Hide AI starts agents for the operator by itself (today a Memory card's `반영하기`), and the work belongs to a screen, its home, not to the operator's agent lists (PRD hide-ai-work-home).
 The Memory tab's To resolve row is the home of a promotion: it shows the progress, the pull request, the failure and the agent link, and it is where the work is read and acted on.
 The fact that Hide AI started an agent comes only from the coordination record of the spawn (`docs/delivery.md`), never from a branch or worktree name: a checkout the operator made by hand on a branch called `hide-memory-m9` is an ordinary checkout.
-The work is named in words, `Memory 올리기 · m72`, and never by an icon of its own, because Hide AI will start other work, each kind with its own home.
+The work is named in words, `Memory 반영하기 · m72`, and never by an icon of its own, because Hide AI will start other work, each kind with its own home.
 `docs/status-model.md`, Work Hide AI does for a home, owns the ownership value, the group rule and the turn table; this section owns what the screen draws.
 
 While the agent works, finishes or rests, the work is in no list: not the sidebar's tree or Working, not the 태스크 list's 작업 중, 끝남 or 쉬는 중, not the phone's list, not Overview's requests and graph, and it moves no badge, rail count, checkout count, desktop notification or push.
@@ -692,12 +692,12 @@ The agent is still found by ⌘K, the recent panel, the tab strip and `hide agen
 The sidebar tree has no `Hide AI` head, and a checkout Hide AI made is drawn as an ordinary checkout only while it is the front checkout or an agent the operator started works in it; the Hide AI agent's own row is never in a tree.
 The same rule applies inside the empty-worktree and Inactive folds, so a fold's count is of the checkouts it draws; the cleanup fold lists every cleanup candidate, because reviewing them is its job, and that is where a worktree kept after its pull request settled is found.
 
-The operator is called out in two cases, and both are one row in the sidebar's Needs You and the 태스크 list's Needs You with the owl beside the status mark, the task name and a place line naming the task where the branch would stand (`herdr-ide › Memory 올리기 · m72`).
+The operator is called out in two cases, and both are one row in the sidebar's Needs You and the 태스크 list's Needs You with the owl beside the status mark, the task name and a place line naming the task where the branch would stand (`herdr-ide › Memory 반영하기 · m72`).
 The agent asks: a question, an approval or a block, with the same read rules as an operator's row, so an AI-inferred question leaves once read and a block or native question stays until answered.
 The home has a turn: the attempt's pull request is open, ready, passing or unchecked and nobody asked for changes, so the second line is `PR #924 리뷰` and the row stays after it is read until the pull request is merged, closed, made a draft, or gets a requested change or a failed check; or checks failed and the agent is no longer working, so the second line is `CI 실패` until the agent works again.
 A draft, running checks and a requested change are the author's turn and draw nothing.
 A row has one line, and its second line is the agent's ask or its block's cause, then `CI 실패`, then `PR #n 리뷰`; the core decides the turn and the screen only words it.
-The row's accessible name carries `Hide AI`, the task and the turn (`Hide AI · Memory 올리기 · m72 · PR #924 리뷰`).
+The row's accessible name carries `Hide AI`, the task and the turn (`Hide AI · Memory 반영하기 · m72 · PR #924 리뷰`).
 An attempt with no live agent (a failure with no pull request, an open pull request after the operator closed the pane) never has a row; the Memory tab alone shows it, as it did.
 
 Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the lane on the Project tool's Memory tab of the row's Project with that attempt's To resolve row open, and the `Agent ↗` link there opens the pane.
@@ -755,7 +755,7 @@ The Stop-work confirmation has one line under its title and lists every pane tha
 While it is open the list is live: a pane that settles stays listed and dims, one that starts working or asking brightens, and its title, line, buttons and focus stay as they opened.
 While a listed pane's status is unknown, `Stop work and close` is disabled, `Keep open` takes the keyboard if the button held it, and a `Check status` in the confirmation reads the status again without closing it.
 `Stop work and close` sends the close the confirmation shows at the press.
-Otherwise one sheet opens in place of the Stop-work confirmation, titled `이 에이전트와 자식 N개를 닫을까요?` (a tab: `이 탭과 자식 N개를 닫을까요?`), N counting only the descendants outside.
+Otherwise one sheet opens in place of the Stop-work confirmation, titled `이 에이전트와 자식 에이전트 N개를 닫을까요?` (a tab: `이 탭과 자식 에이전트 N개를 닫을까요?`), N counting only the descendants outside.
 It has no sentence under the title, and lists the target first and then its descendants in tree order, indented by depth, each with the sidebar's status mark and name and a device chip when it runs on another device than the target; the list scrolls inside the sheet when it is long.
 Closing a tab lists every agent in the tab as a target, each followed by its own descendants, so a working agent beside the parent is shown before it closes.
 A line above the list counts, with the sidebar's marks and neutral text, the descendants waiting for an answer to a question, approval or block (`답 대기`), working (`작업 중`), holding an unread result their row marks with a dot (`확인 안 한 결과`; a delegated child's finished turn is its parent's news, so it reads quiet here as on its row, status-marks B24) and unreadable (`상태 모름`), leaving out a kind with none; those rows are bright and add their status word in neutral text, and a quiet one (idle, read, asleep) is dimmed with no word, its state in its mark's tooltip.
@@ -886,19 +886,19 @@ When a promotion reports a card outdated, its empty, clean worktree is released 
 An accepted outdated report returns the card to verification with its original sources intact.
 An outdated card sharing a batch waits while any sibling still runs, has an open PR or follows a building branch.
 A card whose decision the code does not have yet, which another branch builds, stays in To resolve as a progress row, `Goes in with the PR that builds it`, with `Agent ↗` to that branch's agent and `PR <number>` once its pull request is open; it asks nothing, puts no dot on the tab and is still given to agents, and that pull request's merge makes it a document pointer like any merged promotion.
-When nothing builds it, one row says `Not built yet · nothing builds it` with a clock mark in the checkbox slot and the agent's reason behind the row, and offers only `Keep as is`, which leaves an ordinary card that is not asked about again, its document disagreement included, until its text changes.
+When nothing builds it, one row says `Not built yet · no work underway` with a clock mark in the checkbox slot and the agent's reason behind the row, and offers only `Keep as is`, which leaves an ordinary card that is not asked about again, its document disagreement included, until its text changes.
 A new rule, lesson or decision suggestion keeps its source-session counts and dismissal until its revision changes; at most three new suggestions are open.
 `카드 N` lists the other cards, two lines each: the number and title, then the kind, how many sessions it was given to, how many times it was pulled, how many of its sources are the operator's words, and when it changed.
 The first five show, the rest fold under `그 외 N`, and a card shown in full is never folded; the search above them shows every match, best first, and is the Project's, so every window shows the same query and only the one typed into sends it.
 A searched promotion card also shows its running status and the name that opens its pane, with no name before the session appears; expanding a progress row does not duplicate it in Cards.
-Once merged, its ordinary card dims and shows the file it went into, or the merged pull request's mark when no file was named, with `파일로 올라감 · 주입 안 함`.
+Once merged, its ordinary card dims and shows the file it went into, or the merged pull request's mark when no file was named, with `파일에 반영됨 · 전달 안 함`.
 A personal preference carries `Personal`, remains available to agents and never appears as a document suggestion.
 Unresolved fact disagreements remain withheld and readable in ordinary card detail, with no unsupported document correction action; rule, lesson and decision disagreements are eligible for correction.
 A confirmed enduring correction says `Correction confirmed · document update pending` in the existing comparison row and remains available to agents as untrusted reference data.
 It retains the original human source and document quote; unrelated document commits do not ask the same authority question again.
 When the owning document incorporates it, background reconciliation turns the card into the existing document pointer without another promotion.
 Turning Memory off retains cards and analysis progress; its setting explains that enabling it again catches up on unprocessed conversations, including conversations from the disabled period.
-A Project at its 10,000-card limit makes room for a new card by forgetting its least recently used one, and the tab says so in one quiet line under the head, `N older cards were cleared to make room for new ones.` (`새 카드를 남기려고 오래된 카드 N개를 지웠습니다.`), counting the cards forgotten that way since the tab last said so.
+A Project at its 10,000-card limit makes room for a new card by forgetting its least recently used one, and the tab says so in one quiet line under the head, `N older cards were cleared to make room for new ones.` (`새 카드를 남기려고 오래된 카드 N개를 지웠어요.`), counting the cards forgotten that way since the tab last said so.
 The line is said once: it counts as seen once it is in view on a visible page, stays while the tab is open, and the next time the tab opens it is gone until another card is cleared, when it counts only the new ones.
 `hide memory undo mN` brings one of the newest 1,000 cleared cards back, and so does `되돌리기` on a card just forgotten, but not while the Project is at its limit: the undo is refused with `mN cannot come back while this Project's Memory is full; forget another card first`.
 A card added by hand is never cleared this way.
@@ -914,7 +914,7 @@ With Memory off, stored cards are retained but the list and its empty slot stay 
 An older consent shows a short re-consent explanation under the existing off disclosure and points to the switch above; it never enables or injects on its own.
 The core supplies the usable count, current card and reasons, and the shell only draws them; no banner, alert, toast or panel is added.
 The checking mark is one line in the lane at its 360px minimum in all four languages, and the card is still listed and opens in full; an unverified card is not given to agents until the check ends (PRD memory-card-quality D-13, B6, B19).
-When the agent is gone and GitHub cannot say whether its pull request came (gh missing or logged out, or GitHub not answering), the line reads `PR 확인 못 함 · <reason>` with no spinner and nothing to press, since restoring GitHub settles it; it is not asked about in `처리할 것`.
+When the agent is gone and GitHub cannot say whether its pull request came (gh missing or logged out, or GitHub not answering), the line reads `PR을 확인하지 못함 · <reason>` with no spinner and nothing to press, since restoring GitHub settles it; it is not asked about in `처리할 것`.
 A card on its way into the repository is never folded under `그 외 N`, and a card opened from a conversation clears a search that leaves it out.
 A card opens in place: `N분 전에 바뀜 · 이전 내용` when a text replaced another (the earlier text with `되돌리기`), its body, its cited files, its sources with their runtime, time and whether they are the operator's words, and `지우기`.
 A forgotten card leaves `mN 지움 · 되돌리기` at the bottom of the tab until it is undone or another card is forgotten.
@@ -1919,12 +1919,12 @@ A HEAD that moved past its merged pull request's head is not merged, a pull requ
 Deletion still happens only when the operator confirms the reviewed rows; the Hide AI attempt retirement keeps its own rule (GitHub answering that attempt's pull request merged or closed).
 When Hide cannot read what is in use, the sheet says so above the table with a retry and every checkbox is disabled; no banner or alert appears.
 
-The bottom line reads `N칸 · X` (`N칸 · 워크트리 M · X` when a worktree is chosen, and a part that is zero is left out, so a worktree alone reads `워크트리 M · X`) and `정리` runs at once for caches and dependencies alone.
+The bottom line reads `항목 N개 · X` (`항목 N개 · 워크트리 M · X` when a worktree is chosen, and a part that is zero is left out, so a worktree alone reads `워크트리 M · X`) and `정리` runs at once for caches and dependencies alone.
 A chosen worktree whose finished agents and shells still have panes shows a terminal mark with their count beside its size, in the cell and again in the confirmation, which is the state shown instead of a sentence about it.
-With a worktree chosen a confirmation step titled `<branch> 폴더째 삭제` (`워크트리 N개 폴더째 삭제` for more than one) says only that the branch stays, lists the worktrees with their sizes and pane counts and offers `워크트리 N개와 캐시 정리` (`pane P개 닫고 워크트리 N개와 캐시 정리` when panes close, the same consequence-first naming as Delete worktree's `Close N panes and delete`) and `돌아가기`, neither focused; going back deletes nothing and keeps the choice.
+With a worktree chosen a confirmation step titled `<branch> 폴더째 삭제` (`워크트리 N개 폴더째 삭제` for more than one) says only that the branch stays, lists the worktrees with their sizes and pane counts and offers `워크트리 N개와 캐시 정리` (`터미널 P개 닫고 캐시와 워크트리 N개 정리` when panes close, the same consequence-first naming as Delete worktree's `Close N panes and delete`) and `돌아가기`, neither focused; going back deletes nothing and keeps the choice.
 Cleanup deletes cache and dependency folders permanently, with no trash, and removes worktrees without force, keeping the branch.
 Each cell is checked again when `정리` is pressed and again per folder: a cell that became in use, a worktree that changed and a folder that gained tracked files are skipped with their reason and the rest go on.
-A worktree's panes are listed again just before its own removal and closed through the same Herdr close and confirmation Delete worktree uses, then the folder is removed without force; a pane that does not close leaves the worktree in place as a failed row (`pane을 닫지 못함`) and the other rows go on.
+A worktree's panes are listed again just before its own removal and closed through the same Herdr close and confirmation Delete worktree uses, then the folder is removed without force; a pane that does not close leaves the worktree in place as a failed row (`터미널을 닫지 못함`) and the other rows go on.
 A finished descendant that runs in another checkout is not closed with its parent's worktree: it stays as its own root.
 A folder is moved into the repository's Git directory (`hide-removed`) and disappears from the checkout at once; the cleanup thread then deletes it, and the sheet reads `비우는 중 · N/M`, keeps going when the sheet is closed and shows its progress or result when opened again.
 Only one cleanup runs in a daemon, and pressing the same confirmation twice removes each folder once.
@@ -2144,7 +2144,7 @@ Every tile is a button reached with Tab and chosen with Enter or Space, named fo
 Removing the device in front moves the front to This Mac; that device's agents and its `~/hide` stay on it, and the rail stays.
 
 A right-click on the rail offers `기기 목록 숨기기`.
-While the rail is hidden the top row's device name becomes a `This Mac ⌄` menu that lists the devices (a check on the one in front), `기기 추가…` and `레일 표시`.
+While the rail is hidden the top row's device name becomes a `This Mac ⌄` menu that lists the devices (a check on the one in front), `기기 추가…` and `기기 목록 표시`.
 The View menu of the desktop app carries `Toggle device rail` (`toggle_device_rail`, no default chord, bindable in Settings › Shortcuts like the sidebar switch); a browser tab uses the `This Mac ⌄` menu.
 The hidden state is the core's `ui_state.device_rail_visible`, kept beside `left_sidebar_visible`, so it survives a restart.
 
@@ -2173,7 +2173,7 @@ Web owner: `web/src/StartPanel.tsx`, `web/src/startTargets.ts`, `web/src/startDr
 The start panel starts an agent supported by the shared adapter with a first instruction anywhere hide can reach (PRD home-device-rail D-17..D-22).
 It remains independent of the inline group/draft start: a successful start makes its own tab in the target checkout's selected group rather than consuming the draft whose form happens to be open.
 ⌘N opens it in the desktop app, where it is also File › Start agent; in a browser tab ⌘N stays the browser's and `에이전트 시작…` in ⌘K, found by typing, opens it, on every screen.
-It floats at the ⌘P palette's place and width with no backdrop, and the keyboard lands in its one-line text box, `무엇을 시킬까요?`.
+It floats at the ⌘P palette's place and width with no backdrop, and the keyboard lands in its one-line text box, `에이전트에게 무엇을 요청할까요?`.
 Opened while Settings is up, it takes Settings' place: Settings closes and the target is the front device's Home.
 Under the text are the target, the agent kind and the model menus, a `⏎` keycap and `시작`; Enter or `시작` sends one `agent_start_in_checkout` with a fresh request id, the text as the agent's first instruction, handed to the CLI as its own argument (ARCHITECTURE.md, the first prompt).
 The target defaults to what is in front: the checkout of the Workspace in front (a worktree when that is it), a project's main checkout while the Overview is filtered to that project, and the front device's Home while the Overview with no project chip or Settings is; a device's surface in front makes that device the target's.
