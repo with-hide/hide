@@ -9,7 +9,7 @@ import { findArea as findAgentArea, activeDisplay as activeAgentDisplay, adjacen
 // the same code against the same snapshot. Each action is one core event
 // (dispatch is fire-and-forget; a sequence would arrive as several frames).
 
-import type { AgentLogoMode, AgentLogoModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
+import type { AgentLogoMode, AgentLogoModeSetPayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -1127,6 +1127,10 @@ export function createActions(send: DispatchFn) {
     setAgentLogoMode(mode: AgentLogoMode) {
       const payload = { mode } satisfies AgentLogoModeSetPayload;
       dispatch({ schema_version: 2, kind: "agent_logo_mode_set", payload });
+    },
+    setPaneTurnRowMode(mode: PaneTurnRowMode) {
+      const payload = { mode } satisfies PaneTurnRowModeSetPayload;
+      dispatch({ schema_version: 2, kind: "pane_turn_row_mode_set", payload });
     },
 
     /** Sleep idle agents after `hours`; null is Never (PRD agent-sleep B2). */
