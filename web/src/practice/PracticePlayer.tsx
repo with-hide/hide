@@ -8,6 +8,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { installKeyboard } from "../keyboard";
+import { Palette } from "../Palette";
 import type { SnapshotRest } from "../snapshot";
 import { Sidebar } from "../sidebar";
 import { useShellStore } from "../store";
@@ -15,7 +16,7 @@ import { feedChunks, terminalFor } from "../terminals";
 import { TitleRow } from "../TitleRow";
 import { useUiStore } from "../ui";
 import { WorkspaceScreen } from "../WorkspaceScreen";
-import type { PracticeChapter } from "./chapters";
+import type { PracticeChapter } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
 
 type UiState = NonNullable<SnapshotRest["ui_state"]>;
@@ -96,6 +97,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
           <Sidebar actions={actions} />
           <WorkspaceScreen actions={actions} />
         </div>
+        <Palette actions={actions} />
         <PracticeCoach chapter={chapter} model={model} next={next} resume={resume} onStep={onStep} onNext={() => next && onStart(next)} onRestart={() => onStart(chapter)} onHub={onHub} />
       </div>
     </TooltipProvider>

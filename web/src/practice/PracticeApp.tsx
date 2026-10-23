@@ -8,7 +8,8 @@ import { clientI18n, useInterfaceTranslation } from "../i18n/translator";
 import { isInterfaceLanguage } from "../i18n/locale";
 import { applyTerminalTheme } from "../terminals";
 import { PALETTE_HIDE_CLASS, readColorTheme, readTheme, resolveTheme } from "../theme";
-import { CHAPTERS, type PracticeChapter } from "./chapters";
+import type { PracticeChapter } from "./chapter";
+import { CHAPTERS, nextChapter } from "./chapters";
 import { PRACTICE_CHANNEL, type ChapterProgress, type PracticeMessage, type PracticeProgress, type ShellAnswer } from "./channel";
 import { HUB_CSS } from "./coachStyle";
 import { PracticePlayer, type OperatorChoices } from "./PracticePlayer";
@@ -78,7 +79,7 @@ export function PracticeApp() {
   }, [chapter, progress]);
 
   if (playing) {
-    const next = CHAPTERS.find((row) => row.number === playing.chapter.number + 1) ?? null;
+    const next = nextChapter(playing.chapter);
     return <PracticePlayer key={playing.run} chapter={playing.chapter} next={next} resume={playing.resume} operator={operator} onStep={onStep} onStart={(target) => start(target, 0)} onHub={() => setPlaying(null)} />;
   }
   return <PracticeHub progress={progress} unsaved={unanswered && !answer} onStart={start} />;

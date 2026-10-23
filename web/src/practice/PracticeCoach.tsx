@@ -10,7 +10,8 @@ import type { MessageKey } from "../i18n/catalogs";
 import { commandLabel } from "../shortcutLabels";
 import { hostChord, hostRegistry, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
-import type { PracticeChapter, PracticeDrag, PracticeStep } from "./chapters";
+import { useUiStore } from "../ui";
+import type { PracticeChapter, PracticeDrag, PracticeStep } from "./chapter";
 import { COACH_CSS } from "./coachStyle";
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -209,10 +210,12 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
 
   const back = index > 0 && !step.done && !chapter.steps[index - 1]!.done;
 
-  // ⏎ and → perform the step, ← goes back over a look; every other key reaches the shell untouched.
+  // ⏎ and → perform the step, ← goes back over a look; every other key reaches the shell untouched,
+  // and while a palette the shell opened is up, every key is the palette's.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!event.isTrusted || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.isComposing) return;
+      if (useUiStore.getState().overlay !== "none") return;
       if (event.key === "Enter" || (event.key === "ArrowRight" && !step.done)) {
         event.preventDefault();
         event.stopPropagation();
