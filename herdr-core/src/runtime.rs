@@ -437,7 +437,7 @@ impl ExplorerChange {
         }
     }
 
-    fn plan(&self, root: &str) -> Result<files::ExplorerOperation, String> {
+    fn plan(&self, root: &str) -> Result<files::ExplorerOperation, files::ExplorerFailure> {
         match self {
             Self::Create { kind, parent, name } => {
                 files::ExplorerOperation::create(*kind, root, parent, name)

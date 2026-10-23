@@ -4535,22 +4535,20 @@ pub struct IssueUpdateSnapshot {
     pub task_key: String,
     /// `ready` or `failed`.
     pub phase: String,
-    pub failure: Option<IssueFailure>,
+    pub failure: Option<CodedFailure>,
 }
 
-/// Why a local issue's change or a pull request's issue link failed, as the
-/// code the web words (`localIssue.<code>` for `local_issue.<code>`,
-/// `prLink.<code>` for `pr_link.<code>`) with the one limit its sentence
-/// names; the core's own words go to the `pr_link.failed` and
-/// `local_issue.update` diagnostics.
+/// Why an operation failed, as a code the web words (`local_issue.*`,
+/// `pr_link.*`, `explorer.*`, `host.*`, `link.*`) with the one limit its
+/// sentence names; the core's own words go to that operation's diagnostic.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct IssueFailure {
+pub struct CodedFailure {
     pub code: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
 }
 
-impl IssueFailure {
+impl CodedFailure {
     pub fn new(code: &str) -> Self {
         Self {
             code: code.to_owned(),
@@ -4559,7 +4557,7 @@ impl IssueFailure {
     }
 }
 
-impl From<crate::local_issues::LocalIssueError> for IssueFailure {
+impl From<crate::local_issues::LocalIssueError> for CodedFailure {
     fn from(error: crate::local_issues::LocalIssueError) -> Self {
         Self {
             code: format!("local_issue.{}", error.code()),
@@ -4682,7 +4680,7 @@ pub struct PrLinkSnapshot {
     pub issue_id: Option<String>,
     /// The issue was made by this request.
     pub created: bool,
-    pub failure: Option<IssueFailure>,
+    pub failure: Option<CodedFailure>,
 }
 
 /// One failed check of a pull request, by the name GitHub shows and the page
@@ -5799,7 +5797,9 @@ pub struct ExplorerOperationSnapshot {
     /// The item's path once the change has landed; equal to `path` for a
     /// creation.
     pub destination: String,
-    pub message: Option<String>,
+    /// Why it failed, or why a created file did not open, as a code the
+    /// tree words (`explorer.*`, `host.*`, `link.*`).
+    pub failure: Option<CodedFailure>,
 }
 
 /// One repository's worktrees.

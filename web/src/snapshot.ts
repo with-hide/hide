@@ -574,7 +574,7 @@ export type IssueWork = {
   detail: IssueDetail | null;
   name: { request_id: string; phase: "working" | "ready" | "failed"; name: string | null; message: string | null } | null;
   /** The answer to a Local issue's edit, by the web's request id. */
-  update?: { request_id: string; task_key: string; phase: "ready" | "failed"; failure: IssueFailure | null } | null;
+  update?: { request_id: string; task_key: string; phase: "ready" | "failed"; failure: CodedFailure | null } | null;
   /** ⌘K's explicit GitHub search, by the web's request id (`github_search`). */
   search?: GithubSearch | null;
 };
@@ -634,8 +634,8 @@ export type GithubSearch = {
   message: string | null;
 };
 
-/** Why a Local issue or a pull request's issue failed (`IssueFailure`): a `local_issue.*` or `pr_link.*` code and the limit its sentence names. */
-export type IssueFailure = { code: string; limit?: number };
+/** Why an operation failed (`CodedFailure`): a code the web words (`local_issue.*`, `pr_link.*`, `explorer.*`, `host.*`, `link.*`) and the limit its sentence names. */
+export type CodedFailure = { code: string; limit?: number };
 
 /** A pull request linked to an issue (`PrLinkSnapshot`): the issue made, Hide's link, then `Closes #N` in the body. */
 export type PrLink = {
@@ -651,7 +651,7 @@ export type PrLink = {
   /** This request made the issue. */
   created: boolean;
   /** Why it failed, as a code the web words (`issueFailure.ts`). */
-  failure: IssueFailure | null;
+  failure: CodedFailure | null;
 };
 
 /** A pull request's body, failed checks and standing change requests, read for a new issue made from it or an agent's first prompt (`PrFeedbackSnapshot`). */
@@ -1073,7 +1073,8 @@ export type ExplorerOperation = {
   phase: string;
   path: string;
   destination: string;
-  message: string | null;
+  /** Why it failed, as a code `fileFailure.ts` words (`explorer.*`, `host.*`, `link.*`). */
+  failure: CodedFailure | null;
 };
 
 export type WorkspaceRegistration = {

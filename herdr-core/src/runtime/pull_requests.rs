@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::model::{
-    CheckoutSnapshot, IssueFailure, PR_CARD_LIMIT, PrCardSnapshot, PrFeedbackSnapshot,
+    CheckoutSnapshot, CodedFailure, PR_CARD_LIMIT, PrCardSnapshot, PrFeedbackSnapshot,
     PrLinkSnapshot, PrWriteSnapshot, PullRequestBadge, PullRequestSnapshot,
 };
 
@@ -233,7 +233,7 @@ impl Runtime {
         &mut self,
         mut link: PrLinkSnapshot,
         step: &str,
-        failure: IssueFailure,
+        failure: CodedFailure,
         detail: impl std::fmt::Display,
     ) -> bool {
         crate::diagnostic!(serde_json::json!({
@@ -286,7 +286,7 @@ impl Runtime {
                     return self.fail_pr_link(
                         link,
                         "link",
-                        IssueFailure::new("pr_link.pr_unknown"),
+                        CodedFailure::new("pr_link.pr_unknown"),
                         message,
                     );
                 }
@@ -336,7 +336,7 @@ impl Runtime {
                         return self.fail_pr_link(
                             link,
                             "create",
-                            IssueFailure::new("pr_link.repository_unknown"),
+                            CodedFailure::new("pr_link.repository_unknown"),
                             message,
                         );
                     }
@@ -374,7 +374,7 @@ impl Runtime {
                         self.fail_pr_link(
                             link,
                             "create",
-                            IssueFailure::new("pr_link.worker_unavailable"),
+                            CodedFailure::new("pr_link.worker_unavailable"),
                             message,
                         )
                     }
@@ -383,7 +383,7 @@ impl Runtime {
             _ => self.fail_pr_link(
                 link,
                 "link",
-                IssueFailure::new("pr_link.request_invalid"),
+                CodedFailure::new("pr_link.request_invalid"),
                 "the request names neither one issue to link nor one new issue",
             ),
         }
@@ -406,7 +406,7 @@ impl Runtime {
             return self.fail_pr_link(
                 link,
                 "link",
-                IssueFailure::new("pr_link.issue_not_in_project"),
+                CodedFailure::new("pr_link.issue_not_in_project"),
                 format!("{key} is not an issue of this project"),
             );
         };
@@ -417,7 +417,7 @@ impl Runtime {
             return self.fail_pr_link(
                 link,
                 "link",
-                IssueFailure::new("pr_link.no_worktree"),
+                CodedFailure::new("pr_link.no_worktree"),
                 "no worktree holds the pull request's branch",
             );
         };
@@ -433,7 +433,7 @@ impl Runtime {
             return self.fail_pr_link(
                 link,
                 "link",
-                IssueFailure::new("pr_link.link_not_saved"),
+                CodedFailure::new("pr_link.link_not_saved"),
                 message,
             );
         }
@@ -456,7 +456,7 @@ impl Runtime {
                 self.fail_pr_link(
                     link,
                     "link",
-                    IssueFailure::new("pr_link.link_not_saved"),
+                    CodedFailure::new("pr_link.link_not_saved"),
                     message,
                 );
             }
@@ -487,7 +487,7 @@ impl Runtime {
             return self.fail_pr_link(
                 link,
                 "link",
-                IssueFailure::new("pr_link.issue_not_in_project"),
+                CodedFailure::new("pr_link.issue_not_in_project"),
                 format!("{key} is not an issue of this repository"),
             );
         };
@@ -497,7 +497,7 @@ impl Runtime {
                 return self.fail_pr_link(
                     link,
                     "body",
-                    IssueFailure::new("pr_link.repository_unknown"),
+                    CodedFailure::new("pr_link.repository_unknown"),
                     message,
                 );
             }
@@ -521,7 +521,7 @@ impl Runtime {
             return self.fail_pr_link(
                 link,
                 "body",
-                IssueFailure::new("pr_link.worker_unavailable"),
+                CodedFailure::new("pr_link.worker_unavailable"),
                 message,
             );
         }
@@ -566,7 +566,7 @@ impl Runtime {
                 return self.fail_pr_link(
                     link,
                     "create",
-                    IssueFailure::new("pr_link.create_failed"),
+                    CodedFailure::new("pr_link.create_failed"),
                     message,
                 );
             }
@@ -618,7 +618,7 @@ impl Runtime {
                 return self.fail_pr_link(
                     link,
                     "body",
-                    IssueFailure::new("pr_link.body_not_written"),
+                    CodedFailure::new("pr_link.body_not_written"),
                     message,
                 );
             }

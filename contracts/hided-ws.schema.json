@@ -841,16 +841,16 @@
       }
     },
     "directoryUnavailable": {
-      "description": "Payload of a directory_unavailable frame: a `file_list` for a checkout on an SSH device that did not come back as a listing. code says what the Explorer offers next: `not_ready` (no helper connection: consent missing or withdrawn, or the device unreachable; nothing was sent), `busy` (the device's request queue is full; nothing was sent), `unknown` (the request was sent and no answer arrived), or `refused` (the helper answered with a refusal such as a replaced root or a missing folder). message is the sentence to show, and root_path is the folder that was asked for.",
+      "description": "Payload of a directory_unavailable frame: a `file_list` for a checkout on an SSH device that did not come back as a listing. code says what the Explorer offers next: `not_ready` (no helper connection: consent missing or withdrawn, or the device unreachable; nothing was sent), `busy` (the device's request queue is full; nothing was sent), `unknown` (the request was sent and no answer arrived), or `refused` (the helper answered with a refusal such as a replaced root or a missing folder). reason is the helper's refusal code on `refused` (`not_found`, `permission_denied`, `root_replaced`, ...), null otherwise; the Explorer words code and reason, and the helper's sentence goes to hided's `device.listing_unavailable` log line. root_path is the folder that was asked for.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "device_id", "root_path", "code", "message"],
+      "required": ["kind", "device_id", "root_path", "code", "reason"],
       "properties": {
         "kind": { "type": "string", "enum": ["file_list"] },
         "device_id": { "type": "string", "minLength": 1 },
         "root_path": { "type": "string" },
         "code": { "type": "string", "enum": ["not_ready", "busy", "unknown", "refused"] },
-        "message": { "type": "string" }
+        "reason": { "type": ["string", "null"] }
       }
     },
     "pathRefused": {

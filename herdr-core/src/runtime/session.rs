@@ -4512,33 +4512,41 @@ impl Runtime {
                     })
             });
         let planned = match target {
-            Some(target) if target.device_id != device => Err(format!(
-                "{root} is not on the device in front; nothing was changed"
+            Some(target) if target.device_id != device => Err(files::ExplorerFailure::new(
+                "explorer.not_in_front",
+                format!("{root} is not on the device in front; nothing was changed"),
             )),
             Some(target) if target.root == root => {
                 request.change.plan(root).and_then(|operation| {
                     self.document_source(&target.workspace_id, &target.checkout_id)
                         .map(|source| (operation, target, source))
+                        .map_err(files::ExplorerFailure::from)
                 })
             }
-            Some(target) => Err(format!(
-                "{root} is not the focused checkout {}",
-                target.root
+            Some(target) => Err(files::ExplorerFailure::new(
+                "explorer.not_in_front",
+                format!("{root} is not the focused checkout {}", target.root),
             )),
-            None => Err("No checkout is focused".to_owned()),
+            None => Err(files::ExplorerFailure::new(
+                "explorer.not_in_front",
+                "no checkout is focused",
+            )),
         };
         let (mut operation, target, (document_root, channel)) = match planned {
             Ok(planned) => planned,
-            Err(message) => {
+            Err(refused) => {
                 self.snapshot.explorer_operation = Some(ExplorerOperationSnapshot {
                     id,
                     kind: "refused".to_owned(),
                     phase: "failed".to_owned(),
                     path: started_from.to_owned(),
                     destination: started_from.to_owned(),
-                    message: Some(message.clone()),
+                    failure: Some(refused.failure.clone()),
                 });
-                self.push_diagnostic("explorer.refused", format!("{started_from}: {message}"));
+                self.push_diagnostic(
+                    "explorer.refused",
+                    format!("{started_from}: {}: {refused}", refused.code()),
+                );
                 return true;
             }
         };
@@ -4548,7 +4556,7 @@ impl Runtime {
             phase: "working".to_owned(),
             path: operation.source.clone(),
             destination: operation.destination.clone(),
-            message: None,
+            failure: None,
         });
         crate::diagnostic!(serde_json::json!({
             "component": "explorer", "kind": "explorer.change_requested",
@@ -4603,8 +4611,11 @@ impl Runtime {
             }) {
             Ok(_) => true,
             Err(error) => {
-                let message = format!("The file operation worker could not start: {error}");
-                self.ingest_explorer_operation_result(id, &target, &operation, Err(message))
+                let failure = files::ExplorerFailure::new(
+                    "explorer.worker_unavailable",
+                    format!("the file operation worker could not start: {error}"),
+                );
+                self.ingest_explorer_operation_result(id, &target, &operation, Err(failure))
             }
         }
     }
@@ -4631,13 +4642,13 @@ impl Runtime {
     /// its expanded folders and keeps its file tabs with their drafts, each
     /// marked removed: a save does not recreate a trashed file, and the
     /// operator exports or discards the draft (B18). Failure changes no core
-    /// state beyond the message.
+    /// state beyond the failure code.
     pub(crate) fn ingest_explorer_operation_result(
         &mut self,
         id: u64,
         target: &ExplorerTarget,
         operation: &files::ExplorerOperation,
-        result: Result<files::Applied, String>,
+        result: Result<files::Applied, files::ExplorerFailure>,
     ) -> bool {
         let Some(slot) = self.snapshot.explorer_operation.as_mut() else {
             return false;
@@ -4741,9 +4752,9 @@ impl Runtime {
                 // with no second dispatch from the shell; its read runs on a
                 // worker like every open, so the tab follows the selection.
                 // New Folder, Rename and move open nothing. If the checkout
-                // cannot serve the file it still exists there, so the reason
-                // rides the finished slot's message and the tree keeps the
-                // created file (B10 pattern).
+                // cannot serve the file it still exists there, so
+                // `explorer.created_not_opened` rides the finished slot and the
+                // tree keeps the created file (B10 pattern).
                 if operation.kind == files::ExplorerOperationKind::FileCreate {
                     match self.prepare_file_tab(
                         &target.workspace_id,
@@ -4759,7 +4770,9 @@ impl Runtime {
                         ),
                         Err(message) => {
                             if let Some(slot) = self.snapshot.explorer_operation.as_mut() {
-                                slot.message = Some(message.clone());
+                                slot.failure = Some(crate::model::CodedFailure::new(
+                                    "explorer.created_not_opened",
+                                ));
                             }
                             self.push_diagnostic(
                                 "explorer.file_create.open_failed",
@@ -4770,14 +4783,15 @@ impl Runtime {
                 }
                 self.persist_current_ui_state();
             }
-            Err(message) => {
+            Err(failed) => {
                 slot.phase = "failed".to_owned();
-                slot.message = Some(message.clone());
+                slot.failure = Some(failed.failure.clone());
                 self.push_diagnostic(
                     format!("explorer.{}_failed", operation.kind.as_str()),
                     format!(
-                        "operation {id} on {}: {source}: {message}",
-                        target.device_id
+                        "operation {id} on {}: {source}: {}: {failed}",
+                        target.device_id,
+                        failed.code()
                     ),
                 );
             }

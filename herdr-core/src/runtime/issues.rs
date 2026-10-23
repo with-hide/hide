@@ -860,11 +860,11 @@ impl Runtime {
         project_path: &str,
         title: &str,
         body: &str,
-    ) -> Result<u32, (crate::model::IssueFailure, String)> {
+    ) -> Result<u32, (crate::model::CodedFailure, String)> {
         let number = match self.local_issues.as_mut() {
             Err(reason) => {
                 return Err((
-                    crate::model::IssueFailure::new("local_issue.store_unreadable"),
+                    crate::model::CodedFailure::new("local_issue.store_unreadable"),
                     format!("the local issue file could not be read: {reason}"),
                 ));
             }
@@ -1576,17 +1576,17 @@ impl Runtime {
         let now = unix_milliseconds();
         let key = crate::tasks::parse_local_key(&payload.task_key);
         let node = key.map(|(path, _)| self.local_issue_project(&payload.workspace_id, path));
-        use crate::model::IssueFailure;
+        use crate::model::CodedFailure;
         let updated = match (key, node.clone(), self.local_issues.as_mut()) {
             (None, _, _) | (_, None, _) => Err((
-                IssueFailure::new("local_issue.not_local"),
+                CodedFailure::new("local_issue.not_local"),
                 "only a local issue is edited in Hide".to_owned(),
             )),
             (_, Some(Err(message)), _) => {
-                Err((IssueFailure::new("local_issue.project_unknown"), message))
+                Err((CodedFailure::new("local_issue.project_unknown"), message))
             }
             (Some(_), _, Err(reason)) => Err((
-                IssueFailure::new("local_issue.store_unreadable"),
+                CodedFailure::new("local_issue.store_unreadable"),
                 format!("the local issue file could not be read: {reason}"),
             )),
             (Some((path, number)), Some(Ok(node)), Ok(store)) => store

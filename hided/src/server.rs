@@ -2414,7 +2414,9 @@ fn device_listing(
         Ok(relative) => relative.into_string(),
         Err(_) => return refused("file_list", &folder, Refusal::OutsideCheckout),
     };
-    let unavailable = |code: &str, message: String| {
+    // `reason` is the host's refusal code, which the Explorer words; the
+    // sentence beside it is the log's.
+    let unavailable = |code: &str, reason: Option<&str>, message: String| {
         eprintln!(
             "{}",
             json!({
@@ -2422,16 +2424,17 @@ fn device_listing(
                 "kind": "device.listing_unavailable",
                 "device": device,
                 "code": code,
+                "reason": reason,
                 "message": message,
             })
         );
         json!({"type": "directory_unavailable", "payload": {
-            "kind": "file_list", "device_id": device, "root_path": folder, "code": code, "message": message,
+            "kind": "file_list", "device_id": device, "root_path": folder, "code": code, "reason": reason,
         }})
     };
     let channel = match core.node_link(&device) {
         Ok(channel) => channel,
-        Err(message) => return unavailable("not_ready", message),
+        Err(message) => return unavailable("not_ready", None, message),
     };
     use herdr_core::node_access::LinkError;
     match herdr_core::node_access::list_folder(channel.as_ref(), &root, &relative) {
@@ -2454,10 +2457,12 @@ fn device_listing(
                 "entries": entries, "truncated": listing.truncated,
             }})
         }
-        Err(LinkError::NotConnected(message)) => unavailable("not_ready", message),
-        Err(error @ LinkError::Busy) => unavailable("busy", error.to_string()),
-        Err(LinkError::Unknown(message)) => unavailable("unknown", message),
-        Err(LinkError::Refused(error)) => unavailable("refused", error.message),
+        Err(LinkError::NotConnected(message)) => unavailable("not_ready", None, message),
+        Err(error @ LinkError::Busy) => unavailable("busy", None, error.to_string()),
+        Err(LinkError::Unknown(message)) => unavailable("unknown", None, message),
+        Err(LinkError::Refused(error)) => {
+            unavailable("refused", Some(error.code.as_str()), error.message)
+        }
     }
 }
 
