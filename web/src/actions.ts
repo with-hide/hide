@@ -2374,6 +2374,17 @@ export function createActions(send: DispatchFn) {
     },
 
     /**
+     * 세션 닫기 on a task row: the row's pane on whichever host holds it,
+     * through the same consequence flow as the pane menu's close.
+     */
+    closeSession(paneId: string) {
+      const targetId = remoteTargetOfPane(rest(), paneId);
+      const target = closeTarget({ kind: "pane", id: paneId, targetId });
+      if (!target) return diagnostic(`close_session: ${paneId} is not open on a connected host`);
+      requestClose("pane", paneId, target.panes, targetId);
+    },
+
+    /**
      * The operator chose "Stop work and close" on the confirmation, or
      * 이것만 닫기 on the subtree sheet: the target alone, as an ordinary
      * close, with no second question (B12).
