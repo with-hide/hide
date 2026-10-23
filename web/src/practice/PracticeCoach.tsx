@@ -264,6 +264,12 @@ function fieldOfStep(step: PracticeStep): string | null {
 /** Whether the field `selector` marks is on screen and holds words: then ⏎ there is the palette's, which opens the row it highlights. */
 const fieldFilled = (selector: string | null) => !!selector && !!document.querySelector<HTMLInputElement>(selector)?.value.trim();
 
+/** Whether the field `selector` marks holds all the words `step` types into it. */
+function wordsIn(selector: string, step: PracticeStep): boolean {
+  const words = step.gesture && "type" in step.gesture ? step.gesture.type.text : "";
+  return document.querySelector<HTMLInputElement>(selector)?.value === words;
+}
+
 const ZONES = [
   { selector: "[data-sidebar-box]", key: "view" },
   { selector: "[data-agent-area]", key: "work" },
@@ -422,8 +428,9 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
       // past them ⏎ is the palette's, which opens the row it highlights.
       const types = field !== null && !fieldFilled(field);
       const open = useUiStore.getState().overlay !== "none";
-      // While the coach is still typing, the field holds only part of the words: ⏎ waits for them, here and on the step the words already finished.
-      if (open && event.key === "Enter" && playing.current !== null && playing.current !== step) {
+      // While the coach is still typing into the field, it holds only part of the words: ⏎ there would open the wrong row, so it waits.
+      const typing = playing.current && playing.current !== step ? fieldOfStep(playing.current) : null;
+      if (open && event.key === "Enter" && typing && !wordsIn(typing, playing.current!)) {
         event.preventDefault();
         event.stopPropagation();
         return;
