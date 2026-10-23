@@ -6124,14 +6124,14 @@ impl Runtime {
     pub fn ingest_workspace_creation(
         &mut self,
         request_path: &str,
-        result: Result<live::WorkspaceCreationOutcome, String>,
+        result: Result<live::WorkspaceCreationOutcome, live::WorkspaceCreationFailure>,
         elapsed_ms: u128,
     ) -> bool {
         self.workspace_creations_in_flight.remove(request_path);
         let outcome = match result {
             Ok(outcome) => outcome,
-            Err(message) => {
-                self.set_error("workspace.create_failed", message, false);
+            Err(failure) => {
+                self.set_error(failure.kind, failure.message, false);
                 return true;
             }
         };

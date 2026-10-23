@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coreErrorText, herdrStateText, remoteStateText } from "./coreError";
+import { cloneFailureText, cloneStageText, coreErrorText, herdrStateText, remoteStateText } from "./coreError";
 import { initializeInterfaceI18n } from "./i18n/instance";
 
 const english = initializeInterfaceI18n("en").getFixedT(null, "translation");
@@ -24,5 +24,14 @@ describe("a connection state the core names by its code", () => {
     expect(herdrStateText("a_new_state", english)).toBe("Herdr is not connected.");
     expect(remoteStateText("unreachable", "Mac mini", korean)).toBe("Mac mini 기기에 연결하지 못했어요");
     expect(remoteStateText("ssh_auth_failed", "Mac mini", english)).toBe("Mac mini is not connected");
+  });
+});
+
+describe("a clone the core reports by code", () => {
+  it("words its failure and Git's stage in the viewer's language", () => {
+    expect(cloneFailureText("authentication", korean)).toBe("인증에 실패했어요. 이 저장소에는 Git이 찾지 못한 자격 증명이 필요해요. SSH 키나 자격 증명 도우미를 설정한 뒤 다시 시도하세요.");
+    expect(cloneFailureText("git", english)).toBe(english("addProject.clone.failed"));
+    expect(cloneStageText("Receiving objects", korean)).toBe("객체 받는 중");
+    expect(cloneStageText("Filtering content", english)).toBe(english("addProject.clone.stageFallback"));
   });
 });

@@ -97,7 +97,8 @@ impl Runtime {
             phase: "cloning".to_owned(),
             stage: None,
             percent: None,
-            message: None,
+            failure: None,
+            git_line: None,
         });
         self.repository_clone_job = Some(CloneJob {
             id,
@@ -173,13 +174,21 @@ impl Runtime {
             return false;
         };
         self.repository_clone_job = None;
-        let (phase, message) = match &result {
-            Ok(_) => ("finished", None),
-            Err(CloneFailure::Cancelled) => ("cancelled", None),
-            Err(failure) => ("failed", Some(failure.message())),
+        let phase = match &result {
+            Ok(_) => "finished",
+            Err(CloneFailure::Cancelled) => "cancelled",
+            Err(_) => "failed",
         };
         clone.phase = phase.to_owned();
-        clone.message = message;
+        clone.failure = result
+            .as_ref()
+            .err()
+            .filter(|failure| !matches!(failure, CloneFailure::Cancelled))
+            .map(|failure| failure.code().to_owned());
+        clone.git_line = match &result {
+            Err(CloneFailure::Git(line)) => Some(line.clone()),
+            _ => None,
+        };
         clone.stage = None;
         clone.percent = None;
         crate::diagnostic!(serde_json::json!({
@@ -188,6 +197,7 @@ impl Runtime {
             "id": id,
             "host": clone.host,
             "reason": result.as_ref().err().map(CloneFailure::code),
+            "message": result.as_ref().err().map(CloneFailure::message),
         }));
         let Ok(path) = result else {
             return true;

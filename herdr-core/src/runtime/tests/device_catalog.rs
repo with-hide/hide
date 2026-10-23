@@ -1062,8 +1062,10 @@ fn a_device_folder_outside_its_home_is_refused_by_its_helper() {
         serde_json::json!({"device_id": TARGET, "path": t.other, "label": "Other", "initialize_git": false}),
     );
 
+    // Named by the helper's code, so the shell words it as it words this
+    // Mac's refusal; the helper's sentence stays for the diagnostic log.
     let error = runtime.snapshot.status.last_error.clone().unwrap();
-    assert_eq!(error.kind, "workspace.create_refused");
+    assert_eq!(error.kind, "workspace.create_refused.outside_root");
     assert!(
         error.message.contains("inside the home folder"),
         "{}",
@@ -1084,7 +1086,7 @@ fn a_new_project_folder_on_a_device_is_refused_before_the_helper() {
         serde_json::json!({"device_id": TARGET, "path": t.other, "label": "Other", "initialize_git": true, "new_folder": true}),
     );
     let error = runtime.snapshot.status.last_error.clone().unwrap();
-    assert_eq!(error.kind, "workspace.create_refused");
+    assert_eq!(error.kind, "workspace.create_local_only");
     assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
 }
 

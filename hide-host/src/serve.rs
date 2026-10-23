@@ -1103,10 +1103,11 @@ pub fn handle_with_progress(
             path,
             new_folder,
             initialize_git,
-        } => to_value(
-            crate::project::create(&absolute(&path)?, new_folder, initialize_git)
-                .map_err(|reason| HostError::new(ErrorCode::Io, reason))?,
-        ),
+        } => to_value(crate::project::create(
+            &absolute(&path)?,
+            new_folder,
+            initialize_git,
+        )?),
         Call::PathFacts { paths } => to_value(crate::catalog::path_facts(&paths)?),
         Call::RealPaths { paths } => to_value(crate::cleanup::real_paths(&paths)),
         Call::Repository { path } => to_value(crate::cleanup::repository(&absolute(&path)?)),

@@ -2226,14 +2226,14 @@ impl Runtime {
             return false;
         }
         if worktree.ignored_repositories != payload.expected_ignored_repositories {
-            self.set_error("worktree.remove_unaccepted", "Not deleted: the ignored repository list changed. Refresh and review every repository before choosing Discard.".to_owned(), true);
+            self.set_error("worktree.remove_ignored_changed", "Not deleted: the ignored repository list changed. Refresh and review every repository before choosing Discard.".to_owned(), true);
             return false;
         }
         if let Some(label) = worktree.deletion_gate.discard_label.as_ref()
             && !payload.discard_changes
         {
             self.set_error(
-                "worktree.remove_unaccepted",
+                "worktree.remove_discard_unconfirmed",
                 format!("Not deleted: deleting it would lose work. Tick \"{label}\" to delete it anyway."),
                 true,
             );
