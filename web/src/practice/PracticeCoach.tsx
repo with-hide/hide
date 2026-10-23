@@ -312,17 +312,19 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     else onHub();
   }, [last, next, onNext, onHub]);
 
-  // A gesture that takes a while plays once: ⏎ pressed again meanwhile waits for it.
-  const playing = useRef(false);
+  // A gesture that takes a while plays once: ⏎ pressed again on its step waits for it. The world
+  // can finish the step before the gesture's last pause, and ⏎ on the step after is that step's.
+  const playing = useRef<PracticeStep | null>(null);
   const play = useCallback((gesture: Promise<void>) => {
-    playing.current = true;
+    const playedFor = step;
+    playing.current = playedFor;
     void gesture.finally(() => {
-      playing.current = false;
+      if (playing.current === playedFor) playing.current = null;
     });
-  }, []);
+  }, [step]);
 
   const perform = useCallback(() => {
-    if (playing.current) return;
+    if (playing.current === step) return;
     if (!step.done) return advance();
     // A field the step types into is opened first by the step's command: ⌘K, then the words.
     if (step.gesture && "type" in step.gesture && "input" in step.gesture.type && !document.querySelector(step.gesture.type.input) && step.command) return pressCommand(step.command);
