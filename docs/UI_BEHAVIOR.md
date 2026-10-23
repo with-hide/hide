@@ -807,7 +807,7 @@ So `열어뒀어요(http://127.0.0.1:8391).`, `캡처는("/tmp/a.png")입니다`
 These places are found by the kind of character, a Unicode class, not from a list of marks: a link starts after an opening bracket or quote or an `=`, ends before a closing one, stops at sentence punctuation such as `,`, `。` or `、`, and a run of Hangul, kana or Han letters is cut once, where its script meets the link.
 A run that touches `/`, `.`, `-` or `_` belongs to the name, so `docs/회의록에`, `회의록/a.md` and `한글.md` are checked only as written.
 The original spelling is checked before treating punctuation, attached prose or a location as context: if `docs/a.md)에`, `docs/a.md)`, `(src/a.ts:12:5)` or `src/a.ts:12:5` is itself a file name, that complete name wins.
-A drive path a Windows shell prints with backslashes, such as `C:\Users\me\AppData\Local\Temp\shot.png`, is a link like its `C:/` spelling.
+A drive path a Windows shell prints with backslashes, such as `C:\Users\example\AppData\Local\Temp\shot.png`, is a link like its `C:/` spelling.
 Among the bounded spellings, the longest existing path wins, and of two the same length the one that keeps the token's start; a failed or budget-skipped longer check never establishes a shorter link.
 A path ends at a closing bracket whatever follows it, so `docs/a.md)foo` links `docs/a.md` when only that exists, but never at an opening one, so `app/(auth)/page.tsx` never links `app/`.
 In Korean prose such as `보드 보기 (docs/README.md)에 C안을 추가했습니다.`, only `docs/README.md` is underlined and clickable when that is the actual path.
