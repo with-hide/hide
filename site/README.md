@@ -4,6 +4,7 @@ This directory contains the static introduction-site source prepared for issue #
 It has no build step, packages, framework, webfont service, analytics, cookies, or application environment variables.
 Bricolage Grotesque (headings and body) and Geist Mono (labels and drawn panels) are served from `assets/fonts/` under the SIL Open Font License (`OFL-BricolageGrotesque.txt`, `OFL-Geist.txt`), copied unchanged from the `@fontsource-variable/bricolage-grotesque` 5.3.0 and `geist` 1.4.2 npm packages.
 Serving this directory locally does not publish it or configure the domain.
+`llms.txt` lists the guides an agent reads to use or build hide, as links to their Markdown on the main branch; it names guides, never a release or a figure, so it changes only when a guide is added, renamed or retired.
 
 ## Preview and checks
 
