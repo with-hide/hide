@@ -79,7 +79,7 @@ describe("the phone's language", () => {
     await mount();
     await vi.waitFor(() => expect(postMessage.mock.calls.at(-1)?.[0]).toMatchObject({ type: "words", words: { needs_you: "내 차례", done: "읽을 것", observer_unconfirmed: "관찰자가 경고를 확인하지 않았어요", letter_undelivered: "편지가 전달되지 않았어요", status_question: "질문", status_approval: "승인", status_error: "막힘", status_done: "끝남", subject_plan_review: "계획 검토 · {{count}}단계" } }));
     await choose("ja");
-    await vi.waitFor(() => expect(postMessage.mock.calls.at(-1)?.[0]).toMatchObject({ type: "words", words: { needs_you: "自分の番", done: "未読", observer_unconfirmed: "オブザーバーが警告を確認していません", letter_undelivered: "手紙が届いていません", status_question: "質問", status_approval: "承認", status_error: "ブロック", status_done: "完了", subject_plan_review: "計画レビュー · {{count}}ステップ" } }));
+    await vi.waitFor(() => expect(postMessage.mock.calls.at(-1)?.[0]).toMatchObject({ type: "words", words: { needs_you: "自分の番", done: "未読", observer_unconfirmed: "オブザーバーが警告を確認していません", letter_undelivered: "レターが届いていません", status_question: "質問", status_approval: "承認", status_error: "ブロック", status_done: "完了", subject_plan_review: "計画レビュー · {{count}}ステップ" } }));
     await choose(null);
     await vi.waitFor(() => expect(postMessage.mock.calls.at(-1)?.[0]).toMatchObject({ type: "words", words: { needs_you: "Needs You", done: "Unread", observer_unconfirmed: "Observer has not confirmed a warning", letter_undelivered: "Letter not delivered", status_question: "Question", status_approval: "Approval", status_error: "Blocked", status_done: "Done", subject_plan_review: "Plan review · {{count}} steps" } }));
   });

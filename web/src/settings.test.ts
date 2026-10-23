@@ -108,7 +108,7 @@ describe("deviceRemovalLines", () => {
       [{ device: "mini" }, { device: "local" }, { device: null }],
     );
     expect(lines).toEqual([
-      "Hide forgets 1 registered project and closes 2 file tabs of it here.",
+      "Hide forgets 1 registered project and closes 2 file tabs from it here.",
       "2 unsaved drafts stay in this browser under unsaved drafts, to export or discard.",
     ]);
     expect(deviceRemovalLines("studio", [], [], [])).toEqual([]);
@@ -120,7 +120,7 @@ describe("deviceRemovalLines", () => {
       { id: "t2", checkout_id: "remote:mini:checkout:w1", dirty: true },
     ];
     expect(deviceRemovalLines("mini", [], tabs, [], (tabId) => tabId === "t1")).toEqual([
-      "Hide forgets 0 registered projects and closes 2 file tabs of it here.",
+      "Hide forgets 0 registered projects and closes 2 file tabs from it here.",
       "1 unsaved draft stays in this browser under unsaved drafts, to export or discard.",
       "1 draft could not be stored in this browser and leaves only as the file you exported.",
     ]);
@@ -232,7 +232,7 @@ describe("settings rules", () => {
   it("names every kit part and where it goes in the one consent, and refuses a relative device socket", () => {
     const lines = kitConsentTerms("/opt/hide", "/opt/bin");
     const terms = lines.join(" ");
-    for (const named of ["/opt/hide", "/opt/bin", "hook helper", "old records preserved", "~/.claude/settings.json", "~/.codex/hooks.json"]) {
+    for (const named of ["/opt/hide", "/opt/bin", "hook helper", "old records are kept", "~/.claude/settings.json", "~/.codex/hooks.json"]) {
       expect(terms).toContain(named);
     }
     // The kit no longer touches Codex's daemon setting (PRD settings-cleanup D-12), so the consent says nothing of it.
@@ -300,8 +300,8 @@ describe("in Korean", () => {
   it("words the removal summary, the sleep choices and a missing value in the interface language", () => {
     const lines = deviceRemovalLinesIn("mini", [{ device_id: "mini" }], [{ id: "t1", checkout_id: "remote:mini:checkout:w1", dirty: true }], [{ device: "mini" }], () => false, korean);
     expect(lines).toEqual([
-      "여기서 프로젝트 1개의 등록을 지우고 파일 탭 1개을 닫습니다.",
-      "저장하지 않은 초안 2개는 이 브라우저의 저장하지 않은 초안 목록에 남아 내보내거나 버릴 수 있습니다.",
+      "여기서 프로젝트 1개의 등록을 지우고, 열린 파일 탭 1개도 닫아요.",
+      "저장하지 않은 초안 2개는 이 브라우저에 남아요. 저장하지 않은 초안 목록에서 내보내거나 버릴 수 있어요.",
     ]);
     expect(SLEEP_AFTER_CHOICES.map((choice) => sleepAfterLabel(choice, korean))).toEqual(["잠들지 않음", "12시간", "24시간", "3일"]);
     expect(shownIn(undefined, korean)).toBe("사용할 수 없음");

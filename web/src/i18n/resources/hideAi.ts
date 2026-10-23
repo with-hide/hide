@@ -1,10 +1,7 @@
 import type { Catalog, Catalogs } from "../schema";
 
 // Settings > Hide AI and the first-run line (PRD settings-cleanup D-14 to D-18).
-// The Korean first-run line ends the name with an object particle that
-// follows the name's last sound, so an agent whose Korean reading ends in a
-// consonant has its own key (`hideAi.firstRunConsonant`); Japanese and
-// Chinese insert names without a particle.
+// Every language ends the first-run line with the agent's name, so no particle follows it.
 export const hideAiEnglish = {
   "hideAi.use": "Use Hide AI",
   "hideAi.useDescription": "Off: Hide makes no AI calls. Agent titles show each session's own text, and you name worktrees yourself.",
@@ -27,7 +24,7 @@ export const hideAiEnglish = {
   "hideAi.state.usageLimitedUntil": "Out of usage until {{time}}",
   "hideAi.state.notInstalled": "Not installed",
   "hideAi.state.unavailable": "Unavailable",
-  "hideAi.state.readOnly": "Can't guarantee it only reads",
+  "hideAi.state.readOnly": "Can't guarantee read-only",
   "hideAi.state.unsupported": "Not supported yet",
   "hideAi.state.unread": "Checking…",
   "hideAi.paused": "Hide AI is paused until {{agent}} can answer.",
@@ -67,7 +64,6 @@ export const hideAiEnglish = {
   "hideAi.worktreeNames": "Worktree names",
   "hideAi.worktreeNamesDescription": "Suggested from the issue title when you start work",
   "hideAi.firstRun": "Hide AI uses {{agent}}",
-  "hideAi.firstRunConsonant": "Hide AI uses {{agent}}",
 } as const;
 
 const ko = {
@@ -85,7 +81,7 @@ const ko = {
   "hideAi.modelFixed": "고정 목록",
   "hideAi.modelsFailed": "모델 목록을 불러오지 못했어요. 현재 모델을 그대로 유지해요.",
   "hideAi.state.ready": "로그인됨",
-  "hideAi.state.loginUnchecked": "로그인은 첫 요청 때 확인합니다",
+  "hideAi.state.loginUnchecked": "첫 요청 때만 로그인 확인",
   "hideAi.state.needsLogin": "로그인 안 됨",
   "hideAi.state.needsLoginOn": "{{machine}}에서 로그인 안 됨",
   "hideAi.state.usageLimited": "사용량 소진",
@@ -104,9 +100,9 @@ const ko = {
   "hideAi.pausedAllPast": "Hide AI가 멈춰 있어요 · 모든 에이전트가 이번 주 {{limit}}% 한도를 넘었어요",
   "hideAi.usageLimit": "사용 한도",
   "hideAi.usageLimitSummary": "에이전트별 주간 사용량의 {{limit}}%까지",
-  "hideAi.usageLimitNoneSummary": "Hide AI가 주간 사용량을 제한 없이 씁니다",
+  "hideAi.usageLimitNoneSummary": "Hide AI의 주간 사용량 제한 없음",
   "hideAi.usageLimitNone": "제한 없음",
-  "hideAi.usageLimitNote": "한도를 넘으면 Hide AI가 목록의 다음 에이전트로 넘어갑니다. 워크트리 이름 짓기나 이슈 검토처럼 직접 시작한 작업은 그대로 실행됩니다.",
+  "hideAi.usageLimitNote": "한도를 넘으면 Hide AI가 목록의 다음 에이전트로 넘어가요. 워크트리 이름 짓기나 이슈 검토처럼 직접 시작한 작업은 그대로 실행돼요.",
   "hideAi.using": "{{using}} 사용 중 · {{reason}}",
   "hideAi.reason.usageLimited": "{{agent}}: 사용량 소진",
   "hideAi.reason.usageLimitedUntil": "{{agent}}: {{time}}까지 사용량 소진",
@@ -117,13 +113,13 @@ const ko = {
   "hideAi.reason.unsupported": "{{agent}}: 지원 안 함",
   "hideAi.signIn": "{{agent}}에 로그인하면 Hide AI를 쓸 수 있어요",
   "hideAi.signInOn": "{{machine}}에서 {{agent}}에 로그인하면 Hide AI를 쓸 수 있어요",
-  "hideAi.turnOnAgent": "Agents에서 에이전트를 켜면 Hide AI를 쓸 수 있어요",
+  "hideAi.turnOnAgent": "설정 › 에이전트에서 에이전트를 켜면 Hide AI를 쓸 수 있어요",
   "hideAi.fallbackTitle": "{{agent}}에서 답할 수 없을 때",
-  "hideAi.fallbackNote": "{{agent}}의 사용량이 사용자가 설정한 한도를 넘거나, 로그아웃·사용량 소진·사용 불가 상태일 때 이 순서대로 시도해요.",
-  "hideAi.fallbackEmpty": "추가하지 않으면 {{agent}}가 다시 사용 가능해질 때까지 기다려요.",
+  "hideAi.fallbackNote": "{{agent}}의 사용량이 설정한 한도를 넘었거나 로그아웃·사용량 소진·사용 불가 상태일 때, 이 순서대로 시도해요.",
+  "hideAi.fallbackEmpty": "추가하지 않으면 {{agent}} 에이전트가 다시 응답할 수 있을 때까지 기다려요.",
   "hideAi.addAgent": "에이전트 추가",
   "hideAi.cantUse": "Hide AI가 아직 쓸 수 없는 에이전트",
-  "hideAi.removeAria": "{{agent}} 목록에서 빼기",
+  "hideAi.removeAria": "목록에서 빼기: {{agent}}",
   "hideAi.fallbackModelAria": "{{agent}} 모델",
   "hideAi.notSaved": "저장하지 못했어요. 에이전트 상태가 바뀌었으니 다시 시도하세요.",
   "hideAi.features": "기능",
@@ -131,8 +127,7 @@ const ko = {
   "hideAi.agentSummariesDescription": "에이전트마다 제목과 한 줄 상태",
   "hideAi.worktreeNames": "워크트리 이름",
   "hideAi.worktreeNamesDescription": "작업을 시작할 때 이슈 제목으로 이름을 제안해요",
-  "hideAi.firstRun": "Hide AI는 {{agent}}를 씁니다",
-  "hideAi.firstRunConsonant": "Hide AI는 {{agent}}을 씁니다",
+  "hideAi.firstRun": "Hide AI가 쓰는 에이전트: {{agent}}",
 } satisfies Catalog<typeof hideAiEnglish>;
 
 const zhCN = {
@@ -184,7 +179,7 @@ const zhCN = {
   "hideAi.signInOn": "在 {{machine}} 上登录 {{agent}} 后即可使用 Hide AI",
   "hideAi.turnOnAgent": "在“智能体”中开启一个智能体后即可使用 Hide AI",
   "hideAi.fallbackTitle": "{{agent}}无法响应时",
-  "hideAi.fallbackNote": "当 {{agent}} 超过您设置的用量限制、未登录、用量耗尽或不可用时，按此顺序尝试。",
+  "hideAi.fallbackNote": "当 {{agent}} 超过你设置的用量限制、未登录、用量耗尽或不可用时，按此顺序尝试。",
   "hideAi.fallbackEmpty": "未添加时，Hide AI 会等待 {{agent}} 恢复可用。",
   "hideAi.addAgent": "添加智能体",
   "hideAi.cantUse": "Hide AI 暂时无法使用这些智能体",
@@ -197,7 +192,6 @@ const zhCN = {
   "hideAi.worktreeNames": "工作树名称",
   "hideAi.worktreeNamesDescription": "开始工作时根据议题标题给出建议",
   "hideAi.firstRun": "Hide AI 使用的智能体：{{agent}}",
-  "hideAi.firstRunConsonant": "Hide AI 使用的智能体：{{agent}}",
 } satisfies Catalog<typeof hideAiEnglish>;
 
 const ja = {
@@ -215,7 +209,7 @@ const ja = {
   "hideAi.modelFixed": "固定リスト",
   "hideAi.modelsFailed": "モデル一覧を取得できませんでした。現在のモデルをそのまま使います。",
   "hideAi.state.ready": "ログイン済み",
-  "hideAi.state.loginUnchecked": "サインインは最初のリクエストで確認されます",
+  "hideAi.state.loginUnchecked": "ログインは最初のリクエスト時にのみ確認されます",
   "hideAi.state.needsLogin": "未ログイン",
   "hideAi.state.needsLoginOn": "{{machine}}で未ログイン",
   "hideAi.state.usageLimited": "使用量の上限に達しました",
@@ -262,7 +256,6 @@ const ja = {
   "hideAi.worktreeNames": "ワークツリー名",
   "hideAi.worktreeNamesDescription": "作業開始時に Issue のタイトルから提案します",
   "hideAi.firstRun": "Hide AI が使うエージェント：{{agent}}",
-  "hideAi.firstRunConsonant": "Hide AI が使うエージェント：{{agent}}",
 } satisfies Catalog<typeof hideAiEnglish>;
 
 export const hideAiCatalogs = { en: hideAiEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof hideAiEnglish>;

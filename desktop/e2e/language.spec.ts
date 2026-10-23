@@ -49,7 +49,7 @@ const menuLabels = (target: ElectronApplication) =>
 // Expected texts are written out here, apart from the catalogs they come from.
 const EXPECTED = {
   en: { lang: "en", top: ["File", "Edit", "View", "Pane", "Window", "Help"], newTab: "New tab", failed: "Can't connect to hided", reason: "The hide command was not found.", retry: "Retry" },
-  ko: { lang: "ko", top: ["파일", "편집", "보기", "페인", "윈도우", "도움말"], newTab: "새 탭", failed: "hided에 연결할 수 없어요", reason: "hide 명령을 찾지 못했어요.", retry: "다시 시도" },
+  ko: { lang: "ko", top: ["파일", "편집", "보기", "터미널", "윈도우", "도움말"], newTab: "새 탭", failed: "hided에 연결할 수 없어요", reason: "hide 명령을 찾지 못했어요.", retry: "다시 시도" },
   "zh-CN": { lang: "zh-CN", top: ["文件", "编辑", "视图", "窗格", "窗口", "帮助"], newTab: "新建标签页", failed: "无法连接 hided", reason: "未找到 hide 命令。", retry: "重试" },
   ja: { lang: "ja", top: ["ファイル", "編集", "表示", "ペイン", "ウィンドウ", "ヘルプ"], newTab: "新しいタブ", failed: "hidedに接続できません", reason: "hideコマンドが見つかりませんでした。", retry: "再試行" },
 } as const;

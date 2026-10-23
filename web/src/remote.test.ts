@@ -367,7 +367,7 @@ describe("deviceCatalogLine", () => {
     const refused = (count: number) => status("connected", session(), { state: "ready", message: null, refused: Array.from({ length: count }, (_, index) => ({ path: `/gone${index}`, message: "missing" })) });
     expect(line(refused(1))?.text).toBe("1 folder on Studio could not be read and is listed by workspace.");
     expect(line(refused(2))?.text).toBe("2 folders on Studio could not be read and are listed by workspace.");
-    expect(deviceCatalogLine({ device, status: refused(2), session: session() }, [device], korean)?.text).toBe("Studio의 폴더 2개를 읽지 못해 워크스페이스별로 표시합니다.");
+    expect(deviceCatalogLine({ device, status: refused(2), session: session() }, [device], korean)?.text).toBe("Studio의 폴더 2개를 읽지 못해 작업공간별로 보여 줘요.");
     expect(deviceCatalogLine({ device, status: null, session: null }, [device], korean)?.text).toBe("Studio에서 프로젝트를 읽는 중…");
   });
 });

@@ -4,7 +4,6 @@ import { Button } from "../components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { checkCommand, checkMachine, giveUpOffered, moveCopy, stepMarks, type MoveView, type StepMark } from "../coreMove";
 import { useInterfaceTranslation } from "../i18n/client";
-import { takesEun, takesEuro } from "../i18n/koParticle";
 import { cn } from "../lib/utils";
 import { moveMachines } from "../screenMachine";
 import { useShellStore } from "../store";
@@ -104,19 +103,17 @@ export function CoreMoveDialog({ request, asked: first, giveUp = false, actions,
   const back = request.direction === "back";
   // The machine the move waits on: the core's machine for a move back, the device for a forward move.
   const peer = back ? machines.from : machines.to;
-  // Korean writes the particle after the machine's name by its last sound (`koParticle`).
-  const euro = takesEuro(machines.to);
-  const why = back ? null : takesEun(machines.to) ? t("coreMove.whyEun", values) : t("coreMove.why", values);
+  const why = back ? null : t("coreMove.why", values);
   const title = (() => {
     switch (form) {
       case "checking":
       case "checks_failed":
-        return back ? t("coreMove.back.title", values) : euro ? t("coreMove.titleEuro", values) : t("coreMove.title", values);
+        return back ? t("coreMove.back.title", values) : t("coreMove.title", values);
       case "confirm":
-        return back ? t("coreMove.back.confirmTitle", values) : euro ? t("coreMove.confirmTitleEuro", values) : t("coreMove.confirmTitle", values);
+        return back ? t("coreMove.back.confirmTitle", values) : t("coreMove.confirmTitle", values);
       case "moving":
         if (view?.state === "rolling_back") return t("coreMove.rollingBackTitle");
-        return back ? t("coreMove.back.movingTitle", values) : euro ? t("coreMove.movingTitleEuro", values) : t("coreMove.movingTitle", values);
+        return back ? t("coreMove.back.movingTitle", values) : t("coreMove.movingTitle", values);
       case "give_up":
         return back ? t("coreMove.takeHere.title") : t("coreMove.giveUp.title", { machine: peer });
       case "abandoned":
@@ -124,7 +121,7 @@ export function CoreMoveDialog({ request, asked: first, giveUp = false, actions,
       case "failed":
         return t("coreMove.failedTitle");
       case "done":
-        return back ? t("coreMove.back.doneTitle", values) : euro ? t("coreMove.doneTitleEuro", values) : t("coreMove.doneTitle", values);
+        return back ? t("coreMove.back.doneTitle", values) : t("coreMove.doneTitle", values);
     }
   })();
   const failed = view?.failed ?? [];
@@ -240,7 +237,7 @@ export function CoreMoveDialog({ request, asked: first, giveUp = false, actions,
             <>
               <Button variant="secondary" onClick={onClose}>{t("common.cancel")}</Button>
               <Button data-core-move-start="true" onClick={() => ask(request, true)}>
-                {back ? t("coreMove.back.start", values) : euro ? t("coreMove.startEuro", values) : t("coreMove.start", values)}
+                {back ? t("coreMove.back.start", values) : t("coreMove.start", values)}
               </Button>
             </>
           ) : null}

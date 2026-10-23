@@ -121,7 +121,7 @@ test("Add agent offers the agents Hide AI can use, dims the one it cannot, and t
     await expect(menu).toContainText("Hide AI can't use these yet");
     const dimmed = menu.locator("[data-ai-unusable-item='opencode']");
     await expect(dimmed).toHaveAttribute("data-disabled", "");
-    await expect(dimmed).toContainText("Can't guarantee it only reads");
+    await expect(dimmed).toContainText("Can't guarantee read-only");
     await screenshot(page, "hide-ai-add-menu");
 
     // B39: added in the order chosen, numbered, each with its own model and a remove.
