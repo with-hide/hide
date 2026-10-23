@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startHerdr } from "../../web/e2e/herdr-fixture";
 import { enterWorkspace, pinState, setLanePinned, showExplorer } from "../../web/e2e/wire";
+import { afterCleanup } from "../../web/e2e/worker-owned";
 import { fitWindow, isolate, launch, NEEDS_FOCUS, test } from "./fixture";
 
 const TITLE = "New tab page";
@@ -111,12 +112,17 @@ async function observeMenu(page: Page, info: TestInfo): Promise<() => Promise<vo
     capture("start");
   }, prefix);
   return async () => {
+    const failures: unknown[] = [];
     try { await page.evaluate(() => (window as unknown as { stopMenuTrace: () => void }).stopMenuTrace()); }
-    finally {
-      page.off("console", consoleRecord);
-      try { await wire.detach(); }
-      finally { await info.attach("menu-target-transitions", { body: Buffer.from(JSON.stringify({ overflow, rows }, null, 2)), contentType: "application/json" }); }
-    }
+    catch (error) { failures.push(new Error(`stop menu listeners: ${String(error)}`, { cause: error })); }
+    try { page.off("console", consoleRecord); }
+    catch (error) { failures.push(new Error(`remove menu console listener: ${String(error)}`, { cause: error })); }
+    try { await wire.detach(); }
+    catch (error) { failures.push(new Error(`detach menu CDP session: ${String(error)}`, { cause: error })); }
+    try { await info.attach("menu-target-transitions", { body: Buffer.from(JSON.stringify({ overflow, rows }, null, 2)), contentType: "application/json" }); }
+    catch (error) { failures.push(new Error(`attach menu transitions: ${String(error)}`, { cause: error })); }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length) throw new AggregateError(failures, failures.map(String).join("\n"));
   };
 }
 
@@ -126,6 +132,7 @@ test("Command T and Command W from a native page act on its View area, and after
   const run = isolate(herdr, "new-tab");
   let app: ElectronApplication | null = null;
   let stopObserving: (() => Promise<void>) | undefined;
+  const failures: unknown[] = [];
   try {
     fs.writeFileSync(path.join(herdr.root, "fixture", "page.html"), `<!doctype html><meta charset="utf-8"><title>${TITLE}</title><h1>Browser keyboard owner</h1>`);
     const launched = await launch(run.env);
@@ -208,12 +215,17 @@ test("Command T and Command W from a native page act on its View area, and after
     await terminal(herdr.panes[1]);
     await menuClick(app, "new_tab");
     await expect(agentTabs).toHaveCount(2);
+  } catch (error) {
+    failures.push(error);
   } finally {
-    try { await stopObserving?.(); }
-    finally {
-      await app?.close().catch(() => undefined);
-      run.cleanup();
-      herdr.stop();
-    }
+    try { await stopObserving?.(); } catch (error) { failures.push(error); }
+    try { await app?.close(); } catch (error) { failures.push(new Error(`close menu candidate: ${String(error)}`, { cause: error })); }
+    try { run.cleanup(); } catch (error) { failures.push(new Error(`clean menu fixture: ${String(error)}`, { cause: error })); }
+    try { herdr.stop(); } catch (error) { failures.push(new Error(`stop private menu Herdr: ${String(error)}`, { cause: error })); }
+  }
+  if (failures.length) {
+    let primary = failures[0];
+    for (const secondary of failures.slice(1)) primary = afterCleanup(primary, () => { throw secondary; });
+    throw primary;
   }
 });
