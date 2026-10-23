@@ -11,12 +11,15 @@
 import type { Terminal } from "@xterm/xterm";
 import type { InputRequest } from "./snapshot";
 import { useShellStore } from "./store";
+import { keyboardCommandOwner, type KeyboardOwner } from "./viewFocus";
 
 export type EchoSample = { arrival_ms: number; write_ms: number };
 
 export type Probe = {
   /** Bounded existing diagnostic log, including opt-in terminal path probe counts. */
   diagnostics: () => string[];
+  /** The recorded command target, including native pages outside the shell DOM. */
+  commandOwner: () => KeyboardOwner;
   paneId: () => string | null;
   screenText: () => string;
   /** The colors the focused terminal draws with (background, foreground and the ANSI 16), null without one. */
@@ -99,6 +102,7 @@ export function installProbe(
 ): void {
   window.__hideProbe = {
     diagnostics: () => useShellStore.getState().diagnostics,
+    commandOwner: keyboardCommandOwner,
     inputRequests: () => useShellStore.getState().rest?.terminal?.input_requests ?? [],
     paneId,
     dropSocket,
