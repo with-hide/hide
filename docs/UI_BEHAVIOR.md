@@ -2333,7 +2333,7 @@ A chapter is three new files and no change to a shared one, so chapters written 
 - `web/src/practice/chapters/<id>.ts` default-exports the chapter (`chapter()` in `chapter.ts`): its `id` (the file's name and its catalog prefix), a `number`, a `version`, the `world` it plays in, and its steps.
   `chapters.ts` lists every file there by number and refuses a file whose chapter has another id or a number another chapter has; the next chapter is the next number there is, so a gap is allowed.
 - `web/src/i18n/resources/practice/<id>.ts` default-exports the chapter's words in every language, under `practice.<id>.title`, `practice.<id>.summary` and `practice.<id>.<step>.kick|title|text|quest`.
-  `practice.ts` keeps the guide's own words and joins every file there, refusing a key outside its file's chapter; the catalog checks read them like any other words.
+  `web/src/practice/words.ts` joins every file there when the chapters load, refusing a key outside its file's chapter, and adds them to the window's words; they stay out of the shared catalog (`practice.ts` keeps only the guide's own words), because the desktop host bundles that catalog without Vite, and the catalog and copy checks read them beside it.
 - `web/src/practice/worlds/<id>.ts`, when no world there fits: the world the chapter plays in.
 
 A step names what it rings (`target`, a selector into the shell), where the bubble sits (`side`), the command it teaches (`command`, never a chord), a `gesture` when ⏎ should press a button, drag a pane, type into a pane's terminal (`type`) or choose from a right-click menu (`menu`) instead of pressing the chord, and `done`, which reads the world; a step without `done` is a look.

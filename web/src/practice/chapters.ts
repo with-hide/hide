@@ -1,8 +1,13 @@
 // The practice chapters: every file in `chapters/`, each default-exporting one
-// chapter named like its file, listed by number. A chapter is added by adding
-// its file; nothing here names one.
+// chapter named like its file, listed by number, with their words. A chapter
+// is added by adding its file; nothing here names one.
 
+import { clientI18n } from "../i18n/translator";
 import type { PracticeChapter } from "./chapter";
+import { addChapterWords } from "./words";
+
+// A chapter's words load with it, so wherever a chapter plays its words are there.
+addChapterWords(clientI18n);
 
 const files = import.meta.glob<PracticeChapter>("./chapters/*.ts", { eager: true, import: "default" });
 
