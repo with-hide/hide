@@ -1,4 +1,4 @@
-import { BriefcaseIcon, EllipsisIcon, FileDiffIcon, FilesIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, XIcon, type LucideIcon } from "lucide-react";
+import { BriefcaseIcon, EllipsisIcon, FileDiffIcon, FilesIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, PinIcon, XIcon, type LucideIcon } from "lucide-react";
 import { Fragment, useState } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -68,6 +68,8 @@ function useScope(checkout: Checkout | null): (tool: Tool | "documents") => stri
  * it, opening the tool column on it or closing the column when it already
  * shows it. The Project tool counts its project's 할 일 and what its Memory
  * asks (B38), no number at 0. With no document the documents button is off and says so.
+ * At the bottom the pin and the `…` stay in place whether the lane is up or
+ * not and whichever column it shows (B15).
  */
 export function ToolRail({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -147,7 +149,10 @@ export function ToolRail({ actions }: { actions: Actions }) {
           </Fragment>
         );
       })}
-      <LaneMenu actions={actions} />
+      <div className="mt-auto flex flex-col items-center gap-xxs">
+        <PinButton actions={actions} />
+        <LaneMenu />
+      </div>
     </nav>
   );
 }
@@ -176,10 +181,37 @@ function DetailSlotButton({ actions, pressed }: { actions: Actions; pressed: boo
   );
 }
 
-/** The rail's `…`: the lane's own commands, Pin or Unpin and Expand, which move both columns together (B15). */
-function LaneMenu({ actions }: { actions: Actions }) {
+/**
+ * The rail's pin (B15, B19): filled and pressed while the lane is pinned,
+ * its hint saying what a press does, or that a pinned lane is drawn over
+ * the agents because the body is too narrow to dock it.
+ */
+function PinButton({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const view = useShellStore((s) => (s.rest?.workspace_view as WorkspaceView | undefined) ?? null);
+  const pinned = useShellStore((s) => (s.rest?.workspace_view as WorkspaceView | undefined)?.pinned ?? null);
+  const narrow = useUiStore((s) => s.drawnLane.mode === "overlay");
+  if (pinned === null) return null;
+  const hint = pinned ? (narrow ? t("panes.lane.narrowPinHint") : t("panes.lane.unpinHint")) : t("panes.lane.pinHint");
+  return (
+    <Hint label={hint} side="left">
+      <button
+        type="button"
+        aria-pressed={pinned}
+        aria-label={t("panes.lane.pin")}
+        aria-description={hint}
+        className={cn(RAIL_BUTTON, pinned ? "bg-secondary font-medium text-foreground" : "text-muted-foreground")}
+        data-lane-pin={pinned ? (narrow ? "narrow" : "on") : "off"}
+        onClick={() => actions.setLanePinned(!pinned)}
+      >
+        <PinIcon aria-hidden="true" className={cn("size-(--size-icon-lg)", pinned && "fill-current")} />
+      </button>
+    </Hint>
+  );
+}
+
+/** The rail's `…`: Expand, which moves both columns together (B15); with the lane down it has nothing to offer and is off. */
+function LaneMenu() {
+  const { t } = useInterfaceTranslation();
   const drawn = useUiStore((s) => s.drawnLane);
   const expanded = useUiStore((s) => s.laneExpanded);
   // The pane zoom's chord expands the lane while the keyboard is in it (`keyboard.ts`).
@@ -189,23 +221,16 @@ function LaneMenu({ actions }: { actions: Actions }) {
     <DropdownMenu>
       <Hint label={t("panes.lane.more")} side="left">
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon-sm" className="mt-auto text-muted-foreground" aria-label={t("panes.lane.more")} data-lane-more="true">
+          <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("panes.lane.more")} disabled={!up} data-lane-more="true">
             <EllipsisIcon />
           </Button>
         </DropdownMenuTrigger>
       </Hint>
       <DropdownMenuContent align="end" side="left" aria-label={t("panes.lane.more")} data-lane-menu="true">
-        {view ? (
-          <DropdownMenuItem data-lane-menu-item="pin" data-lane-pin={view.pinned ? (drawn.mode === "overlay" && up ? "narrow" : "on") : "off"} onSelect={() => actions.setLanePinned(!view.pinned)}>
-            {view.pinned ? (drawn.mode === "overlay" && up ? t("panes.lane.narrowPinHint") : t("panes.lane.unpinHint")) : t("panes.lane.pinHint")}
-          </DropdownMenuItem>
-        ) : null}
-        {up ? (
-          <DropdownMenuItem data-lane-menu-item="expand" data-lane-expand={expanded ? "on" : "off"} onSelect={() => useUiStore.getState().setLaneExpanded(!expanded)}>
-            {expanded ? t("panes.lane.collapse") : t("panes.lane.expand")}
-            {expandChord ? <DropdownMenuShortcut>{expandChord}</DropdownMenuShortcut> : null}
-          </DropdownMenuItem>
-        ) : null}
+        <DropdownMenuItem data-lane-menu-item="expand" data-lane-expand={expanded ? "on" : "off"} onSelect={() => useUiStore.getState().setLaneExpanded(!expanded)}>
+          {expanded ? t("panes.lane.collapse") : t("panes.lane.expand")}
+          {expandChord ? <DropdownMenuShortcut>{expandChord}</DropdownMenuShortcut> : null}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

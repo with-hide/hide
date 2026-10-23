@@ -99,13 +99,16 @@ async function print(page: Page, paneId: string, lines: string[], last: string):
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id), paneId), { timeout: 20_000 }).toContain(last);
 }
 
+/** Characters xterm draws two cells wide here: Hangul, Han, kana, CJK punctuation and fullwidth forms. */
+const WIDE = /[\p{scx=Hangul}\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\u3000-\u303F\uFF01-\uFF60]/u;
+
 /** Where `text` is on the screen of `paneId`: its row and the column of its `offset`th character. */
 async function cellOf(page: Page, paneId: string, text: string, offset = 0): Promise<{ row: number; column: number }> {
   const lines = await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id).split("\n"), paneId);
   const row = lines.findIndex((line) => line.includes(text));
   expect(row, `${text} is not on the screen:\n${lines.join("\n")}`).toBeGreaterThanOrEqual(0);
   const prefix = lines[row]!.slice(0, lines[row]!.indexOf(text)) + text.slice(0, offset);
-  const column = [...prefix].reduce((width, char) => width + (/\p{Script=Hangul}/u.test(char) ? 2 : 1), 0);
+  const column = [...prefix].reduce((width, char) => width + (WIDE.test(char) ? 2 : 1), 0);
   return { row, column };
 }
 
@@ -639,7 +642,7 @@ test("Korean prose links only the real path and opens that file", async () => {
     const punctuation = caseIndex < 6 ? "" : ".";
     const base = "docs/composite-" + caseIndex + ".ts";
     const written = "(" + base + ":12:5)에" + punctuation;
-    const spellings = [written, base + ":12:5)에", "(" + base + ":12:5)", base + ":12:5)", base + ":12:5", base];
+    const spellings = [written, "(" + base + ":12:5)", base + ":12:5)에", base + ":12:5)", base + ":12:5", base];
     const selected = spellings[stage]!;
     for (const file of spellings.slice(stage)) {
       fs.mkdirSync(path.join(checkout, path.dirname(file)), { recursive: true });
@@ -734,11 +737,43 @@ async function zoomDensePane(page: Page, paneId: string): Promise<void> {
   await page.locator('[data-menu-item="toggle_zoom"]').click();
 }
 
+test("prose written straight against a bracket links only the path or address inside it", async () => {
+  const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
+  fs.mkdirSync(path.join(checkout, "docs"), { recursive: true });
+  fs.writeFileSync(path.join(checkout, "docs/README.md"), "# glued prose");
+  ({ app } = await launch(run.env));
+  await fitWindow(app, { width: 1024, height: 681 });
+  const page = await shellPage(app);
+  await withProbe(page);
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.4));
+  await enterWorkspace(page, "fixture");
+  const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
+  await dockFiles(page, paneId);
+  // Agents write Korean with no space before a bracket: only the path or the
+  // address is the link, never the word before it or the marks around it.
+  for (const [written, link] of [["캡처는(docs/README.md).", "docs/README.md"], [`열어뒀어요(${origin}/a.html). 이전에는`, `${origin}/a.html`], ["「docs/README.md」를", "docs/README.md"]] as const) {
+    await print(page, paneId, [written, "GLUED-END-" + written.length], "GLUED-END-" + written.length);
+    const first = await cellOf(page, paneId, link);
+    for (const column of [first.column, first.column + link.length - 1]) await hoverLink(page, paneId, await cellPoint(page, paneId, { row: first.row, column }));
+    for (const column of [first.column - 1, first.column - 2, first.column + link.length]) {
+      const outside = await cellPoint(page, paneId, { row: first.row, column });
+      await page.mouse.move(outside.x, outside.y);
+      await expect(page.locator('[data-terminal="' + paneId + '"] .xterm-screen')).not.toHaveClass(/xterm-cursor-pointer/);
+    }
+  }
+  await nativeCapture("glued-prose-hover");
+  const glued = await cellOf(page, paneId, "docs/README.md");
+  const point = await cellPoint(page, paneId, { row: glued.row, column: glued.column + 2 });
+  await hoverLink(page, paneId, point);
+  await page.mouse.click(point.x, point.y);
+  await expect(page.locator(".cm-content")).toContainText("glued prose");
+});
+
 test("dense terminal path hover measures cold and warm native work", async () => {
   const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
   fs.mkdirSync(path.join(checkout, "dense"), { recursive: true });
-  // Half the row exercises the complete six-stage punctuation/location
-  // composition; the first plain path stays hoverable on the original baseline.
+  // Half the row carries punctuation, prose and a location around its path;
+  // the first plain path stays hoverable on the original baseline.
   const tokens = Array.from({ length: 12 }, (_, index) => {
     const base = "dense/f" + String(index).padStart(2, "0") + ".md";
     return index % 2 ? "(" + base + ":12:5)에" : base;
