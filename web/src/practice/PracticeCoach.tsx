@@ -232,6 +232,8 @@ const KEYS_MARK = "\u0001";
 
 /** The shell's own layers over the screen while they are open: a palette and a held chord's switcher. */
 const SHELL_LAYERS = '[data-palette], [data-slot="cycle-overlay"]';
+/** The shell's right-click menus while one is open: the bubble moves beside one it would cover. */
+const OPEN_MENUS = '[role="menu"]';
 const shellLayerOpen = (state: ReturnType<typeof useUiStore.getState>) => state.overlay !== "none" || state.cycle !== null;
 
 const ZONES = [
@@ -269,7 +271,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const [examples, setExamples] = useState<Point[]>([]);
   // A palette (⌘P, ⌘K) or a held chord's switcher (⌃⇥) the shell opened is drawn in full: no ring or dim over it, and the bubble beside it.
   const palette = useUiStore(shellLayerOpen);
-  const [paletteBox, setPaletteBox] = useState<Rect | null>(null);
+  const [layerBox, setLayerBox] = useState<Rect | null>(null);
   const step = chapter.steps[index]!;
   const last = index === chapter.steps.length - 1;
   // A command the host has no chord for is taught by pressing what the step marks.
@@ -311,8 +313,9 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
       });
       const marks = examplesOf(chapter.world.examples);
       setExamples((before) => (marks.length === before.length && marks.every((at, i) => Math.abs(at.x - before[i]!.x) < 0.5 && Math.abs(at.y - before[i]!.y) < 0.5) ? before : marks));
-      const covering = shellLayerOpen(useUiStore.getState()) ? rectOf(SHELL_LAYERS) : null;
-      setPaletteBox((before) => (same(before, covering) ? before : covering));
+      // A right-click menu the learner opened is never under the bubble either.
+      const covering = shellLayerOpen(useUiStore.getState()) ? rectOf(SHELL_LAYERS) : rectOf(OPEN_MENUS);
+      setLayerBox((before) => (same(before, covering) ? before : covering));
       const box = bubble.current;
       if (box) setSize((before) => (before.w === box.offsetWidth && before.h === box.offsetHeight ? before : { w: box.offsetWidth, h: box.offsetHeight }));
       frame = requestAnimationFrame(follow);
@@ -407,7 +410,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     : step.gesture && "type" in step.gesture ? say("input" in step.gesture.type ? "practice.via.typeField" : "practice.via.type")
     : step.gesture && "menu" in step.gesture ? say("practice.via.menu") : null;
   const go = last ? (next ? say("practice.toChapter", { number: next.number }) : say("practice.toHub")) : acts(step) ? say("practice.try") : say("practice.next");
-  const place = besidePalette(bubblePlace(ring, step.side, size), palette ? paletteBox : null, size);
+  const place = besideLayer(bubblePlace(ring, step.side, size), layerBox, size);
   const title = say(`practice.${chapter.id}.title`);
 
   return (
@@ -466,8 +469,8 @@ function bubblePlace(ring: Rect | null, side: PracticeStep["side"], size: { w: n
   return { x: clampX(ring.x + 60), y: clampY(ring.y + Math.min(ring.h * 0.3, 260)), arrow: null };
 }
 
-/** The bubble moved beside an open palette it would cover, on whichever side has room. */
-function besidePalette(place: Placement, palette: Rect | null, size: { w: number; h: number }): Placement {
+/** The bubble moved beside an open palette or menu it would cover, on whichever side has room. */
+function besideLayer(place: Placement, palette: Rect | null, size: { w: number; h: number }): Placement {
   if (!palette) return place;
   const { w, h } = size;
   const covers = place.x < palette.x + palette.w && place.x + w > palette.x && place.y < palette.y + palette.h && place.y + h > palette.y;
