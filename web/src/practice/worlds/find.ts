@@ -87,8 +87,17 @@ function loginMatch(query: string): string | null {
   return said ? said[1] : LOGIN_TITLE.toLowerCase().includes(wanted) ? LOGIN_TITLE : null;
 }
 
-/** Whether ⌘K's last query finds yesterday's session, whichever of its words the learner typed. */
-export const findsLogin = (model: FindModel) => model.query !== null && loginMatch(model.query) !== null;
+/**
+ * Whether ⌘K's last query finds yesterday's session by whole words of it,
+ * whichever ones the learner typed: `clock` does, and so does `login`, but not
+ * its first letter, which the search already answers while the word is typed.
+ */
+export const findsLogin = (model: FindModel) => {
+  const wanted = model.query?.trim().toLowerCase();
+  if (!wanted || loginMatch(wanted) === null) return false;
+  const words = new RegExp(`(^|\\W)${wanted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|\\W)`);
+  return [LOGIN_TITLE, ...LOGIN_REQUESTS.map(([, text]) => text)].some((text) => words.test(text.toLowerCase()));
+};
 
 /** ⌘K's session search: the words of yesterday's session match a query its title or requests hold. */
 function sessionSearch(query: string, nowMs: number): SessionWorkSearch {
