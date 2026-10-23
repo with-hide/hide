@@ -11,7 +11,7 @@ import { installKeyboard } from "../keyboard";
 import { Palette } from "../Palette";
 import type { SnapshotRest } from "../snapshot";
 import { Sidebar } from "../sidebar";
-import { useShellStore } from "../store";
+import { useShellStore, type Documents } from "../store";
 import { feedChunks, terminalFor } from "../terminals";
 import { TitleRow } from "../TitleRow";
 import { useUiStore } from "../ui";
@@ -20,6 +20,8 @@ import type { PracticeChapter } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
 
 type UiState = NonNullable<SnapshotRest["ui_state"]>;
+
+const NO_DOCUMENTS: Documents = {};
 
 /** The operator's own choices the practice screen keeps: their chords, so the keys taught are the keys they press. */
 export type OperatorChoices = Pick<UiState, "shortcut_bindings" | "browser_shortcut_bindings">;
@@ -55,9 +57,13 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   useEffect(() => installKeyboard(actions), [actions]);
 
   useLayoutEffect(() => {
-    const { rest, agents, focused, usage } = chapter.world.snapshot(model, Date.now());
+    const { rest, agents, focused, usage, frames } = chapter.world.snapshot(model, Date.now());
     const ui_state = { ...rest.ui_state, ...operator };
-    useShellStore.setState({ rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null });
+    // A frame the world does not send is empty, so one chapter's files never show in the next.
+    useShellStore.setState({
+      rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,
+      fileIndex: frames?.fileIndex ?? null, editor: frames?.editor ?? null, documents: frames?.documents ?? NO_DOCUMENTS,
+    });
   }, [chapter, model, operator]);
 
   useLayoutEffect(() => {

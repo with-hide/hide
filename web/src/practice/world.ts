@@ -3,11 +3,15 @@
 // leaves the page: no daemon, no Herdr, no agent.
 
 import type { NodeUsage } from "../generated/hided-ws";
-import type { AgentRow, SnapshotRest } from "../snapshot";
+import type { AgentRow, EditorSnapshot, SnapshotRest } from "../snapshot";
+import type { Documents, FileIndexResult } from "../store";
 
 export type CoreEvent = { kind: string; payload: Record<string, unknown> };
 
-export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null };
+/** What the core sends beside the snapshot: the ⌘P index's answer, and the open editor tabs and their documents. */
+export type WorldFrames = { fileIndex?: FileIndexResult | null; editor?: EditorSnapshot | null; documents?: Documents };
+
+export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null; frames?: WorldFrames };
 
 export type PracticeWorld<M> = {
   initial: () => M;
