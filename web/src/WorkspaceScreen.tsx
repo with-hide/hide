@@ -24,6 +24,7 @@ import { keyboardOwner, noteKeyboardOwner } from "./viewFocus";
 import { cn } from "./lib/utils";
 import { useInterfaceTranslation } from "./i18n/client";
 import "./laneCalls";
+import "./missionReveal";
 import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutGitHeader";
 
 // A Workspace (PRD S6 D-01..D-05; S7 B12, B13; PRD right-lane D-01..D-07;

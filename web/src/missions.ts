@@ -7,7 +7,9 @@
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
-import type { AgentStartChoice, Mission, MissionNode, RowMark, SnapshotRest } from "./snapshot";
+import { agentsByPane } from "./paneAgents";
+import { layerDependencies, type LayeredGraph } from "./projectBoard";
+import type { AgentRow, AgentStartChoice, Mission, MissionNode, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -33,6 +35,17 @@ export function conductedBy(rest: SnapshotRest | null | undefined, owner: Conduc
     return owner.pane_id !== undefined && mission.conductor.pane_id === owner.pane_id && (!owner.device_id || mission.device_id === owner.device_id);
   });
   return mine.find(missionOpen) ?? mine.filter((mission) => mission.status !== "planning").sort((a, b) => (b.closed_at_unix_ms ?? 0) - (a.closed_at_unix_ms ?? 0))[0] ?? null;
+}
+
+/**
+ * The mission a pane's session conducts, found through the pane's agent row as
+ * its sidebar row finds it (PRD mission-pane-chip B1, B10): none while the
+ * record cannot be read, so no count is invented.
+ */
+export function missionOfPane(rest: SnapshotRest | null | undefined, agents: AgentRow[], paneId: string): Mission | null {
+  if (rest?.missions?.failed) return null;
+  const agent = agentsByPane(agents).get(paneId);
+  return agent ? conductedBy(rest, agent) : null;
 }
 
 /** What the record counts (B21): done nodes of those still in the plan, and the ones dropped. */
@@ -144,6 +157,97 @@ export function chipWords(mission: Mission): { key: MessageKey; counts: string |
     case "running":
       return { key: "mission.chip", counts: `${done}/${total}` };
   }
+}
+
+/** The Conductor pane's chip (PRD mission-pane-chip B2): the state it reads as, its word and its count. */
+export type PaneChipState = "planning" | "running" | "decision" | "merge_wait" | "done" | "cancelled";
+
+/** A mission holds at most one decision (`decision`), so the chip's count is always one. */
+export function paneChipWords(mission: Mission): { state: PaneChipState; key: MessageKey; counts: string | null } {
+  const { done, total } = missionCounts(mission);
+  const counts = `${done}/${total}`;
+  if (mission.decision && missionOpen(mission)) return { state: "decision", key: "mission.pane.decision", counts: null };
+  switch (mission.status) {
+    case "planning":
+      // A plan put up and not started yet counts from none done (approved board 4).
+      return mission.nodes.length === 0 ? { state: "planning", key: "mission.pane.planning", counts: null } : { state: "running", key: "mission.chip", counts };
+    case "running":
+      return { state: "running", key: "mission.chip", counts };
+    case "merge_wait":
+      return { state: "merge_wait", key: "mission.pane.mergeWait", counts: null };
+    case "done":
+      return { state: "done", key: "mission.pane.done", counts };
+    case "cancelled":
+      return { state: "cancelled", key: "mission.pane.cancelled", counts: null };
+  }
+}
+
+/** The card the small map's paths end in; a node key is letters, digits, `-`, `_` and `.`, so none is this. */
+export const MINI_REPORT = "#report";
+
+/** A row of the small map keeps this many cards; past it, its first card and one `+N` card (B8). */
+export const MINI_ROW_CARDS = 2;
+
+/** A card of the small map: a node, the `+N` card standing for a row's folded nodes, or the report. */
+export type MiniCard = { key: string; kind: "node"; node: MissionNode } | { key: string; kind: "more"; nodes: MissionNode[] } | { key: string; kind: "report" };
+
+/** An edge of the small map, and whether a stack's base runs along it (B7). */
+export type MiniEdge = { from: string; to: string; stacked: boolean };
+
+/**
+ * The Conductor pane's small map (PRD mission-pane-chip D-04, D-05, B6-B8):
+ * the done nodes counted apart, the ones still to do top down by what they
+ * wait on into the report card, and a row of more than two cards as its
+ * first card and one `+N` card that every edge of a folded node meets. A
+ * dropped node left the plan, as `missionCounts` reads it, so it is not drawn.
+ */
+export function missionMiniGraph(mission: Mission): { done: number; graph: LayeredGraph<MiniCard>; stacked: ReadonlySet<string> } {
+  const done = mission.nodes.filter((node) => node.status === "done").length;
+  const nodes = mission.nodes.filter((node) => node.status !== "done" && node.status !== "dropped");
+  const empty = { layers: [], edges: [], unrelated: [] };
+  if (nodes.length === 0) return { done, graph: empty, stacked: new Set() };
+  const cards: MiniCard[] = [...nodes.map((node): MiniCard => ({ key: node.key, kind: "node", node })), { key: MINI_REPORT, kind: "report" }];
+  const byKey = new Map(cards.map((card) => [card.key, card]));
+  const depended = new Set(nodes.flatMap((node) => node.depends_on));
+  const layered = layerDependencies(cards, (card) => card.key, (card) => {
+    // Every node no other node still to do waits on ends in the report.
+    if (card.kind === "report") return nodes.filter((node) => !depended.has(node.key)).map((node) => byKey.get(node.key)!);
+    return card.kind === "node" ? card.node.depends_on.flatMap((key) => byKey.get(key) ?? []) : [];
+  });
+  const into = new Map<string, string>();
+  const layers = layered.layers.map((layer, index) => {
+    if (layer.length <= MINI_ROW_CARDS) return layer;
+    const [first, ...rest] = layer;
+    const more: MiniCard = { key: `#more-${index}`, kind: "more", nodes: rest.flatMap((card) => (card.kind === "node" ? [card.node] : [])) };
+    for (const card of rest) into.set(card.key, more.key);
+    return [first!, more];
+  });
+  const nodeOf = new Map(nodes.map((node) => [node.key, node]));
+  const edges = new Map<string, MiniEdge>();
+  for (const edge of layered.edges) {
+    const from = into.get(edge.from) ?? edge.from;
+    const to = into.get(edge.to) ?? edge.to;
+    const below = nodeOf.get(edge.from);
+    const above = nodeOf.get(edge.to);
+    const stacked = below?.pr != null && above?.base_pr === below.pr;
+    const id = `${from}>${to}`;
+    edges.set(id, { from, to, stacked: (edges.get(id)?.stacked ?? false) || stacked });
+  }
+  const stacked = new Set([...edges.entries()].flatMap(([id, edge]) => (edge.stacked ? [id] : [])));
+  return { done, graph: { layers, edges: [...edges.values()].map(({ from, to }) => ({ from, to })), unrelated: [] }, stacked };
+}
+
+/**
+ * The missions whose first plan landed between two snapshots this page
+ * received (PRD mission-pane-chip D-06, B12-B14): one that went from no
+ * nodes to some, or first appeared with nodes. With no snapshot before, as
+ * after a load or a reconnect, nothing landed.
+ */
+export function firstPlans(before: SnapshotRest | null | undefined, after: SnapshotRest | null | undefined): Mission[] {
+  const previous = before?.missions;
+  if (!previous || previous.failed) return [];
+  const known = new Map(previous.items.map((mission) => [mission.id, mission]));
+  return (after?.missions?.items ?? []).filter((mission) => mission.nodes.length > 0 && (known.get(mission.id)?.nodes.length ?? 0) === 0);
 }
 
 /** Done nodes fold away once a mission has more than this many (B19). */
