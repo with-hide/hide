@@ -574,7 +574,8 @@ A letter another agent sent after it does not replace it; a delegated child with
 The answer is the operator's ask, the agent's own Working progress, for a finished turn the operator has not looked at, `끝남` in the success colour and its result sentence, or, while the agent waits on working children, `대기 · 자식 에이전트 N개 작업 중`, the words its sidebar row says; once the operator has looked at a finished turn the row goes.
 The progress says only what the request does not: the label's line never restates the request, and a turn whose events show nothing beyond it yet has no line, so a working turn with no progress shows its request alone, with no arrow and no `작업 중`, since the status mark and the working line already say it works.
 The request shows only with an ask, while the agent works or waits on working children, or for a finished turn not yet looked at: a pane that waits on anything else, rests or finished and was read has no row (only the children button when it has live children).
-A quiet turn (progress, a result, a children wait or a request alone) sits on the head's own surface under a hairline, one line, its request cut at half the row when an answer follows and each part cut where it overflows; an ask keeps the raised surface with its warning edge, and when its request and answer do not fit one line the answer moves to a second row under the request, each cut only when it overflows its own row, and the two return to one line when the pane widens.
+A quiet turn (progress, a result, a children wait or a request alone) sits on the head's own surface under a hairline, and an ask keeps the raised surface with its warning edge.
+How many lines the row takes is the View menu's choice ([Pane turn row mode](#pane-turn-row-mode)): one line by default, the request cut at two fifths of the row when an answer follows and each part cut where it overflows, an ask included, so no turn grows over the terminal on a narrow pane.
 The children button stays at the first row's left, the request is never folded into an icon, and the rows overlay the terminal without changing its grid.
 The request is a button the keyboard reaches: the pointer or focus on it opens the turn card under it, a press pins the card and a second press or Esc closes it, and Esc on a card neither pinned nor focused stays the terminal's.
 With the card open, Tab from the request or the title moves the keyboard into the card to `기록 열기`, the card stays open while focus is in it, Shift+Tab before its start goes back to the trigger, Tab past its end and Esc in the card close it and return focus to the trigger, which keeps it closed until the pointer or focus comes anew; only Tab moves focus in, so the pointer never takes the terminal's keyboard, and a card the pointer only shows is no Escape layer, so Esc reaches the terminal.
@@ -733,6 +734,20 @@ While hidden, holding the Agents key (⌥, or Alt) draws the same logos for as l
 Shown, the same hold shows only the keycaps.
 Changing the mode or peeking never changes a row's height, the scroll position or the selection.
 Web owners: `web/src/components/view-menu.tsx`, `web/src/agentLogoMode.ts` (the one rule), `web/src/AgentRowMark.tsx`, `web/src/TabBar.tsx`, `web/src/TaskLens.tsx`, `web/src/components/sidebar-agent-row.tsx` and `web/src/components/sleeping-session-row.tsx`; core owner: `herdr-core/src/runtime/events.rs`.
+
+### Pane turn row mode
+
+The View menu's second section, after the agent logo choices and their key line and a separator, is labeled `요청·진행 줄` (`Request and progress line`) and offers `한 줄` (`One line`, marked `기본`, `Default`), `두 줄` (`Two lines`) and `끔` (`Off`), with a check on the current one; the keyboard, Escape, a repeated choice and a disconnected daemon behave as for the logo choices.
+It shapes the second row of every agent pane ([Agent panes and the Agents explorer](#agent-panes-and-the-agents-explorer)) in every window of one daemon at once:
+
+- One line keeps every turn on one line: the request at most two fifths of the row when an answer follows, the answer in the rest, each cut where it overflows, an ask as much as a quiet turn; the whole request stays on the turn card the request opens.
+- Two lines put the request (after the children button) on its own line and the arrow and answer on the line under it, each cut, so a turn takes at most two lines; a turn with only a request or only an answer takes one.
+- Off draws no request, progress, result or ask on the row; a pane with live children keeps the children button alone on it, whose warning border and tree carry a raised descendant's ask, and Working keeps its thin line.
+  The pane's own approval, question, block or stop rides the head after the title as a small warning-edged mark with its verb and wait (`web/src/PaneHeaderBand.tsx`, `PaneAskMark`), named by its verb and what is asked, which opens the same turn card as the request does and dims once read as the row's ask does; an ask is never hidden by the mode.
+
+The choice is a core preference, `ui_state.pane_turn_row_mode` (`one_line`, `two_lines` or `off`, `one_line` when never chosen), changed only by `pane_turn_row_mode_set`; `ui_state_update` never changes it, an unknown stored value opens one line with the `ui_state.pane_turn_row_mode_unknown` diagnostic, and it survives a restart.
+The mode never changes the terminal's viewport or its PTY grid, because the row overlays the terminal.
+Web owners: `web/src/components/view-menu.tsx` and `web/src/PaneHeaderBand.tsx`; core owner: `herdr-core/src/runtime/events.rs`.
 
 ### Subagent count
 
@@ -1948,6 +1963,7 @@ The Host selector lists this Mac and every registered device, and starts on the 
 This Mac here is the machine the window runs on, which on a window of a machine whose core runs elsewhere is not the core's (`hostWays` in `web/src/addProject.ts`).
 On this Mac the primary `Browse folder` row holds the keyboard, so Enter activates it; it opens macOS's own folder picker as a sheet on the window, which can also make a new folder, and a cancelled pick leaves the dialog as it was.
 The chosen folder is registered with one `create_workspace`; the dialog closes when the project appears, and says `Adding <folder>…` until then.
+A project added on this machine, whichever way below and from the first-run wizard too, opens in front on the one terminal tab its registration starts there (`spawn_workspace_creation` in `herdr-core/src/live.rs`), never on the empty start screen, however many checkouts Hide has remembered before (`WorkspaceViews::entry` in `herdr-core/src/workspace_views.rs`); a project added on a device opens on that start screen, because its registration starts no terminal yet.
 A refusal stays inside the dialog as an alert naming the folder, and the dialog stays open for another pick: `already_registered` from the shell's own registrations, before anything is sent, and `outside_home`, `home_root`, `not_found`, `not_a_directory` or `invalid_path` from hided's `$HOME` line, or the core's own error.
 Another machine's folders are not this window's to browse, so on a device, the core's machine seen from a node's window included, the dialog shows a `~/` path field instead, sent to that machine's node through the same event, with its refusal shown the same way.
 On the core's machine, the one a new project can be made on, an `Other ways to add` group sits under Browse folder or the path field, one row per way, each opening its own view of the same dialog with a `Back` that returns to the first view and puts the keyboard on the row it came from; on a node's window it sits under the core's machine and its views offer no folder picker, since the picker would show this machine's folders.
@@ -2312,10 +2328,10 @@ It opens on the chapter list: each chapter's number, title, one line of what it 
 A chapter seen once stays seen when it is played again.
 
 A chapter playing dims everything but what its step marks, rings that, and puts a light bubble beside it with what happens and how: the command's chord as keycaps (`Or press ⌘D`), `Press the button, or ⇧⌘↩` for a step with a button, or `Press where it's marked` where this host has no chord for the command (⌥1 in a browser tab).
-⏎ or → performs the step in the learner's place, pressing the chord, the button, dragging the pane with a hand cursor, typing what the learner would say into an agent's prompt and sending it, or right-clicking and choosing from the shell's own menu with the hand; ← goes back over a step that only looks.
+⏎ or → performs the step in the learner's place, pressing the chord, the button, dragging the pane with a hand cursor, typing what the learner would say into an agent's prompt and sending it, or right-clicking and choosing from the shell's own menu with the hand; a held chord (⌃⇥, ⌥⇥) is let go a moment later, so the shell's own switcher is seen before it lands; ← goes back over a step that only looks.
 A copy made on the practice screen (a menu's Copy pane ID) goes to the practice world, never to the operator's clipboard.
 The learner can also do it themselves, by key, click or drag: a step that changes the screen is done when the world says so, however it was done.
-⌘K search and ⌘P Open file open over the practice screen as they do in the shell; while one is open every key is the palette's, and ⏎, → and ← go back to the guide when it closes.
+⌘K search and ⌘P Open file open over the practice screen as they do in the shell; while one is open every key is the palette's, the guide's ring and dim step aside and its bubble moves beside the palette without buttons, as they do while a held chord's switcher is up, and ⏎, → and ← go back to the guide when it closes.
 A pressed chord shows large in the middle for a moment, so the keys are seen as they are used.
 Every chord is the operator's own: the host's set, the system's, and the operator's stored bindings.
 A chapter with tasks lists them on a card in the lower left with a check as each is done and `↺ 처음부터`; the top center names the chapter and leads back to the list.
@@ -2339,7 +2355,7 @@ A chapter is three new files and no change to a shared one, so chapters written 
 - `web/src/practice/worlds/<id>.ts`, when no world there fits: the world the chapter plays in.
 
 A step names what it rings (`target`, a selector into the shell), where the bubble sits (`side`), the command it teaches (`command`, never a chord), a `gesture` when ⏎ should press a button, drag a pane, type into a pane's terminal (`type`) or choose from a right-click menu (`menu`) instead of pressing the chord, and `done`, which reads the world, or `shown`, a selector whose appearance finishes a step that opens a card, a popover or a page with no core event behind it; a step with neither is a look.
-A world (`web/src/practice/world.ts`) gives the first state, answers the core events the chapter's steps dispatch as the core would (an event it does not need answers nothing), and draws the snapshot and each pane's screen.
+A world (`web/src/practice/world.ts`) gives the first state, answers the core events the chapter's steps dispatch as the core would (an event it does not need answers nothing), and draws the snapshot, what the core sends beside it (`frames`: the ⌘P index's answer and the open documents, empty when a world sends none), and each pane's screen.
 What is typed into a terminal reaches the world as the terminal's `key` events and a copy as `practice_copy`; a pane whose screen the world changes is cleared and drawn again, so an agent's answer appears as the world writes it.
 `worlds/kit.ts` holds what several worlds build with: a checkout's desk of tabs, panes and groups and the events that change it (`applyDesk`), agent rows (`agent`, with a parent named as the core names it), and the snapshot of one or more projects' desks (`deskSnapshot`).
 A tool only one chapter needs stays in that chapter's world file, and moves to `kit.ts` when a second chapter needs it.

@@ -8,11 +8,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { installKeyboard } from "../keyboard";
+import { CycleOverlay } from "../Overlays";
 import { OverviewModal } from "../Overview";
 import { Palette } from "../Palette";
 import type { SnapshotRest } from "../snapshot";
 import { Sidebar } from "../sidebar";
-import { useShellStore } from "../store";
+import { useShellStore, type Documents } from "../store";
 import { feedChunks, terminalFor } from "../terminals";
 import { TitleRow } from "../TitleRow";
 import { useUiStore } from "../ui";
@@ -22,6 +23,8 @@ import { PracticeCoach } from "./PracticeCoach";
 import { PRACTICE_COPY, type CoreEvent } from "./world";
 
 type UiState = NonNullable<SnapshotRest["ui_state"]>;
+
+const NO_DOCUMENTS: Documents = {};
 
 /** Home, then erase the screen and its scrollback: a screen the world changed is drawn from the top. */
 const CLEAR = "\x1b[H\x1b[2J\x1b[3J";
@@ -64,9 +67,13 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   useEffect(() => installKeyboard(actions), [actions]);
 
   useLayoutEffect(() => {
-    const { rest, agents, focused, usage } = chapter.world.snapshot(model, Date.now());
+    const { rest, agents, focused, usage, frames } = chapter.world.snapshot(model, Date.now());
     const ui_state = { ...rest.ui_state, ...operator };
-    useShellStore.setState({ rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null });
+    // A frame the world does not send is empty, so one chapter's files never show in the next.
+    useShellStore.setState({
+      rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,
+      fileIndex: frames?.fileIndex ?? null, editor: frames?.editor ?? null, documents: frames?.documents ?? NO_DOCUMENTS,
+    });
   }, [chapter, model, operator]);
 
   useLayoutEffect(() => {
@@ -114,6 +121,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
         </div>
         <OverviewModal actions={actions} />
         <Palette actions={actions} />
+        <CycleOverlay />
         <PracticeCoach chapter={chapter} model={model} next={next} resume={resume} onStep={onStep} onNext={() => next && onStart(next)} onRestart={() => onStart(chapter)} onHub={onHub} />
       </div>
     </TooltipProvider>

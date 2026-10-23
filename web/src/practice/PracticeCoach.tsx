@@ -8,7 +8,7 @@ import { hostKind, keySystem } from "../host";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { MessageKey } from "../i18n/catalogs";
 import { commandLabel } from "../shortcutLabels";
-import { hostChord, hostRegistry, type CommandId } from "../shortcuts";
+import { hostChord, hostRegistry, isCycleCommand, releaseModifier, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
 import { pasteText, terminalFor } from "../terminals";
 import { useUiStore } from "../ui";
@@ -25,13 +25,23 @@ function chordOf(id: CommandId) {
   return (command && hostChord(command, host)) ?? null;
 }
 
-/** Presses `id`'s chord the way a keyboard would, so the shell's own listener runs the command. */
+/** How long a held chord's switcher stays up before the coach lets go of its modifier, so the list is seen. */
+const HOLD_MS = 700;
+
+/**
+ * Presses `id`'s chord the way a keyboard would, so the shell's own listener
+ * runs the command. A held chord (⌃⇥, ⌥⇥) moves when its modifier is let go,
+ * so the coach lets go of it too.
+ */
 function pressCommand(id: CommandId) {
   const chord = chordOf(id);
   if (!chord) throw new Error(`Practice step names ${id}, which this host has no chord for`);
   const key = chord.code.replace(/^Key|^Digit/, "");
   const target = document.activeElement ?? document.body;
   target.dispatchEvent(new KeyboardEvent("keydown", { key, code: chord.code, metaKey: !!chord.meta, altKey: !!chord.alt, shiftKey: !!chord.shift, ctrlKey: !!chord.ctrl, bubbles: true, cancelable: true }));
+  const release = isCycleCommand(id) ? releaseModifier(chord) : null;
+  if (!release) return;
+  window.setTimeout(() => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keyup", { key: release, bubbles: true, cancelable: true })), HOLD_MS);
 }
 
 /** Presses the middle of what `selector` marks as a hand would, on whatever is drawn there: a terminal hears presses, not clicks. */
@@ -186,6 +196,10 @@ function WithKeys({ text, id }: { text: string; id: CommandId }) {
 }
 const KEYS_MARK = "\u0001";
 
+/** The shell's own layers over the screen while they are open: a palette and a held chord's switcher. */
+const SHELL_LAYERS = '[data-palette], [data-slot="cycle-overlay"]';
+const shellLayerOpen = (state: ReturnType<typeof useUiStore.getState>) => state.overlay !== "none" || state.cycle !== null;
+
 const ZONES = [
   { selector: "[data-sidebar-box]", key: "view" },
   { selector: "[data-agent-area]", key: "work" },
@@ -218,6 +232,9 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const [ring, setRing] = useState<Rect | null>(null);
   const [zones, setZones] = useState<(Rect | null)[]>([]);
   const [hand, setHand] = useState<Point | null>(null);
+  // A palette (⌘P, ⌘K) or a held chord's switcher (⌃⇥) the shell opened is drawn in full: no ring or dim over it, and the bubble beside it.
+  const palette = useUiStore(shellLayerOpen);
+  const [paletteBox, setPaletteBox] = useState<Rect | null>(null);
   const step = chapter.steps[index]!;
   const last = index === chapter.steps.length - 1;
   // A command the host has no chord for is taught by pressing what the step marks.
@@ -254,6 +271,8 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
         return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
       });
+      const covering = shellLayerOpen(useUiStore.getState()) ? rectOf(SHELL_LAYERS) : null;
+      setPaletteBox((before) => (same(before, covering) ? before : covering));
       const box = bubble.current;
       if (box) setSize((before) => (before.w === box.offsetWidth && before.h === box.offsetHeight ? before : { w: box.offsetWidth, h: box.offsetHeight }));
       frame = requestAnimationFrame(follow);
@@ -323,7 +342,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     : step.gesture && "type" in step.gesture ? say("practice.via.type")
     : step.gesture && "menu" in step.gesture ? say("practice.via.menu") : null;
   const go = last ? (next ? say("practice.toChapter", { number: next.number }) : say("practice.toHub")) : acts(step) ? say("practice.try") : say("practice.next");
-  const place = bubblePlace(ring, step.side, size);
+  const place = besidePalette(bubblePlace(ring, step.side, size), palette ? paletteBox : null, size);
   const title = say(`practice.${chapter.id}.title`);
 
   return (
@@ -335,7 +354,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
           <div className="pc-tag">{say(`practice.zone.${ZONES[at]!.key}`)}<small>{say(`practice.zone.${ZONES[at]!.key}Sub`)}</small></div>
         </div>
       ) : null)}
-      <div className={`pc-spot${ring && !step.zones ? "" : " off"}`} style={ring ? { left: ring.x - 3, top: ring.y - 3, width: ring.w + 6, height: ring.h + 6 } : undefined} />
+      <div className={`pc-spot${ring && !step.zones && !palette ? "" : " off"}`} style={ring ? { left: ring.x - 3, top: ring.y - 3, width: ring.w + 6, height: ring.h + 6 } : undefined} />
       <div className="pc-mode">
         <button type="button" onClick={onHub} data-practice-hub-open>{say("practice.hub")}</button>
         <span>{say("practice.mode", { number: chapter.number, title })}</span>
@@ -348,8 +367,9 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         {via ? <div className="pc-via">{via}</div> : null}
         <div className="pc-row">
           <div className="pc-dots">{chapter.steps.map((row, at) => <i key={row.id} className={at === index ? "on" : at < index ? "done" : ""} />)}</div>
-          {back ? <button type="button" className="pc-back" onClick={() => setIndex((value) => value - 1)}>{say("practice.back")}</button> : null}
-          <button type="button" className="pc-go" onClick={perform}>{go} <span className="pc-kc">⏎</span></button>
+          {/* While a palette is up every key and press is its own; a press out here would close it. */}
+          {back && !palette ? <button type="button" className="pc-back" onClick={() => setIndex((value) => value - 1)}>{say("practice.back")}</button> : null}
+          {palette ? null : <button type="button" className="pc-go" onClick={perform}>{go} <span className="pc-kc">⏎</span></button>}
         </div>
       </div>
       {flash ? <div className="pc-flash">{keyParts(flash).map((part, at) => <span key={at} className="pc-kc">{part}</span>)}</div> : null}
@@ -378,6 +398,17 @@ function bubblePlace(ring: Rect | null, side: PracticeStep["side"], size: { w: n
     return { x, y: clampY(ring.y + ring.h + 22), arrow: { left: Math.max(16, Math.min(w - 32, ring.x + ring.w / 2 - x - 8)), top: -8 } };
   }
   return { x: clampX(ring.x + 60), y: clampY(ring.y + Math.min(ring.h * 0.3, 260)), arrow: null };
+}
+
+/** The bubble moved beside an open palette it would cover, on whichever side has room. */
+function besidePalette(place: Placement, palette: Rect | null, size: { w: number; h: number }): Placement {
+  if (!palette) return place;
+  const { w, h } = size;
+  const covers = place.x < palette.x + palette.w && place.x + w > palette.x && place.y < palette.y + palette.h && place.y + h > palette.y;
+  if (!covers) return place;
+  const left = palette.x - w - 22;
+  const x = left >= 16 ? left : Math.min(window.innerWidth - w - 16, palette.x + palette.w + 22);
+  return { x, y: Math.max(40, Math.min(window.innerHeight - h - 16, palette.y)), arrow: null };
 }
 
 type Say = (key: string, values?: Record<string, unknown>) => string;
