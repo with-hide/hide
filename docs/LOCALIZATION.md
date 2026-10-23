@@ -110,6 +110,7 @@ One row is one thing the screen names. A word in the last column is not used for
 | The `hide` command | command | 명령 | コマンド | 命令 | 명령어 |
 | Messages between agents | letter | 편지 | レター | 信件 | 手紙 |
 | A phone | phone | 폰 | スマートフォン | 手机 | 모바일, 휴대폰 (the tab named `모바일` keeps its name) |
+| The panel to the right of the tabs | lane | 레인 | レーン | 右侧面板 | 侧栏 for the lane (it names the sidebar) |
 | The device list beside the sidebar | device rail | 기기 목록 | デバイス一覧 | 设备栏 | 레일 |
 | An issue source kept on this device | local | 로컬 | ローカル | 本地 | Local |
 | The feature that keeps cards for agents | Memory | Memory | Memory | Memory | 기억, メモリ, 记忆 |
