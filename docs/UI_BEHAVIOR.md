@@ -2342,7 +2342,7 @@ It asks the shell of the same origin, over one `BroadcastChannel` (`hide-practic
 With no shell answering, the chapters still play and the list says `진행 기록은 Hide 창이 열려 있을 때 저장돼요.`.
 In the desktop app the window has no preload: it stands in for the desktop host from its address (`host=electron&platform=…`), so its keyboard runs the desktop chords, and a menu command while it holds the keyboard is dropped rather than sent to the main window's shell; it closes with the main window.
 
-Chapter 3, following agents, plays a lead with two children in tabs of their own beside a second project's asking and finished tasks: the 태스크 list by state, the pane head, its turn card, a child opened from the head's child button and the head's › back to the parent, and the Overview's map. Coming back to the lead finishes one child and turns the lead to Needs You, so the list and the head move while the learner watches. Going to an agent from an OS notification is not taught, because the notification is drawn outside the window.
+Chapter 3, following agents, plays a lead with two children in tabs of their own beside a second project's asking and finished tasks: the 태스크 list by state, the pane head, its turn card, a child opened from the head's child button and the parent mark at the front of the child's head back to the parent, and the Overview's map. Coming back to the lead finishes one child and turns the lead to Needs You, so the list and the head move while the learner watches. Going to an agent from an OS notification is not taught, because the notification is drawn outside the window.
 
 ### Adding a chapter
 
