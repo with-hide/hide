@@ -20,6 +20,7 @@ import { agentPresentationCatalogs, agentPresentationEnglish } from "./resources
 import { devicesCatalogs, devicesEnglish } from "./resources/devices";
 import { kitReasonsCatalogs, kitReasonsEnglish } from "./resources/kitReasons";
 import { issueReasonsCatalogs, issueReasonsEnglish } from "./resources/issueReasons";
+import { agentActionReasonsCatalogs, agentActionReasonsEnglish } from "./resources/agentActionReasons";
 import { agentsCatalogs, agentsEnglish } from "./resources/agents";
 import { hideAiCatalogs, hideAiEnglish } from "./resources/hideAi";
 import { issueSettingsCatalogs, issueSettingsEnglish } from "./resources/issueSettings";
@@ -89,6 +90,7 @@ export const english = {
   ...devicesEnglish,
   ...kitReasonsEnglish,
   ...issueReasonsEnglish,
+  ...agentActionReasonsEnglish,
   ...mobileSetupEnglish,
   ...coreMoveEnglish,
   ...workspaceEnglish,
@@ -151,6 +153,7 @@ export const catalogs = {
     ...devicesCatalogs.ko,
     ...kitReasonsCatalogs.ko,
     ...issueReasonsCatalogs.ko,
+    ...agentActionReasonsCatalogs.ko,
     ...mobileSetupCatalogs.ko,
     ...coreMoveCatalogs.ko,
     ...workspaceCatalogs.ko,
@@ -208,6 +211,7 @@ export const catalogs = {
     ...devicesCatalogs["zh-CN"],
     ...kitReasonsCatalogs["zh-CN"],
     ...issueReasonsCatalogs["zh-CN"],
+    ...agentActionReasonsCatalogs["zh-CN"],
     ...mobileSetupCatalogs["zh-CN"],
     ...coreMoveCatalogs["zh-CN"],
     ...workspaceCatalogs["zh-CN"],
@@ -265,6 +269,7 @@ export const catalogs = {
     ...devicesCatalogs.ja,
     ...kitReasonsCatalogs.ja,
     ...issueReasonsCatalogs.ja,
+    ...agentActionReasonsCatalogs.ja,
     ...mobileSetupCatalogs.ja,
     ...coreMoveCatalogs.ja,
     ...workspaceCatalogs.ja,

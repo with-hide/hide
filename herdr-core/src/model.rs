@@ -1613,7 +1613,43 @@ pub struct AgentSleepSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AgentSleepActionSnapshot {
     pub available: bool,
-    pub reason: Option<String>,
+    pub reason: Option<AgentActionRefusal>,
+}
+
+/// Why the pane menu's Sleep agent or Fork cannot run now, as a code the web
+/// words (`contracts/snapshot-wire-enums.json`: `agent_action_refusal`); the
+/// English `detail` is for the log and a refused request's diagnostic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentActionRefusal {
+    /// An agent on another device.
+    Device,
+    /// This agent's reader cannot sleep it.
+    Unsupported,
+    /// This agent sleeps only on the machine the core runs on.
+    CoreMachineOnly,
+    Asleep,
+    Working,
+    WaitingForYou,
+    /// Hide cannot tell what the agent is doing.
+    UnknownActivity,
+    /// Herdr has not reported the agent's conversation yet.
+    NoConversation,
+}
+
+impl AgentActionRefusal {
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::Device => "Agents on another device cannot sleep",
+            Self::Unsupported => "This agent's reader does not support sleep",
+            Self::CoreMachineOnly => "This agent sleeps only on the machine Hide's core runs on",
+            Self::Asleep => "This agent is already asleep",
+            Self::Working => "This agent is working",
+            Self::WaitingForYou => "This agent is waiting for the operator",
+            Self::UnknownActivity => "Hide cannot tell what this agent is doing",
+            Self::NoConversation => "Herdr has not reported this agent's conversation",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -2626,7 +2662,7 @@ pub struct ForkSourceSnapshot {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct PaneForkSnapshot {
     pub available: bool,
-    pub reason: Option<String>,
+    pub reason: Option<AgentActionRefusal>,
     /// Present when this pane is a fork, as its row's `forked_from`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<ForkSourceSnapshot>,
@@ -7814,6 +7850,31 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "herdr_profile_refusal", &profile_refusals);
         checked.insert("herdr_profile_refusal");
+
+        let action_refusals = [
+            AgentActionRefusal::Device,
+            AgentActionRefusal::Unsupported,
+            AgentActionRefusal::CoreMachineOnly,
+            AgentActionRefusal::Asleep,
+            AgentActionRefusal::Working,
+            AgentActionRefusal::WaitingForYou,
+            AgentActionRefusal::UnknownActivity,
+            AgentActionRefusal::NoConversation,
+        ];
+        for variant in action_refusals {
+            match variant {
+                AgentActionRefusal::Device
+                | AgentActionRefusal::Unsupported
+                | AgentActionRefusal::CoreMachineOnly
+                | AgentActionRefusal::Asleep
+                | AgentActionRefusal::Working
+                | AgentActionRefusal::WaitingForYou
+                | AgentActionRefusal::UnknownActivity
+                | AgentActionRefusal::NoConversation => {}
+            }
+        }
+        assert_wire(&contract, "agent_action_refusal", &action_refusals);
+        checked.insert("agent_action_refusal");
 
         let state_variables = [
             hide_kit::layout::StateVariable::HideStateDir,

@@ -7,7 +7,8 @@ import { Hint } from "./components/ui/tooltip";
 import { EntryPointMenu, type MenuEntry } from "./components/entry-menu";
 import { relationEntries, relationState } from "./lineage";
 import { herdrPaneId } from "./remote";
-import { type PaneRow } from "./snapshot";
+import { type AgentActionRefusal, type PaneRow } from "./snapshot";
+import { agentActionReasonsEnglish } from "./i18n/resources/agentActionReasons";
 import { useShellStore } from "./store";
 import { copySelection, pasteClipboard, selectAllText } from "./terminals";
 import { useUiStore } from "./ui";
@@ -151,6 +152,12 @@ export type RevisitOffer = "hidden" | "star" | "done";
  * `overview`: the pane runs an agent, so `개요에서 보기` is offered (PRD pane-open-in-overview D-07).
  * `plan`: the pane's session has a plan, so `계획` opens its map (PRD hide-plan B11).
  */
+/** Why a disabled Sleep agent or Fork item is disabled, from the core's code; a code this build does not word falls back to the item's general line. */
+function refusalText(reason: AgentActionRefusal | null | undefined, fallback: "panes.menu.sleepUnavailable" | "panes.menu.forkUnavailable"): string {
+  const key = `agentActionRefusal.${reason}`;
+  return reason && key in agentActionReasonsEnglish ? translate(key as keyof typeof agentActionReasonsEnglish) : translate(fallback);
+}
+
 export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden", overview = false, plan = false): MenuEntry<PaneMenuId>[] {
   const relationLabel = { parent: "panes.relation.parent", sibling: "panes.relation.sibling" } as const;
   const items: MenuEntry<PaneMenuId>[] = relationEntries(pane).map((entry) => ({
@@ -166,7 +173,7 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
     agentActions.push({
       id: "sleep_agent", menuLabel: translate("menus.sleep"), icon: "sleep",
       label: translate("panes.menu.sleep"),
-      unavailable: pane.sleep_action.available ? null : (pane.sleep_action.reason ?? translate("panes.menu.sleepUnavailable")),
+      unavailable: pane.sleep_action.available ? null : refusalText(pane.sleep_action.reason, "panes.menu.sleepUnavailable"),
     });
   }
   // Archive session (PRD session-archive B1-B4, D-08): below Sleep agent on a
@@ -182,7 +189,7 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
   // core's reason on an agent that can fork but has not reported its conversation
   // yet; an agent with no fork command, a shell and a device pane get neither.
   if (pane.fork?.available || pane.fork?.reason) {
-    const unavailable = pane.fork.available ? null : (pane.fork.reason ?? translate("panes.menu.forkUnavailable"));
+    const unavailable = pane.fork.available ? null : refusalText(pane.fork.reason, "panes.menu.forkUnavailable");
     agentActions.push(
       { id: "fork_agent", group: "fork", menuLabel: translate("menus.forkTab"), icon: "fork", label: translate("panes.menu.fork"), unavailable },
       { id: "fork_agent_side", group: "fork", menuLabel: translate("menus.forkSide"), icon: "split_right", label: translate("panes.menu.forkSide"), unavailable },

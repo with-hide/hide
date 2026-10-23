@@ -68,7 +68,8 @@ describe("the Sleep idle agents setting and the pane menu", () => {
       ({ id: "w1:p1", sleep_action, children: null, lineage_path: [] }) as unknown as PaneRow;
     const sleepItem = (row: PaneRow) => paneMenuItems(row, "reviewer").find((item) => item.id === "sleep_agent");
     expect(sleepItem(pane({ available: true }))).toMatchObject({ label: "Sleep agent", unavailable: null });
-    expect(sleepItem(pane({ available: false, reason: "This agent is working" }))).toMatchObject({ unavailable: "This agent is working" });
+    expect(sleepItem(pane({ available: false, reason: "working" }))).toMatchObject({ unavailable: "This agent is working" });
+    expect(sleepItem(pane({ available: false, reason: "a_newer_reason" as never }))).toMatchObject({ unavailable: "This agent cannot sleep now" });
     expect(sleepItem(pane())).toBeUndefined();
   });
 });

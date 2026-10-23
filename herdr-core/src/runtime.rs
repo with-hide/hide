@@ -2921,7 +2921,7 @@ pub fn pane_fork_snapshot(agent: Option<&SidebarAgentSnapshot>) -> PaneForkSnaps
     PaneForkSnapshot {
         available,
         reason: (!available && ForkableAgent::parse(&agent.agent_kind).is_some())
-            .then(|| "This agent has not reported its conversation yet".to_owned()),
+            .then_some(crate::model::AgentActionRefusal::NoConversation),
         forked_from: agent.forked_from.clone(),
     }
 }

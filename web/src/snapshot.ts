@@ -269,13 +269,16 @@ export type ForkSource = { pane_id?: string | null; label?: string | null };
  * `available` offers Fork agent and Fork agent to the side, `reason` says why a
  * forkable agent cannot fork yet, and `forked_from` is present on a fork.
  */
-export type PaneFork = { available: boolean; reason?: string | null; forked_from?: ForkSource | null };
+/** Why Sleep agent or Fork is disabled now, as a code (`AgentActionRefusal`); the web words it by `agentActionRefusal.<code>`. */
+export type AgentActionRefusal = "device" | "unsupported" | "core_machine_only" | "asleep" | "working" | "waiting_for_you" | "unknown_activity" | "no_conversation";
+
+export type PaneFork = { available: boolean; reason?: AgentActionRefusal | null; forked_from?: ForkSource | null };
 
 /** Where the pane menu's fork puts the fork: its own tab, or beside the source. */
 export type ForkPlacement = "tab" | "side";
 
 /** The pane menu's Sleep agent item (`AgentSleepActionSnapshot`); absent where it does not apply. */
-export type AgentSleepAction = { available: boolean; reason?: string | null };
+export type AgentSleepAction = { available: boolean; reason?: AgentActionRefusal | null };
 
 export type DescendantCounts = { error: number; approval: number; question: number; working: number; done: number };
 
