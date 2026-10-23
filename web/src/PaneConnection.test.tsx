@@ -219,7 +219,7 @@ it("says only that the machine could not be reached when the answer is unreachab
   await act(async () => { useShellStore.setState(snapshot({ state: "failed", reason: "unreachable" }) as never); });
   const line = document.querySelector("[data-codex-shared-server-outcome]");
   expect(line?.getAttribute("data-codex-shared-server-outcome")).toBe("failed");
-  expect(line?.textContent).toBe("Couldn't reach that machine. Try again.");
+  expect(line?.textContent).toBe("Couldn't reach that device. Try again.");
   expect(offLink()?.hasAttribute("disabled")).toBe(false);
   await unmount();
 });

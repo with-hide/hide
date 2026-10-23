@@ -196,13 +196,13 @@ describe("attachment upload", () => {
     expect(refusalText("too_large", en)).toContain("20 MiB");
     expect(refusalText("batch_too_large", en)).toContain("40 MiB");
     expect(refusalText("too_many_files", en)).toContain("1 and 8");
-    expect(refusalText("staging_full", en)).toContain("staged");
+    expect(refusalText("staging_full", en)).toContain("being prepared");
     expect(refusalText("size_mismatch", en)).toContain("changed");
     expect(refusalText("wat", en)).toBe("The attachment was refused.");
   });
 
   it("states the daemon's caps in the chosen language", () => {
-    expect(refusalText("too_large", ko)).toBe("파일 하나가 첨부 한도 20 MiB를 초과합니다.");
+    expect(refusalText("too_large", ko)).toBe("파일 하나가 첨부 한도 20 MiB를 넘어요.");
     expect(refusalText("too_many_files", ko)).toBe("일반 파일을 1개에서 8개까지 선택하세요.");
   });
 });
