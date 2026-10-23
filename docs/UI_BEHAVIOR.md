@@ -784,14 +784,15 @@ Web owner: `web/src/close.ts` (which sheet, which panes and descendants, and the
 A terminal pane links what its program prints, whichever program it is: an http(s) URL, a path, and a link the program marked itself (OSC 8).
 A plain-text path is a link only where it names something on this Mac, so a word that merely looks like a path draws nothing; the check runs when the pointer reaches a row, never per frame.
 A relative path is looked for under the pane's folder and then under its checkout's root, `~/` names the home folder, and a location written after it (`:12`, `:12:5`, `#L12`, `(12,5)`) is where the file opens.
-The original spelling is checked before treating punctuation, attached prose or a location as context: if `docs/a.md)에`, `docs/a.md)` or `src/a.ts:12:5` is itself a file name, that complete name wins.
-Composite punctuation, prose and locations also preserve prose-only literal names such as `(src/a.ts:12:5)` before dropping their leading or closing punctuation or interpreting the location.
-Among the bounded interpretations, the longest existing path wins; a failed or budget-skipped longer check never establishes a shorter link.
+A link may be written against prose with no space: brackets and quotes of any script, sentence punctuation, and Korean, Japanese or Chinese words before or after it.
+So `열어뒀어요(http://127.0.0.1:8391).`, `캡처는("/tmp/a.png")입니다`, `「docs/a.md」를`, `“https://example.com”`, `[label](src/a.ts)`, `{"path":"/tmp/a.png"}` and `--file=/tmp/a.png` each link only the address in them.
+These places are found by the kind of character, a Unicode class, not from a list of marks: a link starts after an opening bracket or quote or an `=`, ends before a closing one, stops at sentence punctuation such as `,`, `。` or `、`, and a run of Hangul, kana or Han letters is cut once, where its script meets the link.
+A run that touches `/`, `.`, `-` or `_` belongs to the name, so `docs/회의록에`, `회의록/a.md` and `한글.md` are checked only as written.
+The original spelling is checked before treating punctuation, attached prose or a location as context: if `docs/a.md)에`, `docs/a.md)`, `(src/a.ts:12:5)` or `src/a.ts:12:5` is itself a file name, that complete name wins.
+Among the bounded spellings, the longest existing path wins, and of two the same length the one that keeps the token's start; a failed or budget-skipped longer check never establishes a shorter link.
+A path ends at a closing bracket whatever follows it, so `docs/a.md)foo` links `docs/a.md` when only that exists, but never at an opening one, so `app/(auth)/page.tsx` never links `app/`.
 In Korean prose such as `보드 보기 (docs/README.md)에 C안을 추가했습니다.`, only `docs/README.md` is underlined and clickable when that is the actual path.
-Korean, Japanese and Chinese attach the next word to a path without a space, and Claude Code draws a backticked path without its backticks, so `view-mode.html에` reaches the pane as one word.
-The run of Hangul, kana or Han characters at a word's end is that attached prose, and it is cut once, where the script changes: `view-mode.html에`, `docs/a.md)에서도` and `view-mode.htmlに` link `view-mode.html`, `docs/a.md` and `view-mode.html`, with no list of particles.
-A run that starts right after `/` is a folder entry's own name and is never cut, so `docs/회의록에` is checked only as written; a word in another script attached to a path is not prose either.
-A URL cannot be checked, so its attached prose is cut only after a closing mark, where it is always prose: in `PR #682 (https://github.com/o/r/pull/682)이 끝났습니다`, only `https://github.com/o/r/pull/682` is the link, while `https://ko.wikipedia.org/wiki/서울이` links all of it.
+A URL cannot be checked, so it is the longest spelling from its scheme whose brackets balance, which holds no quote and which does not end on sentence punctuation: in `PR #682 (https://github.com/o/r/pull/682)이 끝났습니다`, only `https://github.com/o/r/pull/682` is the link, `https://en.wikipedia.org/wiki/Mercury_(planet)` keeps its brackets, and `https://ko.wikipedia.org/wiki/서울이` links all of it.
 Ranges follow the terminal's actual cells, including wide glyphs, combining sequences and wrapped rows.
 A path or URL the terminal wrapped at its last column, or a TUI broke at its own margin and indented, is one link across its rows; a URL spans rows only where the terminal wrapped it, because it cannot be checked.
 Under the pointer a link is underlined and the pointer becomes a hand; a click on it is the link's and never reaches the program, and a drag across it selects its text and opens nothing.

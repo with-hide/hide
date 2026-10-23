@@ -615,6 +615,20 @@ test("Korean prose links only the real path and opens that file", async () => {
   await expect(page.locator(".cm-content")).toContainText("issue 271 exact file");
   await nativeCapture("korean-prose-open");
 
+  // Prose written straight against the opening bracket, as agents write
+  // Korean: only the path or the address is the link, never the word before it.
+  for (const [written, link] of [["캡처는(docs/README.md).", "docs/README.md"], [`열어뒀어요(${origin}/a.html). 이전에는`, `${origin}/a.html`]] as const) {
+    await print(page, paneId, [written, "GLUED-END-" + link.length], "GLUED-END-" + link.length);
+    const first = await cellOf(page, paneId, link);
+    for (const column of [first.column, first.column + link.length - 1]) await hoverLink(page, paneId, await cellPoint(page, paneId, { row: first.row, column }));
+    for (const column of [first.column - 1, first.column - 2, first.column + link.length]) {
+      const outside = await cellPoint(page, paneId, { row: first.row, column });
+      await page.mouse.move(outside.x, outside.y);
+      await expect(page.locator('[data-terminal="' + paneId + '"] .xterm-screen')).not.toHaveClass(/xterm-cursor-pointer/);
+    }
+  }
+  await nativeCapture("korean-glued-prose-hover");
+
   for (const [written, selected] of [
     ["docs/원문.md)에", "docs/원문.md)에"],
     ["docs/괄호.md)", "docs/괄호.md)"],
@@ -639,7 +653,8 @@ test("Korean prose links only the real path and opens that file", async () => {
     const punctuation = caseIndex < 6 ? "" : ".";
     const base = "docs/composite-" + caseIndex + ".ts";
     const written = "(" + base + ":12:5)에" + punctuation;
-    const spellings = [written, base + ":12:5)에", "(" + base + ":12:5)", base + ":12:5)", base + ":12:5", base];
+    // Longest first; of two the same length, the one that keeps the token's start.
+    const spellings = [written, "(" + base + ":12:5)", base + ":12:5)에", base + ":12:5)", base + ":12:5", base];
     const selected = spellings[stage]!;
     for (const file of spellings.slice(stage)) {
       fs.mkdirSync(path.join(checkout, path.dirname(file)), { recursive: true });
@@ -737,8 +752,8 @@ async function zoomDensePane(page: Page, paneId: string): Promise<void> {
 test("dense terminal path hover measures cold and warm native work", async () => {
   const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
   fs.mkdirSync(path.join(checkout, "dense"), { recursive: true });
-  // Half the row exercises the complete six-stage punctuation/location
-  // composition; the first plain path stays hoverable on the original baseline.
+  // Half the row carries punctuation, prose and a location around its path;
+  // the first plain path stays hoverable on the original baseline.
   const tokens = Array.from({ length: 12 }, (_, index) => {
     const base = "dense/f" + String(index).padStart(2, "0") + ".md";
     return index % 2 ? "(" + base + ":12:5)에" : base;
