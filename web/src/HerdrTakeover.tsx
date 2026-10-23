@@ -1,25 +1,26 @@
-// Moving the operator's own older Herdr server onto Hide's Herdr (PRD
-// herdr-takeover): the wizard's first step, Help > Set up Hide's, Overview's
-// Herdr place and the line a move leaves when the operator's own `herdr` is
-// behind. The core owns the offer and the move (`status.herdr_takeover`); a
-// restart where Herdr cannot hand over is the desktop host's, after the
-// operator saw what ends (D-13).
+// The operator's own Herdr server on this machine (PRD herdr-takeover): the
+// wizard's first step, Help > Set up Hide's, the screen that holds all of Hide
+// while the server speaks another protocol, and the line a move leaves when
+// the operator's own `herdr` is behind. The core owns the offer and the move
+// (`status.herdr_takeover`); a restart where Herdr cannot hand over is the
+// desktop host's, after the operator saw what ends (D-13).
 
-import { ArrowRightIcon, CheckIcon } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { ArrowRightIcon, CheckIcon, ChevronRightIcon } from "lucide-react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { Note, Status } from "./components/settings-rows";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Kbd } from "./components/ui/kbd";
-import { hostBridge, type HerdrRestart } from "./host";
-import { HERDR_UPDATE_COMMAND, leavesForLater, movedLine, overviewTakeover, stopYourselfShown } from "./herdrTakeoverRules";
+import { hostBridge, keySystem, type HerdrRestart } from "./host";
+import { coreLogPath, leavesForLater, movedLine, pathHerdrUpdate, stopYourselfShown, type HerdrGate as Gate } from "./herdrTakeoverRules";
 import { useInterfaceTranslation } from "./i18n/client";
+import { UpdateRows } from "./settings/AboutTab";
 import { fieldLabel } from "./shortcutLabels";
-import type { HerdrStatus, HerdrTakeover } from "./snapshot";
+import { holdsFieldModifier } from "./shortcuts";
+import type { HerdrTakeover } from "./snapshot";
 import { useShellStore } from "./store";
-import { useUiStore } from "./ui";
 import { checkForUpdates } from "./updates";
 
 /** How long a restart that went through holds its button while the core's look takes the offer away. */
@@ -99,17 +100,36 @@ function Failure({ takeover }: { takeover: HerdrTakeover }) {
   );
 }
 
-/** The operator's own `herdr` is behind the moved server: what fails and the one command that fixes it (B5). */
+/** The operator's own `herdr` is behind the moved server: what fails, and the one command that brings it up (B5). */
 function PathBehind({ version }: { version: string }) {
+  const { t } = useInterfaceTranslation();
+  const update = pathHerdrUpdate(useShellStore((s) => s.rest?.status?.herdr_versions));
+  return (
+    <div className="flex flex-col gap-sm rounded-md bg-card px-md py-sm" data-herdr-takeover-path-behind={version}>
+      <span className="text-caption text-subtle-foreground">{t("herdrTakeover.moved.pathBehind", { version })}</span>
+      {update ? <UpdateCommand update={update} /> : null}
+    </div>
+  );
+}
+
+/**
+ * The command that brings the operator's own `herdr` up, with what it does and a Copy: Hide never runs it, since it
+ * changes the operator's own file (and asks for `sudo` where their account cannot write the folder).
+ */
+export function UpdateCommand({ update }: { update: NonNullable<ReturnType<typeof pathHerdrUpdate>> }) {
   const { t } = useInterfaceTranslation();
   const [copied, setCopied] = useState(false);
   const copy = () => {
-    void navigator.clipboard?.writeText(HERDR_UPDATE_COMMAND).then(() => setCopied(true), () => setCopied(false));
+    void navigator.clipboard?.writeText(update.command).then(() => setCopied(true), () => setCopied(false));
   };
   return (
-    <div className="flex flex-wrap items-center gap-sm rounded-md bg-card px-md py-sm" data-herdr-takeover-path-behind={version}>
-      <span className="min-w-0 flex-1 text-caption text-subtle-foreground">{t("herdrTakeover.moved.pathBehind", { version })}</span>
-      <code className="font-mono text-caption text-foreground">{HERDR_UPDATE_COMMAND}</code>
+    <div className="flex flex-wrap items-center gap-sm" data-herdr-update-command={update.command}>
+      <span className="flex min-w-0 flex-1 flex-col gap-xxs">
+        <code className="break-all font-mono text-caption text-foreground">{update.command}</code>
+        <span className="text-caption text-muted-foreground">
+          {update.brew ? t("herdrTakeover.pathCommand.brew") : t("herdrTakeover.pathCommand.copy", { version: update.hide })}
+        </span>
+      </span>
       <Button variant="secondary" size="sm" onClick={copy} data-herdr-takeover-copy="true">
         {copied ? <CheckIcon aria-hidden="true" /> : null}
         {copied ? t("herdrTakeover.copied") : t("herdrTakeover.copy")}
@@ -132,20 +152,22 @@ function RestartTerms() {
 type StepParts = { title: string; description: string; body: ReactNode; footer: ReactNode; primary: (() => void) | null };
 
 /**
- * The wizard's Herdr step (B1-B13): the move with what it keeps, its
- * failure and retry, the moved server's `herdr update` line, or the
- * restart with what ends. `onLater` is Not now, where the step offers it,
- * and `onMoved` the moved step's Continue.
+ * The Herdr step (B1-B13): the move with what it keeps, its failure and
+ * retry, the moved server's line for the operator's own `herdr`, the restart
+ * with what ends, or a look that could not read the server with its retry.
+ * `onLater` is Not now where the step offers it (the screen that holds Hide
+ * offers none), and `onMoved` the moved step's Continue.
  */
-function herdrStepParts({ takeover, actions, restart, t, onLater, onMoved }: {
+function herdrStepParts({ takeover, actions, restart, t, onLater, onMoved, desktop }: {
   takeover: HerdrTakeover;
   actions: Actions;
   restart: ReturnType<typeof useHerdrRestart>;
   t: ReturnType<typeof useInterfaceTranslation>["t"];
-  onLater: () => void;
+  onLater: (() => void) | null;
   onMoved: () => void;
+  desktop: boolean;
 }): StepParts {
-  const later = leavesForLater(takeover) ? (
+  const later = onLater && leavesForLater(takeover) ? (
     <Button variant="ghost" onClick={onLater} data-herdr-takeover-later="true">{t("herdrTakeover.later")}</Button>
   ) : null;
   if (takeover.stage === "moved") {
@@ -155,6 +177,35 @@ function herdrStepParts({ takeover, actions, restart, t, onLater, onMoved }: {
       body: takeover.path_herdr_behind ? <PathBehind version={takeover.path_herdr_behind} /> : null,
       footer: <MainButton onClick={onMoved} data-herdr-takeover-continue="true">{t("herdrTakeover.continue")}</MainButton>,
       primary: onMoved,
+    };
+  }
+  if (takeover.kind === "look") {
+    const look = () => actions.herdrTakeover("look");
+    return {
+      title: t("herdrTakeover.look.title"),
+      description: t("herdrTakeover.look.description"),
+      body: null,
+      footer: (
+        <>
+          {later}
+          <MainButton onClick={look} data-herdr-takeover-look="true">{t("herdrTakeover.retry")}</MainButton>
+        </>
+      ),
+      primary: look,
+    };
+  }
+  if (takeover.kind === "restart" && !desktop) {
+    return {
+      title: t("herdrTakeover.restart.title"),
+      description: t("herdrTakeover.restart.description"),
+      body: (
+        <>
+          <RestartTerms />
+          <Note data-herdr-takeover-desktop-only="true">{t("herdrTakeover.restart.desktopOnly")}</Note>
+        </>
+      ),
+      footer: later,
+      primary: null,
     };
   }
   if (takeover.kind === "restart") {
@@ -221,6 +272,28 @@ function MainButton(props: React.ComponentProps<typeof Button>) {
   );
 }
 
+/** A step's title, description, body and buttons, as the wizard's dialog and the screen that holds Hide draw them. */
+function StepLayout({ parts, step, leading }: { parts: StepParts; step: string; leading?: ReactNode }) {
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>{parts.title}</DialogTitle>
+        <DialogDescription>{parts.description}</DialogDescription>
+      </DialogHeader>
+      {parts.body ? (
+        <DialogBody className="flex flex-col gap-md" data-herdr-takeover-step={step}>
+          {parts.body}
+        </DialogBody>
+      ) : <div className="h-md" data-herdr-takeover-step={step} />}
+      <DialogFooter>
+        {leading}
+        <span className="flex-1" />
+        {parts.footer}
+      </DialogFooter>
+    </>
+  );
+}
+
 /** The wizard's Herdr step, drawn into the wizard's dialog (B1). */
 export function FirstRunHerdr({ actions, takeover, primary, onLater, onMoved }: {
   actions: Actions;
@@ -231,113 +304,100 @@ export function FirstRunHerdr({ actions, takeover, primary, onLater, onMoved }: 
 }) {
   const { t } = useInterfaceTranslation();
   const restart = useHerdrRestart(actions);
-  const parts = herdrStepParts({ takeover, actions, restart, t, onLater, onMoved });
+  const parts = herdrStepParts({ takeover, actions, restart, t, onLater, onMoved, desktop: hostBridge() !== null });
   primary.current = parts.primary;
-  return (
-    <>
-      <DialogHeader>
-        <DialogTitle>{parts.title}</DialogTitle>
-        <DialogDescription>{parts.description}</DialogDescription>
-      </DialogHeader>
-      <DialogBody className="flex flex-col gap-md" data-herdr-takeover-step={`${takeover.kind}:${takeover.stage}`}>
-        {parts.body}
-      </DialogBody>
-      <DialogFooter>
-        <span className="flex-1" />
-        {parts.footer}
-      </DialogFooter>
-    </>
-  );
+  return <StepLayout parts={parts} step={`${takeover.kind}:${takeover.stage}`} />;
 }
 
 /**
- * Overview's Herdr place for this machine (B16, B18, B19): a server Hide
- * cannot read gets its version, one line and the move (or the restart, behind
- * the same confirmation as the wizard's); a newer protocol, the update. A
- * mismatch Hide has nothing to offer for is the one line alone. Null when
- * this machine's Herdr is nothing of these.
+ * The screen that holds all of Hide while this machine's Herdr speaks another protocol (`herdrGate`): drawn in place of
+ * the shell, with no Not now and nothing behind it to reach, so no key, menu item or window opens a workspace on a
+ * server Hide cannot use. It offers the core's move or restart, a newer Herdr's wait for a Hide update, or a look again;
+ * View log and Quit stand beside them in the desktop app. Every system draws it; only the restart is the desktop's.
  */
-export function HerdrOverview({ actions }: { actions: Actions }) {
+export function HerdrGate({ actions, gate }: { actions: Actions; gate: Gate }) {
   const { t } = useInterfaceTranslation();
   const takeover = useShellStore((s) => s.rest?.status?.herdr_takeover ?? null);
   const herdr = useShellStore((s) => s.rest?.status?.herdr);
-  const desktop = hostBridge() !== null;
-  const shown = overviewTakeover(takeover);
+  const hide = useShellStore((s) => s.rest?.status?.herdr_versions?.hide ?? null);
+  const statePath = useShellStore((s) => s.daemon?.core_state_path ?? null);
+  const bridge = hostBridge();
   const restart = useHerdrRestart(actions);
-  const [confirming, setConfirming] = useState(false);
-  if (!shown) return herdr?.state === "protocol_mismatch" ? <Mismatch herdr={herdr} /> : null;
-  const current = takeover!;
-  const badge = <Badge variant="outline" className="font-mono">{t("herdrTakeover.version", { version: current.server_version })}</Badge>;
-  if (shown === "update_hide") {
-    return (
-      <Place kind="update_hide" badge={badge} title={t("herdrTakeover.overview.update")} hint={t("herdrTakeover.overview.updateHint")}>
-        {desktop ? (
-          <Button onClick={() => { checkForUpdates(); useUiStore.getState().openSettings("about"); }} data-herdr-takeover-check-updates="true">
-            {t("herdrTakeover.overview.checkUpdates")}
-          </Button>
-        ) : null}
-      </Place>
-    );
+  const look = () => actions.herdrTakeover("look");
+  const again = <Button variant={gate === "older" ? "default" : "secondary"} onClick={look} data-herdr-gate-look="true">{t("herdrTakeover.retry")}</Button>;
+  let parts: StepParts;
+  if ((gate === "move" || gate === "restart" || gate === "look") && takeover) {
+    parts = herdrStepParts({ takeover, actions, restart, t, onLater: null, onMoved: () => {}, desktop: bridge !== null });
+  } else if (gate === "update_hide" || gate === "newer") {
+    const server = takeover?.server_version || herdr?.received_version || null;
+    const known = takeover?.version || hide;
+    parts = {
+      title: t("herdrTakeover.newer.title"),
+      description: t("herdrTakeover.newer.description"),
+      body: (
+        <>
+          {server ? (
+            <div className="flex flex-wrap items-center gap-sm text-caption text-muted-foreground" data-herdr-gate-versions={`${server}>${known ?? ""}`}>
+              <Badge variant="outline" className="font-mono">{t("herdrTakeover.version", { version: server })}</Badge>
+              {known ? <><ChevronRightIcon aria-hidden="true" className="size-(--size-icon)" />{t("herdrTakeover.newer.hideKnows", { version: known })}</> : null}
+            </div>
+          ) : null}
+          {bridge ? <div className="flex flex-col" data-herdr-gate-update="true"><UpdateRows /></div> : null}
+        </>
+      ),
+      footer: (
+        <>
+          {again}
+          {bridge ? <Button onClick={checkForUpdates} data-herdr-takeover-check-updates="true">{t("herdrTakeover.checkUpdates")}</Button> : null}
+        </>
+      ),
+      primary: bridge ? checkForUpdates : look,
+    };
+  } else {
+    const server = herdr?.received_version;
+    parts = {
+      title: t("herdrTakeover.mismatch.title"),
+      description: t("herdrTakeover.mismatch.description"),
+      body: server ? <Badge variant="outline" className="w-fit font-mono">{t("herdrTakeover.version", { version: server })}</Badge> : null,
+      footer: again,
+      primary: look,
+    };
   }
-  if (shown === "restart") {
-    return (
-      <Place kind="restart" badge={badge} title={t("herdrTakeover.overview.mismatch")} hint={t("herdrTakeover.overview.restartHint", { version: current.version })}>
-        {desktop ? (
-          <Button variant="secondary" onClick={() => setConfirming(true)} disabled={restart.restarting} data-herdr-takeover-restart-open="true">
-            {restart.restarting ? t("herdrTakeover.restart.restarting") : t("herdrTakeover.restart.button")}
-          </Button>
-        ) : (
-          <Note data-herdr-takeover-desktop-only="true">{t("herdrTakeover.restart.desktopOnly")}</Note>
-        )}
-        {restart.restarting ? null : <Failure takeover={current} />}
-        <Dialog open={confirming} onOpenChange={setConfirming}>
-          <DialogContent initialFocus="container" aria-describedby={undefined} data-herdr-takeover-confirm="restart">
-            <DialogHeader>
-              <DialogTitle>{t("herdrTakeover.restart.title")}</DialogTitle>
-              <DialogDescription>{t("herdrTakeover.restart.description")}</DialogDescription>
-            </DialogHeader>
-            <DialogBody className="flex flex-col gap-md">
-              <RestartTerms />
-            </DialogBody>
-            <DialogFooter>
-              <span className="flex-1" />
-              <Button variant="ghost" onClick={() => setConfirming(false)}>{t("common.cancel")}</Button>
-              <Button variant="destructive" onClick={() => { setConfirming(false); restart.restart(); }} data-herdr-takeover-restart="true">
-                {t("herdrTakeover.restart.button")}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </Place>
-    );
-  }
-  const moving = current.stage === "moving";
+  const log = statePath ? coreLogPath(statePath) : null;
+  const leading = bridge ? (
+    <>
+      {log ? <Button variant="ghost" onClick={() => bridge.revealPath(log)} data-herdr-gate-log="true">{t("herdrTakeover.viewLog")}</Button> : null}
+      <Button variant="ghost" onClick={() => bridge.quit()} data-herdr-gate-quit="true">{t("herdrTakeover.quit")}</Button>
+    </>
+  ) : null;
+  const primary = useRef(parts.primary);
+  primary.current = parts.primary;
+  // ⌘↵ (Ctrl+Enter off macOS) anywhere on the screen, or Enter on the screen itself, presses its main button, as the wizard's does (B40).
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    const target = event.target as HTMLElement;
+    if (!holdsFieldModifier(event, keySystem()) && target.closest("button, a")) return;
+    if (!primary.current) return;
+    event.preventDefault();
+    primary.current();
+  };
   return (
-    <Place kind="move" badge={badge} title={t("herdrTakeover.overview.mismatch")} hint={t("herdrTakeover.overview.moveHint", { version: current.version })}>
-      <Button onClick={() => actions.herdrTakeover("move")} disabled={moving} aria-busy={moving} data-herdr-takeover-move={current.stage}>
-        {moving ? t("herdrTakeover.move.moving") : current.stage === "failed" ? t("herdrTakeover.retry") : t("herdrTakeover.move.button")}
-      </Button>
-      <Failure takeover={current} />
-    </Place>
+    <Dialog open>
+      <DialogContent
+        initialFocus="container"
+        aria-describedby={undefined}
+        data-herdr-gate={gate}
+        className="w-(--size-onboarding-dialog-w) [&_[data-slot=dialog-title]]:text-headline"
+        onKeyDown={onKeyDown}
+        // Nothing lies behind it to go back to.
+        onEscapeKeyDown={(event) => event.preventDefault()}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
+      >
+        <StepLayout parts={parts} step={`gate:${gate}`} leading={leading} />
+      </DialogContent>
+    </Dialog>
   );
-}
-
-function Place({ kind, badge, title, hint, children }: { kind: string; badge: ReactNode; title: string; hint: string | null; children?: ReactNode }) {
-  return (
-    <div role="status" className="flex flex-1 flex-col items-center justify-center gap-md p-xl text-center" data-herdr-takeover-overview={kind}>
-      {badge}
-      <p className="text-subhead break-keep text-foreground">{title}</p>
-      {hint ? <p className="max-w-(--size-panel-min) break-keep text-body text-subtle-foreground">{hint}</p> : null}
-      {children}
-    </div>
-  );
-}
-
-/** A Herdr on another protocol Hide offers nothing for (no Herdr of its own here, a preview): the version and the one line. */
-function Mismatch({ herdr }: { herdr: HerdrStatus }) {
-  const { t } = useInterfaceTranslation();
-  const badge = herdr.received_version ? <Badge variant="outline" className="font-mono">{t("herdrTakeover.version", { version: herdr.received_version })}</Badge> : null;
-  return <Place kind="mismatch" badge={badge} title={t("herdrTakeover.overview.mismatch")} hint={null} />;
 }
 
 /** The line a move outside the wizard leaves while the operator's own `herdr` is behind; OK closes it (B5). */

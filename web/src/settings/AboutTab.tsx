@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { Actions } from "../actions";
 import { Button } from "../components/ui/button";
 import { Switch } from "../components/ui/switch";
 import { Disclosure, Group, Note, Row, Status, Value, type Tone } from "../components/settings-rows";
@@ -9,9 +10,11 @@ import { diagnosticsInputOf, diagnosticsText, environmentTone, herdrLine, herdrP
 import { useShellStore } from "../store";
 import type { UpdateStatus } from "../host";
 import { checkedAgo, checkForUpdates, restartIntoUpdate, setPreviewUpdates, useUpdateStatus } from "../updates";
+import { UpdateCommand } from "../HerdrTakeover";
+import { pathHerdrUpdate } from "../herdrTakeoverRules";
 
 /** What this hide is: its version, the Herdr behind it, and the details folded away unless something is wrong. */
-export function AboutTab() {
+export function AboutTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const daemon = useShellStore((s) => s.daemon);
   const connection = useShellStore((s) => s.connection);
@@ -33,11 +36,7 @@ export function AboutTab() {
         <Value>{daemon ? daemon.version : t("settings.unavailable")}</Value>
       </Row>
       <UpdateRows />
-      <Row label="Herdr">
-        <Status tone={line.tone} data-herdr-state={herdr?.state ?? "unavailable"}>
-          {herdr?.state === "connected" && herdr.received_version ? `${line.text} · ${herdr.received_version}` : line.text}
-        </Status>
-      </Row>
+      <HerdrRows actions={actions} />
       <Disclosure title={t("settings.details")} data-settings-details="true">
         <Row label={t("settings.process")}>
           <Value>{daemon ? t("settings.processValue", { pid: String(daemon.pid), schema: String(daemon.schema_version) }) : t("settings.unavailable")}</Value>
@@ -93,11 +92,49 @@ export function AboutTab() {
 }
 
 /**
+ * The Herdr server Hide works on and the operator's own `herdr` (PRD herdr-takeover): a version only where one was
+ * read, and a button only where there is something to do, the server's move or the command that brings the terminal's
+ * `herdr` up. The terminal line is absent when the operator's terminal finds no `herdr`. A server on another protocol
+ * never reaches here: the screen that holds Hide offers its move, restart or update.
+ */
+function HerdrRows({ actions }: { actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const herdr = useShellStore((s) => s.rest?.status?.herdr);
+  const takeover = useShellStore((s) => s.rest?.status?.herdr_takeover ?? null);
+  const versions = useShellStore((s) => s.rest?.status?.herdr_versions ?? null);
+  const line = herdrLine(herdr, t);
+  const server = (herdr?.state === "connected" || herdr?.state === "stale") && herdr.received_version ? herdr.received_version : null;
+  const same = server !== null && versions !== null && server === versions.hide;
+  const movable = takeover?.kind === "move" && takeover.same_protocol && takeover.stage !== "moved";
+  const path = versions?.path_herdr ?? null;
+  const update = pathHerdrUpdate(versions);
+  return (
+    <>
+      <Row label={t("settings.herdrServer")}>
+        <Status tone={server === null ? line.tone : same || versions === null ? "ok" : "muted"} data-herdr-state={herdr?.state ?? "unavailable"} data-herdr-server={server ?? ""}>
+          {server === null ? line.text : versions === null ? server : t(same ? "settings.herdrServer.same" : "settings.herdrServer.differs", { version: server, hide: versions.hide })}
+        </Status>
+        {movable ? (
+          <Button variant="secondary" size="sm" onClick={() => actions.herdrTakeover("move")} disabled={takeover.stage === "moving"} aria-busy={takeover.stage === "moving"} data-herdr-takeover-move={takeover.stage}>
+            {t(takeover.stage === "moving" ? "herdrTakeover.move.moving" : takeover.stage === "failed" ? "herdrTakeover.retry" : "herdrTakeover.move.button")}
+          </Button>
+        ) : null}
+      </Row>
+      {path ? (
+        <Row label={t("settings.pathHerdr")} detail={path.behind && update ? <UpdateCommand update={update} /> : null} data-path-herdr={path.behind ? "behind" : "current"}>
+          {path.behind ? <Status tone="muted">{t("settings.pathHerdr.refused", { version: path.version })}</Status> : <Value>{path.version}</Value>}
+        </Row>
+      ) : null}
+    </>
+  );
+}
+
+/**
  * This app's update and its preview switch (PRD auto-update D-20, B25-B28):
  * the one place a check, a download or a failure shows. Only the desktop app
  * has them; a browser tab and the phone draw neither row (B24).
  */
-function UpdateRows() {
+export function UpdateRows() {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const status = useUpdateStatus();
