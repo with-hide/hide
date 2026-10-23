@@ -135,8 +135,8 @@ function PracticeHub({ progress, unsaved, onStart }: { progress: PracticeProgres
                 </div>
                 <span className={`ph-chip ${row.status}`}>{row.status === "paused" ? t("practice.status.paused", { index: row.step + 1, total }) : t(`practice.status.${row.status}`)}</span>
                 <div className="ph-acts">
-                  {row.status === "paused" ? <button type="button" className="ph-sub" onClick={() => play(at, true)}>{t("practice.fromStart")}</button> : null}
-                  <button type="button" className="ph-go" onClick={() => play(at, false)}>
+                  {row.status === "paused" ? <button type="button" className="ph-sub" onClick={() => play(at, true)} data-practice-from-start>{t("practice.fromStart")}</button> : null}
+                  <button type="button" className="ph-go" onClick={() => play(at, false)} data-practice-play>
                     {row.status === "paused" ? t("practice.continue") : row.status === "done" ? t("practice.replay") : t("practice.start")}
                   </button>
                 </div>

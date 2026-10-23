@@ -464,7 +464,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const title = say(`practice.${chapter.id}.title`);
 
   return (
-    <div className="pc-layer" data-practice-layer data-practice-step={step.id}>
+    <div className="pc-layer" data-practice-layer data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length}>
       <style>{COACH_CSS}</style>
       {zones.length ? <div className="pc-zdim" /> : null}
       {zones.map((rect, at) => rect ? (
