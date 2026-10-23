@@ -2321,6 +2321,9 @@ Every chord is the operator's own: the host's set, the system's, and the operato
 A chapter with tasks lists them on a card in the lower left with a check as each is done and `↺ 처음부터`; the top center names the chapter and leads back to the list.
 The last step of a chapter offers the next chapter, and the last chapter's offers the list.
 
+Chapter 4 (`delegate`) hands work on by saying it to a lead agent, in three ways: a child it starts in a tab of its own, under the lead in the list, then tells something and hears back from by letter; an open agent it finds by what it does and writes to; and an agent named by the Terminal ID copied from its pane's menu (Copy details › Terminal ID) and pasted into the request.
+The agents' answers and letters are the world's script, drawn in the panes and the list; the learner only types the requests and chooses the menu item.
+
 The window holds no daemon connection and carries no token.
 It asks the shell of the same origin, over one `BroadcastChannel` (`hide-practice`), for the operator's language, chords, theme and progress, and hands each step it reaches back; the shell dispatches `practice_progress_set`, and the core keeps `ui_state.practice` like the other UI choices.
 With no shell answering, the chapters still play and the list says `진행 기록은 Hide 창이 열려 있을 때 저장돼요.`.
