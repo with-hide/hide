@@ -2077,7 +2077,14 @@ impl Runtime {
         let result =
             context.and_then(|context| live::spawn_worktree_preflight(context, id, outside));
         if let Err(reason) = result {
-            self.ingest_worktree_preflight_result(id, Vec::new(), Err(reason));
+            self.ingest_worktree_preflight_result(
+                id,
+                Vec::new(),
+                Err(live::RemovalFailure::new(
+                    crate::model::WorktreeRemovalNotice::WorkerUnavailable,
+                    reason,
+                )),
+            );
         }
         true
     }
@@ -2087,7 +2094,7 @@ impl Runtime {
         &mut self,
         id: u64,
         outside: Vec<String>,
-        result: Result<(), String>,
+        result: Result<(), live::RemovalFailure>,
     ) -> bool {
         let Some(removal) = self
             .snapshot
@@ -2097,9 +2104,13 @@ impl Runtime {
         else {
             return false;
         };
-        if let Err(message) = result {
+        if let Err(failure) = result {
+            crate::diagnostic!(serde_json::json!({
+                "component": "worktree_removal", "kind": "preflight_failed",
+                "id": id, "detail": failure.detail,
+            }));
             removal.phase = "failed".to_owned();
-            removal.message = Some(message);
+            removal.notice = Some(failure.notice);
             let device = removal.device_id.clone();
             match device.as_deref() {
                 Some(device) => {
@@ -2201,14 +2212,22 @@ impl Runtime {
                 return self.ingest_worktree_close_result(
                     id,
                     &[],
-                    Err(format!(
-                        "Deleting a worktree needs a live Herdr connection: {message}"
+                    Err(live::RemovalFailure::new(
+                        crate::model::WorktreeRemovalNotice::CloseFailed,
+                        format!("Deleting a worktree needs a live Herdr connection: {message}"),
                     )),
                 );
             }
         };
         if let Err(message) = live::spawn_worktree_close(context, id, checkout_path, pane_ids) {
-            self.ingest_worktree_close_result(id, &[], Err(message));
+            self.ingest_worktree_close_result(
+                id,
+                &[],
+                Err(live::RemovalFailure::new(
+                    crate::model::WorktreeRemovalNotice::WorkerUnavailable,
+                    message,
+                )),
+            );
         }
         true
     }
@@ -2221,20 +2240,24 @@ impl Runtime {
         worktree: &crate::model::WorktreeSnapshot,
         payload: &RemoveWorktreePayload,
     ) -> bool {
-        if let Some(reason) = worktree.deletion_gate.blocked_reason.as_ref() {
-            self.set_error("worktree.remove_blocked", reason.clone(), true);
+        if let Some(blocked) = worktree.deletion_gate.blocked.as_ref() {
+            self.set_error(
+                "worktree.remove_blocked",
+                format!("Not deleted: the deletion gate refuses it ({blocked:?})"),
+                true,
+            );
             return false;
         }
         if worktree.ignored_repositories != payload.expected_ignored_repositories {
             self.set_error("worktree.remove_ignored_changed", "Not deleted: the ignored repository list changed. Refresh and review every repository before choosing Discard.".to_owned(), true);
             return false;
         }
-        if let Some(label) = worktree.deletion_gate.discard_label.as_ref()
+        if let Some(discard) = worktree.deletion_gate.discard.as_ref()
             && !payload.discard_changes
         {
             self.set_error(
                 "worktree.remove_discard_unconfirmed",
-                format!("Not deleted: deleting it would lose work. Tick \"{label}\" to delete it anyway."),
+                format!("Not deleted: deleting it would lose work the operator did not accept losing ({discard:?})"),
                 true,
             );
             return false;
@@ -2268,12 +2291,12 @@ impl Runtime {
             protected_base_branch: protected_base_branch
                 .filter(|base| worktree.branch.as_deref() != Some(base.as_str())),
             delete_branch,
-            force_delete_branch: delete_branch && gate.branch_warning.is_some(),
-            discard_changes: payload.discard_changes && gate.discard_label.is_some(),
+            force_delete_branch: delete_branch && gate.branch_loss.is_some(),
+            discard_changes: payload.discard_changes && gate.discard.is_some(),
             expected_ignored_repositories: payload.expected_ignored_repositories.clone(),
             branch: worktree.branch,
             phase: "checking".to_owned(),
-            message: None,
+            notice: None,
         });
         id
     }
@@ -2926,7 +2949,7 @@ impl Runtime {
         &mut self,
         id: u64,
         closed_pane_ids: &[String],
-        result: Result<(), String>,
+        result: Result<(), live::RemovalFailure>,
     ) -> bool {
         let Some(active) = self.snapshot.worktree_removal.as_ref() else {
             return false;
@@ -2962,7 +2985,7 @@ impl Runtime {
                         .is_none_or(|worktree| {
                             worktree.head_sha != active.expected_head_sha
                                 || worktree.branch != active.expected_branch
-                                || worktree.deletion_gate.blocked_reason.is_some()
+                                || worktree.deletion_gate.blocked.is_some()
                         })
                 });
             // The close worker names a device's panes by Herdr's own ids.
@@ -2993,10 +3016,15 @@ impl Runtime {
                 });
             if identity_changed || pane_reappeared {
                 result = Err(if pane_reappeared {
-                    "A pane appeared in the worktree while deletion was being confirmed".to_owned()
+                    live::RemovalFailure::new(
+                        crate::model::WorktreeRemovalNotice::PaneAppeared,
+                        "A pane appeared in the worktree while deletion was being confirmed",
+                    )
                 } else {
-                    "The worktree identity or deletion gate changed while panes were closing"
-                        .to_owned()
+                    live::RemovalFailure::new(
+                        crate::model::WorktreeRemovalNotice::ChangedWhileClosing,
+                        "The worktree identity or deletion gate changed while panes were closing",
+                    )
                 });
             }
         }
@@ -3004,11 +3032,15 @@ impl Runtime {
         match result {
             Ok(()) => {
                 removal.phase = "removing".to_owned();
-                removal.message = None;
+                removal.notice = None;
             }
-            Err(message) => {
+            Err(failure) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "worktree_removal", "kind": "close_failed",
+                    "id": id, "detail": failure.detail,
+                }));
                 removal.phase = "failed".to_owned();
-                removal.message = Some(message);
+                removal.notice = Some(failure.notice);
             }
         }
         true
@@ -3094,7 +3126,7 @@ impl Runtime {
     pub(crate) fn ingest_worktree_removal_result(
         &mut self,
         id: u64,
-        result: Result<String, String>,
+        result: Result<hide_node_link::worktrees::Removed, live::RemovalFailure>,
     ) -> bool {
         let Some(removal) = self
             .snapshot
@@ -3109,12 +3141,22 @@ impl Runtime {
             }));
             return false;
         };
-        let (phase, message) = match result {
-            Ok(message) => ("finished", message),
-            Err(message) => ("failed", message),
+        let (phase, notice, detail) = match result {
+            Ok(removed) => (
+                "finished",
+                crate::model::WorktreeRemovalNotice::Removed {
+                    branch: removed.branch,
+                },
+                removed.message,
+            ),
+            Err(failure) => ("failed", failure.notice, failure.detail),
         };
+        crate::diagnostic!(serde_json::json!({
+            "component": "worktree_removal", "kind": "removal_answered",
+            "id": id, "phase": phase, "detail": detail,
+        }));
         removal.phase = phase.to_owned();
-        removal.message = Some(message);
+        removal.notice = Some(notice);
         let checkout_path = removal.checkout_path.clone();
         let removal_device = removal.device_id.clone();
         if phase == "finished" {
@@ -3916,8 +3958,10 @@ impl Runtime {
         let context = match context {
             Ok(context) => context,
             Err(message) => {
-                return self
-                    .ingest_task_operation_result(id, Err(format!("create worktree: {message}")));
+                return self.ingest_task_operation_result(
+                    id,
+                    Err(format!("create worktree: {message}").into()),
+                );
             }
         };
         let spawned = if existing_branch {
@@ -3926,7 +3970,7 @@ impl Runtime {
             live::spawn_worktree_create(context, request)
         };
         if let Err(message) = spawned {
-            return self.ingest_task_operation_result(id, Err(message));
+            return self.ingest_task_operation_result(id, Err(message.into()));
         }
         true
     }
@@ -4367,9 +4411,9 @@ impl Runtime {
             return self.ingest_task_operation_result(
                 id,
                 Err(if local {
-                    "A live Herdr connection is required. Reconnect and retry.".into()
+                    "workspace.control_unavailable".into()
                 } else {
-                    "The device's Herdr connection is unavailable. Reconnect and retry.".into()
+                    "agent_start.device_unavailable".into()
                 }),
             );
         }
@@ -4383,7 +4427,7 @@ impl Runtime {
                 payload.confirm_only,
             ) {
                 Ok(prepared) => Some(prepared),
-                Err(message) => return self.ingest_task_operation_result(id, Err(message)),
+                Err(message) => return self.ingest_task_operation_result(id, Err(message.into())),
             }
         } else {
             self.group_start = None;
@@ -4422,7 +4466,7 @@ impl Runtime {
             self.remote_controls
                 .get(&device)
                 .map(live::TabTarget::device)
-                .ok_or("start an agent: the device's Herdr connection is unavailable")
+                .ok_or("agent_start.device_unavailable")
         };
         let target = match target {
             Ok(target) => target,
@@ -4437,7 +4481,7 @@ impl Runtime {
         };
         if let Err(message) = spawned {
             self.group_start_failed(id, recovery_only);
-            return self.ingest_task_operation_result(id, Err(message));
+            return self.ingest_task_operation_result(id, Err(message.into()));
         }
         true
     }
@@ -4613,15 +4657,13 @@ impl Runtime {
             issue: None,
         };
         let Some(context) = self.live.as_ref().cloned() else {
-            return self.ingest_task_operation_result(
-                id,
-                Err("move branch: a live Herdr connection is required".into()),
-            );
+            return self
+                .ingest_task_operation_result(id, Err("workspace.control_unavailable".into()));
         };
         if let Err(message) =
             live::spawn_branch_migration(context, Arc::clone(&self.own_node), request)
         {
-            return self.ingest_task_operation_result(id, Err(message));
+            return self.ingest_task_operation_result(id, Err(message.into()));
         }
         true
     }

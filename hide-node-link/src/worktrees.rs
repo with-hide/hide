@@ -143,22 +143,110 @@ pub struct ConfirmedRemoval {
 pub struct RemovalOutcome {
     /// Whether the folder is gone; `false` means the worktree remains.
     pub removed: bool,
+    /// The host's own sentence, for the core's log.
     pub message: String,
+    /// Why it stopped, as the delete dialog words it; absent on a removal,
+    /// and from a helper of an older build.
+    #[serde(default)]
+    pub stop: Option<RemovalStop>,
+    /// What became of the local branch once the folder was gone.
+    #[serde(default)]
+    pub branch: Option<RemovalBranch>,
 }
 
-impl From<Result<String, String>> for RemovalOutcome {
-    fn from(result: Result<String, String>) -> Self {
+impl From<Result<Removed, Stopped>> for RemovalOutcome {
+    fn from(result: Result<Removed, Stopped>) -> Self {
         match result {
-            Ok(message) => Self {
+            Ok(removed) => Self {
                 removed: true,
-                message,
+                message: removed.message,
+                stop: None,
+                branch: Some(removed.branch),
             },
-            Err(message) => Self {
+            Err(stopped) => Self {
                 removed: false,
-                message,
+                message: stopped.message,
+                stop: Some(stopped.stop),
+                branch: None,
             },
         }
     }
+}
+
+/// A cleanup's removal, which no dialog words: the host's sentence alone.
+impl From<Result<String, String>> for RemovalOutcome {
+    fn from(result: Result<String, String>) -> Self {
+        let removed = result.is_ok();
+        Self {
+            removed,
+            message: result.unwrap_or_else(|message| message),
+            stop: None,
+            branch: None,
+        }
+    }
+}
+
+/// A removal that went through: the host's sentence and the branch's fate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Removed {
+    pub message: String,
+    pub branch: RemovalBranch,
+}
+
+/// A removal the host stopped: why, and its own sentence for the log.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Stopped {
+    pub stop: RemovalStop,
+    pub message: String,
+}
+
+/// Why the host stopped a confirmed worktree removal, as a code the delete
+/// dialog words (docs/LOCALIZATION.md, Translation boundary).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum RemovalStop {
+    /// Git's worktree list could not be read again.
+    RegistrationUnreadable,
+    NotRegistered,
+    Main,
+    /// Git's lock; `reason` is the text it was given, empty for none.
+    Locked {
+        name: String,
+        reason: String,
+    },
+    IdentityChanged,
+    HoldsBase,
+    Nested,
+    /// The worktree's status or folder could not be read again.
+    StateUnreadable,
+    /// Files changed after the operator confirmed.
+    Changed {
+        files: u32,
+    },
+    /// Repositories inside its ignored folders would go with it.
+    IgnoredRepositories {
+        names: Vec<String>,
+    },
+    IgnoredListChanged,
+    /// Git kept the worktree, and its folder could not be moved back.
+    NotMovedBack {
+        path: String,
+    },
+    /// `git worktree remove` refused; Git's words are in the message.
+    GitRefused,
+    /// Git answered but the folder or its registration is still there.
+    StillThere,
+}
+
+/// What became of the local branch after its worktree was removed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemovalBranch {
+    /// The operator did not ask for it to go.
+    Kept,
+    Deleted,
+    /// Git refused to delete it; its words are in the message.
+    Remains,
 }
 
 /// A repository's worktrees, as Git reports them. `None` from [`read`] is a

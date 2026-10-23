@@ -40,7 +40,7 @@ const b = project("project-b", "device-b", "Memo on B");
 const projects: BoardProject[] = [a, b].map((workspace) => ({ workspace, agents: [], device: null }));
 const answer = (workspace: Workspace, body: string): IssueDetail => ({
   workspace_id: workspace.id, device_id: workspace.device_id, task_key: key, phase: "ready", body,
-  message: null, labels: [], author: null, created_at_unix_ms: null, assignees: [], comment_count: null, comments: [],
+  failure: null, labels: [], author: null, created_at_unix_ms: null, assignees: [], comment_count: null, comments: [],
 });
 const origin = (workspace: Workspace, request: string, response: string): BacklogOrigin => ({
   workspace_id: workspace.id, device_id: workspace.device_id, task_key: key, phase: "ready",

@@ -779,9 +779,14 @@ impl Runtime {
                 self.set_error("tree_close.incomplete", message, true);
                 true
             }
-            TreeFinal::Worktree { removal_id, .. } => {
-                self.ingest_worktree_close_result(*removal_id, &[], Err(message))
-            }
+            TreeFinal::Worktree { removal_id, .. } => self.ingest_worktree_close_result(
+                *removal_id,
+                &[],
+                Err(crate::live::RemovalFailure::new(
+                    crate::model::WorktreeRemovalNotice::CloseFailed,
+                    message,
+                )),
+            ),
             TreeFinal::Project { workspace_id, .. } => {
                 self.ingest_workspace_close_result(workspace_id, Err(message))
             }

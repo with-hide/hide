@@ -307,8 +307,17 @@ pub(crate) struct WakeRequest {
     pub(crate) codex_daemon: crate::codex_launch::CodexDaemon,
 }
 
-/// How a wake ended. `reason` is what the pane says (B14); `detail` is what
-/// only the diagnostic carries, Herdr's own code and message among it (B19).
+/// Why a wake failed, as the codes the screen words (`web/src/startReason.ts`);
+/// the folder, Herdr's answer and the rest stay in the wake's `detail`.
+pub(crate) const WAKE_FOLDER_MISSING: &str = "agent_wake.folder_missing";
+pub(crate) const WAKE_NOT_RESUMED: &str = "agent_wake.not_resumed";
+pub(crate) const WAKE_NOT_STARTED: &str = "agent_wake.not_started";
+pub(crate) const WAKE_NOT_READY: &str = "agent_wake.not_ready";
+pub(crate) const WAKE_LAUNCH_CHOICE: &str = "agent_wake.launch_choice_refused";
+
+/// How a wake ended. `reason` is the code the pane words (B14); `detail` is
+/// what only the diagnostic carries, Herdr's own code and message among it
+/// (B19).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WakeOutcome {
     Started,
@@ -328,7 +337,7 @@ pub(crate) fn start_agent(
         && !crate::node_access::is_directory(node, cwd)
     {
         return WakeOutcome::Failed {
-            reason: format!("The working folder {cwd} no longer exists."),
+            reason: WAKE_FOLDER_MISSING.to_owned(),
             detail: format!("{cwd} is not a directory"),
         };
     }
@@ -340,6 +349,8 @@ pub(crate) fn start_agent(
         request.codex_daemon,
     ) {
         Ok(params) => params,
+        // A Codex whose daemon Hide has not read answers its own code
+        // (`codex_launch::CAPABILITY_UNKNOWN`), which the screen words.
         Err(detail) => {
             return WakeOutcome::Failed {
                 reason: detail.clone(),
@@ -377,7 +388,7 @@ pub(crate) fn start_agent(
                 WakeOutcome::Started
             }
             Err(detail) => WakeOutcome::Failed {
-                reason: "The agent did not become ready in time.".to_owned(),
+                reason: WAKE_NOT_READY.to_owned(),
                 detail,
             },
         },
@@ -394,7 +405,7 @@ pub(crate) fn start_agent(
             detail: format!("{code}: {message}"),
         },
         Err(StartError::Herdr(error)) => WakeOutcome::Failed {
-            reason: "The agent did not become ready in time.".to_owned(),
+            reason: WAKE_NOT_READY.to_owned(),
             detail: error.to_string(),
         },
     }
@@ -402,8 +413,8 @@ pub(crate) fn start_agent(
 
 fn refused_reason(mode: WakeMode) -> &'static str {
     match mode {
-        WakeMode::Resume => "The conversation couldn\u{2019}t be resumed.",
-        WakeMode::Fresh => "A new session couldn\u{2019}t be started.",
+        WakeMode::Resume => WAKE_NOT_RESUMED,
+        WakeMode::Fresh => WAKE_NOT_STARTED,
     }
 }
 
@@ -1003,7 +1014,7 @@ mod tests {
         assert_eq!(
             outcome,
             WakeOutcome::Failed {
-                reason: "The conversation couldn\u{2019}t be resumed.".into(),
+                reason: WAKE_NOT_RESUMED.into(),
                 detail: "agent_name_taken: agent name one is already used".into(),
             }
         );
@@ -1028,7 +1039,7 @@ mod tests {
         );
         assert!(matches!(
             outcome,
-            WakeOutcome::Failed { ref reason, .. } if reason == "The working folder /nonexistent/agent-sleep-test no longer exists."
+            WakeOutcome::Failed { ref reason, ref detail } if reason == WAKE_FOLDER_MISSING && detail.contains("/nonexistent/agent-sleep-test")
         ));
         assert!(herdr.methods().is_empty());
     }

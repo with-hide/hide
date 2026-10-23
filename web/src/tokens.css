@@ -106,6 +106,19 @@
   --color-terminal-bright-white: var(--terminal-bright-white);
   --color-terminal-selection: var(--terminal-selection);
   --color-logo-plate: var(--logo-plate);
+  --color-practice-accent: var(--practice-accent);
+  --color-practice-accent-strong: var(--practice-accent-strong);
+  --color-practice-ink: var(--practice-ink);
+  --color-practice-card: var(--practice-card);
+  --color-practice-text: var(--practice-text);
+  --color-practice-mute: var(--practice-mute);
+  --color-practice-line: var(--practice-line);
+  --color-practice-scrim: var(--practice-scrim);
+  --color-practice-keycap: var(--practice-keycap);
+  --color-practice-keycap-ink: var(--practice-keycap-ink);
+  --color-practice-zone-view: var(--practice-zone-view);
+  --color-practice-zone-work: var(--practice-zone-work);
+  --color-practice-zone-project: var(--practice-zone-project);
 }
 
 :root {
@@ -359,6 +372,10 @@
   --size-overview-graph-child-orb: 28px;
   --size-checkout-header-commit-min: 540px;
   --size-checkout-header-time-min: 800px;
+  --size-practice-bubble: 340px;
+  --size-practice-quest: 280px;
+  --size-practice-hub: 720px;
+  --size-practice-flash-key: 56px;
 }
 
 /* `.light` and `.dark` also scope a subtree, so one page can show both (the dev gallery). */
@@ -440,6 +457,19 @@
   --terminal-bright-white: #b1bac4;
   --terminal-selection: #d0d7de;
   --logo-plate: #ffffff;
+  --practice-accent: #e9c27a;
+  --practice-accent-strong: #e3a77a;
+  --practice-ink: #2a1f0e;
+  --practice-card: #f7f3ea;
+  --practice-text: #24211b;
+  --practice-mute: #736c5f;
+  --practice-line: #e6dcc6;
+  --practice-scrim: #06060a;
+  --practice-keycap: #ffffff;
+  --practice-keycap-ink: #1d1a14;
+  --practice-zone-view: #a9cfe2;
+  --practice-zone-work: #c3bbe3;
+  --practice-zone-project: #e6cf98;
 }
 
 .dark {
@@ -519,6 +549,19 @@
   --terminal-bright-white: #f4f4f6;
   --terminal-selection: #34373b;
   --logo-plate: #ffffff;
+  --practice-accent: #e9c27a;
+  --practice-accent-strong: #e3a77a;
+  --practice-ink: #2a1f0e;
+  --practice-card: #f7f3ea;
+  --practice-text: #24211b;
+  --practice-mute: #736c5f;
+  --practice-line: #e6dcc6;
+  --practice-scrim: #06060a;
+  --practice-keycap: #ffffff;
+  --practice-keycap-ink: #1d1a14;
+  --practice-zone-view: #a9cfe2;
+  --practice-zone-work: #c3bbe3;
+  --practice-zone-project: #e6cf98;
 }
 
 /* The Hide color theme: the document root carries .palette-hide beside its mode class. */

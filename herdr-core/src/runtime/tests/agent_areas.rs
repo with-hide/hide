@@ -2364,3 +2364,49 @@ fn fork_worker_panic_and_runtime_teardown_discard_the_node_request() {
         )));
     }
 }
+
+/// A checkout nobody has opened yet, such as a project just added, keeps the
+/// tab Herdr opened for it when the saved Workspaces are at their cap: the
+/// cap forgets the stalest saved Workspace, not the one made for it. Ranked
+/// by its unset choice stamp alone, each such Workspace was forgotten as the
+/// next was made, and the screen showed the empty start over a live terminal.
+#[test]
+fn checkouts_not_yet_opened_keep_their_tabs_when_saved_workspaces_are_at_the_cap() {
+    let (mut runtime, checkout) = live_tab_order_runtime("/agent-groups");
+    let elsewhere = register_folder(&mut runtime, "elsewhere");
+    let mut runtime = with_new_views(runtime, "agent-groups-cap");
+    let store = runtime.workspace_views.as_mut().unwrap();
+    for index in 0..crate::workspace_views::MAX_WORKSPACES as u64 {
+        store
+            .views
+            .entry_at(crate::node::TEST_NODE, &format!("/gone-{index}"), index + 1)
+            .last_used_unix_ms = index + 1;
+    }
+
+    for _ in 0..2 {
+        runtime.ingest_session(Ok(session_with_elsewhere(&["w-order:t1"])));
+        runtime.sync_workspace_view();
+    }
+
+    let snapshot = runtime.snapshot();
+    let tabs = |id: &str| {
+        snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .find(|row| row.id == id)
+            .and_then(|row| row.agent_groups.as_ref())
+            .map(|groups| groups.groups[0].tabs.clone())
+    };
+    assert_eq!(tabs(&checkout), Some(vec!["w-order:t1".to_owned()]));
+    assert_eq!(tabs(&elsewhere), Some(vec!["w-else:t1".to_owned()]));
+    let views = &runtime.workspace_views.as_ref().unwrap().views;
+    assert_eq!(
+        views.workspaces.len(),
+        crate::workspace_views::MAX_WORKSPACES
+    );
+    assert!(views.get(crate::node::TEST_NODE, "/gone-0").is_none());
+    assert!(views.get(crate::node::TEST_NODE, "/gone-1").is_none());
+    assert!(views.get(crate::node::TEST_NODE, "/gone-2").is_some());
+}

@@ -9,7 +9,7 @@ import { findArea as findAgentArea, activeDisplay as activeAgentDisplay, adjacen
 // the same code against the same snapshot. Each action is one core event
 // (dispatch is fire-and-forget; a sequence would arrive as several frames).
 
-import type { AgentLogoMode, AgentLogoModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
+import type { AgentLogoMode, AgentLogoModeSetPayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -1119,6 +1119,10 @@ export function createActions(send: DispatchFn) {
       const payload = { mode } satisfies AgentLogoModeSetPayload;
       dispatch({ schema_version: 2, kind: "agent_logo_mode_set", payload });
     },
+    setPaneTurnRowMode(mode: PaneTurnRowMode) {
+      const payload = { mode } satisfies PaneTurnRowModeSetPayload;
+      dispatch({ schema_version: 2, kind: "pane_turn_row_mode_set", payload });
+    },
 
     /** Sleep idle agents after `hours`; null is Never (PRD agent-sleep B2). */
     setAgentSleepAfter(hours: number | null) {
@@ -1832,6 +1836,11 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "task_view_set", payload: { view } });
     },
 
+    /** A chapter of the practice window reached `progress` (`practice/channel.ts`). */
+    setPracticeProgress(chapter: string, progress: import("./practice/channel").ChapterProgress) {
+      dispatch({ schema_version: 2, kind: "practice_progress_set", payload: { chapter, ...progress } });
+    },
+
     /** One action on the Overview map: a filter, a hide, a fold, a drop or Reset layout (PRD overview-graph-remembered D-10). */
     changeOverviewGraph(change: import("./snapshot").OverviewGraphChange) {
       dispatch({ schema_version: 2, kind: "overview_graph_change", payload: { change } });
@@ -2358,6 +2367,17 @@ export function createActions(send: DispatchFn) {
       const pane = here.checkout.tabs.flatMap((tab) => tab.panes).find((row) => row.id === id);
       if (!pane) return diagnostic("close_pane: the pane is no longer visible");
       requestClose("pane", id, [pane], null);
+    },
+
+    /**
+     * 세션 닫기 on a task row: the row's pane on whichever host holds it,
+     * through the same consequence flow as the pane menu's close.
+     */
+    closeSession(paneId: string) {
+      const targetId = remoteTargetOfPane(rest(), paneId);
+      const target = closeTarget({ kind: "pane", id: paneId, targetId });
+      if (!target) return diagnostic(`close_session: ${paneId} is not open on a connected host`);
+      requestClose("pane", paneId, target.panes, targetId);
     },
 
     /**

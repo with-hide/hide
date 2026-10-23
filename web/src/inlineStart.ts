@@ -36,10 +36,10 @@ export function inlineStartAnswer(rest: SnapshotRest | null, requestId: string, 
   if (receipt.state === "pending") {
     // A failed confirmation does not prove the original effect failed. Surface
     // its answer now while keeping the same intent limited to status checks.
-    if (task?.kind === "agent_start" && task.phase === "failed") return { phase: "unknown", taskId: task.id, message: task.message };
+    if (task?.kind === "agent_start" && task.phase === "failed") return { phase: "unknown", taskId: task.id, message: task.failure };
     return { phase: "pending" };
   }
-  if (receipt.state === "failed") return { phase: "failed", message: task?.message ?? null };
+  if (receipt.state === "failed") return { phase: "failed", message: task?.failure ?? null };
   if (task?.phase === "ready") return { phase: "ready", taskId: task.id, paneId: receipt.pane_id, agentPhase: task.agent_phase, agentReason: task.agent_reason, agentLine: task.agent_line };
   // No task slot remains after restart. The same intent reconstructs it before retry.
   if (receipt.agent_phase && receipt.agent_phase !== "started") return { phase: "pending" };
