@@ -1102,10 +1102,17 @@ impl Runtime {
                             .copied()
                             .unwrap_or(store.generation),
                     });
+                    // An outside HTML file is a page the host draws like any
+                    // other, kept alive while it is hidden.
                     displays.extend(
                         area.displays
                             .iter()
-                            .filter(|display| display.kind == DisplayKind::Browser)
+                            .filter(|display| {
+                                display.kind == DisplayKind::Browser
+                                    || display.external.as_ref().is_some_and(|file| {
+                                        file.kind == crate::view_layout::ExternalKind::Html
+                                    })
+                            })
                             .map(|display| BrowserViewInventoryRow {
                                 device_id: view.device_id.clone(),
                                 path: view.path.clone(),
@@ -1115,6 +1122,15 @@ impl Runtime {
                     );
                 }
             }
+            // Every Workspace's, connected or not: a grant ends only when no
+            // tab stands on it.
+            self.snapshot.external_grants = store
+                .views
+                .workspaces
+                .iter()
+                .flat_map(|view| view.layout.displays())
+                .filter_map(|display| display.external.as_ref().map(|file| file.grant.clone()))
+                .collect();
             self.snapshot.browser_views = displays;
             self.snapshot.browser_scopes = scopes;
             self.snapshot.browser_views_revision = Some(store.generation);

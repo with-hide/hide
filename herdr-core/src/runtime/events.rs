@@ -1486,6 +1486,8 @@ pub(super) enum Event {
     AgentGroup(AgentGroupPayload),
     BrowserOpen(BrowserOpenPayload),
     BrowserState(BrowserStatePayload),
+    ExternalOpen(ExternalOpenPayload),
+    ExternalGrants(ExternalGrantsPayload),
     Attachment(AttachmentPayload),
     AttachmentReady(AttachmentCompletionPayload),
     AttachmentAction(AttachmentActionPayload),
@@ -1992,6 +1994,8 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             )
         }
         "browser_state" => decode!(BrowserStatePayload, BrowserState),
+        "external_open" => decode!(ExternalOpenPayload, ExternalOpen),
+        "external_grants" => decode!(ExternalGrantsPayload, ExternalGrants),
         _ => Err(EventValidationError {
             kind: "event.unknown_kind",
             message: format!("Unknown event kind: {kind}"),
@@ -2113,6 +2117,8 @@ impl Runtime {
             Event::ViewComment(payload) => self.apply_view_comment(payload),
             Event::ViewFeedbackSend(payload) => self.apply_view_feedback_send(payload),
             Event::BrowserState(payload) => self.record_browser_state(payload),
+            Event::ExternalOpen(payload) => self.open_external(payload),
+            Event::ExternalGrants(payload) => self.keep_external_grants(payload),
             Event::SessionsRefresh => self.request_sessions_refresh(),
             Event::LinksOpen(payload) => self.open_links(payload),
             Event::SessionRecordOpen(payload) => self.open_session_record(payload),

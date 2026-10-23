@@ -154,7 +154,8 @@ export function owningCheckout<C extends { path: string }>(real: string, checkou
   return best;
 }
 
-export type TerminalContextLink = { target: LinkTarget; found: FoundPath | null; inCheckout?: boolean };
+/** `sourceInHide`: an HTML file's Open source opens its text in Hide, in a checkout or as an outside file. */
+export type TerminalContextLink = { target: LinkTarget; found: FoundPath | null; inCheckout?: boolean; sourceInHide?: boolean };
 
 /** null is outside every checkout; undefined is an unanswered ownership check. */
 export async function terminalPathOwner(found: FoundPath): Promise<{ checkout: Checkout; path: string; deviceId: string } | null | undefined> {

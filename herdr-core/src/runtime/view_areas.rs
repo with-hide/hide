@@ -34,8 +34,8 @@ use crate::model::{
     ViewLayoutSnapshot, ViewLimitsSnapshot, ViewNodeSnapshot, ViewSplitSnapshot,
 };
 use crate::view_layout::{
-    Display, DisplayKind, Edge, Layout, LayoutError, MAX_SPLIT_DEPTH, MAX_VIEW_AREAS,
-    MAX_VIEW_DISPLAYS, Node, browser_address, browser_title, is_file_address,
+    Display, DisplayKind, Edge, ExternalFile, ExternalKind, Layout, LayoutError, MAX_SPLIT_DEPTH,
+    MAX_VIEW_AREAS, MAX_VIEW_DISPLAYS, Node, browser_address, browser_title, is_file_address,
 };
 
 /// Split request ids remembered per Workspace, so a split sent twice splits
@@ -46,6 +46,10 @@ const SPLIT_REQUESTS_KEPT: usize = 32;
 /// CLI waiting on one reads it within a frame or two of its event.
 const BROWSER_OPEN_RECEIPTS_KEPT: usize = 8;
 const BROWSER_PAGE_REPORTS_KEPT: usize = 128;
+
+/// The most grants one `external_grants` may list. The desktop host holds far
+/// fewer at once (its own cap); a longer list is not one of its answers.
+const MAX_EXTERNAL_GRANTS_LISTED: usize = 256;
 
 const UNLOADABLE_ADDRESS: &str = "A page opens from an http, https or file address, or about:blank";
 
@@ -174,6 +178,36 @@ pub(super) struct BrowserStatePayload {
     failure: Option<String>,
     #[serde(default)]
     present: Option<bool>,
+}
+
+/// The payload of `external_open` (PRD outside-path-in-hide B1, B13): a file
+/// outside every checkout that the desktop host granted its window, named by
+/// that grant alone. It opens in the Workspace named, the one in front, or,
+/// with none in front, in the Workspace of the pane whose terminal printed it,
+/// brought forward (`reveal`). A grant already shown there is focused and
+/// read again (B10).
+#[derive(Debug, Deserialize)]
+pub(super) struct ExternalOpenPayload {
+    grant: String,
+    name: String,
+    kind: ExternalKind,
+    #[serde(default)]
+    workspace: Option<ViewWorkspace>,
+    #[serde(default)]
+    pane_id: Option<String>,
+    #[serde(default)]
+    reveal: bool,
+    /// Names the receipt in `status.browser_opens` the sender waits for.
+    #[serde(default)]
+    request_id: Option<String>,
+}
+
+/// The payload of `external_grants`: every grant the desktop host holds now,
+/// sent when its window attaches. An outside file's tab whose grant is not
+/// among them has nothing behind it and goes (PRD outside-path-in-hide D-07).
+#[derive(Debug, Deserialize)]
+pub(super) struct ExternalGrantsPayload {
+    live: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -377,6 +411,13 @@ fn display_limit(shown: usize) -> Option<LayoutRefusal> {
 fn browser_refusal(message: impl Into<String>) -> LayoutRefusal {
     LayoutRefusal {
         kind: "browser.open_refused",
+        message: message.into(),
+    }
+}
+
+fn external_refusal(message: impl Into<String>) -> LayoutRefusal {
+    LayoutRefusal {
+        kind: "external.open_refused",
         message: message.into(),
     }
 }
@@ -747,7 +788,7 @@ impl Runtime {
             // A file still being restored has no document to close yet.
             .filter(|display| match &display.tab_id {
                 Some(tab_id) => !self.document_kept(tab_id),
-                None => display.kind == DisplayKind::Browser,
+                None => matches!(display.kind, DisplayKind::Browser | DisplayKind::External),
             })
             .collect();
         closable.sort_by_key(|display| display.last_focused_unix_ms);
@@ -1711,31 +1752,216 @@ impl Runtime {
             self.set_error(refusal.kind, refusal.message.clone(), false);
         }
         if let Some(request_id) = request_id {
-            let receipt = match outcome {
-                Ok(((device_id, path), display_id)) => BrowserOpenReceiptSnapshot {
-                    request_id,
-                    ok: true,
-                    message: None,
-                    device_id: Some(device_id),
-                    path: Some(path),
-                    display_id: Some(display_id),
-                },
-                Err(refusal) => BrowserOpenReceiptSnapshot {
-                    request_id,
-                    ok: false,
-                    message: Some(refusal.message),
-                    device_id: None,
-                    path: None,
-                    display_id: None,
-                },
-            };
-            let receipts = &mut self.snapshot.status.browser_opens;
-            receipts.push(receipt);
-            if receipts.len() > BROWSER_OPEN_RECEIPTS_KEPT {
-                receipts.remove(0);
-            }
+            self.record_open_receipt(request_id, outcome);
         }
         true
+    }
+
+    /// The receipt a sender that named its open waits for.
+    fn record_open_receipt(
+        &mut self,
+        request_id: String,
+        outcome: Result<(WorkspaceKey, String), LayoutRefusal>,
+    ) {
+        let receipt = match outcome {
+            Ok(((device_id, path), display_id)) => BrowserOpenReceiptSnapshot {
+                request_id,
+                ok: true,
+                message: None,
+                device_id: Some(device_id),
+                path: Some(path),
+                display_id: Some(display_id),
+            },
+            Err(refusal) => BrowserOpenReceiptSnapshot {
+                request_id,
+                ok: false,
+                message: Some(refusal.message),
+                device_id: None,
+                path: None,
+                display_id: None,
+            },
+        };
+        let receipts = &mut self.snapshot.status.browser_opens;
+        receipts.push(receipt);
+        if receipts.len() > BROWSER_OPEN_RECEIPTS_KEPT {
+            receipts.remove(0);
+        }
+    }
+
+    /// `external_open`: an outside file's tab in a View area (see
+    /// `ExternalOpenPayload`). A refusal says why and changes nothing; the log
+    /// names the grant and the kind, never a path, which the core never holds.
+    pub(super) fn open_external(&mut self, payload: ExternalOpenPayload) -> bool {
+        let ExternalOpenPayload {
+            grant,
+            name,
+            kind,
+            workspace,
+            pane_id,
+            reveal,
+            request_id,
+        } = payload;
+        let outcome = ExternalFile::admitted(&grant, &name, kind)
+            .map_err(external_refusal)
+            .and_then(|file| self.place_external(file, workspace, pane_id.as_deref(), reveal));
+        crate::diagnostic!(serde_json::json!({
+            "component": "view_areas",
+            "kind": "external.open",
+            "grant": crate::view_layout::external_grant(&grant).then_some(grant.as_str()),
+            "file_kind": kind,
+            "outcome": match &outcome {
+                Ok(_) => "placed",
+                Err(refusal) => refusal.kind,
+            },
+        }));
+        if let Err(refusal) = &outcome {
+            self.set_error(refusal.kind, refusal.message.clone(), false);
+        }
+        if let Some(request_id) = request_id {
+            self.record_open_receipt(request_id, outcome);
+        }
+        true
+    }
+
+    fn place_external(
+        &mut self,
+        file: ExternalFile,
+        workspace: Option<ViewWorkspace>,
+        pane_id: Option<&str>,
+        reveal: bool,
+    ) -> Result<(WorkspaceKey, String), LayoutRefusal> {
+        if !self.separate_view_areas() {
+            return Err(external_refusal("This shell does not draw View areas"));
+        }
+        let key = match (workspace, pane_id) {
+            (Some(workspace), _) => {
+                let key = (workspace.device_id, workspace.path);
+                if !self.catalog_has_workspace(&key) {
+                    return Err(external_refusal(format!(
+                        "{} is not a Workspace hide shows",
+                        key.1
+                    )));
+                }
+                key
+            }
+            (None, Some(pane_id)) => self.pane_workspace_key(pane_id).ok_or_else(|| {
+                external_refusal(format!(
+                    "Pane {pane_id} is not in a Workspace hide shows on this Mac"
+                ))
+            })?,
+            (None, None) => self
+                .front_workspace_key()
+                .ok_or_else(|| external_refusal("No Workspace is in front to open the file in"))?,
+        };
+        let caller = pane_id
+            .map(str::to_owned)
+            .unwrap_or_else(|| crate::workspace_control::checkout_caller_id("external", &key.1));
+        let reveal_context = if reveal {
+            Some(
+                self.resolve_caller(&key.0, crate::workspace_control::Caller::parse(&caller))
+                    .map_err(|refusal| external_refusal(refusal.next_action))?,
+            )
+        } else {
+            None
+        };
+        let shown = |display: &Display| {
+            display
+                .external
+                .as_ref()
+                .is_some_and(|shown| shown.grant == file.grant)
+        };
+        if !self.view_displays(&key).any(shown) {
+            self.make_view_room(&key);
+        }
+        let before_load = self
+            .workspace_views
+            .as_ref()
+            .map(|store| store.browser_load);
+        let load = self.next_browser_load();
+        let placed = self
+            .change_view_layout(&key, |layout, stamp| {
+                let existing = layout.displays().find(|d| shown(d)).map(|d| d.id.clone());
+                if let Some(display_id) = existing {
+                    // The same file clicked again comes forward and is read
+                    // again from the disk (B10).
+                    layout.focus(&display_id, stamp)?;
+                    if let Some(display) = layout.display_mut(&display_id) {
+                        display.load = load;
+                        display.external = Some(file.clone());
+                    }
+                    return Ok((display_id, true));
+                }
+                let display = layout.new_external_display(file.clone(), load);
+                let display_id = display.id.clone();
+                let area = layout.active_area().id.clone();
+                layout.insert(&area, display, stamp)?;
+                Ok((display_id, true))
+            })
+            .map_err(LayoutRefusal::from);
+        let display_id = match placed {
+            Ok(id) => id,
+            Err(error) => {
+                if let (Some(load), Some(store)) = (before_load, self.workspace_views.as_mut()) {
+                    store.browser_load = load;
+                }
+                return Err(error);
+            }
+        };
+        self.apply_area_intent_to(&key, AreaIntent::Documents);
+        if let Some(context) = reveal_context {
+            self.reveal_workspace_control(
+                &context,
+                &key,
+                &format!("external-open-{load}"),
+                &caller,
+            );
+        }
+        Ok((key, display_id))
+    }
+
+    /// `external_grants`: the desktop host's grants now. An outside file's tab
+    /// whose grant it no longer holds (the app quit and came back) goes, in
+    /// every Workspace, so no tab stands for a file nobody can read.
+    pub(super) fn keep_external_grants(&mut self, payload: ExternalGrantsPayload) -> bool {
+        if payload.live.len() > MAX_EXTERNAL_GRANTS_LISTED {
+            crate::diagnostic!(serde_json::json!({
+                "component": "view_areas",
+                "kind": "external.grants_refused",
+                "listed": payload.live.len(),
+            }));
+            return false;
+        }
+        let live: HashSet<&str> = payload.live.iter().map(String::as_str).collect();
+        let stale: Vec<WorkspaceKey> = self
+            .every_view_layout()
+            .filter(|(_, layout)| {
+                layout.displays().any(|display| {
+                    display.kind == DisplayKind::External
+                        && !display
+                            .external
+                            .as_ref()
+                            .is_some_and(|file| live.contains(file.grant.as_str()))
+                })
+            })
+            .map(|(key, _)| key)
+            .collect();
+        let mut dropped = 0;
+        for key in &stale {
+            let _ = self.change_view_layout(key, |layout, _| {
+                let gone = layout.remove_external(|file| live.contains(file.grant.as_str()));
+                dropped += gone;
+                Ok(((), gone > 0))
+            });
+            self.close_emptied_lane(key);
+        }
+        if dropped > 0 {
+            crate::diagnostic!(serde_json::json!({
+                "component": "view_areas",
+                "kind": "external.grants_gone",
+                "dropped": dropped,
+            }));
+        }
+        dropped > 0
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2290,7 +2516,7 @@ impl Runtime {
             // read from that checkout; a diff is always this one's.
             let (workspace_id, checkout_id) = match kind {
                 DisplayKind::File => self.display_source(key, path),
-                DisplayKind::Diff | DisplayKind::Browser => None,
+                DisplayKind::Diff | DisplayKind::Browser | DisplayKind::External => None,
             }
             .unwrap_or_else(|| front.clone());
             let open = self.snapshot.editor.tabs.iter().any(|tab| {
@@ -2304,7 +2530,7 @@ impl Runtime {
                 continue;
             }
             match kind {
-                DisplayKind::Browser => {}
+                DisplayKind::Browser | DisplayKind::External => {}
                 DisplayKind::Diff => {
                     self.insert_diff_tab(
                         &workspace_id,
@@ -2696,8 +2922,9 @@ impl Runtime {
         display: &Display,
     ) -> (ViewDisplayState, Option<String>) {
         // The host loads a page wherever it is; whether it loaded is the
-        // page's own state, which the host draws.
-        if display.kind == DisplayKind::Browser {
+        // page's own state, which the host draws. An outside file is read by
+        // the desktop host for its own window, which says whether it could.
+        if matches!(display.kind, DisplayKind::Browser | DisplayKind::External) {
             return (ViewDisplayState::Open, None);
         }
         if let Some(tab) = display.tab_id.as_deref().and_then(|id| facts.tabs.get(id)) {
@@ -2731,7 +2958,7 @@ impl Runtime {
             return (ViewDisplayState::Opening, None);
         }
         let reason = match display.kind {
-            DisplayKind::File | DisplayKind::Browser => {
+            DisplayKind::File | DisplayKind::Browser | DisplayKind::External => {
                 "This view's file is not open; Retry reads it again"
             }
             DisplayKind::Diff => "This view's diff is not open; Retry opens it again",
@@ -2794,6 +3021,10 @@ impl Runtime {
                             path: display.path.clone(),
                             label: match (tab, display.kind) {
                                 (_, DisplayKind::Browser) => browser_label(display),
+                                (_, DisplayKind::External) => display
+                                    .external
+                                    .as_ref()
+                                    .map_or_else(String::new, |file| file.name.clone()),
                                 (Some(tab), _) => tab.label.clone(),
                                 (None, DisplayKind::File) => file_label(&display.path),
                                 (None, DisplayKind::Diff) => super::editor::diff_label(
@@ -2815,6 +3046,7 @@ impl Runtime {
                                 .map(|opener| self.view_opener_snapshot(opener)),
                             comments,
                             not_delivered,
+                            external: display.external.clone(),
                         }
                     })
                     .collect(),

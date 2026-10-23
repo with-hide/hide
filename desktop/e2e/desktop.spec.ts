@@ -72,7 +72,7 @@ test("attach: the app starts hided, shows the shell, and runs the native chords 
       bridge: Object.keys(window.hideHost ?? {}).sort(),
       kind: window.hideHost?.kind,
     })),
-  ).toEqual({ require: "undefined", process: "undefined", bridge: ["browser", "editorAvailable", "kind", "notificationPermission", "notify", "onCommand", "onNotificationOpen", "onWindowChrome", "openInEditor", "openNotificationSettings", "openPath", "openPractice", "pickFolder", "platform", "probePaths", "quit", "reportBadge", "reportBindings", "reportLanguage", "restartHerdr", "revealPath", "updates", "withdrawNotifications"], kind: "electron" });
+  ).toEqual({ require: "undefined", process: "undefined", bridge: ["browser", "editorAvailable", "external", "kind", "notificationPermission", "notify", "onCommand", "onNotificationOpen", "onWindowChrome", "openInEditor", "openNotificationSettings", "openPath", "openPractice", "pickFolder", "platform", "probePaths", "quit", "reportBadge", "reportBindings", "reportLanguage", "restartHerdr", "revealPath", "updates", "withdrawNotifications"], kind: "electron" });
   // sidebar-titlebar-refresh B17, B23: the host says what its frame takes of the shell's top row, traffic lights on macOS only, and the row keeps their room.
   const chrome = await page.evaluate(() => new Promise((resolve) => window.hideHost!.onWindowChrome(resolve)));
   expect(chrome).toEqual({ trafficLights: process.platform === "darwin", fullscreen: false });

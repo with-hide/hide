@@ -1,7 +1,7 @@
 // The renderer's whole view of the host (B11): which host this is, the app
 // menu's commands in, the stored macOS pane chords out for the menu to show,
 // the host's OS, a file or folder to show in the OS file manager, a folder the operator picks to add as a project,
-// the paths a terminal link names and handing one to macOS, and the pages of
+// the paths a terminal link names and handing one to macOS, an outside file shown in Hide, and the pages of
 // browser displays (issue 155), and the Factory's and agents' notifications with their clicks,
 // withdrawals, the system's permission for them and the app icon's count, the window frame the
 // top row is drawn inside, a folder handed to VS Code, the app's own updates, its Quit, and the
@@ -11,8 +11,8 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { BrowserCommand, BrowserHostEvent, BrowserSync } from "../../../web/src/host";
-import type { HerdrRestart, NotificationPermission, ProbedPath, UpdateStatus, WindowChrome } from "../../../web/src/host";
-import { BINDINGS_CHANNEL, BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import type { ExternalGrant, ExternalKind, ExternalRead, HerdrRestart, NotificationPermission, ProbedPath, UpdateStatus, WindowChrome } from "../../../web/src/host";
+import { BINDINGS_CHANNEL, BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 
 contextBridge.exposeInMainWorld("hideHost", {
   kind: "electron",
@@ -43,6 +43,20 @@ contextBridge.exposeInMainWorld("hideHost", {
   },
   openPath(path: string): void {
     ipcRenderer.send(OPEN_PATH_CHANNEL, path);
+  },
+  external: {
+    open(path: string, mode: "auto" | "source"): Promise<ExternalGrant | null> {
+      return ipcRenderer.invoke(EXTERNAL_OPEN_CHANNEL, path, mode) as Promise<ExternalGrant | null>;
+    },
+    read(grant: string): Promise<ExternalRead> {
+      return ipcRenderer.invoke(EXTERNAL_READ_CHANNEL, grant) as Promise<ExternalRead>;
+    },
+    describe(grant: string): Promise<{ path: string; name: string; kind: ExternalKind } | null> {
+      return ipcRenderer.invoke(EXTERNAL_DESCRIBE_CHANNEL, grant) as Promise<{ path: string; name: string; kind: ExternalKind } | null>;
+    },
+    live(): Promise<string[]> {
+      return ipcRenderer.invoke(EXTERNAL_LIVE_CHANNEL) as Promise<string[]>;
+    },
   },
   notify(id: string, title: string, body: string, options?: { unlessFocused?: boolean }): void {
     ipcRenderer.send(NOTIFY_CHANNEL, { id, title, body, unlessFocused: options?.unlessFocused ?? false });
