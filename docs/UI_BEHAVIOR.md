@@ -1309,7 +1309,7 @@ A hidden list draws no rows, the elapsed clock updates only its own text, and th
 
 The lane has one 보기 slot per window, which holds a pull request's card, a session's record or a mission's map and belongs to no checkout and no Agent tab, so changing either leaves it as it was (PRD sidebar-task-lens D-50, B48).
 Whatever opens a card or a record opens it there, in front of the documents in the lane's viewing column, and the Workspace in front, its Agent tab, the tool column and the keyboard stay (B14, B15, B50; PRD lane-two-columns B9); no `PR #N` or record tab appears among the documents.
-Its head reads `←`, the item's mark and name (`PR #N · <project>`, `기록 · <title>` or `미션 · <title>`), `↗` (GitHub) on a card, and `✕` (B47); a card's mark is its PR mark, in its state's icon and colour, here and on the rail.
+Its head reads `←`, the item's mark and name (`PR #N · <project>`, `기록 · <title>` or `미션 · <title>`), `↗` (GitHub) on a card, a gear on a map that opens Settings › Conductor, and `✕` (B47); a card's mark is its PR mark, in its state's icon and colour, here and on the rail.
 The head keeps the lane's surface and what the slot holds sits on the page's background, a card and a record alike, as the 보기 screens draw it.
 Opening another item puts it in front, and `←` steps back through the ones opened before, at most 20, the oldest leaving first; `✕` empties the slot and the viewing column goes back to the documents, or closes when the checkout has none, the lane closing with it when there is no tool column (PRD lane-two-columns B13).
 The close chord (⌘W) is the slot's `✕` while the keyboard is in the slot or nowhere, as the close chord's rule says ([The right lane](#the-right-lane)); in the tool column it closes nothing.
