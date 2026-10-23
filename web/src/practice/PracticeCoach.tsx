@@ -105,16 +105,18 @@ const middle = (element: Element): Point => {
   return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
 };
 
-/** The element `selector` marks, once it is on screen; a menu draws its items a frame or two after it opens. */
-function appeared(selector: string): Promise<HTMLElement> {
+/** The element `selector` marks once it is on screen, or null after `ms`; a menu draws its items a frame or two after it opens. */
+function appeared(selector: string, ms: number): Promise<HTMLElement | null> {
   const began = performance.now();
-  return new Promise((resolve, reject) => requestAnimationFrame(function look() {
+  return new Promise((resolve) => requestAnimationFrame(function look() {
     const found = document.querySelector<HTMLElement>(selector);
-    if (found) return resolve(found);
-    if (performance.now() - began > 3000) return reject(new Error(`Practice menu item ${selector} never appeared`));
+    if (found || performance.now() - began > ms) return resolve(found);
     requestAnimationFrame(look);
   }));
 }
+
+/** How many times a submenu is pressed before the step gives up: a pointer resting over the menu can close a submenu as it opens. */
+const SUBMENU_PRESSES = 3;
 
 /** Moves the hand from `from` to `to` over `ms`, eased, and resolves where it stops. */
 function glide(from: Point, to: Point, ms: number, follow: (point: Point | null) => void): Promise<Point> {
@@ -139,15 +141,22 @@ async function chooseFromMenu(menu: PracticeMenu, follow: (point: Point | null) 
   await pause(250);
   const element = document.elementsFromPoint(hand.x, hand.y).find((hit) => marked.contains(hit)) ?? marked;
   element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true, button: 2, buttons: 2, clientX: hand.x, clientY: hand.y }));
-  for (const selector of menu.path) {
-    const item = await appeared(selector);
+  for (const [at, selector] of menu.path.entries()) {
+    const item = await appeared(selector, 3000);
+    if (!item) throw new Error(`Practice menu item ${selector} never appeared`);
     await pause(300);
     hand = await glide(hand, middle(item), 450, follow);
     await pause(200);
-    item.click();
+    const after = menu.path[at + 1];
+    for (let press = 0; ; press += 1) {
+      // The menu may have drawn the item again since it was found; press the one on screen.
+      (document.querySelector<HTMLElement>(selector) ?? item).click();
+      if (!after || (await appeared(after, 800))) break;
+      if (press + 1 === SUBMENU_PRESSES) throw new Error(`Practice menu item ${selector} opened no ${after}`);
+    }
   }
-  await pause(250);
-  follow(null);
+  // The step is done once the last item is pressed; the hand leaves on its own, so the next ⏎ is not held back.
+  window.setTimeout(() => follow(null), 250);
 }
 
 /** One box around every element `selector` matches. */
