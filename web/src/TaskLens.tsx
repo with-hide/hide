@@ -475,13 +475,13 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
   );
 }
 
-type TaskMenuId = "record" | "pane" | "revisit" | "resolve" | "archive";
+type TaskMenuId = "record" | "pane" | "revisit" | "resolve" | "archive" | "close";
 type TaskMenu = { items: () => MenuEntry<TaskMenuId>[]; select: (id: TaskMenuId) => void };
 
 /**
  * A row's menu (B15, B18; PRD session-archive B1): 기록 보기 · pane으로 ·
  * Resolve and, on a root task, 세션 보관, disabled with why where Hide cannot
- * archive it now.
+ * archive it now; last, 세션 닫기, the pane menu's close for the row's pane.
  */
 function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () => void, resolvable: boolean, disabled: boolean, actions: Actions, root: boolean): TaskMenu {
   const { t } = useInterfaceTranslation();
@@ -495,6 +495,7 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
     if (resolvable) entries.push({ id: "resolve", icon: "check", label: t("agentSessions.resolve"), unavailable: disabled ? "" : null });
     const archive = root ? archiveOffer(useShellStore.getState().rest, agent, t) : { kind: "hidden" as const };
     if (archive.kind === "offered") entries.push({ id: "archive", icon: "archive", label: t("archive.menu.archive"), unavailable: archive.unavailable, separated: true });
+    entries.push({ id: "close", icon: "close", label: t("taskLens.menu.close"), unavailable: disabled ? "" : null, separated: archive.kind !== "offered" });
     return entries;
   };
   const select = (id: TaskMenuId) => {
@@ -502,6 +503,7 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
     if (id === "pane") return onPane();
     if (id === "revisit") return revisitOn(agent) ? actions.finishRevisit(agent.pane_id) : actions.starSession(agent.pane_id);
     if (id === "resolve") return actions.resolveSession(agent.pane_id);
+    if (id === "close") return actions.closeSession(agent.pane_id);
     return actions.archiveSession(agent.pane_id);
   };
   return { items, select };

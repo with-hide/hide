@@ -127,7 +127,7 @@ const zhCN = {
   "practice.zone.view": "① 查看区",
   "practice.zone.viewSub": "选择要看的内容",
   "practice.zone.work": "② 工作区",
-  "practice.zone.workSub": "代理终端",
+  "practice.zone.workSub": "智能体终端",
   "practice.zone.project": "③ 项目与工作",
   "practice.zone.projectSub": "概况 · 待办 · 文件",
   ...chapterWords("zh-CN"),
