@@ -12,7 +12,10 @@ Hide starts a server from that file only when none answers on the socket; otherw
 
 Hide speaks exactly one Herdr protocol, the pin's (`HERDR_PROTOCOL_REVISION`, [ARCHITECTURE.md: The Herdr wire boundary](ARCHITECTURE.md#the-herdr-wire-boundary)).
 There is no supported range and no floor: a server on another protocol refuses Hide's requests, so Hide holds its whole screen until that server is moved, restarted or caught up.
-Herdr's own CLI checks the protocol the same way, so a `herdr` command on another protocol than the server is refused too.
+Herdr's own CLI checks the protocol the same way: a `herdr` command on another protocol than the server is refused (measured for `agent list`, `pane read`, `agent prompt` and `workspace list`), and Herdr keeps a few recovery commands such as `server stop` working across protocols.
+
+The protocol each release answers in `ping`, measured on isolated servers on 2026-10-23: 0.5.12 is 7, 0.6.2 is 10, 0.6.3 to 0.6.5 are 11, 0.6.10 is 13, 0.7.5 is 17, 0.8.2 is 20, and 0.9.4 and 0.9.5 are 22.
+Herdr's release notes do not state the protocol, so a bump is read from the pinned binary's schema (`scripts/check-herdr-contract.sh`), not from the notes.
 
 ## What each server gets
 
@@ -28,7 +31,7 @@ Herdr's own CLI checks the protocol the same way, so a `herdr` command on anothe
 | A server an earlier Hide app started | Hands it to this app's Herdr on connect without asking (macOS and Linux) | [ARCHITECTURE.md: The bundled Herdr runtime](ARCHITECTURE.md#the-bundled-herdr-runtime) |
 | A connected device's server on an older stable release | Handed to the pinned copy on connect without asking; the device row says what to do when it cannot be | [INSTALL.md: Connect another Mac over SSH](INSTALL.md#connect-another-mac-over-ssh) |
 
-Measured on 2026-10-23 against real servers: Move from 0.6.3, 0.6.4, 0.6.5, 0.6.10, 0.7.5, 0.8.2 and 0.9.4; Restart from 0.5.12 and 0.6.2.
+Measured on 2026-10-23 against real servers: Move from 0.6.3, 0.6.4, 0.6.5, 0.6.10, 0.7.5, 0.8.2 and 0.9.4; Restart from 0.5.12 and 0.6.2; 0.9.5 is the pin and needs neither.
 A move loses the screen contents behind a full-screen program on every release, Herdr's handoff behaviour, while plain scrollback stays.
 Windows has only the restart, and that restart has not been run against a real Windows server ([INSTALL.md: What each system supports](INSTALL.md#what-each-system-supports)).
 
