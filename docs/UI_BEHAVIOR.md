@@ -992,6 +992,7 @@ Every tab, the device switch, the project chip, a row, a fold line and every but
 The Overview draws its first screen from the snapshot without waiting for any disk or GitHub read, and a closed Overview adds nothing to terminal output or key input (B63).
 
 The Home with no project shows `Add a project to start an agent.` and Add project with its chord (⇧⌘N); a browser tab has no chord for it (Chrome keeps ⇧⌘N), so the button stands alone there.
+Under it a quiet `Try it on a practice screen first` opens the [Practice window](#practice-window).
 With projects and no agent, Work shows its empty state and the existing New agent route; the backlog remains available.
 Before the first snapshot the shell's own connecting state shows instead.
 
@@ -2287,11 +2288,46 @@ The core keeps one value of each hint, so with several pages open the last page 
 
 Web owner: `web/src/components/help-menu.tsx`, `diagnosticsInputOf` in `web/src/settings.ts`, `web/src/updates.ts` (PRD sidebar-titlebar-refresh D-11, D-12; PRD auto-update D-03, D-21).
 
-The footer's `?` opens the Help menu above it: `Keyboard shortcuts` with its chord, which opens the shortcut sheet; `Copy diagnostics`, which puts About's diagnostics text on the clipboard and says `Copied` in place, or the failure when the clipboard refuses, keeping the menu open either way; `Report an issue`, which opens the repository's new-issue page in the default browser; then, under a separator, the `hide <version>` line in mono, which takes no press.
+The footer's `?` opens the Help menu above it: `Keyboard shortcuts` with its chord, which opens the shortcut sheet; `Practice Hide`, which opens the [Practice window](#practice-window) or brings the open one forward; `Copy diagnostics`, which puts About's diagnostics text on the clipboard and says `Copied` in place, or the failure when the clipboard refuses, keeping the menu open either way; `Report an issue`, which opens the repository's new-issue page in the default browser; then, under a separator, the `hide <version>` line in mono, which takes no press.
 The version is the release the app was built as, such as `0.4.0`, and a development build's own version, such as `0.4.0-main.<commit>`.
 When the desktop app has an update ready ([INSTALL.md](INSTALL.md#update)), a dot in the primary color sits on the `?`, whose name and tooltip become `Help · Update ready`, and the last line becomes a menu item, `hide <new version> ready` with `Restart` at its end, which installs the update and reopens the app.
 Nothing else of an update reaches the footer or this menu: looking, downloading and a failure show only in Settings > About.
 A browser tab and the phone have no dot and no update line.
+
+## Practice window
+
+Web owner: `web/src/practice/` (`PracticeApp.tsx` the chapter list, `PracticePlayer.tsx` a chapter playing, `PracticeCoach.tsx` the guide, `chapters.ts` the chapters, `channel.ts` what the window and the shell say to each other), `web/src/i18n/resources/practice.ts`. Desktop owner: `desktop/src/main/practice.ts`, `desktop/src/main/host.ts` (`listenPractice`, `openPractice`). Core owner: `ui_state.practice` and `practice_progress_set`.
+
+The practice window teaches Hide on a practice screen: the shell's own sidebar, panes, lane and keyboard, drawn over a scripted world with no agent, project, file or Herdr behind it.
+`Practice Hide` in the Help menu and the line under Add project on the Home with no project open it; the desktop app opens one window of its own, sized like the main window, and a browser tab opens one tab of its own; asking again brings the open one forward.
+It is not a ⌘K row, because ⌘K goes to things and runs no command but two ([Search keyboard navigation](#search-keyboard-navigation)).
+
+It opens on the chapter list: each chapter's number, title, one line of what it covers and its step count, its state (`새로`, `<n> / <m>에서 멈춤`, `✓ 봄`, or `바뀜` when the chapter's steps changed since it was played), and one button: `시작`, `이어서`, or `다시 보기`, with `처음부터` beside `이어서`.
+↑ and ↓ choose a chapter and ⏎ plays it; the first chapter not yet seen is chosen at first.
+`이어서` plays the steps before the stopping point again on its own, quickly, the way ⏎ would, so the screen reaches the state that step needs.
+A chapter seen once stays seen when it is played again.
+
+A chapter playing dims everything but what its step marks, rings that, and puts a light bubble beside it with what happens and how: the command's chord as keycaps (`Or press ⌘D`), `Press the button, or ⇧⌘↩` for a step with a button, or `Press where it's marked` where this host has no chord for the command (⌥1 in a browser tab).
+⏎ or → performs the step in the learner's place, pressing the chord, the button, or dragging the pane with a hand cursor; ← goes back over a step that only looks.
+The learner can also do it themselves, by key, click or drag: a step that changes the screen is done when the world says so, however it was done.
+A pressed chord shows large in the middle for a moment, so the keys are seen as they are used.
+Every chord is the operator's own: the host's set, the system's, and the operator's stored bindings.
+A chapter with tasks lists them on a card in the lower left with a check as each is done and `↺ 처음부터`; the top center names the chapter and leads back to the list.
+The last step of a chapter offers the next chapter, and the last chapter's offers the list.
+
+The window holds no daemon connection and carries no token.
+It asks the shell of the same origin, over one `BroadcastChannel` (`hide-practice`), for the operator's language, chords, theme and progress, and hands each step it reaches back; the shell dispatches `practice_progress_set`, and the core keeps `ui_state.practice` like the other UI choices.
+With no shell answering, the chapters still play and the list says `진행 기록은 Hide 창이 열려 있을 때 저장돼요.`.
+In the desktop app the window has no preload: it stands in for the desktop host from its address (`host=electron&platform=…`), so its keyboard runs the desktop chords, and a menu command while it holds the keyboard is dropped rather than sent to the main window's shell; it closes with the main window.
+
+### Adding a chapter
+
+A chapter is data in `web/src/practice/chapters.ts`: an `id` (its catalog prefix), a `number`, a `version`, the `world` it plays in, and its steps.
+A step names what it rings (`target`, a selector into the shell), where the bubble sits (`side`), the command it teaches (`command`, never a chord), a `gesture` when ⏎ should press a button or drag a pane instead of pressing the chord, and `done`, which reads the world; a step without `done` is a look.
+A world (`web/src/practice/world.ts`) gives the first state, answers the core events the chapter's steps dispatch as the core would (an event it does not need answers nothing), and draws the snapshot and each pane's screen; `practiceWorld.ts` and `tourWorld.ts` are the two there are.
+The words go in `web/src/i18n/resources/practice.ts` under `practice.<id>.title`, `practice.<id>.summary` and `practice.<id>.<step>.kick|title|text|quest`, in every language.
+Bump a chapter's `version` when its steps change, so a learner's old progress reads as `바뀜`.
+`web/e2e/practice.spec.ts` plays every chapter to its end with ⏎ alone, so a new chapter is played there without a change to the spec; a step whose ⏎ moves nothing stops it.
 
 ## Search keyboard navigation
 

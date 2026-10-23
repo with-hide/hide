@@ -1835,6 +1835,11 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "task_view_set", payload: { view } });
     },
 
+    /** A chapter of the practice window reached `progress` (`practice/channel.ts`). */
+    setPracticeProgress(chapter: string, progress: import("./practice/channel").ChapterProgress) {
+      dispatch({ schema_version: 2, kind: "practice_progress_set", payload: { chapter, ...progress } });
+    },
+
     /** One action on the Overview map: a filter, a hide, a fold, a drop or Reset layout (PRD overview-graph-remembered D-10). */
     changeOverviewGraph(change: import("./snapshot").OverviewGraphChange) {
       dispatch({ schema_version: 2, kind: "overview_graph_change", payload: { change } });
