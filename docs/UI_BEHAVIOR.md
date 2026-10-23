@@ -2350,6 +2350,8 @@ The last step of a chapter offers the next chapter, and the last chapter's offer
 Chapter 1 closes its working agent by mistake, through the shell's own Stop-work sheet, and brings it back with Reopen closed tab, where it stood and continuing its conversation; its world answers `close_pane` and `reopen_closed` and draws `recent_closed` the way the core does.
 The practice screen mounts the shell's close sheet, so a learner's close in any chapter asks as it would in Hide.
 
+Chapter 7 asks an agent to plan before it changes anything, opens the plan from the pane's plan chip and large in the 보기 slot, and approves it in the conversation, because Hide has no button that approves a plan; its world draws `plans` and lays the review on the agent's row as the core's question, and any words sent to the agent put the plan up, then approve it and start the first step.
+
 The window holds no daemon connection and carries no token.
 It asks the shell of the same origin, over one `BroadcastChannel` (`hide-practice`), for the operator's language, chords, theme and progress, and hands each step it reaches back; the shell dispatches `practice_progress_set`, and the core keeps `ui_state.practice` like the other UI choices.
 With no shell answering, the chapters still play and the list says `진행 기록은 Hide 창이 열려 있을 때 저장돼요.`.
