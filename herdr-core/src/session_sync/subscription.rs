@@ -29,7 +29,11 @@ pub(crate) fn connect(
         params,
         context.request_timeout(),
     )
-    .map_err(|error| connect_failure_from_api(error, has_projection))?;
+    .map_err(|error| match error {
+        ApiError::NotRunning(_) => connect_failure_from_api(error, has_projection),
+        error => protocol_behind_refusal(context)
+            .unwrap_or_else(|| connect_failure_from_api(error, has_projection)),
+    })?;
     *generation = generation.saturating_add(1);
     let subscription = spawn_subscription_reader(subscription, *generation, sender.clone())
         .map_err(SessionFetchError::Unreachable)?;
@@ -45,6 +49,25 @@ pub(crate) fn connect(
         subscription,
         snapshot_at: Instant::now(),
     })
+}
+
+/// Why a server refused the subscription, when it is the protocol: a server
+/// older than 0.9 refuses the topics this build subscribes to before any
+/// snapshot could name its protocol, and every release answers `ping` with
+/// it. A ping that fails, or names this build's protocol, leaves the
+/// subscription's own failure.
+fn protocol_behind_refusal(context: &SessionSyncContext) -> Option<SessionFetchError> {
+    let pong = hide_herdr_client::request_with_connector(
+        context.api_connector.as_ref(),
+        "ping",
+        crate::wire::ping_params().ok()?,
+        context.request_timeout(),
+    )
+    .ok()
+    .and_then(|answer| crate::wire::server_pong(answer).ok())?;
+    let protocol = u64::from(pong.protocol);
+    (protocol != hide_herdr_client::HERDR_PROTOCOL_REVISION)
+        .then(|| crate::wire::protocol_mismatch(protocol, Some(pong.version)))
 }
 
 fn spawn_subscription_reader(
