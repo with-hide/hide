@@ -25,8 +25,12 @@ the run failed, and `--measurement` writes each as an error annotation titled
 
 A run with a flaky test also sets the step output `flaky=true`, so the lane
 keeps the same logs it keeps for a failure: the first attempt's daemon, Herdr
-and input logs are the evidence its issue needs, and a passing job uploads
-nothing otherwise.
+and input logs are the evidence its issue needs. The reusable web/desktop
+lanes also keep immutable, attempt-named Playwright reports with the actual
+checkout SHA (`--history-record`). The existing verify job's `--retry-history`
+connects an earlier unexpected failure to a later first-try pass, only within
+the same workflow run and at the same tested checkout, OS and test identity.
+Missing reports and infrastructure failures never prove a test passed.
 
 The nightly's report job (`--nightly`) is the one writer of `nightly-failure`
 issues, so the run's cap, the recurrence comments and the closing never race:
@@ -51,15 +55,19 @@ older gh before the first log read. The report job needs `actions: read`, `check
 a red job rather than a silence.
 """
 import argparse
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import functools
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
 import xml.etree.ElementTree as ET
+import zipfile
 
 LABEL = "quarantine"
 EXPIRY_DAYS = 7
@@ -115,6 +123,13 @@ NEW_ISSUES_PER_RUN = 10
 GREEN_LOOKBACK_RUNS = 14
 # Every listing reads at most this many pages of 100.
 PAGES = 10
+# Same-run history is deliberately small. Hitting a bound fails the report,
+# never turns a partial search into a successful test or a new issue.
+HISTORY_ATTEMPTS = 5
+HISTORY_ARTIFACTS = 80
+HISTORY_BYTES = 16 * 1024 * 1024
+HISTORY_TESTS = 10000
+HISTORY_PREFIX = "ci-test-history-"
 # Jobs that only report on the others: this job, and `verify`'s gate, which
 # fails whenever a lane it waits for did and so names no failure of its own.
 REPORT_JOBS = ("nightly report", "verify / verify")
@@ -272,10 +287,13 @@ def new_issue(test, system, facts, today):
         "title": f"Flaky test: {test['name']}"[:200],
         "labels": [LABEL, "bug"],
         "body": (
-            "CI found this test flaky: it failed, then passed on the one retry in the same job, so the run passed.\n\n"
-            f"- Test: {label_of(test)}\n- System: {system}\n"
+            f"{test.get('marker', facts['marker'])}\n"
+            + ("CI found this test flaky across job attempts at the same tested commit.\n\n" if test.get("history") else
+               "CI found this test flaky: it failed, then passed on the one retry in the same job, so the run passed.\n\n")
+            + f"- Test: {label_of(test)}\n- System: {system}\n"
             f"- First seen: {facts['run']} ({facts['change']}, commit {facts['sha']})\n- Expires: {expires}\n\n"
             f"First attempt's failure:\n\n```\n{clean(test['error'])}\n```\n\n"
+            f"{test.get('history', '')}"
             "Fix the cause or delete the test by the expiry date; a flaky test is not left running. "
             "A longer timeout, more retries or a lower expectation does not end this issue. "
             "Each later flaky run adds a comment here.\n"
@@ -286,8 +304,8 @@ def new_issue(test, system, facts, today):
 def comment(test, system, facts, expired):
     late = "\n\nThis issue is past its expiry date. Decide now: fix it, delete the test, or say here why not." if expired else ""
     return (
-        f"{facts['marker']}\nFlaky again on {system}: {facts['run']} ({facts['change']}, commit {facts['sha']}).\n\n"
-        f"```\n{clean(test['error'])}\n```{late}"
+        f"{test.get('marker', facts['marker'])}\nFlaky again on {system}: {facts['run']} ({facts['change']}, commit {facts['sha']}).\n\n"
+        f"```\n{clean(test['error'])}\n```\n\n{test.get('history', '')}{late}"
     )
 
 
@@ -300,8 +318,8 @@ def gh_reads_logs():
     not know: it would answer `unknown flag` and print its usage.
     """
     try:
-        done = subprocess.run(["gh", "--version"], capture_output=True)
-    except OSError as error:
+        done = subprocess.run(["gh", "--version"], capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError(f"gh could not run: {error}") from error
     said = done.stdout.decode("utf-8", "replace")
     version = re.match(r"gh version ((\d+)\.(\d+)\S*)", said)
@@ -325,8 +343,9 @@ def gh(args, body=None, raw=False):
         done = subprocess.run(
             ["gh", "api", *(["--allow-escape-sequences"] if raw else []), *args],
             input=None if body is None else json.dumps(body).encode("utf-8"), capture_output=True,
+            timeout=30,
         )
-    except OSError as error:
+    except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError(f"gh could not run: {error}") from error
     # gh speaks UTF-8; a named encoding keeps a Windows runner from reading it as cp1252.
     if done.returncode:
@@ -349,6 +368,7 @@ def report(tests, system, env, call=gh, today=None):
     issues = open_issues(repo, call)
     lines = [f"### Flaky tests ({system})", ""]
     for test in tests[:MAX_PER_RUN]:
+        facts = {**facts, "sha": test.get("tested_sha", env.get("GITHUB_SHA", "unknown")[:12])}
         issue = next((item for item in issues if tracks(item, test)), None)
         if issue is None:
             created = call([f"repos/{repo}/issues", "--input", "-"], new_issue(test, system, facts, today))
@@ -359,7 +379,8 @@ def report(tests, system, env, call=gh, today=None):
         number = issue["number"]
         comments = listing(call, f"repos/{repo}/issues/{number}/comments")
         lines.append(f"- #{number}: {label_of(test)}")
-        if any(facts["marker"] in (item.get("body") or "") for item in comments):
+        marker = test.get("marker", facts["marker"])
+        if any(marker in (item.get("body") or "") for item in [issue, *comments]):
             continue
         match = re.search(r"^- Expires: (\d{4}-\d\d-\d\d)", issue.get("body") or "", re.M)
         expired = bool(match) and date.fromisoformat(match.group(1)) < today
@@ -387,6 +408,246 @@ def listing(call, path, key=None):
         if len(batch) < 100:
             return items
     raise RuntimeError(f"{path} lists more than {PAGES * 100} entries")
+
+
+def history_record(folder, source, suite, job_name, system, env):
+    """Keep the checkout we actually tested, never GITHUB_SHA's PR head substitute."""
+    done = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, timeout=10, check=True)
+    tested_sha = done.stdout.decode("ascii").strip()
+    record = {
+        "version": 1, "repository": env["GITHUB_REPOSITORY"], "run_id": int(env["GITHUB_RUN_ID"]),
+        "attempt": int(env["GITHUB_RUN_ATTEMPT"]), "workflow_ref": env["GITHUB_WORKFLOW_REF"],
+        "workflow_sha": env["GITHUB_WORKFLOW_SHA"], "tested_sha": tested_sha,
+        "system": system, "suite": suite, "job_name": job_name, "runner_name": env["RUNNER_NAME"],
+        "has_report": source.is_file(),
+    }
+    folder.mkdir(parents=True, exist_ok=True)
+    # A reused local directory must not lend a missing run somebody else's pass.
+    (folder / "record.json").unlink(missing_ok=True)
+    (folder / "report.json").unlink(missing_ok=True)
+    if record["has_report"]:
+        with source.open("rb") as report_file:
+            data = report_file.read(HISTORY_BYTES + 1)
+        if len(data) > HISTORY_BYTES:
+            raise RuntimeError(f"Playwright report exceeds {HISTORY_BYTES} bytes")
+        (folder / "report.json").write_bytes(data)
+    (folder / "record.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+def artifact_bytes(args):
+    """Download with gh's existing credentials, a byte cap and a process deadline.
+
+    The reader stops at the cap, kills and reaps gh on every exit, and keeps
+    stderr bounded on a separate reader so an API refusal cannot deadlock stdout.
+    """
+    gh_reads_logs()
+    try:
+        with subprocess.Popen(["gh", "api", "--allow-escape-sequences", *args],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+            errors = []
+
+            def read_errors():
+                data = child.stderr.read(4097)
+                errors.append(data)
+                if len(data) > 4096:
+                    child.kill()
+
+            reader = threading.Thread(target=read_errors, daemon=True)
+            timer = threading.Timer(45, child.kill)
+            reader.start()
+            timer.start()
+            try:
+                data = child.stdout.read(HISTORY_BYTES + 1)
+                if len(data) > HISTORY_BYTES:
+                    raise RuntimeError(f"artifact download exceeds {HISTORY_BYTES} bytes: {args[0]}")
+                child.wait()
+                reader.join()
+                if len(errors[0]) > 4096:
+                    raise RuntimeError(f"artifact download stderr exceeds 4096 bytes: {args[0]}")
+                if child.returncode:
+                    raise RuntimeError(f"artifact download failed or timed out: {args[0]}: "
+                                       + clean(errors[0].decode("utf-8", "replace")))
+                return data
+            finally:
+                timer.cancel()
+                if child.poll() is None:
+                    child.kill()
+                child.wait()
+                reader.join()
+    except OSError as error:
+        raise RuntimeError(f"gh artifact download could not run: {error}") from error
+
+
+def history_archive(data):
+    if len(data) > HISTORY_BYTES:
+        raise RuntimeError("history archive exceeds the byte cap")
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        entries = archive.infolist()
+        names = [item.filename for item in entries]
+        if sorted(names) not in (["record.json"], ["record.json", "report.json"]):
+            raise RuntimeError("history artifact must contain only record.json and its optional report.json")
+        if sum(item.file_size for item in entries) > HISTORY_BYTES:
+            raise RuntimeError("expanded history archive exceeds the byte cap")
+        record = json.loads(archive.read("record.json"))
+        report_data = json.loads(archive.read("report.json")) if "report.json" in names else None
+    return record, report_data
+
+
+def history_tests(data, suite):
+    """Only normal assertions with explicit, complete Playwright outcomes prove anything."""
+    found = {}
+    seen = 0
+
+    def walk(node, trail):
+        nonlocal seen
+        for spec in node.get("specs", []):
+            for test in spec.get("tests", []):
+                seen += 1
+                if seen > HISTORY_TESTS:
+                    raise RuntimeError(f"history report exceeds {HISTORY_TESTS} tests")
+                if (not spec.get("file") or not spec.get("title") or not isinstance(test.get("projectId"), str)
+                        or not isinstance(test.get("projectName"), str) or test.get("expectedStatus") != "passed"):
+                    continue
+                titles = (*trail, spec["title"])
+                key = (suite, spec["file"], titles, test["projectId"], test["projectName"])
+                if key in found:
+                    raise RuntimeError(f"ambiguous duplicate test identity: {spec['file']} {titles}")
+                results = test.get("results", [])
+                outcome = None
+                if (test.get("status") == "expected" and len(results) == 1
+                        and results[0].get("status") == "passed" and results[0].get("retry") == 0):
+                    outcome = "pass"
+                elif (test.get("status") == "unexpected" and len(results) >= 2
+                      and all(result.get("status") in ("failed", "timedOut")
+                              and result.get("retry") == retry for retry, result in enumerate(results))):
+                    outcome = "fail"
+                found[key] = {
+                    "outcome": outcome, "file": f"{suite}/e2e/{spec['file']}", "line": spec.get("line"),
+                    "name": " > ".join(titles), "project": test["projectName"],
+                    "error": (results[0].get("error") or {}).get("message", "") if results else "",
+                }
+        for child in node.get("suites", []):
+            walk(child, (*trail, child["title"]))
+
+    for top in data.get("suites", []):
+        walk(top, ())
+    return found
+
+
+def timestamp(value):
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def retry_history(env, call=gh, download=artifact_bytes):
+    """Read all bounded evidence before writing any issue. No cross-run inference."""
+    repo, run, attempt = env["GITHUB_REPOSITORY"], int(env["GITHUB_RUN_ID"]), int(env["GITHUB_RUN_ATTEMPT"])
+    if not 1 <= attempt <= HISTORY_ATTEMPTS:
+        raise RuntimeError(f"retry history supports at most {HISTORY_ATTEMPTS} attempts; found {attempt}")
+    if attempt == 1:
+        print("first workflow attempt; no earlier job attempt to connect")
+        return
+    root = f"repos/{repo}/actions/runs/{run}"
+    jobs, starts = {}, {}
+    for number in range(1, attempt + 1):
+        details = call([f"{root}/attempts/{number}"])
+        if details["id"] != run or details["run_attempt"] != number:
+            raise RuntimeError(f"wrong workflow attempt returned for {run}/{number}")
+        starts[number] = timestamp(details["run_started_at"])
+        jobs[number] = listing(call, f"{root}/attempts/{number}/jobs", "jobs")
+    artifacts = [item for item in listing(call, f"{root}/artifacts", "artifacts")
+                 if item["name"].startswith(HISTORY_PREFIX)]
+    if len(artifacts) > HISTORY_ARTIFACTS:
+        raise RuntimeError(f"retry history exceeds {HISTORY_ARTIFACTS} artifacts")
+    evidence, notes, unique = [], [], set()
+    for artifact in artifacts:
+        if artifact.get("expired") or artifact["size_in_bytes"] > HISTORY_BYTES:
+            raise RuntimeError(f"history artifact expired or too large: {artifact['name']}")
+        try:
+            record, data = history_archive(download([f"repos/{repo}/actions/artifacts/{artifact['id']}/zip"]))
+        except (RuntimeError, ValueError, zipfile.BadZipFile) as error:
+            raise RuntimeError(f"{artifact['name']}: {error}") from error
+        number = record["attempt"]
+        if (record["version"] != 1 or record["repository"] != repo or record["run_id"] != run
+                or not isinstance(number, int) or number not in jobs
+                or not re.fullmatch(r"[0-9a-f]{40}", record["tested_sha"])
+                or not re.fullmatch(r"[0-9a-f]{40}", record["workflow_sha"])
+                or record["workflow_ref"] != env["GITHUB_WORKFLOW_REF"]
+                or record["workflow_sha"] != env["GITHUB_WORKFLOW_SHA"]
+                or record["system"] not in ("Linux", "Windows", "macOS")
+                or record["suite"] not in ("web", "desktop") or not record["job_name"] or not record["runner_name"]):
+            raise RuntimeError(f"unsupported or missing history provenance: {artifact['name']}")
+        matches = [job for job in jobs[number] if (job["name"] == record["job_name"]
+                   or job["name"].endswith(" / " + record["job_name"]))
+                   and job.get("runner_name") == record["runner_name"]
+                   and job.get("run_attempt") == number and job.get("run_id") == run
+                   and job.get("status") == "completed" and job.get("started_at")
+                   and timestamp(job["started_at"]) >= starts[number]]
+        if len(matches) != 1:
+            raise RuntimeError(f"history job provenance is missing or ambiguous: {artifact['name']}")
+        job = matches[0]
+        identity = (number, job["id"])
+        if identity in unique:
+            raise RuntimeError(f"duplicate history report for job {job['id']} attempt {number}")
+        unique.add(identity)
+        if not record["has_report"] or data is None:
+            notes.append(f"- Not measured: {job['html_url']} attempt {number} has no Playwright report.")
+            continue
+        suite_step = {"web": "End-to-end", "desktop": "Desktop app end-to-end"}[record["suite"]]
+        suite_steps = [step for step in job.get("steps", []) if step["name"] == suite_step]
+        outcome = job.get("conclusion")
+        if len(suite_steps) != 1 or suite_steps[0].get("conclusion") != outcome or outcome not in ("success", "failure"):
+            notes.append(f"- Not measured: {job['html_url']} has no completed test step matching its outcome.")
+            continue
+        tests = history_tests(data, record["suite"])
+        if not tests or not any(test["outcome"] for test in tests.values()):
+            notes.append(f"- Not measured: {job['html_url']} has no supported explicit test outcomes.")
+        evidence.append((record, job, tests))
+    # A missing artifact is not a passing report. List it, including old runs
+    # that predate this protocol; only explicit test outcomes below can pair.
+    for number, rows in jobs.items():
+        for job in rows:
+            if re.search(r"(?:^| / )(?:web|desktop) e2e \S+ \d+/\d+$", job["name"]):
+                if (job.get("started_at") and timestamp(job["started_at"]) >= starts[number]
+                        and (number, job["id"]) not in unique):
+                    notes.append(f"- Not measured: {job['html_url']} attempt {number} has no history artifact.")
+    failures, flakes = {}, []
+    for record, job, tests in sorted(evidence, key=lambda item: item[0]["attempt"]):
+        for key, test in tests.items():
+            identity = (record["tested_sha"], record["system"], record["workflow_ref"], record["workflow_sha"], key)
+            if test["outcome"] == "fail" and job["conclusion"] == "failure":
+                failures.setdefault(identity, (record, job, test))
+            elif test["outcome"] == "pass" and job["conclusion"] == "success" and identity in failures:
+                first, failed_job, failed_test = failures[identity]
+                if first["attempt"] >= record["attempt"]:
+                    continue
+                # Stable across repeat reporting and later successful reruns:
+                # one external effect for this original failure, per issue.
+                test_id = hashlib.sha256(json.dumps(key).encode("utf-8")).hexdigest()
+                marker = f"<!-- flaky-rerun:{run}:{failed_job['id']}:{first['attempt']}:{test_id} -->"
+                duration = "not measured"
+                original_duration = "not measured"
+                if failed_job.get("completed_at"):
+                    seconds = (timestamp(failed_job["completed_at"]) - timestamp(failed_job["started_at"])).total_seconds()
+                    if seconds >= 0:
+                        original_duration = f"{seconds:g} runner seconds"
+                if job.get("completed_at"):
+                    seconds = (timestamp(job["completed_at"]) - timestamp(job["started_at"])).total_seconds()
+                    if seconds >= 0:
+                        duration = f"{seconds:g} runner seconds for this newly executed passing job"
+                base = f"{env['GITHUB_SERVER_URL']}/{repo}/actions/runs/{run}"
+                history = (f"- Tested checkout: `{record['tested_sha']}`; project: `{test['project']}`.\n"
+                           f"- Original failure: {failed_job['html_url']} ([attempt {first['attempt']}]({base}/attempts/{first['attempt']})).\n"
+                           f"- Original failed job time: {original_duration}.\n"
+                           f"- Later first-try pass: {job['html_url']} ([attempt {record['attempt']}]({base}/attempts/{record['attempt']})).\n"
+                           f"- Additional runner time: {duration}; total added run cost not measured, not PR wall latency or billed cost.\n\n")
+                flakes.append(({**failed_test, "marker": marker, "history": history, "tested_sha": record["tested_sha"]}, record["system"]))
+                del failures[identity]
+    summary(["### Job rerun test history", "", *notes, f"- {len(flakes)} test(s) failed then passed at the same tested checkout."])
+    if len(flakes) > MAX_PER_RUN:
+        print(f"::warning::{len(flakes)} cross-attempt flaky tests; filing the first {MAX_PER_RUN}")
+    selected = flakes[:MAX_PER_RUN]
+    for system in sorted({system for _, system in selected}):
+        report([test for test, os_name in selected if os_name == system], system, env, call=call)
 
 
 def lane_of(job_name):
@@ -798,6 +1059,9 @@ def main(argv=None):
     source.add_argument("--junit", type=Path, nargs="+", help="cargo-nextest JUnit reports (a lane writes one per nextest run)")
     source.add_argument("--measurement", type=Path, help="a performance lane's record, whose failures are annotated")
     parser.add_argument("--system", default=os.environ.get("RUNNER_OS", "unknown"))
+    parser.add_argument("--history-record", type=Path, help="keep this job's checkout provenance and Playwright JSON")
+    parser.add_argument("--job-name", help="the reusable job's displayed name, including its lane and shard")
+    parser.add_argument("--retry-history", action="store_true", help="connect explicit same-checkout failures and passes across this run's job attempts")
     parser.add_argument("--nightly", action="store_true", help="the nightly report job: file, comment on and close nightly-failure issues (needs gh 2.97 or newer)")
     parser.add_argument("--repo", help="OWNER/REPO (default: GITHUB_REPOSITORY)")
     parser.add_argument("--run", help="the nightly run to report (default: this run)")
@@ -805,6 +1069,14 @@ def main(argv=None):
     parser.add_argument("--lane-input", default="", help="the hand run's lane input; empty for the schedule")
     parser.add_argument("--dry-run", action="store_true", help="print what the nightly report would write, and write nothing")
     args = parser.parse_args(argv)
+    if args.retry_history:
+        try:
+            retry_history(os.environ)
+        except (RuntimeError, KeyError, ValueError, TypeError, zipfile.BadZipFile) as error:
+            print(f"::warning::job rerun test history was not reported: {error}")
+            summary(["### Job rerun test history not reported", "", str(error)])
+            return 1
+        return 0
     if args.nightly:
         try:
             return nightly(args, os.environ)
@@ -816,11 +1088,20 @@ def main(argv=None):
         return measurement(args.measurement)
     if not args.suite or not (args.playwright or args.junit):
         parser.error("a lane's report needs --suite and --playwright or --junit")
+    history_error = False
+    if args.history_record:
+        if not args.playwright or args.suite == "rust" or not args.job_name:
+            parser.error("--history-record needs a Playwright suite and --job-name")
+        try:
+            history_record(args.history_record, args.playwright, args.suite, args.job_name, args.system, os.environ)
+        except (RuntimeError, KeyError, ValueError, OSError, subprocess.SubprocessError) as error:
+            print(f"::warning::could not preserve job test history: {error}")
+            history_error = True
     paths = [args.playwright] if args.playwright else args.junit
     paths = [path for path in paths if path.is_file()]
     if not paths:
         print("no report; nothing to file")
-        return 0
+        return int(history_error)
     if args.playwright:
         report_data = json.loads(paths[0].read_text(encoding="utf-8"))
         tests, failed = playwright_flaky(report_data, args.suite), playwright_failed(report_data, args.suite)
@@ -831,7 +1112,7 @@ def main(argv=None):
     annotate(failed)
     if not tests:
         print("no flaky test in this run")
-        return 0
+        return int(history_error)
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
             output.write("flaky=true\n")
@@ -844,7 +1125,7 @@ def main(argv=None):
         summary(["### Flaky tests that were not filed", "", f"Filing failed: {error}", ""]
                 + [f"- {label_of(test)} ({args.system})" for test in tests])
         return 1
-    return 0
+    return int(history_error)
 
 
 if __name__ == "__main__":

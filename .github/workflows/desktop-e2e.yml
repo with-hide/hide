@@ -175,12 +175,25 @@ jobs:
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json
+        run: |
+          python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json \
+            --history-record agents/runs/ci-test-history \
+            --job-name "desktop e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}"
+      - name: Keep this job attempt's test report
+        continue-on-error: true
+        timeout-minutes: 2
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-test-history-desktop-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: agents/runs/ci-test-history/
+          if-no-files-found: error
+          retention-days: 7
       - name: Keep the window the tests drew
         if: ${{ inputs.keep-screenshots && steps.suite.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-desktop-screenshots-${{ inputs.lane }}-${{ matrix.shard }}
+          name: hide-desktop-screenshots-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/hide-e2e/*.png
           if-no-files-found: error
       - name: Keep the e2e run's logs
@@ -188,7 +201,7 @@ jobs:
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-desktop-e2e-logs-${{ inputs.lane }}-${{ matrix.shard }}
+          name: hide-desktop-e2e-logs-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/hide-e2e
             desktop/test-results
