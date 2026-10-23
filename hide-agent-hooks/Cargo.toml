@@ -20,6 +20,7 @@ hide-herdr-client = { path = "../hide-herdr-client" }
 hide-memory = { path = "../hide-memory" }
 hide-platform = { path = "../hide-platform" }
 hide-project = { path = "../hide-project" }
+hide-shell = { path = "../hide-shell" }
 # Gitignore-style matching of the guardrails' protected paths.
 ignore = "=0.4.33"
 serde = { version = "=1.0.229", features = ["derive"] }
