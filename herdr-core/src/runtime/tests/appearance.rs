@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::model::{AgentLogoMode, ColorTheme, ThemePreference};
+use crate::model::{AgentLogoMode, ColorTheme, PaneTurnRowMode, ThemePreference};
 
 pub(super) fn runtime_at(path: &std::path::Path) -> Runtime {
     Runtime::new(
@@ -884,6 +884,99 @@ fn a_ui_state_update_never_changes_the_agent_logo_mode() {
         runtime.snapshot().ui_state.agent_logo_mode,
         AgentLogoMode::Shown
     );
+}
+
+fn pane_turn_row_mode_set(mode: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "pane_turn_row_mode_set",
+        "payload": {"mode": mode}
+    }))
+    .expect("pane turn row mode event")
+}
+
+/// A store without the mode opens one line; one event changes it, a repeat is
+/// no change, a shared UI-state save never moves it, and a restart keeps it.
+#[test]
+fn pane_turn_row_mode_set_alone_changes_the_mode_and_a_restart_keeps_it() {
+    let (_state, path) = state_path("turn-row-roundtrip");
+    let mut runtime = runtime_at(&path);
+    assert_eq!(
+        runtime.snapshot().ui_state.pane_turn_row_mode,
+        PaneTurnRowMode::OneLine
+    );
+    assert!(runtime.dispatch_json(&pane_turn_row_mode_set("two_lines")));
+    assert!(
+        !runtime.dispatch_json(&pane_turn_row_mode_set("two_lines")),
+        "the same mode again is no change"
+    );
+    let update = ui_state_update(
+        &runtime,
+        serde_json::json!({"font_size": 14, "pane_turn_row_mode": "off"}),
+    );
+    runtime.dispatch_json(&update);
+    assert_eq!(
+        serde_json::to_value(runtime.snapshot()).unwrap()["ui_state"]["pane_turn_row_mode"],
+        "two_lines",
+        "the snapshot the shell draws from carries the mode a ui_state_update did not move"
+    );
+    drop(runtime);
+    let mut restarted = runtime_at(&path);
+    assert_eq!(
+        restarted.snapshot().ui_state.pane_turn_row_mode,
+        PaneTurnRowMode::TwoLines
+    );
+    assert!(restarted.dispatch_json(&pane_turn_row_mode_set("off")));
+    drop(restarted);
+
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(stored["pane_turn_row_mode"], "off");
+    stored.as_object_mut().unwrap().remove("pane_turn_row_mode");
+    std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+    let older = runtime_at(&path);
+    assert_eq!(
+        older.snapshot().ui_state.pane_turn_row_mode,
+        PaneTurnRowMode::OneLine,
+        "a store written before the mode existed opens one line"
+    );
+    assert!(older.snapshot().status.diagnostics.is_empty());
+}
+
+/// A stored value this build does not know opens one line and is only a
+/// diagnostic; an event naming one is refused and the mode stays.
+#[test]
+fn an_unknown_pane_turn_row_mode_falls_back_to_one_line_or_is_refused() {
+    let (_state, path) = state_path("turn-row-unknown");
+    let mut runtime = runtime_at(&path);
+    assert!(runtime.dispatch_json(&pane_turn_row_mode_set("off")));
+    runtime.dispatch_json(&pane_turn_row_mode_set("three_lines"));
+    assert!(runtime.snapshot().status.last_error.is_some());
+    assert_eq!(
+        runtime.snapshot().ui_state.pane_turn_row_mode,
+        PaneTurnRowMode::Off
+    );
+    drop(runtime);
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    stored["pane_turn_row_mode"] = serde_json::json!("three_lines");
+    std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+
+    let runtime = runtime_at(&path);
+    assert_eq!(
+        runtime.snapshot().ui_state.pane_turn_row_mode,
+        PaneTurnRowMode::OneLine
+    );
+    assert!(
+        runtime
+            .snapshot()
+            .status
+            .diagnostics
+            .iter()
+            .any(|entry| entry.kind == "ui_state.pane_turn_row_mode_unknown"),
+        "the fallback is logged"
+    );
+    assert!(runtime.snapshot().status.last_error.is_none());
 }
 
 /// Appearance's Terminal text slider: a size inside 10..=24 is kept across a

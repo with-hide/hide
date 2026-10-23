@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     AgentLogoMode, ColorTheme, DetailSlot, DeviceRegistration, OverviewGraphChoices,
-    PaneCompletion, PaneReadRecord, PetOriginSnapshot, RightPanelSection, SidebarLens,
-    SidebarProject, TaskView, ThemePreference, UiStateSnapshot, WorkspaceRegistration,
+    PaneCompletion, PaneReadRecord, PaneTurnRowMode, PetOriginSnapshot, RightPanelSection,
+    SidebarLens, SidebarProject, TaskView, ThemePreference, UiStateSnapshot, WorkspaceRegistration,
     default_accent_hex, default_font_size, default_pane_text_scale, default_panel_visible,
     default_sidebar_width, default_terminal_font_size,
 };
@@ -134,6 +134,10 @@ struct StoredUiState {
     /// loads as hidden.
     #[serde(default)]
     agent_logo_mode: Option<String>,
+    /// `one_line`, `two_lines` or `off`; a store written before the mode
+    /// existed loads as one line.
+    #[serde(default)]
+    pane_turn_row_mode: Option<String>,
     /// Kept as text for the same reason as `theme`; absent in a store written
     /// before the color theme existed, which loads as Hide (D-04).
     #[serde(default)]
@@ -278,6 +282,8 @@ pub enum UnrecognizedField {
     ColorTheme,
     /// The agent logo mode; hidden was used.
     AgentLogoMode,
+    /// The pane turn row mode; one line was used.
+    PaneTurnRowMode,
     /// The sidebar's lens or the 태스크 view option; the projects, grouped
     /// by state, was used.
     SidebarLens,
@@ -434,6 +440,13 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             AgentLogoMode::Hidden
         }),
     };
+    let pane_turn_row_mode = match stored.pane_turn_row_mode.as_deref() {
+        None => PaneTurnRowMode::OneLine,
+        Some(value) => PaneTurnRowMode::parse(value).unwrap_or_else(|| {
+            unrecognized.push(UnrecognizedField::PaneTurnRowMode);
+            PaneTurnRowMode::OneLine
+        }),
+    };
     let sidebar_lens = match stored.sidebar_lens.as_deref() {
         None => SidebarLens::default(),
         Some(value) => SidebarLens::parse(value).unwrap_or_else(|| {
@@ -538,6 +551,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             accent_hex: stored.accent_hex,
             theme,
             agent_logo_mode,
+            pane_turn_row_mode,
             color_theme,
             interface_language: stored.interface_language,
             usage: stored.usage.restored(),
@@ -719,6 +733,7 @@ pub fn save(
         accent_hex: state.accent_hex.clone(),
         theme: Some(state.theme.as_str().to_owned()),
         agent_logo_mode: Some(state.agent_logo_mode.as_str().to_owned()),
+        pane_turn_row_mode: Some(state.pane_turn_row_mode.as_str().to_owned()),
         color_theme: Some(state.color_theme.as_str().to_owned()),
         interface_language: state.interface_language.clone(),
         usage: state.usage.clone(),

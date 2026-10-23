@@ -3096,6 +3096,39 @@ impl AgentLogoMode {
     }
 }
 
+/// How an agent pane draws its turn row over the terminal, the operator's
+/// last request and the agent's answer (View menu, `pane_turn_row_mode_set`).
+/// One line is the default: an ask no longer wraps over the terminal on a
+/// narrow pane. Two lines give the request its own line; off draws no turn
+/// row, and an ask then rides the pane head as a mark.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneTurnRowMode {
+    #[default]
+    OneLine,
+    TwoLines,
+    Off,
+}
+
+impl PaneTurnRowMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OneLine => "one_line",
+            Self::TwoLines => "two_lines",
+            Self::Off => "off",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "one_line" => Some(Self::OneLine),
+            "two_lines" => Some(Self::TwoLines),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
 /// The palette every window draws in (Settings > Appearance > Color theme),
 /// independent of the Mode above: Hide is the landing page's Owl Field
 /// colors, Neutral the grey chrome. Hide is the default, including for a store
@@ -3913,6 +3946,9 @@ pub struct UiStateSnapshot {
     /// Whether list rows and tabs draw the agent's logo (`agent_logo_mode_set`).
     #[serde(default)]
     pub agent_logo_mode: AgentLogoMode,
+    /// How agent panes draw their turn row (`pane_turn_row_mode_set`).
+    #[serde(default)]
+    pub pane_turn_row_mode: PaneTurnRowMode,
     /// The palette every window draws in; `color_theme_set` owns it.
     #[serde(default)]
     pub color_theme: ColorTheme,
@@ -4784,6 +4820,7 @@ impl Default for UiStateSnapshot {
             accent_hex: default_accent_hex(),
             theme: ThemePreference::Dark,
             agent_logo_mode: AgentLogoMode::Hidden,
+            pane_turn_row_mode: PaneTurnRowMode::OneLine,
             color_theme: ColorTheme::Hide,
             interface_language: None,
             usage: Default::default(),
@@ -7670,6 +7707,19 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "agent_logo_mode", &logo_modes);
         checked.insert("agent_logo_mode");
+
+        let turn_row_modes = [
+            PaneTurnRowMode::OneLine,
+            PaneTurnRowMode::TwoLines,
+            PaneTurnRowMode::Off,
+        ];
+        for variant in turn_row_modes {
+            match variant {
+                PaneTurnRowMode::OneLine | PaneTurnRowMode::TwoLines | PaneTurnRowMode::Off => {}
+            }
+        }
+        assert_wire(&contract, "pane_turn_row_mode", &turn_row_modes);
+        checked.insert("pane_turn_row_mode");
 
         let behind = [
             hide_kit::device_herdr::BehindCause::CannotHandOff,
