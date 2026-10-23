@@ -1,4 +1,4 @@
-// Page motion: one-time reveals, the owls' loops, the hero peek's and the section owls', and the hero's tabs.
+// Page motion: one-time reveals, the owls' loops, the hero peek's and the section owls', and the stages' tabs.
 // Under reduced motion the reveals show at once, every owl holds its still frame and the tabs never turn by themselves.
 
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -45,14 +45,13 @@ function mountMotion() {
   owls.forEach(sync);
 }
 
-// The hero's tabs: one window each. With motion allowed they hand over every few seconds while the stage is on
+// A stage's tabs: one window each. With motion allowed they hand over every few seconds while the stage is on
 // screen and the tab is visible; the first press, click or key, leaves the choice to the visitor for good.
 const TAB_MS = 7000;
 
-function mountTabs() {
-  const stage = document.querySelector(".stage");
+function mountTabs(stage) {
   const tabs = [...stage.querySelectorAll('[role="tab"]')];
-  const caption = document.getElementById("stage-caption");
+  const caption = stage.querySelector("figcaption");
   let index = 0;
   let timer = null;
   let manual = reduceMotion;
@@ -68,7 +67,6 @@ function mountTabs() {
     });
     const panel = document.getElementById(tabs[index].getAttribute("aria-controls"));
     caption.textContent = panel.dataset.caption;
-    stage.dataset.tab = tabs[index].id.replace("tab-", "");
     if (focus) tabs[index].focus();
     schedule();
   }
@@ -110,6 +108,14 @@ function mountTabs() {
   select(0, false);
 }
 
+// A link to a folded answer opens it.
+function openLinkedAnswer() {
+  const target = location.hash ? document.getElementById(location.hash.slice(1)) : null;
+  if (target instanceof HTMLDetailsElement) target.open = true;
+}
+
 mountReveals();
 mountMotion();
-mountTabs();
+document.querySelectorAll(".stage").forEach(stage => { if (stage.querySelector('[role="tablist"]')) mountTabs(stage); });
+openLinkedAnswer();
+window.addEventListener("hashchange", openLinkedAnswer);
