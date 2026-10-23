@@ -2156,7 +2156,7 @@ The tile of the machine that runs the core wears a crown notched into its bottom
 
 A window on a machine whose core runs elsewhere shows its core's state and takes its strip, in the place and size of the connection badge, when the core cannot draw it (W1 to W3, B16):
 
-- while a move holds the window, `core를 Mac mini로 옮기는 중 · 3/5 프로젝트와 기록 복사 · 다시 연결될 때까지 입력을 받지 않아요`, the move's step of five, with `…`, and the window sends nothing but the move's own give-up (a rollback says `옮기지 못해 이 Mac의 core로 되돌리는 중`); while the move waits on a machine that took its link and stopped answering, the strip ends with `그만 기다리기` (`여기로 가져오기` for a move back), which only opens the move dialog at its confirm;
+- while a move holds the window, `core를 Mac mini 기기로 옮기는 중 · 3/5 프로젝트와 기록 복사 · 다시 연결될 때까지 입력을 받지 않아요`, the move's step of five, with `…`, and the window sends nothing but the move's own give-up (a rollback says `옮기지 못해 이 Mac의 core로 되돌리는 중`); while the move waits on a machine that took its link and stopped answering, the strip ends with `그만 기다리기` (`여기로 가져오기` for a move back), which only opens the move dialog at its confirm;
 - while this machine updates its core to this app's build, `Mac mini의 core를 이 앱의 빌드로 바꾸는 중 · 에이전트는 계속 실행돼요`, with `…`;
 - while the core cannot be reached, `! Mac mini의 core에 연결할 수 없어요 · 다시 연결하는 중`;
 - after the operator ended the link here, `! Mac mini core와 연결을 끊었어요` with `다시 연결` at its end, which links it again and is the only thing the window sends while it waits;
@@ -2579,13 +2579,13 @@ A connected device this core dials offers `core를 이 기기로 옮기기…` i
 That window's own row offers instead `core를 이 Mac으로 되돌리기…` and `Mac mini core와 연결 끊기…`, and its menu has no Remove…, since a machine does not remove itself.
 `연결 끊기…` asks once, saying that the core refuses this Mac's pane input, file reads and browser actions at once and that reconnecting allows them again, and the window's strip then offers `다시 연결` (B16).
 
-A move is one dialog over Settings whose body turns with the move, and every form names the reason first, `Mac mini는 늘 켜져 있어서 이 Mac을 덮어도 에이전트와 폰 연결이 계속돼요.` (B3 to B5):
+A move is one dialog over Settings whose body turns with the move, and every form names the reason first, `Mac mini 기기는 늘 켜져 있어서 이 Mac을 덮어도 에이전트와 폰 연결이 계속돼요.` (B3 to B5):
 
 - checking: `점검하는 중…` while both machines are checked and nothing is changed;
 - checks failed: `고칠 것 2개 · 통과 9개` (the passed count only when every check ran) and one line per failing check, naming the machine and either the one command that fixes it, with Copy (`gh auth login`, `sudo pmset -c sleep 0`), or what to do in words; `다시 점검` checks again;
   a line names the machine the failure is on, so a Hide AI with no agent chosen names the machine whose core moves, since that setting moves with the core, `이 Mac의 Hide AI` with `설정 › Hide AI에서 켜고 에이전트를 고르세요`, while an agent of it not signed in names the machine taking the core (`checkMachine` in `web/src/coreMove.ts`);
   earlier core records on the machine taking the core fail `Mac mini의 이전 core 기록` with `Mac mini에서 정리하세요`, and a folder the copy cannot reach there (a file on the way to its state folder, a link that leads nowhere, a folder another account owns) fails `Mac mini의 상태 폴더` with the cause as its line and `Mac mini에서 폴더를 고치세요`; a link on the way is no failure, since the machine answers the folder by its resolved path;
-- confirm: what happens (`몇 초 동안 창이 입력을 받지 않아요. 폰에서는 QR을 한 번 다시 스캔해야 해요.`), that it can be undone, and `Mac mini 기기로 옮기기`;
+- confirm: what happens (`몇 초 동안 창에 입력할 수 없어요. 폰에서는 QR을 한 번 다시 스캔해야 해요.`), that it can be undone, and `Mac mini 기기로 옮기기`;
 - moving: the five steps with ✓, `…` and `-`, and, while the other machine cannot be reached, `Mac mini에 연결할 수 없어요 · 연결되면 옮기기를 이어 가요`; where that machine may already have taken the core, so only it can say whether the move committed, the footer offers `그만 기다리기`, and for a move back whose core machine does not answer its retirement, `여기로 가져오기`;
 - give up (amendment 4): the confirm of that action in the same dialog, `되돌릴 수 없어요.` first, then that this Mac's core starts again as it was and that a core coming back on Mac mini is stopped and set aside, not merged, and one plain line, in the body color like the others, that a Mac mini only cut off, not gone, keeps its core running until this Mac reaches it; `취소` goes back to the steps and `그만 기다리기` is the destructive action, never the default; the move back's `core를 여기로 가져올까요?` says instead that this Mac's core starts from the copy it received and that Mac mini's core stays stopped until it is retired, with no risk line;
 - stopped waiting: `이 Mac의 core가 원래대로 실행 중이에요.` and that Mac mini's core stops once this Mac reaches it;

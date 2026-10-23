@@ -68,6 +68,9 @@ describe("the strip above the window (W1 to W3)", () => {
     const { t } = await createInterfaceI18n("ko");
     const strip = windowStrip({ connection: "moving", refused: false, move: view({ state: "copying", step: "copy" }), link: null, machines: { from: "이 Mac", to: "Mac mini" }, coreMachine: "이 Mac" }, t);
     expect(strip).toEqual({ kind: "moving", mark: "pending", text: "core를 Mac mini 기기로 옮기는 중 · 3/5 프로젝트와 기록 복사 · 다시 연결될 때까지 입력을 받지 않아요" });
+    // A move back goes to this machine, whose name already says what it is: no 기기 after it.
+    const back = windowStrip({ connection: "moving", refused: false, move: view({ state: "copying", step: "copy", direction: "back" }), link: null, machines: { from: "Mac mini", to: "이 Mac" }, coreMachine: "Mac mini" }, t);
+    expect(back?.text).toBe("core를 이 Mac 쪽으로 되돌리는 중 · 3/5 프로젝트와 기록 복사 · 다시 연결될 때까지 입력을 받지 않아요");
   });
 
   it("names the node's update of its core and its failed link while the screen waits, and nothing once live", async () => {

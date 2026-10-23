@@ -3,7 +3,7 @@ import type { Catalogs } from "../schema";
 const words = {
   "recordCard.restore": ["Restore session", "세션 복구하기", "セッションを復元", "恢复会话"],
   "recordCard.restoring": ["Restoring…", "복구하는 중…", "復元中…", "正在恢复…"],
-  "links.resumeUnknown": ["Couldn't confirm yet whether the session resumed. Check its status.", "이어서 하기가 됐는지 아직 확인하지 못했어요. 상태를 확인하세요.", "再開できたかどうか、まだ確認できません。状態を確認してください。", "尚未确认会话是否已继续。请检查状态。"],
+  "links.resumeUnknown": ["Couldn't confirm yet whether the session resumed. Check its status.", "세션을 이어서 시작했는지 아직 확인하지 못했어요. 상태를 확인하세요.", "再開できたかどうか、まだ確認できません。状態を確認してください。", "尚未确认会话是否已继续。请检查状态。"],
   "recordCard.paneOpen": ["Pane open", "터미널 열림", "ペインは開いています", "窗格已打开"],
   "recordCard.paneClosed": ["Pane closed", "터미널 닫힘", "ペインは閉じています", "窗格已关闭"],
   "recordCard.prs": ["PR", "PR", "PR", "PR"],
