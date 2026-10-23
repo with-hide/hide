@@ -210,7 +210,7 @@ function restored(desk: DeskModel): DeskModel {
 function restoreOperation(requestId: string | null): TaskOperation {
   return {
     id: 1, kind: "agent_start", phase: "ready", repository_root: `/work/${PLACE.project}`, branch: PLACE.branch, base_branch: null, path: `/work/${PLACE.project}`,
-    pane_id: RESTORED_PANE, agent_kind: LOGIN_SESSION.agent, message: null, agent_phase: "started", agent_reason: null, agent_line: null, request_id: requestId,
+    pane_id: RESTORED_PANE, agent_kind: LOGIN_SESSION.agent, failure: null, agent_phase: "started", agent_reason: null, agent_line: null, request_id: requestId,
   };
 }
 
