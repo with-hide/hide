@@ -4,14 +4,15 @@
 
 import type { AgentGroup, AgentLayout } from "../agentLayout";
 import type { AgentScope } from "../agentScope";
-import type { AgentRow, Checkout, LayoutNode, SnapshotRest } from "../snapshot";
+import type { AgentRow, AsyncOperation, Checkout, LayoutNode, SnapshotRest } from "../snapshot";
+import type { PaneMoveIntent } from "../paneMove";
 import { galleryAgentState } from "../gallery/agentStates";
 import type { CoreEvent, PracticeWorld } from "./world";
 import { agent, checkout, REFERENCE_FOLDS, sidebarStatusAxisScene, workspace } from "../gallery/sceneData";
 import statusAxisScope from "../gallery/sidebarStatusAxisScope.json";
 
 export const PROJECT = "hide-practice";
-export const PROJECT_LABEL = "hide-연습";
+export const PROJECT_LABEL = "hide-practice";
 const CHECKOUT = `${PROJECT}:main`;
 
 type PracticeTab = { id: string; name: string | null; root: LayoutNode; focused: string; zoomed: boolean };
@@ -25,22 +26,43 @@ export type PracticeModel = {
   selectedGroup: string | null;
   activeTab: string;
   nextId: number;
+  /** The pane moves the core finished, as `status.async_operations` reports them. */
+  operations: AsyncOperation[];
 };
 
 /** The world chapter 1 opens on: one Claude agent at work in the practice project's only tab. */
 export function chapterOneModel(): PracticeModel {
-  const lead = agent({ pane_id: "lead", identity_label: "결제 오류 고치기", agent_kind: "claude", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "1m", state: galleryAgentState("e1", null, Date.now() - 60_000) });
+  const lead = agent({ pane_id: "lead", identity_label: "Fix the checkout 500", agent_kind: "claude", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "1m", state: galleryAgentState("e1", null, Date.now() - 60_000) });
   return {
-    panes: [{ id: "lead", agent: lead, title: "결제 오류 고치기" }],
+    panes: [{ id: "lead", agent: lead, title: "Fix the checkout 500" }],
     tabs: [{ id: "t1", name: null, root: { type: "pane", pane_id: "lead" }, focused: "lead", zoomed: false }],
     groups: [{ id: null, name: null, tabs: ["t1"] }],
     selectedGroup: null,
     activeTab: "t1",
     nextId: 2,
+    operations: [],
   };
 }
 
 const panesOf = (node: LayoutNode): string[] => (node.type === "pane" ? [node.pane_id] : [...panesOf(node.first), ...panesOf(node.second)]);
+
+/** `node` without the pane `id`; a split left with one side becomes that side. */
+function withoutPane(node: LayoutNode, id: string): LayoutNode | null {
+  if (node.type === "pane") return node.pane_id === id ? null : node;
+  const first = withoutPane(node.first, id);
+  const second = withoutPane(node.second, id);
+  if (!first) return second;
+  if (!second) return first;
+  return { ...node, first, second };
+}
+
+/** The pane `id` placed on `edge` of the pane `beside`. */
+function placeBeside(node: LayoutNode, beside: string, id: string, edge: "left" | "right" | "up" | "down"): LayoutNode {
+  const moved: LayoutNode = { type: "pane", pane_id: id };
+  const there: LayoutNode = { type: "pane", pane_id: beside };
+  const before = edge === "left" || edge === "up";
+  return replacePane(node, beside, { type: "split", direction: edge === "left" || edge === "right" ? "right" : "down", ratio: 0.5, first: before ? moved : there, second: before ? there : moved });
+}
 
 function replacePane(node: LayoutNode, id: string, next: LayoutNode): LayoutNode {
   if (node.type === "pane") return node.pane_id === id ? next : node;
@@ -89,6 +111,8 @@ export function applyPractice(model: PracticeModel, event: CoreEvent): PracticeM
       if (!tab) return null;
       return { ...model, tabs: model.tabs.map((row) => (row === tab ? { ...row, focused: String(p.pane_id), zoomed: !row.zoomed } : row)) };
     }
+    case "pane_move":
+      return movePane(model, p as unknown as PaneMoveIntent);
     case "agent_group":
       return applyGroup(model, p.group_id as string | null, p);
     case "agent_layout":
@@ -102,18 +126,41 @@ export function applyPractice(model: PracticeModel, event: CoreEvent): PracticeM
   }
 }
 
+/** A pane moved the way the core moves it, with the finished operation the shell waits for. */
+function movePane(model: PracticeModel, intent: PaneMoveIntent): PracticeModel | null {
+  const { source, destination } = intent;
+  const from = model.tabs.find((tab) => tab.id === source.tab_id);
+  if (!from) return null;
+  const rest = withoutPane(from.root, source.pane_id);
+  let tabs = model.tabs.map((tab) => (tab === from ? { ...tab, root: rest ?? tab.root, focused: rest && tab.focused === source.pane_id ? panesOf(rest)[0]! : tab.focused } : tab));
+  let groups = model.groups;
+  let activeTab: string;
+  let nextId = model.nextId;
+  if (destination.type === "new_tab") {
+    if (!rest) return null;
+    const id = `t${nextId++}`;
+    tabs = [...tabs, { id, name: null, root: { type: "pane", pane_id: source.pane_id }, focused: source.pane_id, zoomed: false }];
+    groups = groups.map((group) => (group.tabs.includes(from.id) ? { ...group, tabs: [...group.tabs, id] } : group));
+    activeTab = id;
+  } else {
+    const edge = destination.type === "pane" ? destination.edge : "right";
+    tabs = tabs.map((tab) => (tab.id === destination.tab_id ? { ...tab, root: placeBeside(tab.id === from.id ? rest! : tab.root, destination.pane_id, source.pane_id, edge), focused: source.pane_id, zoomed: false } : tab));
+    activeTab = destination.tab_id;
+  }
+  if (!rest) {
+    tabs = tabs.filter((tab) => tab.id !== from.id);
+    groups = groups.map((group) => ({ ...group, tabs: group.tabs.filter((tab) => tab !== from.id) }));
+  }
+  const done: AsyncOperation = { id: intent.request_id, kind: "pane.move", target_id: "local", scope_id: source.tab_id, phase: "completed", stage: "completed", message: null, retryable: false };
+  return { ...model, tabs, groups, activeTab, nextId, operations: [...model.operations, done] };
+}
+
 function applyGroup(model: PracticeModel, groupId: string | null, p: Record<string, unknown>): PracticeModel | null {
   switch (p.action) {
     case "new_tab": {
       const pane = shellPane(model);
       const tab: PracticeTab = { id: `t${model.nextId}`, name: null, root: { type: "pane", pane_id: pane.id }, focused: pane.id, zoomed: false };
       return { ...model, panes: [...model.panes, pane], tabs: [...model.tabs, tab], nextId: model.nextId + 1, activeTab: tab.id, groups: model.groups.map((row) => (row.id === groupId ? { ...row, tabs: [...row.tabs, tab.id] } : row)) };
-    }
-    case "create": {
-      const id = `g${model.nextId}`;
-      const tabId = typeof p.tab_id === "string" ? p.tab_id : null;
-      const without = model.groups.map((row) => ({ ...row, tabs: row.tabs.filter((tab) => tab !== tabId) }));
-      return { ...model, nextId: model.nextId + 1, groups: [...without, { id, name: String(p.name).trim(), tabs: tabId ? [tabId] : [] }], selectedGroup: id, activeTab: tabId ?? model.activeTab };
     }
     case "select": {
       const group = model.groups.find((row) => row.id === groupId);
@@ -173,7 +220,7 @@ export function practiceSnapshot(model: PracticeModel, nowMs: number): { rest: S
   };
   main.tabs = model.tabs.map((tab, index) => ({ ...template, id: tab.id, label: String(index + 1), sidebar: { number: index + 1, manual_name: tab.name, named_by_operator: tab.name !== null }, panes: panesOf(tab.root).map(titled) }));
   main.active_tab_id = model.activeTab;
-  main.strip = main.tabs.map((tab) => ({ id: `strip:${tab.id}`, kind: "herdr", source_id: tab.id!, label: tab.sidebar?.manual_name ?? `탭 ${tab.sidebar?.number}`, preview: false }));
+  main.strip = main.tabs.map((tab) => ({ id: `strip:${tab.id}`, kind: "herdr", source_id: tab.id!, label: tab.sidebar?.manual_name ?? `Tab ${tab.sidebar?.number}`, preview: false }));
   main.next_tab_label = String(model.tabs.length + 1);
   main.agent_groups = { selected: model.selectedGroup, groups: model.groups, drafts: [] };
   main.agent_scope = scope;
@@ -211,6 +258,7 @@ export function practiceSnapshot(model: PracticeModel, nowMs: number): { rest: S
       workspace_registrations: [{ device_id: "local", path: project.path, label: PROJECT_LABEL } as never],
     },
     focused: { pane_id: focused },
+    status: { ...base.rest.status!, async_operations: model.operations },
     pane_layouts: model.tabs.map((tab) => ({ workspace_id: PROJECT, tab_id: tab.id, focused_pane_id: tab.focused, zoomed: tab.zoomed, root: tab.root })),
     workspace_view: {
       device_id: "local", path: main.path, open: false, documents: false, tool: null, pinned: false,
@@ -229,12 +277,12 @@ export function paneScreen(pane: PracticePane): string {
   return [
     "\x1b[38;5;209m✻\x1b[0m Claude Code",
     "",
-    "\x1b[2m>\x1b[0m 결제할 때 500 나는 거 고쳐줘",
+    "\x1b[2m>\x1b[0m Checkout returns a 500 when I pay. Fix it",
     "",
-    "\x1b[38;5;209m●\x1b[0m 결제 요청 흐름을 따라가 볼게요.",
-    "  \x1b[2m⎿  src/payment/checkout.ts 읽는 중…\x1b[0m",
+    "\x1b[38;5;209m●\x1b[0m Following the payment request through the code.",
+    "  \x1b[2m⎿  Reading src/payment/checkout.ts…\x1b[0m",
     "",
-    "\x1b[38;5;209m✻\x1b[0m \x1b[2m원인 찾는 중… (esc로 중단)\x1b[0m",
+    "\x1b[38;5;209m✻\x1b[0m \x1b[2mLooking for the cause… (esc to interrupt)\x1b[0m",
   ].join("\r\n");
 }
 

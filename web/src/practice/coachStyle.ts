@@ -61,4 +61,6 @@ export const COACH_CSS = `
 .pc-qf{padding:0 14px 12px;font-size:12px;color:var(--pc-mute);display:flex;justify-content:space-between}
 .pc-qf button{font:inherit;border:0;background:none;color:var(--pc-mute);cursor:pointer;padding:0}
 .pc-qf button:hover{color:var(--pc-text)}
+.pc-hand{position:absolute;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5))}
+.pc-hand path{fill:var(--pc-card);stroke:#1d1a14;stroke-width:1.2}
 `;

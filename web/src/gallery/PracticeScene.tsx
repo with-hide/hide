@@ -6,10 +6,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createActions } from "../actions";
-import { GroupNameDialog } from "../AgentGroupControls";
 import { TooltipProvider } from "../components/ui/tooltip";
 import type { HostBridge } from "../host";
-import { clientI18n } from "../i18n/translator";
 import { installKeyboard } from "../keyboard";
 import { CHAPTERS } from "../practice/chapters";
 import { PracticeCoach } from "../practice/PracticeCoach";
@@ -71,9 +69,7 @@ export function PracticeScene({ chapter: first, theme, system }: PracticeScenePa
     root.classList.toggle("dark", theme === "dark");
     root.classList.toggle("light", theme === "light");
     root.classList.add(PALETTE_HIDE_CLASS);
-    void clientI18n.changeLanguage("ko");
-    root.lang = "ko";
-    document.title = `hide · 연습 모드 ${chapter.number}편`;
+    document.title = `hide · practice ${chapter.number}`;
   }, [chapter.number, theme]);
 
   // A pane keeps no scrollback, so a terminal a layout change re-created or
@@ -117,7 +113,6 @@ export function PracticeScene({ chapter: first, theme, system }: PracticeScenePa
           <Sidebar actions={actions} />
           <WorkspaceScreen key={run} actions={actions} />
         </div>
-        <GroupNameDialog actions={actions} />
         <PracticeCoach key={run} chapter={chapter} model={model} next={next} onNext={() => next && start(next)} onRestart={() => start(chapter)} />
       </div>
     </TooltipProvider>

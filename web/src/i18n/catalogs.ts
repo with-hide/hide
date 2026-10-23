@@ -40,6 +40,7 @@ import { coreMoveCatalogs, coreMoveEnglish } from "./resources/coreMove";
 import { nativeCatalogs, nativeEnglish } from "./resources/native";
 import { overviewCatalogs, overviewEnglish } from "./resources/overview";
 import { firstRunCatalogs, firstRunEnglish } from "./resources/firstRun";
+import { practiceCatalogs, practiceEnglish } from "./resources/practice";
 import { herdrTakeoverCatalogs, herdrTakeoverEnglish } from "./resources/herdrTakeover";
 import { memoryCatalogs, memoryEnglish } from "./resources/memory";
 import { prWorkCatalogs, prWorkEnglish } from "./resources/prWork";
@@ -110,6 +111,7 @@ export const english = {
   ...feedbackEnglish,
   ...overviewEnglish,
   ...firstRunEnglish,
+  ...practiceEnglish,
   ...herdrTakeoverEnglish,
   ...memoryEnglish,
   ...projectSettingsEnglish,
@@ -174,6 +176,7 @@ export const catalogs = {
     ...feedbackCatalogs.ko,
     ...overviewCatalogs.ko,
     ...firstRunCatalogs.ko,
+    ...practiceCatalogs.ko,
     ...herdrTakeoverCatalogs.ko,
     ...memoryCatalogs.ko,
     ...projectSettingsCatalogs.ko,
@@ -233,6 +236,7 @@ export const catalogs = {
     ...feedbackCatalogs["zh-CN"],
     ...overviewCatalogs["zh-CN"],
     ...firstRunCatalogs["zh-CN"],
+    ...practiceCatalogs["zh-CN"],
     ...herdrTakeoverCatalogs["zh-CN"],
     ...memoryCatalogs["zh-CN"],
     ...projectSettingsCatalogs["zh-CN"],
@@ -292,6 +296,7 @@ export const catalogs = {
     ...feedbackCatalogs.ja,
     ...overviewCatalogs.ja,
     ...firstRunCatalogs.ja,
+    ...practiceCatalogs.ja,
     ...herdrTakeoverCatalogs.ja,
     ...memoryCatalogs.ja,
     ...projectSettingsCatalogs.ja,
