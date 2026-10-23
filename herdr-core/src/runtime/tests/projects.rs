@@ -3370,16 +3370,23 @@ fn a_task_agent_start_reports_apart_from_the_creation_it_follows() {
 
     assert!(runtime.ingest_task_agent_result(
         id,
-        live::TaskAgentOutcome::Failed("claude is not installed".into()),
+        live::TaskAgentOutcome::Failed(live::AgentFailure::with_detail(
+            "agent_start.not_installed",
+            "claude is not installed on the daemon's PATH",
+        )),
     ));
     let operation = runtime.snapshot().task_operation.clone().unwrap();
     assert_eq!(operation.phase, "ready");
     assert_eq!(operation.pane_id.as_deref(), Some("w1:p9"));
     assert_eq!(operation.agent_phase.as_deref(), Some("failed"));
     assert_eq!(
-        operation.agent_message.as_deref(),
-        Some("claude is not installed")
+        operation.agent_reason.as_deref(),
+        Some("agent_start.not_installed")
     );
+    // The snapshot carries the code; the sentence is the log's.
+    let wire = serde_json::to_string(&operation).unwrap();
+    assert!(!wire.contains("daemon's PATH"), "{wire}");
+    assert!(wire.contains(r#""agent_line":null"#), "{wire}");
     assert_eq!(runtime.pending_task_agent_start(id), None);
 
     // The pane is not in this runtime's navigator, so the retry says so and

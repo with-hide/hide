@@ -393,7 +393,7 @@ fn a_device_home_start_with_unknown_codex_reports_the_next_action_without_starti
     });
     let outcome = operation(&shared);
     assert_eq!(
-        outcome.agent_message.as_deref(),
+        outcome.agent_reason.as_deref(),
         Some(crate::codex_launch::CAPABILITY_UNKNOWN)
     );
     assert_eq!(outcome.request_id.as_deref(), Some("unknown"));

@@ -11,9 +11,13 @@ import type { MessageKey } from "./i18n/catalogs";
 const REASON_KEYS = new Map<string, MessageKey>([
   ["codex_capability_unknown", "agents.codexUnread"],
   ["session_route_unconfirmed", "coreError.startReason.session_route_unconfirmed"],
+  ["session_route_reader_unavailable", "coreError.startReason.session_route_unconfirmed"],
+  ["session_route_reference_unconfirmed", "coreError.startReason.session_route_unconfirmed"],
+  ["session_route_cwd_unconfirmed", "coreError.startReason.session_route_unconfirmed"],
   ["session_route_in_motion", "coreError.startReason.session_route_in_motion"],
   ["session_resume_scope_required", "coreError.startReason.session_resume_scope_required"],
   ["session_resume_intent_changed", "coreError.startReason.session_resume_intent_changed"],
+  ["session_resume_reader_changed", "coreError.startReason.session_resume_intent_changed"],
   ["session_resume_control_changed", "coreError.startReason.session_resume_control_changed"],
   ["cursor_launch_environment_invalid", "coreError.startReason.cursor_launch_environment_invalid"],
   ["cursor_launch_root_unsupported", "coreError.startReason.cursor_launch_root_unsupported"],

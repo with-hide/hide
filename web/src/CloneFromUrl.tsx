@@ -24,6 +24,7 @@ import { localDeviceId, type RepositoryClone, type WorkspaceRegistration } from 
 import { useShellStore } from "./store";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cloneFailureText, cloneStageText, coreErrorText } from "./coreError";
+import { QuotedLine } from "./QuotedLine";
 import { useErrorSince } from "./errorSince";
 
 /** How long typing settles before hided is asked about the folder. */
@@ -230,8 +231,7 @@ function CloneProgress({ clone, following }: { clone: RepositoryClone | null; fo
     return (
       <div role="alert" className="flex min-w-0 flex-col gap-xxs" data-clone-phase="failed" data-core-error={clone.failure ?? undefined}>
         <Status tone="error">{cloneFailureText(clone.failure, t)}</Status>
-        {/* Git's own line is quoted as what Git said, not worded as the screen's. */}
-        {clone.failure === "git" && clone.git_line ? <span className="break-all font-mono text-caption text-muted-foreground" data-clone-git-line="true">{clone.git_line}</span> : null}
+        {clone.failure === "git" && clone.git_line ? <QuotedLine line={clone.git_line} /> : null}
       </div>
     );
   }

@@ -691,8 +691,24 @@ fn a_task_prompt_is_handed_to_its_agent_start_and_kept_for_a_retry() {
     let pending = runtime.pending_task_agent_start(id).unwrap();
     assert_eq!(pending.prompt.as_deref(), Some("Issue #192를 해결해줘"));
     assert_eq!(pending.args, ["--model", "opus"]);
-    assert!(
-        runtime.ingest_task_agent_result(id, live::TaskAgentOutcome::Failed("no claude".into()))
+    // A shell stopped at a question: the screen's last line is quoted
+    // beside the code, and a later start clears both.
+    assert!(runtime.ingest_task_agent_result(
+        id,
+        live::TaskAgentOutcome::Failed(live::AgentFailure {
+            reason: "agent_start.shell_starting".into(),
+            detail: None,
+            line: Some("Update oh-my-zsh now? [Y/n]".into()),
+        })
+    ));
+    let failed = runtime.snapshot().task_operation.clone().unwrap();
+    assert_eq!(
+        failed.agent_reason.as_deref(),
+        Some("agent_start.shell_starting")
+    );
+    assert_eq!(
+        failed.agent_line.as_deref(),
+        Some("Update oh-my-zsh now? [Y/n]")
     );
     assert!(runtime.task_agent_launch.is_some(), "kept for Retry");
     runtime
@@ -705,7 +721,8 @@ fn a_task_prompt_is_handed_to_its_agent_start_and_kept_for_a_retry() {
     assert!(runtime.task_agent_launch.is_none());
     let operation = runtime.snapshot().task_operation.clone().unwrap();
     assert_eq!(operation.agent_phase.as_deref(), Some("started"));
-    assert_eq!(operation.agent_message, None);
+    assert_eq!(operation.agent_reason, None);
+    assert_eq!(operation.agent_line, None);
 }
 
 /// A runtime whose project reads Local issues and holds one, `L-1`.

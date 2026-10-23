@@ -16,7 +16,8 @@ import { Checkbox } from "./components/ui/checkbox";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import { DiskCleanupSheet } from "./DiskCleanupSheet";
-import { endedSentence, startFailure } from "./startDraft";
+import { agentFailure, endedSentence } from "./startDraft";
+import { QuotedLine } from "./QuotedLine";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Note, Status } from "./components/settings-rows";
 import { SubtreeList } from "./components/subtree-list";
@@ -637,13 +638,14 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
 
   if (!task || !task.agent_phase || task.agent_phase === "started") return null;
   const dismiss = () => useUiStore.getState().setWatchedTask(null);
-  const failure = startFailure(task.agent_message);
+  const failure = agentFailure(task.agent_reason, task.agent_line);
   return (
-    <div role="status" data-task-agent={task.agent_phase} className="flex flex-wrap items-center gap-md border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground">
+    <div role="status" data-task-agent={task.agent_phase} data-core-error={"code" in failure ? failure.code : undefined} className="flex flex-wrap items-center gap-md border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground">
       <span className="min-w-0 flex-1 break-words">
         {task.agent_phase === "starting"
           ? t("workspace.startingAgent", { kind: task.agent_kind ?? t("common.agent") })
           : `${endedSentence("key" in failure ? t(failure.key) : failure.message)} ${task.kind === "worktree_create" ? t("workspace.worktreePaneKept") : t("workspace.paneKept")}`}
+        {task.agent_phase !== "starting" && "line" in failure && failure.line ? <QuotedLine line={failure.line} /> : null}
       </span>
       {task.agent_phase === "failed" ? (
         <button type="button" className="text-foreground underline" onClick={() => actions.retryTaskAgent(task.id)} data-task-agent-retry="true">

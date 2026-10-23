@@ -394,7 +394,7 @@ fn start_dormant(
                 DormantStartOutcome::Unknown
             }
         },
-        Err(StartError::NotStarted(_))
+        Err(StartError::NotStarted { .. })
         | Err(StartError::ShellStarting(_))
         | Err(StartError::Herdr(ApiError::Remote { .. })) => DormantStartOutcome::NotStarted,
         Err(StartError::Herdr(_)) => {
