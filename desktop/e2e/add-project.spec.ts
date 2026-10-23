@@ -125,9 +125,9 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     await expect(field).toHaveValue("~/");
     await field.fill("~/projects/app");
     await field.press("Enter");
-    await expect(alert).toHaveAttribute("data-registration-reason", "core");
+    await expect(alert).toHaveAttribute("data-registration-reason", "workspace.create_unavailable");
     await expect(alert).toHaveAttribute("data-registration-path", "~/projects/app");
-    await expect(alert).toContainText("needs its connection");
+    await expect(alert).toContainText("This device is not connected");
     await captureWindow(app, page, "add-project-device");
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);

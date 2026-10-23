@@ -25,7 +25,7 @@ const FOLDERS: Array<{ name: string; setup: (herdr: HerdrFixture, root: string) 
       git(herdr, root, "init", "-q");
       fs.writeFileSync(path.join(root, ".git", "index"), "not an index");
     },
-    mark: { state: "unavailable", says: /^Git status unavailable: git status failed/ },
+    mark: { state: "unavailable", says: /^Git status unavailable: Git could not read this repository/ },
   },
 ];
 
