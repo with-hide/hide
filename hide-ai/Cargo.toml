@@ -12,7 +12,7 @@ name = "hide_ai"
 hide-platform = { path = "../hide-platform" }
 jsonschema = { version = "=0.58.6", default-features = false }
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(unix)'.dependencies]

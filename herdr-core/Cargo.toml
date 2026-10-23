@@ -30,15 +30,15 @@ regex = "=1.13.1"
 rusqlite = { version = "=0.32.1", features = ["bundled"] }
 schemars = { version = "=0.8.22", features = ["preserve_order"] }
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = { version = "=1.0.151", features = ["raw_value"] }
+serde_json = { version = "=1.0.154", features = ["raw_value"] }
 sha2 = "=0.10.9"
-tokio = { version = "=1.53.2", features = ["io-util", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "=1.53.3", features = ["io-util", "net", "rt-multi-thread", "sync", "time"] }
 tempfile = "=3.27.0"
 unicode-normalization = "=0.1.25"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [build-dependencies]
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 typify = "=0.8.0"
 
 [dev-dependencies]

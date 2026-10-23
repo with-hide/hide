@@ -25,7 +25,7 @@ hide-shell = { path = "../hide-shell" }
 ignore = "=0.4.33"
 serde = { version = "=1.0.229", features = ["derive"] }
 # Keep key order and borrow exact source spans while editing owned entries.
-serde_json = { version = "=1.0.151", features = ["preserve_order", "raw_value"] }
+serde_json = { version = "=1.0.154", features = ["preserve_order", "raw_value"] }
 # Hashes the OpenCode plugin's body, so an edit by the operator is told from Hide's own text.
 sha2 = "=0.10.9"
 # Edits Grok's folder trust (`trusted_folders.toml`) keeping the rest of the file.
