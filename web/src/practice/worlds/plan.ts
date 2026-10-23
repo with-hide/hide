@@ -6,10 +6,9 @@
 // its plan (`hide plan approve`) and starts on the first step. Approval is a
 // conversation, as in Hide: no event of the shell's approves a plan.
 
-import type { AgentScope } from "../../agentScope";
-import type { AgentRow, AgentState, AskSubject, DetailItem, PaneHeader, PlanStep, PlanView, SnapshotRest, StatusTone, WorkSession } from "../../snapshot";
+import type { AgentRow, AgentState, AskSubject, DetailItem, PaneHeader, PlanStep, PlanView, StatusTone, WorkSession } from "../../snapshot";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
-import { agent, applyDesk, deskSnapshot, oneTabDesk, shellScreen, type DeskModel, type PracticePlace } from "./kit";
+import { agent, applyDesk, counted, deskSnapshot, keyText, oneTabDesk, shellScreen, typed, type DeskModel, type PracticePlace } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 
@@ -147,23 +146,6 @@ function submit(model: PlanModel): PlanModel {
   }
 }
 
-const decode = (base64: string) => new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)));
-
-/** The prompt after the keys `text`: ⌃U clears it, ⌫ takes a character back, ⏎ sends it; an arrow or other escape sequence moves nothing. */
-function typed(model: PlanModel, text: string): PlanModel {
-  let next = model;
-  let escape = false;
-  for (const char of text) {
-    if (escape) escape = !/[A-Za-z~]/.test(char);
-    else if (char === "\x1b") escape = true;
-    else if (char === "\r") next = submit(next);
-    else if (char === "\x15") next = { ...next, draft: "" };
-    else if (char === "\x7f") next = { ...next, draft: [...next.draft].slice(0, -1).join("") };
-    else if (char >= " ") next = { ...next, draft: next.draft + char };
-  }
-  return next;
-}
-
 // --- The events --------------------------------------------------------------------
 
 function apply(model: PlanModel, event: CoreEvent): PlanModel | null {
@@ -171,7 +153,7 @@ function apply(model: PlanModel, event: CoreEvent): PlanModel | null {
   switch (event.kind) {
     // Only the agent is talked to here; keys typed into another pane reach no one.
     case "key":
-      return p.pane_id === LEAD && typeof p.bytes_base64 === "string" ? typed(model, decode(p.bytes_base64)) : null;
+      return p.pane_id === LEAD && typeof p.bytes_base64 === "string" ? typed(model, keyText(p.bytes_base64), submit) : null;
     // The plan opens in the 보기 slot as a lane call, the way the core numbers one; a record or a card this world keeps none of.
     case "detail_open": {
       const item = p.item as DetailItem;
@@ -192,48 +174,6 @@ function apply(model: PlanModel, event: CoreEvent): PlanModel | null {
 }
 
 // --- The snapshot --------------------------------------------------------------------
-
-/**
- * Every agent scope in `rest` counting the one root where its row stands, as
- * the core counts it: Seen at rest, or waiting on the operator in Needs You
- * while its plan's review asks. The kit counts every root as working.
- */
-function counted(rest: SnapshotRest, as: "seen" | "needs_you"): SnapshotRest {
-  const asks = as === "needs_you";
-  const scope = (one: AgentScope): AgentScope => ({
-    ...one,
-    overview_needs_you: asks ? one.total : 0, has_working: false,
-    groups: { ...one.groups, [as]: one.groups.working, working: 0 },
-    marks: { ...one.marks, turn: asks ? one.marks.going : 0, going: 0 },
-    buckets: { ...one.buckets, [asks ? "turn" : "resting"]: one.buckets.working, working: 0 },
-    turns: { ...one.turns, question: asks ? one.buckets.working : 0 },
-    tree: { ...one.tree, needs_you: asks && one.total > 0 },
-    sidebar_tree: { ...one.sidebar_tree, needs_you: asks && one.total > 0 },
-    global_tree: { ...one.global_tree, needs_you: asks && one.total > 0 },
-  });
-  const navigator = rest.navigator!;
-  return {
-    ...rest,
-    navigator: {
-      ...navigator,
-      agent_scope: navigator.agent_scope && scope(navigator.agent_scope),
-      devices: navigator.devices?.map((device) => ({ ...device, agent_scope: scope(device.agent_scope) })),
-      workspaces: navigator.workspaces?.map((workspace) => ({
-        ...workspace,
-        agent_scope: scope(workspace.agent_scope),
-        agent_presence: { working: false },
-        checkouts: workspace.checkouts.map((checkout) => ({
-          ...checkout,
-          agent_scope: scope(checkout.agent_scope),
-          agent_summary: checkout.agent_summary && {
-            ...checkout.agent_summary, [as]: checkout.agent_summary.working, working: 0,
-            marks: { ...checkout.agent_summary.marks, turn: asks ? checkout.agent_summary.marks.going : 0, going: 0 },
-          },
-        })),
-      })),
-    },
-  };
-}
 
 /** The agent pane's head as the core sends it: at rest, asking for the review on its second row, or at work on the request. */
 function header(model: PlanModel): PaneHeader {
