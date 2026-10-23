@@ -562,7 +562,7 @@ The whole pill is one button, reachable by keyboard and pressed with Enter, and 
 Pressing sends `deliver_letters_now` and nothing else: the pill goes, and the bell line appears in the terminal as the doorbell submits it through Herdr's `agent.prompt`, with no confirmation and no warning about a draft, because the pill sits right above the composer.
 The line begins with 🦉 (U+1F989, no variation selector); Codex CLI on Windows may omit it, and the saved bell still identifies the letter ([delivery.md](delivery.md#recognizing-the-bell)).
 No other hold of a letter reaches the screen, and nothing changes on the sender's pane (`web/src/components/letter-mark.tsx`).
-The tree popover's `Overview에서 일감 보기` opens the Overview on the agent's device with the card of the task it belongs to selected and the agent's own record in the panel (PRD overview-device-tasks B59); a resting or cleanup card's fold opens with it, so the selected card is drawn.
+The tree popover's `개요에서 보기` opens the Overview on the agent's device with the card of the task it belongs to selected and the agent's own record in the panel (PRD overview-device-tasks B59); a resting or cleanup card's fold opens with it, so the selected card is drawn.
 The zoom control names the panes it hides and unzooms the tab; the input pane keeps its accent perimeter and header tint.
 
 The second row over the terminal shows the pane's turn, `<request> → <answer>` with no word before the request (the button's accessible name still begins `요청:`), with a child-tree button at its left when direct children are known (PRD pane-last-request).
@@ -964,7 +964,7 @@ An agent pane's `개요에서 보기` opens it instead on Work, whatever tab was
 Work, Projects, Backlog and History share the chosen device and optional canonical project scope; Usage always shows the core machine's global account usage.
 It opens on Work the first time and remembers the chosen tab for the current window.
 It opens as a centered modal over a mounted Workspace, as large as the window allows with the window inset (`--size-settings-sheet-window-inset`) clear on every side and at most `--size-overview-sheet-w` by `--size-overview-sheet-h`, preserving terminal geometry and output, and otherwise as a central page.
-Its head is the title `Overview` and the device switch: every connected device as its rail tile and name, the rail's front device marked `rail`, a device that does not answer marked `연결 안 됨`, and every other device's tooltip carrying `내 차례 N` (B2).
+Its head is the title `Overview` and the device switch: every connected device as its rail tile and name, a device that does not answer marked `연결 안 됨`, and every other device's tooltip carrying `내 차례 N` (B2).
 With This Mac alone there is no switch, since there is nothing to choose.
 Choosing a device changes only what the Overview shows; the rail, the sidebar and the Workspace in front stay, and a project chip that was set clears.
 The tab row shows Work, Projects, Backlog, History and Usage, with counts derived from the same scoped records each view shows.
@@ -1002,7 +1002,7 @@ The core derives the tasks from facts it already holds, stores none of them, and
 A fork is a root of its own and so a task of its own.
 A task belongs to the device its root agent runs on.
 A connected device's branches, worktrees and fetched refs follow within seconds of changing there, through that device's own Git watch, without a reconnect (PRD git-freshness B19); while the device is not connected its rows keep their last values dimmed, and a reconnect reads them afresh (B21).
-The Overview reads the same tasks for the Projects tab's `지금` counts and the order of Backlog's sections.
+The Overview reads the same tasks for the Projects tab's `최상위 태스크` counts and the order of Backlog's sections.
 
 ### Work
 
@@ -1166,7 +1166,7 @@ Pasted text with line breaks joins into one line and stops at 256 characters (B4
 
 Projects is one row per project of the device (B48).
 Its top line is `<device> 디스크 여유 X / 전체 Y · 프로젝트 합계 Z · 정리하면 W 확보`, the free space in the warning colour below 10 GB (`LOW_FREE_BYTES`, the cleanup sheet's own threshold), and a small `계산하는 중` while the sweep runs, the sizes in mono and the words in the body font; a device the core dials has no top line (B47).
-A row reads the project's name with its GitHub mark (a Git project whose issues are not on GitHub has the folder-with-branch mark) or `폴더`, `지금` (a colour bar and the counts that are not zero among `내 차례 N · 작업 중 N · 대기 N · 읽을 것 N`, `쉬는 중 N` when all four are zero, `태스크 없음` with no task), the backlog's `N ›`, the disk, `처리할 일`, the last activity and `열기 ↗` (B48).
+A row reads the project's name with its GitHub mark (a Git project whose issues are not on GitHub has the folder-with-branch mark) or `폴더`, `최상위 태스크` (a colour bar and the counts that are not zero among `내 차례 N · 작업 중 N · 대기 N · 읽을 것 N`, `쉬는 중 N` when all four are zero, `태스크 없음` with no task), the backlog's `N ›`, the disk, `처리할 일`, the last activity and `열기 ↗` (B48).
 The backlog's `N ›` opens 백로그 on that project, and `열기 ↗` closes the Overview and opens the project's most recent checkout.
 `처리할 일` is `머지됨 N → 정리` while the project holds merged checkouts and empty otherwise; pressing it opens the disk cleanup sheet on that project's finished checkouts (B49); a project of a device the core dials says `머지됨 N` with nothing to press, since its cleanup is that device's.
 Projects that rest with nothing to clean fold at the bottom into `조용한 프로젝트 N · X GB ›`, which opens in place (B50).

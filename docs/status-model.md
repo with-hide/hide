@@ -433,7 +433,7 @@ Each child's own state is the mark beside its name on the same row, the mark its
 Its head names the parent with its direct child count, and its body draws the same rows two levels deep with five siblings each, the children that finished and were read, with nothing below them raised or working, folded below them behind `끝난 자식 N`; choosing a grandchild that has children re-roots the popover on it.
 Arrows move, Right and Left open and fold a branch, Enter opens the agent's pane, and Escape closes it and returns focus to what opened it.
 Opened from a pane button with a raised mark, or the fallback ask-band button, it starts with the raised branches open and draws each ask on the row it raised (`raised_pane_id`) with its verb, what to do and Open, which for a draft goes to the parent holding it.
-A pending or failed move shows at its footer with the retry rules of the relation, and the last line, `Overview에서 일감 보기`, opens the Overview on the agent's device with its task's card selected and the agent's own record beside it.
+A pending or failed move shows at its footer with the retry rules of the relation, and the last line, `개요에서 보기`, opens the Overview on the agent's device with its task's card selected and the agent's own record beside it.
 Disappearing children leave immediately and an empty popover closes.
 
 The one sidebar raises Needs You and Done above its project tree, at most five and three most recent roots respectively, with older rows behind More.
