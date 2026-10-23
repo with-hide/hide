@@ -115,41 +115,15 @@
           <h2 id="team-title">One view of the whole team.<br> <span class="accent">Only decisions reach you.</span></h2>
           <p>Every agent on every machine in one tree. They start helpers, watch them and write to each other; what they can settle stays between them.</p>
         </div>
-        <div class="canvas team-canvas reveal">
-          <svg id="team-tree" viewBox="0 0 1100 690" role="img" aria-labelledby="team-desc">
-            <desc id="team-desc">A lead agent on this Mac starts workers from different vendors on this Mac and on a Linux server. Letters move between parents and children; only a blocked prompt and a merge question rise over the line to the person, whose list shows the two.</desc>
-            <defs>
-              <g id="t-env"><rect class="t-env" x="-10" y="-7" width="20" height="14" rx="3"/><path class="t-flap" d="M-10 -6 L0 2 L10 -6"/></g>
-              <g id="t-envq"><rect class="t-envq" x="-11" y="-8" width="22" height="16" rx="3"/><path class="t-flap" d="M-11 -7 L0 2 L11 -7"/></g>
-              <linearGradient id="t-above" x1="0" y1="0" x2="0" y2="1"><stop class="t-glow" offset="0" stop-opacity=".12"/><stop class="t-glow" offset="1" stop-opacity="0"/></linearGradient>
-            </defs>
-            <rect x="0" y="0" width="1100" height="172" fill="url(#t-above)"/>
-            <g transform="translate(330 22)">
-              <rect class="t-you" width="440" height="124" rx="16"/>
-              <circle class="t-you-dot" cx="26" cy="27" r="9"/><text class="t-you-name" x="44" y="32">You</text>
-              <text class="t-count" x="420" y="32" text-anchor="end" id="you-count">NEEDS YOU · 2</text>
-              <g id="you-rows">
-                <g transform="translate(14 46)"><rect class="t-row" width="412" height="30" rx="8"/><circle class="t-row-dot" cx="16" cy="15" r="5"/><text class="t-row-title" x="30" y="19.5">Blocked: allow a push to main?</text><text class="t-row-agent" x="398" y="19.5" text-anchor="end">Grok</text></g>
-                <g transform="translate(14 82)"><rect class="t-row" width="412" height="30" rx="8"/><circle class="t-row-dot" cx="16" cy="15" r="5"/><text class="t-row-title" x="30" y="19.5">Approve #431 and #436?</text><text class="t-row-agent" x="398" y="19.5" text-anchor="end">Claude Code</text></g>
-              </g>
-              <text class="t-calm" x="220" y="92" text-anchor="middle" id="you-calm" display="none">Nothing needs you right now.</text>
-            </g>
-            <line class="t-line" x1="40" y1="172" x2="1060" y2="172"/>
-            <text class="t-line-label" x="40" y="196">ONLY A DECISION CROSSES THIS LINE</text>
-            <rect class="t-machine" x="40" y="344" width="600" height="326" rx="18"/>
-            <text class="t-machine-label" x="62" y="654">THIS MAC</text>
-            <rect class="t-machine" x="664" y="344" width="396" height="326" rx="18"/>
-            <text class="t-machine-label" x="686" y="654">WORKBOX · LINUX</text>
-            <!-- team:start -->
-            <g class="t-edges"><path class="t-edge" data-edge="c1" d="M550 312 C550 356 150 340 150 386"/><path class="t-edge" data-edge="c2" d="M550 312 C550 356 345 340 345 386"/><path class="t-edge" data-edge="c3" d="M550 312 C550 356 535 340 535 386"/><path class="t-edge" data-edge="c4" d="M550 312 C550 356 870 340 870 386"/><path class="t-edge" data-edge="g1" d="M150 482 C150 526 150 488 150 534"/><path class="t-edge" data-edge="g2" d="M870 482 C870 526 780 488 780 534"/><path class="t-edge" data-edge="g3" d="M870 482 C870 526 960 488 960 534"/></g>
-          <g class="t-ups" fill="none" stroke="none"><path data-up="lead" d="M550 216 C550 54 550 270 550 150"/><path data-up="c1" d="M150 386 C150 224 360 270 360 150"/><path data-up="c2" d="M345 386 C345 224 360 270 360 150"/><path data-up="c3" d="M535 386 C535 224 535 270 535 150"/><path data-up="c4" d="M870 386 C870 224 740 270 740 150"/><path data-up="g1" d="M150 534 C150 372 360 270 360 150"/><path data-up="g2" d="M780 534 C780 372 740 270 740 150"/><path data-up="g3" d="M960 534 C960 372 740 270 740 150"/></g>
-          <g class="t-nodes"><g class="t-node" data-id="lead" data-state="blocked" transform="translate(550 244)"><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">CC</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Split the invoice export</text><text class="t-name" y="64">Claude Code</text></g><g class="t-node" data-id="c1" data-state="working" transform="translate(150 414)"><circle class="t-pulse" r="24" style="animation-delay:-0.7s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">CX</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Sort by date</text><text class="t-name" y="64">Codex</text></g><g class="t-node" data-id="c2" data-state="working" transform="translate(345 414)"><circle class="t-pulse" r="24" style="animation-delay:-1.4s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">CX</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Export as CSV</text><text class="t-name" y="64">Codex</text></g><g class="t-node" data-id="c3" data-state="working" transform="translate(535 414)"><circle class="t-pulse" r="24" style="animation-delay:-2.1s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">AG</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Write the tests</text><text class="t-name" y="64">Antigravity</text></g><g class="t-node" data-id="c4" data-state="working" transform="translate(870 414)"><circle class="t-pulse" r="24" style="animation-delay:-0.4s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">OC</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Check #431 and #436</text><text class="t-name" y="64">OpenCode</text></g><g class="t-node" data-id="g1" data-state="done" transform="translate(150 562)"><circle class="t-pulse" r="24" style="animation-delay:-1.1s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">PI</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Find the slow query</text><text class="t-name" y="64">Pi</text></g><g class="t-node" data-id="g2" data-state="working" transform="translate(780 562)"><circle class="t-pulse" r="24" style="animation-delay:-1.8s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">OM</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Review the diff</text><text class="t-name" y="64">omp</text></g><g class="t-node" data-id="g3" data-state="blocked" transform="translate(960 562)"><circle class="t-pulse" r="24" style="animation-delay:-0.1s"/><circle class="t-ring" r="23"/><circle class="t-spin" r="23"/><circle class="t-core" r="17"/><text class="t-mono" y="4.5">GK</text><g class="t-badge" transform="translate(20 -20)"><circle r="10"/><text y="4.5">!</text></g><text class="t-title" y="46">Draft release notes</text><text class="t-name" y="64">Grok</text></g></g>
-          <g class="t-letters"></g>
-            <!-- team:end -->
-          </svg>
-        </div>
+        <figure class="shot map-shot reveal">
+          <picture>
+            <source media="(prefers-color-scheme: light)" srcset="./assets/shots/map-light.webp">
+            <img src="./assets/shots/map-dark.webp" width="2912" height="1800" alt="The Overview's work graph. Agents of three projects sit around You; lines show which agent started which and the letters between them, and the two that wait on you are drawn in amber and listed on the right with Go answer." loading="lazy" decoding="async">
+          </picture>
+          <video class="map-video" data-dark="./assets/video/map-dark" data-light="./assets/video/map-light" muted loop playsinline preload="none" aria-hidden="true" hidden></video>
+        </figure>
         <div class="trio reveal">
-          <div><b>See every agent</b>One tree across machines and vendors, each with a title Hide AI wrote.</div>
+          <div><b>See every agent</b>The Overview draws every project's agents around you: who started whom, and the letters between them.</div>
           <div><b>They handle each other</b>A parent hears within a minute when its child stops; a letter reaches a working agent within five minutes.</div>
           <div class="you"><b>You get the decisions</b>A blocked prompt, or a question the parent did not answer, comes up on every screen.</div>
         </div>
@@ -162,19 +136,24 @@
           <h2 id="ai-title">Hide AI does the reading.<br> <span class="accent">You get one line.</span></h2>
           <p>It reads what each agent did and writes what a person needs: a title, why it stopped, what you asked and what you missed. It runs on the agent CLI you already signed in to; switch it off and every status still works.</p>
         </div>
-        <div class="ai-pair reveal">
-          <div class="raw" aria-hidden="true">
-            <div class="raw-roll">
-              <p>Reading src/export/sort.ts (182 lines)</p><p>Searching for 'issued_at' in src/</p><p>  src/export/sort.ts:41  const key = row.issued_at</p><p>  src/db/invoices.sql:12  issued_at TIMESTAMPTZ NOT NULL</p><p>Editing src/export/sort.ts</p><p>  - rows.sort((a, b) =&gt; a.id - b.id)</p><p>  + rows.sort(byIssueDate)</p><p>Running pnpm test export</p><p>  ✓ sorts by issue date (4 ms)</p><p>  ✓ keeps ties in id order (2 ms)</p><p>  ✗ CSV header order (11 ms)</p><p>Reading src/export/csv.ts</p><p>Thinking about the column order…</p><p>The lead asked for CSV; the issue mentions XLSX.</p><p>Writing a question to the lead</p><p>Waiting for an answer</p>
-              <p>Reading src/export/sort.ts (182 lines)</p><p>Searching for 'issued_at' in src/</p><p>  src/export/sort.ts:41  const key = row.issued_at</p><p>  src/db/invoices.sql:12  issued_at TIMESTAMPTZ NOT NULL</p><p>Editing src/export/sort.ts</p><p>  - rows.sort((a, b) =&gt; a.id - b.id)</p><p>  + rows.sort(byIssueDate)</p><p>Running pnpm test export</p><p>  ✓ sorts by issue date (4 ms)</p><p>  ✓ keeps ties in id order (2 ms)</p><p>  ✗ CSV header order (11 ms)</p><p>Reading src/export/csv.ts</p><p>Thinking about the column order…</p><p>The lead asked for CSV; the issue mentions XLSX.</p><p>Writing a question to the lead</p><p>Waiting for an answer</p>
+        <div class="ai-compare reveal">
+          <figure>
+            <figcaption><b>Without Hide AI</b>The vendor's name and the agent's raw question.</figcaption>
+            <div class="shot">
+            <picture>
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/plain-light.webp">
+              <img src="./assets/shots/plain-dark.webp" width="856" height="1480" alt="hide's sidebar with Hide AI off. The two agents under Needs You show only their vendor's name, Codex and Antigravity, with the first line of their question cut short. The finished one under Unread is just OpenCode." loading="lazy" decoding="async">
+            </picture>
             </div>
-          </div>
-          <p class="ai-arrow" aria-hidden="true">Hide AI →</p>
-          <figure class="shot shot-narrow">
+          </figure>
+          <figure class="on">
+            <figcaption><b>With Hide AI</b>What each task is, and why it stopped.</figcaption>
+            <div class="shot">
             <picture>
               <source media="(prefers-color-scheme: light)" srcset="./assets/shots/attention-light.webp">
-              <img src="./assets/shots/attention-dark.webp" width="856" height="1480" alt="hide's sidebar. Two agents wait under Needs You, each with a title and a one-line reason Hide AI wrote. A finished fix sits under Unread. Below them, the project tree shows who is still working." loading="lazy" decoding="async">
+              <img src="./assets/shots/attention-dark.webp" width="856" height="1480" alt="The same sidebar with Hide AI on. Each agent has a title for its task, Approve #431 and #436 and the export format question, with a one-line reason it stopped; the finished one reads Fix the test that broke the export." loading="lazy" decoding="async">
             </picture>
+            </div>
           </figure>
         </div>
         <p class="langs reveal">Written in English, 한국어, 日本語 or 简体中文.</p>
@@ -186,21 +165,18 @@
           <h2 id="memory-title">Say it once.<br> <span class="accent">Every next agent knows.</span></h2>
           <p>Hide AI turns what you decide in a session into a card, checks it against the repository and hands it to the next agents, whichever vendor runs them. A rule worth keeping comes back as a suggestion for your docs, written in one pull request.</p>
         </div>
-        <div class="canvas timeline reveal" tabindex="0" aria-label="Six sessions of one project, left to right">
-          <div class="tl" id="timeline">
-            <!-- timeline:start -->
-            <div></div><div class="colhead">Session 1</div><div class="colhead">Session 2</div><div class="colhead">Session 3</div><div class="colhead">Session 4</div><div class="colhead">Session 5</div><div class="colhead">Session 6</div>
-            <div class="rowlab">You</div><div class="cell" data-col="0"><div class="say">“Use pnpm, never npm.”</div></div><div class="cell" data-col="1"><span class="quiet">nothing to repeat</span></div><div class="cell" data-col="2"><div class="say">“Keep exports in UTC.”</div></div><div class="cell" data-col="3"><span class="quiet">nothing to repeat</span></div><div class="cell" data-col="4"><span class="quiet">nothing to repeat</span></div><div class="cell" data-col="5"><span class="quiet">nothing to repeat</span></div>
-            <div class="rowlab">Agent</div><div class="cell" data-col="0"><div class="who">Claude Code</div><div class="chips"><span class="quiet">starts empty</span></div></div><div class="cell" data-col="1"><div class="who">Codex</div><div class="chips"><span class="quiet">starts with</span><i>m13</i></div></div><div class="cell" data-col="2"><div class="who">OpenCode</div><div class="chips"><span class="quiet">starts with</span><i>m13</i></div></div><div class="cell" data-col="3"><div class="who">Antigravity</div><div class="chips"><span class="quiet">starts with</span><i>m13</i><i>m14</i></div></div><div class="cell" data-col="4"><div class="who">Pi</div><div class="chips"><span class="quiet">starts with</span><i>m13</i><i>m14</i></div></div><div class="cell" data-col="5"><div class="who">Codex</div><div class="chips"><span class="quiet">starts with</span><i>m13 → doc</i><i>m14</i></div></div>
-            <div class="rowlab">Memory</div><div class="cell" data-col="0"><div class="card"><code>m13</code>Use pnpm, never npm<small>new</small></div></div><div class="cell" data-col="1"><div class="card"><code>m13</code>checked against the repo<small>✓</small></div></div><div class="cell" data-col="2"><div class="card"><code>m14</code>Exports stay in UTC<small>new</small></div></div><div class="cell" data-col="3"><div class="card"><code>m13</code>not in your docs yet</div></div><div class="cell" data-col="4"><div class="card"><code>m13</code>suggested for your docs</div></div><div class="cell" data-col="5"><div class="card"><code>m13</code>points to CONTRIBUTING.md</div></div>
-            <div class="rowlab">Docs</div><div class="cell" data-col="0"></div><div class="cell" data-col="1"></div><div class="cell" data-col="2"></div><div class="cell" data-col="3"></div><div class="cell" data-col="4"><div class="ask">Add m13 to your docs?<span class="pill">Promote</span></div></div><div class="cell" data-col="5"><div class="doc"><span>CONTRIBUTING.md</span><div class="add">+ Use pnpm, never npm.</div></div></div>
-            <!-- timeline:end -->
+        <div class="side-shot">
+          <figure class="shot reveal">
+            <picture>
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/memory-light.webp">
+              <img src="./assets/shots/memory-dark.webp" width="724" height="1640" alt="The Memory tab of the billing-app project. Auto memory is on. Under To resolve, the card Use pnpm, never npm waits for Promote or Don't promote, and a release-notes rule waits on its pull request. Below, the project's cards: decisions, lessons, a rule that lives in CONTRIBUTING.md and a fact, each with how many times agents were given it and pulled it." loading="lazy" decoding="async">
+            </picture>
+          </figure>
+          <div class="trio trio-col reveal">
+            <div><b>Cards, not transcripts</b>Decisions, rules and lessons, each with the words and sessions it came from.</div>
+            <div><b>Checked against the code</b>A card is checked against the repository before agents get it, and a clash with your docs is asked about.</div>
+            <div><b>You stay in charge</b>A doc change waits for your Promote and lands as one pull request. Forget or undo any card.</div>
           </div>
-        </div>
-        <div class="trio reveal">
-          <div><b>Cards, not transcripts</b>Decisions, rules and lessons, each with the words and sessions it came from.</div>
-          <div><b>Checked against the code</b>A card is checked against the repository before agents get it, and a clash with your docs is asked about.</div>
-          <div><b>You stay in charge</b>A doc change waits for your Promote and lands as one pull request. Forget or undo any card.</div>
         </div>
       </section>
 
@@ -210,37 +186,12 @@
           <h2 id="beside-title">Your agent drives the browser.<br> <span class="accent">You watch it check its work.</span></h2>
           <p>An agent opens the page it changed beside its pane, clicks through it and reads what it shows before it asks you. A file it names opens next to it too, so you review the work where it happened.</p>
         </div>
-        <div class="canvas beside reveal" id="beside-scene" role="img" aria-label="A Codex terminal beside a browser display. The agent opens the invoices page, clicks Export CSV, reads that an export dialog appeared, and opens the file it changed in a tab beside the page.">
-          <div class="term">
-            <div class="term-bar"><span class="term-ring"></span><b>Codex</b><span>· Add the export button</span></div>
-            <pre class="term-body" id="beside-term">› Check the export button works, then show me
-• Ran hide browser open localhost:5173/invoices
-• Ran hide browser click browser-1 --text "Export CSV"
-  └ + dialog "Export ready · 128 rows"
-• Ran hide file open src/export/csv.ts
-• It works. The page and the file are beside you.</pre>
-          </div>
-          <div class="view" aria-hidden="true">
-            <div class="view-tabs"><span class="view-tab on" data-view="page">localhost:5173</span><span class="view-tab" data-view="file" id="beside-file-tab">csv.ts</span></div>
-            <div class="view-bar"><span>←</span><span>→</span><span>↻</span><span class="view-address">localhost:5173/invoices</span></div>
-            <div class="view-body">
-              <div class="page" data-view="page">
-                <div class="page-head"><b>Invoices</b><span class="page-button" id="beside-button">Export CSV</span></div>
-                <div class="page-rows"><span>INV-1042 · Acme Corp · $1,240.00</span><span>INV-1041 · Northwind · $860.00</span><span>INV-1040 · Globex · $3,105.50</span><span>INV-1039 · Initech · $412.00</span><span>INV-1038 · Umbrella · $2,020.00</span></div>
-                <div class="page-toast" id="beside-toast">Export ready · 128 rows</div>
-                <span class="page-cursor" id="beside-cursor"></span>
-              </div>
-              <pre class="file" data-view="file" hidden><span class="dim">// src/export/csv.ts</span>
-export function toCsv(rows: Invoice[]): string {
-  const head = ["number", "customer", "issued_at", "total"];
-  const lines = rows
-    .sort(byIssueDate)
-    .map((row) => head.map((key) => quote(row[key])));
-  return [head, ...lines].join("\n");
-}</pre>
-            </div>
-          </div>
-        </div>
+        <figure class="shot wide-shot reveal">
+          <picture>
+              <source media="(prefers-color-scheme: light)" srcset="./assets/shots/browser-light.webp">
+              <img src="./assets/shots/browser-dark.webp" width="2912" height="1800" alt="hide with a Codex pane beside a browser display. The agent ran hide browser open on the invoices page, clicked Export CSV, read the Export ready toast and opened src/export/csv.ts in a tab next to the page." loading="lazy" decoding="async">
+            </picture>
+        </figure>
         <div class="trio reveal">
           <div><b>A page beside the work</b><code>hide browser open</code> shows a page next to the agent's pane, and it comes back after a relaunch.</div>
           <div><b>Driven by the agent</b>It reads the page, clicks, fills and takes screenshots, so it checks its own change before it asks you.</div>
@@ -255,7 +206,7 @@ export function toCsv(rows: Invoice[]): string {
           <h2 id="machines-title">One core, any screen.<br> <span class="accent">Your laptop is just a window.</span></h2>
           <p>Put hide's core on the machine that never sleeps. Projects, letters and titles live there, so closing the laptop stops nothing. Add a machine by its SSH alias and its agents join the same lists, and pair your phone to answer the one that needs you.</p>
         </div>
-        <figure class="shot machines-shot reveal">
+        <figure class="shot wide-shot reveal">
           <picture>
             <source media="(prefers-color-scheme: light)" srcset="./assets/shots/core-light.webp">
             <img src="./assets/shots/core-dark.webp" width="2912" height="1800" alt="Settings in hide beside the sidebar. Devices lists the core machine, a MacBook that dials in and a Linux server, all connected. Mobile shows Tailscale ready and one paired phone receiving notifications." loading="lazy" decoding="async">

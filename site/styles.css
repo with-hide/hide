@@ -317,60 +317,17 @@ code, .mono { font-family: var(--font-mono); }
 .shot img { display: block; width: 100%; height: auto; }
 .shot-narrow { width: min(100%, 400px); justify-self: center; }
 
-/* Drawn scenes: the page's own diagrams of what hide does, in the site's tokens. */
-.canvas {
-  position: relative;
-  margin-top: 48px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: radial-gradient(var(--dot) 1px, transparent 1.2px) 0 0 / 22px 22px, var(--bg-raised);
-}
-.canvas svg { display: block; width: 100%; height: auto; }
 .trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
 .trio > div { padding: 18px 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-raised); font-size: var(--t-small); color: var(--muted); }
 .trio b { display: block; margin-bottom: 4px; font-size: var(--t-body); font-weight: var(--w-medium); color: var(--ink); }
 .trio .you { border-color: color-mix(in srgb, var(--lime) 45%, transparent); background: color-mix(in srgb, var(--lime) 6%, var(--bg-raised)); }
 .trio .you b { color: var(--accent-text); }
 
-/* The team: one tree, letters between agents, decisions over the line. */
-#team-tree text { font-family: var(--font-sans); }
-.t-glow { stop-color: var(--lime); }
-.t-you { fill: var(--bg); stroke: color-mix(in srgb, var(--lime) 55%, transparent); }
-.t-you-dot { fill: var(--lime); }
-.t-you-name { font-size: 15px; font-weight: 600; fill: var(--ink); }
-#team-tree .t-count, #team-tree .t-calm, #team-tree .t-row-agent, #team-tree .t-line-label, #team-tree .t-machine-label, #team-tree .t-name, #team-tree .t-mono { font-family: var(--font-mono); }
-.t-count { font-size: 12px; fill: var(--st-needs); }
-.t-calm { font-size: 12px; fill: var(--faint); }
-.t-row { fill: var(--surface-2); }
-.t-row-dot { fill: var(--st-needs); }
-.t-row-title { font-size: 14px; fill: var(--ink); }
-.t-row-agent { font-size: 11.5px; fill: var(--faint); }
-.t-line { stroke: var(--accent-text); stroke-opacity: 0.6; stroke-dasharray: 2 7; stroke-width: 2; }
-.t-line-label { font-size: 12px; letter-spacing: 1.4px; fill: var(--accent-text); }
-.t-machine { fill: none; stroke: var(--line-strong); stroke-dasharray: 4 6; }
-.t-machine-label { font-size: 12px; letter-spacing: 1.6px; fill: var(--faint); }
-.t-edge { fill: none; stroke: var(--line-strong); stroke-width: 2; }
-.t-env { fill: var(--ink); }
-.t-envq { fill: var(--st-needs); }
-.t-flap { fill: none; stroke: var(--bg); stroke-width: 1.5; }
-.t-node text { text-anchor: middle; }
-.t-core { fill: var(--surface); stroke: var(--line-strong); }
-.t-mono { font-size: 11px; font-weight: 600; fill: var(--ink); }
-.t-title { font-size: 14px; fill: var(--ink); }
-.t-name { font-size: 12px; fill: var(--faint); }
-.t-ring, .t-spin { fill: none; stroke-width: 2.5; }
-.t-ring { stroke: var(--st-done); }
-.t-spin { stroke: var(--st-working); stroke-dasharray: 90 60; transform-box: fill-box; transform-origin: center; animation: spin 1.6s linear infinite; }
-.t-node[data-state="working"] .t-ring, .t-node:not([data-state="working"]) .t-spin { display: none; }
-.t-node[data-state="ask"] .t-ring, .t-node[data-state="blocked"] .t-ring { stroke: var(--st-needs); }
-.t-badge { display: none; }
-.t-badge circle { fill: var(--st-needs); }
-.t-badge text { font-size: 13px; font-weight: 700; fill: #101112; }
-.t-node[data-state="ask"] .t-badge, .t-node[data-state="blocked"] .t-badge { display: inline; }
-.t-pulse { fill: none; stroke: var(--lime); transform-box: fill-box; transform-origin: center; animation: pulse 2.4s ease-out infinite; }
+/* The team: the Overview map, played while it is on screen over its still. */
+.map-shot { position: relative; margin-top: 48px; box-shadow: var(--shot-shadow); }
+.map-video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; }
+.map-video[hidden] { display: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@keyframes pulse { from { transform: scale(1); stroke-opacity: 0.4; } to { transform: scale(1.7); stroke-opacity: 0; } }
 
 /* Whatever you run: the layers a command passes through, and the terminal it runs in. */
 .anygrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr); gap: 56px; align-items: start; }
@@ -399,62 +356,20 @@ code, .mono { font-family: var(--font-mono); }
 .herdr-line .text-link { display: inline; min-height: 0; margin-left: 6px; }
 .trio code, .essentials kbd { font-family: var(--font-mono); font-size: 0.9em; color: var(--ink); }
 
-/* Beside the agent: a terminal and the browser display it drives. */
-.beside { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 18px; padding: 28px; }
-.beside .term { align-self: start; }
-.beside .term-body { min-height: 0; overflow-x: auto; font-size: 12.5px; white-space: pre; }
-.view { overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shot-shadow); }
-.view-tabs { display: flex; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 12px; color: var(--faint); }
-.view-tab { padding: 10px 16px; border-right: 1px solid var(--line); transition: color 300ms ease, background-color 300ms ease; }
-.view-tab.on { background: var(--surface-2); color: var(--ink); }
-.view-bar { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 12px; color: var(--faint); }
-.view-address { flex: 1; min-width: 0; overflow: hidden; padding: 3px 10px; border-radius: var(--radius-pill); background: var(--bg-raised); white-space: nowrap; text-overflow: ellipsis; color: var(--muted); }
-.view-body { position: relative; min-height: 270px; }
-.page { position: relative; padding: 18px 20px 22px; }
-.page[hidden], .file[hidden], .view-bar[hidden] { display: none; }
-.page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.page-head b { font-size: var(--t-sub); font-weight: var(--w-semibold); }
-.page-button { padding: 6px 12px; border-radius: var(--radius-sm); background: var(--lime); font-size: var(--t-small); font-weight: var(--w-semibold); color: #101112; transition: transform 150ms ease; }
-.page-button.pressed { transform: scale(0.94); }
-.page-rows { display: grid; gap: 1px; margin-top: 16px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--line); }
-.page-rows span { padding: 8px 12px; background: var(--bg-raised); font-family: var(--font-mono); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.page-toast { position: absolute; right: 20px; bottom: 18px; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--st-done) 50%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--st-done) 14%, var(--surface)); font-size: var(--t-small); color: var(--st-done); transition: opacity 300ms ease, transform 300ms ease; }
-.page-toast.gone { opacity: 0; transform: translateY(6px); }
-.page-cursor { position: absolute; top: 0; left: 0; width: 14px; height: 14px; border: 2px solid var(--ink); border-radius: 50%; opacity: 0; pointer-events: none; transition: transform 900ms cubic-bezier(.5, 0, .2, 1), opacity 300ms ease; }
-.page-cursor.on { opacity: 1; }
-.file { margin: 0; padding: 18px 20px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.75; white-space: pre; overflow-x: auto; color: var(--ink); }
-.file .dim { color: var(--faint); }
-.machines-shot { margin-top: 48px; box-shadow: var(--shot-shadow); }
+/* Beside the agent and every machine: one wide shot of the app. */
+.wide-shot { margin-top: 48px; box-shadow: var(--shot-shadow); }
 
-/* Say it once: one project's sessions, left to right. */
-.timeline { padding: 22px 20px 24px; overflow-x: auto; }
-.tl { display: grid; grid-template-columns: 76px repeat(6, minmax(140px, 1fr)); gap: 10px; min-width: 980px; }
-.rowlab, .colhead { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
-.rowlab { align-self: center; }
-.cell { min-height: 64px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); font-size: 12.5px; line-height: 1.45; color: var(--muted); transition: opacity 500ms ease, border-color 500ms ease; }
-.tl.playing .cell { opacity: 0.14; }
-.tl.playing .cell.on { opacity: 1; }
-.tl.playing .cell.now { border-color: var(--lime); }
-.cell .say { padding: 7px 9px; border-radius: 10px 10px 10px 3px; background: var(--surface-2); font-size: 13px; color: var(--ink); }
-.cell .quiet { font-family: var(--font-mono); font-size: 11.5px; color: var(--faint); }
-.cell .who { font-size: 13px; font-weight: var(--w-medium); color: var(--ink); }
-.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
-.chips i { padding: 2px 7px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--lime) 14%, transparent); font-family: var(--font-mono); font-size: 11px; font-style: normal; color: var(--accent-text); }
-.cell .card { display: flex; gap: 6px; align-items: baseline; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink); }
-.cell .card code { font-size: 11px; color: var(--accent-text); }
-.cell .card small { margin-left: auto; font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); white-space: nowrap; }
-.cell .ask { padding: 7px 9px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--st-needs) 12%, transparent); color: var(--st-needs); }
-.cell .pill { display: block; width: max-content; margin-top: 6px; padding: 2px 9px; border-radius: var(--radius-sm); background: var(--st-needs); font-weight: var(--w-semibold); color: #101112; }
-.cell .doc { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); }
-.cell .add { margin-top: 5px; padding: 5px 7px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--st-done) 14%, transparent); color: var(--st-done); }
+/* Say it once: the Memory tab beside what it does. */
+.side-shot { display: grid; grid-template-columns: minmax(0, 362px) minmax(0, 1fr); gap: 56px; align-items: center; margin-top: 48px; }
+.trio-col { grid-template-columns: minmax(0, 1fr); margin-top: 0; }
 
-/* Hide AI: what an agent did, and the line it becomes. */
-.ai-pair { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 400px); gap: 28px; align-items: center; margin-top: 48px; }
-.raw { position: relative; height: 520px; overflow: hidden; padding: 0 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.8; color: var(--faint); white-space: pre; }
-.raw::after { content: ""; position: absolute; inset: 0; background: linear-gradient(var(--surface), transparent 18%, transparent 82%, var(--surface)); }
-.raw-roll { animation: roll 24s linear infinite; }
-@keyframes roll { to { transform: translateY(-50%); } }
-.ai-arrow { font-family: var(--font-mono); font-size: var(--t-label); letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent-text); white-space: nowrap; }
+/* Hide AI: the same sidebar without it and with it. */
+.ai-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 400px)); justify-content: center; gap: 40px; margin-top: 48px; }
+.ai-compare figure { margin: 0; }
+.ai-compare figcaption { margin-bottom: 14px; font-size: var(--t-small); color: var(--muted); }
+.ai-compare figcaption b { display: block; margin-bottom: 4px; font-family: var(--font-mono); font-size: var(--t-label); font-weight: var(--w-medium); letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+.ai-compare .on figcaption b { color: var(--accent-text); }
+.ai-compare .on .shot { border-color: color-mix(in srgb, var(--lime) 45%, transparent); box-shadow: var(--shot-shadow); }
 .langs { margin-top: 18px; font-family: var(--font-mono); font-size: var(--t-label); letter-spacing: 0.06em; color: var(--faint); }
 
 /* Still an IDE: the essentials, one line each. */
@@ -546,9 +461,7 @@ select { width: 100%; min-height: 48px; padding: 0 40px 0 14px; border: 1px soli
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .reveal { opacity: 1; transform: none; transition: none; }
-  .t-spin, .t-pulse, .term-ring, .raw-roll, .term-body .caret { animation: none; }
-  .page-cursor, .page-toast, .view-tab { transition: none; }
-  .t-pulse { display: none; }
+  .term-ring, .term-body .caret { animation: none; }
 }
 
 @media (max-width: 1000px) {
@@ -557,13 +470,8 @@ select { width: 100%; min-height: 48px; padding: 0 40px 0 14px; border: 1px soli
   .site-header nav .nav-extra { display: none; }
   .plans, .trio, .trust { grid-template-columns: minmax(0, 1fr); }
   .essentials { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ai-pair { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .ai-pair .raw { height: 240px; }
-  .ai-arrow { justify-self: center; }
-  .beside { grid-template-columns: minmax(0, 1fr); padding: 16px; }
-  /* The team keeps its drawing's size and scrolls sideways inside its frame. */
-  .team-canvas { overflow-x: auto; }
-  #team-tree { min-width: 760px; }
+  .side-shot { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  .side-shot .shot { width: min(100%, 362px); justify-self: center; }
 }
 
 @media (max-width: 640px) {
@@ -579,6 +487,7 @@ select { width: 100%; min-height: 48px; padding: 0 40px 0 14px; border: 1px soli
   .stage { margin-top: 72px; }
   .tabs button { padding: 0 12px; }
   .agents-strip ul { gap: 10px 24px; font-size: var(--t-small); }
+  .ai-compare { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .chooser { grid-template-columns: minmax(0, 1fr); }
   .download-picker { padding: 22px; }
   .closing { padding-block: 88px; }

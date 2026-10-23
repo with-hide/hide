@@ -1,13 +1,9 @@
-// The page's drawn scenes: the team's letters, the setup layers, the terminal, the memory timeline and the agent driving its browser.
-// The markup already holds each scene's resting frame, which is what reduced motion and a page without
+// The page's moving parts: the Overview map's recording, the setup layers and the terminal.
+// The markup already holds each one's resting frame, which is what reduced motion and a page without
 // script show. A scene plays only while it is on screen and the tab is visible, and stops every timer
 // it started when it leaves.
 
 (() => {
-  // A phone shows the team's drawing at its own size, scrolled to the middle where the lead and the person are.
-  const teamFrame = document.querySelector(".team-canvas");
-  if (teamFrame) teamFrame.scrollLeft = (teamFrame.scrollWidth - teamFrame.clientWidth) / 2;
-
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
   /** Runs `start` while `element` is on screen and the tab visible; `start` returns the function that stops it. */
@@ -38,110 +34,18 @@
     };
   }
 
-  // ---- The team: letters between parents and children, and only decisions over the line. ----
-  const team = document.getElementById("team-tree");
-  if (team) {
-    const NS = "http://www.w3.org/2000/svg";
-    const node = id => team.querySelector(`.t-node[data-id="${id}"]`);
-    const edge = id => team.querySelector(`[data-edge="${id}"]`);
-    const up = id => team.querySelector(`[data-up="${id}"]`);
-    const letters = team.querySelector(".t-letters");
-    const rows = document.getElementById("you-rows");
-    const count = document.getElementById("you-count");
-    const calm = document.getElementById("you-calm");
-    const kids = [...team.querySelectorAll("[data-edge]")].map(path => path.dataset.edge);
-    const resting = [...team.querySelectorAll(".t-node")].map(element => [element, element.dataset.state]);
-    const restingRows = rows.innerHTML;
-    const asks = [];
-    let flying = [];
-
-    const svg = (tag, attrs, parent) => {
-      const element = document.createElementNS(NS, tag);
-      for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, value);
-      parent?.appendChild(element);
-      return element;
-    };
-    const setState = (id, state) => { node(id).dataset.state = state; };
-
-    function drawYou() {
-      rows.replaceChildren();
-      asks.forEach((ask, at) => {
-        const row = svg("g", { transform: `translate(14 ${46 + at * 36})` }, rows);
-        svg("rect", { class: "t-row", width: 412, height: 30, rx: 8 }, row);
-        svg("circle", { class: "t-row-dot", cx: 16, cy: 15, r: 5 }, row);
-        svg("text", { class: "t-row-title", x: 30, y: 19.5 }, row).textContent = ask.title;
-        svg("text", { class: "t-row-agent", x: 398, y: 19.5, "text-anchor": "end" }, row).textContent = node(ask.id).querySelector(".t-name").textContent;
-      });
-      count.textContent = `NEEDS YOU · ${asks.length}`;
-      calm.setAttribute("display", asks.length ? "none" : "inline");
-    }
-
-    function send(path, reverse, ask, ms, done) {
-      const letter = svg("use", { href: ask ? "#t-envq" : "#t-env" }, letters);
-      flying.push({ path, length: path.getTotalLength(), reverse, start: performance.now(), ms, letter, done });
-    }
-
-    let frame = 0;
-    function fly(now) {
-      flying = flying.filter(item => {
-        const p = Math.min(1, (now - item.start) / item.ms);
-        const eased = p < 0.5 ? 2 * p * p : 1 - (-2 * p + 2) ** 2 / 2;
-        const point = item.path.getPointAtLength(item.length * (item.reverse ? 1 - eased : eased));
-        item.letter.setAttribute("transform", `translate(${point.x} ${point.y})`);
-        if (p < 1) return true;
-        item.letter.remove();
-        item.done?.();
-        return false;
-      });
-      frame = requestAnimationFrame(fly);
-    }
-
-    const toYou = (id, title) => { setState(id, "blocked"); send(up(id), false, true, 1500, () => { asks.push({ id, title }); drawYou(); }); };
-    const answer = id => {
-      const at = asks.findIndex(ask => ask.id === id);
-      if (at >= 0) asks.splice(at, 1);
-      drawYou();
-      send(up(id), true, false, 1400, () => setState(id, "working"));
-    };
-    const askParent = (id, time) => {
-      setState(id, "ask");
-      send(edge(id), true, true, 1500, () => time.after(500, () => send(edge(id), false, false, 1300, () => setState(id, "working"))));
-    };
-    const report = id => { setState(id, "done"); send(edge(id), true, false, 1400); };
-
-    whileSeen(team, () => {
-      const time = clock();
-      resting.forEach(([element]) => { element.dataset.state = "working"; });
-      asks.length = 0;
-      drawYou();
-      frame = requestAnimationFrame(fly);
-      time.every(700, () => {
-        const id = kids[Math.floor(Math.random() * kids.length)];
-        send(edge(id), Math.random() < 0.5, false, 1700 + Math.random() * 900);
-      });
-      const story = () => {
-        time.after(400, () => askParent("c3", time));
-        time.after(2600, () => toYou("g3", "Blocked: allow a push to main?"));
-        time.after(4600, () => report("g1"));
-        time.after(6200, () => askParent("g2", time));
-        time.after(7600, () => toYou("lead", "Approve #431 and #436?"));
-        time.after(10200, () => answer("g3"));
-        time.after(12000, () => answer("lead"));
-        time.after(12600, () => setState("g1", "working"));
-      };
-      story();
-      time.every(14000, story);
-      return () => {
-        time.stop();
-        cancelAnimationFrame(frame);
-        flying.forEach(item => item.letter.remove());
-        flying = [];
-        asks.length = 0;
-        resting.forEach(([element, state]) => { element.dataset.state = state; });
-        rows.innerHTML = restingRows;
-        count.textContent = "NEEDS YOU · 2";
-        calm.setAttribute("display", "none");
-      };
+  // ---- The team: the Overview map's recording plays over its still, in the visitor's color scheme. ----
+  const map = document.querySelector(".map-video");
+  if (map) {
+    const light = window.matchMedia("(prefers-color-scheme: light)");
+    // H.264 where the browser has it, VP9 where it does not (Chromium builds without the licensed codecs).
+    const kind = map.canPlayType('video/mp4; codecs="avc1.640028"') ? ".mp4" : ".webm";
+    map.addEventListener("playing", () => { map.hidden = false; });
+    whileSeen(map.parentElement, () => {
+      const source = (light.matches ? map.dataset.light : map.dataset.dark) + kind;
+      if (map.getAttribute("src") !== source) { map.hidden = true; map.src = source; }
+      map.play().catch(() => {});
+      return () => map.pause();
     });
   }
 
@@ -197,89 +101,6 @@
       run();
       time.every(11000, run);
       return () => { time.stop(); body.textContent = full; title.textContent = fullTitle; };
-    });
-  }
-
-  // ---- Beside the agent: it opens its page, clicks the button, reads the result and opens the file. ----
-  const beside = document.getElementById("beside-scene");
-  if (beside) {
-    const term = document.getElementById("beside-term");
-    const full = term.textContent;
-    const [ask, open, click, read, file, done] = full.split("\n");
-    const button = document.getElementById("beside-button");
-    const toast = document.getElementById("beside-toast");
-    const cursor = document.getElementById("beside-cursor");
-    const page = beside.querySelector('.page[data-view="page"]');
-    const code = beside.querySelector('.file[data-view="file"]');
-    const tabs = [...beside.querySelectorAll(".view-tab")];
-    const bar = beside.querySelector(".view-bar");
-    const show = view => {
-      page.hidden = view !== "page";
-      bar.hidden = view !== "page";
-      code.hidden = view !== "file";
-      tabs.forEach(tab => tab.classList.toggle("on", tab.dataset.view === view));
-    };
-    const rest = () => {
-      term.textContent = full;
-      show("page");
-      toast.classList.remove("gone");
-      cursor.classList.remove("on");
-      button.classList.remove("pressed");
-    };
-    whileSeen(beside, () => {
-      const time = clock();
-      const run = () => {
-        term.textContent = ask;
-        show("page");
-        toast.classList.add("gone");
-        cursor.classList.remove("on");
-        cursor.style.transform = "translate(40px, 200px)";
-        const line = text => term.append(`\n${text}`);
-        time.after(1100, () => line(open));
-        time.after(2300, () => {
-          line(click);
-          const at = button.getBoundingClientRect();
-          const origin = page.getBoundingClientRect();
-          cursor.classList.add("on");
-          cursor.style.transform = `translate(${at.left - origin.left + at.width / 2 - 7}px, ${at.top - origin.top + at.height / 2 - 7}px)`;
-        });
-        time.after(3400, () => { button.classList.add("pressed"); time.after(160, () => button.classList.remove("pressed")); toast.classList.remove("gone"); });
-        time.after(4100, () => line(read));
-        time.after(5600, () => { line(file); cursor.classList.remove("on"); show("file"); });
-        time.after(6800, () => line(done));
-      };
-      run();
-      time.every(12000, run);
-      return () => { time.stop(); rest(); };
-    });
-  }
-
-  // ---- Say it once: the sessions light up left to right, then the whole row rests. ----
-  const timeline = document.getElementById("timeline");
-  if (timeline) {
-    const cells = [...timeline.querySelectorAll(".cell")];
-    const columns = Math.max(...cells.map(cell => Number(cell.dataset.col))) + 1;
-    const frame = timeline.parentElement;
-    // The timeline follows the lit session only until the visitor scrolls it themselves.
-    let follow = true;
-    for (const type of ["pointerdown", "wheel", "keydown"]) frame.addEventListener(type, () => { follow = false; }, { passive: true });
-    whileSeen(timeline, () => {
-      const time = clock();
-      let step = 0;
-      timeline.classList.add("playing");
-      const tick = () => {
-        if (step === 0) cells.forEach(cell => cell.classList.remove("on", "now"));
-        cells.forEach(cell => cell.classList.remove("now"));
-        if (step < columns) {
-          const lit = cells.filter(cell => Number(cell.dataset.col) === step);
-          lit.forEach(cell => cell.classList.add("on", "now"));
-          if (follow && frame.scrollWidth > frame.clientWidth) frame.scrollTo({ left: lit[0].offsetLeft - 96, behavior: "smooth" });
-        }
-        step = (step + 1) % (columns + 2);
-      };
-      tick();
-      time.every(1700, tick);
-      return () => { time.stop(); timeline.classList.remove("playing"); cells.forEach(cell => cell.classList.remove("on", "now")); };
     });
   }
 })();
