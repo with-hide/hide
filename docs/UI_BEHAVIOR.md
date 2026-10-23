@@ -2365,6 +2365,7 @@ A pressed chord shows large in the middle for a moment, so the keys are seen as 
 Every chord is the operator's own: the host's set, the system's, and the operator's stored bindings.
 A chapter with tasks lists them on a card in the lower left with a check as each is done and `↺ 처음부터`; the top center names the chapter and leads back to the list.
 The last step of a chapter offers the next chapter, and the last chapter's offers the list.
+Chapter 5 (찾고 다시 보기) finds yesterday's ended session in ⌘K by a word of its requests, opens its record in the lane's 보기 slot, finds the PR it made by `#3` and opens that card, and puts a finished task in 다시 볼 것 from its right-click menu; any word of the session finds it, the record's `세션 복구하기` brings the session back in a tab of its own, and the invented PR wears a `예시` mark so it is never taken for a real one.
 
 Chapter 1 closes its working agent by mistake, through the shell's own Stop-work sheet, and brings it back with Reopen closed tab, where it stood and continuing its conversation; its world answers `close_pane` and `reopen_closed` and draws `recent_closed` the way the core does.
 The practice screen mounts the shell's close sheet, so a learner's close in any chapter asks as it would in Hide.
