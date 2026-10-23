@@ -3,26 +3,29 @@
 // leaves the page: no daemon, no Herdr, no agent.
 
 import type { NodeUsage } from "../generated/hided-ws";
-import type { AgentRow, EditorSnapshot, LinkPanel, SessionRecordSection, SessionWorkSearch, SnapshotRest } from "../snapshot";
-import type { Documents, FileIndexResult } from "../store";
+import type { AgentRow, ChangesSnapshot, EditorSnapshot, LinkPanel, MemorySection, SessionRecordSection, SessionWorkSearch, SnapshotRest } from "../snapshot";
+import type { DirectoryList, Documents, FileIndexResult } from "../store";
 
 export type CoreEvent = { kind: string; payload: Record<string, unknown> };
 
 /**
  * What the practice window sends a world besides the core's events: text the
- * shell would have put on the clipboard (`{ text, what }`). The operator's
- * clipboard is never written from a practice screen.
+ * shell would have put on the clipboard (`{ text, what }`). A paste on a
+ * practice screen takes the last of them back; the operator's clipboard is
+ * never read or written from a practice screen.
  */
 export const PRACTICE_COPY = "practice_copy";
 
 /**
  * What the core sends beside the snapshot: the ⌘P index's answer, the open
- * editor tabs and their documents, ⌘K's session search, and the record and
- * link record the lane's 보기 slot shows.
+ * editor tabs and their documents, ⌘K's session search, the record and link
+ * record the lane's 보기 slot shows, the Explorer's folder listings (keyed by
+ * folder path) and the checkout's Git changes, and the Memory tool's Project.
  */
 export type WorldFrames = {
   fileIndex?: FileIndexResult | null; editor?: EditorSnapshot | null; documents?: Documents;
   sessionWorkSearch?: SessionWorkSearch | null; sessionRecord?: SessionRecordSection | null; linkPanel?: LinkPanel | null;
+  listings?: Record<string, DirectoryList>; changes?: ChangesSnapshot | null; memory?: MemorySection | null;
 };
 
 export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null; frames?: WorldFrames };
@@ -37,6 +40,12 @@ export type PracticeWorld<M> = {
   screen: (model: M, paneId: string, cols: number) => string;
   /** Whether the right lane is open on this world's screen. */
   lane: boolean;
+  /**
+   * The words typed into `paneId`'s prompt and not sent yet. A world whose
+   * chapter types to an agent keeps it, so ⏎ sends what the learner wrote
+   * there and types the step's example only into an empty prompt.
+   */
+  prompt?: (model: M, paneId: string) => string;
   /**
    * What on the screen is an invented record that could pass for a real one
    * (a pull request's title): the coach marks each match `예시`, so the

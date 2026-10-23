@@ -247,7 +247,7 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
       data-link-file={line.file}
       data-link-request={line.request ?? undefined}
     >
-      {gone ? <MissingFile path={line.path} id={line.id} /> : null}
+      {gone ? <MissingFile path={line.path} id={line.id} actions={actions} /> : null}
       {resume.uncertain ? <span role="status" className="text-caption text-muted-foreground">{t("links.resumeUnknown")}</span> : null}
       {resume.failure !== null ? (
         <span role="alert" className="flex items-center gap-xs text-caption text-warning" data-link-resume-failed={line.id}>
@@ -292,7 +292,7 @@ function LineButton({ icon, label, blocked, busy = false, onClick, data, id }: {
 }
 
 /** `Conversation file gone` and the copy of where it was (B15). */
-function MissingFile({ path, id }: { path: string | null; id: string }) {
+function MissingFile({ path, id, actions }: { path: string | null; id: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
@@ -308,7 +308,8 @@ function MissingFile({ path, id }: { path: string | null; id: string }) {
             variant="ghost"
             size="icon-sm"
             onClick={() => {
-              void navigator.clipboard?.writeText(path).then(() => {
+              void actions.copyText(path, "link path").then((copied) => {
+                if (!copied) return;
                 setCopied(true);
                 timer.current = window.setTimeout(() => setCopied(false), 1500);
               });
