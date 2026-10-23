@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SnapshotRest } from "./snapshot";
 import { startAnswer, startRequestId } from "./startAnswer";
 
-const operation = (over: Record<string, unknown>) => ({ id: 7, kind: "agent_start", phase: "working", pane_id: null, agent_phase: null, agent_reason: null, agent_line: null, message: null, request_id: "mine", ...over });
+const operation = (over: Record<string, unknown>) => ({ id: 7, kind: "agent_start", phase: "working", pane_id: null, agent_phase: null, agent_reason: null, agent_line: null, failure: null, request_id: "mine", ...over });
 const rest = (task: Record<string, unknown> | null, error: Record<string, unknown> | null = null) =>
   ({ task_operation: task, status: { last_error: error } }) as unknown as SnapshotRest;
 
@@ -45,8 +45,8 @@ describe("the answer to one start request", () => {
     expect(startAnswer(rest(operation({ phase: "ready", pane_id: "p1", agent_phase: "failed", agent_reason: "agent_start.shell_starting", agent_line: "Trust this folder? [y/N]" })), "mine")).toMatchObject({ agentPhase: "failed", agentReason: "agent_start.shell_starting", agentLine: "Trust this folder? [y/N]" });
   });
 
-  it("reports a failed task with its message", () => {
-    expect(startAnswer(rest(operation({ phase: "failed", message: "no tab" })), "mine")).toEqual({ phase: "failed", message: "no tab" });
+  it("reports a failed task with its failure code", () => {
+    expect(startAnswer(rest(operation({ phase: "failed", failure: "agent_start.not_saved" })), "mine")).toEqual({ phase: "failed", message: "agent_start.not_saved" });
   });
 
   it("carries no message when the failed task has none", () => {

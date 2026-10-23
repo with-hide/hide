@@ -11,6 +11,7 @@ import { HerdrGate, HerdrMovedLine, RESTART_HOLD_MS } from "./HerdrTakeover";
 import { herdrGate } from "./herdrTakeoverRules";
 import { AboutTab } from "./settings/AboutTab";
 import { TooltipProvider } from "./components/ui/tooltip";
+import type { UpdateStatus } from "./host";
 import type { HerdrTakeover } from "./snapshot";
 import { useShellStore } from "./store";
 import type { DispatchFn } from "./ws";
@@ -27,7 +28,7 @@ const offer = (overrides: Partial<HerdrTakeover> = {}): HerdrTakeover => ({
   version: "0.9.5",
   same_protocol: false,
   failure: null,
-  path_herdr_behind: null,
+  path_herdr: null,
   ...overrides,
 });
 
@@ -72,11 +73,17 @@ async function mount(next: ReturnType<typeof state>, what: "wizard" | "gate" = "
   return { events, unmount: async () => { await act(async () => root.unmount()); useShellStore.setState(saved, true); } };
 }
 
-const host = { quit: vi.fn(), revealPath: vi.fn(), check: vi.fn() };
+const host = { quit: vi.fn(), revealPath: vi.fn(), check: vi.fn(), restart: vi.fn() };
+// The page subscribes to the host's update status once for its life, so every stand-in hands its listener here.
+let updateStatus: ((status: UpdateStatus) => void) | null = null;
 const desktop = (restartHerdr = vi.fn(async () => "restarted")) => {
-  window.hideHost = { kind: "electron", platform: "darwin", restartHerdr, quit: host.quit, revealPath: host.revealPath, notificationPermission: async () => "unsupported", updates: { check: host.check, onStatus: () => () => {} } } as never;
+  window.hideHost = {
+    kind: "electron", platform: "darwin", restartHerdr, quit: host.quit, revealPath: host.revealPath, notificationPermission: async () => "unsupported",
+    updates: { check: host.check, restart: host.restart, onStatus: (listener: (status: UpdateStatus) => void) => { updateStatus = listener; return () => {}; } },
+  } as never;
   return restartHerdr;
 };
+const phase = (next: UpdateStatus["phase"]) => act(async () => updateStatus?.({ phase: next, prerelease: false, installOnQuit: true }));
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -85,39 +92,42 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-it("opens the first run on moving an older Herdr Hide cannot read, with no Not now and no count, and moves on one press (B1, B2, B3, B7)", async () => {
-  desktop();
-  const { events, unmount } = await mount(state(offer()));
-  expect(document.querySelector("[data-first-run]")?.getAttribute("data-first-run")).toBe("herdr");
-  expect(document.querySelector("[data-first-run-progress]")?.getAttribute("data-first-run-progress")).toBe("1");
-  expect(document.querySelector("[data-herdr-takeover-versions]")?.getAttribute("data-herdr-takeover-versions")).toBe("0.8.2->0.9.5");
-  expect(document.body.textContent).toContain("Workspaces and tabs");
-  expect(document.body.textContent).not.toMatch(/\d+ (workspaces|tabs|agents)/);
-  expect(button("[data-herdr-takeover-later]")).toBeNull();
-  await act(async () => button("[data-herdr-takeover-move]")!.click());
-  expect(sent(events)).toEqual([{ action: "move" }]);
-  // ⌘↵ anywhere in the step presses the move too.
-  await act(async () => { document.querySelector("[data-first-run]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true })); });
-  expect(sent(events)).toEqual([{ action: "move" }, { action: "move" }]);
-  await unmount();
-});
+const enter = () => act(async () => { document.querySelector("[data-first-run]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true })); });
+const text = () => document.body.textContent ?? "";
 
-it("holds the button while the core moves the server, so no second move is sent (B3)", async () => {
+it("opens the first run on the move Hide makes on its own: a title, the two versions, two lines, no button and no count (B1, B2, B3)", async () => {
   desktop();
   const { events, unmount } = await mount(state(offer({ stage: "moving" })));
-  const move = button("[data-herdr-takeover-move]")!;
-  expect(move.disabled).toBe(true);
-  expect(move.textContent).toContain("Moving…");
-  await act(async () => { document.querySelector("[data-first-run]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true })); });
+  expect(document.querySelector("[data-first-run]")?.getAttribute("data-first-run")).toBe("herdr");
+  expect(document.querySelector("[data-first-run-progress]")?.getAttribute("data-first-run-progress")).toBe("1");
+  expect(document.querySelector("[data-slot=dialog-title]")?.textContent).toBe("Moving Herdr to 0.9.5");
+  expect(document.querySelector("[data-herdr-takeover-busy]")).not.toBeNull();
+  expect(document.querySelector("[data-slot=dialog-description]")).toBeNull();
+  expect(document.querySelector("[data-herdr-takeover-versions]")?.getAttribute("data-herdr-takeover-versions")).toBe("0.8.2->0.9.5");
+  expect(text()).toContain("✓Tabs and agents keep running");
+  expect(text()).toContain("!A Herdr screen open in a terminal disconnects once");
+  expect(text()).not.toMatch(/\d+ (workspaces|tabs|agents)/);
+  expect(document.querySelectorAll("[data-herdr-takeover-move], [data-herdr-takeover-later]")).toHaveLength(0);
+  await enter();
   expect(sent(events)).toEqual([]);
   await unmount();
 });
 
-it("a failed move names its cause, offers Try again, and only then Not now with the step to stop Herdr yourself (B8, B9)", async () => {
+it("a move Hide does not make on its own again waits on its Move, which ⌘↵ presses too", async () => {
+  desktop();
+  const { events, unmount } = await mount(state(offer()));
+  expect(document.querySelector("[data-slot=dialog-title]")?.textContent).toBe("Move Herdr to 0.9.5");
+  expect(button("[data-herdr-takeover-later]")).toBeNull();
+  await act(async () => button("[data-herdr-takeover-move]")!.click());
+  await enter();
+  expect(sent(events)).toEqual([{ action: "move" }, { action: "move" }]);
+  await unmount();
+});
+
+it("a failed move says what came of it in one line, offers Try again, and only then Not now (B8, B9)", async () => {
   desktop();
   const { events, unmount } = await mount(state(offer({ stage: "failed", failure: "refused" })));
-  expect(document.querySelector("[data-herdr-takeover-failure]")?.getAttribute("data-herdr-takeover-failure")).toBe("refused");
-  expect(document.querySelector("[data-herdr-takeover-stop-yourself]")).not.toBeNull();
+  expect(document.querySelector("[data-herdr-takeover-failure]")?.textContent).toBe("Herdr declined. Nothing changed.");
   expect(button("[data-herdr-takeover-move]")!.textContent).toContain("Try again");
   expect(button("[data-herdr-takeover-restart]")).toBeNull();
   await act(async () => button("[data-herdr-takeover-later]")!.click());
@@ -125,22 +135,34 @@ it("a failed move names its cause, offers Try again, and only then Not now with 
   await unmount();
 });
 
-it("a server Hide reads as it is can be left from the start, without the hint to stop it (B6)", async () => {
+it("a server Hide reads as it is can be left from the start (B6)", async () => {
   desktop();
   const { unmount } = await mount(state(offer({ server_version: "0.9.1", same_protocol: true }), "herdr", "connected"));
   expect(button("[data-herdr-takeover-later]")).not.toBeNull();
-  expect(document.body.textContent).not.toContain("Hide can't read this Herdr");
   await unmount();
 });
 
-it("a moved server whose operator's herdr is behind shows the core's command to copy and what it does, and Continue closes it (B5)", async () => {
+it("a moved server's result says the work keeps running and how the terminal's herdr was brought up, and Continue closes it (B4, B5)", async () => {
   desktop();
-  const { events, unmount } = await mount(state(offer({ stage: "moved", path_herdr_behind: "0.8.2" }), "herdr", "connected"));
-  const line = document.querySelector("[data-herdr-takeover-path-behind]")!;
-  expect(line.textContent).toContain("install -m 755 '/Applications/hide.app/Contents/Resources/herdr' '/srv/op/.local/bin/herdr'");
-  expect(line.textContent).toContain("Replaces it with Hide's herdr 0.9.5");
+  const moved = (path: HerdrTakeover["path_herdr"]) => state(offer({ stage: "moved", path_herdr: path }), "herdr", "connected");
+  const { events, unmount } = await mount(moved(null));
+  expect(document.querySelector("[data-slot=dialog-title]")?.textContent).toBe("Moved");
+  expect(document.querySelector("[data-slot=dialog-description]")?.textContent).toBe("Your work keeps running.");
+  expect(document.querySelector("[data-herdr-takeover-path]")).toBeNull();
+
+  await act(async () => { useShellStore.setState(moved({ stage: "updating", version: "0.8.2" }) as never); });
+  expect(document.querySelector('[data-herdr-takeover-path="updating"]')?.textContent).toBe("Updating the herdr in your terminal");
+
+  await act(async () => { useShellStore.setState(moved({ stage: "updated", version: "0.9.5" }) as never); });
+  expect(document.querySelector('[data-herdr-takeover-path="updated"]')?.textContent).toBe("✓The herdr in your terminal is now 0.9.5 too");
+  expect(button("[data-herdr-takeover-copy]")).toBeNull();
+
+  await act(async () => { useShellStore.setState(moved({ stage: "behind", version: "0.8.2" }) as never); });
+  const line = document.querySelector('[data-herdr-takeover-path="behind"]')!;
+  expect(line.textContent).toContain("Update the herdr in your terminal (0.8.2) too. Until then its commands are refused.");
+  expect(line.querySelector("[data-herdr-update-command]")?.getAttribute("data-herdr-update-command")).toBe("install -m 755 '/Applications/hide.app/Contents/Resources/herdr' '/srv/op/.local/bin/herdr'");
+  expect(line.textContent).not.toContain("Replaces it with");
   expect(line.textContent).not.toContain("--handoff");
-  expect(document.body.textContent).toContain("0.8.2");
   await act(async () => button("[data-herdr-takeover-continue]")!.click());
   expect(sent(events)).toEqual([{ action: "continue" }]);
   await unmount();
@@ -149,8 +171,12 @@ it("a moved server whose operator's herdr is behind shows the core's command to 
 it("a restart shows what ends, takes no Enter, and runs only on its own button (B10, B11, B12)", async () => {
   const restartHerdr = desktop(vi.fn(async () => "stop_failed"));
   const { events, unmount } = await mount(state(offer({ kind: "restart" })));
-  expect(document.body.textContent).toContain("Commands running in panes end");
-  expect(document.body.textContent).toContain("Workspaces and panes come back");
+  expect(document.querySelector("[data-slot=dialog-title]")?.textContent).toBe("Restart Herdr");
+  expect(document.querySelector("[data-slot=dialog-description]")).toBeNull();
+  expect(document.querySelector("[data-herdr-takeover-versions]")?.textContent).toBe("Herdr 0.8.2NowHerdr 0.9.5After the restart");
+  expect(text()).toContain("✓Tabs and folders come back");
+  expect(text()).toContain("!Running commands end. Press after your builds finish");
+  expect(button("[data-herdr-takeover-restart]")!.textContent).toBe("Restart");
   expect(document.querySelector("[data-herdr-takeover-restart]")?.closest("span")?.querySelector("kbd")).toBeFalsy();
   await act(async () => { document.querySelector("[data-first-run]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true })); });
   expect(restartHerdr).not.toHaveBeenCalled();
@@ -164,11 +190,10 @@ it("a restart shows what ends, takes no Enter, and runs only on its own button (
   await unmount();
 });
 
-it("a restart whose stop failed names it, keeps the restart, and only then offers Not now with the step to stop Herdr yourself (B12, D-29)", async () => {
+it("a restart whose stop failed says so, keeps the restart, and only then offers Not now (B12, D-29)", async () => {
   desktop();
   const { events, unmount } = await mount(state(offer({ kind: "restart", stage: "failed", failure: "stop_failed" })));
-  expect(document.querySelector('[data-herdr-takeover-failure="stop_failed"]')?.textContent).toContain("Herdr did not stop");
-  expect(document.querySelector('[data-herdr-takeover-failure="stop_failed"] [data-herdr-takeover-stop-yourself]')).not.toBeNull();
+  expect(document.querySelector('[data-herdr-takeover-failure="stop_failed"]')?.textContent).toBe("Herdr didn't stop. Nothing changed.");
   expect(button("[data-herdr-takeover-restart]")!.disabled).toBe(false);
   await act(async () => button("[data-herdr-takeover-later]")!.click());
   expect(sent(events)).toEqual([{ action: "later" }]);
@@ -217,7 +242,8 @@ it("a look that could not read a server Hide cannot use says so with Try again a
   desktop();
   const { events, unmount } = await mount(state(offer({ kind: "look", stage: "failed", failure: "unreadable", server_version: "", version: "" }), "herdr", "malformed"));
   expect(document.querySelector("[data-first-run]")?.getAttribute("data-first-run")).toBe("herdr");
-  expect(document.body.textContent).toContain("Couldn't read Herdr");
+  expect(document.querySelector("[data-slot=dialog-title]")?.textContent).toBe("Couldn't read Herdr");
+  expect(document.querySelector("[data-slot=dialog-description]")?.textContent).toBe("Your Herdr is unchanged.");
   await act(async () => button("[data-herdr-takeover-look]")!.click());
   await act(async () => button("[data-herdr-takeover-later]")!.click());
   expect(sent(events)).toEqual([{ action: "look" }, { action: "later" }]);
@@ -259,7 +285,7 @@ it("a restart under the hold shows what ends; a browser tab names the desktop ap
 
   const restartHerdr = desktop();
   const app = await mount(state(offer({ kind: "restart", server_version: "0.6.2" }), "done", "protocol_mismatch", { version: "0.6.2", protocol: 10 }), "gate");
-  expect(document.body.textContent).toContain("Commands running in panes end");
+  expect(text()).toContain("Running commands end");
   await act(async () => button("[data-herdr-takeover-restart]")!.click());
   expect(restartHerdr).toHaveBeenCalledTimes(1);
   await app.unmount();
@@ -279,29 +305,44 @@ it("a restart under the hold keeps its step while the old server is gone and Hid
   await unmount();
 });
 
-it("a newer protocol holds Hide with the wait for a Hide update, the two versions read, and Check for updates in the desktop app", async () => {
+it("a newer protocol holds Hide while the desktop app looks for a Hide update at once and opens it once downloaded (B18)", async () => {
   const newer = offer({ kind: "update_hide", server_version: "0.10.0" });
   const received = { version: "0.10.0", protocol: 23 };
+  const title = () => document.querySelector("[data-slot=dialog-title]")?.textContent;
   const browser = await mount(state(newer, "done", "protocol_mismatch", received), "gate");
-  expect(document.body.textContent).toContain("Herdr is newer than Hide");
-  expect(document.querySelector("[data-herdr-gate-versions]")?.getAttribute("data-herdr-gate-versions")).toBe("0.10.0>0.9.5");
+  expect(title()).toBe("Hide needs an update");
+  expect(text()).toContain("✓Your Herdr and its work are unchanged");
   expect(button("[data-herdr-takeover-check-updates]")).toBeNull();
   await browser.unmount();
 
   desktop();
   const app = await mount(state(newer, "done", "protocol_mismatch", received), "gate");
-  await act(async () => button("[data-herdr-takeover-check-updates]")!.click());
   expect(host.check).toHaveBeenCalledTimes(1);
+  await phase({ kind: "idle", checkedAt: 1 });
+  expect(title()).toBe("Hide needs an update");
+  expect(document.querySelector("[data-slot=dialog-description]")?.textContent).toBe("A Hide for Herdr 0.10.0 is coming soon.");
+  await phase({ kind: "downloading", version: "0.4.3", percent: 40 });
+  expect(title()).toBe("Downloading the Hide update");
+  expect(document.querySelector("[data-slot=dialog-description]")).toBeNull();
+  expect(host.restart).not.toHaveBeenCalled();
+  await phase({ kind: "ready", version: "0.4.3" });
+  expect(host.restart).toHaveBeenCalledTimes(1);
+  // An install that failed keeps the update ready; the screen does not restart into it again.
+  await phase({ kind: "ready", version: "0.4.3" });
+  expect(host.restart).toHaveBeenCalledTimes(1);
+  await act(async () => button("[data-herdr-takeover-check-updates]")!.click());
+  expect(host.check).toHaveBeenCalledTimes(2);
   await act(async () => button("[data-herdr-gate-look]")!.click());
   expect(sent(app.events)).toEqual([{ action: "look" }]);
+  await phase({ kind: "idle", checkedAt: null });
   await app.unmount();
 });
 
-it("a mismatch the core offers nothing for still holds Hide, with its version and Try again", async () => {
+it("a mismatch the core offers nothing for still holds Hide, with one line and Try again", async () => {
   const { events, unmount } = await mount(state(null, "done"), "gate");
   expect(document.querySelector("[data-herdr-gate]")?.getAttribute("data-herdr-gate")).toBe("older");
-  expect(document.body.textContent).toContain("This Herdr isn't compatible with Hide");
-  expect(document.body.textContent).toContain("Herdr 0.8.2");
+  expect(document.querySelector("[data-slot=dialog-title]")?.textContent).toBe("This Herdr isn't compatible with Hide");
+  expect(document.querySelector("[data-slot=dialog-description]")?.textContent).toBe("When your work is done, stop Herdr and open Hide again.");
   await act(async () => button("[data-herdr-gate-look]")!.click());
   expect(sent(events)).toEqual([{ action: "look" }]);
   await unmount();
@@ -313,9 +354,12 @@ it("a server on Hide's protocol never holds Hide, whatever its release (D-16)", 
   await unmount();
 });
 
-it("a move made outside the wizard leaves its herdr update line until OK, and none when the operator's herdr keeps up (B5)", async () => {
-  const behind = await mount(state(offer({ stage: "moved", path_herdr_behind: "0.8.2" }), "done", "connected"), "gate");
-  expect(document.querySelector("[data-herdr-takeover-moved]")).not.toBeNull();
+it("a move made outside the wizard leaves a line only for a terminal herdr Hide could not bring up, until OK (B5)", async () => {
+  const updating = await mount(state(offer({ stage: "moved", path_herdr: { stage: "updating", version: "0.8.2" } }), "done", "connected"), "gate");
+  expect(document.querySelector("[data-herdr-takeover-moved]")).toBeNull();
+  await updating.unmount();
+  const behind = await mount(state(offer({ stage: "moved", path_herdr: { stage: "behind", version: "0.8.2" } }), "done", "connected"), "gate");
+  expect(document.querySelector("[data-herdr-takeover-moved]")?.textContent).toContain("Update the herdr in your terminal (0.8.2) too.");
   await act(async () => button("[data-herdr-takeover-done]")!.click());
   expect(sent(behind.events)).toEqual([{ action: "continue" }]);
   await behind.unmount();

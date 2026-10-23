@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { chipWords, conductedBy, firstPlans, kindWord, missionMiniGraph, missionOfPane, paneChipWords, MINI_REPORT, launchModelOf, missionCounts, nodeLine, nodeMark, shownNodes, stackWaiting, stepsOf, takeOverPrompt, takeOverProvider, workerWords, FOLD_DONE_OVER } from "./missions";
+import { chipWords, conductedBy, firstPlans, kindWord, missionMiniGraph, missionOfPane, paneChipWords, MINI_REPORT, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stepsOf, takeOverPrompt, takeOverProvider, workerWords } from "./missions";
 import type { Mission, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -96,13 +96,6 @@ describe("the numbers and words", () => {
     expect(launchModelOf(rest, m, node("a"))).toBeNull();
   });
 
-  it("folds done nodes away only on a long plan", () => {
-    const short = mission("m", { nodes: [node("a", { status: "done" }), node("b")] });
-    expect(shownNodes(short, false)).toEqual({ nodes: short.nodes, folded: 0 });
-    const long = mission("m", { nodes: Array.from({ length: FOLD_DONE_OVER + 1 }, (_, index) => node(`n-${index}`, { status: index < 5 ? "done" : "working" })) });
-    expect(shownNodes(long, false).folded).toBe(5);
-    expect(shownNodes(long, true).folded).toBe(0);
-  });
 });
 
 describe("a takeover", () => {

@@ -27,6 +27,8 @@ import { PrDelegateDialog, PrLinkDialog, PrNewIssueDialog } from "./PrDialogs";
 import { translate, useInterfaceTranslation } from "./i18n/client";
 import { coreErrorText } from "./coreError";
 import { useErrorSince } from "./errorSince";
+import { blockedText, branchLossText, deleteButtonText, discardText, warningText } from "./deletionGate";
+import { removalNoticeText } from "./removalNotice";
 import { localDeviceId, type Checkout, type Workspace } from "./snapshot";
 import { machineName, windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
@@ -305,7 +307,7 @@ function NewWorktreeDialog({ actions, workspace, onClose }: { actions: Actions; 
       purpose: purpose.trim() ? normalizePurpose(purpose.trim()) : null,
     });
   };
-  const failure = task?.phase === "failed" ? (task.message ?? t("workspace.createFailed")) : refused ? coreErrorText(refused, t, "workspace.createFailed") : null;
+  const failure = task?.phase === "failed" ? (task.failure ? coreErrorText({ kind: task.failure }, t, "workspace.createFailed") : t("workspace.createFailed")) : refused ? coreErrorText(refused, t, "workspace.createFailed") : null;
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
       <DialogContent data-new-worktree={workspace.id}>
@@ -385,7 +387,7 @@ function PurposeDialog({ actions, checkout, deviceLabel, onClose }: { actions: A
     setRequest({ afterId: actions.taskIdNow(), at: Date.now(), text: value });
     actions.setPurpose(checkout.id, value);
   };
-  const failure = task?.phase === "failed" ? (task.message ?? t("workspace.purposeFailed")) : refused ? coreErrorText(refused, t, "workspace.purposeFailed") : null;
+  const failure = task?.phase === "failed" ? (task.failure ? coreErrorText({ kind: task.failure }, t, "workspace.purposeFailed") : t("workspace.purposeFailed")) : refused ? coreErrorText(refused, t, "workspace.purposeFailed") : null;
   const label = checkout.branch ?? checkout.label;
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
@@ -464,10 +466,10 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
   const finished = removal?.phase === "finished" ? removal : null;
   // A refusal or a failed removal keeps the worktree, so the choices come
   // back under the reason and Delete tries again on the row as it is now.
-  const failure = refused ? coreErrorText(refused, t, "workspace.deleteFailed") : removal?.phase === "failed" ? (removal.message ?? t("workspace.deleteFailed")) : null;
-  const choosing = !!row && !!gate && !gate.blocked_reason && !inFlight && !finished;
+  const failure = refused ? coreErrorText(refused, t, "workspace.deleteFailed") : removal?.phase === "failed" ? removalNoticeText(removal.notice, removal.phase, t) : null;
+  const choosing = !!row && !!gate && !gate.blocked && !inFlight && !finished;
   const branch = row?.branch ?? checkout.branch;
-  const needsDiscard = !!gate?.discard_label;
+  const needsDiscard = !!gate?.discard;
   const inside = checkout.tabs.flatMap((tab) => tab.panes.map((pane) => pane.id));
   const subtree = useOutsideSubtree(actions, inside, listed);
   const [withOutside, setWithOutside] = useState(false);
@@ -497,9 +499,9 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
             {t("workspace.readingGit")}
           </Status>
         ) : null}
-        {gate?.blocked_reason ? (
-          <Note tone="warn" data-delete-blocked="true">
-            {gate.blocked_reason}
+        {gate?.blocked ? (
+          <Note tone="warn" data-delete-blocked={gate.blocked.code}>
+            {blockedText(gate.blocked, t)}
           </Note>
         ) : null}
         {failure ? (
@@ -514,9 +516,9 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
               {gate.warnings.length > 0 ? (
                 <ul className="flex flex-wrap gap-xs" aria-label={t("workspace.warnings")}>
                   {gate.warnings.map((warning) => (
-                    <li key={warning}>
-                      <Badge variant="secondary" data-delete-warning={warning}>
-                        {warning}
+                    <li key={warning.code}>
+                      <Badge variant="secondary" data-delete-warning={warning.code}>
+                        {warningText(warning, t)}
                       </Badge>
                     </li>
                   ))}
@@ -529,19 +531,19 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
                 <span className="min-w-0 break-words">
                   {t("workspace.deleteBranch", { branch })}
                   {!gate.can_delete_branch ? <span> ({t("workspace.branchNotOffered")})</span> : null}
-                  {gate.can_delete_branch && gate.branch_warning ? (
-                    <span className="block text-caption text-subtle-foreground" data-delete-branch-warning="true">
-                      {gate.branch_warning}
+                  {gate.can_delete_branch && gate.branch_loss ? (
+                    <span className="block text-caption text-subtle-foreground" data-delete-branch-warning={gate.branch_loss.code}>
+                      {branchLossText(gate.branch_loss, t)}
                     </span>
                   ) : null}
                 </span>
               </label>
             ) : null}
-            {gate.discard_label ? (
+            {gate.discard ? (
               <label className="flex items-start gap-xs text-body text-foreground">
                 <Checkbox checked={discard} onCheckedChange={(checked) => setDiscardSelection({ key: discardKey, accepted: checked === true })} data-delete-discard="true" className="mt-xxs" />
                 <span className="min-w-0 break-words">
-                  {gate.discard_label}
+                  {discardText(gate.discard, t)}
                   <span className="block text-caption text-muted-foreground">{t("workspace.discardRequired")}</span>
                 </span>
               </label>
@@ -562,7 +564,7 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
         ) : null}
         {finished ? (
           <Note tone="ok" data-delete-result="finished">
-            {finished.message ?? t("workspace.worktreeRemoved")}
+            {removalNoticeText(finished.notice, finished.phase, t)}
           </Note>
         ) : null}
         <AlertDialogFooter>
@@ -582,7 +584,7 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
             </>
           ) : choosing && gate ? (
             <Button variant="destructive" disabled={needsDiscard && !discard} onClick={() => confirm(false)} data-delete-confirm="true">
-              {gate.button_label || t("workspace.deleteWorktree")}
+              {deleteButtonText(gate, t)}
             </Button>
           ) : null}
         </AlertDialogFooter>
@@ -609,7 +611,7 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
     if (!watchedRemoval || dialogOpen) return;
     const answer = removalFor(removal, watchedRemoval.deviceId, watchedRemoval.path, watchedRemoval.afterId, localDeviceId(useShellStore.getState().rest));
     if (!answer || (answer.phase !== "finished" && answer.phase !== "failed")) return;
-    useUiStore.getState().setNotice({ text: answer.message ?? (answer.phase === "finished" ? translate("workspace.worktreeRemoved") : translate("workspace.deleteFailed")), refreshable: false });
+    useUiStore.getState().setNotice({ text: removalNoticeText(answer.notice, answer.phase, translate), refreshable: false });
     useUiStore.getState().setWatchedRemoval(null);
   }, [watchedRemoval, removal, dialogOpen]);
 

@@ -173,3 +173,37 @@ it("puts the worker's own plan on the card's last line and folded in the node's 
     expect([...detail.querySelectorAll<HTMLElement>("[data-plan-step]")].map((step) => step.dataset.planStep)).toEqual(["core", "web"]);
   } finally { await map.unmount(); }
 });
+
+it("draws every node, done ones too, and outlines the ones at work", async () => {
+  const nodes = Array.from({ length: 14 }, (_, index) => node(`n-${index}`, { status: index < 6 ? "done" : index < 9 ? "working" : "planned" }));
+  const map = await mount({ items: [mission({ nodes })] });
+  try {
+    expect(map.container.querySelectorAll("[data-mission-node]")).toHaveLength(14);
+    expect([...map.container.querySelectorAll<HTMLElement>("[data-node-moving]")].map((card) => card.dataset.missionNode)).toEqual(["n-6", "n-7", "n-8"]);
+  } finally { await map.unmount(); }
+});
+
+/** A CSS length as the box style writes it. */
+const px = (value: number) => `${value}px`;
+
+it("shrinks a map wider than its slot to the slot's width, and 100% draws it at its own size", async () => {
+  const width = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1800);
+  const height = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
+  const room = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(900);
+  const map = await mount({ items: [mission({ nodes: [node("a", { status: "working" }), node("b")] })] });
+  try {
+    const fit = map.q("[data-mission-fit]")!;
+    expect(fit.dataset.missionScale).toBe("0.50");
+    // The box holds the shrunk size, so the slot does not scroll sideways.
+    expect((fit.firstElementChild as HTMLElement).style.width).toBe(px(900));
+    expect((fit.firstElementChild as HTMLElement).style.height).toBe(px(300));
+    await act(async () => map.q('[data-mission-zoom-choice="actual"]')!.click());
+    expect(map.q("[data-mission-fit]")?.dataset.missionScale).toBe("1.00");
+    expect((map.q("[data-mission-fit]")!.firstElementChild as HTMLElement).style.width).toBe(px(1800));
+  } finally {
+    await map.unmount();
+    width.mockRestore();
+    height.mockRestore();
+    room.mockRestore();
+  }
+});

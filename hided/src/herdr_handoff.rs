@@ -25,19 +25,20 @@
 //! process and pin (D-13).
 //!
 //! This machine's server the operator runs from their own older Herdr is
-//! moved only when the operator asks, from the first-run wizard or Overview
-//! (PRD herdr-takeover D-14): [`LocalTakeover`] is what the core asks, and
-//! it judges the server by the same [`device_step`] a device's node does
-//! (D-08). A failed move is remembered by server process and pin in one
-//! file of this machine's state folder (D-23), so the step opens on its
-//! failure after a restart, and a press always tries again.
+//! moved by the core as soon as a look offers it, once per server (operator
+//! decision 2026-10-23, replacing PRD herdr-takeover D-14): [`LocalTakeover`]
+//! is what the core asks, and it judges the server by the same
+//! [`device_step`] a device's node does (D-08). A failed move is remembered
+//! by server process and pin in one file of this machine's state folder
+//! (D-23), so the step opens on its failure after a restart, Hide does not
+//! move that server again on its own, and a press always tries again.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use herdr_core::herdr_takeover::{
-    FailureCause, HerdrTakeover, Look, Moved, Offer, OfferKind, PathHerdr, Versions,
+    FailureCause, HerdrTakeover, Look, Moved, Offer, OfferKind, PathHerdr, PathUpdated, Versions,
 };
 use hide_kit::device_herdr::{BehindCause, HerdrUpdate};
 use hide_platform::fs::identity::file_id;
@@ -51,6 +52,13 @@ const HANDOFF_WITHIN: Duration = Duration::from_secs(15);
 
 /// How long a `ping` or this app's Herdr naming its version may take.
 const ASK_WITHIN: Duration = Duration::from_secs(5);
+
+/// How long Homebrew may take to upgrade the operator's `herdr`: it updates
+/// its own index first, and downloads the release.
+const BREW_WITHIN: Duration = Duration::from_secs(300);
+
+/// How long a copy of this app's Herdr over the operator's may take.
+const COPY_WITHIN: Duration = Duration::from_secs(30);
 
 /// What one look at the server came to.
 #[derive(Debug, Eq, PartialEq)]
@@ -261,9 +269,9 @@ impl LocalTakeover {
     }
 
     /// The moves that failed before. A record that cannot be read counts as
-    /// none and is replaced by the next failure: it only decides whether the
-    /// step opens on its failure, since the core never moves on its own
-    /// (D-14), so a damaged file must not hide the offer.
+    /// none and is replaced by the next failure: it decides whether the step
+    /// opens on its failure, and the core keeps its own memory of the server
+    /// it moved on its own, so a damaged file must not hide the offer.
     fn attempts(&self) -> Attempts {
         Attempts::read(&self.record).unwrap_or_else(|detail| {
             herdr_core::diagnostic!(serde_json::json!({
@@ -355,10 +363,7 @@ impl LocalTakeover {
     /// and an older release answers only `--version`, which leaves the
     /// protocol unknown and so behind this build's.
     fn path_herdr(&self) -> Option<PathHerdr> {
-        let herdr = match &self.operator_herdr {
-            Some(herdr) => herdr.clone(),
-            None => hide_platform::programs::find_cli("herdr")?,
-        };
+        let herdr = self.operator_herdr()?;
         let (version, protocol) = match status_client(&herdr) {
             Ok(answer) => (
                 answer["version"].as_str()?.to_owned(),
@@ -367,35 +372,129 @@ impl LocalTakeover {
             Err(_) => (named_version(&herdr)?, None),
         };
         Some(PathHerdr {
-            update: update_command(&self.ours, &herdr),
+            update: PathUpdate::of(&self.ours, &herdr).command(),
             version,
             protocol,
         })
     }
-}
 
-/// The command that brings the operator's `herdr` to this app's: Homebrew's
-/// own upgrade where Homebrew installed it, which refuses any other update,
-/// and otherwise a copy of this app's Herdr over the file the link points
-/// at. The copy writes a new file, so a server running the old one goes on;
-/// Hide never runs it, the operator does (letter-13293).
-fn update_command(ours: &Path, herdr: &Path) -> String {
-    let file = std::fs::canonicalize(herdr).unwrap_or_else(|_| herdr.to_owned());
-    if homebrew_keg(&file) {
-        return "brew upgrade herdr".to_owned();
+    /// The operator's own `herdr`, as their terminal finds it.
+    fn operator_herdr(&self) -> Option<PathBuf> {
+        match &self.operator_herdr {
+            Some(herdr) => Some(herdr.clone()),
+            None => hide_platform::programs::find_cli("herdr"),
+        }
     }
-    let needs_admin = file.parent().is_some_and(|dir| {
-        !hide_platform::fs::permissions::account_can_add_to(dir).unwrap_or(true)
-    });
-    copy_command(ours, &file, needs_admin)
 }
 
-/// A file Homebrew put in its cellar (`<prefix>/Cellar/herdr/<version>/bin`).
-fn homebrew_keg(file: &Path) -> bool {
-    let names: Vec<_> = file.components().map(|part| part.as_os_str()).collect();
-    names
-        .windows(2)
-        .any(|pair| pair[0] == "Cellar" && pair[1] == "herdr")
+/// How the operator's `herdr` is brought to this app's Herdr without
+/// touching a running server: Homebrew's own upgrade where Homebrew
+/// installed it, which refuses any other update, and otherwise a copy of
+/// this app's Herdr over the file the link points at, which writes a new
+/// file, so a server running the old one goes on. Hide runs it after a move
+/// (operator decision 2026-10-23), except a copy that needs an administrator,
+/// which it only shows (letter-13293).
+#[derive(Debug, Eq, PartialEq)]
+enum PathUpdate {
+    /// `brew` is the Homebrew of the prefix that holds the file.
+    Brew { brew: PathBuf },
+    Copy {
+        ours: PathBuf,
+        file: PathBuf,
+        needs_admin: bool,
+    },
+}
+
+impl PathUpdate {
+    fn of(ours: &Path, herdr: &Path) -> Self {
+        let file = std::fs::canonicalize(herdr).unwrap_or_else(|_| herdr.to_owned());
+        if let Some(prefix) = homebrew_prefix(&file) {
+            return Self::Brew {
+                brew: prefix.join("bin").join("brew"),
+            };
+        }
+        let needs_admin = file.parent().is_some_and(|dir| {
+            !hide_platform::fs::permissions::account_can_add_to(dir).unwrap_or(true)
+        });
+        Self::Copy {
+            ours: ours.to_owned(),
+            file,
+            needs_admin,
+        }
+    }
+
+    /// The command as the operator would type it in their terminal.
+    fn command(&self) -> String {
+        match self {
+            Self::Brew { .. } => "brew upgrade herdr".to_owned(),
+            Self::Copy {
+                ours,
+                file,
+                needs_admin,
+            } => copy_command(ours, file, *needs_admin),
+        }
+    }
+
+    /// Whether Hide runs it: never a copy that asks for an administrator,
+    /// and never on a system with no move to follow (Windows).
+    fn runs(&self) -> bool {
+        match self {
+            Self::Brew { .. } => true,
+            Self::Copy { needs_admin, .. } => cfg!(unix) && !needs_admin,
+        }
+    }
+
+    /// Runs it, when it [`runs`](Self::runs), as a program with its
+    /// arguments rather than through a shell.
+    fn run(&self) -> Result<(), String> {
+        if !self.runs() {
+            return Err("it is left to the operator".to_owned());
+        }
+        let (mut command, within) = match self {
+            Self::Brew { brew } => {
+                // A prefix without its own `brew` is found as the terminal would.
+                let program = if brew.is_file() {
+                    brew.clone()
+                } else {
+                    PathBuf::from("brew")
+                };
+                let mut command = hide_platform::programs::command(program);
+                command.args(["upgrade", "herdr"]);
+                (command, BREW_WITHIN)
+            }
+            Self::Copy { ours, file, .. } => {
+                let mut command = hide_platform::programs::command("install");
+                command.args(["-m", "755"]).arg(ours).arg(file);
+                (command, COPY_WITHIN)
+            }
+        };
+        let finished = hide_platform::process::run_to_end(
+            &mut command,
+            within,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .map_err(|error| format!("{}: {error:?}", self.command()))?;
+        if !finished.succeeded() {
+            return Err(format!(
+                "{} exited {:?}: {}",
+                self.command(),
+                finished.code,
+                finished.last_error_line()
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The prefix of a file Homebrew put in its cellar
+/// (`<prefix>/Cellar/herdr/<version>/bin`).
+fn homebrew_prefix(file: &Path) -> Option<&Path> {
+    file.ancestors().find_map(|folder| {
+        let cellar = folder.parent()?;
+        (folder.file_name()? == "herdr" && cellar.file_name()? == "Cellar")
+            .then_some(())
+            .and(cellar.parent())
+    })
 }
 
 #[cfg(unix)]
@@ -442,9 +541,39 @@ impl HerdrTakeover for NoTakeover {
             detail: "this daemon does not run from a desktop package with its own Herdr".into(),
         }
     }
+
+    fn update_path_herdr(&self) -> PathUpdated {
+        PathUpdated::Gone
+    }
 }
 
 impl HerdrTakeover for LocalTakeover {
+    fn update_path_herdr(&self) -> PathUpdated {
+        let Some(herdr) = self.operator_herdr() else {
+            return PathUpdated::Gone;
+        };
+        let update = PathUpdate::of(&self.ours, &herdr);
+        let ran = update.runs().then(|| update.command());
+        let outcome = update.run();
+        match self.path_herdr() {
+            None => PathUpdated::Gone,
+            Some(now) if !now.behind() => PathUpdated::Current {
+                version: now.version,
+            },
+            Some(now) => PathUpdated::Behind {
+                detail: match outcome {
+                    Ok(()) => format!(
+                        "herdr {} still speaks protocol {:?}",
+                        now.version, now.protocol
+                    ),
+                    Err(detail) => detail,
+                },
+                version: now.version,
+                ran,
+            },
+        }
+    }
+
     fn versions(&self) -> Versions {
         Versions {
             hide: self.version().ok(),
@@ -1104,12 +1233,18 @@ mod tests {
         let keg = dir.path().join("Cellar/herdr/0.7.5/bin");
         std::fs::create_dir_all(&keg).unwrap();
         std::fs::write(keg.join("herdr"), b"").unwrap();
+        let update = PathUpdate::of(
+            Path::new("/Applications/hide.app/herdr"),
+            &keg.join("herdr"),
+        );
+        assert_eq!(update.command(), "brew upgrade herdr");
+        assert!(update.runs());
         assert_eq!(
-            update_command(
-                Path::new("/Applications/hide.app/herdr"),
-                &keg.join("herdr")
-            ),
-            "brew upgrade herdr"
+            update,
+            PathUpdate::Brew {
+                brew: std::fs::canonicalize(dir.path()).unwrap().join("bin/brew")
+            },
+            "the Homebrew that installed it upgrades it"
         );
     }
 
@@ -1123,19 +1258,51 @@ mod tests {
         std::fs::write(own.join("herdr"), b"").unwrap();
         let file = std::fs::canonicalize(own.join("herdr")).unwrap();
         let ours = Path::new("/Applications/hide.app/Contents/Resources/herdr");
+        let open = PathUpdate::of(ours, &own.join("herdr"));
         assert_eq!(
-            update_command(ours, &own.join("herdr")),
+            open.command(),
             format!(
                 "install -m 755 '{}' '{}'",
                 ours.display(),
                 file.display().to_string().replace('\'', r"'\''")
             )
         );
+        assert!(open.runs());
         std::fs::set_permissions(&own, std::fs::Permissions::from_mode(0o555)).unwrap();
-        let locked = update_command(ours, &own.join("herdr"));
+        let locked = PathUpdate::of(ours, &own.join("herdr"));
         std::fs::set_permissions(&own, std::fs::Permissions::from_mode(0o755)).unwrap();
         if unsafe { libc::geteuid() } != 0 {
-            assert!(locked.starts_with("sudo install -m 755 "), "{locked}");
+            assert!(
+                locked.command().starts_with("sudo install -m 755 "),
+                "{}",
+                locked.command()
+            );
+            assert!(!locked.runs(), "a command that needs sudo is never run");
+            assert!(locked.run().is_err());
         }
+    }
+
+    /// A copy the account may make replaces the operator's `herdr` with a new
+    /// file of this app's, executable, and leaves the old one to a process
+    /// still running it.
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_hide_runs_replaces_the_file_with_a_new_one() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let ours = dir.path().join("ours");
+        std::fs::write(&ours, b"new herdr").unwrap();
+        let theirs = dir.path().join("theirs");
+        std::fs::write(&theirs, b"old herdr").unwrap();
+        let before = std::fs::metadata(&theirs).unwrap().ino();
+        PathUpdate::of(&ours, &theirs).run().unwrap();
+        assert_eq!(std::fs::read(&theirs).unwrap(), b"new herdr");
+        let after = std::fs::metadata(&theirs).unwrap();
+        assert_eq!(after.permissions().mode() & 0o777, 0o755);
+        assert_ne!(
+            after.ino(),
+            before,
+            "a new file, not the running one rewritten"
+        );
     }
 }

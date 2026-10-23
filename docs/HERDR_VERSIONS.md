@@ -23,11 +23,11 @@ Herdr's release notes do not state the protocol, so a bump is read from the pinn
 | --- | --- | --- |
 | None | Starts one from its own Herdr; nothing is asked | [ARCHITECTURE.md: The bundled Herdr runtime](ARCHITECTURE.md#the-bundled-herdr-runtime) |
 | Hide's version | Uses it | same |
-| Another version on Hide's protocol, older | Uses it; the first-run wizard offers the move with `Not now` | [UI_BEHAVIOR.md: First run](UI_BEHAVIOR.md#first-run) |
+| Another version on Hide's protocol, older | Uses it and moves it to Hide's Herdr on its own, live, once per server (macOS and Linux); a failed move offers `Try again` and `Not now` | [UI_BEHAVIOR.md: First run](UI_BEHAVIOR.md#first-run) |
 | Another version on Hide's protocol, newer | Uses it and changes nothing | [ARCHITECTURE.md: The operator's own older server](ARCHITECTURE.md#the-operators-own-older-server) |
-| An older protocol, and the server can hand off (0.6.3 and later, macOS and Linux) | Holds the screen and offers Move: the server hands its panes to Hide's Herdr live, so running agents and commands go on | [UI_BEHAVIOR.md: First run](UI_BEHAVIOR.md#first-run) |
-| An older protocol that cannot hand off (0.6.2 and earlier, and every older server on Windows) | Holds the screen and offers Restart: workspaces, tabs, panes and their folders come back, running commands end | same |
-| A newer protocol | Holds the screen, touches nothing, and offers the update check; Hide catches up with a release | same |
+| An older protocol, and the server can hand off (0.6.3 and later, macOS and Linux) | Holds the screen and moves it on its own, once per server: the server hands its panes to Hide's Herdr live, so running agents and commands go on; a failed move offers `Try again` | [UI_BEHAVIOR.md: First run](UI_BEHAVIOR.md#first-run) |
+| An older protocol that cannot hand off (0.6.2 and earlier, and every older server on Windows) | Holds the screen and offers Restart, which waits for the press because running commands end; workspaces, tabs, panes and their folders come back | same |
+| A newer protocol | Holds the screen and touches nothing; the desktop app checks for a Hide update at once and restarts into it once downloaded, or says one is coming and keeps checking (no desktop updates on Linux outside the deb and rpm packages) | same |
 | A server an earlier Hide app started | Hands it to this app's Herdr on connect without asking (macOS and Linux) | [ARCHITECTURE.md: The bundled Herdr runtime](ARCHITECTURE.md#the-bundled-herdr-runtime) |
 | A connected device's server on an older stable release | Handed to the pinned copy on connect without asking; the device row says what to do when it cannot be | [INSTALL.md: Connect another Mac over SSH](INSTALL.md#connect-another-mac-over-ssh) |
 
@@ -38,8 +38,9 @@ Windows has only the restart, and that restart has not been run against a real W
 ## The terminal's `herdr` after a move
 
 A move changes the program the server runs, not the operator's own `herdr` file, so that file can stay on the old protocol and its commands are refused.
-Settings › About shows the server's version and, when the terminal's `herdr` speaks another protocol, its version with a command to copy: `install -m 755` of Hide's Herdr over that file, or `brew upgrade herdr` for a Homebrew install.
-Hide never runs that command itself, because it replaces a file the operator owns.
+Hide therefore brings that file up itself once after each move, off the core's lock: `brew upgrade herdr` for a Homebrew install, otherwise `install -m 755` of Hide's Herdr over that file, which writes a new file so a running server keeps its own (operator decision 2026-10-23).
+A command that needs `sudo` is never run, since it changes a file the account cannot write; that case, and one that ran but left the file on another protocol (Homebrew's latest can be ahead of Hide's pin), shows the command to copy on the moved step and in Settings › About, and the outcome is the `herdr.path_update` diagnostic record.
+Windows has no move, so Hide never runs its `Copy-Item` there.
 The advice never says `herdr update --handoff`: that command always installs Herdr's latest release and hands the server to it, which moves the server past Hide's pin whenever Herdr is ahead.
 Agents in Hide's panes call Herdr through `HERDR_BIN_PATH`, which names the server's own binary, so an older `herdr` on the operator's `PATH` does not break them.
 

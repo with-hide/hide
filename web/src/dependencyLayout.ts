@@ -130,7 +130,8 @@ export async function placeGraph(elk: Pick<ELK, "layout">, nodes: readonly NodeB
       "elk.direction": flow === "down" ? "DOWN" : "RIGHT",
       "elk.edgeRouting": flow === "down" ? "ORTHOGONAL" : "POLYLINE",
       // Down, every node that waits on nothing starts on the top row, as a plan reads: what starts now, then what follows.
-      ...(flow === "down" ? { "elk.layered.layering.strategy": "LONGEST_PATH_SOURCE" } : {}),
+      // Down, a node sits centred over what it fans out to and under what it gathers, rather than over its first child.
+      ...(flow === "down" ? { "elk.layered.layering.strategy": "LONGEST_PATH_SOURCE", "elk.layered.nodePlacement.bk.fixedAlignment": "BALANCED" } : {}),
       // A caller whose layer order means something (a row's first card, then its `+N`) keeps it.
       ...(order === "given" ? { "elk.layered.crossingMinimization.forceNodeModelOrder": "true", "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES" } : {}),
       "elk.layered.spacing.nodeNodeBetweenLayers": String(spacing.betweenLayers),

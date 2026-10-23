@@ -6,6 +6,7 @@
 //! directory; a new directory in the session, or a new helper connection,
 //! asks again. They are kept while the device is, up to a cap.
 
+use super::agents::FailureReport;
 use super::*;
 use crate::device_catalog::{self, DeviceFacts, Fact};
 use crate::node_access::{LinkError, call_as};
@@ -563,6 +564,7 @@ impl Runtime {
             "failure": failure,
         }));
         let mut changed = self.refresh_device_catalog(target);
+        self.open_registration_terminals(target);
         // The session may have named new directories while this ran.
         if failure.is_none() {
             changed |= self.request_device_facts(target);
@@ -868,6 +870,8 @@ impl Runtime {
         self.device_recent_tabs.remove(target);
         self.created_device_tabs
             .retain(|(owner, _), _| owner != target);
+        self.registration_terminals
+            .retain(|wanted| wanted.target != target);
     }
 
     /// The device was removed, or another machine answers its address:
@@ -1097,6 +1101,7 @@ impl Runtime {
             }
         };
         let id = device_catalog::project_id(device, Path::new(&registrable.root));
+        let path = registrable.root.clone();
         if self
             .snapshot
             .ui_state
@@ -1133,11 +1138,175 @@ impl Runtime {
             "component": "registration", "kind": "workspace.registered",
             "target": device, "workspace_id": id,
         }));
+        self.want_registration_terminal(device, &path);
         self.request_device_facts(device);
         self.refresh_device_catalog(device);
+        self.open_registration_terminals(device);
         true
     }
+
+    /// A project just registered on `device` opens on one terminal, as one
+    /// on this machine does (`live::spawn_workspace_creation`): the request
+    /// New tab sends, started by the registration rather than by a second
+    /// event from the shell, once the device's helper has confirmed the
+    /// folder (`request_device_facts`), since an unconfirmed checkout opens no
+    /// tab. Nothing it reports reaches the operator's notice: a project that
+    /// already has a tab, whose folder is not confirmed, or whose terminal is
+    /// refused or fails stays registered on its start screen, and why is in
+    /// the diagnostic log (design principle 13).
+    fn want_registration_terminal(&mut self, device: &str, path: &str) {
+        if self.registration_terminals.len() == REGISTRATION_TERMINAL_LIMIT
+            && let Some(oldest) = self.registration_terminals.pop_front()
+        {
+            // A sent one's answer, when it comes, is the notice's like any other.
+            self.push_diagnostic(
+                "registration.terminal_limit",
+                format!(
+                    "{} on {} is no longer waited on for its first terminal",
+                    oldest.path, oldest.target
+                ),
+            );
+        }
+        self.registration_terminals.push_back(RegistrationTerminal {
+            target: device.to_owned(),
+            path: path.to_owned(),
+            request_id: None,
+        });
+    }
+
+    /// Sends the terminal of each of `device`'s registrations whose checkout
+    /// is now confirmed; one still waiting for the helper's facts waits on.
+    pub(super) fn open_registration_terminals(&mut self, device: &str) {
+        let mut waiting = Vec::new();
+        self.registration_terminals.retain(|wanted| {
+            let take = wanted.target == device && wanted.request_id.is_none();
+            if take {
+                waiting.push(wanted.path.clone());
+            }
+            !take
+        });
+        for path in waiting {
+            let checkout = self
+                .catalog_workspaces()
+                .filter(|workspace| workspace.device_id == device)
+                .flat_map(|workspace| &workspace.checkouts)
+                .find(|checkout| checkout.path == path)
+                .map(|checkout| {
+                    (
+                        checkout.workspace_id.clone(),
+                        checkout.id.clone(),
+                        checkout.next_tab_label.clone(),
+                        checkout.unconfirmed,
+                        checkout.tabs.is_empty(),
+                    )
+                });
+            let facts_unavailable = self
+                .device_facts
+                .get(device)
+                .is_some_and(|facts| facts.in_flight.is_none() && facts.unavailable.is_some());
+            let (workspace_id, checkout_id, label) = match checkout {
+                None => {
+                    self.skip_registration_terminal(device, &path, "its checkout is not listed");
+                    continue;
+                }
+                Some((.., true, _)) if facts_unavailable => {
+                    self.skip_registration_terminal(
+                        device,
+                        &path,
+                        "the device's helper did not confirm the folder",
+                    );
+                    continue;
+                }
+                Some((.., true, _)) => {
+                    self.registration_terminals.push_back(RegistrationTerminal {
+                        target: device.to_owned(),
+                        path,
+                        request_id: None,
+                    });
+                    continue;
+                }
+                Some((.., false)) => {
+                    self.skip_registration_terminal(device, &path, "it has a tab already");
+                    continue;
+                }
+                Some((workspace_id, checkout_id, label, ..)) => (workspace_id, checkout_id, label),
+            };
+            let request_id = format!("registration-{}", unix_milliseconds());
+            let sent = self.send_remote_terminal(
+                RemoteControlPayload {
+                    target_id: device.to_owned(),
+                    request_id: request_id.clone(),
+                    report_pane_focus_outcome: false,
+                    // The device answers after its helper's facts, seconds
+                    // later at times, when the window may be elsewhere: the
+                    // terminal is there when the project is opened, and the
+                    // window stays.
+                    focus_device: false,
+                    request: RemoteControlRequest::CreateTab {
+                        workspace_id,
+                        checkout_id: Some(checkout_id),
+                        cwd: path.clone(),
+                        label,
+                        area_id: None,
+                    },
+                },
+                REGISTRATION_TERMINAL_REPORT,
+            );
+            // One refused before it was sent has logged why already.
+            if sent {
+                self.registration_terminals.push_back(RegistrationTerminal {
+                    target: device.to_owned(),
+                    path,
+                    request_id: Some(request_id),
+                });
+            }
+        }
+    }
+
+    fn skip_registration_terminal(&mut self, device: &str, path: &str, reason: &str) {
+        self.push_diagnostic(
+            "registration.terminal_skipped",
+            format!("{path} on {device} opens no terminal: {reason}"),
+        );
+    }
+
+    /// How the answer to `request_id` on `target` reports a failure: to the
+    /// log when it is a registration's terminal, which it stops being, since
+    /// the answer is the last thing it reports.
+    pub(super) fn registration_terminal_report(
+        &mut self,
+        target: &str,
+        request_id: &str,
+    ) -> FailureReport {
+        let Some(index) = self.registration_terminals.iter().position(|wanted| {
+            wanted.target == target && wanted.request_id.as_deref() == Some(request_id)
+        }) else {
+            return FailureReport::Notice;
+        };
+        self.registration_terminals.remove(index);
+        REGISTRATION_TERMINAL_REPORT
+    }
 }
+
+/// A terminal a device project's registration opens on its own
+/// (`want_registration_terminal`), kept until the device answers it.
+#[derive(Debug)]
+pub(super) struct RegistrationTerminal {
+    target: String,
+    path: String,
+    /// The request sent for it; `None` while its checkout waits for the
+    /// device's helper to confirm the folder.
+    request_id: Option<String>,
+}
+
+/// The registration terminals kept at once, waiting or sent.
+const REGISTRATION_TERMINAL_LIMIT: usize = 16;
+
+/// A registration terminal's failure, refused before it is sent or answered
+/// as failed by the device, goes to the log under this kind.
+const REGISTRATION_TERMINAL_REPORT: FailureReport = FailureReport::Log {
+    kind: "registration.terminal_failed",
+};
 
 /// The `last_error` kind for a device's refusal of a folder to register, by
 /// the helper's code: the shell words a missing folder, a file and a folder

@@ -769,7 +769,7 @@ fn a_github_issue_panel_read_settles_only_the_issue_it_asked_for() {
     )));
     let detail = runtime.snapshot().issue_work.detail.clone().unwrap();
     assert_eq!(detail.phase, "failed", "a core without a worker says so");
-    assert!(detail.message.unwrap().contains("No worker"));
+    assert_eq!(detail.failure.as_deref(), Some("issue_detail.read_failed"));
 
     runtime.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::reading(
         "w".into(),
@@ -919,7 +919,7 @@ fn detail_paging_keeps_cached_content_on_failure_and_reports_the_cap() {
         ("ready", Some("Full original body"), 50)
     );
     assert_eq!(cached.comments_cursor.as_deref(), Some("page-1"));
-    assert!(cached.message.is_some() && !cached.comments_loading && cached.comments_has_more);
+    assert!(cached.failure.is_some() && !cached.comments_loading && cached.comments_has_more);
     assert!(!runtime.dispatch_json(&event(
         "issue_detail_request",
         serde_json::json!({
@@ -963,7 +963,7 @@ fn detail_paging_keeps_cached_content_on_failure_and_reports_the_cap() {
     let ready = runtime.snapshot().issue_work.detail.as_ref().unwrap();
     assert_eq!(ready.comments.len(), 200);
     assert_eq!(ready.comments[199].body, "Comment 199");
-    assert!(ready.comments_limited && !ready.comments_has_more && ready.message.is_none());
+    assert!(ready.comments_limited && !ready.comments_has_more && ready.failure.is_none());
     assert_eq!(ready.body.as_deref(), Some("Full original body"));
 }
 

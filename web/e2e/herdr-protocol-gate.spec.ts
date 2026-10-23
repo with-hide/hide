@@ -2,7 +2,7 @@
 // daemon's socket that answers `ping` as an older (0.8.2, protocol 20) or a newer (protocol 23) release and refuses
 // the subscription as such a release does, so the core's own read, its look and the screen are the product's. No
 // protocol-23 Herdr exists yet, which is why a stand-in plays both. The daemon runs from a bundle with the pinned
-// Herdr, the one a packaged app has, so its look offers the move.
+// Herdr, the one a packaged app has, so its look offers the move, which the core starts on its own.
 
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";
@@ -50,7 +50,7 @@ async function standIn(herdr: HerdrFixture, version: string, protocol: number) {
   return { socket, methods, stop: () => new Promise<void>((resolve) => server.close(() => resolve())) };
 }
 
-test("an older Herdr holds Hide on its move: no key opens a workspace, and a failed move keeps the hold", async ({ page }) => {
+test("an older Herdr holds Hide while Hide moves it once on its own: no key opens a workspace, and a failed move keeps the hold", async ({ page }) => {
   const herdr = await startHerdr();
   const old = await standIn(herdr, "0.8.2", 20);
   const daemon = await startHided(herdr, "gate-older", undefined, { HERDR_SOCKET_PATH: old.socket }, true, { bundledHerdr: true });
@@ -72,12 +72,17 @@ test("an older Herdr holds Hide on its move: no key opens a workspace, and a fai
     await expect(page.locator("body")).not.toContainText("before workspace creation");
 
     if (process.platform !== "win32") {
-      // The stand-in refuses the handoff: the failure is named, Try again stays, and nothing lets Hide past it.
-      await page.locator("[data-herdr-takeover-move]").click();
-      await expect(page.locator("[data-herdr-takeover-failure]")).toBeVisible({ timeout: 30_000 });
+      // The core moved it with no press and the stand-in refused the handoff: the failure is named, Try again stays,
+      // nothing lets Hide past it, and Hide does not try that server again on its own.
+      await expect(page.locator("[data-herdr-takeover-failure]")).toHaveText("Herdr declined. Nothing changed.", { timeout: 30_000 });
       await expect(page.locator("[data-herdr-takeover-move]")).toContainText("Try again");
       await expect(page.locator("[data-herdr-takeover-later]")).toHaveCount(0);
       await expect(gate).toBeVisible();
+      const handoffs = () => old.methods.filter((method) => method === "server.live_handoff").length;
+      expect(handoffs()).toBe(1);
+      await page.locator("[data-herdr-takeover-move]").click();
+      await expect.poll(handoffs, { timeout: 30_000 }).toBe(2);
+      await expect(page.locator("[data-herdr-takeover-move]")).toContainText("Try again", { timeout: 30_000 });
     }
   } finally {
     daemon.stop();
@@ -85,7 +90,7 @@ test("an older Herdr holds Hide on its move: no key opens a workspace, and a fai
   }
 });
 
-test("a newer Herdr holds Hide with the wait for a Hide update and the two versions read", async ({ page }) => {
+test("a newer Herdr holds Hide with the wait for a Hide update, leaving that Herdr as it is", async ({ page }) => {
   const herdr = await startHerdr();
   const newer = await standIn(herdr, "0.10.0", 23);
   const daemon = await startHided(herdr, "gate-newer", undefined, { HERDR_SOCKET_PATH: newer.socket }, true, { bundledHerdr: true });
@@ -93,8 +98,8 @@ test("a newer Herdr holds Hide with the wait for a Hide update and the two versi
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     const gate = page.locator("[data-herdr-gate]");
     await expect(gate).toHaveAttribute("data-herdr-gate", "update_hide", { timeout: 60_000 });
-    await expect(gate).toContainText("Herdr is newer than Hide");
-    await expect(page.locator("[data-herdr-gate-versions]")).toHaveAttribute("data-herdr-gate-versions", /^0\.10\.0>\d/);
+    await expect(page.locator("[data-herdr-gate] [data-slot=dialog-title]")).toHaveText("Hide needs an update");
+    await expect(gate).toContainText("Your Herdr and its work are unchanged");
     await screenshot(page, "herdr-gate-newer");
     await page.keyboard.press(chord("new_tab"));
     await expect(gate).toBeVisible();

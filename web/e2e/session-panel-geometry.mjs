@@ -29,7 +29,7 @@ export async function measure(page) {
         if (Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left) > 1 && Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top) > 1) partProblems.push(`${name}: ${a.textContent} overlaps ${b.textContent}`);
       }
     }
-    if (root.scrollWidth > root.clientWidth) overflow.push('the 태스크 list scrolls sideways');
+    for (const part of root.querySelectorAll("[data-task-scroll]")) if (part.scrollWidth > part.clientWidth) overflow.push(`the 태스크 list (${part.dataset.taskScroll}) scrolls sideways`);
     return { partProblems, rowsFit, overflow };
   });
 }

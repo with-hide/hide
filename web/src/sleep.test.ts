@@ -22,7 +22,7 @@ describe("a sleeping pane's words", () => {
     expect(sleepCaption({ state: "sleeping", since_unix_ms: now - 22 * HOUR }, now, t)).toEqual({ text: "sleeping · 22h", moon: true });
     expect(sleepCaption({ state: "sleeping", since_unix_ms: now - 1000 }, now, t)).toEqual({ text: "sleeping", moon: true });
     expect(sleepCaption({ state: "waking", since_unix_ms: now - 22 * HOUR }, now, t)).toEqual({ text: "waking…", moon: true });
-    expect(sleepCaption({ state: "failed", since_unix_ms: now, reason: "The conversation couldn’t be resumed." }, now, t)).toEqual({
+    expect(sleepCaption({ state: "failed", since_unix_ms: now, reason: "agent_wake.not_resumed" }, now, t)).toEqual({
       text: "could not resume",
       moon: false,
     });
@@ -33,10 +33,12 @@ describe("a sleeping pane's words", () => {
     expect(wakingLine({ state: "waking", since_unix_ms: now }, now, t)).toBe("Resuming the conversation");
   });
 
-  it("words a wake the core refused for an unread Codex in the chosen language, and keeps any other reason as sent", () => {
+  it("words a wake the core refused in the chosen language, and keeps an older record's sentence as sent", () => {
     const refused = { state: "failed", since_unix_ms: now, reason: "codex_capability_unknown" } as const;
     expect(wakeFailureReason(refused, t)).toBe("Hide hasn't read this machine's Codex yet. Check Codex in Settings > Agents, then try again.");
     expect(wakeFailureReason(refused, ko)).toBe("이 기기의 Codex를 아직 확인하지 못했어요. 설정 > 에이전트에서 Codex를 확인한 뒤 다시 시도하세요.");
+    expect(wakeFailureReason({ state: "failed", since_unix_ms: now, reason: "agent_wake.not_resumed" }, ko)).toBe("대화를 이어 가지 못했어요.");
+    // A record saved by an older build kept its sentence.
     expect(wakeFailureReason({ state: "failed", since_unix_ms: now, reason: "The working folder /w no longer exists." }, t)).toBe("The working folder /w no longer exists.");
     expect(wakeFailureReason({ state: "failed", since_unix_ms: now }, t)).toBeNull();
   });

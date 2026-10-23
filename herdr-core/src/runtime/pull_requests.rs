@@ -674,7 +674,7 @@ impl Runtime {
             body: None,
             failed_checks: Vec::new(),
             change_requests: Vec::new(),
-            message: None,
+            failure: None,
         };
         let place = self
             .open_pull_request(&payload.workspace_id, payload.pr_number)
@@ -688,8 +688,12 @@ impl Runtime {
         let place = match place {
             Ok(place) => place,
             Err(message) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "pull_requests", "kind": "pr_feedback.failed",
+                    "request": slot.request_id, "pr": slot.pr_number, "reason": message,
+                }));
                 slot.phase = "failed".into();
-                slot.message = Some(message);
+                slot.failure = Some("pr_feedback.read_failed".to_owned());
                 self.snapshot.pr_work.feedback = Some(slot);
                 return true;
             }
@@ -736,7 +740,7 @@ impl Runtime {
                     "request": request_id, "pr": slot.pr_number, "reason": message,
                 }));
                 slot.phase = "failed".into();
-                slot.message = Some(message);
+                slot.failure = Some("pr_feedback.read_failed".to_owned());
             }
         }
         true
