@@ -2312,9 +2312,9 @@ It opens on the chapter list: each chapter's number, title, one line of what it 
 A chapter seen once stays seen when it is played again.
 
 A chapter playing dims everything but what its step marks, rings that, and puts a light bubble beside it with what happens and how: the command's chord as keycaps (`Or press ⌘D`), `Press the button, or ⇧⌘↩` for a step with a button, or `Press where it's marked` where this host has no chord for the command (⌥1 in a browser tab).
-⏎ or → performs the step in the learner's place, pressing the chord, the button, or dragging the pane with a hand cursor; a held chord (⌃⇥, ⌥⇥) is let go a moment later, so its switcher is seen before it lands; ← goes back over a step that only looks.
+⏎ or → performs the step in the learner's place, pressing the chord, the button, or dragging the pane with a hand cursor; a held chord (⌃⇥, ⌥⇥) is let go a moment later, so the shell's own switcher is seen before it lands; ← goes back over a step that only looks.
 The learner can also do it themselves, by key, click or drag: a step that changes the screen is done when the world says so, however it was done.
-⌘K search and ⌘P Open file open over the practice screen as they do in the shell; while one is open every key is the palette's, the guide's ring and dim step aside and its bubble moves beside the palette without buttons, and ⏎, → and ← go back to the guide when it closes.
+⌘K search and ⌘P Open file open over the practice screen as they do in the shell; while one is open every key is the palette's, the guide's ring and dim step aside and its bubble moves beside the palette without buttons, as they do while a held chord's switcher is up, and ⏎, → and ← go back to the guide when it closes.
 A pressed chord shows large in the middle for a moment, so the keys are seen as they are used.
 Every chord is the operator's own: the host's set, the system's, and the operator's stored bindings.
 A chapter with tasks lists them on a card in the lower left with a check as each is done and `↺ 처음부터`; the top center names the chapter and leads back to the list.

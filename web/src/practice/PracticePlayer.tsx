@@ -8,6 +8,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { installKeyboard } from "../keyboard";
+import { CycleOverlay } from "../Overlays";
 import { Palette } from "../Palette";
 import type { SnapshotRest } from "../snapshot";
 import { Sidebar } from "../sidebar";
@@ -104,6 +105,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
           <WorkspaceScreen actions={actions} />
         </div>
         <Palette actions={actions} />
+        <CycleOverlay />
         <PracticeCoach chapter={chapter} model={model} next={next} resume={resume} onStep={onStep} onNext={() => next && onStart(next)} onRestart={() => onStart(chapter)} onHub={onHub} />
       </div>
     </TooltipProvider>

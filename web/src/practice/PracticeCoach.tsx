@@ -127,6 +127,10 @@ function WithKeys({ text, id }: { text: string; id: CommandId }) {
 }
 const KEYS_MARK = "\u0001";
 
+/** The shell's own layers over the screen while they are open: a palette and a held chord's switcher. */
+const SHELL_LAYERS = '[data-palette], [data-slot="cycle-overlay"]';
+const shellLayerOpen = (state: ReturnType<typeof useUiStore.getState>) => state.overlay !== "none" || state.cycle !== null;
+
 const ZONES = [
   { selector: "[data-sidebar-box]", key: "view" },
   { selector: "[data-agent-area]", key: "work" },
@@ -156,8 +160,8 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const [ring, setRing] = useState<Rect | null>(null);
   const [zones, setZones] = useState<(Rect | null)[]>([]);
   const [hand, setHand] = useState<Point | null>(null);
-  // A palette the shell opened (⌘P, ⌘K) is drawn in full: no ring or dim over it, and the bubble beside it.
-  const palette = useUiStore((state) => state.overlay !== "none");
+  // A palette (⌘P, ⌘K) or a held chord's switcher (⌃⇥) the shell opened is drawn in full: no ring or dim over it, and the bubble beside it.
+  const palette = useUiStore(shellLayerOpen);
   const [paletteBox, setPaletteBox] = useState<Rect | null>(null);
   const step = chapter.steps[index]!;
   const last = index === chapter.steps.length - 1;
@@ -194,7 +198,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
         return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
       });
-      const covering = useUiStore.getState().overlay !== "none" ? rectOf("[data-palette]") : null;
+      const covering = shellLayerOpen(useUiStore.getState()) ? rectOf(SHELL_LAYERS) : null;
       setPaletteBox((before) => (same(before, covering) ? before : covering));
       const box = bubble.current;
       if (box) setSize((before) => (before.w === box.offsetWidth && before.h === box.offsetHeight ? before : { w: box.offsetWidth, h: box.offsetHeight }));
