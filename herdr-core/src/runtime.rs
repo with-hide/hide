@@ -1289,6 +1289,9 @@ pub struct Runtime {
     /// answer from an older connection cannot settle a newer request.
     remote_connection_generations: HashMap<String, u64>,
     remote_tab_creations_in_flight: HashSet<(String, String, String, RemoteTabCreationIdentity)>,
+    /// The terminals device projects' registrations open on their own,
+    /// waiting for the folder's confirmation or for the device's answer.
+    registration_terminals: VecDeque<device_catalog::RegistrationTerminal>,
     /// Every node's terminals (PRD core-host-node-terminal): the core tells
     /// them which panes attach and hears their state back; keys and output
     /// never pass here.
@@ -2206,6 +2209,7 @@ impl Runtime {
             remote_operations: HashMap::new(),
             remote_connection_generations: HashMap::new(),
             remote_tab_creations_in_flight: HashSet::new(),
+            registration_terminals: VecDeque::new(),
             terminals: Arc::new(terminal::NoTerminals),
             terminal_states: HashMap::new(),
             terminal_attach_requested: HashSet::new(),

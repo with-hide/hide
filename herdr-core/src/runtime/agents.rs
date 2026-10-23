@@ -3057,6 +3057,48 @@ impl Runtime {
         elapsed_ms: u128,
         connection_generation: Option<u64>,
     ) -> bool {
+        if !self.take_registration_terminal(target_id, request_id) {
+            return self.ingest_remote_control_answer(
+                target_id,
+                request_id,
+                action,
+                result,
+                elapsed_ms,
+                connection_generation,
+            );
+        }
+        // A registration's own terminal: its failure is logged and leaves
+        // the project on its start screen, with no failed tab to retry or
+        // uncertain one to check.
+        let before = self.snapshot.status.last_error.clone();
+        self.ingest_remote_control_answer(
+            target_id,
+            request_id,
+            action,
+            result,
+            elapsed_ms,
+            connection_generation,
+        );
+        self.keep_registration_error_in_log(before, target_id);
+        let key = (target_id.to_owned(), request_id.to_owned());
+        if self.remote_operations.get(&key).is_some_and(|operation| {
+            matches!(operation.phase.as_str(), "failed" | "refused" | "unknown")
+        }) {
+            self.remote_operations.remove(&key);
+            self.sync_async_operations();
+        }
+        true
+    }
+
+    fn ingest_remote_control_answer(
+        &mut self,
+        target_id: &str,
+        request_id: &str,
+        action: RemoteControlAction,
+        result: Result<RemoteControlOutcome, live::ControlFailure>,
+        elapsed_ms: u128,
+        connection_generation: Option<u64>,
+    ) -> bool {
         // A device's tab move is held per checkout like this machine's, and
         // its own record already names the connection that carried it.
         if let RemoteControlAction::RenameTab { request_id, .. } = &action {
