@@ -222,7 +222,7 @@ export function landingWorkspace(nowMs: number, width: number, expanded: string[
     groups,
     needs_you: groups[0]!.numbers.length,
   };
-  const github = { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: nowMs - 60_000, unavailable_reason: null };
+  const github = { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: nowMs - 60_000 };
   // A pane's header reads the title its agent row carries.
   const titled = { ...tab, panes: tab.panes.map((pane) => ({ ...pane, identity_label: scene.agents.find((row) => row.pane_id === pane.id)?.identity_label ?? pane.identity_label })) };
   const front: Workspace = { ...project, is_git: true, pull_requests: pulls, agent_scope: { ...project.agent_scope, prs }, checkouts: project.checkouts.map((checkout) => (checkout === main ? { ...checkout, github, tabs: [titled] } : checkout)) };

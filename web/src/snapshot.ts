@@ -422,7 +422,6 @@ export type GithubStatus = {
   loading: boolean;
   stale: boolean;
   last_success_at_unix_ms: number | null;
-  unavailable_reason: string | null;
   /** The extra questions of the last read that went unanswered while the pull request list was read (`ExtraQuery`). */
   unread_queries?: ExtraQuery[];
 };
@@ -545,7 +544,8 @@ export type IssueDetail = {
   task_key: string;
   phase: "reading" | "ready" | "failed";
   body: string | null;
-  message: string | null;
+  /** A `local_issue.*` code, or `issue_detail.read_failed` for a GitHub read; `gh`'s words stay in the core's log. */
+  failure: string | null;
   labels: IssueLabel[];
   author: string | null;
   created_at_unix_ms: number | null;
@@ -663,7 +663,8 @@ export type PrFeedback = {
   body: string | null;
   failed_checks: { name: string; url: string | null }[];
   change_requests: { author: string | null; body: string }[];
-  message: string | null;
+  /** `project_settings_repository_changed` or `pr_feedback.read_failed`. */
+  failure: string | null;
 };
 
 /** The Overview's pull-request work in flight (`PrWorkSnapshot`), one slot each. */

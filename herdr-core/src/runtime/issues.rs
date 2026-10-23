@@ -999,7 +999,7 @@ impl Runtime {
         if payload.comments_after.is_some() {
             if let Some(slot) = self.snapshot.issue_work.detail.as_mut() {
                 slot.comments_loading = true;
-                slot.message = None;
+                slot.failure = None;
             }
         } else {
             self.snapshot.issue_work.detail = Some(crate::model::IssueDetailSnapshot::reading(
@@ -1140,6 +1140,8 @@ impl Runtime {
                 serde_json::json!({"component":"issues", "kind":"issue_detail.failed", "task":key, "reason":reason})
             );
         }
+        // `gh`'s words stay in that diagnostic; the page words the code.
+        let result = result.map_err(|_| "issue_detail.read_failed".to_owned());
         if after.is_some() {
             slot.comments_loading = false;
             match result {
@@ -1158,10 +1160,10 @@ impl Runtime {
                         slot.comments_limited = true;
                         slot.comments_has_more = false;
                     }
-                    slot.message = None;
+                    slot.failure = None;
                 }
-                Err(message) => {
-                    slot.message = Some(message);
+                Err(failure) => {
+                    slot.failure = Some(failure);
                 }
             }
         } else {

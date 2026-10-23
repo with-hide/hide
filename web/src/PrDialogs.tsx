@@ -302,7 +302,7 @@ export function PrDelegateDialog({ actions, workspace, pr, intent, onClose }: { 
             {!reviewing && read?.phase === "failed" ? (
               <Note tone="warn" data-pr-delegate-read-failed="true">
                 <span className="flex items-center gap-sm">
-                  <span className="min-w-0 flex-1 break-words">{t("prWork.feedbackReadFailed", { message: read.message === "project_settings_repository_changed" ? t("projectSettings.repositoryChanged") : read.message ?? "" })}</span>
+                  <span className="min-w-0 flex-1 break-words">{read.failure === "project_settings_repository_changed" ? t("prWork.feedbackReadFailed", { message: t("projectSettings.repositoryChanged") }) : t("githubReason.feedbackReadFailed")}</span>
                   <Button type="button" variant="secondary" size="sm" onClick={() => setReadId(requestId("pr-feedback", pr.number))} data-pr-delegate-reread="true">
                     {t("prWork.readAgain")}
                   </Button>

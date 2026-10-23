@@ -4457,7 +4457,10 @@ pub struct IssueDetailSnapshot {
     /// `reading`, `ready` or `failed`.
     pub phase: String,
     pub body: Option<String>,
-    pub message: Option<String>,
+    /// Why the read failed, as a code the page words: a `local_issue.*`
+    /// code, or `issue_detail.read_failed` with `gh`'s words in the
+    /// `issue_detail.failed` diagnostic.
+    pub failure: Option<String>,
     pub labels: Vec<crate::tasks::TaskLabel>,
     pub author: Option<String>,
     pub created_at_unix_ms: Option<u64>,
@@ -4475,7 +4478,8 @@ impl IssueDetailSnapshot {
         Self::settled(workspace_id, device_id, task_key, "reading", None)
     }
 
-    /// The answer to a read: `ready` with what it read, or `failed` with why.
+    /// The answer to a read: `ready` with what it read, or `failed` with the
+    /// failure code.
     pub fn answered(
         workspace_id: String,
         device_id: String,
@@ -4484,8 +4488,8 @@ impl IssueDetailSnapshot {
     ) -> Self {
         match answer {
             Ok(detail) => Self::settled(workspace_id, device_id, task_key, "ready", Some(detail)),
-            Err(message) => Self {
-                message: Some(message),
+            Err(failure) => Self {
+                failure: Some(failure),
                 ..Self::settled(workspace_id, device_id, task_key, "failed", None)
             },
         }
@@ -4512,7 +4516,7 @@ impl IssueDetailSnapshot {
             task_key,
             phase: phase.into(),
             body: read.then_some(detail.body),
-            message: None,
+            failure: None,
             labels: detail.labels,
             author: detail.author,
             created_at_unix_ms: detail.created_at_unix_ms,
@@ -4713,7 +4717,10 @@ pub struct PrFeedbackSnapshot {
     pub body: Option<String>,
     pub failed_checks: Vec<PrFailedCheck>,
     pub change_requests: Vec<PrChangeRequest>,
-    pub message: Option<String>,
+    /// Why the read failed, as a code the page words:
+    /// `project_settings_repository_changed`, or `pr_feedback.read_failed`
+    /// with the sentence in the `pr_feedback.failed` diagnostic.
+    pub failure: Option<String>,
 }
 
 /// The background AI's name for a worktree started from an issue.
@@ -5471,8 +5478,11 @@ pub struct GithubStatusSnapshot {
     /// The last lookup failed, so the values shown are the previous ones.
     pub stale: bool,
     pub last_success_at_unix_ms: Option<u64>,
-    /// The card's one allowed sentence: gh missing, logged out, or the exact
-    /// failure. Absent when the lookup is healthy.
+    /// `gh`'s own words for the failure, for the `pull_requests.failed`
+    /// diagnostic and the core's own judgments. Absent when the lookup is
+    /// healthy. Never sent to the screen, which words `failure_category`
+    /// (docs/LOCALIZATION.md, Translation boundary).
+    #[serde(skip_serializing)]
     pub unavailable_reason: Option<String>,
     /// The extra questions of the last read that failed while the pull request
     /// list was read: the list is current and the judgments derived from these

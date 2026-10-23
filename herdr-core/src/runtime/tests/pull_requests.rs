@@ -396,7 +396,7 @@ fn a_feedback_read_that_cannot_run_says_why_in_its_slot() {
         (feedback.request_id.as_str(), feedback.phase.as_str()),
         ("f1", "failed")
     );
-    assert!(feedback.message.unwrap().contains("No worker"));
+    assert_eq!(feedback.failure.as_deref(), Some("pr_feedback.read_failed"));
 }
 
 fn card(runtime: &Runtime, number: u32) -> crate::model::PrCardSnapshot {

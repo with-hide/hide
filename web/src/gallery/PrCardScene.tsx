@@ -28,7 +28,7 @@ export function PrCardScene({ params }: { params: URLSearchParams }) {
     if (params.get("content") === "long") { pr.title += " - 긴한글제목과영문경로의줄바꿈을확인합니다".repeat(3); pr.head_branch += "/long-branch-name".repeat(8); }
     checkout.branch = pr.head_branch!;
     checkout.pull_request = pr;
-    checkout.github = { available: true, loading: false, stale: false, failure_category: null, last_success_at_unix_ms: AT, unavailable_reason: null };
+    checkout.github = { available: true, loading: false, stale: false, failure_category: null, last_success_at_unix_ms: AT };
     project.pull_requests = [pr];
     project.agent_scope!.prs = { rows: [{ number: pr.number, group: failed ? "blocked" : ready || skipped ? "needs_you" : "waiting", fold: null, reason: { kind: failed ? "failed" : ready || skipped ? "merge" : "ci", count: failed ? 2 : 4, base: "main", since_unix_ms: AT }, agents: [], agent_pane: null, checkout_id: checkout.id, checkout_ids: [checkout.id], issue: null }], groups: [{ group: failed ? "blocked" : ready || skipped ? "needs_you" : "waiting", numbers: [pr.number] }], needs_you: ready || skipped ? 1 : 0 };
 

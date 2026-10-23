@@ -25,7 +25,7 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { branchProblem, taskFor } from "./workspaceManage";
 import { coreErrorText } from "./coreError";
-import { issueFailureText } from "./issueFailure";
+import { issueBodyFailure } from "./issueFailure";
 import { useErrorSince } from "./errorSince";
 import { fieldLabel } from "./shortcutLabels";
 import { originOf, useBacklogOrigin } from "./backlogOrigin";
@@ -285,7 +285,7 @@ export function StartIssueDialog({ actions, workspace, task, onClose }: { action
                   data-start-prompt="true"
                 />
               </Field>
-            {detail?.phase === "failed" ? <Note tone="warn">{t("issue.bodyReadFailed", { message: issueFailureText(detail.message ? { code: detail.message } : null, t) ?? detail.message ?? "" })}</Note> : null}
+            {detail?.phase === "failed" ? <Note tone="warn" data-issue-detail-failure={detail.failure ?? undefined}>{issueBodyFailure(detail.failure, t)}</Note> : null}
             {failure ? <Note tone="error" data-start-error="true" data-core-error={refused?.kind}>{failure}</Note> : null}
             {working ? <Status tone="pending">{t("issue.creatingWorktree")}</Status> : null}
           </DialogBody>

@@ -1,6 +1,6 @@
 import type { Actions } from "../actions";
 import { Button } from "../components/ui/button";
-import { Group, Note, Row, Status } from "../components/settings-rows";
+import { Group, Row, Status } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import { checkCommand } from "../coreMove";
 import { coreMachineAway } from "../screenMachine";
@@ -40,10 +40,6 @@ export function GithubTab({ actions }: { actions: Actions }) {
               <span className="text-body text-muted-foreground">{t("settings.fixOn", { machine: fixOn })}</span>
               <FixCommand command={ghCommand} what="gh sign-in command" actions={actions} data-github-fix-command="true" />
             </span>
-          ) : access?.state === "failed" && access.reason ? (
-            <Note tone="warn" data-issue-github-reason="true">
-              {access.reason}
-            </Note>
           ) : null
         }
       >
