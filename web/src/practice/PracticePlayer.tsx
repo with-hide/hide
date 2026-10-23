@@ -6,7 +6,6 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createActions } from "../actions";
-import type { Clipboard } from "../clipboard";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { installKeyboard } from "../keyboard";
 import { CycleOverlay } from "../Overlays";
@@ -21,7 +20,8 @@ import { useUiStore } from "../ui";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import type { PracticeChapter } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
-import { PRACTICE_COPY, type CoreEvent } from "./world";
+import { holdPageClipboard, practiceClipboard } from "./clipboard";
+import type { CoreEvent } from "./world";
 
 type UiState = NonNullable<SnapshotRest["ui_state"]>;
 
@@ -51,7 +51,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   const live = useRef({ world: chapter.world, model });
   live.current = { world: chapter.world, model };
 
-  const actions = useMemo(() => {
+  const { actions, clipboard } = useMemo(() => {
     const send = (event: CoreEvent) => {
       const after = live.current.world.apply(live.current.model, event);
       if (after) {
@@ -62,19 +62,12 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       return true;
     };
     // A copy goes to the world and a paste takes the last copy back; the operator's clipboard is never read or written.
-    let copied: string | null = null;
-    const clipboard: Clipboard = {
-      async write(text, what) {
-        copied = text;
-        send({ kind: PRACTICE_COPY, payload: { text, what } });
-        return true;
-      },
-      read: async () => (copied === null ? null : { kind: "text", text: copied }),
-    };
-    return createActions(send, clipboard);
+    const clipboard = practiceClipboard(send);
+    return { actions: createActions(send, clipboard), clipboard };
   }, []);
 
   useEffect(() => installKeyboard(actions), [actions]);
+  useEffect(() => holdPageClipboard(clipboard), [clipboard]);
 
   useLayoutEffect(() => {
     const { rest, agents, focused, usage, frames } = chapter.world.snapshot(model, Date.now());
