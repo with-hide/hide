@@ -27,7 +27,7 @@ const signedOut = () => ({
           is_git: true,
           is_home: false,
           remote_target_id: null,
-          checkouts: [{ id: "c1", github: { failure_category: "not_logged_in", available: false, loading: false, stale: false, last_success_at_unix_ms: null, unavailable_reason: "run gh auth login" } }],
+          checkouts: [{ id: "c1", github: { failure_category: "not_logged_in", available: false, loading: false, stale: false, last_success_at_unix_ms: null } }],
         },
       ],
     },
@@ -74,16 +74,19 @@ it("names the core's machine and the command that signs gh in there, from a wind
   expect(q("[data-github-fix-command] code")?.textContent).toBe("gh auth login");
   await act(async () => { q("[data-github-fix-command] button")?.click(); });
   expect(copied).toEqual(["gh auth login"]);
-  // The command replaces gh's own reason, which would say the same without the machine.
+  // gh's own words stay in the core's log; the row says the state.
   expect(q("[data-issue-github-reason]")).toBeNull();
   await unmount();
 });
 
-it("keeps the gh row as it was on the core's own machine, a node dialing in or not (B1)", async () => {
-  const { q, unmount } = await mount(signedOut());
+it("offers the sign-in command on the core's own machine too, a node dialing in or not (B1)", async () => {
+  const { q, copied, unmount } = await mount(signedOut());
   expect(q("[data-issue-source-github]")?.textContent).toMatch(/Not signed in to gh$/);
-  expect(q("[data-github-fix-on]")).toBeNull();
-  expect(q("[data-issue-github-reason]")?.textContent).toBe("run gh auth login");
+  expect(q("[data-github-fix-on]")?.textContent).toContain("Run in a terminal");
+  expect(q("[data-github-fix-command] code")?.textContent).toBe("gh auth login");
+  await act(async () => { q("[data-github-fix-command] button")?.click(); });
+  expect(copied).toEqual(["gh auth login"]);
+  expect(q("[data-issue-github-reason]")).toBeNull();
   await unmount();
 });
 

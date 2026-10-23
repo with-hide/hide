@@ -205,7 +205,12 @@ use crate::error::HostError;
 /// `Call::GitWatch` open on each connected device, and both run on a lane of
 /// their own (`Call::is_background`). An older helper cannot fetch without
 /// prompting and is upgraded at Hello.
-pub const PROTOCOL_VERSION: u32 = 52;
+/// 53: a worktree removal answers why it stopped as a code
+/// (`worktrees::RemovalStop`), `Call::WorktreeRemovalCheck` answers a stop
+/// as its answer rather than an error, and a diff names why it is short or
+/// absent as a code (`git::DiffNotice`). An older core would read the new
+/// check's stop as a pass, so the helper is upgraded at Hello.
+pub const PROTOCOL_VERSION: u32 = 53;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -469,7 +474,9 @@ pub enum Call {
     WorktreeRemove {
         removal: crate::worktrees::ConfirmedRemoval,
     },
-    /// Non-mutating authoritative check before any pane is closed.
+    /// Non-mutating authoritative check before any pane is closed; answers
+    /// `null` when the removal may go on, or the
+    /// [`crate::worktrees::Stopped`] that stops it.
     WorktreeRemovalCheck {
         removal: crate::worktrees::ConfirmedRemoval,
     },

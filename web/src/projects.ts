@@ -9,6 +9,7 @@ import type { AgentScope } from "./agentScope";
 // repeated.
 
 import type { TFunction } from "i18next";
+import { githubFailureText } from "./githubFailure";
 import { agentGroupTitle, type AgentGroup, type ListedAgent } from "./navigation";
 import { badgeWord, checksWord, PR_LOOK, reviewWord, settled, staleness } from "./prMark";
 import type { Checkout, InactiveProjectGroup, MarkCounts, PrState, PullRequest, RecentCheckout, SnapshotRest, Workspace } from "./snapshot";
@@ -154,7 +155,7 @@ export function shownPullRequest(checkout: Checkout): PullRequest | null {
   const pr = checkout.pull_request;
   const github = checkout.github;
   if (pr === null) return null;
-  return !github || github.available || github.stale || github.unavailable_reason === null ? pr : null;
+  return !github || github.available || github.stale || github.failure_category == null ? pr : null;
 }
 
 /** The checkout row's leading glyph: its pull request's mark, else what kind of checkout it is. */
@@ -201,7 +202,7 @@ export function checkoutPresentation(workspace: Workspace, checkout: Checkout, n
     if (lastKnown) first += ` · ${t("card.lastKnown", { age: ageText(lastKnown, t) })}`;
     lines.push(first);
   }
-  if (github?.unavailable_reason) lines.push(github.unavailable_reason);
+  if (github?.failure_category && github.failure_category !== "no_github_remote") lines.push(githubFailureText(github.failure_category, t));
   if (summary && agentCount > 0) {
     const counts = (
       [

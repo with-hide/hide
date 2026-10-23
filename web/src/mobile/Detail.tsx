@@ -15,7 +15,7 @@ import { Elapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { Button } from "../components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { wakingLine } from "../sleep";
+import { wakeFailureReason, wakingLine } from "../sleep";
 import type { AgentSleep } from "../snapshot";
 import { renderMarkdown } from "./markdown";
 import { AgentHead, DETAIL_INSET, Place } from "./parts";
@@ -152,7 +152,7 @@ function SleepState({ sleep, agentKey }: { sleep: AgentSleep; agentKey: AgentKey
           <p className="text-title text-foreground">{t("panes.sleep.resumeFailed")}</p>
           {sleep.reason ? (
             <p className="max-w-full text-body text-muted-foreground" role="alert">
-              {sleep.reason}
+              {wakeFailureReason(sleep, t)}
             </p>
           ) : null}
         </>

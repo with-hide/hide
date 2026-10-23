@@ -217,9 +217,15 @@ fn removing_a_project_or_a_worktree_drops_its_records() {
         discard_changes: false,
         expected_ignored_repositories: Vec::new(),
         phase: "removing".into(),
-        message: None,
+        notice: None,
     });
-    assert!(runtime.ingest_worktree_removal_result(1, Ok("Deleted.".into())));
+    assert!(runtime.ingest_worktree_removal_result(
+        1,
+        Ok(hide_node_link::worktrees::Removed {
+            message: "Deleted.".into(),
+            branch: hide_node_link::worktrees::RemovalBranch::Kept
+        })
+    ));
     assert_eq!(recent(&runtime), ["c-gamma"]);
 }
 
@@ -242,9 +248,15 @@ fn a_failed_worktree_removal_keeps_the_record() {
         discard_changes: false,
         expected_ignored_repositories: Vec::new(),
         phase: "removing".into(),
-        message: None,
+        notice: None,
     });
-    assert!(runtime.ingest_worktree_removal_result(1, Err("dirty".into())));
+    assert!(runtime.ingest_worktree_removal_result(
+        1,
+        Err(crate::live::RemovalFailure::new(
+            crate::model::WorktreeRemovalNotice::ResultUnknown,
+            "dirty"
+        ))
+    ));
     assert_eq!(recent(&runtime), ["c-alpha"]);
 }
 

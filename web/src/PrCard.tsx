@@ -229,9 +229,9 @@ function Blocked({ pr, entry, card, actions, projectId }: { pr: PullRequest; ent
   return (
     <ul className="flex flex-col gap-xxs" aria-label={t("work.card.blocked")} data-pr-card-blocked="true">
       {conflict ? <li className="text-caption text-pr-failed" data-pr-card-conflict="true">✗ {t("work.card.conflict", { base: pr.base_branch ?? "" })}</li> : null}
-      {failed.map((check) => (
-        <li key={check.name} className="flex min-w-0 items-center gap-xs text-caption" data-pr-card-failed={check.name}>
-          <span className="min-w-0 flex-1 truncate"><span className="text-pr-failed">✗</span> <span className="font-mono">{check.name}</span></span>
+      {failed.map((check, index) => (
+        <li key={`${check.name ?? ""}:${index}`} className="flex min-w-0 items-center gap-xs text-caption" data-pr-card-failed={check.name ?? ""}>
+          <span className="min-w-0 flex-1 truncate"><span className="text-pr-failed">✗</span> {check.name ? <span className="font-mono">{check.name}</span> : t("githubReason.unnamedCheck")}</span>
           {check.url ? (
             <button type="button" className="inline-flex shrink-0 items-center gap-xxs rounded-xs text-micro text-muted-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openPullRequest(check.url!, device, true)}>
               {t("work.card.checkLog")}

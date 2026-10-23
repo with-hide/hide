@@ -68,8 +68,33 @@ pub struct ChangedFile {
 pub struct Diff {
     pub path: String,
     pub text: String,
-    /// Set when the diff was cut short or could not be taken, naming why.
+    /// Set when the diff was cut short or could not be taken, naming why;
+    /// the core's log keeps it.
     pub notice: Option<String>,
+    /// The same, as a code the page words; absent from a helper of an older
+    /// build, which the core reads as `unreadable`.
+    #[serde(default)]
+    pub kind: Option<DiffNotice>,
+}
+
+/// Why a diff is short or absent, as a code the page words
+/// (docs/LOCALIZATION.md, Translation boundary).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum DiffNotice {
+    /// Larger than `limit_kb` and shown cut short.
+    Truncated { limit_kb: u32 },
+    /// The checkout has no base branch to compare with.
+    NoBase,
+    /// The file has no changes on this branch.
+    NoBranchChanges,
+    /// The file has no uncommitted changes.
+    NoUncommittedChanges,
+    /// Git could not produce the diff; why is in the log.
+    Unreadable,
+    /// The file is outside `root`, the folder History reads for the
+    /// Project in front.
+    Outside { root: String },
 }
 
 /// The six working-tree states the view presents. Git's porcelain codes

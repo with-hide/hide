@@ -54,7 +54,7 @@ export type ProjectRead = { state: "reading" } | { state: "failed"; tooltip: str
 export function projectRead(workspace: Workspace, asked: ReadonlySet<string>, now: number, t: TFunction<"translation">, language: InterfaceLanguage): ProjectRead {
   const status = githubStatus(workspace);
   const failure = workspace.tasks?.source?.failure ?? null;
-  const failed = status?.failure_category !== "no_github_remote" && (status?.stale === true || (status?.unavailable_reason != null && !status.available) || failure !== null);
+  const failed = status?.failure_category !== "no_github_remote" && (status?.stale === true || (status?.failure_category != null && !status.available) || failure !== null);
   if (failed) {
     const age = readAge(status?.last_success_at_unix_ms ?? workspace.tasks?.source?.last_read_at_unix_ms, now, t, language);
     return { state: "failed", tooltip: age ? t("search.readFailedWithAge", { age }) : t("search.readFailedNoValue") };
