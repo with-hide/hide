@@ -10,8 +10,9 @@ export type CoreEvent = { kind: string; payload: Record<string, unknown> };
 
 /**
  * What the practice window sends a world besides the core's events: text the
- * shell would have put on the clipboard (`{ text, what }`). The operator's
- * clipboard is never written from a practice screen.
+ * shell would have put on the clipboard (`{ text, what }`). A paste on a
+ * practice screen takes the last of them back; the operator's clipboard is
+ * never read or written from a practice screen.
  */
 export const PRACTICE_COPY = "practice_copy";
 

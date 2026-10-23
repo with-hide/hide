@@ -6,6 +6,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createActions } from "../actions";
+import type { Clipboard } from "../clipboard";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { installKeyboard } from "../keyboard";
 import { CycleOverlay } from "../Overlays";
@@ -60,8 +61,17 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       }
       return true;
     };
-    // A copy goes to the world, never to the operator's clipboard.
-    return { ...createActions(send), copyText: (text: string, what: string) => void send({ kind: PRACTICE_COPY, payload: { text, what } }) };
+    // A copy goes to the world and a paste takes the last copy back; the operator's clipboard is never read or written.
+    let copied: string | null = null;
+    const clipboard: Clipboard = {
+      async write(text, what) {
+        copied = text;
+        send({ kind: PRACTICE_COPY, payload: { text, what } });
+        return true;
+      },
+      read: async () => (copied === null ? null : { kind: "text", text: copied }),
+    };
+    return createActions(send, clipboard);
   }, []);
 
   useEffect(() => installKeyboard(actions), [actions]);
