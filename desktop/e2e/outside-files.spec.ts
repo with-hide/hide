@@ -132,7 +132,7 @@ test("an outside image, text file and HTML page open read-only in the View with 
   await expect(page.locator("[data-external-text] .cm-content")).not.toContainText("typed");
 
   // An HTML page loads its folder's stylesheet and not the one beside the folder (B3).
-  await click(page, paneId, "site/index.html");
+  await click(page, paneId, path.join("site", "index.html"));
   await expect(outsideTab(page, "index.html")).toHaveAttribute("data-external", "held", { timeout: 20_000 });
   await expect.poll(() => pageEval<string>("Outside page", "getComputedStyle(document.body).backgroundColor"), { timeout: 20_000 }).toBe("rgb(1, 2, 3)");
   expect(await pageEval<string>("Outside page", "getComputedStyle(document.body).color")).not.toBe("rgb(9, 9, 9)");

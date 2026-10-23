@@ -56,6 +56,9 @@ describe("osc8Target", () => {
     expect(osc8Target("file:///C:/repo/report.HTML#L2")).toEqual({ kind: "path", path: "C:/repo/report.HTML", line: 2, column: null });
     expect(osc8Target("vscode://file/C:/repo/report.HTML:2")).toEqual({ kind: "path", path: "C:/repo/report.HTML", line: 2, column: null });
     expect(parseToken("C:/repo/report.HTML:2")?.target).toEqual({ kind: "path", path: "C:/repo/report.HTML", line: 2, column: null });
+    // A Windows shell's own spelling, such as a %TEMP% file, links in the wire spelling (PRD outside-path-in-hide B21).
+    expect(parseToken("C:\\Users\\runneradmin\\AppData\\Local\\Temp\\shot.png")?.target).toEqual({ kind: "path", path: "C:/Users/runneradmin/AppData/Local/Temp/shot.png", line: null, column: null });
+    expect(parseToken("D:\\repo\\notes.txt:3")?.target).toEqual({ kind: "path", path: "D:/repo/notes.txt", line: 3, column: null });
     expect(osc8Target("vscode://file/Users/example/p/src/a.ts:12:4")).toEqual({ kind: "path", path: "/Users/example/p/src/a.ts", line: 12, column: 4 });
   });
 
