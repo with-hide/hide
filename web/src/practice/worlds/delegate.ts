@@ -282,5 +282,4 @@ export const DELEGATE_WORLD: PracticeWorld<DelegateModel> = {
   panes: (model) => model.desk.panes.map((pane) => pane.id),
   // A pane the learner opened, a new tab or a split, is a shell with no agent in it.
   screen: (model, paneId, cols) => SCREENS[paneId]?.(model, cols) ?? shellScreen(PLACE),
-  lane: false,
 };
