@@ -26,6 +26,6 @@ it("holds Hide for every server on another protocol and never for one on Hide's"
 });
 
 it("finds the core's log beside its state file on either system's spelling", () => {
-  expect(coreLogPath("/Users/op/.hide/state/core-state.json")).toBe("/Users/op/.hide/state/Logs/core.jsonl");
-  expect(coreLogPath("C:\\Users\\op\\.hide\\state\\core-state.json")).toBe("C:\\Users\\op\\.hide\\state\\Logs\\core.jsonl");
+  expect(coreLogPath("/srv/op/.hide/state/core-state.json")).toBe("/srv/op/.hide/state/Logs/core.jsonl");
+  expect(coreLogPath("D:\\op\\.hide\\state\\core-state.json")).toBe("D:\\op\\.hide\\state\\Logs\\core.jsonl");
 });

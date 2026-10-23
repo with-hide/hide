@@ -34,14 +34,14 @@ const offer = (overrides: Partial<HerdrTakeover> = {}): HerdrTakeover => ({
 const state = (takeover: HerdrTakeover | null, step: string | null = "herdr", herdrState = "protocol_mismatch", received = { version: "0.8.2", protocol: 20 }) => ({
   connection: "live" as const,
   revision: 1,
-  daemon: { core_state_path: "/Users/op/.hide/state/core-state.json" },
+  daemon: { core_state_path: "/srv/op/.hide/state/core-state.json" },
   rest: {
     ui_state: { agent_onboarding: "pending", first_run: step ? { version: 1, step } : null },
     navigator: { devices: [{ id: "local", kit: { agents: [{ id: "codex", label: "Codex", availability: "available", enabled: false, chosen: false, skill: { state: "off", reason: null, location: null }, hook: null, doc_url: "https://example.test" }], components: [], busy: false } }] },
     status: {
       herdr: { state: herdrState, received_version: received.version, received_protocol: received.protocol, expected_protocol: 22 },
       herdr_takeover: takeover ?? undefined,
-      herdr_versions: { hide: "0.9.5", path_herdr: { version: "0.8.2", behind: true, update_command: "install -m 755 '/Applications/hide.app/Contents/Resources/herdr' '/Users/op/.local/bin/herdr'" } },
+      herdr_versions: { hide: "0.9.5", path_herdr: { version: "0.8.2", behind: true, update_command: "install -m 755 '/Applications/hide.app/Contents/Resources/herdr' '/srv/op/.local/bin/herdr'" } },
       herdr_profiles: { state: "ready", error: null, profiles: [], truncated: false },
     },
   },
@@ -137,7 +137,7 @@ it("a moved server whose operator's herdr is behind shows the core's command to 
   desktop();
   const { events, unmount } = await mount(state(offer({ stage: "moved", path_herdr_behind: "0.8.2" }), "herdr", "connected"));
   const line = document.querySelector("[data-herdr-takeover-path-behind]")!;
-  expect(line.textContent).toContain("install -m 755 '/Applications/hide.app/Contents/Resources/herdr' '/Users/op/.local/bin/herdr'");
+  expect(line.textContent).toContain("install -m 755 '/Applications/hide.app/Contents/Resources/herdr' '/srv/op/.local/bin/herdr'");
   expect(line.textContent).toContain("Replaces it with Hide's herdr 0.9.5");
   expect(line.textContent).not.toContain("--handoff");
   expect(document.body.textContent).toContain("0.8.2");
@@ -235,7 +235,7 @@ it("an older protocol holds Hide on its move with no Not now, and offers View lo
   await act(async () => button("[data-herdr-takeover-move]")!.click());
   expect(sent(events)).toEqual([{ action: "move" }]);
   await act(async () => button("[data-herdr-gate-log]")!.click());
-  expect(host.revealPath).toHaveBeenCalledWith("/Users/op/.hide/state/Logs/core.jsonl");
+  expect(host.revealPath).toHaveBeenCalledWith("/srv/op/.hide/state/Logs/core.jsonl");
   await act(async () => button("[data-herdr-gate-quit]")!.click());
   expect(host.quit).toHaveBeenCalledTimes(1);
   await unmount();

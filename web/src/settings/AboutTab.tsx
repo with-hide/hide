@@ -116,8 +116,9 @@ function HerdrRows({ actions }: { actions: Actions }) {
   return (
     <>
       <Row label={t("settings.herdrServer")}>
-        <Status tone={server === null ? line.tone : same || versions === null ? "ok" : "muted"} data-herdr-state={herdr?.state ?? "unavailable"} data-herdr-server={server ?? ""}>
-          {server === null ? line.text : versions === null ? server : t(same ? "settings.herdrServer.same" : "settings.herdrServer.differs", { version: server, hide: versions.hide })}
+        {/* A daemon without a Herdr of its own cannot say whether the server is Hide's, so it keeps the connection line. */}
+        <Status tone={server === null || versions === null ? line.tone : same ? "ok" : "muted"} data-herdr-state={herdr?.state ?? "unavailable"} data-herdr-server={server ?? ""}>
+          {server === null ? line.text : versions === null ? `${line.text} · ${server}` : t(same ? "settings.herdrServer.same" : "settings.herdrServer.differs", { version: server, hide: versions.hide })}
         </Status>
         {movable ? (
           <Button variant="secondary" size="sm" onClick={() => actions.herdrTakeover("move")} disabled={takeover.stage === "moving"} aria-busy={takeover.stage === "moving"} data-herdr-takeover-move={takeover.stage}>
