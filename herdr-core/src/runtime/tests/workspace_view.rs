@@ -926,7 +926,7 @@ fn the_lane_drives_the_panel_the_readers_gate_on() {
     layout(&mut runtime, serde_json::json!({"tool": "changes"}));
     assert_eq!(panel(&runtime), (true, RightPanelSection::Changes));
     layout(&mut runtime, serde_json::json!({"tool": "project"}));
-    assert_eq!(panel(&runtime), (true, RightPanelSection::Overview));
+    assert_eq!(panel(&runtime), (true, RightPanelSection::Memory));
     layout(&mut runtime, serde_json::json!({"tool": "memory"}));
     assert_eq!(panel(&runtime), (true, RightPanelSection::Memory));
     layout(&mut runtime, serde_json::json!({"tool": "explorer"}));

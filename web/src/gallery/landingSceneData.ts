@@ -194,7 +194,7 @@ export const HERO_PANES = ["a1", "a3"] as const;
  * front, its lead and the agent asking to merge side by side, and the Project
  * tool pinned beside them. The agents shot is the same window with the lead's
  * children unfolded in the tree (`expanded`), and the memory shot shows the
- * Project tool's 기억 tab.
+ * Memory tool.
  */
 export function landingWorkspace(nowMs: number, width: number, expanded: string[] = [], tool: "project" | "memory" = "project"): { rest: SnapshotRest; agents: AgentRow[] } {
   const scene = landingSidebar(nowMs, expanded, width);

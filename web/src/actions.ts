@@ -1960,7 +1960,7 @@ export function createActions(send: DispatchFn) {
     },
 
     /**
-     * Opens a catalog Project's Memory for the Memory tab (PRD
+     * Opens a catalog Project's Memory for the Memory tool (PRD
      * project-memory-v2 D-17); the core keeps one opened Project per daemon
      * and reads it again when asked for the same one.
      */
@@ -1985,7 +1985,7 @@ export function createActions(send: DispatchFn) {
       dispatch({ schema_version: 2, kind: "memory_expand", payload: { workspace_id: workspaceId, number } });
     },
 
-    /** The Memory tab showed how many older cards were cleared, the newest at `throughUnixMs`; false when it was not sent. */
+    /** The Memory tool showed how many older cards were cleared, the newest at `throughUnixMs`; false when it was not sent. */
     memoryEvictionsSeen(workspaceId: string, throughUnixMs: number): boolean {
       return dispatch({ schema_version: 2, kind: "memory_evictions_seen", payload: { workspace_id: workspaceId, through_unix_ms: throughUnixMs } }) !== false;
     },
@@ -2038,7 +2038,7 @@ export function createActions(send: DispatchFn) {
     /**
      * An agent chosen in a list that shows only what the operator has to do
      * (the sidebar, Sessions, a digit): a row its home owns opens the home,
-     * the Memory tab with that attempt's row open, and any other row its pane
+     * the Memory tool with that attempt's row open, and any other row its pane
      * (PRD hide-ai-work-home B11). Its pane stays one link away from there.
      */
     openListedAgent(paneId: string) {

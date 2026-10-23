@@ -555,15 +555,15 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     expect(effectiveRegistry({ split_right: "command+shift+l" }, "electron", "mac").diagnostic).toContain("conflict open_project_memory");
   });
 
-  it("runs a chord bound to the removed Memory and PRs tools as the Project's 기억 and the sidebar's PR list, the new name winning (PRD lane-two-columns B25)", () => {
+  it("runs a chord bound to the removed PRs tool as the sidebar's PR list, the new name winning, and keeps a Memory tool chord on the Memory tool (PRD lane-two-columns B25)", () => {
     const electron = effectiveRegistry({ toggle_lane_memory: "command+option+9", toggle_lane_prs: "command+option+8" }, "electron", "mac");
     expect(electron.diagnostic).toBeNull();
-    expect(displayCommand("open_project_memory", "electron", electron.registry, "mac")).toBe("⌥⌘9");
+    expect(displayCommand("toggle_lane_memory", "electron", electron.registry, "mac")).toBe("⌥⌘9");
     expect(displayCommand("open_sidebar_prs", "electron", electron.registry, "mac")).toBe("⌥⌘8");
     const browser = effectiveRegistry({ toggle_lane_prs: "alt+shift+Digit7" }, "browser", "mac");
     expect(browser.registry.find((command) => command.id === "open_sidebar_prs")?.browser).toEqual({ code: "Digit7", alt: true, shift: true });
-    const both = effectiveRegistry({ toggle_lane_memory: "command+option+9", open_project_memory: "command+option+7" }, "electron", "mac");
-    expect(displayCommand("open_project_memory", "electron", both.registry, "mac")).toBe("⌥⌘7");
+    const both = effectiveRegistry({ toggle_lane_prs: "command+option+9", open_sidebar_prs: "command+option+7" }, "electron", "mac");
+    expect(displayCommand("open_sidebar_prs", "electron", both.registry, "mac")).toBe("⌥⌘7");
   });
 
   it("stores a chord as the macOS chord it stands for, so one set reads the same on both systems", () => {

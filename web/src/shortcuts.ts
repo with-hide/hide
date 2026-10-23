@@ -700,13 +700,13 @@ export type EffectiveRegistry = { registry: readonly Command[]; diagnostic: stri
 const RETIRED_KEYS: readonly string[] = ["toggle_sidebar_view", "project_home", "sidebar_agents", "toggle_lane_work", "toggle_file_tree", "toggle_lane_files"];
 
 /**
- * Stored commands read as the command that took their place. The Memory and
- * PRs tools became the Project tool's 기억 tab and the sidebar's PR list, and
- * a chord the operator bound to either keeps doing what it did, now there
- * (PRD lane-two-columns B25). The new name, once stored, wins over the old.
+ * Stored commands read as the command that took their place. The PRs tool
+ * became the sidebar's PR list, and a chord the operator bound to it keeps
+ * doing what it did, now there (PRD lane-two-columns B25). The new name, once
+ * stored, wins over the old. `toggle_lane_memory` is a live command again,
+ * so a chord stored under it toggles the Memory tool as it did before.
  */
 const RENAMED_KEYS: Readonly<Record<string, CommandId>> = {
-  toggle_lane_memory: "open_project_memory",
   toggle_lane_prs: "open_sidebar_prs",
 };
 

@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../schema";
 
-// The lane's Project tool: its 현황 and 기억 tabs, the 현황 tiles and 할 일,
+// The lane's Project tool: the 현황 tiles and 할 일,
 // the 보기 slot's worktree table and cost, and the sidebar's PR list (PRD
 // lane-two-columns B25-B41).
 export const projectToolEnglish = {

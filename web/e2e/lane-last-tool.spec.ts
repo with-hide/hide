@@ -7,7 +7,7 @@ import { chord, commandLabel, mod } from "./chords";
 import { chooseLane, enterWorkspace, screenshot, showExplorer } from "./wire";
 
 // A lane closed whole keeps its columns for the next ⌘E, a lane whose last
-// column closed comes back on the Explorer, ⇧⌘L opens the Project tool's 기억,
+// column closed comes back on the Explorer, ⇧⌘L opens the Memory tool,
 // ⇧⌘R the sidebar's PR list and ⇧⌘G Changes (PRD lane-two-columns B14, B15,
 // B24, B25). Each test starts one
 // stack and asserts one contract.
@@ -125,7 +125,7 @@ test("⇧⌘L opens the Project's Memory tool, ⇧⌘R the sidebar's PR list, �
     await page.keyboard.press(chord("open_sidebar_prs"));
     await expect(page.locator('[data-sidebar-lens-option="prs"]')).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator("[data-sidebar-prs]")).toBeVisible();
-    await shows(page, "project");
+    await shows(page, "memory");
     expect(commandLabel("toggle_lane_changes")).toMatch(/G$/);
     await page.keyboard.press(chord("toggle_lane_changes"));
     await shows(page, "changes");

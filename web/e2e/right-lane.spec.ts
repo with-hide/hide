@@ -105,7 +105,7 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
   const lane = await startLane(page, "lane-overlay");
   try {
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
-    await expect(page.locator("[data-lane-tool]")).toHaveCount(4);
+    await expect(page.locator("[data-lane-tool]")).toHaveCount(5);
     await expect(railTool(page, "documents")).toBeDisabled();
     await expect(pane(page, lane.herdr.panes[0]!)).toBeVisible();
     await quietFor(page, 500, "the first fit has landed before the lane opens");
@@ -218,8 +218,8 @@ test("the rail draws the viewing column's buttons over a rule and one divider be
     await expect(projectHeader.locator('[data-lane-scope-kind="project"]')).toContainText("fixture");
     await expect(projectHeader.getByRole("button")).toHaveCount(2);
     await expect(projectHeader.locator('[data-lane-tool-close="project"]')).toBeVisible();
-    // Every checkout tool reads `name · scope`, with decoration only, and closes with one ×.
-    for (const [tool, name, icon] of [["explorer", "Explorer", "git-branch"], ["changes", "Changes", "git-branch"]] as const) {
+    // Memory and every checkout tool read `name · scope`, with decoration only, and close with one ×.
+    for (const [tool, name, icon] of [["memory", "Memory", "folder"], ["explorer", "Explorer", "git-branch"], ["changes", "Changes", "git-branch"]] as const) {
       await showTool(page, tool);
       const header = page.locator("[data-lane-header]");
       const scope = header.locator("[data-lane-scope]");
