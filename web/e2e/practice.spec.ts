@@ -1,7 +1,7 @@
 // The practice window (UI_BEHAVIOR.md, Practice window) on an isolated pinned
 // Herdr and hided: opened from the shell's Help menu, every chapter played to
-// its end with Enter alone, and the chapter list then reads every chapter as
-// seen from the progress the core kept. The chapters run the shell's own
+// its end with Enter alone without a call to the system clipboard, and the
+// chapter list then reads every chapter as seen from the progress the core kept. The chapters run the shell's own
 // components, so a change that moves what a step points at, presses or waits
 // for stops this journey at that step and names it.
 
@@ -13,6 +13,19 @@ test.describe.configure({ timeout: 180_000 });
 
 /** More presses than any chapter's steps and the press that starts it; a practice that needs more has stopped moving. */
 const PRESSES_PER_CHAPTER = 25;
+
+/** Records each call a page makes to the system clipboard in `window.clipboardCalls`; the practice window makes none. */
+function watchClipboard() {
+  const calls: string[] = [];
+  Object.assign(window, { clipboardCalls: calls });
+  const board = navigator.clipboard;
+  if (!board) return;
+  for (const name of ["read", "readText", "write", "writeText"] as const) {
+    const real = board[name] as ((...args: unknown[]) => unknown) | undefined;
+    if (!real) continue;
+    Object.defineProperty(board, name, { configurable: true, value: (...args: unknown[]) => (calls.push(name), real.apply(board, args)) });
+  }
+}
 
 /** Where the practice window stands: the chapter list, or a chapter's step and how many events its world has answered. */
 function practiceState(page: Page): Promise<string> {
@@ -47,6 +60,7 @@ test("the practice window plays every chapter with Enter alone and the core keep
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("nav[data-sidebar]")).toHaveAttribute("data-sidebar", "projects", { timeout: 20_000 });
 
+    await page.context().addInitScript(watchClipboard);
     await page.locator("[data-help-menu-trigger]").click();
     const opened = page.context().waitForEvent("page");
     await page.locator('[data-help-item="practice"]').click();
@@ -67,6 +81,8 @@ test("the practice window plays every chapter with Enter alone and the core keep
     await expect(chapters.and(practice.locator('[data-status="done"]'))).toHaveCount(count);
     // The shell answered, so the line that says progress is not being kept never showed.
     await expect(practice.locator("[data-practice-unsaved]")).toHaveCount(0);
+    // Every copy the chapters made went to their worlds, and no paste read the operator's clipboard.
+    expect(await practice.evaluate(() => (window as unknown as { clipboardCalls: string[] }).clipboardCalls)).toEqual([]);
   } finally {
     daemon?.stop();
     herdr.stop();

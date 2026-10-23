@@ -20,7 +20,8 @@ import { useUiStore } from "../ui";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import type { PracticeChapter } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
-import { PRACTICE_COPY, type CoreEvent } from "./world";
+import { holdPageClipboard, practiceClipboard } from "./clipboard";
+import type { CoreEvent } from "./world";
 
 type UiState = NonNullable<SnapshotRest["ui_state"]>;
 
@@ -50,7 +51,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   const live = useRef({ world: chapter.world, model });
   live.current = { world: chapter.world, model };
 
-  const actions = useMemo(() => {
+  const { actions, clipboard } = useMemo(() => {
     const send = (event: CoreEvent) => {
       const after = live.current.world.apply(live.current.model, event);
       if (after) {
@@ -60,19 +61,22 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       }
       return true;
     };
-    // A copy goes to the world, never to the operator's clipboard.
-    return { ...createActions(send), copyText: (text: string, what: string) => void send({ kind: PRACTICE_COPY, payload: { text, what } }) };
+    // A copy goes to the world and a paste takes the last copy back; the operator's clipboard is never read or written.
+    const clipboard = practiceClipboard(send);
+    return { actions: createActions(send, clipboard), clipboard };
   }, []);
 
   useEffect(() => installKeyboard(actions), [actions]);
+  useEffect(() => holdPageClipboard(clipboard), [clipboard]);
 
   useLayoutEffect(() => {
     const { rest, agents, focused, usage, frames } = chapter.world.snapshot(model, Date.now());
     const ui_state = { ...rest.ui_state, ...operator };
-    // A frame the world does not send is empty, so one chapter's files never show in the next.
+    // A frame the world does not send is empty, so one chapter's files or records never show in the next.
     useShellStore.setState({
       rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,
       fileIndex: frames?.fileIndex ?? null, editor: frames?.editor ?? null, documents: frames?.documents ?? NO_DOCUMENTS,
+      sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
     });
   }, [chapter, model, operator]);
 

@@ -77,6 +77,7 @@ import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { useShellStore } from "./store";
 import { useUiStore, type MainView, type OverviewPlace, type PendingClose } from "./ui";
+import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
 import { focusTerminal } from "./terminals";
@@ -132,7 +133,12 @@ export function laneCalled(event: Parameters<DispatchFn>[0]): boolean {
   }
 }
 
-export function createActions(send: DispatchFn) {
+/**
+ * The operator's actions, sending each event through `send`. Every copy and
+ * paste goes through `clipboard`, the system one unless the screen gives its
+ * own (the practice window keeps its copies off the operator's clipboard).
+ */
+export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const dispatch: DispatchFn = (event) => {
     if (laneCalled(event)) {
       useUiStore.getState().showLane();
@@ -145,6 +151,7 @@ export function createActions(send: DispatchFn) {
   const rest = () => useShellStore.getState().rest;
   const catalogObserver = createCatalogObserver((observing) => dispatch({ schema_version: 2, kind: "ai_settings", payload: { start_observing: observing } }));
   const diagnostic = (message: string) => useShellStore.getState().noteDiagnostic(message);
+  const board = clipboard ?? browserClipboard(diagnostic);
   const ui = () => useUiStore.getState();
 
 
@@ -962,7 +969,7 @@ export function createActions(send: DispatchFn) {
     if (id === "keep_open") return keepViewOpen(displayId);
     if (id === "copy_path") {
       const text = located.display.kind === "browser" ? (located.display.url ?? "") : located.display.path;
-      return void navigator.clipboard?.writeText(text).catch(() => undefined);
+      return void board.write(text, "view path");
     }
     if (id === "select_in_tree") return revealInExplorer(located.display.path);
     if (id === "reveal_external") return revealExternal(located.display.path);
@@ -1090,7 +1097,7 @@ export function createActions(send: DispatchFn) {
     if (command === "copy_name") {
       const checkout = remoteContext(rest()) ? remoteView(remoteContext(rest())!.session, rest()?.workspace_view)?.checkout : current()?.checkout;
       const label = checkout?.strip.find((row) => row.source_id === id)?.label;
-      if (label) void navigator.clipboard?.writeText(label);
+      if (label) void board.write(label, "tab name");
     }
     if (command === "close_tab") closeTab(id);
   };
@@ -2142,10 +2149,14 @@ export function createActions(send: DispatchFn) {
       requestClose("tab", tab.id, tab.panes, targetId);
     },
 
-    /** Puts text on the clipboard; a refused write is the log's, not a notice (design principle 13). */
-    copyText(text: string, what: string) {
-      if (!navigator.clipboard) return diagnostic(`copy ${what}: the clipboard is unavailable`);
-      navigator.clipboard.writeText(text).catch((error: unknown) => diagnostic(`copy ${what}: ${String(error)}`));
+    /** Puts text on the clipboard, answering whether it took it; a refused write is the log's, not a notice (design principle 13). */
+    copyText(text: string, what: string): Promise<boolean> {
+      return board.write(text, what);
+    },
+
+    /** What the clipboard holds for a paste, or null when it cannot be read, which is the log's. */
+    readClipboard(what: string): Promise<ClipboardContent | null> {
+      return board.read(what);
     },
 
     /**

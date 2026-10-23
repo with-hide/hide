@@ -36,13 +36,11 @@ export function HelpMenu({ actions }: { actions: Actions }) {
     // The menu stays open so the outcome is read where it was asked for (B14).
     event.preventDefault();
     const text = diagnosticsText(diagnosticsInputOf(useShellStore.getState(), navigator.userAgent));
-    void navigator.clipboard.writeText(text).then(
-      () => {
-        setCopy("copied");
-        window.setTimeout(() => setCopy((now) => (now === "copied" ? "idle" : now)), COPIED_SHOWN_MS);
-      },
-      () => setCopy("failed"),
-    );
+    void actions.copyText(text, "diagnostics").then((copied) => {
+      if (!copied) return setCopy("failed");
+      setCopy("copied");
+      window.setTimeout(() => setCopy((now) => (now === "copied" ? "idle" : now)), COPIED_SHOWN_MS);
+    });
   };
   return (
     <DropdownMenu onOpenChange={(open) => (open ? setCopy("idle") : undefined)}>
