@@ -20,6 +20,7 @@ import { useUiStore } from "../ui";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import type { PracticeChapter } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
+import { holdPageOutside } from "./outside";
 import { PRACTICE_COPY, type CoreEvent } from "./world";
 
 type UiState = NonNullable<SnapshotRest["ui_state"]>;
@@ -50,7 +51,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   const live = useRef({ world: chapter.world, model });
   live.current = { world: chapter.world, model };
 
-  const actions = useMemo(() => {
+  const { actions, send } = useMemo(() => {
     const send = (event: CoreEvent) => {
       const after = live.current.world.apply(live.current.model, event);
       if (after) {
@@ -61,10 +62,12 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       return true;
     };
     // A copy goes to the world, never to the operator's clipboard.
-    return { ...createActions(send), copyText: (text: string, what: string) => void send({ kind: PRACTICE_COPY, payload: { text, what } }) };
+    return { actions: { ...createActions(send), copyText: (text: string, what: string) => void send({ kind: PRACTICE_COPY, payload: { text, what } }) }, send };
   }, []);
 
   useEffect(() => installKeyboard(actions), [actions]);
+  // A link, a window, a navigation or a host call the shell would have sent off the page goes to the world instead.
+  useEffect(() => holdPageOutside(send), [send]);
 
   useLayoutEffect(() => {
     const { rest, agents, focused, usage, frames } = chapter.world.snapshot(model, Date.now());
