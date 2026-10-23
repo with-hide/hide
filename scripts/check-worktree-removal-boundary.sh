@@ -18,13 +18,15 @@ fail() {
     exit 1
 }
 
-# One `--force`, pushed only behind `remove_worktree`'s `force` argument, and
+# One `--force`, pushed only behind the removal helper's `force` argument, and
 # that argument is the operator's accepted discard.
 [ "$(git grep -cF -- '"--force"' "$executor" | cut -d: -f2)" = 1 ] ||
     fail "git worktree remove --force must appear once, behind remove_worktree's force argument"
 git grep -qF -- 'arguments.push("--force");' "$executor" ||
     fail "--force must be added only by remove_worktree when force is set"
-git grep -qF -- 'remove_worktree(root, target, request.discard_changes)' "$executor" ||
+# The confirmed removal goes through `remove_worktree_stopping`, which keeps why
+# Git stopped for the dialog; `remove_worktree` wraps the same helper.
+git grep -qF -- 'remove_worktree_stopping(root, target, request.discard_changes)' "$executor" ||
     fail "the confirmed removal must force only as far as the operator accepted a discard"
 git grep -qF -- 'remove_worktree(root, checkout, discard)' "$executor" ||
     fail "task retirement must force only an explicitly discarded task"

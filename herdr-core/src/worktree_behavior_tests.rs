@@ -23,10 +23,11 @@ fn locked_worktrees_name_the_reason_and_unlock_action_even_when_the_folder_is_mi
         .iter()
         .find(|row| row.branch.as_deref() == Some("locked-feature"))
         .unwrap();
-    let blocked = row.deletion_gate.blocked_reason.as_deref().unwrap();
-    assert!(blocked.contains("locked-feature"));
-    assert!(blocked.contains(reason));
-    assert!(blocked.contains("git worktree unlock"));
+    let locked = Some(WorktreeDeletionBlock::Locked {
+        name: "locked-feature".to_owned(),
+        reason: reason.to_owned(),
+    });
+    assert_eq!(row.deletion_gate.blocked, locked);
     std::fs::remove_dir_all(&linked).unwrap();
     let project = repo.read(None);
     let row = project
@@ -35,13 +36,7 @@ fn locked_worktrees_name_the_reason_and_unlock_action_even_when_the_folder_is_mi
         .find(|row| row.branch.as_deref() == Some("locked-feature"))
         .unwrap();
     assert!(row.missing);
-    assert!(
-        row.deletion_gate
-            .blocked_reason
-            .as_deref()
-            .unwrap()
-            .contains(reason)
-    );
+    assert_eq!(row.deletion_gate.blocked, locked);
 }
 
 #[test]
@@ -64,9 +59,8 @@ fn discard_names_every_measured_repository_and_an_unavailable_scan_blocks_the_ch
         row.ignored_repositories,
         ["node_modules/vendor/beta", "target/deep/alpha"]
     );
-    let discard = row.deletion_gate.discard_label.as_deref().unwrap();
-    assert!(discard.contains("node_modules/vendor/beta"));
-    assert!(discard.contains("target/deep/alpha"));
+    let discard = row.deletion_gate.discard.as_ref().unwrap();
+    assert_eq!(discard.ignored_repositories, row.ignored_repositories);
     std::fs::write(linked.join("target/.git"), "gitdir: missing\n").unwrap();
     let project = repo.read(None);
     let row = project
@@ -75,12 +69,9 @@ fn discard_names_every_measured_repository_and_an_unavailable_scan_blocks_the_ch
         .find(|row| row.branch.as_deref() == Some("repositories"))
         .unwrap();
     assert!(row.ignored_scan_unavailable.is_some());
-    assert!(
-        row.deletion_gate
-            .blocked_reason
-            .as_deref()
-            .unwrap()
-            .contains("refresh before deleting")
+    assert_eq!(
+        row.deletion_gate.blocked,
+        Some(WorktreeDeletionBlock::IgnoredScanUnavailable)
     );
 }
 
@@ -225,8 +216,8 @@ fn set_base_branch_from_checkout_row() {
         .find(|row| row.branch.as_deref() == Some("feature"))
         .unwrap()
         .deletion_gate;
-    assert!(gate.blocked_reason.is_none());
-    assert!(gate.warnings.contains(&"holds the base branch".to_owned()));
+    assert!(gate.blocked.is_none());
+    assert!(gate.warnings.contains(&WorktreeDeletionWarning::Base));
     assert!(!gate.can_delete_branch);
 }
 impl Drop for Repository {
@@ -261,8 +252,8 @@ fn ancestry_does_not_mistake_a_squash_merge_for_a_merged_tip() {
     // A squash merge leaves the tip off the base, so its deletion says what
     // `-D` loses rather than calling it merged.
     assert!(row("squash").deletion_gate.can_delete_branch);
-    assert!(row("squash").deletion_gate.branch_warning.is_some());
-    assert!(row("merged").deletion_gate.branch_warning.is_none());
+    assert!(row("squash").deletion_gate.branch_loss.is_some());
+    assert!(row("merged").deletion_gate.branch_loss.is_none());
     assert!(row("merged").last_commit_unix_seconds.is_some());
     assert!(row("merged").measured_at_unix_ms.is_some());
 }
@@ -333,7 +324,7 @@ fn configured_missing_upstream_is_distinct_from_no_upstream_and_pushed() {
         result.worktrees[1]
             .deletion_gate
             .warnings
-            .contains(&"not pushed".to_owned())
+            .contains(&WorktreeDeletionWarning::NotPushed)
     );
 }
 
@@ -378,11 +369,15 @@ fn missing_detached_nested_and_dirty_rows_preserve_their_actual_state() {
         .find(|w| w.branch.as_deref() == Some("parent"))
         .unwrap();
     assert!(parent.nested && parent.dirty);
-    assert!(parent.deletion_gate.blocked_reason.is_none());
+    assert!(parent.deletion_gate.blocked.is_none());
     // The child's folder is untracked in the parent too, so it is counted.
     assert_eq!(
-        parent.deletion_gate.discard_label.as_deref(),
-        Some("Discard 2 changed files and the worktree inside it")
+        parent.deletion_gate.discard,
+        Some(WorktreeDiscard {
+            changed_files: Some(2),
+            nested: true,
+            ..WorktreeDiscard::default()
+        })
     );
     let detached = result
         .worktrees
@@ -412,23 +407,28 @@ fn deletion_gate_warns_instead_of_blocking_and_reports_pane_consequence() {
         ..WorktreeSnapshot::default()
     };
     let gate = deletion_gate(&row, false, 2);
-    assert_eq!(gate.button_label, "Close 2 panes and delete");
+    assert_eq!(gate.pane_count, 2);
     assert_eq!(
-        deletion_gate(&row, false, 1).button_label,
-        "Close 1 pane and delete"
+        gate.warnings,
+        [
+            WorktreeDeletionWarning::Unmerged { ahead: 2 },
+            WorktreeDeletionWarning::NotPushed
+        ]
     );
-    assert_eq!(gate.warnings, ["ahead 2 unmerged", "not pushed"]);
-    assert!(gate.blocked_reason.is_none() && gate.discard_label.is_none());
+    assert!(gate.blocked.is_none() && gate.discard.is_none());
     assert!(gate.can_delete_branch);
     assert_eq!(
-        gate.branch_warning.as_deref(),
-        Some("2 commits not on main are lost with it")
+        gate.branch_loss,
+        Some(WorktreeBranchLoss::Commits {
+            count: 2,
+            base: Some("main".to_owned())
+        })
     );
 
     let base = deletion_gate(&row, true, 0);
-    assert!(base.blocked_reason.is_none() && !base.can_delete_branch);
-    assert!(base.branch_warning.is_none());
-    assert!(base.warnings.contains(&"holds the base branch".to_owned()));
+    assert!(base.blocked.is_none() && !base.can_delete_branch);
+    assert!(base.branch_loss.is_none());
+    assert!(base.warnings.contains(&WorktreeDeletionWarning::Base));
 
     let dirty = deletion_gate(
         &WorktreeSnapshot {
@@ -439,12 +439,12 @@ fn deletion_gate_warns_instead_of_blocking_and_reports_pane_consequence() {
         false,
         0,
     );
-    assert!(dirty.blocked_reason.is_none());
-    assert_eq!(dirty.warnings[0], "3 changed files not committed");
+    assert!(dirty.blocked.is_none());
     assert_eq!(
-        dirty.discard_label.as_deref(),
-        Some("Discard 3 changed files")
+        dirty.warnings[0],
+        WorktreeDeletionWarning::Uncommitted { files: 3 }
     );
+    assert_eq!(dirty.discard.unwrap().changed_files, Some(3));
 
     let nested = deletion_gate(
         &WorktreeSnapshot {
@@ -455,8 +455,11 @@ fn deletion_gate_warns_instead_of_blocking_and_reports_pane_consequence() {
         0,
     );
     assert_eq!(
-        nested.discard_label.as_deref(),
-        Some("Discard the worktree inside it")
+        nested.discard,
+        Some(WorktreeDiscard {
+            nested: true,
+            ..WorktreeDiscard::default()
+        })
     );
 
     let unknown = deletion_gate(
@@ -471,13 +474,16 @@ fn deletion_gate_warns_instead_of_blocking_and_reports_pane_consequence() {
     assert!(
         unknown
             .warnings
-            .contains(&"Git status unavailable".to_owned())
+            .contains(&WorktreeDeletionWarning::StatusUnknown)
     );
     assert_eq!(
-        unknown.discard_label.as_deref(),
-        Some("Discard any uncommitted changes")
+        unknown.discard,
+        Some(WorktreeDiscard {
+            status_unknown: true,
+            ..WorktreeDiscard::default()
+        })
     );
-    assert!(unknown.branch_warning.unwrap().contains("could not tell"));
+    assert_eq!(unknown.branch_loss, Some(WorktreeBranchLoss::Unknown));
 
     let merged = deletion_gate(
         &WorktreeSnapshot {
@@ -487,9 +493,9 @@ fn deletion_gate_warns_instead_of_blocking_and_reports_pane_consequence() {
         false,
         0,
     );
-    assert!(merged.branch_warning.is_none());
+    assert!(merged.branch_loss.is_none());
 
-    assert!(
+    assert_eq!(
         deletion_gate(
             &WorktreeSnapshot {
                 is_main: true,
@@ -498,8 +504,8 @@ fn deletion_gate_warns_instead_of_blocking_and_reports_pane_consequence() {
             false,
             0
         )
-        .blocked_reason
-        .is_some()
+        .blocked,
+        Some(WorktreeDeletionBlock::Main)
     );
 }
 

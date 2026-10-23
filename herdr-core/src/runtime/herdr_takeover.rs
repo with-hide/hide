@@ -5,18 +5,25 @@
 //! nothing when the daemon does not run from a desktop package with its own
 //! Herdr); the core asks
 //! it on a worker of its own, one call at a time, whenever this machine's
-//! Herdr connection changes state, and when the operator asks for the move.
-//! Nothing moves without that press (D-14): the look only decides what is
-//! offered, `status.herdr_takeover`, and whether the first-run wizard opens
-//! on its Herdr step.
+//! Herdr connection changes state, and when the operator asks.
+//! Hide does what it safely can itself (operator decision 2026-10-23, which
+//! replaces D-14): a look that offers a live move starts it with no press,
+//! once per server, and a move that left the operator's own `herdr` behind
+//! has that `herdr` updated, once per move, without an administrator. A
+//! restart ends running commands, so it still waits for the operator's
+//! press. The look decides what is offered, `status.herdr_takeover`, and
+//! whether the first-run wizard opens on its Herdr step.
 
 use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 
 use super::Runtime;
 use crate::handle::ChangeNotifier;
-use crate::herdr_takeover::{HerdrTakeover, Look, Moved, OfferKind, Versions};
-use crate::model::{FirstRunStep, HerdrTakeoverSnapshot, HerdrVersionsSnapshot, PathHerdrSnapshot};
+use crate::herdr_takeover::{HerdrTakeover, Look, Moved, OfferKind, PathUpdated, Versions};
+use crate::model::{
+    FirstRunStep, HerdrTakeoverSnapshot, HerdrVersionsSnapshot, MovedPathHerdrSnapshot,
+    PathHerdrSnapshot,
+};
 
 /// The installed takeover and the one call it is making.
 #[derive(Default)]
@@ -39,6 +46,14 @@ pub(super) struct Takeover {
     closed_unanswered: bool,
     /// The server the last look offered something for.
     offered_server: Option<Server>,
+    /// The server Hide moved on its own: it is never moved on its own again,
+    /// whatever its record says, so a failure waits for the operator's press.
+    auto_moved: Option<Server>,
+    /// Who started the move under way, for its record.
+    move_origin: MoveOrigin,
+    /// Looks in a row that could not read a server Hide cannot use, retried
+    /// without a word before the screen says so.
+    quiet_unreadable: u8,
     /// The server the desktop host's restart could not stop: its restart
     /// step stays on that failure, with Not now, while a server of that pid
     /// (where the system names one) and version answers, until a look finds
@@ -49,6 +64,23 @@ pub(super) struct Takeover {
 /// A server as a look reads it: its process, where the system says, and its
 /// version.
 type Server = (Option<u32>, String);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum MoveOrigin {
+    /// The look offered a move and Hide started it.
+    #[default]
+    Auto,
+    Operator,
+}
+
+impl MoveOrigin {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Operator => "operator",
+        }
+    }
+}
 
 #[derive(Clone)]
 struct Worker {
@@ -61,7 +93,9 @@ struct Worker {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum TakeoverAction {
-    /// Move the server now; a second press while it moves is the same one.
+    /// Move the server now: an offered move starts on its own, so this is
+    /// the retry after a failure; a second press while it moves is the same
+    /// one.
     Move,
     /// Leave the step without moving: offered on a server Hide reads as it
     /// is, and on any server once its move or restart failed (D-16, D-29).
@@ -106,6 +140,11 @@ impl Runtime {
     }
 
     fn look_at_herdr_server(&mut self) {
+        self.look_at_herdr_server_after(std::time::Duration::ZERO);
+    }
+
+    /// Looks at the server once `after` has passed, on the look's worker.
+    fn look_at_herdr_server_after(&mut self, after: std::time::Duration) {
         let takeover = &mut self.herdr_takeover;
         let Some(worker) = takeover.worker.clone() else {
             return;
@@ -120,6 +159,11 @@ impl Runtime {
         let spawned = thread::Builder::new()
             .name("herdr-core-herdr-takeover-look".into())
             .spawn(move || {
+                if !after.is_zero() {
+                    // A production wait off the lock: the quiet retry's pause.
+                    #[allow(clippy::disallowed_methods)]
+                    thread::sleep(after);
+                }
                 let (look, versions) = bounded_look(&worker.takeover, LOOK_WITHIN);
                 answer(&worker, |runtime| {
                     let versions_changed =
@@ -151,36 +195,48 @@ impl Runtime {
             }
             return false;
         }
-        takeover.answered = true;
         let current = self.snapshot.status.herdr_takeover.clone();
+        let unusable_unread = matches!(look, Look::Unreadable { .. })
+            && !self.herdr_usable()
+            && current.as_ref().is_none_or(|shown| shown.stage != "moved");
+        let takeover = &mut self.herdr_takeover;
+        if !unusable_unread {
+            takeover.quiet_unreadable = 0;
+        } else if takeover.quiet_unreadable < QUIET_LOOKS {
+            // A server that did not answer this once is asked again a few
+            // seconds later before the screen says it could not be read.
+            takeover.quiet_unreadable += 1;
+            let mut record = look_record(&look);
+            record["quiet_retry"] = takeover.quiet_unreadable.into();
+            crate::diagnostic!(record);
+            takeover.look_again = false;
+            self.look_at_herdr_server_after(QUIET_LOOK_AFTER);
+            return false;
+        }
+        takeover.answered = true;
         let next = match &look {
             // A server Hide cannot use and could not read says so, with a
             // look again, rather than leaving the wizard as if there were
             // nothing to move (B8); one Hide reads keeps the log line alone.
-            Look::Unreadable { .. }
-                if !self.herdr_usable()
-                    && current.as_ref().is_none_or(|shown| shown.stage != "moved") =>
-            {
-                Some(HerdrTakeoverSnapshot {
-                    kind: OfferKind::Look.as_str().to_owned(),
-                    stage: "failed".to_owned(),
-                    server_version: String::new(),
-                    version: self
-                        .snapshot
-                        .status
-                        .herdr_versions
-                        .as_ref()
-                        .map(|versions| versions.hide.clone())
-                        .unwrap_or_default(),
-                    same_protocol: false,
-                    failure: Some(
-                        crate::herdr_takeover::FailureCause::Unreadable
-                            .as_str()
-                            .to_owned(),
-                    ),
-                    path_herdr_behind: None,
-                })
-            }
+            Look::Unreadable { .. } if unusable_unread => Some(HerdrTakeoverSnapshot {
+                kind: OfferKind::Look.as_str().to_owned(),
+                stage: "failed".to_owned(),
+                server_version: String::new(),
+                version: self
+                    .snapshot
+                    .status
+                    .herdr_versions
+                    .as_ref()
+                    .map(|versions| versions.hide.clone())
+                    .unwrap_or_default(),
+                same_protocol: false,
+                failure: Some(
+                    crate::herdr_takeover::FailureCause::Unreadable
+                        .as_str()
+                        .to_owned(),
+                ),
+                path_herdr: None,
+            }),
             Look::Nothing | Look::Unreadable { .. } => {
                 // Only a server that is gone takes a restart's stop failure
                 // with it; one that did not answer in time may still be there.
@@ -217,7 +273,7 @@ impl Runtime {
                     same_protocol: offer.server_protocol
                         == hide_herdr_client::HERDR_PROTOCOL_REVISION,
                     failure: failure.map(str::to_owned),
-                    path_herdr_behind: None,
+                    path_herdr: None,
                 })
             }
         };
@@ -225,6 +281,9 @@ impl Runtime {
             crate::diagnostic!(look_record(&look));
         }
         let mut changed = self.show_herdr_takeover(next);
+        if let Look::Offer(offer) = &look {
+            changed |= self.move_on_its_own(offer);
+        }
         if matches!(look, Look::Nothing) {
             // The server was restarted or stopped away.
             changed |= self.ask_the_unanswered_agent_question();
@@ -285,39 +344,10 @@ impl Runtime {
                 {
                     return refused(action, "no move is offered");
                 }
-                let Some(worker) = self.herdr_takeover.worker.clone() else {
+                if self.herdr_takeover.worker.is_none() {
                     return refused(action, "this app cannot move Herdr");
-                };
-                self.herdr_takeover.moving = true;
-                self.herdr_takeover.epoch += 1;
-                let spawned = thread::Builder::new()
-                    .name("herdr-core-herdr-takeover-move".into())
-                    .spawn(move || {
-                        // A move that panics still ends, so the step is not
-                        // held on "Moving…" and looks resume.
-                        let moved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            worker.takeover.hand_over()
-                        }))
-                        .unwrap_or_else(|_| Moved::Failed {
-                            cause: crate::herdr_takeover::FailureCause::Unreadable,
-                            stage: "panic".into(),
-                            detail: "the move stopped unexpectedly".into(),
-                        });
-                        answer(&worker, |runtime| runtime.ingest_herdr_move(moved));
-                    });
-                if let Err(error) = spawned {
-                    self.herdr_takeover.moving = false;
-                    return self.ingest_herdr_move(Moved::Failed {
-                        cause: crate::herdr_takeover::FailureCause::Unreadable,
-                        stage: "worker".into(),
-                        detail: error.to_string(),
-                    });
                 }
-                self.show_herdr_takeover(Some(HerdrTakeoverSnapshot {
-                    stage: "moving".into(),
-                    failure: None,
-                    ..shown
-                }))
+                self.start_herdr_move(shown, MoveOrigin::Operator)
             }
             TakeoverAction::Later => {
                 let movable = [
@@ -378,9 +408,66 @@ impl Runtime {
         }
     }
 
+    /// A move the look offered for a server Hide has not moved on its own
+    /// before, and whose earlier move did not fail, starts with no press;
+    /// any other waits for the operator's.
+    fn move_on_its_own(&mut self, offer: &crate::herdr_takeover::Offer) -> bool {
+        let server = (offer.server_pid, offer.server_version.clone());
+        let takeover = &self.herdr_takeover;
+        if offer.kind != OfferKind::Move
+            || offer.failed_before.is_some()
+            || takeover.moving
+            || takeover.auto_moved.as_ref() == Some(&server)
+        {
+            return false;
+        }
+        let Some(shown) = self.snapshot.status.herdr_takeover.clone() else {
+            return false;
+        };
+        self.herdr_takeover.auto_moved = Some(server);
+        self.start_herdr_move(shown, MoveOrigin::Auto)
+    }
+
+    /// Runs `hand_over` on a worker off the lock and shows the step moving.
+    fn start_herdr_move(&mut self, shown: HerdrTakeoverSnapshot, origin: MoveOrigin) -> bool {
+        let Some(worker) = self.herdr_takeover.worker.clone() else {
+            return false;
+        };
+        self.herdr_takeover.moving = true;
+        self.herdr_takeover.move_origin = origin;
+        self.herdr_takeover.epoch += 1;
+        let spawned = thread::Builder::new()
+            .name("herdr-core-herdr-takeover-move".into())
+            .spawn(move || {
+                // A move that panics still ends, so the step is not held on
+                // "Moving…" and looks resume.
+                let moved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    worker.takeover.hand_over()
+                }))
+                .unwrap_or_else(|_| Moved::Failed {
+                    cause: crate::herdr_takeover::FailureCause::Unreadable,
+                    stage: "panic".into(),
+                    detail: "the move stopped unexpectedly".into(),
+                });
+                answer(&worker, |runtime| runtime.ingest_herdr_move(moved));
+            });
+        if let Err(error) = spawned {
+            return self.ingest_herdr_move(Moved::Failed {
+                cause: crate::herdr_takeover::FailureCause::Unreadable,
+                stage: "worker".into(),
+                detail: error.to_string(),
+            });
+        }
+        self.show_herdr_takeover(Some(HerdrTakeoverSnapshot {
+            stage: "moving".into(),
+            failure: None,
+            ..shown
+        }))
+    }
+
     pub(super) fn ingest_herdr_move(&mut self, moved: Moved) -> bool {
         self.herdr_takeover.moving = false;
-        crate::diagnostic!(move_record(&moved));
+        crate::diagnostic!(move_record(&moved, self.herdr_takeover.move_origin));
         let Some(shown) = self.snapshot.status.herdr_takeover.clone() else {
             return false;
         };
@@ -388,10 +475,17 @@ impl Runtime {
             Moved::Done {
                 path_herdr_behind, ..
             } => {
-                let next = path_herdr_behind.map(|behind| HerdrTakeoverSnapshot {
+                let path = path_herdr_behind.map(|version| {
+                    self.update_path_herdr();
+                    MovedPathHerdrSnapshot {
+                        stage: PATH_UPDATING.into(),
+                        version,
+                    }
+                });
+                let next = self.moved_shown(&path).then(|| HerdrTakeoverSnapshot {
                     stage: "moved".into(),
                     failure: None,
-                    path_herdr_behind: Some(behind),
+                    path_herdr: path,
                     ..shown
                 });
                 self.show_herdr_takeover(next) | self.ask_the_unanswered_agent_question()
@@ -407,6 +501,85 @@ impl Runtime {
         self.look_at_herdr_server();
         changed |= self.settle_first_run_herdr();
         changed
+    }
+
+    /// A moved server's step stays while the first-run wizard shows it, and
+    /// while the operator's own `herdr` is being updated or could not be:
+    /// outside the wizard a move that left nothing to do shows nothing.
+    fn moved_shown(&self, path: &Option<MovedPathHerdrSnapshot>) -> bool {
+        self.first_run_step() == Some(FirstRunStep::Herdr)
+            || path.as_ref().is_some_and(|path| path.stage != PATH_UPDATED)
+    }
+
+    /// Brings the operator's own `herdr` up on a worker off the lock, once
+    /// for the move that just landed, and reads the versions again after it.
+    fn update_path_herdr(&mut self) {
+        let Some(worker) = self.herdr_takeover.worker.clone() else {
+            return;
+        };
+        let spawned = thread::Builder::new()
+            .name("herdr-core-herdr-path-update".into())
+            .spawn(move || {
+                let updated = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    worker.takeover.update_path_herdr()
+                }))
+                .unwrap_or_else(|_| PathUpdated::Behind {
+                    version: String::new(),
+                    ran: None,
+                    detail: "the update stopped unexpectedly".into(),
+                });
+                let versions = worker.takeover.versions();
+                answer(&worker, |runtime| {
+                    runtime.ingest_herdr_versions(versions)
+                        | runtime.ingest_path_herdr_update(updated)
+                });
+            });
+        if let Err(error) = spawned {
+            let _ = self.ingest_path_herdr_update(PathUpdated::Behind {
+                version: String::new(),
+                ran: None,
+                detail: error.to_string(),
+            });
+        }
+    }
+
+    /// What the update of the operator's own `herdr` came to: the moved step
+    /// says it was brought up, or keeps the command to copy.
+    pub(super) fn ingest_path_herdr_update(&mut self, updated: PathUpdated) -> bool {
+        crate::diagnostic!(path_update_record(&updated));
+        let Some(shown) = self
+            .snapshot
+            .status
+            .herdr_takeover
+            .clone()
+            .filter(|shown| shown.stage == "moved")
+        else {
+            return false;
+        };
+        let Some(before) = shown.path_herdr.clone() else {
+            return false;
+        };
+        let path = match updated {
+            PathUpdated::Current { version } => Some(MovedPathHerdrSnapshot {
+                stage: PATH_UPDATED.into(),
+                version,
+            }),
+            // A read that named nothing keeps the version the move read.
+            PathUpdated::Behind { version, .. } => Some(MovedPathHerdrSnapshot {
+                stage: PATH_BEHIND.into(),
+                version: if version.is_empty() {
+                    before.version
+                } else {
+                    version
+                },
+            }),
+            PathUpdated::Gone => None,
+        };
+        let next = self.moved_shown(&path).then_some(HerdrTakeoverSnapshot {
+            path_herdr: path,
+            ..shown
+        });
+        self.show_herdr_takeover(next) | self.settle_first_run_herdr()
     }
 
     /// The wizard closed with the move or restart unanswered opens again on
@@ -479,6 +652,17 @@ impl Runtime {
 
 /// The failure of a restart whose stop did not end the server.
 const STOP_FAILED: &str = "stop_failed";
+
+/// The stages of the operator's own `herdr` after a move.
+const PATH_UPDATING: &str = "updating";
+const PATH_UPDATED: &str = "updated";
+const PATH_BEHIND: &str = "behind";
+
+/// How many looks in a row that could not read a server Hide cannot use are
+/// retried without a word, and how long each waits: a server busy starting
+/// or handing over answers within seconds.
+const QUIET_LOOKS: u8 = 3;
+const QUIET_LOOK_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// How long a look may take before it counts as one that could not read the
 /// server: the wizard waits on its Herdr step for it, and a server that does
@@ -564,7 +748,7 @@ fn look_record(look: &Look) -> serde_json::Value {
     record
 }
 
-fn move_record(moved: &Moved) -> serde_json::Value {
+fn move_record(moved: &Moved, origin: MoveOrigin) -> serde_json::Value {
     let mut record = match moved {
         Moved::Done {
             from_pid,
@@ -591,6 +775,28 @@ fn move_record(moved: &Moved) -> serde_json::Value {
     };
     record["component"] = "herdr".into();
     record["kind"] = "herdr.handoff".into();
-    record["origin"] = "operator".into();
+    record["origin"] = origin.as_str().into();
+    record
+}
+
+fn path_update_record(updated: &PathUpdated) -> serde_json::Value {
+    let mut record = match updated {
+        PathUpdated::Current { version } => {
+            serde_json::json!({"outcome": "updated", "version": version})
+        }
+        PathUpdated::Behind {
+            version,
+            ran,
+            detail,
+        } => serde_json::json!({
+            "outcome": "behind",
+            "version": version,
+            "command": ran,
+            "message": detail,
+        }),
+        PathUpdated::Gone => serde_json::json!({"outcome": "gone"}),
+    };
+    record["component"] = "herdr".into();
+    record["kind"] = "herdr.path_update".into();
     record
 }

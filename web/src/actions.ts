@@ -77,6 +77,7 @@ import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { useShellStore } from "./store";
 import { useUiStore, type MainView, type OverviewPlace, type PendingClose } from "./ui";
+import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
 import { focusTerminal } from "./terminals";
@@ -132,10 +133,14 @@ export function laneCalled(event: Parameters<DispatchFn>[0]): boolean {
   }
 }
 
-export function createActions(send: DispatchFn) {
+/**
+ * The operator's actions, sending each event through `send`. Every copy and
+ * paste goes through `clipboard`, the system one unless the screen gives its
+ * own (the practice window keeps its copies off the operator's clipboard).
+ */
+export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const dispatch: DispatchFn = (event) => {
     if (laneCalled(event)) {
-      useUiStore.getState().showLane();
       // A stacked lane draws the column the call is for (PRD lane-two-columns B19).
       const tool = event.kind === "workspace_view" && (typeof event.payload.tool === "string" || event.payload.reveal !== undefined);
       useUiStore.getState().setStackFront(tool || event.kind === "reveal_path" ? "tool" : "view");
@@ -145,6 +150,7 @@ export function createActions(send: DispatchFn) {
   const rest = () => useShellStore.getState().rest;
   const catalogObserver = createCatalogObserver((observing) => dispatch({ schema_version: 2, kind: "ai_settings", payload: { start_observing: observing } }));
   const diagnostic = (message: string) => useShellStore.getState().noteDiagnostic(message);
+  const board = clipboard ?? browserClipboard(diagnostic);
   const ui = () => useUiStore.getState();
 
 
@@ -399,8 +405,7 @@ export function createActions(send: DispatchFn) {
 
   /** Whether the lane is on screen now, as the Workspace screen draws it. */
   const laneUp = () => {
-    const { mode } = ui().drawnLane;
-    return mode !== "closed" && mode !== "hidden";
+    return ui().drawnLane.mode !== "closed";
   };
 
   /** Whether the tool column draws `tool` now, a stacked lane's back column not counted. */
@@ -416,14 +421,13 @@ export function createActions(send: DispatchFn) {
   };
 
   /**
-   * Shows one tool in the tool column (B3, B14): an unpinned lane comes up,
-   * a stacked lane draws the tool, and nothing is sent when the column
-   * already holds it. The viewing column is left as it is.
+   * Shows one tool in the tool column (B3, B14): a stacked lane draws the
+   * tool, and nothing is sent when the column already holds it. An open lane's viewing column is left as it is; a
+   * closed one the core opens on the tool alone (B15).
    */
   const showTool = (tool: Tool) => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
-    ui().showLane();
     ui().setStackFront("tool");
     if (view.tool !== tool || !view.open) setWorkspaceView({ tool });
   };
@@ -431,7 +435,6 @@ export function createActions(send: DispatchFn) {
   /** Puts `item` in the 보기 slot in front (PRD sidebar-task-lens B14, B15; lane-two-columns B9): the Workspace, its Agent tab and the keyboard stay. */
   const openDetail = (item: import("./snapshot").DetailItem) => {
     if (!workspaceViewOf(rest())) return diagnostic("detail_open: no Workspace in front");
-    ui().showLane();
     ui().setStackFront("view");
     dispatch({ schema_version: 2, kind: "detail_open", payload: { item } });
   };
@@ -439,11 +442,8 @@ export function createActions(send: DispatchFn) {
   /** Whether a Workspace is in front to draw the lane, rather than Home (B17). */
   const workspaceInFront = () => ui().screen?.kind === "workspace" && Boolean(frontCheckout(rest()) && workspaceViewOf(rest()));
 
-  /** Closes the lane (B15): ⌘E and the path's menu; both columns keep their shape for the reopen. */
-  const closeLane = () => {
-    ui().putLaneAway();
-    setWorkspaceView({ open: false });
-  };
+  /** Closes the lane (B15): ⌘E, the path's menu and Escape on an unpinned lane; both columns keep their shape for ⌘E's reopen. */
+  const closeLane = () => setWorkspaceView({ open: false });
 
   /** The tool column's ×, a pressed tool icon or its chord (B14): the tool column alone closes; the documents stay. */
   const closeTool = () => setWorkspaceView({ tool: null });
@@ -460,7 +460,6 @@ export function createActions(send: DispatchFn) {
   const showDocuments = () => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
-    ui().showLane();
     ui().setStackFront("view");
     if (!view.open || !view.documents || detailShown()) setWorkspaceView({ documents: true });
     if (view.layout && (view.layout.display_count ?? 0) > 0) {
@@ -494,9 +493,8 @@ export function createActions(send: DispatchFn) {
     }
   };
 
-  /** The pin (B5): pinned, the lane docks; unpinned, it stays up over Agent Views until the operator closes it or puts it away with Escape. */
+  /** The pin (B5): pinned, the lane docks; unpinned, it stays up over Agent Views until the operator closes it with ⌘E or Escape. */
   const setLanePinned = (pinned: boolean) => {
-    if (!pinned) ui().showLane();
     setWorkspaceView({ pinned });
   };
 
@@ -962,7 +960,7 @@ export function createActions(send: DispatchFn) {
     if (id === "keep_open") return keepViewOpen(displayId);
     if (id === "copy_path") {
       const text = located.display.kind === "browser" ? (located.display.url ?? "") : located.display.path;
-      return void navigator.clipboard?.writeText(text).catch(() => undefined);
+      return void board.write(text, "view path");
     }
     if (id === "select_in_tree") return revealInExplorer(located.display.path);
     if (id === "reveal_external") return revealExternal(located.display.path);
@@ -1090,7 +1088,7 @@ export function createActions(send: DispatchFn) {
     if (command === "copy_name") {
       const checkout = remoteContext(rest()) ? remoteView(remoteContext(rest())!.session, rest()?.workspace_view)?.checkout : current()?.checkout;
       const label = checkout?.strip.find((row) => row.source_id === id)?.label;
-      if (label) void navigator.clipboard?.writeText(label);
+      if (label) void board.write(label, "tab name");
     }
     if (command === "close_tab") closeTab(id);
   };
@@ -1710,7 +1708,6 @@ export function createActions(send: DispatchFn) {
       const state = ui();
       const openWorkspace = !workspaceInFront();
       if (state.overviewOpen || state.screen?.kind !== "workspace") state.setScreen({ kind: "workspace" });
-      state.showLane();
       dispatch({ schema_version: 2, kind: "pr_open", payload: { workspace_id: projectId, pr_number: number, ...(checkoutId ? { checkout_id: checkoutId } : {}), ...(openWorkspace ? { open_workspace: true } : {}) } });
     },
 
@@ -1733,7 +1730,6 @@ export function createActions(send: DispatchFn) {
         this.openWorkspace(mission.device_id, checkout.workspace_id, checkout.id);
         state.setScreen({ kind: "workspace" });
       }
-      state.showLane();
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId } } });
     },
 
@@ -1826,7 +1822,6 @@ export function createActions(send: DispatchFn) {
       if (detailShown() && viewUp("detail")) {
         return dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: false } });
       }
-      ui().showLane();
       ui().setStackFront("view");
       dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: true } });
     },
@@ -1868,7 +1863,6 @@ export function createActions(send: DispatchFn) {
       const agent = allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote).find((row) => row.pane_id === paneId);
       const session = agent ? sessionOfAgent(agent, rest()) : null;
       const inFront = workspaceInFront() && !ui().overviewOpen;
-      if (inFront && session) ui().showLane();
       dispatch({ schema_version: 2, kind: "task_reveal", payload: { pane_id: paneId, ...(inFront && session ? { session } : {}) } });
       if (!inFront && session) this.openOverview(session.device_id, { panel: { kind: "record", session } });
     },
@@ -2142,10 +2136,14 @@ export function createActions(send: DispatchFn) {
       requestClose("tab", tab.id, tab.panes, targetId);
     },
 
-    /** Puts text on the clipboard; a refused write is the log's, not a notice (design principle 13). */
-    copyText(text: string, what: string) {
-      if (!navigator.clipboard) return diagnostic(`copy ${what}: the clipboard is unavailable`);
-      navigator.clipboard.writeText(text).catch((error: unknown) => diagnostic(`copy ${what}: ${String(error)}`));
+    /** Puts text on the clipboard, answering whether it took it; a refused write is the log's, not a notice (design principle 13). */
+    copyText(text: string, what: string): Promise<boolean> {
+      return board.write(text, what);
+    },
+
+    /** What the clipboard holds for a paste, or null when it cannot be read, which is the log's. */
+    readClipboard(what: string): Promise<ClipboardContent | null> {
+      return board.read(what);
     },
 
     /**
@@ -2751,7 +2749,6 @@ export function createActions(send: DispatchFn) {
     viewRecordInLane(deviceId: string, workspaceId: string, checkoutId: string, session: import("./snapshot").WorkSession) {
       this.closeOverview();
       this.openWorkspace(deviceId, workspaceId, checkoutId);
-      ui().showLane();
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session } } });
     },
     openRecordedIssue(session: import("./snapshot").WorkSession, repository: string, number: number) {

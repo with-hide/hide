@@ -16,7 +16,6 @@ const status = (patch: Partial<GithubStatus>): GithubStatus => ({
   loading: false,
   stale: false,
   last_success_at_unix_ms: null,
-  unavailable_reason: null,
   ...patch,
 });
 
@@ -51,20 +50,20 @@ const project = (patch: Partial<Workspace> & { github?: GithubStatus }): Workspa
 
 describe("Issue settings", () => {
   it("reads gh as connected once any project's read succeeded, and otherwise names gh's own refusal first", () => {
-    const loggedOut = project({ github: status({ available: false, failure_category: "not_logged_in", unavailable_reason: "run gh auth login" }) });
-    const offline = project({ id: "w2", github: status({ stale: true, failure_category: "network_or_rate_limit", unavailable_reason: "timeout" }) });
-    const noRemote = project({ id: "w3", github: status({ stale: true, failure_category: "no_github_remote", unavailable_reason: "none of the git remotes" }) });
+    const loggedOut = project({ github: status({ available: false, failure_category: "not_logged_in" }) });
+    const offline = project({ id: "w2", github: status({ stale: true, failure_category: "network_or_rate_limit" }) });
+    const noRemote = project({ id: "w3", github: status({ stale: true, failure_category: "no_github_remote" }) });
     const healthy = project({ id: "w4", github: status({ last_success_at_unix_ms: 5 }) });
 
     expect(githubAccess([offline, healthy], [])).toEqual({ state: "connected" });
-    expect(githubAccess([offline, loggedOut], [])).toEqual({ state: "failed", category: "not_logged_in", reason: "run gh auth login" });
-    expect(githubAccessLine({ state: "failed", category: "not_logged_in", reason: null }).text).toBe("gh 로그인 안 됨");
+    expect(githubAccess([offline, loggedOut], [])).toEqual({ state: "failed", category: "not_logged_in" });
+    expect(githubAccessLine({ state: "failed", category: "not_logged_in" }).text).toBe("gh 로그인 안 됨");
     // A repository with no GitHub remote says nothing about gh, and a dialed device's project is not read here.
     expect(githubAccess([noRemote], [])).toBeNull();
-    const onMini = project({ remote_target_id: "mini", device_id: "mini", github: status({ available: false, failure_category: "not_logged_in", unavailable_reason: "run gh auth login" }) });
+    const onMini = project({ remote_target_id: "mini", device_id: "mini", github: status({ available: false, failure_category: "not_logged_in" }) });
     expect(githubAccess([onMini], [{ id: "mini", dials_in: false } as Device])).toBeNull();
     // A node that dials the core has its repositories read with the core's gh, so its signed-out read speaks.
-    expect(githubAccess([onMini], [{ id: "mini", dials_in: true } as Device])).toEqual({ state: "failed", category: "not_logged_in", reason: "run gh auth login" });
+    expect(githubAccess([onMini], [{ id: "mini", dials_in: true } as Device])).toEqual({ state: "failed", category: "not_logged_in" });
   });
 
   it("names what Auto resolves to only where the core has shown it, and offers GitHub only to a Git project", () => {
@@ -99,8 +98,8 @@ describe("Issue settings", () => {
   });
 
   it("words the same choices and the gh state in English", () => {
-    expect(githubAccessLineIn({ state: "failed", category: "not_logged_in", reason: null }, english).text).toBe("Not signed in to gh");
-    expect(githubAccessLineIn({ state: "failed", category: "from a newer gh" as GithubFailureCategory, reason: null }, english).text).toBe("from a newer gh");
+    expect(githubAccessLineIn({ state: "failed", category: "not_logged_in" }, english).text).toBe("Not signed in to gh");
+    expect(githubAccessLineIn({ state: "failed", category: "from a newer gh" as GithubFailureCategory }, english).text).toBe("from a newer gh");
     const onDefault = project({ tasks: { source: source({}), tasks: [], overflow: false } });
     expect(issueSourceChoicesIn(onDefault, undefined, english).options.map((option) => option.label)).toEqual(["Automatic (GitHub)", "GitHub · acme/app", "Local"]);
   });

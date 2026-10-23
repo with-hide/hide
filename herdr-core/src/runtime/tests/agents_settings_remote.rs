@@ -2357,8 +2357,8 @@ fn remote_purpose_results_update_clear_and_preserve_the_exact_checkout() {
     let operation = runtime.snapshot.task_operation.as_ref().unwrap();
     assert_eq!(operation.phase, "failed");
     assert_eq!(
-        operation.message.as_deref(),
-        Some("Herdr did not answer. Your text is kept; Save tries again.")
+        operation.failure.as_deref(),
+        Some("checkout_purpose.token_failed")
     );
 }
 
@@ -2377,11 +2377,9 @@ fn remote_purpose_resolver_reports_an_unsupported_server_in_the_sheet() {
     let operation = runtime.snapshot.task_operation.as_ref().expect("operation");
     assert_eq!(operation.kind, "checkout_purpose");
     assert_eq!(operation.phase, "failed");
-    assert!(
-        operation
-            .message
-            .as_deref()
-            .is_some_and(|message| message.contains("0.9.1 or newer"))
+    assert_eq!(
+        operation.failure.as_deref(),
+        Some("checkout_purpose.remote_unsupported")
     );
     assert!(
         runtime

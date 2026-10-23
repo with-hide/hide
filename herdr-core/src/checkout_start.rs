@@ -32,11 +32,7 @@ fn inspect(control: &Control<'_>, pane: &str) -> Result<PaneIdentity, ControlFai
         },
         Duration::from_secs(5),
     )
-    .map_err(|_| {
-        uncertain(
-            "The terminal identity could not be checked. Reconnect and check this start's status.",
-        )
-    })
+    .map_err(|_| uncertain("agent_start.terminal_unchecked"))
 }
 
 fn save(control: &Control<'_>, effect: &Effect) -> Result<(), ControlFailure> {

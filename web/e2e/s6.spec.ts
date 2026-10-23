@@ -184,7 +184,8 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
 
     // ⌘E closes the lane without closing a view; the documents button counts
     // the views it keeps, and the keyboard that was in the lane goes back to
-    // the focused pane (B2, B7, B17). Opening it brings the same tabs, docked.
+    // the focused pane (B2, B7, B17). ⌘E brings the same tabs back, docked,
+    // beside the Explorer (B15; the documents button would open them alone).
     await settled();
     const resizesBeforeClose = resizes();
     await lane.locator("[data-editor-body] .cm-content").click();
@@ -201,7 +202,7 @@ test("Main, Overview and a Workspace with its lane, tools and delegated child", 
     await settled();
     expect(resizes() - resizesBeforeClose).toBe(panesShown);
     await screenshot(page, "s6-lane-closed");
-    await documentsIcon.click();
+    await page.keyboard.press(chord("toggle_lane"));
     await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
     await expect(lane.locator('[data-tab-kind="file"]')).toHaveCount(2);

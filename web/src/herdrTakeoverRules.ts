@@ -2,6 +2,7 @@
 // (PRD herdr-takeover). The core decides the offer and owns the move
 // (`status.herdr_takeover`); these rules only say which parts show where.
 
+import type { UpdateStatus } from "./host";
 import type { HerdrTakeover, HerdrVersions, SnapshotRest } from "./snapshot";
 
 /** Whether the wizard and Help > Set up Hide have a Herdr step: a move or restart to make, a look to try again, or a move whose step waits to be read (B1, B5, B8, B17). */
@@ -13,11 +14,6 @@ export function herdrStepShown(takeover: HerdrTakeover | null | undefined): bool
 /** Not now: on a server Hide reads as it is from the start, and on any server once its move, restart or look failed (D-16, D-29, D-31). */
 export function leavesForLater(takeover: HerdrTakeover): boolean {
   return takeover.stage !== "moving" && (takeover.same_protocol || takeover.stage === "failed");
-}
-
-/** "Stop Herdr yourself": only for a server Hide cannot read whose move or restart failed here (D-29); a failed look says it in its own words. */
-export function stopYourselfShown(takeover: HerdrTakeover): boolean {
-  return takeover.stage === "failed" && !takeover.same_protocol && takeover.kind !== "look";
 }
 
 /**
@@ -40,15 +36,40 @@ export function herdrGate(rest: SnapshotRest | null | undefined): HerdrGate | nu
   return (herdr.received_protocol ?? 0) > (herdr.expected_protocol ?? Infinity) ? "newer" : "older";
 }
 
-/** The operator's own `herdr` that stays behind a moved server: its version, or null (B5). */
+/** The operator's own `herdr` a move left behind and Hide could not bring up: its version, or null (B5). */
 export function movedLine(takeover: HerdrTakeover | null | undefined): string | null {
-  return takeover?.stage === "moved" ? takeover.path_herdr_behind : null;
+  return takeover?.stage === "moved" && takeover.path_herdr?.stage === "behind" ? takeover.path_herdr.version : null;
+}
+
+/**
+ * Where the wait for a Hide made for a newer Herdr stands, from this app's own update status: `checking` before the
+ * first answer, `none` when the last check found no newer Hide, `downloading` until it opens, `failed` when the app
+ * could not check or cannot update itself (About's row says why), and `unknown` where updates are not this page's
+ * (a browser tab).
+ */
+export type NewerWait = "checking" | "none" | "downloading" | "failed" | "unknown";
+
+export function newerWait(status: UpdateStatus | null): NewerWait {
+  if (!status) return "unknown";
+  switch (status.phase.kind) {
+    case "idle":
+      return status.phase.checkedAt === null ? "checking" : "none";
+    case "checking":
+      return "checking";
+    case "downloading":
+    case "ready":
+      return "downloading";
+    case "off":
+    case "failed":
+      return "failed";
+  }
 }
 
 /**
  * The command that brings the operator's own `herdr` up, as the core composed it for the file their terminal finds:
- * Homebrew's upgrade where Homebrew installed it, else a copy of Hide's Herdr over it. Hide shows it to copy and never
- * runs it, since it changes a file that is the operator's. Null when the core read no `herdr` there.
+ * Homebrew's upgrade where Homebrew installed it, else a copy of Hide's Herdr over it. Hide runs it itself after a
+ * move unless it asks for `sudo`; the screen shows it to copy where Hide could not, and in Settings > About.
+ * Null when the core read no `herdr` there.
  */
 export function pathHerdrUpdate(versions: HerdrVersions | null | undefined): { command: string; brew: boolean; hide: string } | null {
   const command = versions?.path_herdr?.update_command;

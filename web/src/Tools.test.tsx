@@ -54,7 +54,7 @@ describe("the rail's pin", () => {
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
       useShellStore.setState({ connection: "live", rest: snapshot(pinned) });
-      useUiStore.setState({ screen: { kind: "workspace" }, laneShown: mode !== "closed", drawnLane: { mode, view: "none", tool: mode === "closed" ? null : "explorer", stacked: false } });
+      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode, view: "none", tool: mode === "closed" ? null : "explorer", stacked: false } });
       root.render(<TooltipProvider><ToolRail actions={actions} /></TooltipProvider>);
     });
   }

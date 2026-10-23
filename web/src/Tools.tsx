@@ -42,7 +42,7 @@ const LANE_TOOL_COMMAND = { project: "toggle_lane_project", memory: "toggle_lane
 
 /** Whether a lane drawn this way is on screen. */
 export function laneUp(mode: LaneFrame["mode"]): boolean {
-  return mode === "overlay" || mode === "docked" || mode === "expanded";
+  return mode !== "closed";
 }
 
 const RAIL_BUTTON = "relative flex size-(--size-tool-rail-button) items-center justify-center rounded-md outline-none hover:bg-secondary hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-(--opacity-disabled)";
