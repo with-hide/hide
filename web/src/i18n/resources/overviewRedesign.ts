@@ -11,7 +11,7 @@ const words = {
   "overviewRedesign.noCheckouts": ["No available checkouts", "열 수 있는 체크아웃이 없어요", "開けるチェックアウトはありません", "没有可打开的检出"],
   "overviewRedesign.allProjects": ["Back to all projects", "모든 프로젝트로", "すべてのプロジェクトへ", "返回所有项目"],
   "overviewRedesign.openCheckout": ["Open {{checkout}}", "{{checkout}} 열기", "{{checkout}} を開く", "打开 {{checkout}}"],
-  "overviewRedesign.rootTasks": ["Root tasks", "최상위 태스크", "ルート作業", "根任务"],
+  "overviewRedesign.rootTasks": ["Root tasks", "최상위 태스크", "ルートタスク", "根任务"],
   "overviewRedesign.mixedBacklog": ["GitHub {{github}} · Memos {{local}}", "GitHub {{github}} · 메모 {{local}}", "GitHub {{github}} · メモ {{local}}", "GitHub {{github}} · 备忘 {{local}}"],
 } as const;
 
