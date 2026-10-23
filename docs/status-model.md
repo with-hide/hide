@@ -332,7 +332,7 @@ Only a finished verdict draws the green dot and the word Done (`끝남`); work l
 Read, a stop with work left keeps its line, subdued, with its word (`line.mode: kept`, B7).
 
 A line leads with the word for what is asked or how the turn ended (`질문 · …`, `승인 · …`, `막힘 · …`, `끝남 · …`, `일 남음 · …`); an Unread row's line is only ever `끝남 · …` or `일 남음 · …` (B6).
-A working row says its sentence alone or has no line; a waiting row's line is `대기 · ` and its sentence, or with none the proven cause: `대기 · 백그라운드 작업`, `대기 · 자식 N명 작업 중`, `대기 · 답장`, `대기 · CI · PR #N` (B10, B29).
+A working row says its sentence alone or has no line; a waiting row's line is `대기 · ` and its sentence, or with none the proven cause: `대기 · 백그라운드 작업`, `대기 · 자식 에이전트 N개 작업 중`, `대기 · 답장`, `대기 · CI · PR #N` (B10, B29).
 The web splits a line into its lead word, sentence and background tail (`lineParts`), and a narrow row cuts only the sentence, so the lead and the tail always show.
 A Needs You line's ask verb says the same word: an Answer reads `질문` (Question) and an Approval `승인` (Approval), followed by ` · ` and what to do.
 A row of unknown state, or on an unreachable device, has no mark and is drawn dimmed whole, and its line says why (B16).
@@ -440,7 +440,7 @@ The one sidebar raises Needs You and Done above its project tree, at most five a
 Those rows also remain under their checkouts, and a shortcut belongs to the first visible occurrence in physical sidebar order.
 A checkout starts open; `session_collapsed_checkout_ids` remembers only explicit collapses, independently of older disclosure records.
 A collapsed checkout still shows its Needs You rows.
-Core `session_folds` puts agentless worktrees behind No agents, excluding the primary, front, dirty, unpushed and already inactive checkouts, lists in `child_only` the worktrees (same exclusions) whose unresolved agents are all delegated children, which the sidebar draws nowhere because the parent root's tree reaches them, and collects agent worktrees and missing folders behind Cleanup at the bottom.
+Core `session_folds` puts agentless worktrees behind Worktrees with no agents, excluding the primary, front, dirty, unpushed and already inactive checkouts, lists in `child_only` the worktrees (same exclusions) whose unresolved agents are all delegated children, which the sidebar draws nowhere because the parent root's tree reaches them, and collects agent worktrees and missing folders behind Cleanup at the bottom.
 `session_open_folds` remembers explicit openings across startup and device reconnects, including an intermediate empty catalog.
 A confirmed project unregistration removes its project key; removing a device removes its project keys and Cleanup key.
 Resolving a session removes it from sidebar membership without changing its pane, tab or task membership.
@@ -1074,7 +1074,7 @@ Regression owners: `agent_state::escalation::tests`, `runtime::tests::lineage`, 
 The notice says why the terminal is not live and is drawn in the pane's body: the device away first, then Herdr's restoration failure, sleep, and the stream's own state (ended with its exit code, released, closing, unavailable, starting, or a wheel another client holds); a device's unavailable pane reads `reconnecting` or `helper_not_allowed` by what its link waits for.
 A pane with a notice takes no answer, so it has no band, progress or working line.
 The band is the operator's turn and nothing else: the pane's own Approval, Answer or Blocked first, then the lead raised descendant, then the pane's own Stopped.
-A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; a finished turn the operator has not looked at still shows its request and result without a band until the pane is read; Working has a thin blue line and can show its own progress, a wait on working children shows its request and `대기 · 자식 N명 작업 중`, while CI wait, a read finished turn and Idle have nothing.
+A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; a finished turn the operator has not looked at still shows its request and result without a band until the pane is read; Working has a thin blue line and can show its own progress, a wait on working children shows its request and `대기 · 자식 에이전트 N개 작업 중`, while CI wait, a read finished turn and Idle have nothing.
 A band stays until it is answered, not until it is read: `Band.read` says the operator has had the pane focused since it arrived, and a question the operator read but did not answer keeps its Answer band although the row's verb has left Answer.
 An ask band is quiet text on the secondary fill with a warning rail (PRD D-43): the pane's own ask starts with its verb and says what is asked (for an Answer, the row's second line, so a native question reads as itself).
 A raised descendant's `RaisedAsk` starts with its verb, then the originating agent's name and `(자식)` for a direct child or `(하위 세션)` for a deeper descendant, what to do, the unreceived parent for an Answer, the elapsed time, and Open.

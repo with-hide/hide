@@ -26,15 +26,15 @@ With the background fetch turned off in Project settings the project is not fetc
 Only the ↑ arrow uses the existing success green and only the ↓ arrow uses warning orange; both counts and the file count remain neutral, including when the branch is ahead and behind at once.
 At the right, the current HEAD's subject and relative age open a compact history popover directly below that trigger, with up to five newest commits from the captured HEAD; no commit is invented for an unborn branch.
 Above them, dimmed and marked `들어올 커밋`, sit up to five of the tracking branch's commits not yet in HEAD, with `+N개 더` when more are behind; while the fetch fails they are the ones last received and the list says since when.
-A local commit no remote has is marked `푸시 안 됨` when `origin` is on GitHub.
+A local commit no remote has is marked `푸시하지 않음` when `origin` is on GitHub.
 When Git cannot say in time which commits a remote holds, or the upstream was pruned during the read, the header keeps its other facts, lists no incoming commit, and no commit opens a page; the reason goes to the diagnostic log once.
 A commit GitHub can show, one some remote already has or an incoming one, opens its GitHub commit page in the Browser View from its subject; a commit only this checkout has does not.
 Each compact item has its subject on the first line and short SHA and relative time on the second, with the exact local time available on the timestamp.
 Its associated CI result sits at the right of that second line; commits with no CI omit the result.
 The adjacent CI mark describes only that exact SHA, using GitHub's aggregate statusCheckRollup even on main without a PR, and distinguishes passing, pending, failed, none, unknown and unavailable.
 The header's Git read, each CI result and the remote check share one observed shape (PRD git-freshness D-09, `herdr-core/src/observed.rs`): the last value read stays, with when it was read and whether it is fresh, stale or behind a failed read.
-A CI read that fails, or ages past 90 seconds, keeps each commit's last result dimmed, not openable, with `GitHub 읽기 실패 · N분 전 값` or `N분 전 값` in its hint (B22); a commit GitHub never answered for reads unavailable.
-A Git read that fails keeps the ↑/↓ counts dimmed with `Git 읽기 실패 · N분 전 값` instead of hiding them.
+A CI read that fails, or ages past 90 seconds, keeps each commit's last result dimmed, not openable, with `GitHub 읽기 실패 · N분 전 기준` or `N분 전 기준` in its hint (B22); a commit GitHub never answered for reads unavailable.
+A Git read that fails keeps the ↑/↓ counts dimmed with `Git 읽기 실패 · N분 전 기준` instead of hiding them.
 Its trigger opens the same history below itself, with initial focus on the content so no CI hint covers the first item; Tab reaches the CI links and their read-time hints.
 Each CI result opens only the provider-returned URL validated against that repository and exact commit in the existing Browser View.
 An outside click closes the history and keeps the clicked destination's focus; Escape closes it and returns focus to its trigger.
@@ -756,7 +756,7 @@ While a listed pane's status is unknown, `Stop work and close` is disabled, `Kee
 Otherwise one sheet opens in place of the Stop-work confirmation, titled `이 에이전트와 자식 N개를 닫을까요?` (a tab: `이 탭과 자식 N개를 닫을까요?`), N counting only the descendants outside.
 It has no sentence under the title, and lists the target first and then its descendants in tree order, indented by depth, each with the sidebar's status mark and name and a device chip when it runs on another device than the target; the list scrolls inside the sheet when it is long.
 Closing a tab lists every agent in the tab as a target, each followed by its own descendants, so a working agent beside the parent is shown before it closes.
-A line above the list counts, with the sidebar's marks and neutral text, the descendants waiting for an answer to a question, approval or block (`답 대기`), working (`진행 중`), holding an unread result their row marks with a dot (`확인 안 한 결과`; a delegated child's finished turn is its parent's news, so it reads quiet here as on its row, status-marks B24) and unreadable (`상태 모름`), leaving out a kind with none; those rows are bright and add their status word in neutral text, and a quiet one (idle, read, asleep) is dimmed with no word, its state in its mark's tooltip.
+A line above the list counts, with the sidebar's marks and neutral text, the descendants waiting for an answer to a question, approval or block (`답 대기`), working (`작업 중`), holding an unread result their row marks with a dot (`확인 안 한 결과`; a delegated child's finished turn is its parent's news, so it reads quiet here as on its row, status-marks B24) and unreadable (`상태 모름`), leaving out a kind with none; those rows are bright and add their status word in neutral text, and a quiet one (idle, read, asleep) is dimmed with no word, its state in its mark's tooltip.
 Each row is focusable, and its accessible name is its name, its device when it differs, and its status word.
 `이것만 닫기`'s tooltip and accessible description say what it leaves: the children keep running and come up into the operator's own list.
 Colour in both sheets is the status marks' and the one destructive button's (`모두 닫기`, `Stop work and close`); `취소`, `Keep open` and `이것만 닫기` are neutral.
@@ -1841,7 +1841,7 @@ A raised group draws at most its five (Needs You) or three (Done) most recent ag
 The fold is the page's own and starts closed on a fresh load, so the list returns to its short form; an agent folded there keeps its ⌥n number on its checkout row.
 A device's Projects list is its `Needs You · N` group, its `Done · N` group, then Pinned and the projects, then `No agents N` and `Inactive projects N`, and no row there names the device, since the whole list is that device's (with the rail rework of quick device-rail-badges).
 An agent row's title is its identity label at both densities: the rolling task, or the provider's name when no task exists; a Herdr agent name and a Herdr workspace label never become display copy.
-No agents folds worktrees with no unresolved agent, excluding primary, front, dirty, unpushed and already inactive checkouts and one holding a named tab the operator kept ([Agent areas](#agent-areas)); a worktree whose unresolved agents are all delegated children is in no fold and has no line (`session_folds.child_only`, same exclusions), because No agents would be false for it; Cleanup gathers agent worktrees and missing folders at the bottom without assuming they have no live pane.
+Worktrees with no agents folds worktrees with no unresolved agent, excluding primary, front, dirty, unpushed and already inactive checkouts and one holding a named tab the operator kept ([Agent areas](#agent-areas)); a worktree whose unresolved agents are all delegated children is in no fold and has no line (`session_folds.child_only`, same exclusions), because Worktrees with no agents would be false for it; Cleanup gathers agent worktrees and missing folders at the bottom without assuming they have no live pane.
 
 ### Purpose, pinning, and PR chrome
 
