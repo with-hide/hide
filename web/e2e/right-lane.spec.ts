@@ -174,20 +174,20 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
 
-    // Escape in the lane puts it away; the keyboard goes back to the pane.
+    // Escape in the lane closes it as ⌘E does; the keyboard goes back to the pane.
     await documentArea(page).locator(".cm-content").click();
     await page.keyboard.press("Escape");
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "hidden");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
     await expect(pane(page, lane.herdr.panes[0]!).locator(".xterm-helper-textarea")).toBeFocused();
     await expect(page.locator('[data-lane-badge="1"]')).toBeVisible();
     await quietFor(page, 500, "no terminal was fitted again while the lane came and went");
     expect(resizes(lane)).toBe(before);
 
-    // Escape on the rail puts it away too.
+    // Escape on the rail closes it too.
     await railTool(page, "documents").click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
     await page.keyboard.press("Escape");
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "hidden");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
 
     // The rail's documents button, pressed while they show, folds them; with
     // no tool column the lane has nothing left and closes (B11, B12).

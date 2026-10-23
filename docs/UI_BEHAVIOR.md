@@ -92,6 +92,7 @@ Memory is a tool of its own beside the Project tool, not a tab inside it, so wha
 A second short rule between Memory and Explorer marks where the Project's tools end and the checkout's begin (PRD work-tab-pr-lens D-37); it is derived from each tool's scope, so a tool of the other scope moves it.
 A rail button is drawn pressed, with a primary bar at the rail's edge, while its column shows it: a tool icon while the tool column shows that tool, the documents or 보기 button while the viewing column draws it.
 Pressing a tool icon opens the tool column on that tool, or swaps the tool it shows; pressing the pressed one closes the tool column, and the viewing column stays (B14).
+A closed lane that a tool icon, an open, a reveal or the 보기 slot opens shows that one column alone, the other closed, whatever the lane held when ⌘E closed it; only ⌘E brings back both columns (operator decision 2026-10-23, replacing the mockup's reopen of the other column).
 Pressing the documents or 보기 button brings it to the front of the viewing column; pressed while it is in front, it folds the viewing column, and pressing it again brings the same content back (B11).
 The Project icon is a briefcase and the Explorer icon an open folder, so neither repeats the Overview's dashboard mark or the other's folder.
 The Project icon carries a warning-coloured number counting its project's 할 일, no number at 0, its hint ending in it, such as `할 일 2`; worktrees to remove, memory to move into documents and bots' pull requests are never in it (B38).
@@ -106,8 +107,7 @@ The viewing column has no header of its own: the documents draw their View areas
 
 Unpinned, the lane opens over Agent Views at their right edge, set apart by a shadow and a left border in both themes; the terminals under it keep their grid and layout, are not dimmed, and keep their input and output (B20).
 An unpinned lane stays up until the operator takes it down: a click on a terminal pane, choosing an agent or a tab, another Workspace in front and a restart all leave it as it was.
-⌘E closes the lane whole, and Escape inside the lane or on its rail puts it away and hands the keyboard to the focused pane; Escape first closes a menu, popover or search open in the lane, and Escape in a terminal is the program's.
-A lane put away keeps its documents, tabs, scroll, previews and searches, and ⌘E, an open or a reveal brings it back as it was.
+⌘E closes the lane whole, and Escape inside an unpinned lane or on its rail closes it the same way and hands the keyboard to the focused pane, so a tool, an open or a reveal afterwards opens its own column alone and only ⌘E brings both back (operator decision 2026-10-23); Escape first closes a menu, popover or search open in the lane, and Escape in a terminal is the program's.
 Pinned (`Pin · keep it beside the agents`), the lane docks beside Agent Views, which narrow by its width once; unpinned (`Unpin · back over the agents`), Agent Views take their width back and the lane is over them again.
 The pin is the lane's, whatever its columns show, and a pinned lane closed and opened again comes back docked.
 A pinned lane docks in any window where its columns' minimums fit beside 480px of Agent Views, the viewing column giving up its width first and the tool column after, each taking its stored width back as the window widens; in a window too narrow for even that the two columns stack, the one brought to the front last drawn and the other behind it, and a body too narrow for even one column draws the lane over the agents as if unpinned, the rail's pin still filled and saying `Pin · too narrow, drawn over` (B19).
@@ -164,7 +164,7 @@ A Workspace stored by a build with the one-tool lane comes back closed at the de
 
 Agent Views is always live: clicking a pane or a tab focuses it and typing goes to it, and chords such as ⌘F, ⌘T and ⌥W act where the keyboard is, a View area, the lane's tool or a pane.
 A lane going out of sight with the keyboard inside it, or a viewing column that folds or closes while the keyboard is in its documents, hands the keyboard to the focused pane.
-Tab never walks into a lane out of sight: a lane put away is inert and holds no Escape layer or focus return, and a native page in it is hidden before it goes inert.
+Tab never walks into a folded or stacked-behind column: it is inert and holds no Escape layer or focus return, and a native page in it is hidden before it goes inert.
 
 An Agent tab shows the focused pane's status mark, then title, using the sidebar row's title and mark rules; the agent's logo stands between them only while the agent logo view mode shows it ([Agent logo view mode](#agent-logo-view-mode)); a tab with no agent keeps the neutral `>_` in both modes.
 A custom Herdr label wins; an empty, numeric, or `Tab N` label instead follows the focused pane's chosen agent title (manual name, Hide AI goal, automatic name, then provider, as [Task identity](status-model.md#task-identity) defines), foreground process name, then `Tab N` using Herdr's stable number; a Herdr workspace label is never a tab or agent name.
@@ -357,7 +357,7 @@ Every tab sees the same list.
 The lane, its tool, pin, tree and widths, and document editing and saving remain shared by the Workspace.
 Changing Agent tabs through the strip, sidebar, search, cycling or a confirmed local or device switch changes no View selection, split or list.
 Closing an Agent tab keeps its Views and documents.
-Putting the lane away or closing it preserves its documents, unsaved text and save state.
+Closing the lane preserves its documents, unsaved text and save state.
 Closing the selected input View chooses its area's most recently visited surviving View, then the right neighbour and then the left when none was visited, and the keyboard follows the confirmed result.
 Closing a background View, including the selected View of another area, leaves input where it was.
 A View context menu borrows the current input without selecting its target, and its automatic focus return does not cancel a pending close follow.
@@ -399,7 +399,7 @@ Each area has at most one preview, and a click never touches another area or a p
 A double-click on the row or the tab, Keep open, or the first edit pins the preview where it is, including a double-click that lands while the file's first read is still running; because the first edit pins, a document that is dirty, saving, or whose save failed is never a preview in any area that shows it.
 Opening a file that is already shown moves to its view instead of adding a tab, choosing the one used last when several views show it.
 The keyboard goes with every open from the Explorer (a click, a double-click or Enter), a History row, ⌘P, Open to the side or a terminal link into the view that shows it once the core places it, so ⌘W, ⌘S and typing act on that file rather than on the pane that printed the link; a page the operator opens (a terminal link's URL or HTML file, the Explorer's Open in Browser, Open server, or a row's, a card's or ⌘K's link) takes it the same way once the core names the display it opened, so ⌘W closes that page, while a View area's New tab gives it to its address field and a page's own new tab leaves it with that page; a folder a link reveals opens nothing to type in, so the keyboard stays in the pane; the tree's arrow keys only move its selection, so the keyboard stays in the tree until something opens.
-Opening a file while the lane is closed, put away or on another tool opens it on Files first.
+Opening a file while the lane is closed or on another tool opens it on Files first.
 Diffs are placed by the same rules.
 
 Open to the side (from the Explorer's file menu, a History row's menu, or ⌘↵ on a ⌘P result) is the only way to show one file twice.
@@ -543,7 +543,7 @@ A definitive failure offers Retry locally; an uncertain result offers a status c
 An agent pane's head carries no task chip, no checklist popover and no chord for one (PRD session-record-goal-flow D-01, B1); the PR, letter and branch marks in the same place stay, and the session record holds the whole record.
 A turn the agent's provider refused for a usage limit or an API error ends as the label's `한도`, and the second row and the turn card draw it as `막힘` with its line as the cause (B9); only the session record tells the two apart.
 A plain shell keeps its terminal mark.
-On an agent pane whose session Hide knows, the status mark, the logo and the title are one button: under the pointer or focus they light together and open nothing, since a card under the head kept rising in the way of the terminal (the turn card opens from the request on the second row, and the record shows the whole title), and a press shows that session's record in the lane's 보기 slot ([The 보기 slot](#the-보기-slot)), opening the lane when it is closed or put away, while the keyboard and the input cursor stay in the pane's terminal (PRD overview-device-tasks B22, sidebar-task-lens B15); the Overview's `레인에서 보기` lands the same way.
+On an agent pane whose session Hide knows, the status mark, the logo and the title are one button: under the pointer or focus they light together and open nothing, since a card under the head kept rising in the way of the terminal (the turn card opens from the request on the second row, and the record shows the whole title), and a press shows that session's record in the lane's 보기 slot ([The 보기 slot](#the-보기-slot)), opening the lane when it is closed, while the keyboard and the input cursor stay in the pane's terminal (PRD overview-device-tasks B22, sidebar-task-lens B15); the Overview's `레인에서 보기` lands the same way.
 A press while the lane already draws that record turns the lane back to its tool, and the fork mark and the PR mark keep their own presses outside the button (B23).
 Whether the lane draws that record is read from the slot's front item and the lane's tool, both of which the core keeps.
 A plain shell, and an agent pane whose session is not known yet, keeps the plain head with nothing to press; the head becomes the button in place once the session is known, on a device's pane as on this Mac's (B24).

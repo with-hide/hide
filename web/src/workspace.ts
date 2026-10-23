@@ -132,13 +132,11 @@ export type LaneSizes = {
  * right-lane D-02..D-04, D-07, D-11):
  *
  * - `closed`: no column; Agent Views has the body.
- * - `hidden`: a column, but an unpinned lane the operator put away with
- *   Escape; kept mounted out of sight.
  * - `overlay`: drawn over Agent Views, which keeps its width.
  * - `docked`: pinned, beside Agent Views, which gives up the lane's width.
  * - `expanded`: over the whole body; Agent Views keeps the width it had.
  */
-export type LaneMode = "closed" | "hidden" | "overlay" | "docked" | "expanded";
+export type LaneMode = "closed" | "overlay" | "docked" | "expanded";
 
 /** The Workspace widths the columns draw from (D-09). */
 export type LaneWidthField = "document_width" | "detail_width" | "explorer_width" | "panel_width";
@@ -175,8 +173,6 @@ export type LaneInput = {
   detailWidth: number | null;
   explorerWidth: number | null;
   panelWidth: number | null;
-  /** An unpinned lane is up: not put away with Escape since it was last called or opened. */
-  shown: boolean;
   expanded: boolean;
   /** The column a stacked lane draws (B19); ignored while both fit. */
   front: LaneSide;
@@ -234,10 +230,9 @@ export function laneFrame(input: LaneInput): LaneFrame {
   const tool = toolWant(input);
   const columns = (view ? 1 : 0) + (tool ? 1 : 0);
   const open = input.open && columns > 0;
-  const visible = open && (input.pinned || input.shown || input.expanded);
   const none: LaneFrame = { mode: "closed", agents: body, width: 0, view: null, tool: null, stacked: false, narrowPin: false };
   if (!open) return none;
-  if (body <= 0) return { ...none, mode: !visible ? "hidden" : input.expanded ? "expanded" : input.pinned ? "docked" : "overlay", agents: 0 };
+  if (body <= 0) return { ...none, mode: input.expanded ? "expanded" : input.pinned ? "docked" : "overlay", agents: 0 };
   // The lane's room: beside the agents' minimum when pinned, else the body.
   const dockRoom = body - sizes.divider - sizes.agentMin;
   const column = (want: Want, width: number): LaneColumn => ({ field: want.field, width, min: want.min });
@@ -260,7 +255,7 @@ export function laneFrame(input: LaneInput): LaneFrame {
     return { view: view ? column(view, width) : null, tool: tool ? column(tool, width) : null, stacked: false, width };
   };
   const docks = input.pinned && dockRoom >= 0 && place(dockRoom) !== null;
-  const mode: LaneMode = !visible ? "hidden" : input.expanded ? "expanded" : docks ? "docked" : "overlay";
+  const mode: LaneMode = input.expanded ? "expanded" : docks ? "docked" : "overlay";
   if (mode === "expanded") {
     // The tool column keeps its width and the viewing column takes the rest (B15).
     if (view && tool) {

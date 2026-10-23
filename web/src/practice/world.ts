@@ -17,6 +17,4 @@ export type PracticeWorld<M> = {
   /** The panes whose terminals show a screen, and that screen for a terminal `cols` wide. */
   panes: (model: M) => string[];
   screen: (model: M, paneId: string, cols: number) => string;
-  /** Whether the right lane is open on this world's screen. */
-  lane: boolean;
 };

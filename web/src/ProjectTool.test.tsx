@@ -71,7 +71,7 @@ describe("the Project tool", () => {
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
       useShellStore.setState({ connection: "live", rest, memory: { project }, usage });
-      useUiStore.setState({ screen: { kind: "workspace" }, laneShown: true, drawnLane: { mode: "docked", view: rest.ui_state?.detail?.shown ? "detail" : "none", tool: "project", stacked: false } });
+      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: rest.ui_state?.detail?.shown ? "detail" : "none", tool: "project", stacked: false } });
       root.render(<TooltipProvider><ToolRail actions={actions} /><ProjectTool actions={actions} /></TooltipProvider>);
     });
     return actions;
