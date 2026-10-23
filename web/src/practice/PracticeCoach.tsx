@@ -86,6 +86,8 @@ function dragPane(drag: PracticeDrag, follow: (point: Point | null) => void) {
     if (t < 1) return void requestAnimationFrame(glide);
     window.setTimeout(() => {
       window.dispatchEvent(new PointerEvent("pointerup", pointer("pointerup", end)));
+      // A mouse released after a drag also clicks; the shell swallows that click (`suppressDragClick`), and left waiting it would eat the learner's next one.
+      window.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, clientX: end.x, clientY: end.y }));
       window.setTimeout(() => follow(null), 250);
     }, 350);
   };
