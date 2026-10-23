@@ -1331,7 +1331,9 @@ Pressing a card opens its detail beside it with `터미널로 이동`, `기록` 
 A change card's last line is `지금: <단계> (n/m)` from its worker's own plan, and the Conductor's `--line` when the worker put up none (PRD hide-plan B16).
 Its detail's PR row carries the same four steps with their names, `코드 → PR → 리뷰 → 머지`, and the worker's plan sits folded under `이 에이전트의 계획 · <N분 전 갱신>`, opening to the plan's small map (B15).
 A decision the Conductor waits on is one banner with `대화로 이동`; a mission whose Conductor is gone shows `Conductor 없음` with `이어받기`, which starts a new agent in the mission's checkout told to take the mission, and the core refuses a second Conductor while the first is there (B44).
-More than twelve nodes fold the done ones under one line that unfolds them (B19).
+Every node is drawn, done ones too, so the map keeps one shape from the first plan to the last report.
+A map wider than the slot is shrunk to the slot's width, so every edge shows at once and the slot scrolls only down; `맞춤 / 100%` at the summary row's end draws it at its own size with scrolling instead, and a card's detail always opens at full size.
+A card whose worker is at it (working or in review) is outlined in the working colour, its PR band kept, and its outgoing edges are drawn in the same colour.
 When the device that runs the mission disconnects, the map keeps its last values dimmed under a note and invents no number (B20).
 A build from before missions opens with an empty 보기 slot when the saved slot held a map; the rest of the saved screen loads as it was.
 
