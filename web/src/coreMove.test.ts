@@ -58,7 +58,7 @@ describe("the strip above the window (W1 to W3)", () => {
     const { t } = await createInterfaceI18n("ko");
     const firstFrame = (move: MoveView) => windowStrip({ connection: "moving", refused: false, move, link: null, machines: moveMachines(undefined, move, t), coreMachine: coreMachineName(undefined, t) }, t);
     const forward = firstFrame(view({ state: "waiting", step: "reattach", device: "mini-2", alias: "mini", abandon: true }));
-    expect(forward?.text).toContain("core를 mini로 옮기는 중");
+    expect(forward?.text).toContain("core를 mini 기기로 옮기는 중");
     expect(forward?.text).not.toContain("mini-2");
     // A move back's strip names this Mac only; its take-here dialog names the core's machine.
     expect(moveMachines(undefined, view({ state: "waiting", direction: "back", device: "mini-2", alias: "mini", abandon: true }), t)).toEqual({ from: "mini", to: "이 Mac" });
@@ -67,13 +67,13 @@ describe("the strip above the window (W1 to W3)", () => {
   it("names the move's step while a move holds the window", async () => {
     const { t } = await createInterfaceI18n("ko");
     const strip = windowStrip({ connection: "moving", refused: false, move: view({ state: "copying", step: "copy" }), link: null, machines: { from: "이 Mac", to: "Mac mini" }, coreMachine: "이 Mac" }, t);
-    expect(strip).toEqual({ kind: "moving", mark: "pending", text: "core를 Mac mini로 옮기는 중 · 3/5 프로젝트와 기록 복사 · 다시 연결될 때까지 입력을 받지 않아요" });
+    expect(strip).toEqual({ kind: "moving", mark: "pending", text: "core를 Mac mini 기기로 옮기는 중 · 3/5 프로젝트와 기록 복사 · 다시 연결될 때까지 입력을 받지 않아요" });
   });
 
   it("names the node's update of its core and its failed link while the screen waits, and nothing once live", async () => {
     const { t } = await createInterfaceI18n("ko");
     const base = { refused: false, move: null, machines, coreMachine: "Mac mini" };
-    expect(windowStrip({ ...base, connection: "connecting", link: { phase: "updating", machine: null, alias: "mini" } }, t)?.text).toBe("Mac mini의 core를 이 앱의 빌드로 바꾸는 중 · 에이전트는 계속 돌아요");
+    expect(windowStrip({ ...base, connection: "connecting", link: { phase: "updating", machine: null, alias: "mini" } }, t)?.text).toBe("Mac mini의 core를 이 앱의 빌드로 바꾸는 중 · 에이전트는 계속 실행돼요");
     expect(windowStrip({ ...base, connection: "reconnecting", link: { phase: "waiting", machine: "Mac mini", alias: "mini" } }, t)).toEqual({ kind: "unreachable", mark: "warn", text: "Mac mini의 core에 연결할 수 없어요 · 다시 연결하는 중" });
     expect(windowStrip({ ...base, connection: "live", link: { phase: "waiting", machine: "Mac mini", alias: "mini" } }, t)).toBeNull();
     // The operator ended the link (B16): the strip offers it back.

@@ -17,7 +17,7 @@ import { create } from "zustand";
 import type { Actions } from "./actions";
 import { AddProjectViews } from "./AddProjectDialog";
 import { agentLogo, monogram } from "./agentLogos";
-import { hideAiFirstRunKey, selection, tileSwitchable } from "./agentOnboardingRules";
+import { selection, tileSwitchable } from "./agentOnboardingRules";
 import { Note, Status } from "./components/settings-rows";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
@@ -316,7 +316,7 @@ function AgentsStep({ actions, reopened, desktop, primary, chosen, onChoose, onN
       <DialogFooter>
         {/* The agent Hide AI will run on under its first-run rule; no line when none of the chosen agents is signed in (B13). */}
         <span className="min-w-0 flex-1 text-caption text-muted-foreground">
-          {hideAi ? <span data-onboarding-hide-ai={hideAi.id}>{t(hideAiFirstRunKey(hideAi.agent), { agent: hideAi.label })}</span> : null}
+          {hideAi ? <span data-onboarding-hide-ai={hideAi.id}>{t("hideAi.firstRun", { agent: hideAi.label })}</span> : null}
         </span>
         {/* A refused pass may take a terminal and a restart to clear, so the step can be left; the question stays unanswered. */}
         {refused && !reopened ? (
