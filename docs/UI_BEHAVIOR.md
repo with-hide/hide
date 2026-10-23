@@ -2375,6 +2375,8 @@ The agents' answers and letters are the world's script, drawn in the panes and t
 
 Chapter 8 hands a Conductor a job of several pull requests as a mission: its world draws the plan, the workers in delegated tabs under the Conductor and the one decision it asks as an ordinary question, in `missions` the way the core keeps them, and the learner's answer in the conversation changes the plan; the first plan opens the pane chip's small map by itself under the shell's own rule ([A mission on its Conductor's pane](#a-mission-on-its-conductors-pane)), and the big map opens only from `크게 ›`, as a lane call the world numbers.
 
+Chapter 7 asks an agent to plan before it changes anything, opens the plan from the pane's plan chip and large in the 보기 slot, and approves it in the conversation, because Hide has no button that approves a plan; its world draws `plans` and lays the review on the agent's row as the core's question, and any words sent to the agent put the plan up, then approve it and start the first step.
+
 The window holds no daemon connection and carries no token.
 It asks the shell of the same origin, over one `BroadcastChannel` (`hide-practice`), for the operator's language, chords, theme and progress, and hands each step it reaches back; the shell dispatches `practice_progress_set`, and the core keeps `ui_state.practice` like the other UI choices.
 With no shell answering, the chapters still play and the list says `진행 기록은 Hide 창이 열려 있을 때 저장돼요.`.
