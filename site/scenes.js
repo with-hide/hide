@@ -1,4 +1,4 @@
-// The page's drawn scenes: the team's letters, the setup layers, the terminal and the memory timeline.
+// The page's drawn scenes: the team's letters, the setup layers, the terminal, the memory timeline and the agent driving its browser.
 // The markup already holds each scene's resting frame, which is what reduced motion and a page without
 // script show. A scene plays only while it is on screen and the tab is visible, and stops every timer
 // it started when it leaves.
@@ -197,6 +197,60 @@
       run();
       time.every(11000, run);
       return () => { time.stop(); body.textContent = full; title.textContent = fullTitle; };
+    });
+  }
+
+  // ---- Beside the agent: it opens its page, clicks the button, reads the result and opens the file. ----
+  const beside = document.getElementById("beside-scene");
+  if (beside) {
+    const term = document.getElementById("beside-term");
+    const full = term.textContent;
+    const [ask, open, click, read, file, done] = full.split("\n");
+    const button = document.getElementById("beside-button");
+    const toast = document.getElementById("beside-toast");
+    const cursor = document.getElementById("beside-cursor");
+    const page = beside.querySelector('.page[data-view="page"]');
+    const code = beside.querySelector('.file[data-view="file"]');
+    const tabs = [...beside.querySelectorAll(".view-tab")];
+    const bar = beside.querySelector(".view-bar");
+    const show = view => {
+      page.hidden = view !== "page";
+      bar.hidden = view !== "page";
+      code.hidden = view !== "file";
+      tabs.forEach(tab => tab.classList.toggle("on", tab.dataset.view === view));
+    };
+    const rest = () => {
+      term.textContent = full;
+      show("page");
+      toast.classList.remove("gone");
+      cursor.classList.remove("on");
+      button.classList.remove("pressed");
+    };
+    whileSeen(beside, () => {
+      const time = clock();
+      const run = () => {
+        term.textContent = ask;
+        show("page");
+        toast.classList.add("gone");
+        cursor.classList.remove("on");
+        cursor.style.transform = "translate(40px, 200px)";
+        const line = text => term.append(`\n${text}`);
+        time.after(1100, () => line(open));
+        time.after(2300, () => {
+          line(click);
+          const at = button.getBoundingClientRect();
+          const origin = page.getBoundingClientRect();
+          cursor.classList.add("on");
+          cursor.style.transform = `translate(${at.left - origin.left + at.width / 2 - 7}px, ${at.top - origin.top + at.height / 2 - 7}px)`;
+        });
+        time.after(3400, () => { button.classList.add("pressed"); time.after(160, () => button.classList.remove("pressed")); toast.classList.remove("gone"); });
+        time.after(4100, () => line(read));
+        time.after(5600, () => { line(file); cursor.classList.remove("on"); show("file"); });
+        time.after(6800, () => line(done));
+      };
+      run();
+      time.every(12000, run);
+      return () => { time.stop(); rest(); };
     });
   }
 
