@@ -444,6 +444,7 @@ impl Runtime {
             url,
             area_id,
             new_target,
+            beside,
         } = action
         {
             if !crate::view_layout::browser_address(url) {
@@ -459,8 +460,17 @@ impl Runtime {
                 });
             }
             let load = self.next_browser_load();
-            let view_id = self
-                .change_view_layout(key, |layout, stamp| {
+            let view_id = if *beside && area_id.is_none() {
+                self.change_view_layout(key, |layout, stamp| {
+                    super::view_areas::place_page_beside(layout, url, load, stamp)
+                        .map(|id| (id, true))
+                })
+                .map_err(|error| Refusal {
+                    reason: error.kind(),
+                    next_action: "There is no room for another View area beside this one; close one with hide view close <view-id>, or open without --beside, and retry",
+                })?
+            } else {
+                self.change_view_layout(key, |layout, stamp| {
                     let existing = if *new_target {
                         None
                     } else {
@@ -488,7 +498,8 @@ impl Runtime {
                     layout.insert(&area_id, display, stamp)?;
                     Ok((id, true))
                 })
-                .map_err(layout_refusal)?;
+                .map_err(layout_refusal)?
+            };
             let area_id = self
                 .view_layout_of(key)
                 .and_then(|layout| layout.area_of(&view_id))

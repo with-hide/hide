@@ -628,6 +628,7 @@ fn browser_load_status_tracks_the_current_load_and_retry_does_not_reload() {
         url: "https://example.test/page".into(),
         area_id: None,
         new_target: false,
+        beside: false,
     };
     let request_id = action_id("browser-open");
     let first = runtime
@@ -754,6 +755,7 @@ fn browser_new_target_uses_the_named_area_and_duplicate_intent_converges() {
         url: "https://example.test/page".into(),
         area_id: Some("a1".into()),
         new_target: true,
+        beside: false,
     };
     let id = action_id("new-browser-target");
     let first = runtime
@@ -841,6 +843,7 @@ fn browser_explicit_area_dedupes_only_within_that_area() {
         url: "https://example.test/other".into(),
         area_id: Some("a1".into()),
         new_target: false,
+        beside: false,
     };
     let first = runtime
         .workspace_control_action(
@@ -919,6 +922,71 @@ fn legacy_browser_open_keeps_global_dedupe_and_active_area_insertion() {
     assert_eq!(runtime.view_layout_of(&key).unwrap().displays().count(), 3);
 }
 
+/// `hide browser open --beside` opens the page next to the area in use, a new
+/// area to its right when there is none, and brings forward the page of the
+/// same address already there instead of opening it again (PRD
+/// agent-beside-and-session-guide B14, B15).
+#[test]
+fn a_browser_open_beside_uses_the_neighbouring_area_and_its_page() {
+    let (mut runtime, _dir) = caller_fixture();
+    let expected = runtime
+        .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
+        .unwrap()
+        .context;
+    let key = (expected.device_id.clone(), expected.checkout_path.clone());
+    let mut act = |runtime: &mut Runtime, id: &str, action: serde_json::Value| {
+        runtime
+            .workspace_control_action(
+                crate::node::TEST_NODE,
+                "pane-b",
+                &expected,
+                &action_id(id),
+                serde_json::from_value(action).unwrap(),
+                Ok(None),
+            )
+            .unwrap()
+    };
+    let first = act(
+        &mut runtime,
+        "plain",
+        serde_json::json!({"action": "open_browser", "url": "https://example.test/a"}),
+    );
+    let beside = act(
+        &mut runtime,
+        "beside",
+        serde_json::json!({"action": "open_browser", "url": "https://example.test/b", "beside": true}),
+    );
+    assert_ne!(beside.area_id, first.area_id, "a new area beside the first");
+    let areas = |runtime: &Runtime| runtime.view_layout_of(&key).unwrap().areas().len();
+    assert_eq!(areas(&runtime), 2);
+    act(
+        &mut runtime,
+        "back",
+        serde_json::json!({"action": "select", "view_id": first.view_id}),
+    );
+    let again = act(
+        &mut runtime,
+        "again",
+        serde_json::json!({"action": "open_browser", "url": "https://example.test/b", "beside": true}),
+    );
+    assert_eq!(
+        again.view_id, beside.view_id,
+        "the page beside is brought forward"
+    );
+    assert_eq!(areas(&runtime), 2);
+    assert_eq!(runtime.view_layout_of(&key).unwrap().displays().count(), 2);
+    let other = act(
+        &mut runtime,
+        "other",
+        serde_json::json!({"action": "open_browser", "url": "https://example.test/c", "beside": true}),
+    );
+    assert_eq!(
+        other.area_id, beside.area_id,
+        "another page joins that area"
+    );
+    assert_eq!(areas(&runtime), 2);
+}
+
 #[test]
 fn browser_unknown_area_refuses_without_mutating_empty_or_existing_views() {
     for seeded in [false, true] {
@@ -934,6 +1002,7 @@ fn browser_unknown_area_refuses_without_mutating_empty_or_existing_views() {
             url: "https://example.test/page".into(),
             area_id: Some("missing-area".into()),
             new_target: true,
+            beside: false,
         };
         let id = action_id("unknown-browser-area");
         let before = browser_control_state(&runtime);
@@ -996,6 +1065,7 @@ fn browser_area_removed_during_file_read_refuses_without_mutation() {
         url: format!("file://{}", path.display()),
         area_id: Some(other_area.clone()),
         new_target: true,
+        beside: false,
     };
     let id = action_id("browser-area-disappeared");
     let ActionPreparation::Read(source) = runtime
@@ -1371,6 +1441,7 @@ fn browser_file_source_is_confined_to_the_calling_checkout() {
         url: format!("file://{}", outside.display()),
         area_id: None,
         new_target: false,
+        beside: false,
     };
     let ActionPreparation::Read(source) = runtime
         .workspace_control_prepare_action(
@@ -1391,6 +1462,7 @@ fn browser_file_source_is_confined_to_the_calling_checkout() {
         url: format!("file://{}", inside.display()),
         area_id: None,
         new_target: false,
+        beside: false,
     };
     let id = action_id("inside-html");
     let ActionPreparation::Read(source) = runtime
@@ -1674,6 +1746,7 @@ fn checkout_callers_in_one_checkout_keep_separate_retry_records() {
                 url: "http://localhost:3000".into(),
                 area_id: None,
                 new_target: false,
+                beside: false,
             },
             Ok(None),
         )

@@ -784,6 +784,7 @@ impl BrowserAction {
                     url,
                     area_id: Some(self.area_id.clone()),
                     new_target: true,
+                    beside: false,
                 })
             }
             "close" | "select" if self.url.is_none() => {

@@ -336,6 +336,34 @@ mod tests {
         }
     }
     #[test]
+    fn beside_is_a_switch_for_either_mode_and_its_help_names_the_folder_rule() {
+        let beside_of = |extra: &[&str]| {
+            let mut args = vec![
+                "spawn", "--name", "worker", "--intent", "one", "--kind", "codex", "--repo",
+                "/fixture", "--branch", "topic",
+            ];
+            args.extend_from_slice(extra);
+            match line(&args)? {
+                Delivery::Agents {
+                    command: Command::Spawn { beside, .. },
+                } => Ok::<bool, String>(beside),
+                _ => panic!("spawn"),
+            }
+        };
+        assert_eq!(beside_of(&[]), Ok(false));
+        assert_eq!(beside_of(&["--beside"]), Ok(true));
+        assert_eq!(beside_of(&["--parent", "here", "--beside"]), Ok(true));
+        assert_eq!(
+            beside_of(&["--beside", "--beside"]),
+            Err("--beside is given twice".into())
+        );
+        assert!(USAGE.contains("[--beside]"));
+        assert!(SPAWN_HELP.contains("Without --beside it opens in a tab of its own."));
+        assert!(SPAWN_HELP.contains("Only for your own checkout"));
+        assert!(SPAWN_HELP.contains("run it again without --beside to open it in a new tab"));
+    }
+
+    #[test]
     fn machine_names_the_device_for_either_mode_and_is_in_every_help() {
         let spawn = |extra: &[&str]| {
             let mut args = vec![

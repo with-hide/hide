@@ -243,6 +243,7 @@ pub const COMMANDS: &[Spec] = &[
         options: &[
             optional("--parent", Text),
             optional("--machine", Text),
+            switch("--beside"),
             required("--name", Text),
             required("--intent", Text),
             required("--kind", Text),
@@ -278,6 +279,10 @@ pub const COMMANDS: &[Spec] = &[
             "invalid_brief",
             "brief_not_submitted",
             "mission_brief_missing",
+            "beside_other_checkout",
+            "beside_other_machine",
+            "beside_needs_agent_pane",
+            "beside_pane_unavailable",
         ],
     },
     // Without --json it prints the same answer as a tree for a person.
