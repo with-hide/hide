@@ -20,7 +20,7 @@ import { agentsByPane, allAgents } from "./paneAgents";
 import { ReasonLine } from "./prReason";
 import { hasPullRequests, prListModel } from "./prWork";
 import { projectRepository, settingsTarget } from "./projectSettings";
-import { agentShares, costPrefix, dayHeights, frontProject, missedCount, projectCost, recentCards, todoView, usd } from "./projectStatus";
+import { agentShares, costPrefix, dayHeights, frontProject, memoryAsks, missedCount, projectCost, recentCards, todoView, usd } from "./projectStatus";
 import { machineName } from "./screenMachine";
 import { sameDetailItem, type AgentRow, type DetailItem, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
@@ -46,10 +46,7 @@ export function ProjectTool({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const project = useShellStore((s) => frontProject(s.rest));
   const tab = useUiStore((s) => s.projectTab);
-  const waiting = useShellStore((s) => {
-    const memory = s.memory?.project;
-    return Boolean(project && memory?.enabled && memory.workspace_id === project.id && memory.questions.length > 0);
-  });
+  const waiting = useShellStore((s) => Boolean(project && memoryAsks(s.memory?.project, project.id) > 0));
   if (!project) return <p className="p-lg text-caption text-muted-foreground" data-project-tool="none">{t("history.openWorkspace")}</p>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-project-tool={project.id}>
@@ -290,9 +287,17 @@ function TodoList({ project, status, actions }: { project: Workspace; status: Pr
   });
   const fromMemory = useMemo(() => new Set(promoted ? promoted.split(",").map(Number) : []), [promoted]);
   const view = todoView(status, open);
-  if (status.todo_total === 0) return <p className="text-caption text-subtle-foreground opacity-(--opacity-dimmed)" data-project-todo="empty">{t("projectTool.todo.empty")}</p>;
+  if (status.todo_total === 0) {
+    return (
+      <section className="flex min-w-0 flex-col gap-xs" aria-label={t("projectTool.todo")} data-project-todo="empty">
+        <SectionHead title={t("projectTool.todo")} count={0} />
+        <p className="px-xs text-caption text-subtle-foreground opacity-(--opacity-dimmed)">{t("projectTool.todo.empty")}</p>
+      </section>
+    );
+  }
   return (
     <section className="flex min-w-0 flex-col gap-xs" aria-label={t("projectTool.todo")} data-project-todo={status.todo_total}>
+      <SectionHead title={t("projectTool.todo")} count={status.todo_total} />
       {view.asks.length + view.revisit.length > 0 ? (
         <TodoGroup title={t("projectTool.todo.agents")} kind="agents">
           {view.asks.map((row) => <AgentTodo key={`ask:${row.kind === "ask" ? row.pane_id : ""}`} row={row} agent={row.kind === "ask" ? byPane.get(row.pane_id) : undefined} actions={actions} />)}
@@ -323,10 +328,25 @@ function TodoList({ project, status, actions }: { project: Workspace; status: Pr
   );
 }
 
+/**
+ * A part's head in 현황 (할 일, 최근 기억): one size above its rows and
+ * bolder, so the part reads before its rows; a group inside the part keeps
+ * the small muted head, a third step.
+ */
+function SectionHead({ title, count, children }: { title: string; count?: number; children?: ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-center gap-xs px-xs pb-xxs">
+      <h3 className="text-body font-semibold text-foreground">{title}</h3>
+      {count === undefined ? null : <span className="text-caption tabular-nums text-subtle-foreground" data-project-section-count={count}>{count}</span>}
+      {children}
+    </div>
+  );
+}
+
 function TodoGroup({ title, kind, children }: { title: string; kind: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col" data-project-todo-group={kind}>
-      <h3 className="px-xs pb-xxs text-micro font-medium text-subtle-foreground">{title}</h3>
+      <h4 className="px-xs pb-xxs text-micro font-medium text-subtle-foreground">{title}</h4>
       <ul className="flex min-w-0 flex-col">{children}</ul>
     </div>
   );
@@ -392,15 +412,14 @@ function RecentMemory({ project, actions }: { project: Workspace; actions: Actio
   const toMemory = () => useUiStore.getState().setProjectTab("memory");
   return (
     <section className="flex min-w-0 flex-col gap-xs" aria-label={t("projectTool.memory.recent")} data-project-memory={cards.length}>
-      <div className="flex min-w-0 items-center gap-xs px-xs">
-        <h3 className="text-micro font-medium text-subtle-foreground">{t("projectTool.memory.recent")}</h3>
+      <SectionHead title={t("projectTool.memory.recent")}>
         {memory.questions.length > 0 ? (
           <button type="button" className="rounded-sm bg-warning/15 px-xs text-micro text-warning outline-none focus-visible:ring-1 focus-visible:ring-ring" onClick={toMemory} data-project-memory-handle={memory.questions.length}>
             {t("projectTool.memory.toHandle", { count: memory.questions.length })}
           </button>
         ) : null}
         <button type="button" className="ml-auto rounded-xs text-micro text-subtle-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring" onClick={toMemory} data-project-memory-more="true">{t("projectTool.memory.more")}</button>
-      </div>
+      </SectionHead>
       <ul className="flex min-w-0 flex-col">
         {cards.map((card) => (
           <li key={card.number} className="min-w-0">

@@ -92,7 +92,8 @@ A second short rule between Project and Explorer marks where the Project's tools
 A rail button is drawn pressed, with a primary bar at the rail's edge, while its column shows it: a tool icon while the tool column shows that tool, the documents or 보기 button while the viewing column draws it.
 Pressing a tool icon opens the tool column on that tool, or swaps the tool it shows; pressing the pressed one closes the tool column, and the viewing column stays (B14).
 Pressing the documents or 보기 button brings it to the front of the viewing column; pressed while it is in front, it folds the viewing column, and pressing it again brings the same content back (B11).
-The Project icon carries a warning-coloured number counting its project's 할 일 (see The Project tool), no number at 0; worktrees to remove, memory to move into documents and bots' pull requests are never in it (B38).
+The Project icon is a briefcase and the Explorer icon an open folder, so neither repeats the Overview's dashboard mark or the other's folder.
+The Project icon carries a warning-coloured number counting its project's 할 일 plus what its Memory asks (`처리할 것`, see The Project tool), no number at 0, and its hint names each part, such as `할 일 2 · 기억 처리할 것 4`; worktrees to remove, memory to move into documents and bots' pull requests are never in it (B38).
 The rail's `…` menu holds Pin or Unpin and Expand, which move both columns together (B15).
 A Workspace seen for the first time shows Agent Views alone, its lane closed.
 The Explorer's and Changes' header names its tool, then its scope behind one small icon, a branch for the checkout, in the scope text's colour, and ends with `✕`, which closes the tool column (B14); the icon is decoration.
@@ -830,11 +831,12 @@ A tile's number is a quiet bar until the core has answered, and a 0 is drawn as 
   An agent with a call Hide has no price for is named `가격 없음` apart, those calls in no amount, and when its other calls are priced the total reads `≥`.
   Before the core's first reading the tile is the quiet bar and the page a placeholder; a reading that found no priced call is `$0.00`; when no reading has succeeded, the usage store failing to open included, the tile reads `–` and the page says so, and after a later failure the page keeps the last amounts and says they are the last read.
 
+현황's parts below the tiles, 할 일 and the recent memory, each open with the same head: the part's name one size above its rows and bold, 할 일 with its count; a group inside a part keeps a smaller muted head, so the screen reads in three steps, part, group, row.
 할 일 holds only what stops without the operator (D-16, B34-B37).
 Its first group, `에이전트가 나를 기다림`, lists the questions and decisions not read yet, then `다시 볼 것`, the read and unanswered questions and the ★ tasks, the rows of the sidebar's 태스크 Needs You and 다시 볼 것; a live session whose record still holds an open question joins them though its row asks nothing now, as a new ask while unread and under 다시 볼 것 once read, one line per pane; reading an ask moves its row down and keeps the count, answering it or lifting the ★ takes it out.
 Its second group, `내 PR · 내 리뷰`, lists the project's pull requests the PR list puts in Needs You, the team's review asks and bots' left out; one opened from a Memory card wears `◆ 기억에서`, and a review left on GitHub or a moved state takes it out on the next read.
 A row has no button: an agent's row says `pane` and brings that pane forward with the keyboard, a pull request's says `보기` and opens its card in the viewing column (B36).
-Past five rows the list shows five in that order and `+N 더`, which shows the rest the core sent; past the core's 64 rows a last line sends each kind left over to the sidebar list that holds it, narrowed to the project: `나머지 N개는 사이드바 태스크에서` for the agents' rows and `나머지 PR N개는 사이드바 PR 목록에서` for the pull requests, one link per kind there is; with nothing to do it reads a dim `할 일 없음`.
+Past five rows the list shows five in that order and `+N 더`, which shows the rest the core sent; past the core's 64 rows a last line sends each kind left over to the sidebar list that holds it, narrowed to the project: `나머지 N개는 사이드바 태스크에서` for the agents' rows and `나머지 PR N개는 사이드바 PR 목록에서` for the pull requests, one link per kind there is; with nothing to do its head reads `할 일 0` over a dim `없음`.
 
 The recent memory is the five newest cards of all Memory holds, a search in 기억 narrowing only that tab, each title with its date, `처리할 것 N` at its head while Memory asks something, and `기억에서 자세히 ›`; a card or the chip opens 기억 at its place, and with no card the part is not drawn (B39).
 

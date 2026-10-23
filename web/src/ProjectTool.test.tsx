@@ -92,6 +92,18 @@ describe("the Project tool", () => {
     expect(container.querySelector('[data-project-todo="empty"]')).not.toBeNull();
   });
 
+  it("adds what Memory asks to the rail's number and names both parts (B38)", async () => {
+    const asks: ProjectMemory["questions"] = [{ kind: "failed", number: 9, title: "card 9", start_failure: null }];
+    await render(snapshot(status({ todo: [{ kind: "pr", number: 7 }], todo_total: 1 })), memory(asks));
+    const button = container.querySelector('[data-lane-tool="project"]');
+    expect(button?.querySelector("[data-lane-todo-count]")?.textContent).toBe("2");
+    expect(button?.getAttribute("aria-description")).toBe("1 to do · Memory: 1 to handle");
+    await render(snapshot(status()), memory(asks));
+    expect(container.querySelector('[data-lane-tool="project"] [data-lane-todo-count]')?.textContent).toBe("1");
+    await render(snapshot(status()), { ...memory(asks), enabled: false });
+    expect(container.querySelector('[data-lane-tool="project"] [data-lane-todo-count]')).toBeNull();
+  });
+
   it("holds the tiles' numbers empty until the core answers, and shows 0 as 0 (B33)", async () => {
     await render(snapshot(undefined));
     expect(container.querySelector('[data-project-tile="git"] [data-tile-value]')?.getAttribute("data-tile-value")).toBe("pending");
