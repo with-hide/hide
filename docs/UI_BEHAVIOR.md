@@ -2337,6 +2337,9 @@ Every chord is the operator's own: the host's set, the system's, and the operato
 A chapter with tasks lists them on a card in the lower left with a check as each is done and `↺ 처음부터`; the top center names the chapter and leads back to the list.
 The last step of a chapter offers the next chapter, and the last chapter's offers the list.
 
+Chapter 1 closes its working agent by mistake, through the shell's own Stop-work sheet, and brings it back with Reopen closed tab, where it stood and continuing its conversation; its world answers `close_pane` and `reopen_closed` and draws `recent_closed` the way the core does.
+The practice screen mounts the shell's close sheet, so a learner's close in any chapter asks as it would in Hide.
+
 The window holds no daemon connection and carries no token.
 It asks the shell of the same origin, over one `BroadcastChannel` (`hide-practice`), for the operator's language, chords, theme and progress, and hands each step it reaches back; the shell dispatches `practice_progress_set`, and the core keeps `ui_state.practice` like the other UI choices.
 With no shell answering, the chapters still play and the list says `진행 기록은 Hide 창이 열려 있을 때 저장돼요.`.
