@@ -72,6 +72,8 @@ fn hosting(
         }
         if let Some(session) = session {
             row["agent_session"] = json!({"kind": "id", "value": session});
+            // The core proves the session it hosts by this digest, as `wire.rs` does.
+            row["lineage_session"] = json!(crate::wire::session_digest(session));
         }
         let owned: SessionSnapshotPayload =
             crate::sidebar::owned_label_fixture(json!({"agents": [row]})).unwrap();
@@ -236,6 +238,19 @@ fn a_choice_kept_before_the_session_arrives_reaches_the_wake() {
             .session
             .as_deref(),
         Some(SESSION)
+    );
+    // The Overview map names the bound session's launch choice, model and effort.
+    let graph = &runtime.snapshot().overview_graph.sessions;
+    let drawn = graph
+        .iter()
+        .find(|session| session.pane_id == AGENT)
+        .unwrap();
+    assert_eq!(
+        (
+            drawn.launch_model.as_deref(),
+            drawn.launch_effort.as_deref()
+        ),
+        (Some("gpt-6-luna"), Some("low"))
     );
     sleep(&mut runtime, &folder, "codex");
     let (herdr, starts) = starting_herdr("launch-choice-late-wake");

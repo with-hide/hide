@@ -121,7 +121,7 @@ it("draws a PR node with its band, its mark, the base of its stack, its steps an
     node("cause", { kind: "research", delivery: null, status: "done", line: "The cache was stale", worker: { agent: "opencode", effort_auto: false } }),
     node("together", { kind: "verify", delivery: null, status: "planned", depends_on: ["screen"], worker: { agent: "codex", model: "gpt-6-astra", effort_auto: true } }),
   ];
-  const map = await mount({ items: [mission({ nodes })] }, [], [{ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model: "sonnet" }]);
+  const map = await mount({ items: [mission({ nodes })] }, [], [{ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model: "sonnet", launch_effort: null }]);
   try {
     const screen = map.q('[data-mission-node="screen"]')!;
     expect(screen.className).toContain("border-l-pr-failed");

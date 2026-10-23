@@ -52,7 +52,7 @@ it.each([
     const row = { ...agent, id: paneId, pane_id: paneId, identity_label: `Session ${index}`, session_id: `native-${index}` };
     return { ...project, agents: [row], workspace: { ...workspace, id, label: id, checkouts: [{ ...checkout, workspace_id: id }], agent_scope: { ...emptyScope(), members: [{ pane_id: paneId, project_id: id, checkout_id: checkout.id }] } } };
   }) : [project];
-  const rest = { navigator: { devices: [{ id: "local", kind: "local" }, { id: "mini", kind: "remote" }], workspaces: [workspace], focused_device_id: front }, status: { remote: [{ target_id: "mini", state: "connected" }] }, overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [{ device_id: device, pane_id: pane, session_digest: "confirmed-current", launch_model: null }] } } as unknown as SnapshotRest;
+  const rest = { navigator: { devices: [{ id: "local", kind: "local" }, { id: "mini", kind: "remote" }], workspaces: [workspace], focused_device_id: front }, status: { remote: [{ target_id: "mini", state: "connected" }] }, overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [{ device_id: device, pane_id: pane, session_digest: "confirmed-current", launch_model: null, launch_effort: null }] } } as unknown as SnapshotRest;
   useShellStore.setState({ rest, agents: projects.flatMap((project) => project.agents), focusedPaneId: overflow ? null : pane, connection: "live", linkSummaries: null });
   useUiStore.getState().setOverview({ projectId: null, panel: null });
   useUiStore.setState({ overviewOpen: modal, opening: null, screen: modal ? { kind: "workspace" } : { kind: "main", deviceId: front } });
@@ -123,7 +123,7 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
     available: true, limit: 2000, retained_count: 2, truncated: false, retention_ms: 86400000,
     letters: [{ id: "l1", sender: party("r"), recipient: party("o"), kind: "request", at_unix_ms: 10 }, { id: "l2", sender: party("o"), recipient: party("r"), kind: "report", at_unix_ms: 20 }, { id: "l3", sender: party("o"), recipient: party("r"), kind: "progress", at_unix_ms: 30 }],
     direct_inputs: [{ id: "d1", sender: party("c"), recipient: party("r"), at_unix_ms: 40 }],
-    sessions: ["r", "c", "o"].map((pane) => ({ device_id: "local", pane_id: pane, session_digest: `digest-${pane}`, launch_model: null })),
+    sessions: ["r", "c", "o"].map((pane) => ({ device_id: "local", pane_id: pane, session_digest: `digest-${pane}`, launch_model: pane === "r" ? "opus" : null, launch_effort: pane === "r" ? "high" : null })),
   } } as unknown as SnapshotRest;
   useShellStore.setState({ rest, agents: [root, child, other], focusedPaneId: null, connection: "live", linkSummaries: null });
   useUiStore.getState().setOverview({ projectId: null, panel: null });
@@ -154,6 +154,7 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
     const preview = () => container.querySelector("[data-graph-preview]");
     expect(preview()?.textContent).toContain("Asks you");
     expect(preview()?.textContent).toContain("feat/map");
+    expect(preview()?.textContent).toContain("Launched with · opus · high");
     const team = preview()!.querySelector(".og-team-list")!;
     expect(team.textContent).toContain("검증 자식");
     const talks = [...preview()!.querySelectorAll(".og-talks > div")].map((row) => row.textContent);
@@ -226,7 +227,7 @@ it("opens Work with a pane's session chosen, showing its hidden project and fold
   const projects: BoardProject[] = [{ agents: [root, child], device: null, workspace: { id: "alpha", label: "알파", device_id: "local", path: "/fixture/alpha", registered: true, temporary: false, pinned: false, checkouts: [row], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: ["r", "c"].map((pane_id) => ({ pane_id, project_id: "alpha", checkout_id: row.id })) } } }];
   const alpha = { device_id: "local", workspace_id: "alpha" };
   const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local" }, status: {},
-    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: ["r", "c"].map((pane) => ({ device_id: "local", pane_id: pane, session_digest: `digest-${pane}`, launch_model: null })) },
+    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: ["r", "c"].map((pane) => ({ device_id: "local", pane_id: pane, session_digest: `digest-${pane}`, launch_model: null, launch_effort: null })) },
     ui_state: { overview_graph: { ...GRAPH_CHOICES_DEFAULTS, hidden_projects: [alpha], folded_projects: [alpha], team_folds: [{ session: { device_id: "local", pane_id: "r", session: "digest-r" }, folded: true }] } },
   } as unknown as SnapshotRest;
   // `n` runs in a pane the map has no project for yet.
@@ -291,7 +292,7 @@ it("opens a sleeping pane's session drawn on the whole map, its quiet team unfol
   const alone = legacyAgentRow({ id: "z", pane_id: "z", identity_label: "혼자 잠듦", agent_kind: "claude", session_id: "native-z", mark: "asleep", status_code: "sleeping" });
   const projects = [board("alpha", [root, sleeper]), board("beta", [alone])];
   const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local" }, status: {},
-    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: ["r", "s", "z"].map((pane) => ({ device_id: "local", pane_id: pane, session_digest: `digest-${pane}`, launch_model: null })) } } as unknown as SnapshotRest;
+    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: ["r", "s", "z"].map((pane) => ({ device_id: "local", pane_id: pane, session_digest: `digest-${pane}`, launch_model: null, launch_effort: null })) } } as unknown as SnapshotRest;
   useShellStore.setState({ rest, agents: [root, sleeper, alone], focusedPaneId: null, connection: "live", linkSummaries: null });
   useUiStore.setState({ overviewOpen: false, opening: null, screen: { kind: "main", deviceId: "local" } });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -328,7 +329,7 @@ it("opens the project scope for a pane outside the graph budget", async () => {
     return { agents: [agent], device: null, workspace: { id, label: id, device_id: "local", path: `/fixture/${id}`, registered: true, temporary: false, pinned: false, checkouts: [checkout], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: [{ pane_id: pane, project_id: id, checkout_id: checkout.id }] } } };
   });
   const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local" }, status: {},
-    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: projects.map((project) => ({ device_id: "local", pane_id: project.agents[0]!.pane_id, session_digest: `digest-${project.agents[0]!.pane_id}`, launch_model: null })) } } as unknown as SnapshotRest;
+    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: projects.map((project) => ({ device_id: "local", pane_id: project.agents[0]!.pane_id, session_digest: `digest-${project.agents[0]!.pane_id}`, launch_model: null, launch_effort: null })) } } as unknown as SnapshotRest;
   useShellStore.setState({ rest, agents: projects.flatMap((project) => project.agents), focusedPaneId: null, connection: "live", linkSummaries: null });
   useUiStore.setState({ overviewOpen: false, opening: null, screen: { kind: "main", deviceId: "local" } });
   const actions = createActions(() => true);

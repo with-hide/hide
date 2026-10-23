@@ -3,7 +3,7 @@ import { scopeAgents, type LensAgent } from "./overviewLens";
 import type { BoardProject } from "./projectBoard";
 import type { AgentRow, GraphProjectKey, OverviewGraphFocus, GraphScope, GraphSessionKey, OverviewGraphChoices, OverviewGraphMetadata, OverviewGraphParty } from "./snapshot";
 
-export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null };
+export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null; launchEffort: string | null };
 export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; roots: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null };
 export type GraphFocus = OverviewGraphFocus;
 /** `chosen`: the session whose details are open, drawn whatever the filter says (PRD pane-open-in-overview D-05). */
@@ -124,7 +124,7 @@ function projectSessions(projects: readonly BoardProject[], metadata: OverviewGr
       const agentId = graphSessionId(deviceId, row.agent.pane_id, digest ?? row.agent.session_id ?? null);
       if (seen.has(agentId)) return [];
       seen.add(agentId);
-      return [{ ...row, id: agentId, projectId: id, deviceId, digest, launchModel: session?.launch_model ?? null }];
+      return [{ ...row, id: agentId, projectId: id, deviceId, digest, launchModel: session?.launch_model ?? null, launchEffort: session?.launch_effort ?? null }];
     });
     agents.sort((a, b) => a.id.localeCompare(b.id));
     const parents = lineageParents(agents);

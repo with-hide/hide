@@ -53,7 +53,7 @@ const words = {
   "overviewGraph.failed": ["Couldn't place the graph. Sessions remain available.", "그래프를 배치하지 못함. 세션 목록을 사용할 수 있어요.", "グラフを配置できません。セッション一覧は利用できます。", "无法排列图。仍可使用会话列表。"],
   "overviewGraph.retry": ["Retry", "다시 시도", "再試行", "重试"],
   "overviewGraph.limit": ["Up to {{count}} visible nodes. Choose one project, or find the rest in Sessions.", "최대 {{count}}개 노드 표시. 프로젝트 하나를 고르거나 나머지는 세션 목록에서 찾으세요.", "最大 {{count}} ノード。プロジェクトを1つ選ぶか、残りはセッション一覧で探してください。", "最多显示 {{count}} 个节点。请选择一个项目，或在会话列表中查找其余会话。"],
-  "overviewGraph.launchModel": ["Launch model · {{model}}", "시작 모델 · {{model}}", "開始モデル · {{model}}", "启动模型 · {{model}}"],
+  "overviewGraph.launchModel": ["Launched with · {{model}}", "시작 설정 · {{model}}", "開始設定 · {{model}}", "启动设置 · {{model}}"],
   "overviewGraph.openSession": ["Open session", "세션 열기", "セッションを開く", "打开会话"],
   "overviewGraph.openRecord": ["Open record", "기록 보기", "記録を表示", "查看记录"],
   "overviewGraph.close": ["Close details", "상세 닫기", "詳細を閉じる", "关闭详情"],

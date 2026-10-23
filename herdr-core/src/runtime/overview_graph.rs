@@ -18,7 +18,7 @@ impl Runtime {
             let Some(digest) = agent.lineage_session.as_ref() else {
                 return;
             };
-            let launch_model = launches
+            let choice = launches
                 .get(&agent.pane_id)
                 .filter(|launch| {
                     hide_agent_adapter::canonical_kind(&agent.agent_kind) == launch.kind
@@ -26,14 +26,15 @@ impl Runtime {
                             crate::wire::session_digest(session).as_ref() == Some(digest)
                         })
                 })
-                .and_then(|launch| launch.choice.model.clone());
+                .map(|launch| &launch.choice);
             sessions.insert(
                 (device.to_owned(), agent.pane_id.clone()),
                 crate::model::GraphSession {
                     device_id: device.to_owned(),
                     pane_id: agent.pane_id.clone(),
                     session_digest: digest.clone(),
-                    launch_model,
+                    launch_model: choice.and_then(|choice| choice.model.clone()),
+                    launch_effort: choice.and_then(|choice| choice.effort.clone()),
                 },
             );
         };

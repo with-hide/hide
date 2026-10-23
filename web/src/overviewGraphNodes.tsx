@@ -61,6 +61,9 @@ const graphRowLine = (agent: AgentRow) => sidebarLine(agent) ?? rowLine(agent);
 /** Whether a session has anything to say on its second row. */
 export const hasGraphLine = (agent: AgentRow) => Boolean(agent.state.ask || graphRowLine(agent));
 
+/** The model and effort Hide launched a session with, as chosen ("opus · high"); null without a proved launch. */
+export const launchWords = (row: Pick<GraphAgent, "launchModel" | "launchEffort">) => [row.launchModel, row.launchEffort].filter(Boolean).join(" · ") || null;
+
 /** What a session does now, as its sidebar row says it, or what it asks the operator. */
 export function GraphLine({ agent, className }: { agent: AgentRow; className?: string }) {
   const { t } = useInterfaceTranslation();
@@ -118,14 +121,14 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
   const { row, root, choose, highlight, team } = data;
   const reveal = useRevealNode(id);
   const asking = row.agent.mark === "turn";
+  const launch = launchWords(row);
   return <div className="og-session" data-root={root} data-mark={row.agent.mark} data-selected={selected} data-current={data.current} data-context={data.context} data-muted={data.muted} data-highlighted={data.highlighted} data-folded-turn={team?.folded === true && team.turn > 0} data-graph-session={row.agent.pane_id}>
     <Ports />
-    <button type="button" className="og-session-target nopan" aria-label={[rowAccessibleName(t, row.agent, row.device), starred(row.agent) ? t("taskLens.revisit.starred") : null, data.current ? t("overviewGraph.currentPane") : null, data.context ? t("overviewGraph.context") : null, row.launchModel ? t("overviewGraph.launchModel", { model: row.launchModel }) : null].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
-      {root
-        ? <span className="og-orb og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })}><AgentMark kind={row.agent.agent_kind} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} /></span></span>
-        // A delegated session is a small dot in its state's color.
-        : <span className="og-dot og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })} />}
+    <button type="button" className="og-session-target nopan" aria-label={[rowAccessibleName(t, row.agent, row.device), starred(row.agent) ? t("taskLens.revisit.starred") : null, data.current ? t("overviewGraph.currentPane") : null, data.context ? t("overviewGraph.context") : null, launch ? t("overviewGraph.launchModel", { model: launch }) : null].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
+      {/* A delegated session is the same circle, smaller (its size comes from data-root). */}
+      <span className="og-orb og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })}><AgentMark kind={row.agent.agent_kind} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} /></span></span>
       <strong className="og-session-title"><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong>
+      {launch ? <span className="og-session-launch" aria-hidden="true">{launch}</span> : null}
       {root || asking ? <GraphLine agent={row.agent} className={asking ? "og-session-line og-asking" : "og-session-line"} /> : null}
     </button>
     {team ? <button type="button" className="og-team-chip nodrag nopan" data-folded={team.folded} data-turn={team.turn > 0} aria-expanded={!team.folded} aria-label={t(team.folded ? "overviewGraph.unfoldTeam" : "overviewGraph.foldTeam", { count: team.count })} onClick={team.toggle}>

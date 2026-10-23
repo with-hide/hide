@@ -19,7 +19,7 @@ function project(id: string, agents: AgentRow[], device = "local"): BoardProject
 const party = (pane: string, session = `digest-${pane}`, device = "local"): OverviewGraphParty => ({ device_id: device, pane_id: pane, session });
 const letter = (id: string, sender: OverviewGraphParty, recipient: OverviewGraphParty, kind = "request", at = 10) => ({ id, sender, recipient, kind, at_unix_ms: at });
 function metadata(parties: OverviewGraphParty[], letters: OverviewGraphMetadata["letters"] = []): OverviewGraphMetadata {
-  return { available: true, limit: 2000, retained_count: letters.length, truncated: false, retention_ms: 86400000, letters, sessions: parties.map((row) => ({ device_id: row.device_id, pane_id: row.pane_id, session_digest: row.session, launch_model: null })) };
+  return { available: true, limit: 2000, retained_count: letters.length, truncated: false, retention_ms: 86400000, letters, sessions: parties.map((row) => ({ device_id: row.device_id, pane_id: row.pane_id, session_digest: row.session, launch_model: null, launch_effort: null })) };
 }
 type Model = ReturnType<typeof overviewGraphModel>;
 const pane = (model: Model, id: string) => model.allAgents.find((row) => row.id === id)!.agent.pane_id;

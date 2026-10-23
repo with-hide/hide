@@ -1028,7 +1028,7 @@ Selection, the project search, the graph/list choice and the camera are not reme
 
 The graph is a force map centred on the operator, the way Obsidian's graph view is drawn (PRD overview-main-map D-01, D-20): a `나` circle is fixed at the centre, and every session without a lineage parent (a root) is held loosely toward it by a faint line.
 Each project gathers around its own place on an ellipse around the operator, so a project's sessions settle as one cluster apart from the others.
-A delegated session is a small dot in its state colour, tied short to its parent by a faint line, and a grandchild sits outside its parent the same way (D-02).
+A delegated session is the root's circle drawn smaller: its agent's logo, its state on the ring and the corner mark, tied short to its parent by a faint line, and a grandchild sits outside its parent the same way (D-02).
 Behind each project's cluster is a soft glow in the project's accent colour, and its name sits in bold, larger than a session's title, in that colour above the cluster; there is no band or box (D-17).
 The accent is one of sky, violet, lime and amber, chosen by a stable hash of the project's id.
 Pointing at a project's name or its row in the side column, focusing either from the keyboard, or choosing one of its sessions so its details open, makes that project's glow and name clearly stronger, and they return when the pointer leaves or the choice closes; the current pane's highlight at entry lights nothing, and reduced motion changes them without a transition (B21).
@@ -1037,7 +1037,8 @@ Status, labels, letters, filters, selection, hiding and folding never enter the 
 When a session appears, every placed session holds still while only the new one finds a place beside its parent or in its project; a session that leaves takes only itself away.
 Admission keeps the map within the 400-node budget (below); a map the layout cannot place fails into the existing Retry and session list.
 A root's circle shows its title and its sidebar second line (what it is doing, what it asks, what it waits for); a descendant shows only its title, plus what it asks in amber while it is the operator's turn.
-Provider, proved launch model, state words and judged tasks are not drawn under circles; the accessible name still reads title, state, provider and proved launch model.
+Under every circle's title, the model and effort Hide proved it launched the session with sit in one small quiet line (`opus · high`), as the start chose them; a session Hide did not start, or one whose conversation has changed since, shows no line rather than a guess.
+State words and judged tasks are not drawn under circles; the accessible name reads title, state, provider and the launch choice.
 The ring colour and shape of each circle encode its mark (working, waiting, my turn, unread result, quiet), with the StatusMark beside it and a dashed outline on the current pane's session.
 
 Lines carry no words.
@@ -1066,7 +1067,7 @@ Folding a team leaves its root circle with a chip that counts its descendants an
 Folding a project, from the faint fold button beside its name in the map (clear while the name is pointed at), turns its cluster into one circle in the project's place, filled faintly and bordered in the project's colour, keeping the project's glow and its emphasis, with its name at the expanded name's size and colour, its session count and nonzero counts; a line between that project and another ends on the circle, and choosing the circle unfolds the cluster to its old shape; both places share one fold state, and the button never starts a project drag (B25).
 Fold all folds every project into its circle and leaves each team's own fold as it was; Unfold all opens every project and every team; both sit in the toolbar of the graph view (B26).
 A project folds and unfolds only on the map: its name's fold button, its folded circle, and Fold all or Unfold all; the side column does not fold (PRD overview-graph-remembered D-03).
-Choosing a session by click, Enter or Space replaces the column with its panel: title, state, project and branch, provider and proved launch model, what it does now, what it asks the operator when it asks, its team (every descendant with its state; choosing one selects it), its counterparts with sent and received counts only, and `세션 열기 · 기록 보기`.
+Choosing a session by click, Enter or Space replaces the column with its panel: title, state, project and branch, provider and proved launch model and effort, what it does now, what it asks the operator when it asks, its team (every descendant with its state; choosing one selects it), its counterparts with sent and received counts only, and `세션 열기 · 기록 보기`.
 Below the Overview breakpoint the panel overlays the graph; Escape closes the panel first, and changing filter or scope clears a selection that no longer matches.
 Hover and keyboard focus outline the pointed session and its counterparts and never open details.
 
