@@ -184,14 +184,34 @@ async function chooseFromMenu(menu: PracticeMenu, follow: (point: Point | null) 
   follow(null);
 }
 
-/** Where the `예시` mark of each element `selector` matches goes: just past the end of its text, so it covers none. */
-function examplesOf(selectors: readonly string[] | undefined): Point[] {
+/** The first words `element` shows: a row's title before its subtitle, a card's heading. */
+function firstWords(element: Element): Text | null {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, { acceptNode: (node) => (node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP) });
+  return walker.nextNode() as Text | null;
+}
+
+/**
+ * Where the `예시` mark of each element `selector` matches goes: just past the
+ * end of the first words it shows, so it covers none of them, and never past
+ * the element's own right edge (`reach`, the mark's width from where it is
+ * put), so it covers nothing beside the element either.
+ */
+function examplesOf(selectors: readonly string[] | undefined, reach: number): Point[] {
   return (selectors ?? []).flatMap((selector) => [...document.querySelectorAll(selector)].flatMap((element) => {
+    const words = firstWords(element);
+    if (!words) return [];
     const range = document.createRange();
-    range.selectNodeContents(element);
+    range.selectNodeContents(words);
     const end = [...range.getClientRects()].filter((box) => box.width && box.height).at(-1);
-    return end ? [{ x: end.right, y: end.top + end.height / 2 }] : [];
+    if (!end) return [];
+    return [{ x: Math.min(end.right, element.getBoundingClientRect().right - reach), y: end.top + end.height / 2 }];
   }));
+}
+
+/** How far a drawn `예시` mark reaches right of the point it is put at; none is drawn yet before the first. */
+function markReach(): number {
+  const mark = document.querySelector<HTMLElement>("[data-practice-example]");
+  return mark ? mark.getBoundingClientRect().right - parseFloat(mark.style.left) : 0;
 }
 
 /** One box around every element `selector` matches. */
@@ -236,6 +256,20 @@ const SHELL_LAYERS = '[data-palette], [data-slot="cycle-overlay"]';
 const OPEN_MENUS = '[role="menu"]';
 const shellLayerOpen = (state: ReturnType<typeof useUiStore.getState>) => state.overlay !== "none" || state.cycle !== null;
 
+/** The palette field a step types into, or null for a step that types nowhere or into a terminal. */
+function fieldOfStep(step: PracticeStep): string | null {
+  return step.gesture && "type" in step.gesture && "input" in step.gesture.type ? step.gesture.type.input : null;
+}
+
+/** Whether the field `selector` marks is on screen and holds words: then ⏎ there is the palette's, which opens the row it highlights. */
+const fieldFilled = (selector: string | null) => !!selector && !!document.querySelector<HTMLInputElement>(selector)?.value.trim();
+
+/** Whether the field `selector` marks holds all the words `step` types into it. */
+function wordsIn(selector: string, step: PracticeStep): boolean {
+  const words = step.gesture && "type" in step.gesture ? step.gesture.type.text : "";
+  return document.querySelector<HTMLInputElement>(selector)?.value === words;
+}
+
 const ZONES = [
   { selector: "[data-sidebar-box]", key: "view" },
   { selector: "[data-agent-area]", key: "work" },
@@ -273,6 +307,9 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const palette = useUiStore(shellLayerOpen);
   const [layerBox, setLayerBox] = useState<Rect | null>(null);
   const step = chapter.steps[index]!;
+  const field = fieldOfStep(step);
+  // Whether the step's field holds words now, so the bubble says what ⏎ does there.
+  const [filled, setFilled] = useState(false);
   const last = index === chapter.steps.length - 1;
   // A command the host has no chord for is taught by pressing what the step marks.
   const pressed = !!step.command && !chordOf(step.command);
@@ -312,11 +349,12 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
         return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
       });
-      const marks = examplesOf(chapter.world.examples);
+      const marks = examplesOf(chapter.world.examples, markReach());
       setExamples((before) => (marks.length === before.length && marks.every((at, i) => Math.abs(at.x - before[i]!.x) < 0.5 && Math.abs(at.y - before[i]!.y) < 0.5) ? before : marks));
       // A right-click menu the learner opened is never under the bubble either.
       const covering = shellLayerOpen(useUiStore.getState()) ? rectOf(SHELL_LAYERS) : rectOf(OPEN_MENUS);
       setLayerBox((before) => (same(before, covering) ? before : covering));
+      setFilled(fieldFilled(fieldOfStep(step)));
       const box = bubble.current;
       if (box) setSize((before) => (before.w === box.offsetWidth && before.h === box.offsetHeight ? before : { w: box.offsetWidth, h: box.offsetHeight }));
       frame = requestAnimationFrame(follow);
@@ -386,9 +424,18 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!event.isTrusted || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.isComposing) return;
-      // A step that types into the palette's field keeps ⏎: the palette's own ⏎ would open its first row.
-      const typesInPalette = step.gesture && "type" in step.gesture && "input" in step.gesture.type;
-      if (useUiStore.getState().overlay !== "none" && !(typesInPalette && event.key === "Enter")) return;
+      // A step that types into the palette's field keeps ⏎ while the field is empty, to type its words;
+      // past them ⏎ is the palette's, which opens the row it highlights.
+      const types = field !== null && !fieldFilled(field);
+      const open = useUiStore.getState().overlay !== "none";
+      // While the coach is still typing into the field, it holds only part of the words: ⏎ there would open the wrong row, so it waits.
+      const typing = playing.current && playing.current !== step ? fieldOfStep(playing.current) : null;
+      if (open && event.key === "Enter" && typing && !wordsIn(typing, playing.current!)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (open && !((types || playing.current === step) && event.key === "Enter")) return;
       if (event.key === "Enter" || (event.key === "ArrowRight" && !acts(step))) {
         event.preventDefault();
         event.stopPropagation();
@@ -401,14 +448,16 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [back, perform, step]);
+  }, [back, field, perform, step]);
 
   const words = (part: string) => say(`practice.${chapter.id}.${step.id}.${part}`);
+  // A step that types into a palette says how to type, not the palette's chord, which would close it; past its words, nothing.
   const via: ReactNode = pressed ? say("practice.via.press")
+    : field ? (palette && filled ? null : say("practice.via.typeField"))
     : step.command && step.gesture && "click" in step.gesture ? <WithKeys id={step.command} text={say("practice.via.buttonOrKey", { keys: KEYS_MARK })} />
     : step.command ? <WithKeys id={step.command} text={say("practice.via.key", { keys: KEYS_MARK })} />
     : step.gesture && "drag" in step.gesture ? say("practice.via.drag")
-    : step.gesture && "type" in step.gesture ? say("input" in step.gesture.type ? "practice.via.typeField" : "practice.via.type")
+    : step.gesture && "type" in step.gesture ? say("practice.via.type")
     : step.gesture && "menu" in step.gesture ? say("practice.via.menu") : null;
   const go = last ? (next ? say("practice.toChapter", { number: next.number }) : say("practice.toHub")) : acts(step) ? say("practice.try") : say("practice.next");
   const place = besideLayer(bubblePlace(ring, step.side, size), layerBox, size);
