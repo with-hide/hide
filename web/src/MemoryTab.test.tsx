@@ -276,7 +276,7 @@ describe("the Memory tab", () => {
       questions: [{ kind: "unbuilt", number: 7, title: "card 7", reason: "No branch builds the backlog source" }],
     }));
     const asked = container.querySelector("[data-memory-question='unbuilt']");
-    expect(asked?.textContent).toContain("Not built yet · nothing builds it");
+    expect(asked?.textContent).toContain("Not built yet · no work underway");
     // Nothing to promote: it is never selected for a batch, retried or promoted.
     expect(asked?.querySelector("[data-memory-select]")).toBeNull();
     expect(asked?.querySelector("[data-memory-unbuilt='7']")).not.toBeNull();
@@ -326,7 +326,7 @@ describe("the Memory tab", () => {
     const merged = container.querySelector("[data-memory-card='8']");
     expect(merged?.className).toContain("opacity-");
     expect(merged?.textContent).toContain("AGENTS.md");
-    expect(merged?.textContent).toContain("In the file · not injected");
+    expect(merged?.textContent).toContain("In the file · not given to agents");
   });
 
   it("explains waiting once above the list and dims the cards waiting for a check", async () => {
@@ -351,7 +351,7 @@ describe("the Memory tab", () => {
   it("does not call cards already in repository documents a pending check", async () => {
     await render(memory({ usable_cards: 0, rows: [row(3, { promotion: { state: "merged", agent: null, pr_number: 44, pr_url: "https://github.com/acme/one/pull/44", target_path: "AGENTS.md", github_failure: null } })] }));
     expect(container.querySelector("[data-memory-empty]")).toBeNull();
-    expect(container.textContent).toContain("In the file · not injected");
+    expect(container.textContent).toContain("In the file · not given to agents");
   });
 
   it("marks only the running card as checking and explains zero usable cards", async () => {
