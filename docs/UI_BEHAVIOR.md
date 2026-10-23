@@ -2337,6 +2337,8 @@ A chapter is three new files and no change to a shared one, so chapters written 
 - `web/src/practice/worlds/<id>.ts`, when no world there fits: the world the chapter plays in.
 
 A step names what it rings (`target`, a selector into the shell), where the bubble sits (`side`), the command it teaches (`command`, never a chord), a `gesture` when ⏎ should press a button or drag a pane instead of pressing the chord, and `done`, which reads the world; a step without `done` is a look.
+A `type` gesture types into a pane's terminal and sends it, or into a field (a palette's search box) letter by letter, where ⏎ stays the coach's until the words are in and the palette's after; a field the step's `command` opens is opened by the first ⏎.
+A world sends what the core sends beside the snapshot as `frames` (⌘K's session search, the 보기 slot's record and link record), and names in `examples` what it invented that could pass for a real record, which the coach marks `예시` just past its text; the shell's own components stay as they are.
 A world (`web/src/practice/world.ts`) gives the first state, answers the core events the chapter's steps dispatch as the core would (an event it does not need answers nothing), and draws the snapshot and each pane's screen.
 `worlds/kit.ts` holds what several worlds build with: a checkout's desk of tabs, panes and groups and the events that change it (`applyDesk`), agent rows (`agent`, with a parent named as the core names it), and the snapshot of one or more projects' desks (`deskSnapshot`).
 A tool only one chapter needs stays in that chapter's world file, and moves to `kit.ts` when a second chapter needs it.
