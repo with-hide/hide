@@ -48,4 +48,6 @@ Agents in Hide's panes call Herdr through `HERDR_BIN_PATH`, which names the serv
 `.github/workflows/herdr-update.yml` looks for a new stable release daily and opens a pull request made by `scripts/bump-herdr.sh`, with the contract that binary reports; it never merges.
 A release on the same protocol changes nothing for operators until Hide ships it.
 A release on a new protocol means an operator who updates Herdr before Hide sees the held screen with the update check, so that bump is merged and released quickly.
+That bump's pull request says so in its title, carries the `herdr-protocol` label and leads its body with the protocol change.
+The same workflow reads the newest preview's protocol daily and opens one issue when a preview speaks another protocol than the pin, so the bump can be prepared before a stable release reaches operators.
 `scripts/check-herdr-contract.sh` compares the pinned binary's `herdr api schema --json` with `contracts/herdr-api.schema.json`, and the wire types are generated from that contract in `herdr-core/src/wire.rs`.
