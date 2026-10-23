@@ -1168,7 +1168,7 @@ fn a_sleeping_session_an_older_build_saved_offers_wake_only_while_its_checkout_i
     );
 
     // A wake that failed keeps saying why it failed.
-    let failed = "The conversation couldn\u{2019}t be resumed.";
+    let failed = crate::agent_sleep_herdr::WAKE_NOT_RESUMED;
     {
         let record = runtime
             .snapshot
@@ -1885,7 +1885,7 @@ fn a_failed_wake_says_why_and_can_be_retried_fresh() {
         SLEEPER,
         crate::agent_sleep::WakeMode::Resume,
         crate::agent_sleep_herdr::WakeOutcome::Failed {
-            reason: "The conversation couldn\u{2019}t be resumed.".into(),
+            reason: crate::agent_sleep_herdr::WAKE_NOT_RESUMED.into(),
             detail: "agent_start_failed: exited".into(),
         },
     ));
@@ -1893,7 +1893,7 @@ fn a_failed_wake_says_why_and_can_be_retried_fresh() {
     assert_eq!(failed["sleep"]["state"], "failed");
     assert_eq!(
         failed["sleep"]["reason"],
-        "The conversation couldn\u{2019}t be resumed."
+        crate::agent_sleep_herdr::WAKE_NOT_RESUMED
     );
     assert_eq!(failed["status_code"], "sleep_failed");
     assert!(runtime.dispatch_json(&event(
@@ -1948,7 +1948,7 @@ fn a_wake_whose_agent_never_appears_fails_at_the_starts_deadline() {
     assert_eq!(failed["sleep"]["state"], "failed");
     assert_eq!(
         failed["sleep"]["reason"],
-        "The agent did not become ready in time."
+        crate::agent_sleep_herdr::WAKE_NOT_READY
     );
     assert_eq!(failed["status_code"], "sleep_failed");
 }

@@ -10,10 +10,19 @@ export type CoreEvent = { kind: string; payload: Record<string, unknown> };
 
 /**
  * What the practice window sends a world besides the core's events: text the
- * shell would have put on the clipboard (`{ text, what }`). The operator's
- * clipboard is never written from a practice screen.
+ * shell would have put on the clipboard (`{ text, what }`). A paste on a
+ * practice screen takes the last of them back; the operator's clipboard is
+ * never read or written from a practice screen.
  */
 export const PRACTICE_COPY = "practice_copy";
+
+/**
+ * What the practice window sends a world when the shell would have left the
+ * page (`{ what, detail }`: a window it would open, a link, a navigation, or a
+ * call on the desktop host), held there instead (`outside.ts`). A world that
+ * has no answer for it keeps it as told.
+ */
+export const PRACTICE_OUTSIDE = "practice_outside";
 
 /**
  * What the core sends beside the snapshot: the ⌘P index's answer, the open
@@ -37,8 +46,12 @@ export type PracticeWorld<M> = {
   /** The panes whose terminals show a screen, and that screen for a terminal `cols` wide. */
   panes: (model: M) => string[];
   screen: (model: M, paneId: string, cols: number) => string;
-  /** Whether the right lane is open on this world's screen. */
-  lane: boolean;
+  /**
+   * The words typed into `paneId`'s prompt and not sent yet. A world whose
+   * chapter types to an agent keeps it, so ⏎ sends what the learner wrote
+   * there and types the step's example only into an empty prompt.
+   */
+  prompt?: (model: M, paneId: string) => string;
   /**
    * What on the screen is an invented record that could pass for a real one
    * (a pull request's title): the coach marks each match `예시`, so the

@@ -23,7 +23,8 @@ use crate::root::Root;
 pub const MAX_DIFF_BYTES: usize = 256 * 1024;
 
 pub use hide_node_link::git::{
-    ChangedFile, Changes, ChangesQuery, Diff, DiffTarget, FileStatus, GroupDiff, MAX_DIFFS,
+    ChangedFile, Changes, ChangesQuery, Diff, DiffNotice, DiffTarget, FileStatus, GroupDiff,
+    MAX_DIFFS,
 };
 
 /// Reads the checkout's changes under `scope`. A folder that is not a
@@ -126,10 +127,14 @@ pub fn changes(root: &Root, query: &ChangesQuery) -> HostResult<Changes> {
         .into_iter()
         .map(|(target, diff)| GroupDiff {
             committed: target.committed,
-            diff: diff.unwrap_or_else(|| Diff {
-                path: target.path.clone(),
-                text: String::new(),
-                notice: Some(absent_notice(target.committed, has_base)),
+            diff: diff.unwrap_or_else(|| {
+                let (kind, notice) = absent_notice(target.committed, has_base);
+                Diff {
+                    path: target.path.clone(),
+                    text: String::new(),
+                    notice: Some(notice.to_owned()),
+                    kind: Some(kind),
+                }
             }),
         })
         .collect();
@@ -143,11 +148,20 @@ pub fn changes(root: &Root, query: &ChangesQuery) -> HostResult<Changes> {
 }
 
 /// Why a View display's file has no diff in its group now.
-fn absent_notice(in_committed: bool, has_base: bool) -> String {
+fn absent_notice(in_committed: bool, has_base: bool) -> (DiffNotice, &'static str) {
     match (in_committed, has_base) {
-        (true, false) => "This checkout has no base branch to compare with".to_owned(),
-        (true, true) => "This file has no changes on this branch".to_owned(),
-        (false, _) => "This file has no uncommitted changes".to_owned(),
+        (true, false) => (
+            DiffNotice::NoBase,
+            "This checkout has no base branch to compare with",
+        ),
+        (true, true) => (
+            DiffNotice::NoBranchChanges,
+            "This file has no changes on this branch",
+        ),
+        (false, _) => (
+            DiffNotice::NoUncommittedChanges,
+            "This file has no uncommitted changes",
+        ),
     }
 }
 
@@ -596,6 +610,7 @@ fn bounded(path: String, text: Result<(String, bool), String>) -> Diff {
                 path,
                 text: String::new(),
                 notice: Some(reason),
+                kind: Some(DiffNotice::Unreadable),
             };
         }
     };
@@ -613,6 +628,9 @@ fn bounded(path: String, text: Result<(String, bool), String>) -> Diff {
                 "This diff is larger than {} KB and is shown truncated",
                 MAX_DIFF_BYTES / 1024
             )
+        }),
+        kind: cut.then_some(DiffNotice::Truncated {
+            limit_kb: u32::try_from(MAX_DIFF_BYTES / 1024).unwrap_or(u32::MAX),
         }),
     }
 }

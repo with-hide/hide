@@ -58,7 +58,7 @@ describe("a project's read as its checkouts show it (B8, B9)", () => {
 
   it("says a failed read with the last value's age and no reason (B9)", () => {
     const failed = structuredClone(RICH) as SnapshotRest;
-    failed.navigator!.workspaces![0]!.checkouts[0]!.github = { failure_category: "network_or_rate_limit", available: false, loading: false, stale: true, last_success_at_unix_ms: 1_000_000, unavailable_reason: "gh timed out" };
+    failed.navigator!.workspaces![0]!.checkouts[0]!.github = { failure_category: "network_or_rate_limit", available: false, loading: false, stale: true, last_success_at_unix_ms: 1_000_000 };
     const read = projectRead(failed.navigator!.workspaces![0]!, new Set(["w1"]), now, t, "en");
     expect(read).toEqual({ state: "failed", tooltip: "GitHub read failed · last value: 5 min. ago · reason in logs" });
     expect(projectRead(failed.navigator!.workspaces![0]!, new Set(["w1"]), now, ko, "ko")).toEqual({ state: "failed", tooltip: "GitHub 읽기 실패 · 5분 전 값 · 이유는 로그에" });

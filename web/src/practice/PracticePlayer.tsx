@@ -8,7 +8,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { installKeyboard } from "../keyboard";
-import { CycleOverlay } from "../Overlays";
+import { ConfirmClose, CycleOverlay } from "../Overlays";
 import { OverviewModal } from "../Overview";
 import { Palette } from "../Palette";
 import type { SnapshotRest } from "../snapshot";
@@ -20,7 +20,9 @@ import { useUiStore } from "../ui";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import type { PracticeChapter } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
-import { PRACTICE_COPY, type CoreEvent } from "./world";
+import { holdPageClipboard, practiceClipboard } from "./clipboard";
+import { holdPageOutside } from "./outside";
+import type { CoreEvent } from "./world";
 
 type UiState = NonNullable<SnapshotRest["ui_state"]>;
 
@@ -51,7 +53,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   const live = useRef({ world: chapter.world, model });
   live.current = { world: chapter.world, model };
 
-  const actions = useMemo(() => {
+  const { actions, clipboard, send } = useMemo(() => {
     const send = (event: CoreEvent) => {
       const after = live.current.world.apply(live.current.model, event);
       if (after) {
@@ -61,11 +63,15 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       }
       return true;
     };
-    // A copy goes to the world, never to the operator's clipboard.
-    return { ...createActions(send), copyText: (text: string, what: string) => void send({ kind: PRACTICE_COPY, payload: { text, what } }) };
+    // A copy goes to the world and a paste takes the last copy back; the operator's clipboard is never read or written.
+    const clipboard = practiceClipboard(send);
+    return { actions: createActions(send, clipboard), clipboard, send };
   }, []);
 
   useEffect(() => installKeyboard(actions), [actions]);
+  useEffect(() => holdPageClipboard(clipboard), [clipboard]);
+  // A link, a window, a navigation or a host call the shell would have sent off the page goes to the world instead.
+  useEffect(() => holdPageOutside(send), [send]);
 
   useLayoutEffect(() => {
     const { rest, agents, focused, usage, frames } = chapter.world.snapshot(model, Date.now());
@@ -80,7 +86,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   }, [chapter, model, operator]);
 
   useLayoutEffect(() => {
-    useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneShown: chapter.world.lane, laneExpanded: false, stackFront: "view" });
+    useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneExpanded: false, stackFront: "view" });
   }, [chapter]);
 
   // A pane keeps no scrollback, so a terminal a layout change re-created or
@@ -125,6 +131,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
         <OverviewModal actions={actions} />
         <Palette actions={actions} />
         <CycleOverlay />
+        <ConfirmClose actions={actions} />
         <PracticeCoach chapter={chapter} model={model} next={next} resume={resume} onStep={onStep} onNext={() => next && onStart(next)} onRestart={() => onStart(chapter)} onHub={onHub} />
       </div>
     </TooltipProvider>

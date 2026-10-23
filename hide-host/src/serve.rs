@@ -1562,9 +1562,8 @@ pub fn handle_with_progress(
         Call::WorktreeRemovalCheck { removal } => {
             absolute(&removal.repository_root)?;
             absolute(&removal.checkout_path)?;
-            worktrees::check_removal(&removal)
-                .map_err(|reason| HostError::new(ErrorCode::Io, reason))?;
-            to_value(())
+            // A stop is an answer the dialog words, not a refused request.
+            to_value(worktrees::check_removal(&removal).err())
         }
         Call::Changes {
             root,

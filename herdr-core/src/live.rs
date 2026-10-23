@@ -47,12 +47,12 @@ mod checkout_start;
 mod worktree_control;
 pub use worktree_control::{
     AgentFailure, CheckoutTabRequest, HomeStartRequest, IssueWriteFailure, PendingAgentStart,
-    PurposeMirror, PurposeTaskOutcome, PurposeTaskRequest, TabTarget, TaskAgentOutcome,
-    WorktreeTarget, WorktreeTaskOutcome, WorktreeTaskRequest, spawn_branch_migration,
-    spawn_checkout_tab_create, spawn_existing_branch_worktree, spawn_home_link_sync,
-    spawn_home_start, spawn_purpose_write, spawn_remote_purpose_write, spawn_task_agent_start,
-    spawn_workspace_close, spawn_worktree_close, spawn_worktree_create, spawn_worktree_open,
-    spawn_worktree_preflight,
+    PurposeMirror, PurposeTaskOutcome, PurposeTaskRequest, RemovalFailure, TabTarget,
+    TaskAgentOutcome, TaskFailure, WorktreeTarget, WorktreeTaskOutcome, WorktreeTaskRequest,
+    spawn_branch_migration, spawn_checkout_tab_create, spawn_existing_branch_worktree,
+    spawn_home_link_sync, spawn_home_start, spawn_purpose_write, spawn_remote_purpose_write,
+    spawn_task_agent_start, spawn_workspace_close, spawn_worktree_close, spawn_worktree_create,
+    spawn_worktree_open, spawn_worktree_preflight,
 };
 pub(crate) use worktree_control::{
     CONFIRM_TIMEOUT, ProcessWait, close_checkout_panes, prompt_argument,

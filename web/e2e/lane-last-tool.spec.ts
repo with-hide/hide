@@ -6,10 +6,10 @@ import { startHided, type Daemon } from "./hided-fixture";
 import { chord, commandLabel, mod } from "./chords";
 import { chooseLane, enterWorkspace, screenshot, showExplorer } from "./wire";
 
-// A lane closed whole keeps its columns for the next ⌘E, a lane whose last
-// column closed comes back on the Explorer, ⇧⌘L opens the Memory tool,
-// ⇧⌘R the sidebar's PR list and ⇧⌘G Changes (PRD lane-two-columns B14, B15,
-// B24, B25). Each test starts one
+// A lane closed whole keeps its columns for the next ⌘E, a tool pressed into
+// it opens alone, a lane whose last column closed comes back on the
+// Explorer, ⇧⌘L opens the Memory tool, ⇧⌘R the sidebar's PR list and ⇧⌘G
+// Changes (PRD lane-two-columns B14, B15, B24, B25). Each test starts one
 // stack and asserts one contract.
 
 const screen = (page: Page) => page.locator("[data-workspace-screen]");
@@ -72,6 +72,54 @@ test("⌘E reopens the tool a whole-lane close kept, and the Explorer for a lane
     await closed(page);
     await page.keyboard.press(chord("toggle_lane"));
     await shows(page, "explorer");
+  } finally {
+    daemon?.stop();
+    herdr.stop();
+  }
+});
+
+test("a tool pressed into a lane ⌘E or Escape closed opens alone, and the documents wait on their rail button (B15)", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const herdr = await startHerdr({ agents: false });
+  let daemon: Daemon | null = null;
+  try {
+    fs.writeFileSync(path.join(herdr.root, "fixture", "notes.md"), "# Notes\n");
+    daemon = await startHided(herdr, "lane-tool-alone");
+    await open(page, daemon);
+    await showExplorer(page);
+    await page.locator('[data-explorer-row$="/notes.md"]').click();
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
+    await shows(page, "explorer");
+
+    // ⌘E closes both columns; the Memory icon then opens Memory alone.
+    await page.keyboard.press(chord("toggle_lane"));
+    await closed(page);
+    await page.locator('[data-lane-tool="memory"]').click();
+    await shows(page, "memory");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
+    await screenshot(page, "lane-tool-alone-memory");
+
+    // ⌘E closes and reopens the lane as it was last shown: Memory alone.
+    await page.keyboard.press(chord("toggle_lane"));
+    await closed(page);
+    await page.keyboard.press(chord("toggle_lane"));
+    await shows(page, "memory");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
+
+    // The document is kept, and its rail button brings it beside Memory.
+    await expect(page.locator('[data-lane-tool="documents"] [data-lane-badge]')).toHaveAttribute("data-lane-badge", "1");
+    await page.locator('[data-lane-tool="documents"]').click();
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
+    await shows(page, "memory");
+
+    // Escape closes the unpinned lane as ⌘E does, so Memory again opens alone.
+    await page.locator("[data-editor-body] .cm-content").click();
+    await page.keyboard.press("Escape");
+    await closed(page);
+    await page.locator('[data-lane-tool="memory"]').click();
+    await shows(page, "memory");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
   } finally {
     daemon?.stop();
     herdr.stop();

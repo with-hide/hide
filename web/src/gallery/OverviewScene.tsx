@@ -66,7 +66,7 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
       const workspace = world.rest.navigator?.workspaces?.find((row) => row.id === payload.workspace_id);
       const task = workspace?.tasks?.tasks.find((row) => row.key === payload.task_key);
       if (workspace && task) useShellStore.setState((store) => ({ rest: { ...store.rest, issue_work: { ...store.rest!.issue_work!, detail: {
-        workspace_id: workspace.id, device_id: workspace.device_id ?? "local", task_key: task.key, phase: "ready", body: "## 목표\n\n긴 한국어와 English issue titles를 같은 목록에서 읽을 수 있어야 합니다.\n\n- [x] 제목과 메타데이터 비교\n- [ ] 좁은 화면에서 키보드 검토\n\n```ts\nconst visible = items.filter(matches);\n```\n\n### 검토 사항\n\n필터를 바꾼 뒤에도 원래 항목과 위치로 돌아옵니다.", message: null,
+        workspace_id: workspace.id, device_id: workspace.device_id ?? "local", task_key: task.key, phase: "ready", body: "## 목표\n\n긴 한국어와 English issue titles를 같은 목록에서 읽을 수 있어야 합니다.\n\n- [x] 제목과 메타데이터 비교\n- [ ] 좁은 화면에서 키보드 검토\n\n```ts\nconst visible = items.filter(matches);\n```\n\n### 검토 사항\n\n필터를 바꾼 뒤에도 원래 항목과 위치로 돌아옵니다.", failure: null,
         labels: task.labels ?? [], author: task.author ?? "jules", created_at_unix_ms: task.created_at_unix_ms ?? null,
         assignees: task.assignees ?? [], comment_count: 2, comments_cursor: null, comments_has_more: false, comments_limited: false, comments_loading: false,
         comments: [{ author: "mira", created_at_unix_ms: Date.now() - 60_000, body: "**검토 완료**: 본문과 활동을 함께 읽을 수 있습니다." }, { author: "jules", created_at_unix_ms: Date.now(), body: "키보드와 좁은 화면도 확인하겠습니다." }],
@@ -127,7 +127,6 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
       mainView: state === "projects" ? "projects" : (state === "work" || state === "focus") ? "work" : state === "history" ? "history" : state === "usage" ? "usage" : "backlog",
       overview: { ...OVERVIEW_ENTRY, panel: state === "home-record" ? { kind: "record", session: world.recordSession } : state === "backlog-detail" ? { kind: "item", workspaceId: "hide", taskKey: hideKey(163) } : null },
       quickAdd: state === "backlog-add" ? { returnFocus: null } : null,
-      laneShown: state === "record",
     });
     const root = document.documentElement;
     root.classList.toggle("dark", theme === "dark");

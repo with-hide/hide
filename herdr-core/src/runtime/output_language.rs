@@ -51,6 +51,14 @@ impl Runtime {
     /// The language every Hide AI text a person reads is asked in. A stored
     /// choice that is invalid reads as English, as the snapshot shows it.
     pub(crate) fn output_language(&self) -> hide_ai::OutputLanguage {
+        self.interface_language().into()
+    }
+
+    /// The language the core words a line in that it writes outside any
+    /// screen, the doorbell's bell line among them: the same answer as
+    /// [`Self::output_language`], from state the runtime holds, so it is read
+    /// under the lock without I/O.
+    pub(crate) fn interface_language(&self) -> InterfaceLanguage {
         let choice = self
             .snapshot
             .ui_state
@@ -62,6 +70,5 @@ impl Runtime {
         choice
             .or(self.system_language)
             .unwrap_or(InterfaceLanguage::English)
-            .into()
     }
 }

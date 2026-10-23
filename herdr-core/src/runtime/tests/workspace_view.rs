@@ -725,12 +725,27 @@ fn a_closed_lane_comes_back_in_the_shape_it_had_across_a_restart() {
     layout(&mut runtime, serde_json::json!({"tool": "project"}));
     layout(&mut runtime, serde_json::json!({"open": false}));
     assert_eq!(lane(&runtime), (false, true, Some(Tool::Project), false));
+    layout(&mut runtime, serde_json::json!({"open": true}));
+    assert_eq!(
+        lane(&runtime),
+        (true, true, Some(Tool::Project), false),
+        "⌘E brings both columns back"
+    );
+    layout(&mut runtime, serde_json::json!({"open": false}));
     layout(&mut runtime, serde_json::json!({"tool": "changes"}));
     assert_eq!(
         lane(&runtime),
-        (true, true, Some(Tool::Changes), false),
-        "a tool called while closed opens the lane with the documents back"
+        (true, false, Some(Tool::Changes), false),
+        "a tool called while closed opens the lane on itself alone"
     );
+    layout(&mut runtime, serde_json::json!({"open": false}));
+    open(&mut runtime, &checkout_id, &directory.join("notes.md"));
+    assert_eq!(
+        lane(&runtime),
+        DOCUMENTS,
+        "an open while closed opens the lane on the documents alone"
+    );
+    layout(&mut runtime, serde_json::json!({"tool": "changes"}));
     layout(&mut runtime, serde_json::json!({"open": false}));
 
     let (saved, _) = crate::workspace_views::load(&state, 0);
@@ -902,8 +917,8 @@ fn a_reveal_or_a_linked_folder_shows_the_explorer_and_a_linked_file_the_document
     assert_eq!(runtime.snapshot.status.last_error, None);
     assert_eq!(
         lane(&runtime),
-        (true, true, Some(Tool::Explorer), false),
-        "a linked folder shows in the Explorer, the documents back beside it"
+        (true, false, Some(Tool::Explorer), false),
+        "a linked folder opens a closed lane on the Explorer alone"
     );
     assert_eq!(called(&runtime), before + 4);
 }

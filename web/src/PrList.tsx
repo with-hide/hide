@@ -249,7 +249,7 @@ function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrE
             {linkable ? <DropdownMenuItem onSelect={() => onLinking(true)} data-pr-menu-link="true">{t("prList.linkIssue")}</DropdownMenuItem> : null}
             {linkable ? <DropdownMenuItem onSelect={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_new_issue", workspaceId: project.id, prNumber: pr.number })} data-pr-menu-new-issue="true">{t("prList.newIssue")}</DropdownMenuItem> : null}
             <DropdownMenuItem onSelect={() => actions.openPullRequest(pr.url, project.device_id, true)} data-pr-menu-github="true">{t("work.card.github")}</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => void navigator.clipboard?.writeText(pr.head_branch ?? "")} data-pr-menu-copy="true">{t("prList.copyBranch")}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void actions.copyText(pr.head_branch ?? "", "branch name")} data-pr-menu-copy="true">{t("prList.copyBranch")}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </span>

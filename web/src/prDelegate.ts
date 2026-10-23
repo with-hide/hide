@@ -15,7 +15,7 @@ export function delegatePrompt(pr: { number: number; title: string; branch: stri
   const lines: string[] = [t("prWork.prompt.fix", { number: String(pr.number), branch: pr.branch, title: pr.title })];
   if (feedback.failed_checks.length > 0) {
     lines.push("", t("prWork.prompt.failedChecks"));
-    for (const check of feedback.failed_checks) lines.push(`- ${check.name}${check.url ? ` ${check.url}` : ""}`);
+    for (const check of feedback.failed_checks) lines.push(`- ${check.name ?? t("githubReason.unnamedCheck")}${check.url ? ` ${check.url}` : ""}`);
   }
   const requests = feedback.change_requests.filter((request) => request.body.trim());
   if (requests.length > 0) {

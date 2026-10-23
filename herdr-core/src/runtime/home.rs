@@ -144,7 +144,7 @@ impl Runtime {
         };
         if let Err(message) = live::spawn_home_start(target, request) {
             self.forget_home_sync(device);
-            return self.ingest_task_operation_result(id, Err(message));
+            return self.ingest_task_operation_result(id, Err(message.into()));
         }
         true
     }
@@ -179,13 +179,13 @@ impl Runtime {
                     false,
                     request_id.as_deref(),
                 );
-                self.ingest_task_operation_result(id, Err(error.message));
+                self.ingest_task_operation_result(id, Err(error.message.into()));
                 return None;
             }
             Err(error) => {
                 let message = format!("Home could not be prepared: {error}");
                 self.log_home_sync_failure(device, "home.sync_failed", &message);
-                self.ingest_task_operation_result(id, Err(message));
+                self.ingest_task_operation_result(id, Err(message.into()));
                 return None;
             }
         };

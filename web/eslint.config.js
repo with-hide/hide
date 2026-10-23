@@ -58,4 +58,14 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Every copy and paste goes through the clipboard the shell's actions were
+    // made with, so a screen can give its own (the practice window keeps the
+    // operator's clipboard untouched); only `src/clipboard.ts` reaches the system one.
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.test.{ts,tsx}", "src/clipboard.ts"],
+    rules: {
+      "no-restricted-properties": ["error", { object: "navigator", property: "clipboard", message: "Copy and paste through the actions' clipboard (src/clipboard.ts)." }],
+    },
+  },
 );
