@@ -42,12 +42,12 @@ describe("a sleeping pane's words", () => {
   });
 
   it("words the caption and the age line in the chosen language", () => {
-    expect(sleepCaption({ state: "sleeping", since_unix_ms: now - 22 * HOUR }, now, ko)).toEqual({ text: "휴면 중 · 22시간", moon: true });
+    expect(sleepCaption({ state: "sleeping", since_unix_ms: now - 22 * HOUR }, now, ko)).toEqual({ text: "재움 · 22시간", moon: true });
     expect(wakingLine({ state: "waking", since_unix_ms: now - 3 * 24 * HOUR }, now, ko)).toBe("3일 전 대화를 다시 시작하는 중");
   });
 
   it("leaves the age out under a minute in every language, not by comparing the word", () => {
-    expect(sleepCaption({ state: "sleeping", since_unix_ms: now - 1000 }, now, ko)).toEqual({ text: "휴면 중", moon: true });
+    expect(sleepCaption({ state: "sleeping", since_unix_ms: now - 1000 }, now, ko)).toEqual({ text: "재움", moon: true });
     expect(wakingLine({ state: "waking", since_unix_ms: now }, now, ko)).toBe("대화를 다시 시작하는 중");
   });
 });
