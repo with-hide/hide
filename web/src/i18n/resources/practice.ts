@@ -1,24 +1,11 @@
-import type { InterfaceLanguage } from "../locale";
-import type { Catalog, Catalogs, MessageSchema } from "../schema";
+import type { Catalog, Catalogs } from "../schema";
 
 // Practice mode: the guide over the real shell. Each chapter's words are a
-// file of their own in `practice/`, named like the chapter, every key under
-// `practice.<chapter>.`; they join the catalog here without being listed.
+// file of their own in `practice/`, which the practice window adds when its
+// chapters load (`web/src/practice/words.ts`); the desktop host and the shell
+// never show them.
 
-const chapterFiles = import.meta.glob<Catalogs<MessageSchema>>("./practice/*.ts", { eager: true, import: "default" });
-
-/** Every chapter file's words in `language`; a key outside its file's chapter would overwrite another's. */
-function chapterWords(language: InterfaceLanguage): Record<string, string> {
-  return Object.assign({}, ...Object.entries(chapterFiles).map(([path, catalogs]) => {
-    const prefix = `practice.${path.slice(path.lastIndexOf("/") + 1, -".ts".length)}.`;
-    const words = catalogs[language];
-    const stray = Object.keys(words).find((key) => !key.startsWith(prefix));
-    if (stray) throw new Error(`Practice words ${stray} are in ${path}`);
-    return words;
-  }));
-}
-
-const common = {
+export const practiceEnglish = {
   "practice.mode": "Practice · Chapter {{number}} {{title}}",
   "practice.count": "{{index}} / {{total}}",
   "practice.next": "Next",
@@ -47,6 +34,8 @@ const common = {
   "practice.via.key": "Or press {{keys}}",
   "practice.via.buttonOrKey": "Press the button, or {{keys}}",
   "practice.via.drag": "Or drag the pane's header yourself",
+  "practice.via.type": "⏎ types it in and sends it",
+  "practice.via.menu": "Or right-click it yourself, or press ⋯",
   "practice.zone.view": "① Where you look",
   "practice.zone.viewSub": "Choose what to see",
   "practice.zone.work": "② Where work happens",
@@ -54,8 +43,6 @@ const common = {
   "practice.zone.project": "③ The project and its work",
   "practice.zone.projectSub": "Status · To do · Files",
 };
-
-export const practiceEnglish: typeof common = { ...common, ...chapterWords("en") };
 
 const ko = {
   "practice.mode": "연습 모드 · {{number}}편 {{title}}",
@@ -86,13 +73,14 @@ const ko = {
   "practice.via.key": "단축키 {{keys}} 를 눌러도 돼요",
   "practice.via.buttonOrKey": "버튼을 누르거나 단축키 {{keys}}",
   "practice.via.drag": "pane 머리줄을 직접 끌어도 돼요",
+  "practice.via.type": "⏎를 누르면 대신 입력해서 보내요",
+  "practice.via.menu": "직접 우클릭하거나 ⋯를 눌러도 돼요",
   "practice.zone.view": "① 보는 곳",
   "practice.zone.viewSub": "무엇을 볼지 고르기",
   "practice.zone.work": "② 일하는 곳",
   "practice.zone.workSub": "에이전트 터미널",
   "practice.zone.project": "③ 프로젝트와 그 작업",
   "practice.zone.projectSub": "현황 · 할 일 · 파일",
-  ...chapterWords("ko"),
 } satisfies Catalog<typeof practiceEnglish>;
 
 const zhCN = {
@@ -124,13 +112,14 @@ const zhCN = {
   "practice.via.key": "也可以按 {{keys}}",
   "practice.via.buttonOrKey": "点按钮，或按 {{keys}}",
   "practice.via.drag": "也可以直接拖动窗格标题栏",
+  "practice.via.type": "按 ⏎ 会替你输入并发送",
+  "practice.via.menu": "也可以自己右键点击，或点 ⋯",
   "practice.zone.view": "① 查看区",
   "practice.zone.viewSub": "选择要看的内容",
   "practice.zone.work": "② 工作区",
   "practice.zone.workSub": "智能体终端",
   "practice.zone.project": "③ 项目与工作",
   "practice.zone.projectSub": "概况 · 待办 · 文件",
-  ...chapterWords("zh-CN"),
 } satisfies Catalog<typeof practiceEnglish>;
 
 const ja = {
@@ -162,13 +151,14 @@ const ja = {
   "practice.via.key": "{{keys}} を押してもできます",
   "practice.via.buttonOrKey": "ボタンを押すか {{keys}}",
   "practice.via.drag": "ペインのヘッダーを直接ドラッグしてもできます",
+  "practice.via.type": "⏎ で代わりに入力して送ります",
+  "practice.via.menu": "自分で右クリックするか ⋯ を押してもできます",
   "practice.zone.view": "① 見るところ",
   "practice.zone.viewSub": "何を見るか選ぶ",
   "practice.zone.work": "② 作業するところ",
   "practice.zone.workSub": "エージェントのターミナル",
   "practice.zone.project": "③ プロジェクトとその作業",
   "practice.zone.projectSub": "状況 · やること · ファイル",
-  ...chapterWords("ja"),
 } satisfies Catalog<typeof practiceEnglish>;
 
 export const practiceCatalogs = { en: practiceEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof practiceEnglish>;

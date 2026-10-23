@@ -10,6 +10,12 @@ import type { PracticeWorld } from "./world";
 /** A pane header dragged onto `edge` of the pane `to` names. */
 export type PracticeDrag = { from: string; to: string; edge: "left" | "right" | "up" | "down" };
 
+/** What the learner would say to an agent: `text` typed into the terminal of the pane `pane`, then ⏎. */
+export type PracticeTyping = { pane: string; text: string };
+
+/** A menu opened by right-clicking what `at` marks, then each of `path` pressed in turn: a submenu, then its item. */
+export type PracticeMenu = { at: string; path: string[] };
+
 export type PracticeStep<M = unknown> = {
   id: string;
   /** Listed on the quest card; a step without it is not a task of its own. */
@@ -22,8 +28,8 @@ export type PracticeStep<M = unknown> = {
   zones?: true;
   /** The command the step teaches; ⏎ presses its chord unless the step has a gesture. */
   command?: CommandId;
-  /** What ⏎ does in the learner's place: press the target, or drag a pane. */
-  gesture?: { click: true } | { drag: PracticeDrag };
+  /** What ⏎ does in the learner's place: press the target, drag a pane, type to an agent, or choose from a right-click menu. */
+  gesture?: { click: true } | { drag: PracticeDrag } | { type: PracticeTyping } | { menu: PracticeMenu };
   /** Done when the world says so; a step without it is a look, done when the learner presses on. */
   done?: (model: M) => boolean;
   /**

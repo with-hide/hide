@@ -10,8 +10,9 @@ import type { MessageKey } from "../i18n/catalogs";
 import { commandLabel } from "../shortcutLabels";
 import { hostChord, hostRegistry, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
+import { pasteText, terminalFor } from "../terminals";
 import { useUiStore } from "../ui";
-import type { PracticeChapter, PracticeDrag, PracticeStep } from "./chapter";
+import type { PracticeChapter, PracticeDrag, PracticeMenu, PracticeStep, PracticeTyping } from "./chapter";
 import { COACH_CSS } from "./coachStyle";
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -79,6 +80,74 @@ function dragPane(drag: PracticeDrag, follow: (point: Point | null) => void) {
     }, 350);
   };
   window.setTimeout(() => requestAnimationFrame(glide), 250);
+}
+
+/** How long typed words stay in the prompt before ⏎ sends them, so the learner reads what was said. */
+const READ_MS = 700;
+
+/**
+ * Says `typing.text` to the agent in its pane: the terminal takes the words,
+ * after ⌃U clears whatever the learner had typed there, then ⏎. The terminal
+ * sends them to the world as it sends the learner's own keys; a practice
+ * terminal reaches no program.
+ */
+function typeInto(typing: PracticeTyping): Promise<void> {
+  if (!terminalFor(typing.pane)) throw new Error(`Practice step types into ${typing.pane}, which has no terminal on screen`);
+  pasteText(typing.pane, `\x15${typing.text}`);
+  return new Promise((resolve) => window.setTimeout(() => {
+    pasteText(typing.pane, "\r");
+    resolve();
+  }, READ_MS));
+}
+
+const middle = (element: Element): Point => {
+  const box = element.getBoundingClientRect();
+  return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+};
+
+/** The element `selector` marks, once it is on screen; a menu draws its items a frame or two after it opens. */
+function appeared(selector: string): Promise<HTMLElement> {
+  const began = performance.now();
+  return new Promise((resolve, reject) => requestAnimationFrame(function look() {
+    const found = document.querySelector<HTMLElement>(selector);
+    if (found) return resolve(found);
+    if (performance.now() - began > 3000) return reject(new Error(`Practice menu item ${selector} never appeared`));
+    requestAnimationFrame(look);
+  }));
+}
+
+/** Moves the hand from `from` to `to` over `ms`, eased, and resolves where it stops. */
+function glide(from: Point, to: Point, ms: number, follow: (point: Point | null) => void): Promise<Point> {
+  const began = performance.now();
+  return new Promise((resolve) => requestAnimationFrame(function step(now) {
+    const t = Math.min(1, (now - began) / ms);
+    const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+    follow({ x: from.x + (to.x - from.x) * eased, y: from.y + (to.y - from.y) * eased });
+    if (t < 1) requestAnimationFrame(step);
+    else resolve(to);
+  }));
+}
+
+const pause = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+/** Right-clicks what `menu.at` marks as a hand would, so the shell opens its own menu, then presses each of `menu.path` in turn. */
+async function chooseFromMenu(menu: PracticeMenu, follow: (point: Point | null) => void): Promise<void> {
+  const marked = document.querySelector<HTMLElement>(menu.at);
+  if (!marked) throw new Error(`Practice menu target ${menu.at} is not on screen`);
+  let hand = middle(marked);
+  follow(hand);
+  await pause(250);
+  const element = document.elementsFromPoint(hand.x, hand.y).find((hit) => marked.contains(hit)) ?? marked;
+  element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true, button: 2, buttons: 2, clientX: hand.x, clientY: hand.y }));
+  for (const selector of menu.path) {
+    const item = await appeared(selector);
+    await pause(300);
+    hand = await glide(hand, middle(item), 450, follow);
+    await pause(200);
+    item.click();
+  }
+  await pause(250);
+  follow(null);
 }
 
 /** One box around every element `selector` matches. */
@@ -198,13 +267,25 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     else onHub();
   }, [last, next, onNext, onHub]);
 
+  // A gesture that takes a while plays once: ⏎ pressed again meanwhile waits for it.
+  const playing = useRef(false);
+  const play = useCallback((gesture: Promise<void>) => {
+    playing.current = true;
+    void gesture.finally(() => {
+      playing.current = false;
+    });
+  }, []);
+
   const perform = useCallback(() => {
+    if (playing.current) return;
     if (!acts(step)) return advance();
+    if (step.gesture && "type" in step.gesture) return play(typeInto(step.gesture.type));
+    if (step.gesture && "menu" in step.gesture) return play(chooseFromMenu(step.gesture.menu, setHand));
     if (step.gesture && "drag" in step.gesture) return dragPane(step.gesture.drag, setHand);
     if (step.gesture && "click" in step.gesture) return pressTarget(step.target);
     if (pressed) return pressTarget(step.target);
     if (step.command) pressCommand(step.command);
-  }, [advance, pressed, step]);
+  }, [advance, play, pressed, step]);
 
   useEffect(() => {
     if (index >= resume) return undefined;
@@ -238,7 +319,9 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const via: ReactNode = pressed ? say("practice.via.press")
     : step.command && step.gesture && "click" in step.gesture ? <WithKeys id={step.command} text={say("practice.via.buttonOrKey", { keys: KEYS_MARK })} />
     : step.command ? <WithKeys id={step.command} text={say("practice.via.key", { keys: KEYS_MARK })} />
-    : step.gesture && "drag" in step.gesture ? say("practice.via.drag") : null;
+    : step.gesture && "drag" in step.gesture ? say("practice.via.drag")
+    : step.gesture && "type" in step.gesture ? say("practice.via.type")
+    : step.gesture && "menu" in step.gesture ? say("practice.via.menu") : null;
   const go = last ? (next ? say("practice.toChapter", { number: next.number }) : say("practice.toHub")) : acts(step) ? say("practice.try") : say("practice.next");
   const place = bubblePlace(ring, step.side, size);
   const title = say(`practice.${chapter.id}.title`);
