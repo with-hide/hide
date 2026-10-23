@@ -8,7 +8,7 @@
 
 import type { PrBoard, TaskCardScope } from "../agentScope";
 import type { NodeUsage } from "../generated/hided-ws";
-import type { AgentRow, Checkout, Device, PullRequest, SidebarLens, SnapshotRest, Workspace } from "../snapshot";
+import type { AgentRow, Checkout, Device, EditorDocumentSnapshot, EditorTabSnapshot, MemoryRow, ProjectMemory, PullRequest, SidebarLens, SnapshotRest, ViewDisplaySnapshot, Workspace } from "../snapshot";
 import type { MobileState } from "../mobileSettings";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 import { overviewWorld, type OverviewWorld } from "./overviewSceneData";
@@ -134,6 +134,35 @@ export function landingSidebar(nowMs: number, expanded: string[], width: number)
   return { rest, agents: reworded(base.agents.map(reword)) };
 }
 
+/** What each kind of agent is called when nothing better names it: the provider fallback of Task identity. */
+const PROVIDERS: Record<string, string> = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode", antigravity: "Antigravity" };
+
+/** A native question's first line, as the row shows it without Hide AI (40 characters with the ellipsis). */
+const NATIVE_QUESTIONS: Record<string, string> = {
+  a3: "Merge both into main?",
+  q1: "Which format should the export use, CS…",
+  a2c1: "Should the CSV export lead the notes?",
+};
+
+/**
+ * The attention shot with Agent summaries off (docs/status-model.md, With and
+ * without Hide AI): no generated title, so a Claude Code session keeps its own
+ * automatic title and every other agent is called by its provider; no generated
+ * sentence, so only a native question keeps its first line. Groups and marks
+ * are the same, since every demand in the story is a native question.
+ */
+export function landingPlainSidebar(nowMs: number, width: number): { rest: SnapshotRest; agents: AgentRow[] } {
+  const scene = landingSidebar(nowMs, [], width);
+  const agents = scene.agents.map((row) => {
+    const title = row.agent_kind === "claude" ? row.identity_label : PROVIDERS[row.agent_kind ?? ""] ?? row.identity_label;
+    const question = NATIVE_QUESTIONS[row.pane_id];
+    const line = question && row.state.line ? { ...row.state.line, text: question } : null;
+    return { ...row, identity_label: title, request: row.request ? { ...row.request, request: null } : row.request, state: { ...row.state, line } };
+  });
+  const rest: SnapshotRest = { ...scene.rest, status: { ...scene.rest.status, background_ai: { provider: null, providers: [], unavailable_reason: null, enabled: false, chosen: false, agent_summary: false } } as SnapshotRest["status"] };
+  return { rest, agents };
+}
+
 const NOW_SKEW = 90_000;
 
 const MACHINE = (platform: string): NonNullable<Device["host"]> => ({ consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: "~/.local/bin", contract: 3, bound_identity: "SHA256:example", granted_at_unix_ms: 1, state: "ready", message: null, platform, helper_path: "~/.hide/host-helper/current/hided" });
@@ -245,6 +274,59 @@ export function landingWorkspace(nowMs: number, width: number, expanded: string[
   return { rest, agents: scene.agents };
 }
 
+
+/** The browser shot's pane: the Codex worker that added the export button, alone in its tab. */
+export const BROWSER_PANE = "a1c6";
+/** The page the agent opened, as its View id: the name `hide browser` commands take. */
+export const BROWSER_DISPLAY = "browser-1";
+const BROWSER_URL = "http://localhost:5173/invoices";
+const CSV_PATH = "src/export/csv.ts";
+const CSV_SOURCE = `import type { Invoice } from "../invoices";
+import { byIssueDate, quote } from "./format";
+
+/** The invoices as CSV: one header row, then one row per invoice by issue date. */
+export function toCsv(rows: Invoice[]): string {
+  const head = ["number", "customer", "issued_at", "total"] as const;
+  const lines = [...rows]
+    .sort(byIssueDate)
+    .map((row) => head.map((key) => quote(row[key])).join(","));
+  return [head.join(","), ...lines].join("\\n");
+}
+`;
+
+/**
+ * The browser shot: the Codex worker that added the export button, alone in
+ * its pane, and beside it the View area it filled with \`hide browser open\`
+ * and \`hide file open\`: the invoices page in front, the file it changed
+ * behind. The page itself is the desktop host's to draw, so the scene hands
+ * the shell a still of it (`landing-invoices-<theme>.svg`).
+ */
+export function landingBrowser(nowMs: number, width: number): { rest: SnapshotRest; agents: AgentRow[]; editor: { tabs: EditorTabSnapshot[]; active_tab_id: string | null }; documents: Record<string, EditorDocumentSnapshot> } {
+  const scene = landingWorkspace(nowMs, width);
+  const navigator = scene.rest.navigator!;
+  const project = navigator.workspaces!.find((row) => row.id === "hide")!;
+  const main = project.checkouts[0]!;
+  const tab = main.tabs[0]!;
+  const path = `${main.path}/${CSV_PATH}`;
+  const file: EditorTabSnapshot = { id: "t-csv", workspace_id: project.id, checkout_id: main.id, path, label: "csv.ts", kind: "file", diff_committed: null, markdown_live: false, wrap: false, dirty: false, preview: false };
+  const displays: ViewDisplaySnapshot[] = [
+    { id: BROWSER_DISPLAY, tab_id: null, path: "", label: "Invoices", kind: "browser", committed: null, preview: false, state: "open", reason: null, url: BROWSER_URL },
+    { id: "d-csv", tab_id: file.id, path, label: file.label, kind: "file", committed: null, preview: false, state: "open", reason: null },
+  ];
+  const document: EditorDocumentSnapshot = { path, language: "typescript", document_kind: "text", contents_utf8: CSV_SOURCE, revision: "sha256:0", dirty: false, readonly_reason: null, conflict: null, save: null };
+  const rest: SnapshotRest = {
+    ...scene.rest,
+    pane_layouts: [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: BROWSER_PANE, zoomed: false, root: { type: "pane", pane_id: BROWSER_PANE } }],
+    workspace_view: {
+      ...scene.rest.workspace_view!,
+      documents: true, tool: null, pinned: true, document_width: 820,
+      layout: { root: { area: { id: "v1", active: BROWSER_DISPLAY, displays } }, active_area: "v1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
+    },
+    terminal: { headers: { [BROWSER_PANE]: { working: false, notice: null, band: null } } },
+  };
+  return { rest, agents: scene.agents, editor: { tabs: [file], active_tab_id: null }, documents: { [file.id]: document } };
+}
+
 const MINUTE = 60_000;
 const DAY = 1440 * MINUTE;
 
@@ -322,7 +404,8 @@ const MAP_PROJECTS: Record<string, string> = { hide: "billing-app", "billing-api
 
 /** The Overview's work graph over the page's story: the reference world with every word a visitor reads in English. */
 export function landingMap(nowMs: number): OverviewWorld {
-  const world = overviewWorld(nowMs);
+  // The lead's worktree is the story's, not the reference world's.
+  const world: OverviewWorld = JSON.parse(JSON.stringify(overviewWorld(nowMs)).replaceAll("feat/sidebar-readable", "feat/export-split"));
   for (const row of world.agents) {
     const words = MAP_WORDS[row.pane_id];
     if (!words) continue;
@@ -343,6 +426,35 @@ export function landingMap(nowMs: number): OverviewWorld {
   return world;
 }
 
+/**
+ * The memory shot's cards (the Project tool's Memory tab): what the story's sessions decided about the
+ * billing-app, in the kinds and states the core gives them. One rule is asked
+ * about for the docs, an agent is writing another into them, and one already
+ * lives in the repository's CONTRIBUTING.md.
+ */
+export function landingMemory(nowMs: number, workspaceId: string): ProjectMemory {
+  const card = (number: number, title: string, kind: MemoryRow["kind"], given: number, pulled: number, human: number, ago: number, promotion: MemoryRow["promotion"] = null): MemoryRow => ({
+    number, title, kind, provided_session_count: given, pull_count: pulled, human_source_count: human, updated_at_unix_ms: nowMs - ago, verifying: false, promotion,
+  });
+  const rows = [
+    card(13, "Use pnpm, never npm", "rule", 6, 4, 2, 40 * MINUTE),
+    card(14, "Exports stay in UTC; the invoice PDF shows local time", "decision", 4, 2, 1, 2 * 60 * MINUTE),
+    card(16, "An empty invoice list exports a header row, not an empty file", "decision", 2, 1, 1, 25 * MINUTE),
+    card(11, "Above 10,000 rows the export times out; page it", "lesson", 3, 2, 1, DAY),
+    card(10, "Release notes wait for a person to read them", "rule", 5, 3, 2, 2 * DAY, { state: "running", agent: { name: "memory-promote-m10", pane_id: "w1:p9" }, pr_number: null, target_path: null, github_failure: null }),
+    card(9, "Run the export tests before opening a pull request", "rule", 8, 6, 2, 3 * DAY, { state: "merged", agent: null, pr_number: 474, target_path: "CONTRIBUTING.md", github_failure: null }),
+    card(7, "Invoices live in the billing schema, not public", "fact", 7, 5, 0, 4 * DAY),
+  ];
+  return {
+    workspace_id: workspaceId, unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0, evicted_through_unix_ms: null,
+    rows,
+    questions: [{ kind: "promote", number: 13, title: rows[0]!.title, human_session_count: 2, pulled_session_count: 4 }],
+    analysis: "idle", consent_required: false, usable_cards: rows.length, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null,
+    expanded: null,
+    search: null,
+  };
+}
+
 const CLAUDE = "\x1b[38;2;215;119;87m";
 const CODEX = "\x1b[36m";
 const DIM = "\x1b[90m";
@@ -358,6 +470,29 @@ const lines = (...rows: string[]) => rows.join("\r\n");
  * under the row of its child that asks.
  */
 export const RULE = "{rule}";
+export const BROWSER_TERMINAL = lines(
+  "",
+  `${DIM}╭──────────────────────────────╮${RESET}`,
+  `${DIM}│${RESET} ${BOLD}>_ Codex${RESET}                     ${DIM}│${RESET}`,
+  `${DIM}│${RESET} ${DIM}~/billing-app · main${RESET}         ${DIM}│${RESET}`,
+  `${DIM}╰──────────────────────────────╯${RESET}`,
+  "",
+  `${CODEX}›${RESET} Add the export button, then check it in the browser`,
+  "",
+  `${DIM}•${RESET} ${BOLD}Edited${RESET} src/export/button.tsx ${GREEN}(+24${RESET} -3${GREEN})${RESET}`,
+  "",
+  `${DIM}•${RESET} ${BOLD}Ran${RESET} hide browser open localhost:5173/invoices`,
+  `  ${DIM}└${RESET} loaded`,
+  "",
+  `${DIM}•${RESET} ${BOLD}Ran${RESET} hide browser click ${BROWSER_DISPLAY} --text "Export CSV"`,
+  `  ${DIM}└${RESET} + dialog "Export ready · 128 rows"`,
+  "",
+  `${DIM}•${RESET} ${BOLD}Ran${RESET} hide file open ${CSV_PATH}`,
+  "",
+  `${DIM}•${RESET} The button works: 128 rows exported.`,
+  "  The page and the file are beside you.",
+);
+
 export const HERO_TERMINALS: Record<(typeof HERO_PANES)[number], string> = {
   a1: lines(
     "",
