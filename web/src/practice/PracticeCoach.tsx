@@ -301,7 +301,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     if (step.gesture && "type" in step.gesture) return play(typeInto(step.gesture.type));
     if (step.gesture && "menu" in step.gesture) return play(chooseFromMenu(step.gesture.menu, setHand));
     if (step.gesture && "drag" in step.gesture) return dragPane(step.gesture.drag, setHand);
-    if (step.gesture && "click" in step.gesture) return document.querySelector<HTMLElement>(step.target ?? "")?.click();
+    if (step.gesture && "click" in step.gesture) return pressTarget(step.target);
     if (pressed) return pressTarget(step.target);
     if (step.command) pressCommand(step.command);
   }, [advance, play, pressed, step]);
