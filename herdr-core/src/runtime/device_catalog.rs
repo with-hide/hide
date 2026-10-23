@@ -6,6 +6,7 @@
 //! directory; a new directory in the session, or a new helper connection,
 //! asks again. They are kept while the device is, up to a cap.
 
+use super::agents::FailureReport;
 use super::*;
 use crate::device_catalog::{self, DeviceFacts, Fact};
 use crate::node_access::{LinkError, call_as};
@@ -1231,44 +1232,34 @@ impl Runtime {
                 Some((workspace_id, checkout_id, label, ..)) => (workspace_id, checkout_id, label),
             };
             let request_id = format!("registration-{}", unix_milliseconds());
-            let before = self.snapshot.status.last_error.clone();
-            self.request_remote_terminal(RemoteControlPayload {
-                target_id: device.to_owned(),
-                request_id: request_id.clone(),
-                report_pane_focus_outcome: false,
-                // The device answers after its helper's facts, seconds later
-                // at times, when the window may be elsewhere: the terminal is
-                // there when the project is opened, and the window stays.
-                focus_device: false,
-                request: RemoteControlRequest::CreateTab {
-                    workspace_id,
-                    checkout_id: Some(checkout_id),
-                    cwd: path.clone(),
-                    label,
-                    area_id: None,
+            let sent = self.send_remote_terminal(
+                RemoteControlPayload {
+                    target_id: device.to_owned(),
+                    request_id: request_id.clone(),
+                    report_pane_focus_outcome: false,
+                    // The device answers after its helper's facts, seconds
+                    // later at times, when the window may be elsewhere: the
+                    // terminal is there when the project is opened, and the
+                    // window stays.
+                    focus_device: false,
+                    request: RemoteControlRequest::CreateTab {
+                        workspace_id,
+                        checkout_id: Some(checkout_id),
+                        cwd: path.clone(),
+                        label,
+                        area_id: None,
+                    },
                 },
-            });
-            self.keep_registration_error_in_log(before, device);
-            // Sent, with its creation waiting for the device's answer: a
-            // refusal before the send, or a worker that did not start, leaves
-            // no answer to wait for.
-            let sent = self
-                .remote_control_requests
-                .iter()
-                .any(|(target, request)| target == device && *request == request_id)
-                && self
-                    .remote_tab_creations_in_flight
-                    .iter()
-                    .any(|(target, _, cwd, _)| target == device && *cwd == path);
-            if !sent {
-                self.skip_registration_terminal(device, &path, "the request was not sent");
-                continue;
+                REGISTRATION_TERMINAL_REPORT,
+            );
+            // One refused before it was sent has logged why already.
+            if sent {
+                self.registration_terminals.push_back(RegistrationTerminal {
+                    target: device.to_owned(),
+                    path,
+                    request_id: Some(request_id),
+                });
             }
-            self.registration_terminals.push_back(RegistrationTerminal {
-                target: device.to_owned(),
-                path,
-                request_id: Some(request_id),
-            });
         }
     }
 
@@ -1279,38 +1270,21 @@ impl Runtime {
         );
     }
 
-    /// Whether `request_id` on `target` is a terminal a registration opened,
-    /// which it stops being: its answer is the last thing it reports.
-    pub(super) fn take_registration_terminal(&mut self, target: &str, request_id: &str) -> bool {
+    /// How the answer to `request_id` on `target` reports a failure: to the
+    /// log when it is a registration's terminal, which it stops being, since
+    /// the answer is the last thing it reports.
+    pub(super) fn registration_terminal_report(
+        &mut self,
+        target: &str,
+        request_id: &str,
+    ) -> FailureReport {
         let Some(index) = self.registration_terminals.iter().position(|wanted| {
             wanted.target == target && wanted.request_id.as_deref() == Some(request_id)
         }) else {
-            return false;
+            return FailureReport::Notice;
         };
         self.registration_terminals.remove(index);
-        true
-    }
-
-    /// Moves an error reported since `before` from the operator's notice to
-    /// the diagnostic log, where a registration terminal's failure belongs.
-    pub(super) fn keep_registration_error_in_log(
-        &mut self,
-        before: Option<LastErrorSnapshot>,
-        target: &str,
-    ) {
-        if self.snapshot.status.last_error == before {
-            return;
-        }
-        if let Some(error) = self.snapshot.status.last_error.take() {
-            self.push_diagnostic(
-                "registration.terminal_failed",
-                format!(
-                    "A registration's terminal on {target} failed ({}): {}",
-                    error.kind, error.message
-                ),
-            );
-        }
-        self.snapshot.status.last_error = before;
+        REGISTRATION_TERMINAL_REPORT
     }
 }
 
@@ -1327,6 +1301,12 @@ pub(super) struct RegistrationTerminal {
 
 /// The registration terminals kept at once, waiting or sent.
 const REGISTRATION_TERMINAL_LIMIT: usize = 16;
+
+/// A registration terminal's failure, refused before it is sent or answered
+/// as failed by the device, goes to the log under this kind.
+const REGISTRATION_TERMINAL_REPORT: FailureReport = FailureReport::Log {
+    kind: "registration.terminal_failed",
+};
 
 /// The `last_error` kind for a device's refusal of a folder to register, by
 /// the helper's code: the shell words a missing folder, a file and a folder

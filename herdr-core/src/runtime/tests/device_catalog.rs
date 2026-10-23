@@ -1239,7 +1239,8 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
         },
     );
     // Registered before the device can be asked anything, so the terminal
-    // the registration opens is not sent and the shell's tab is the one asked.
+    // the registration opens is refused, in the log only, and the shell's tab
+    // is the one asked.
     assert!(runtime.ingest_device_registration(
         TARGET,
         "Other".to_owned(),
@@ -1249,9 +1250,10 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
         }),
     ));
     assert_eq!(
-        diagnostic_messages(&runtime, "registration.terminal_skipped").len(),
+        diagnostic_messages(&runtime, "registration.terminal_failed").len(),
         1
     );
+    assert_eq!(runtime.snapshot.status.last_error, None);
     let connector: Arc<dyn hide_herdr_client::ApiConnector> = Arc::new(
         hide_herdr_client::LocalSocketConnector::new("/tmp/herdr-core-never-connect.sock"),
     );
