@@ -306,5 +306,4 @@ export const PLAN_WORLD: PracticeWorld<PlanModel> = {
   panes: (model) => model.desk.panes.map((pane) => pane.id),
   // A pane the learner opened, a new tab or a split, is a shell with no agent in it.
   screen: (model, paneId, cols) => (paneId === LEAD ? leadScreen(model, cols) : shellScreen(PLACE)),
-  lane: false,
 };
