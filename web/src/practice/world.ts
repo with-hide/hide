@@ -8,6 +8,13 @@ import type { Documents, FileIndexResult } from "../store";
 
 export type CoreEvent = { kind: string; payload: Record<string, unknown> };
 
+/**
+ * What the practice window sends a world besides the core's events: text the
+ * shell would have put on the clipboard (`{ text, what }`). The operator's
+ * clipboard is never written from a practice screen.
+ */
+export const PRACTICE_COPY = "practice_copy";
+
 /** What the core sends beside the snapshot: the ⌘P index's answer, and the open editor tabs and their documents. */
 export type WorldFrames = { fileIndex?: FileIndexResult | null; editor?: EditorSnapshot | null; documents?: Documents };
 

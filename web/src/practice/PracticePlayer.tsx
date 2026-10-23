@@ -19,10 +19,14 @@ import { useUiStore } from "../ui";
 import { WorkspaceScreen } from "../WorkspaceScreen";
 import type { PracticeChapter } from "./chapter";
 import { PracticeCoach } from "./PracticeCoach";
+import { PRACTICE_COPY, type CoreEvent } from "./world";
 
 type UiState = NonNullable<SnapshotRest["ui_state"]>;
 
 const NO_DOCUMENTS: Documents = {};
+
+/** Home, then erase the screen and its scrollback: a screen the world changed is drawn from the top. */
+const CLEAR = "\x1b[H\x1b[2J\x1b[3J";
 
 /** The operator's own choices the practice screen keeps: their chords, so the keys taught are the keys they press. */
 export type OperatorChoices = Pick<UiState, "shortcut_bindings" | "browser_shortcut_bindings">;
@@ -45,15 +49,19 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   const live = useRef({ world: chapter.world, model });
   live.current = { world: chapter.world, model };
 
-  const actions = useMemo(() => createActions((event) => {
-    const after = live.current.world.apply(live.current.model, event);
-    if (after) {
-      live.current = { ...live.current, model: after };
-      setModel(after);
-      setMoves((count) => count + 1);
-    }
-    return true;
-  }), []);
+  const actions = useMemo(() => {
+    const send = (event: CoreEvent) => {
+      const after = live.current.world.apply(live.current.model, event);
+      if (after) {
+        live.current = { ...live.current, model: after };
+        setModel(after);
+        setMoves((count) => count + 1);
+      }
+      return true;
+    };
+    // A copy goes to the world, never to the operator's clipboard.
+    return { ...createActions(send), copyText: (text: string, what: string) => void send({ kind: PRACTICE_COPY, payload: { text, what } }) };
+  }, []);
 
   useEffect(() => installKeyboard(actions), [actions]);
 
@@ -72,9 +80,10 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   }, [chapter]);
 
   // A pane keeps no scrollback, so a terminal a layout change re-created or
-  // shrank comes back blank; whichever terminal shows blank gets its screen again.
+  // shrank comes back blank; whichever terminal shows blank gets its screen
+  // again, and a terminal whose screen the world changed is cleared and drawn anew.
   useEffect(() => {
-    const wrote = new WeakMap<object, number>();
+    const wrote = new WeakMap<object, { at: number; text: string }>();
     const encode = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
     const blank = (terminal: NonNullable<ReturnType<typeof terminalFor>>) => {
       const buffer = terminal.buffer.active;
@@ -85,11 +94,16 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       const { world, model: current } = live.current;
       const ready = world.panes(current).flatMap((id) => {
         const terminal = terminalFor(id);
-        return terminal && terminal.rows > 8 && blank(terminal) && now - (wrote.get(terminal) ?? 0) > 500 ? [{ id, terminal }] : [];
+        if (!terminal || terminal.rows <= 8) return [];
+        const text = world.screen(current, id, terminal.cols);
+        const last = wrote.get(terminal);
+        const changed = last !== undefined && last.text !== text;
+        const lost = blank(terminal) && now - (last?.at ?? 0) > 500;
+        return changed || lost ? [{ id, terminal, text, changed }] : [];
       });
       if (ready.length) {
-        feedChunks(ready.map(({ id, terminal }) => ({ pane_id: id, bytes_base64: encode(world.screen(current, id, terminal.cols)) })));
-        for (const { terminal } of ready) wrote.set(terminal, now);
+        feedChunks(ready.map(({ id, text, changed }) => ({ pane_id: id, bytes_base64: encode((changed ? CLEAR : "") + text) })));
+        for (const { terminal, text } of ready) wrote.set(terminal, { at: now, text });
       }
       frame = requestAnimationFrame(write);
     });
