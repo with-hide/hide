@@ -13,7 +13,7 @@ import { OverviewModal } from "../Overview";
 import { Palette } from "../Palette";
 import type { SnapshotRest } from "../snapshot";
 import { Sidebar } from "../sidebar";
-import { useShellStore, type Documents } from "../store";
+import { useShellStore, type DirectoryList, type Documents } from "../store";
 import { feedChunks, terminalFor } from "../terminals";
 import { TitleRow } from "../TitleRow";
 import { useUiStore } from "../ui";
@@ -26,6 +26,7 @@ import type { CoreEvent } from "./world";
 type UiState = NonNullable<SnapshotRest["ui_state"]>;
 
 const NO_DOCUMENTS: Documents = {};
+const NO_LISTINGS: Record<string, DirectoryList> = {};
 
 /** Home, then erase the screen and its scrollback: a screen the world changed is drawn from the top. */
 const CLEAR = "\x1b[H\x1b[2J\x1b[3J";
@@ -77,6 +78,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,
       fileIndex: frames?.fileIndex ?? null, editor: frames?.editor ?? null, documents: frames?.documents ?? NO_DOCUMENTS,
       sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
+      listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null,
     });
   }, [chapter, model, operator]);
 
