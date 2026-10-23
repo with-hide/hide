@@ -13,21 +13,20 @@ import { summariesEnabled } from "./hideAi";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { memoryTime } from "./memoryList";
-import { MemoryTab } from "./MemoryTab";
 import { ageWords } from "./overviewLens";
 import { agentsByPane, allAgents } from "./paneAgents";
 import { ReasonLine } from "./prReason";
 import { hasPullRequests, prListModel } from "./prWork";
 import { projectRepository, settingsTarget } from "./projectSettings";
-import { agentShares, costPrefix, dayHeights, frontProject, memoryAsks, missedCount, projectCost, recentCards, todoView, usd } from "./projectStatus";
+import { agentShares, costPrefix, dayHeights, frontProject, missedCount, projectCost, todoView, usd } from "./projectStatus";
 import { machineName } from "./screenMachine";
 import { sameDetailItem, type AgentRow, type DetailItem, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
-import { useUiStore, type ProjectTab } from "./ui";
+import { useUiStore } from "./ui";
 
-// The lane's Project tool (PRD lane-two-columns D-14..D-18, B26-B40): the
-// front checkout's project, its 현황 and its 기억. Every count is the core's
+// The lane's Project tool (PRD lane-two-columns D-14..D-18, B26-B38): the
+// front checkout's project and its 현황; its Memory is a tool of its own
+// (operator decision 2026-10-23, replacing D-20). Every count is the core's
 // (`agent_scope.status`, the usage frame's `projects`); a tile sends the
 // operator where the list or the detail lives, the sidebar or the 보기 slot,
 // and the rows carry no button of their own (D-17).
@@ -45,25 +44,11 @@ function useDetailOpen(item: DetailItem): boolean {
 export function ProjectTool({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const project = useShellStore((s) => frontProject(s.rest));
-  const tab = useUiStore((s) => s.projectTab);
-  const waiting = useShellStore((s) => Boolean(project && memoryAsks(s.memory?.project, project.id) > 0));
   if (!project) return <p className="p-lg text-caption text-muted-foreground" data-project-tool="none">{t("history.openWorkspace")}</p>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-project-tool={project.id}>
       <Header project={project} actions={actions} />
-      <div role="tablist" aria-label={t("projectTool.tabs")} className="flex shrink-0 gap-md border-b border-border px-md" data-project-tabs={tab}>
-        {(["status", "memory"] as const satisfies readonly ProjectTab[]).map((id) => (
-          <button key={id} type="button" role="tab" aria-selected={tab === id} data-project-tab={id}
-            className={cn("relative -mb-px flex items-center gap-xs border-b-2 py-xs text-caption outline-none focus-visible:ring-1 focus-visible:ring-ring", tab === id ? "border-primary font-medium text-foreground" : "border-transparent text-subtle-foreground hover:text-foreground")}
-            onClick={() => useUiStore.getState().setProjectTab(id)}>
-            {t(`projectTool.tab.${id}`)}
-            {id === "memory" && waiting ? <span role="img" aria-label={t("projectTool.memoryWaiting")} className="size-(--size-status-mark) rounded-full bg-warning" data-project-tab-dot="memory" /> : null}
-          </button>
-        ))}
-      </div>
-      <div role="tabpanel" className="flex min-h-0 min-w-0 flex-1 flex-col" data-project-panel={tab}>
-        {tab === "memory" ? <MemoryTab actions={actions} /> : <StatusTab project={project} actions={actions} />}
-      </div>
+      <Status project={project} actions={actions} />
     </div>
   );
 }
@@ -94,7 +79,7 @@ function Header({ project, actions }: { project: Workspace; actions: Actions }) 
   );
 }
 
-function StatusTab({ project, actions }: { project: Workspace; actions: Actions }) {
+function Status({ project, actions }: { project: Workspace; actions: Actions }) {
   const status = project.agent_scope.status ?? null;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-lg overflow-y-auto px-md py-md" data-project-status="true">
@@ -105,7 +90,6 @@ function StatusTab({ project, actions }: { project: Workspace; actions: Actions 
         <CostTile project={project} actions={actions} />
       </div>
       {status ? <TodoList project={project} status={status} actions={actions} /> : null}
-      <RecentMemory project={project} actions={actions} />
     </div>
   );
 }
@@ -329,16 +313,14 @@ function TodoList({ project, status, actions }: { project: Workspace; status: Pr
 }
 
 /**
- * A part's head in 현황 (할 일, 최근 기억): one size above its rows and
- * bolder, so the part reads before its rows; a group inside the part keeps
- * the small muted head, a third step.
+ * 할 일's head: one size above its rows and bolder, so the part reads before
+ * its rows; a group inside the part keeps the small muted head, a third step.
  */
-function SectionHead({ title, count, children }: { title: string; count?: number; children?: ReactNode }) {
+function SectionHead({ title, count }: { title: string; count: number }) {
   return (
     <div className="flex min-w-0 items-center gap-xs px-xs pb-xxs">
       <h3 className="text-body font-semibold text-foreground">{title}</h3>
-      {count === undefined ? null : <span className="text-caption tabular-nums text-subtle-foreground" data-project-section-count={count}>{count}</span>}
-      {children}
+      <span className="text-caption tabular-nums text-subtle-foreground" data-project-section-count={count}>{count}</span>
     </div>
   );
 }
@@ -399,37 +381,5 @@ function PrTodo({ project, number, fromMemory, actions }: { project: Workspace; 
         <Tail open={open}>{open ? t("projectTool.close") : t("projectTool.todo.toView")}</Tail>
       </button>
     </li>
-  );
-}
-
-/** The five newest cards (B39), drawn only while the project has some; a card or the chip opens 기억 at its place. */
-function RecentMemory({ project, actions }: { project: Workspace; actions: Actions }) {
-  const { t, i18n } = useInterfaceTranslation();
-  const language = requireInterfaceLanguage(i18n.language);
-  const memory = useShellStore((s) => (s.memory?.project?.workspace_id === project.id ? s.memory.project : null));
-  const cards = useMemo(() => (memory ? recentCards(memory) : []), [memory]);
-  if (!memory || cards.length === 0) return null;
-  const toMemory = () => useUiStore.getState().setProjectTab("memory");
-  return (
-    <section className="flex min-w-0 flex-col gap-xs" aria-label={t("projectTool.memory.recent")} data-project-memory={cards.length}>
-      <SectionHead title={t("projectTool.memory.recent")}>
-        {memory.questions.length > 0 ? (
-          <button type="button" className="rounded-sm bg-warning/15 px-xs text-micro text-warning outline-none focus-visible:ring-1 focus-visible:ring-ring" onClick={toMemory} data-project-memory-handle={memory.questions.length}>
-            {t("projectTool.memory.toHandle", { count: memory.questions.length })}
-          </button>
-        ) : null}
-        <button type="button" className="ml-auto rounded-xs text-micro text-subtle-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring" onClick={toMemory} data-project-memory-more="true">{t("projectTool.memory.more")}</button>
-      </SectionHead>
-      <ul className="flex min-w-0 flex-col">
-        {cards.map((card) => (
-          <li key={card.number} className="min-w-0">
-            <button type="button" className={ROW} onClick={() => { actions.memoryExpand(project.id, card.number); toMemory(); }} data-project-memory-card={card.number}>
-              <span className="min-w-0 flex-1 truncate text-caption text-foreground">{card.title}</span>
-              <span className="shrink-0 text-micro text-muted-foreground">{memoryTime(card.updated_at_unix_ms, language)}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }

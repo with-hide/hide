@@ -47,13 +47,13 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
     const now = Date.now();
     if (shot === "core") return { ...landingDevices(now, SIDEBAR_WIDTH.core), memory: null };
     if (shot === "attention") return { ...landingSidebar(now, [], SIDEBAR_WIDTH.attention), mobile: null, memory: null };
-    const scene = landingWorkspace(now, SIDEBAR_WIDTH[shot], shot === "agents" ? ["a1"] : []);
+    const scene = landingWorkspace(now, SIDEBAR_WIDTH[shot], shot === "agents" ? ["a1"] : [], shot === "memory" ? "memory" : "project");
     return { ...scene, mobile: null, memory: shot === "memory" ? landingMemory(now, "hide") : null };
   }, [shot]);
 
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, mobile: fixture.mobile, memory: { project: fixture.memory }, connection: "live" });
-    useUiStore.setState({ screen: { kind: workspace ? "workspace" : "main" }, overviewOpen: false, laneShown: workspace, projectTab: shot === "memory" ? "memory" : "status" });
+    useUiStore.setState({ screen: { kind: workspace ? "workspace" : "main" }, overviewOpen: false, laneShown: workspace });
     const root = document.documentElement;
     root.classList.toggle("dark", theme === "dark");
     root.classList.toggle("light", theme === "light");

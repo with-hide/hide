@@ -57,7 +57,7 @@ test("Memory progress expands whole rows and follows the live promotion agent th
     await expect(page.locator('[data-workspace-screen]')).toBeVisible();
     await expect(page.locator('[data-connection]')).toHaveCount(0);
     await showProjectMemory(page);
-    const tab = page.locator('[data-lane="project"]');
+    const tab = page.locator('[data-lane="memory"]');
     const quiet = tab.locator('[data-memory-pr-group="72"]');
     await expect(quiet).toContainText("Awaiting review");
     await expect(quiet.locator("[data-memory-agent]")).toHaveCount(0);

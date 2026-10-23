@@ -678,7 +678,7 @@ impl Runtime {
         if let Some(store) = self.workspace_views.as_mut() {
             let entry = store.views.entry(&key.0, &key.1);
             let before = (entry.open, entry.tool);
-            entry.show_tool(Tool::Project);
+            entry.show_tool(Tool::Memory);
             let changed = before != (entry.open, entry.tool);
             store.call_lane(key, LaneCallSide::Tool);
             if changed {
@@ -1271,8 +1271,9 @@ impl Runtime {
             let (visible, section) = match view.tool.filter(|_| view.open) {
                 Some(Tool::Explorer) => (true, RightPanelSection::Explorer),
                 Some(Tool::Changes) => (true, RightPanelSection::Changes),
-                // The Project tool shows its Memory, which no reader gates on.
-                Some(Tool::Project) => (true, RightPanelSection::Memory),
+                // No reader gates on the Project's status or its Memory.
+                Some(Tool::Project) => (true, RightPanelSection::Overview),
+                Some(Tool::Memory) => (true, RightPanelSection::Memory),
                 None => (false, self.snapshot.ui_state.right_panel_section),
             };
             self.snapshot.ui_state.right_panel_visible = visible;

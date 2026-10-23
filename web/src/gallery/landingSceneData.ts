@@ -196,7 +196,7 @@ export const HERO_PANES = ["a1", "a3"] as const;
  * children unfolded in the tree (`expanded`), and the memory shot shows the
  * Project tool's 기억 tab.
  */
-export function landingWorkspace(nowMs: number, width: number, expanded: string[] = []): { rest: SnapshotRest; agents: AgentRow[] } {
+export function landingWorkspace(nowMs: number, width: number, expanded: string[] = [], tool: "project" | "memory" = "project"): { rest: SnapshotRest; agents: AgentRow[] } {
   const scene = landingSidebar(nowMs, expanded, width);
   const navigator = scene.rest.navigator!;
   const project = navigator.workspaces!.find((row) => row.id === "hide")!;
@@ -232,7 +232,7 @@ export function landingWorkspace(nowMs: number, width: number, expanded: string[
     pane_layouts: [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: HERO_PANES[1], zoomed: false, root: { type: "split", direction: "right", ratio: 0.5, first: { type: "pane", pane_id: HERO_PANES[0] }, second: { type: "pane", pane_id: HERO_PANES[1] } } }],
     workspace_view: {
       agent_layout: { root: { area: { id: "g1", active: tab.id, displays: [{ id: tab.id! }] } }, active_area: "g1", canvases: {}, limits: { areas: 4, depth: 3, displays: 64 }, display_count: 1 },
-      device_id: "local", path: main.path, open: true, documents: false, tool: "project", pinned: true, document_width: HERO_LANE_WIDTH, detail_width: null, explorer_width: null, panel_width: HERO_LANE_WIDTH, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+      device_id: "local", path: main.path, open: true, documents: false, tool, pinned: true, document_width: HERO_LANE_WIDTH, detail_width: null, explorer_width: null, panel_width: HERO_LANE_WIDTH, lane_called: 0, lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "v1", active: null, displays: [] } }, active_area: "v1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: 0 },
     },
     terminal: { headers: { a1: { working: true, notice: null, band: null } } },

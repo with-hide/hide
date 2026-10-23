@@ -47,14 +47,18 @@ pub const MAX_WORKSPACES: usize = 256;
 pub const MAX_WIDTH: u32 = 8192;
 
 /// The tool the lane's tool column shows (PRD lane-two-columns D-03, D-07,
-/// D-14, D-20): the Project (its status and Memory), then the checkout's
-/// Explorer (the file tree) and History, in the rail's order. The documents
-/// are no tool: they are the viewing column's (`WorkspaceView::documents`).
+/// D-14): the Project's status and its Memory, then the checkout's Explorer
+/// (the file tree) and History, in the rail's order. Memory is a tool of its
+/// own, no longer a tab of the Project tool (operator decision 2026-10-23,
+/// replacing D-20). The documents are no tool: they are the viewing column's
+/// (`WorkspaceView::documents`).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tool {
-    /// The Project: its status and its Memory.
+    /// The Project's status: its counts and what waits on the operator.
     Project,
+    /// The Project's Memory.
+    Memory,
     /// The file tree.
     Explorer,
     /// History, the checkout's changes.
@@ -65,6 +69,7 @@ impl Tool {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "project" => Some(Self::Project),
+            "memory" => Some(Self::Memory),
             "explorer" => Some(Self::Explorer),
             "changes" => Some(Self::Changes),
             _ => None,
@@ -1116,8 +1121,9 @@ mod tests {
     }
 
     /// PRD lane-two-columns D-20, D-10: a schema 4 lane loads as it was, a
-    /// Memory or PRs tool column reading as none (the Project tool takes
-    /// their place) and its PRs scope dropped; the next save writes schema 5.
+    /// PRs tool column reading as none (the sidebar's PR list takes its
+    /// place) and its PRs scope dropped, a Memory one as the Memory tool it
+    /// is again (operator decision 2026-10-23); the next save writes schema 5.
     #[test]
     fn a_schema_4_lane_loads_whole_and_a_retired_tool_reads_as_no_tool_column() {
         let folder = scratch("two-column-lane");
@@ -1145,7 +1151,7 @@ mod tests {
             LoadOutcome::Loaded { migrated_from: Some(4), ref repairs } if repairs.is_empty()
         ));
         let memory = loaded.get("local", "/memory").unwrap();
-        assert_eq!(lane(memory), (true, true, None, true));
+        assert_eq!(lane(memory), (true, true, Some(Tool::Memory), true));
         assert_eq!(memory.panel_width, Some(420));
         assert_eq!(memory.layout.display_count(), 1);
         assert_eq!(
@@ -1163,7 +1169,7 @@ mod tests {
             !written.contains("\"prs\""),
             "the PRs scope is not written again"
         );
-        assert!(!written.contains("\"memory\""));
+        assert!(written.contains("\"tool\": \"memory\""));
         assert_eq!(load(&path, 2).1, current());
     }
 

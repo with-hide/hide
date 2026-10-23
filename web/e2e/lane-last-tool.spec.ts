@@ -107,7 +107,7 @@ test("⌘E bringing the documents back hands the keyboard to the shown document"
   }
 });
 
-test("⇧⌘L opens the Project's 기억, ⇧⌘R the sidebar's PR list, ⇧⌘G Changes and closes it showing, ⌥⌘1-4 do nothing, and the last tool survives a restart (B24, B25)", async ({ page }) => {
+test("⇧⌘L opens the Project's Memory tool, ⇧⌘R the sidebar's PR list, ⇧⌘G Changes and closes it showing, ⌥⌘1-4 do nothing, and the last tool survives a restart (B24, B25)", async ({ page }) => {
   test.setTimeout(120_000);
   await page.setViewportSize({ width: 1600, height: 900 });
   const herdr = await startHerdr({ agents: false });
@@ -117,11 +117,10 @@ test("⇧⌘L opens the Project's 기억, ⇧⌘R the sidebar's PR list, ⇧⌘G
     await open(page, daemon);
     expect(commandLabel("open_project_memory")).toMatch(/L$/);
     await page.keyboard.press(chord("open_project_memory"));
-    await shows(page, "project");
-    await expect(page.locator('aside[data-lane="project"] [data-project-tab="memory"]')).toHaveAttribute("aria-selected", "true");
-    // ⇧⌘L again leaves the tool on its 기억; it opens, never toggles.
+    await shows(page, "memory");
+    // ⇧⌘L again leaves the Memory tool shown; it opens, never toggles.
     await page.keyboard.press(chord("open_project_memory"));
-    await shows(page, "project");
+    await shows(page, "memory");
     expect(commandLabel("open_sidebar_prs")).toMatch(/R$/);
     await page.keyboard.press(chord("open_sidebar_prs"));
     await expect(page.locator('[data-sidebar-lens-option="prs"]')).toHaveAttribute("aria-pressed", "true");

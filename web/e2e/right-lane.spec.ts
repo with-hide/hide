@@ -211,7 +211,7 @@ test("the rail draws the viewing column's buttons over a rule and one divider be
   try {
     // The documents' button, a rule, then one short rule where the Project's tools end and the checkout's begin.
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? `divider:${node.getAttribute("data-tool-rail-divider")}`));
-    expect(rail).toEqual(["documents", "divider:view", "project", "divider:true", "explorer", "changes"]);
+    expect(rail).toEqual(["documents", "divider:view", "project", "memory", "divider:true", "explorer", "changes"]);
     // The Project tool's head names the project and where it is, with ⚙ and × (PRD lane-two-columns B26).
     await showTool(page, "project");
     const projectHeader = page.locator('aside[data-lane="project"] [data-lane-header]');

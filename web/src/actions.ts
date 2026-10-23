@@ -1791,11 +1791,10 @@ export function createActions(send: DispatchFn) {
       openDetail(item);
     },
 
-    /** ⇧⌘L (B25): the Project tool's 기억 tab for the Project in front. */
+    /** ⇧⌘L (B25): the Memory tool for the Project in front. */
     openFrontProjectMemory() {
       if (!workspaceInFront()) return diagnostic("project_memory: no Workspace in front");
-      ui().setProjectTab("memory");
-      showTool("project");
+      showTool("memory");
     },
 
     /** ← in the 보기 head (B47): the item opened before, or the slot closes. */
@@ -1977,8 +1976,7 @@ export function createActions(send: DispatchFn) {
       const workspace = catalogWorkspaces(rest()).find((row) => row.id === workspaceId && row.device_id === deviceId);
       const checkout = workspace && deviceConnected(rest(), deviceId) ? projectCheckout(workspace, rest()?.ui_state?.recent_checkouts) : null;
       if (!checkout) return false;
-      ui().setProjectTab("memory");
-      beginOpening({ checkoutId: checkout.id, deviceId, path: checkout.path, workspaceId, tool: "project" });
+      beginOpening({ checkoutId: checkout.id, deviceId, path: checkout.path, workspaceId, tool: "memory" });
       return dispatch({ schema_version: 2, kind: "project_memory_navigate", payload: { device_id: deviceId, workspace_id: workspaceId, checkout_id: checkout.id, request_id: crypto.randomUUID() } });
     },
 
@@ -2004,14 +2002,13 @@ export function createActions(send: DispatchFn) {
 
     /**
      * A card number under a past conversation (B33): that Project's Memory
-     * opens with the card in full, in the Memory tab of one of its checkouts.
+     * opens with the card in full, in the Memory tool of one of its checkouts.
      */
     openMemoryCard(deviceId: string, workspaceId: string, number: number) {
       this.memoryOpen(workspaceId);
       this.memoryExpand(workspaceId, number);
       this.openProjectById(deviceId, workspaceId);
-      ui().setProjectTab("memory");
-      showTool("project");
+      showTool("memory");
     },
 
     /**

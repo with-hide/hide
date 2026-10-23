@@ -243,7 +243,7 @@ test("the card opens in the 보기 slot and Merge goes out on the head it showed
     // The rail's slot button draws the card's PR mark in its state and stands
     // apart from the tools by one rule (B46).
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? "divider"));
-    expect(rail).toEqual(["detail", "documents", "divider", "project", "divider", "explorer", "changes"]);
+    expect(rail).toEqual(["detail", "documents", "divider", "project", "memory", "divider", "explorer", "changes"]);
     await expect(page.locator('[data-lane-tool="detail"] [data-detail-mark]')).toHaveAttribute("data-detail-mark", "mergeable");
     await expect(card.locator('[data-pr-card-reason="merge"]')).toBeVisible();
     // Issue linking lives in the menu and hands focus to its picker.

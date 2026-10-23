@@ -273,6 +273,6 @@ describe("readCalls", () => {
 
 describe("the rail's tool scopes (PRD work-tab-pr-lens D-37)", () => {
   it("lists the Project's tools before the checkout's, so the rail draws one boundary", () => {
-    expect(TOOLS.map((tool) => TOOL_SCOPES[tool])).toEqual(["project", "checkout", "checkout"]);
+    expect(TOOLS.map((tool) => TOOL_SCOPES[tool])).toEqual(["project", "project", "checkout", "checkout"]);
   });
 });

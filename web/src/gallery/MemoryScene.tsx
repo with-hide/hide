@@ -8,7 +8,6 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import type { Checkout, MemoryRow, ProjectMemory, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { Lane } from "../Tools";
-import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 
 export const MEMORY_SCENE_STATES = ["workspace", "correction", "off", "ai_not_ready", "analyzing", "empty", "unreadable", "promote", "writing", "writing_batch", "failed", "start_failed", "not_processed", "building", "unbuilt", "forgotten", "verifying", "reconsent", "checking", "check_budget_exhausted", "evicted", "full"] as const;
@@ -98,7 +97,7 @@ export function memorySceneProject(state: MemorySceneState): ProjectMemory {
 }
 
 /** The lane pinned on the Project tool's 기억 tab, the scene's width wide. */
-const VIEW: WorkspaceView = { device_id: "local", path: "/projects/herdr-ide", open: true, documents: false, tool: "project", pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
+const VIEW: WorkspaceView = { device_id: "local", path: "/projects/herdr-ide", open: true, documents: false, tool: "memory", pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
 const FRAME: LaneFrame = { mode: "docked", agents: 0, width: 0, view: null, tool: { field: "panel_width", width: 0, min: 360 }, stacked: false, narrowPin: false };
 const SIZES: LaneSizes = { agentMin: 480, viewMin: 360, viewIdeal: 520, lanePage: 900, explorerMin: 180, explorerIdeal: 240, panelMin: 360, panelIdeal: 400, divider: 8 };
 
@@ -123,7 +122,6 @@ export function MemoryScene({ theme, state, width, language }: MemorySceneParams
   }) as unknown as SnapshotRest, [state, language]);
   useLayoutEffect(() => {
     useShellStore.setState({ rest, memory: { project: memorySceneProject(state) }, connection: "gone" });
-    useUiStore.setState({ projectTab: "memory" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
   }, [rest, state, theme]);

@@ -29,7 +29,7 @@ const LANES: Record<LaneState, Lane> = {
   "explorer-only": { tool: "explorer", pinned: true, documents: false, expanded: false },
   expanded: { tool: "explorer", pinned: false, documents: true, expanded: true },
   project: { tool: "project", pinned: true, documents: true, expanded: false },
-  memory: { tool: "project", pinned: true, documents: true, expanded: false },
+  memory: { tool: "memory", pinned: true, documents: true, expanded: false },
   changes: { tool: "changes", pinned: true, documents: true, expanded: false },
   narrow: { tool: "explorer", pinned: true, documents: true, expanded: false },
 };
@@ -92,14 +92,14 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
       prs: { open: 3, mergeable: 1, failed: 1, review: 1, checking: 0 },
       git: { worktrees: 1, changed: 0, unpushed: 0, removable: 0, dots: [{ checkout_id: checkout.id, state: "clean" }] },
     } };
-    // The project's Memory, so the Project tool draws its recent cards and the rail adds what Memory asks to its number.
+    // The project's Memory, so the Memory tool draws its cards and the rail counts what Memory asks.
     const memory = { ...memorySceneProject("workspace"), workspace_id: workspace.id };
     return { scene, editor: { tabs: lane.documents ? tabs : [], active_tab_id: lane.documents ? "t1" : null }, documents, listings, memory };
   }, [content, lane, state]);
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.scene.rest, agents: fixture.scene.agents, connection: "live", editor: fixture.editor, documents: fixture.documents, listings: fixture.listings, memory: { project: fixture.memory } });
-    useUiStore.setState({ screen: { kind: "workspace" }, laneShown: state !== "closed", laneExpanded: lane.expanded, stackFront: "view", projectTab: state === "memory" ? "memory" : "status" });
+    useUiStore.setState({ screen: { kind: "workspace" }, laneShown: state !== "closed", laneExpanded: lane.expanded, stackFront: "view" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
