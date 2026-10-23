@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { chooseHerdr, ensureServer, parseServerStatus, serverEnvironment, type ServerStatus } from "./herdr";
+import { chooseHerdr, ensureServer, parseServerStatus, restartServer, serverEnvironment, type ServerStatus } from "./herdr";
 import type { ChildResult } from "./spawn";
 
 describe("chooseHerdr", () => {
@@ -126,5 +126,56 @@ describe("ensureServer", () => {
   it("reports a binary that could not start", async () => {
     const { io } = herdr([{ running: false }], { spawnError: "spawn EACCES" });
     expect(await ensureServer(io)).toEqual({ outcome: "start_failed", detail: "spawn EACCES" });
+  });
+});
+
+describe("restartServer", () => {
+  // Herdr's answers in order, what was asked of it, and a clock that moves only when the loop sleeps.
+  const herdr = (answers: ServerStatus[], stop: { ok: true } | { failed: string } = { ok: true }) => {
+    let clock = 0;
+    const asked: string[] = [];
+    const io = {
+      stop: async () => {
+        asked.push("stop");
+        return stop;
+      },
+      status: async () => {
+        asked.push("status");
+        return answers.shift() ?? { running: false };
+      },
+      start: async () => {
+        asked.push("start");
+        return { pid: 43 };
+      },
+      sleep: async (ms: number) => {
+        clock += ms;
+      },
+      now: () => clock,
+      stopped: () => false,
+      statusTimeoutMs: 5_000,
+      waitMs: 5_000,
+      pollMs: 200,
+    };
+    return { io, asked };
+  };
+
+  it("stops the server, waits until none runs, then starts this app's Herdr", async () => {
+    const { io, asked } = herdr([{ running: true }, { running: false }, { running: false }, { running: true }]);
+    expect(await restartServer(io)).toEqual({ outcome: "restarted", pid: 43, elapsedMs: 200 });
+    expect(asked).toEqual(["stop", "status", "status", "status", "start", "status"]);
+  });
+
+  it("starts nothing when Herdr refuses the stop or the server keeps running", async () => {
+    const refused = herdr([], { failed: "herdr server stop exited 1" });
+    expect(await restartServer(refused.io)).toEqual({ outcome: "stop_failed", detail: "herdr server stop exited 1" });
+    expect(refused.asked).toEqual(["stop"]);
+    const stays = herdr(Array.from({ length: 40 }, () => ({ running: true })));
+    expect(await restartServer(stays.io)).toEqual({ outcome: "stop_failed", detail: "the server still runs after the stop" });
+    expect(stays.asked).not.toContain("start");
+  });
+
+  it("answers a server that does not come up as the start failure the status page shows", async () => {
+    const { io } = herdr([{ running: false }, { running: false }, ...Array.from({ length: 40 }, () => ({ running: false }))]);
+    expect(await restartServer(io)).toMatchObject({ outcome: "start_failed", detail: "no answer", pid: 43 });
   });
 });

@@ -54,6 +54,8 @@ mod group_start_admission;
 mod group_tabs;
 mod group_tabs_remote;
 mod guardrails;
+#[path = "tests/herdr_takeover.rs"]
+mod herdr_takeover;
 #[path = "tests/home.rs"]
 mod home;
 #[path = "tests/inbound.rs"]

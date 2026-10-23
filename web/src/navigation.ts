@@ -171,6 +171,8 @@ function localAvailability(rest: SnapshotRest | null): DeviceAvailability {
   const herdr = rest?.status?.herdr;
   if (!herdr?.state || herdr.state === "connected") return { state: "ready" };
   if (herdr.state === "not_connected") return { state: "loading", text: translate("overview.availability.connectingHerdr") };
+  // A Herdr on another protocol says so in the operator's language; Overview draws its move in this place (PRD herdr-takeover B16).
+  if (herdr.state === "protocol_mismatch") return { state: "unavailable", text: translate("herdrTakeover.overview.mismatch"), retry: null };
   const reason = herdr.message ?? translate("overview.availability.herdrState", { state: herdr.state.replace(/_/g, " ") });
   return { state: "unavailable", text: translate("overview.availability.agentCountsLater", { reason }), retry: null };
 }

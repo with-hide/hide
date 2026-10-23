@@ -14,9 +14,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type NativeImage } from "electron";
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
-import { CHECK_UPDATES_COMMAND, SETUP_COMMAND } from "../../../web/src/host";
+import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type HerdrRestart } from "../../../web/src/host";
 import type { MenuCommand } from "./menu";
-import { BINDINGS_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, PICK_FOLDER_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { BINDINGS_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, PICK_FOLDER_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpScope } from "./browserCdp";
 import {
@@ -43,7 +43,7 @@ import {
 import type { DesktopEnv } from "./env";
 import { readJsonFile, writeJsonFile } from "./jsonFile";
 import type { HostLanguage } from "./language";
-import { chooseHerdr, ensureServer, parseServerStatus, serverEnvironment, type HerdrChoice } from "./herdr";
+import { chooseHerdr, ensureServer, parseServerStatus, restartServer, serverEnvironment, type HerdrChoice } from "./herdr";
 import { loadFailureFields, type HostLog } from "./log";
 import { ChildRunner, executableFile, startDetached, type ChildResult } from "./spawn";
 import { fallbackScreen, fallbackScript, statusPageFile } from "./statusPage";
@@ -141,6 +141,8 @@ export class DesktopHost {
   /** Every CLI child runs through this chain, so the runner's cap of one is never crossed. */
   private cliChain: Promise<unknown> = Promise.resolve();
   private discovering: Promise<void> | null = null;
+  /** The one Herdr restart running (`listenHerdrRestart`). */
+  private herdrRestart: Promise<HerdrRestart> | null = null;
   private attempts = 0;
   private cli: { path: string; source: CliSource } | null = null;
   /**
@@ -221,6 +223,7 @@ export class DesktopHost {
     this.startBrowserControl(this.browsers);
     this.listenReveal();
     this.listenPickFolder();
+    this.listenHerdrRestart();
     this.listenLocalPaths();
     this.listenNotify();
     this.listenWindowChrome();
@@ -603,6 +606,65 @@ export class DesktopHost {
       app.setBadgeCount(count);
       this.log.event("notify.badge", { count });
     }
+  }
+
+  /**
+   * Restarting the operator's Herdr server on this app's Herdr (PRD
+   * herdr-takeover B12, B13), asked by this window's shell after the operator
+   * confirmed what ends; one runs at a time and a second ask answers with it.
+   * Only a packaged app has a Herdr of its own to restart onto. A server that
+   * does not come back shows the status page's start failure, with Retry and
+   * Copy diagnostics, as a launch whose server does not start would.
+   */
+  private listenHerdrRestart(): void {
+    ipcMain.handle(HERDR_RESTART_CHANNEL, (event: IpcMainInvokeEvent) => {
+      if (!this.fromShell(event)) {
+        this.log.event("herdr.restart_refused", { reason: "sender" });
+        return "refused";
+      }
+      this.herdrRestart ??= this.restartHerdr().finally(() => {
+        this.herdrRestart = null;
+      });
+      return this.herdrRestart;
+    });
+  }
+
+  private async restartHerdr(): Promise<HerdrRestart> {
+    const herdr = this.herdr();
+    if (herdr.source !== "bundled" || herdr.path === null) {
+      this.log.event("herdr.restart_unavailable", { source: herdr.source });
+      return "unavailable";
+    }
+    const bin = herdr.path;
+    const env = serverEnvironment(this.childEnvironment());
+    const attempt = this.attempts;
+    const result = await restartServer({
+      stop: async () => {
+        const stopped = await this.runChild(bin, ["server", "stop"], STATUS_TIMEOUT_MS, env);
+        if (stopped.spawnError) return { failed: `herdr could not start: ${stopped.spawnError}` };
+        if (stopped.timedOut) return { failed: "herdr server stop timed out" };
+        return stopped.code === 0 ? { ok: true } : { failed: `herdr server stop exited ${stopped.code ?? stopped.signal ?? "without a code"}` };
+      },
+      status: (timeoutMs) => this.runChild(bin, ["status", "server", "--json"], timeoutMs, env).then(parseServerStatus),
+      start: () => startDetached(bin, ["server"], env),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      now: Date.now,
+      stopped: () => this.quitting,
+      statusTimeoutMs: STATUS_TIMEOUT_MS,
+      waitMs: HERDR_START_WAIT_MS,
+      pollMs: HERDR_START_POLL_MS,
+    });
+    if (result.outcome === "restarted") {
+      this.log.event("herdr.server_restarted", { attempt, pid: result.pid, elapsed_ms: result.elapsedMs });
+      return "restarted";
+    }
+    if (result.outcome === "stop_failed") {
+      this.log.event("herdr.server_stop_failed", { attempt, detail: result.detail });
+      return "stop_failed";
+    }
+    this.log.event("herdr.server_restart_failed", { attempt, outcome: result.outcome, detail: result.detail });
+    this.fail(attempt, "start_failed", `herdr restart: ${result.detail}`);
+    return "failed";
   }
 
   /**

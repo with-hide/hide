@@ -40,6 +40,7 @@ mod github_poll;
 mod github_store;
 mod handle;
 pub mod herdr_contract;
+pub mod herdr_takeover;
 pub mod input_gate;
 pub mod issues;
 mod kit;

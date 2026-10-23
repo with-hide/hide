@@ -87,3 +87,10 @@ export const UPDATE_STATUS_CHANNEL = "hide:update-status";
 export const UPDATE_CHECK_CHANNEL = "hide:update-check";
 export const UPDATE_RESTART_CHANNEL = "hide:update-restart";
 export const UPDATE_PRERELEASE_CHANNEL = "hide:update-prerelease";
+
+/**
+ * Restarting the operator's Herdr server on this app's Herdr where Herdr
+ * cannot hand it over live (PRD herdr-takeover B12): the shell asks once the
+ * operator confirmed what ends (invoke), and the host answers how it went.
+ */
+export const HERDR_RESTART_CHANNEL = "hide:herdr-restart";

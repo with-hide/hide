@@ -11,11 +11,15 @@ import { FIRST_RUN_VERSION, type AiProvider, type FirstRunStep, type HerdrProfil
 /** The desktop route includes saved devices; a browser tab has its first step alone. */
 export type WizardStep = Exclude<FirstRunStep, "done">;
 
-/** Failed or unread discovery has its own retry step; an observed empty list skips it. */
-export function wizardSteps(profiles: HerdrProfiles | undefined): readonly WizardStep[] {
-  return profiles?.state === "ready" && profiles.profiles.length === 0
+/**
+ * Failed or unread discovery has its own retry step; an observed empty list skips it. Moving the operator's
+ * older Herdr comes first, and only while there is one to move (PRD herdr-takeover B1, B17).
+ */
+export function wizardSteps(profiles: HerdrProfiles | undefined, herdr = false): readonly WizardStep[] {
+  const rest: readonly WizardStep[] = profiles?.state === "ready" && profiles.profiles.length === 0
     ? ["agents", "notifications", "project"]
     : ["agents", "devices", "notifications", "project"];
+  return herdr ? ["herdr", ...rest] : rest;
 }
 
 /**
@@ -27,7 +31,8 @@ export function wizardSteps(profiles: HerdrProfiles | undefined): readonly Wizar
 export function firstRunStep(rest: SnapshotRest | null, desktop: boolean): WizardStep | null {
   const run = rest?.ui_state?.first_run;
   if (!run || run.version !== FIRST_RUN_VERSION || run.step === "done") return null;
-  if (!desktop && run.step !== "agents") return null;
+  // A browser tab's wizard is the agent step alone; its Continue leaves a Herdr step unanswered (PRD herdr-takeover D-24).
+  if (!desktop) return run.step === "agents" || run.step === "herdr" ? "agents" : null;
   return run.step;
 }
 

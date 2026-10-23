@@ -34,6 +34,7 @@ mod github_poll;
 pub(crate) mod group_starts;
 mod guardrails;
 mod herdr_profiles;
+mod herdr_takeover;
 mod home;
 mod hosts;
 mod inbound;
@@ -1353,6 +1354,9 @@ pub struct Runtime {
     /// (`runtime/first_run.rs`); session-only, since a relaunch reopens the
     /// step and its next Continue asks again.
     first_run_apply: Option<first_run::FirstRunApply>,
+    /// Moving the operator's older Herdr server onto this app's Herdr
+    /// (`runtime/herdr_takeover.rs`); session-only.
+    herdr_takeover: herdr_takeover::Takeover,
     /// When this Mac's kit is next re-read while Settings is on screen.
     local_kit_next_status: Option<Instant>,
     /// A Settings tab asked for one read of this Mac's kit.
@@ -2199,6 +2203,7 @@ impl Runtime {
             unknown_kit_agents_limit_reported: false,
             local_kit_pending: None,
             first_run_apply: None,
+            herdr_takeover: herdr_takeover::Takeover::default(),
             local_kit_next_status: None,
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),

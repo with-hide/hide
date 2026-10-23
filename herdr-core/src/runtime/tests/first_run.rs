@@ -6,7 +6,7 @@ use super::*;
 use crate::model::{FirstRun, FirstRunStep, ScreenIntro};
 use hide_kit::{AgentReport, Availability, ComponentState, KitReport, PieceReport};
 
-fn agent(id: &str, enabled: bool, skill: ComponentState) -> AgentReport {
+pub(super) fn agent(id: &str, enabled: bool, skill: ComponentState) -> AgentReport {
     AgentReport {
         id: id.to_owned(),
         label: id.to_owned(),
@@ -25,7 +25,7 @@ fn agent(id: &str, enabled: bool, skill: ComponentState) -> AgentReport {
 }
 
 /// This Mac's kit pass: `held` while its record waits for the first-run choice.
-fn pass(held: bool, agents: Vec<AgentReport>) -> KitReport {
+pub(super) fn pass(held: bool, agents: Vec<AgentReport>) -> KitReport {
     KitReport {
         agents,
         held_for_onboarding: held,
@@ -33,7 +33,7 @@ fn pass(held: bool, agents: Vec<AgentReport>) -> KitReport {
     }
 }
 
-fn first_run_pass() -> KitReport {
+pub(super) fn first_run_pass() -> KitReport {
     pass(
         true,
         vec![
@@ -43,18 +43,18 @@ fn first_run_pass() -> KitReport {
     )
 }
 
-fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
+pub(super) fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
     }))
     .expect("event")
 }
 
-fn step(runtime: &Runtime) -> Option<FirstRunStep> {
+pub(super) fn step(runtime: &Runtime) -> Option<FirstRunStep> {
     runtime.snapshot().ui_state.first_run.map(|run| run.step)
 }
 
-fn report_here(runtime: &mut Runtime, report: &KitReport) {
+pub(super) fn report_here(runtime: &mut Runtime, report: &KitReport) {
     // Existing cases exercise the original no-saved-devices route.
     runtime.snapshot.status.herdr_profiles.state = "ready".to_owned();
     let node = runtime.node.clone();
@@ -62,7 +62,7 @@ fn report_here(runtime: &mut Runtime, report: &KitReport) {
 }
 
 /// The kit worker takes what Continue queued and answers with `report`.
-fn run_queued_pass(runtime: &mut Runtime, report: &KitReport) -> hide_kit::Scope {
+pub(super) fn run_queued_pass(runtime: &mut Runtime, report: &KitReport) -> hide_kit::Scope {
     let Some(KitJob::Apply(scope)) = runtime.take_local_kit_job(Instant::now()) else {
         panic!("Continue queues an install on this Mac");
     };

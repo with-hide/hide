@@ -24,6 +24,8 @@ import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, Dia
 import { Kbd } from "./components/ui/kbd";
 import { accountHome, failedAgents, firstRunStep, firstStartAgent, noAgentInstalled, SUGGESTED_INSTALLS, tileStatus, whatChanges, wizardSteps, type TileStatus, type WizardStep } from "./firstRun";
 import { FirstRunDevices } from "./FirstRunDevices";
+import { FirstRunHerdr } from "./HerdrTakeover";
+import { herdrStepShown } from "./herdrTakeoverRules";
 import { firstRunAgent } from "./hideAi";
 import { BrandOwl } from "./components/brand-owl";
 import { hostBridge, keySystem } from "./host";
@@ -47,7 +49,8 @@ type SetupWalk = { step: WizardStep | null; open: () => void; go: (step: WizardS
 
 export const useSetupWalk = create<SetupWalk>((set) => ({
   step: null,
-  open: () => set({ step: "agents" }),
+  // It opens on moving the operator's older Herdr only while there is one to move (PRD herdr-takeover B17, D-17).
+  open: () => set({ step: herdrStepShown(useShellStore.getState().rest?.status?.herdr_takeover) ? "herdr" : "agents" }),
   go: (step) => set({ step }),
   close: () => set({ step: null }),
 }));
@@ -59,9 +62,16 @@ export function FirstRunWizard({ actions }: { actions: Actions }) {
   const firstRun = useShellStore((s) => firstRunStep(s.rest, desktop));
   const setup = useSetupWalk((s) => s.step);
   const kit = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.kind !== "remote")?.kit);
+  const takeover = useShellStore((s) => s.rest?.status?.herdr_takeover);
   // The first run owns the screen; Help's walk waits behind it.
   const step = firstRun ?? setup;
+  // A walk on a Herdr step with nothing left to move goes on to the agents; the core moves the first run itself.
+  useEffect(() => {
+    if (firstRun === null && setup === "herdr" && !herdrStepShown(takeover)) useSetupWalk.getState().go("agents");
+  }, [firstRun, setup, takeover]);
   if (step === null) return null;
+  // The core's Herdr step waits for its look at the server; there is nothing to draw until it answers.
+  if (step === "herdr" && !herdrStepShown(takeover)) return null;
   // The agent step draws this Mac's kit, which lists every supported agent once it has been read;
   // a kit that could not run, or a pass that stopped before changing anything, stays on screen to say why.
   if (step === "agents" && !kit?.agents?.length && !kit?.unavailable && !kit?.refused) return null;
@@ -74,7 +84,8 @@ function Wizard({ actions, step, reopened, desktop }: { actions: Actions; step: 
   const saved = useShellStore((s) => s.rest?.ui_state?.first_run_choices);
   const [chosen, setChosen] = useState<readonly string[] | null>(() => reopened ? null : saved?.agents ?? null);
   const [answered, setAnswered] = useState(false);
-  const steps = wizardSteps(profiles);
+  const takeover = useShellStore((s) => s.rest?.status?.herdr_takeover ?? null);
+  const steps = wizardSteps(profiles, step === "herdr" || (desktop && herdrStepShown(takeover)));
   // Read saved configuration once per walk. This does not connect a device.
   useEffect(() => { if (desktop) actions.listHerdrProfiles(); }, [actions, desktop]);
   const primary = useRef<(() => void) | null>(null);
@@ -82,7 +93,7 @@ function Wizard({ actions, step, reopened, desktop }: { actions: Actions; step: 
   primary.current = null;
   const close = () => useSetupWalk.getState().close();
   const number = Math.max(steps.indexOf(step), 0) + 1;
-  const back = step === "agents" ? undefined : () => {
+  const back = step === "agents" || step === "herdr" ? undefined : () => {
     if (reopened) useSetupWalk.getState().go(steps[Math.max(steps.indexOf(step) - 1, 0)]!);
     else actions.backFirstRun(step);
   };
@@ -133,9 +144,25 @@ function Wizard({ actions, step, reopened, desktop }: { actions: Actions; step: 
             <span className="text-caption text-muted-foreground">{t("firstRun.progress", { step: number, total: steps.length })}</span>
           </div>
         ) : null}
-            <BrandOwl key={step} pose={step === "agents" ? "agents" : step === "notifications" ? "devices" : "ai"} className="ml-auto h-(--size-owl-onboarding) w-(--size-owl-onboarding)" />
+            <BrandOwl key={step} pose={step === "agents" ? "agents" : step === "notifications" || step === "herdr" ? "devices" : "ai"} className="ml-auto h-(--size-owl-onboarding) w-(--size-owl-onboarding)" />
           </div>
-        {step === "agents" ? (
+        {step === "herdr" && takeover ? (
+          <FirstRunHerdr
+            actions={actions}
+            takeover={takeover}
+            primary={primary}
+            // Help's walk moves on its own; the first run's Not now is the core's (D-16, D-29).
+            onLater={() => {
+              if (!reopened) actions.herdrTakeover("later");
+              else if (takeover.same_protocol) useSetupWalk.getState().go("agents");
+              else close();
+            }}
+            onMoved={() => {
+              actions.herdrTakeover("continue");
+              if (reopened) useSetupWalk.getState().go("agents");
+            }}
+          />
+        ) : step === "agents" ? (
           <AgentsStep actions={actions} reopened={reopened} desktop={desktop} primary={primary} chosen={chosen} onChoose={choose} onNext={nextAgents} />
         ) : step === "devices" ? (
           <FirstRunDevices actions={actions} primary={primary} onBack={back!} onNext={() => reopened ? useSetupWalk.getState().go("notifications") : actions.advanceFirstRun("devices")} />

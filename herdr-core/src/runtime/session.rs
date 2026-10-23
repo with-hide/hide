@@ -3053,6 +3053,7 @@ impl Runtime {
             self.snapshot.status.herdr.expected_protocol = expected_protocol;
             self.snapshot.status.herdr.received_protocol = received_protocol;
             self.snapshot.status.herdr.received_version = received_version;
+            self.herdr_connection_changed();
             changed = true;
         }
         if let Some(mut agents) = agents {

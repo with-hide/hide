@@ -136,6 +136,7 @@ section!(StatusSections, StatusSnapshot, s, {
     server_discovery: ServerDiscoverySnapshot => s.server_discovery,
     tab_rename: Option<TabRenameSnapshot> => s.tab_rename,
     herdr: ProviderStatusSnapshot => s.herdr,
+    herdr_takeover: Option<HerdrTakeoverSnapshot> => s.herdr_takeover,
     remote: Vec<RemoteStatusSnapshot> => s.remote,
     environment: Vec<EnvironmentStatusSnapshot> => s.environment,
     agent_hooks: AgentHooksSnapshot => s.agent_hooks,

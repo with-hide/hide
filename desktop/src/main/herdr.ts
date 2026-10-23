@@ -109,3 +109,38 @@ export async function ensureServer(io: {
   }
   return { outcome: "start_failed", detail: "no answer", pid: spawned.pid, elapsedMs: io.now() - started };
 }
+
+export type ServerRestart =
+  | { outcome: "restarted"; pid: number; elapsedMs: number }
+  | { outcome: "stop_failed"; detail: string }
+  | Exclude<ServerStart, { outcome: "started" } | { outcome: "running" }>;
+
+/**
+ * Restarts the operator's server on this app's Herdr where Herdr cannot hand
+ * it over live (PRD herdr-takeover B12, D-13): the pinned Herdr stops the
+ * server on the socket, which ends the processes in its panes and keeps its
+ * saved layout, and once Herdr says none runs the server is started as
+ * `ensureServer` starts one. A stop Herdr refuses, or a server still running
+ * after the wait, changes nothing more and is answered as `stop_failed`; a
+ * server that comes back running on its own before the start is no restart
+ * either. The operator confirmed what ends before this is called.
+ */
+export async function restartServer(io: Parameters<typeof ensureServer>[0] & {
+  /** Herdr's own `server stop` against the socket, or why it failed. */
+  stop: () => Promise<{ ok: true } | { failed: string }>;
+}): Promise<ServerRestart> {
+  const stopped = await io.stop();
+  if ("failed" in stopped) return { outcome: "stop_failed", detail: stopped.failed };
+  const started = io.now();
+  for (;;) {
+    const now = await io.status(io.statusTimeoutMs);
+    if ("unreadable" in now) return { outcome: "status_failed", detail: now.unreadable };
+    if (!now.running) break;
+    if (io.now() - started >= io.waitMs || io.stopped()) return { outcome: "stop_failed", detail: "the server still runs after the stop" };
+    await io.sleep(io.pollMs);
+  }
+  const result = await ensureServer(io);
+  if (result.outcome === "started") return { outcome: "restarted", pid: result.pid, elapsedMs: result.elapsedMs };
+  if (result.outcome === "running") return { outcome: "stop_failed", detail: "a server was running again before the start" };
+  return result;
+}

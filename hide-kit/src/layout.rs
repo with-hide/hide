@@ -238,6 +238,13 @@ pub fn worktree_facts(state_dir: &Path) -> PathBuf {
     state_dir.join("worktree-facts")
 }
 
+/// The moves of this machine's own Herdr server onto the app's Herdr that
+/// failed, by server process and pin, at most 16 (PRD herdr-takeover D-23);
+/// its owner is the daemon's takeover (`hided::herdr_handoff`).
+pub fn herdr_takeover_record(state_dir: &Path) -> PathBuf {
+    state_dir.join("herdr-handoff.json")
+}
+
 /// Where this machine's core runs when it is not here: present only on a
 /// node whose core a move placed on another machine; its owner is the
 /// daemon's start (`hided::placement`).
