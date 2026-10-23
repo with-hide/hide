@@ -1236,7 +1236,10 @@ impl Runtime {
                 target_id: device.to_owned(),
                 request_id: request_id.clone(),
                 report_pane_focus_outcome: false,
-                focus_device: true,
+                // The device answers after its helper's facts, seconds later
+                // at times, when the window may be elsewhere: the terminal is
+                // there when the project is opened, and the window stays.
+                focus_device: false,
                 request: RemoteControlRequest::CreateTab {
                     workspace_id,
                     checkout_id: Some(checkout_id),
