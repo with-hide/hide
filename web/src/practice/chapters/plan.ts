@@ -23,7 +23,7 @@ export default chapter<PlanModel>({
     { id: "ask", quest: true, target: PANE, side: "inside", gesture: say("Make payment retries back off and read the count from settings. Plan it first and let me review it"), done: (model) => model.stage >= 1 },
     // Pointing at the chip, pressing it or the chord opens the small map; the shell opens it with no core event.
     { id: "chip", quest: true, target: CHIP, side: "bottom", command: "toggle_plan", shown: `[data-pane-plan="${LEAD}"]` },
-    { id: "large", target: LARGE, side: "left", gesture: { click: true }, done: planInSlot },
+    { id: "large", target: LARGE, side: "right", gesture: { click: true }, done: planInSlot },
     { id: "review", target: '[data-plan-banner="review"]', side: "left" },
     // Approval is a conversation: whatever the learner answers, the agent approves its plan and starts.
     { id: "approve", quest: true, target: PANE, side: "inside", gesture: say("Looks good. Cap the backoff at 30 seconds, then go"), done: (model) => model.stage >= 2 },

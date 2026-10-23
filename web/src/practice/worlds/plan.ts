@@ -33,6 +33,8 @@ export type PlanModel = {
   /** The 보기 slot: what it opened, oldest first, and whether the lane draws it. */
   detail: DetailItem[];
   detailShown: boolean;
+  /** The core's count of lane calls; an open in the 보기 slot is one, which brings an unpinned lane up. */
+  laneCalls: number;
 };
 
 /** Whether the 보기 slot shows this chapter's plan in front. */
@@ -79,7 +81,7 @@ function reviewing(row: AgentRow, subject: AskSubject, since: number): AgentRow 
 function initial(): PlanModel {
   const lead = resting(agent({ pane_id: LEAD, identity_label: LABEL, agent_kind: "claude", group: "seen", mark: "quiet", status_code: "idle", elapsed: "6m", session_id: SESSION.session_id }));
   const now = Date.now();
-  return { desk: oneTabDesk({ id: LEAD, agent: lead, title: LABEL }), stage: 0, draft: "", said: [], createdAt: now, updatedAt: now, detail: [], detailShown: false };
+  return { desk: oneTabDesk({ id: LEAD, agent: lead, title: LABEL }), stage: 0, draft: "", said: [], createdAt: now, updatedAt: now, detail: [], detailShown: false, laneCalls: 0 };
 }
 
 // --- The plan ------------------------------------------------------------------
@@ -170,10 +172,11 @@ function apply(model: PlanModel, event: CoreEvent): PlanModel | null {
     // Only the agent is talked to here; keys typed into another pane reach no one.
     case "key":
       return p.pane_id === LEAD && typeof p.bytes_base64 === "string" ? typed(model, decode(p.bytes_base64)) : null;
-    // The plan opens in the 보기 slot; a record or a card this world keeps none of.
+    // The plan opens in the 보기 slot as a lane call, the way the core numbers one; a record or a card this world keeps none of.
     case "detail_open": {
       const item = p.item as DetailItem;
-      return item.kind === "plan" && item.session.session_id === SESSION.session_id && model.stage > 0 ? { ...model, detail: [...model.detail.filter((one) => one.kind !== "plan"), item], detailShown: true } : null;
+      if (item.kind !== "plan" || item.session.session_id !== SESSION.session_id || model.stage === 0) return null;
+      return { ...model, detail: [...model.detail.filter((one) => one.kind !== "plan"), item], detailShown: true, laneCalls: model.laneCalls + 1 };
     }
     case "detail_back":
       return model.detail.length > 1 ? { ...model, detail: model.detail.slice(0, -1) } : null;
@@ -251,7 +254,7 @@ function snapshot(model: PlanModel, nowMs: number): WorldSnapshot {
       plans: { items: plan ? [plan] : [] },
       ui_state: { ...base.ui_state!, detail: { items: model.detail, shown } },
       // Opening the 보기 slot opens the lane, as the core does on `detail_open`.
-      workspace_view: { ...base.workspace_view!, open: shown },
+      workspace_view: { ...base.workspace_view!, open: shown, lane_called: model.laneCalls, lane_calls: model.laneCalls, lane_called_side: "view" },
       terminal: { headers: { [LEAD]: header(model) } },
     },
   };
