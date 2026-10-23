@@ -2368,6 +2368,11 @@ The last step of a chapter offers the next chapter, and the last chapter's offer
 
 Chapter 1 closes its working agent by mistake, through the shell's own Stop-work sheet, and brings it back with Reopen closed tab, where it stood and continuing its conversation; its world answers `close_pane` and `reopen_closed` and draws `recent_closed` the way the core does.
 The practice screen mounts the shell's close sheet, so a learner's close in any chapter asks as it would in Hide.
+Chapter 4 (`delegate`) hands work on by saying it to a lead agent, in three ways: a child it starts in a tab of its own, under the lead in the list, then tells something and hears back from by letter; an open agent it finds by what it does and writes to; and an agent named by the Terminal ID copied from its pane's menu (Copy details › Terminal ID) and pasted into the request.
+The lead takes the learner's own words for the first three; the last goes only when the request holds the copied ID, and the lead asks for it otherwise.
+The agents' answers and letters are the world's script, drawn in the panes and the list; the learner only types the requests and chooses the menu item.
+
+Chapter 8 hands a Conductor a job of several pull requests as a mission: its world draws the plan, the workers in delegated tabs under the Conductor and the one decision it asks as an ordinary question, in `missions` the way the core keeps them, and the learner's answer in the conversation changes the plan; the first plan opens the pane chip's small map by itself under the shell's own rule ([A mission on its Conductor's pane](#a-mission-on-its-conductors-pane)), and the big map opens only from `크게 ›`, as a lane call the world numbers.
 
 The window holds no daemon connection and carries no token.
 It asks the shell of the same origin, over one `BroadcastChannel` (`hide-practice`), for the operator's language, chords, theme and progress, and hands each step it reaches back; the shell dispatches `practice_progress_set`, and the core keeps `ui_state.practice` like the other UI choices.
@@ -2375,6 +2380,8 @@ With no shell answering, the chapters still play and the list says `진행 기�
 In the desktop app the window has no preload: it stands in for the desktop host from its address (`host=electron&platform=…`), so its keyboard runs the desktop chords, and a menu command while it holds the keyboard is dropped rather than sent to the main window's shell; it closes with the main window.
 
 Chapter 3, following agents, plays a lead with two children in tabs of their own beside a second project's asking and finished tasks: the 태스크 list by state, the pane head, its turn card, a child opened from the head's child button and the parent mark at the front of the child's head back to the parent, and the Overview's map. Coming back to the lead finishes one child and turns the lead to Needs You, so the list and the head move while the learner watches. Going to an agent from an OS notification is not taught, because the notification is drawn outside the window.
+Chapter 6, the project at a glance (`chapters/project.ts`), opens the right lane beside an agent at work with the Project tool's rail icon (`toggle_lane_project`), so ⏎ reaches the Project tool even after the learner showed another one, and reads its 현황 tiles and 할 일, whose two invented PRs wear the `예시` mark; ⇧⌘E (`toggle_lane_explorer`) shows the files the agent changed, ⇧⌘L (`open_project_memory`) the project's Memory cards, and ⌘E puts the lane away.
+A tool step ends when the lane shows that tool, whether by its chord or its rail icon, and the closing step when the lane is no longer drawn, by ⌘E or by the tool's ×; the world answers the pin too, and nothing opens from a tile, a row or a file, which the bubbles say.
 
 ### Adding a chapter
 
