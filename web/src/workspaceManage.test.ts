@@ -291,7 +291,7 @@ describe("receipts", () => {
   });
 
   it("reads only the removal of the checkout this page asked to delete", () => {
-    const removal = { id: 3, repository_root: "/r", checkout_path: "/r-feature", branch: "feature", delete_branch: false, phase: "removing", message: null };
+    const removal = { id: 3, repository_root: "/r", checkout_path: "/r-feature", branch: "feature", delete_branch: false, phase: "removing", notice: null };
     expect(removalFor(removal, "local", "/r-feature", 2, "local")?.id).toBe(3);
     expect(removalFor(removal, "local", "/r-other", 2, "local")).toBeNull();
     expect(removalFor(removal, "local", "/r-feature", 3, "local")).toBeNull();
@@ -301,7 +301,7 @@ describe("receipts", () => {
   });
 
   it("marks a checkout as being deleted while checking, closing panes or running Git", () => {
-    const removal = { id: 3, repository_root: "/r", checkout_path: "/r-feature", branch: "feature", delete_branch: false, phase: "closing", message: null };
+    const removal = { id: 3, repository_root: "/r", checkout_path: "/r-feature", branch: "feature", delete_branch: false, phase: "closing", notice: null };
     expect(checkoutRemoving(removal, "local", "/r-feature", "local")).toBe(true);
     expect(checkoutRemoving({ ...removal, phase: "checking" }, "local", "/r-feature", "local")).toBe(true);
     expect(checkoutRemoving({ ...removal, phase: "removing" }, "local", "/r-feature", "local")).toBe(true);

@@ -28,6 +28,7 @@ import { translate, useInterfaceTranslation } from "./i18n/client";
 import { coreErrorText } from "./coreError";
 import { useErrorSince } from "./errorSince";
 import { blockedText, branchLossText, deleteButtonText, discardText, warningText } from "./deletionGate";
+import { removalNoticeText } from "./removalNotice";
 import { localDeviceId, type Checkout, type Workspace } from "./snapshot";
 import { machineName, windowDeviceId } from "./screenMachine";
 import { useShellStore } from "./store";
@@ -465,7 +466,7 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
   const finished = removal?.phase === "finished" ? removal : null;
   // A refusal or a failed removal keeps the worktree, so the choices come
   // back under the reason and Delete tries again on the row as it is now.
-  const failure = refused ? coreErrorText(refused, t, "workspace.deleteFailed") : removal?.phase === "failed" ? (removal.message ?? t("workspace.deleteFailed")) : null;
+  const failure = refused ? coreErrorText(refused, t, "workspace.deleteFailed") : removal?.phase === "failed" ? removalNoticeText(removal.notice, removal.phase, t) : null;
   const choosing = !!row && !!gate && !gate.blocked && !inFlight && !finished;
   const branch = row?.branch ?? checkout.branch;
   const needsDiscard = !!gate?.discard;
@@ -563,7 +564,7 @@ function DeleteWorktreeDialog({ actions, deviceId, checkout, listed, onClose }: 
         ) : null}
         {finished ? (
           <Note tone="ok" data-delete-result="finished">
-            {finished.message ?? t("workspace.worktreeRemoved")}
+            {removalNoticeText(finished.notice, finished.phase, t)}
           </Note>
         ) : null}
         <AlertDialogFooter>
@@ -610,7 +611,7 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
     if (!watchedRemoval || dialogOpen) return;
     const answer = removalFor(removal, watchedRemoval.deviceId, watchedRemoval.path, watchedRemoval.afterId, localDeviceId(useShellStore.getState().rest));
     if (!answer || (answer.phase !== "finished" && answer.phase !== "failed")) return;
-    useUiStore.getState().setNotice({ text: answer.message ?? (answer.phase === "finished" ? translate("workspace.worktreeRemoved") : translate("workspace.deleteFailed")), refreshable: false });
+    useUiStore.getState().setNotice({ text: removalNoticeText(answer.notice, answer.phase, translate), refreshable: false });
     useUiStore.getState().setWatchedRemoval(null);
   }, [watchedRemoval, removal, dialogOpen]);
 

@@ -2077,7 +2077,14 @@ impl Runtime {
         let result =
             context.and_then(|context| live::spawn_worktree_preflight(context, id, outside));
         if let Err(reason) = result {
-            self.ingest_worktree_preflight_result(id, Vec::new(), Err(reason));
+            self.ingest_worktree_preflight_result(
+                id,
+                Vec::new(),
+                Err(live::RemovalFailure::new(
+                    crate::model::WorktreeRemovalNotice::WorkerUnavailable,
+                    reason,
+                )),
+            );
         }
         true
     }
@@ -2087,7 +2094,7 @@ impl Runtime {
         &mut self,
         id: u64,
         outside: Vec<String>,
-        result: Result<(), String>,
+        result: Result<(), live::RemovalFailure>,
     ) -> bool {
         let Some(removal) = self
             .snapshot
@@ -2097,9 +2104,13 @@ impl Runtime {
         else {
             return false;
         };
-        if let Err(message) = result {
+        if let Err(failure) = result {
+            crate::diagnostic!(serde_json::json!({
+                "component": "worktree_removal", "kind": "preflight_failed",
+                "id": id, "detail": failure.detail,
+            }));
             removal.phase = "failed".to_owned();
-            removal.message = Some(message);
+            removal.notice = Some(failure.notice);
             let device = removal.device_id.clone();
             match device.as_deref() {
                 Some(device) => {
@@ -2201,14 +2212,22 @@ impl Runtime {
                 return self.ingest_worktree_close_result(
                     id,
                     &[],
-                    Err(format!(
-                        "Deleting a worktree needs a live Herdr connection: {message}"
+                    Err(live::RemovalFailure::new(
+                        crate::model::WorktreeRemovalNotice::CloseFailed,
+                        format!("Deleting a worktree needs a live Herdr connection: {message}"),
                     )),
                 );
             }
         };
         if let Err(message) = live::spawn_worktree_close(context, id, checkout_path, pane_ids) {
-            self.ingest_worktree_close_result(id, &[], Err(message));
+            self.ingest_worktree_close_result(
+                id,
+                &[],
+                Err(live::RemovalFailure::new(
+                    crate::model::WorktreeRemovalNotice::WorkerUnavailable,
+                    message,
+                )),
+            );
         }
         true
     }
@@ -2277,7 +2296,7 @@ impl Runtime {
             expected_ignored_repositories: payload.expected_ignored_repositories.clone(),
             branch: worktree.branch,
             phase: "checking".to_owned(),
-            message: None,
+            notice: None,
         });
         id
     }
@@ -2930,7 +2949,7 @@ impl Runtime {
         &mut self,
         id: u64,
         closed_pane_ids: &[String],
-        result: Result<(), String>,
+        result: Result<(), live::RemovalFailure>,
     ) -> bool {
         let Some(active) = self.snapshot.worktree_removal.as_ref() else {
             return false;
@@ -2997,10 +3016,15 @@ impl Runtime {
                 });
             if identity_changed || pane_reappeared {
                 result = Err(if pane_reappeared {
-                    "A pane appeared in the worktree while deletion was being confirmed".to_owned()
+                    live::RemovalFailure::new(
+                        crate::model::WorktreeRemovalNotice::PaneAppeared,
+                        "A pane appeared in the worktree while deletion was being confirmed",
+                    )
                 } else {
-                    "The worktree identity or deletion gate changed while panes were closing"
-                        .to_owned()
+                    live::RemovalFailure::new(
+                        crate::model::WorktreeRemovalNotice::ChangedWhileClosing,
+                        "The worktree identity or deletion gate changed while panes were closing",
+                    )
                 });
             }
         }
@@ -3008,11 +3032,15 @@ impl Runtime {
         match result {
             Ok(()) => {
                 removal.phase = "removing".to_owned();
-                removal.message = None;
+                removal.notice = None;
             }
-            Err(message) => {
+            Err(failure) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "worktree_removal", "kind": "close_failed",
+                    "id": id, "detail": failure.detail,
+                }));
                 removal.phase = "failed".to_owned();
-                removal.message = Some(message);
+                removal.notice = Some(failure.notice);
             }
         }
         true
@@ -3098,7 +3126,7 @@ impl Runtime {
     pub(crate) fn ingest_worktree_removal_result(
         &mut self,
         id: u64,
-        result: Result<String, String>,
+        result: Result<hide_node_link::worktrees::Removed, live::RemovalFailure>,
     ) -> bool {
         let Some(removal) = self
             .snapshot
@@ -3113,12 +3141,22 @@ impl Runtime {
             }));
             return false;
         };
-        let (phase, message) = match result {
-            Ok(message) => ("finished", message),
-            Err(message) => ("failed", message),
+        let (phase, notice, detail) = match result {
+            Ok(removed) => (
+                "finished",
+                crate::model::WorktreeRemovalNotice::Removed {
+                    branch: removed.branch,
+                },
+                removed.message,
+            ),
+            Err(failure) => ("failed", failure.notice, failure.detail),
         };
+        crate::diagnostic!(serde_json::json!({
+            "component": "worktree_removal", "kind": "removal_answered",
+            "id": id, "phase": phase, "detail": detail,
+        }));
         removal.phase = phase.to_owned();
-        removal.message = Some(message);
+        removal.notice = Some(notice);
         let checkout_path = removal.checkout_path.clone();
         let removal_device = removal.device_id.clone();
         if phase == "finished" {

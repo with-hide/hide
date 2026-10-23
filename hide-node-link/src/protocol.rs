@@ -469,7 +469,9 @@ pub enum Call {
     WorktreeRemove {
         removal: crate::worktrees::ConfirmedRemoval,
     },
-    /// Non-mutating authoritative check before any pane is closed.
+    /// Non-mutating authoritative check before any pane is closed; answers
+    /// `null` when the removal may go on, or the
+    /// [`crate::worktrees::Stopped`] that stops it.
     WorktreeRemovalCheck {
         removal: crate::worktrees::ConfirmedRemoval,
     },

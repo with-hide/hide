@@ -2033,7 +2033,30 @@ export type WorktreeRemoval = {
   force_delete_branch?: boolean;
   discard_changes?: boolean;
   phase: string;
-  message: string | null;
+  /** How it ended or why it stopped (`WorktreeRemovalNotice`); `removalNotice.ts` words it. */
+  notice: RemovalNotice | null;
+};
+
+/**
+ * Why the repository's host stopped a removal (`hide_node_link::worktrees::RemovalStop`): `locked` names the branch or
+ * folder and Git's lock reason, `changed` the files that changed, `ignored_repositories` their names and
+ * `not_moved_back` where the folder was left.
+ */
+export type RemovalStop = { code: string; name?: string; reason?: string; files?: number; names?: string[]; path?: string };
+
+/**
+ * How a worktree removal ended, or why it stopped (`WorktreeRemovalNotice`): `removed` with what became of the branch
+ * (`kept`, `deleted`, `remains`), `stopped` by the host, `still_running` programs in the folder, `host_failed` with a
+ * `host.*` or `link.*` reason, and the core's own `pane_appeared`, `changed_while_closing`, `close_failed`,
+ * `result_unknown` and `worker_unavailable`.
+ */
+export type RemovalNotice = {
+  code: string;
+  branch?: "kept" | "deleted" | "remains";
+  stop?: RemovalStop;
+  panes_closed?: boolean;
+  programs?: { name: string; pid: number }[];
+  reason?: string | null;
 };
 
 /** A card's kind (`contracts/snapshot-wire-enums.json`: `memory_card_kind`). */

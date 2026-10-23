@@ -1797,7 +1797,7 @@ pub fn spawn_confirm(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hide_host::worktrees::{ConfirmedRemoval, remove_confirmed};
+    use hide_host::worktrees::{ConfirmedRemoval, RemovalBranch, RemovalStop, remove_confirmed};
 
     /// Git run in the fixture, as the test sets it up.
     fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
@@ -1982,19 +1982,17 @@ mod tests {
         std::fs::write(worktree.join("tracked"), "dirty").unwrap();
 
         let refused = remove_confirmed(&request).unwrap_err();
+        assert_eq!(refused.stop, RemovalStop::Changed { files: 1 });
         assert!(
-            refused.starts_with("Not deleted: 1 file changed after you confirmed"),
-            "{refused}"
-        );
-        assert!(
-            refused.contains("panes already closed stay closed"),
-            "{refused}"
+            refused.message.contains("panes already closed stay closed"),
+            "{}",
+            refused.message
         );
         assert!(worktree.exists());
 
         std::fs::write(worktree.join("tracked"), "keep").unwrap();
         let removed = remove_confirmed(&request).unwrap();
-        assert!(removed.contains("local branch was kept"), "{removed}");
+        assert_eq!(removed.branch, RemovalBranch::Kept);
         assert!(!worktree.exists());
         assert!(branch_exists(&f, "linked"));
     }
@@ -2016,7 +2014,7 @@ mod tests {
         request.expected_ignored_repositories = vec!["target/clone".to_owned()];
 
         let removed = remove_confirmed(&request).unwrap();
-        assert!(removed.contains("and local branch linked"), "{removed}");
+        assert_eq!(removed.branch, RemovalBranch::Deleted);
         assert!(!worktree.exists());
         assert!(!branch_exists(&f, "linked"));
     }
@@ -2033,7 +2031,12 @@ mod tests {
         std::fs::write(worktree.join("tracked"), "dirty").unwrap();
 
         let removed = remove_confirmed(&request).unwrap();
-        assert!(removed.contains("branch linked remains"), "{removed}");
+        assert_eq!(removed.branch, RemovalBranch::Remains);
+        assert!(
+            removed.message.contains("branch linked remains"),
+            "{}",
+            removed.message
+        );
         assert!(!worktree.exists());
         assert!(branch_exists(&f, "linked"));
     }
@@ -2051,8 +2054,10 @@ mod tests {
         )
         .unwrap();
         let mut request = confirmed(&f, &outer, false);
-        let refused = remove_confirmed(&request).unwrap_err();
-        assert!(refused.contains("nested worktree"), "{refused}");
+        assert_eq!(
+            remove_confirmed(&request).unwrap_err().stop,
+            RemovalStop::Nested
+        );
         assert!(inner.exists());
 
         request.discard_changes = true;
@@ -2080,17 +2085,18 @@ mod tests {
     fn a_confirmed_removal_deletes_a_merged_branch_only_with_safe_deletion() {
         let f = Fixture::new();
         let merged = f.add("merged");
-        assert!(
+        assert_eq!(
             remove_confirmed(&confirmed(&f, &merged, true))
                 .unwrap()
-                .contains("and local branch merged")
+                .branch,
+            RemovalBranch::Deleted
         );
         assert!(!branch_exists(&f, "merged"));
 
         let ahead = f.add("ahead");
         commit(&ahead, "not merged anywhere");
-        let message = remove_confirmed(&confirmed(&f, &ahead, true)).unwrap();
-        assert!(message.contains("branch ahead remains"), "{message}");
+        let removed = remove_confirmed(&confirmed(&f, &ahead, true)).unwrap();
+        assert_eq!(removed.branch, RemovalBranch::Remains);
         assert!(!ahead.exists());
         assert!(branch_exists(&f, "ahead"));
     }
@@ -2102,8 +2108,10 @@ mod tests {
         let request = confirmed(&f, &worktree, true);
         commit(&worktree, "moved after confirmation");
 
-        let refused = remove_confirmed(&request).unwrap_err();
-        assert!(refused.contains("identity changed"), "{refused}");
+        assert_eq!(
+            remove_confirmed(&request).unwrap_err().stop,
+            RemovalStop::IdentityChanged
+        );
         assert!(worktree.exists());
         assert!(branch_exists(&f, "linked"));
     }
@@ -2113,19 +2121,14 @@ mod tests {
         let f = Fixture::new();
         let mut main = confirmed(&f, &f.main, false);
         main.expected_branch = Some("main".into());
-        assert!(
-            remove_confirmed(&main)
-                .unwrap_err()
-                .contains("main worktree")
-        );
+        assert_eq!(remove_confirmed(&main).unwrap_err().stop, RemovalStop::Main);
 
         let worktree = f.add("base");
         let mut base = confirmed(&f, &worktree, false);
         base.protected_base_branch = Some("base".into());
-        assert!(
-            remove_confirmed(&base)
-                .unwrap_err()
-                .contains("protected base")
+        assert_eq!(
+            remove_confirmed(&base).unwrap_err().stop,
+            RemovalStop::HoldsBase
         );
         assert!(worktree.exists());
 
@@ -2142,8 +2145,12 @@ mod tests {
             ],
         )
         .unwrap();
-        let refused = remove_confirmed(&confirmed(&f, &worktree, false)).unwrap_err();
-        assert!(refused.contains("nested worktree"), "{refused}");
+        assert_eq!(
+            remove_confirmed(&confirmed(&f, &worktree, false))
+                .unwrap_err()
+                .stop,
+            RemovalStop::Nested
+        );
         assert!(nested.exists());
     }
 

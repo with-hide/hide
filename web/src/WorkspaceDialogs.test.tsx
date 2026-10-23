@@ -122,9 +122,9 @@ describe("worktree Discard confirmation", () => {
     await act(async () => confirm()?.click());
     const after = catalog(row());
     after.navigator!.workspaces![0]!.checkouts = [];
-    after.worktree_removal = { id: 1, device_id: "local", repository_root: "/projects/example", checkout_path: row().path, branch: "feature/delete", delete_branch: false, phase: "finished", message: "Worktree removed" };
+    after.worktree_removal = { id: 1, device_id: "local", repository_root: "/projects/example", checkout_path: row().path, branch: "feature/delete", delete_branch: false, phase: "finished", notice: { code: "removed", branch: "kept" } };
     await act(async () => useShellStore.setState({ rest: legacyRest(after, []) }));
-    expect(document.querySelector('[data-delete-result="finished"]')?.textContent).toBe("Worktree removed");
+    expect(document.querySelector('[data-delete-result="finished"]')?.textContent).toBe("Worktree removed. Its local branch was kept.");
     expect(document.querySelector('[data-delete-confirm]')).toBeNull();
   });
 

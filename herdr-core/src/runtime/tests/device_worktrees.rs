@@ -221,19 +221,23 @@ fn an_unsupported_device_preflight_never_falls_back_to_removal() {
             .is_some_and(|row| row.phase == "failed")
     });
     let runtime = shared.lock().unwrap();
-    let message = runtime
+    let notice = runtime
         .snapshot
         .worktree_removal
         .as_ref()
         .unwrap()
-        .message
-        .as_deref()
-        .unwrap();
+        .notice
+        .clone();
     assert!(
-        message.contains("Reconnect to update the device helper"),
-        "{message}"
+        matches!(
+            notice,
+            Some(crate::model::WorktreeRemovalNotice::HostFailed {
+                panes_closed: false,
+                reason: Some(_)
+            })
+        ),
+        "{notice:?}"
     );
-    assert!(message.contains("No panes were closed"), "{message}");
     assert!(Path::new(&repo.linked).exists());
     assert!(runtime.tree_closes.is_empty());
 }
@@ -269,19 +273,16 @@ fn a_new_device_lock_refuses_before_even_the_outside_descendant_close_sequence()
             .is_some_and(|row| row.phase == "failed")
     });
     let runtime = shared.lock().unwrap();
-    let message = runtime
-        .snapshot
-        .worktree_removal
-        .as_ref()
-        .unwrap()
-        .message
-        .as_deref()
-        .unwrap();
-    assert!(
-        message.contains("Worktree feature is locked: release review"),
-        "{message}"
+    assert_eq!(
+        runtime.snapshot.worktree_removal.as_ref().unwrap().notice,
+        Some(crate::model::WorktreeRemovalNotice::Stopped {
+            stop: hide_node_link::worktrees::RemovalStop::Locked {
+                name: "feature".to_owned(),
+                reason: "release review".to_owned(),
+            },
+            panes_closed: false,
+        })
     );
-    assert!(message.contains("No panes were closed"), "{message}");
     assert!(Path::new(&repo.linked).exists());
     assert!(runtime.tree_closes.is_empty());
 }
@@ -332,7 +333,7 @@ fn a_device_worktree_is_deleted_by_its_helper_whatever_this_machine_lists_at_tha
         .worktree_removal
         .clone()
         .unwrap();
-    assert_eq!(removal.phase, "finished", "{:?}", removal.message);
+    assert_eq!(removal.phase, "finished", "{:?}", removal.notice);
     assert_eq!(removal.device_id.as_deref(), Some(DEVICE));
     assert!(!Path::new(&repo.linked).exists());
     assert_eq!(git(&repo.root, &["branch", "--list", "feature"]), "");
@@ -422,7 +423,7 @@ fn a_dirty_device_worktree_is_deleted_only_once_the_operator_accepts_the_loss() 
         .worktree_removal
         .clone()
         .unwrap();
-    assert_eq!(removal.phase, "finished", "{:?}", removal.message);
+    assert_eq!(removal.phase, "finished", "{:?}", removal.notice);
     assert!(removal.discard_changes && removal.force_delete_branch);
     assert!(!Path::new(&repo.linked).exists());
     assert_eq!(git(&repo.root, &["branch", "--list", "feature"]), "");

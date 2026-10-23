@@ -3454,7 +3454,7 @@ fn a_client_cannot_claim_a_worktree_removal_finished() {
         discard_changes: false,
         expected_ignored_repositories: Vec::new(),
         phase: "removing".into(),
-        message: None,
+        notice: None,
     });
     let forged = serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,
@@ -3480,7 +3480,13 @@ fn a_client_cannot_claim_a_worktree_removal_finished() {
             .map(|removal| removal.phase.as_str()),
         Some("removing")
     );
-    assert!(runtime.ingest_worktree_removal_result(7, Ok("Deleted.".into())));
+    assert!(runtime.ingest_worktree_removal_result(
+        7,
+        Ok(hide_node_link::worktrees::Removed {
+            message: "Deleted.".into(),
+            branch: hide_node_link::worktrees::RemovalBranch::Kept
+        })
+    ));
     assert_eq!(
         runtime
             .snapshot()
@@ -3489,7 +3495,13 @@ fn a_client_cannot_claim_a_worktree_removal_finished() {
             .map(|removal| removal.phase.as_str()),
         Some("finished")
     );
-    assert!(!runtime.ingest_worktree_removal_result(7, Ok("again".into())));
+    assert!(!runtime.ingest_worktree_removal_result(
+        7,
+        Ok(hide_node_link::worktrees::Removed {
+            message: "Deleted.".into(),
+            branch: hide_node_link::worktrees::RemovalBranch::Kept
+        })
+    ));
 }
 
 /// Herdr confirms the panes gone before the navigator applies the close, so
@@ -3553,7 +3565,7 @@ fn a_closed_pane_still_listed_does_not_stop_the_removal_but_a_new_one_does() {
         discard_changes: false,
         expected_ignored_repositories: Vec::new(),
         phase: "closing".into(),
-        message: None,
+        notice: None,
     };
 
     runtime.snapshot.worktree_removal = Some(closing(1));
@@ -3572,7 +3584,10 @@ fn a_closed_pane_still_listed_does_not_stop_the_removal_but_a_new_one_does() {
     assert!(runtime.ingest_worktree_close_result(2, &[], Ok(())));
     let removal = runtime.snapshot().worktree_removal.clone().unwrap();
     assert_eq!(removal.phase, "failed");
-    assert!(removal.message.unwrap().contains("A pane appeared"));
+    assert_eq!(
+        removal.notice,
+        Some(crate::model::WorktreeRemovalNotice::PaneAppeared)
+    );
     assert!(runtime.confirmed_worktree_removal(2).is_none());
 }
 
@@ -3620,7 +3635,7 @@ fn a_repository_the_reader_stopped_answering_for_does_not_stop_the_removal() {
         discard_changes: false,
         expected_ignored_repositories: Vec::new(),
         phase: "closing".into(),
-        message: None,
+        notice: None,
     };
     let phase = |runtime: &Runtime| {
         runtime
@@ -3717,12 +3732,18 @@ fn a_finished_removal_drops_its_row_at_once_and_an_older_read_cannot_bring_it_ba
         discard_changes: false,
         expected_ignored_repositories: Vec::new(),
         phase: "removing".into(),
-        message: None,
+        notice: None,
     });
     assert!(rows(&runtime).contains(&gone));
     let before = runtime.worktrees_request();
 
-    assert!(runtime.ingest_worktree_removal_result(1, Ok("Deleted.".into())));
+    assert!(runtime.ingest_worktree_removal_result(
+        1,
+        Ok(hide_node_link::worktrees::Removed {
+            message: "Deleted.".into(),
+            branch: hide_node_link::worktrees::RemovalBranch::Kept
+        })
+    ));
     assert!(!rows(&runtime).contains(&gone), "{:?}", rows(&runtime));
     let after = runtime.worktrees_request();
     assert_eq!(
@@ -3783,10 +3804,19 @@ fn a_failed_removal_keeps_its_row_and_rereads() {
         discard_changes: false,
         expected_ignored_repositories: Vec::new(),
         phase: "removing".into(),
-        message: None,
+        notice: None,
     });
     let before = runtime.worktrees_request();
-    assert!(runtime.ingest_worktree_removal_result(2, Err("Not deleted: 1 file changed".into())));
+    assert!(runtime.ingest_worktree_removal_result(
+        2,
+        Err(crate::live::RemovalFailure::new(
+            crate::model::WorktreeRemovalNotice::Stopped {
+                stop: hide_node_link::worktrees::RemovalStop::Changed { files: 1 },
+                panes_closed: true
+            },
+            "Not deleted: 1 file changed"
+        ))
+    ));
     assert!(
         runtime.snapshot().navigator.workspaces[0]
             .checkouts

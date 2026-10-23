@@ -5781,7 +5781,53 @@ pub struct WorktreeRemovalSnapshot {
     pub discard_changes: bool,
     pub expected_ignored_repositories: Vec<String>,
     pub phase: String,
-    pub message: Option<String>,
+    /// How it ended, or why it stopped, as the delete dialog words it; the
+    /// sentences stay in the `worktree_removal` diagnostics.
+    pub notice: Option<WorktreeRemovalNotice>,
+}
+
+/// How a worktree removal ended, or why it stopped
+/// (docs/LOCALIZATION.md, Translation boundary).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorktreeRemovalNotice {
+    /// The folder is gone; `branch` says what became of the local branch.
+    Removed {
+        branch: hide_node_link::worktrees::RemovalBranch,
+    },
+    /// The repository's host stopped it.
+    Stopped {
+        stop: hide_node_link::worktrees::RemovalStop,
+        panes_closed: bool,
+    },
+    /// Herdr closed the panes, and these programs still run in the folder,
+    /// which the operator can end before deleting again.
+    StillRunning { programs: Vec<RunningProgram> },
+    /// A pane appeared in the worktree while the panes were closing.
+    PaneAppeared,
+    /// The worktree or its deletion gate changed while the panes closed.
+    ChangedWhileClosing,
+    /// The panes could not be closed, or Herdr did not confirm it.
+    CloseFailed,
+    /// The repository's host could not be asked (`reason`: a `host.*` or
+    /// `link.*` code, `node_access::link_failure_code`), or stopped it
+    /// without naming why (a helper of an older build: no reason).
+    HostFailed {
+        panes_closed: bool,
+        reason: Option<String>,
+    },
+    /// The removal was sent and its answer never came, so its effect is
+    /// unknown.
+    ResultUnknown,
+    /// The removal's worker could not start; nothing was closed.
+    WorkerUnavailable,
+}
+
+/// A program still running in a worktree its panes were closed for.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RunningProgram {
+    pub name: String,
+    pub pid: u32,
 }
 
 /// One user-initiated task whose blocking work runs outside the runtime mutex.

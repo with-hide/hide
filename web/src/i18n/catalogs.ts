@@ -25,6 +25,7 @@ import { fileReasonsCatalogs, fileReasonsEnglish } from "./resources/fileReasons
 import { taskReasonsCatalogs, taskReasonsEnglish } from "./resources/taskReasons";
 import { deletionGateCatalogs, deletionGateEnglish } from "./resources/deletionGate";
 import { githubReasonsCatalogs, githubReasonsEnglish } from "./resources/githubReasons";
+import { removalReasonsCatalogs, removalReasonsEnglish } from "./resources/removalReasons";
 import { agentsCatalogs, agentsEnglish } from "./resources/agents";
 import { hideAiCatalogs, hideAiEnglish } from "./resources/hideAi";
 import { issueSettingsCatalogs, issueSettingsEnglish } from "./resources/issueSettings";
@@ -99,6 +100,7 @@ export const english = {
   ...taskReasonsEnglish,
   ...deletionGateEnglish,
   ...githubReasonsEnglish,
+  ...removalReasonsEnglish,
   ...mobileSetupEnglish,
   ...coreMoveEnglish,
   ...workspaceEnglish,
@@ -166,6 +168,7 @@ export const catalogs = {
     ...taskReasonsCatalogs.ko,
     ...deletionGateCatalogs.ko,
     ...githubReasonsCatalogs.ko,
+    ...removalReasonsCatalogs.ko,
     ...mobileSetupCatalogs.ko,
     ...coreMoveCatalogs.ko,
     ...workspaceCatalogs.ko,
@@ -228,6 +231,7 @@ export const catalogs = {
     ...taskReasonsCatalogs["zh-CN"],
     ...deletionGateCatalogs["zh-CN"],
     ...githubReasonsCatalogs["zh-CN"],
+    ...removalReasonsCatalogs["zh-CN"],
     ...mobileSetupCatalogs["zh-CN"],
     ...coreMoveCatalogs["zh-CN"],
     ...workspaceCatalogs["zh-CN"],
@@ -290,6 +294,7 @@ export const catalogs = {
     ...taskReasonsCatalogs.ja,
     ...deletionGateCatalogs.ja,
     ...githubReasonsCatalogs.ja,
+    ...removalReasonsCatalogs.ja,
     ...mobileSetupCatalogs.ja,
     ...coreMoveCatalogs.ja,
     ...workspaceCatalogs.ja,
