@@ -110,7 +110,7 @@ export function SidebarProjectFilter({ deviceId, actions }: { deviceId: string; 
             <DropdownMenuRadioGroup value={filter?.workspace_id ?? ""} onValueChange={(id) => choose(id)}>
               {projects.map((project: Workspace) => (
                 <DropdownMenuRadioItem key={project.id} value={project.id} data-sidebar-project-option={project.id}>
-                  <span className="min-w-0 flex-1 truncate" title={project.path}>{project.label}</span>
+                  <span className="min-w-0 flex-1 truncate">{project.label}</span>
                   <Counts count={counts.get(project.id) ?? { needsYou: 0, open: 0 }} />
                 </DropdownMenuRadioItem>
               ))}
