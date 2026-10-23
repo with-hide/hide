@@ -1,5 +1,5 @@
-//! What the screen offers for this machine's Herdr server on another
-//! protocol, and the move itself (PRD herdr-takeover).
+//! What the screen offers for the operator's own older Herdr server on this
+//! machine's socket, and the move itself (PRD herdr-takeover).
 //!
 //! `hided` installs the [`HerdrTakeover`] that does the work (one that finds
 //! nothing when the daemon does not run from a desktop package with its own
@@ -7,19 +7,16 @@
 //! it on a worker of its own, one call at a time, whenever this machine's
 //! Herdr connection changes state, and when the operator asks for the move.
 //! Nothing moves without that press (D-14): the look only decides what is
-//! offered, `status.herdr_takeover`. While the connection answers another
-//! protocol the shell draws that offer in place of everything else (operator
-//! decision 2026-10-23), so a look that finds nothing to do or cannot read
-//! the server still answers one, `none`, rather than leaving the screen to a
-//! refusal it cannot act on.
+//! offered, `status.herdr_takeover`, and whether the first-run wizard opens
+//! on its Herdr step.
 
 use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 
 use super::Runtime;
 use crate::handle::ChangeNotifier;
-use crate::herdr_takeover::{FailureCause, HerdrTakeover, Look, Moved, OfferKind};
-use crate::model::HerdrTakeoverSnapshot;
+use crate::herdr_takeover::{HerdrTakeover, Look, Moved, OfferKind};
+use crate::model::{FirstRunStep, HerdrTakeoverSnapshot};
 
 /// The installed takeover and the one call it is making.
 #[derive(Default)]
@@ -36,9 +33,10 @@ pub(super) struct Takeover {
     epoch: u64,
     /// The connection state the last look was asked for.
     seen_state: Option<String>,
-    /// A move landed and the connection has not moved since: its
-    /// `protocol_mismatch` describes the server the move replaced.
-    moved_unseen: bool,
+    /// The wizard was closed with the move unanswered (B9): it does not open
+    /// again on its own until the server moves or is gone, or Hide starts
+    /// again.
+    closed_unanswered: bool,
     /// The server the last look offered something for.
     offered_server: Option<Server>,
     /// The server the desktop host's restart could not stop: its restart
@@ -65,14 +63,16 @@ struct Worker {
 pub(super) enum TakeoverAction {
     /// Move the server now; a second press while it moves is the same one.
     Move,
+    /// Leave the step without moving: offered on a server Hide reads as it
+    /// is, and on any server once its move or restart failed (D-16, D-29).
+    Later,
     /// The moved server's step was read.
     Continue,
-    /// Look at the server again: the operator's Try again, or the desktop
-    /// host restarted it, which the connection state may not show when the
-    /// stop and start are quick.
+    /// Look at the server again: the desktop host restarted it, which the
+    /// connection state may not show when the stop and start are quick.
     Look,
     /// The desktop host's restart did not stop the server, so nothing
-    /// changed: the restart fails as a move does (D-29).
+    /// changed: the restart fails as a move does, and Not now appears (D-29).
     StopFailed,
 }
 
@@ -102,7 +102,6 @@ impl Runtime {
             return;
         }
         self.herdr_takeover.seen_state = Some(state.clone());
-        self.herdr_takeover.moved_unseen = false;
         self.look_at_herdr_server();
     }
 
@@ -150,11 +149,8 @@ impl Runtime {
             }
             return false;
         }
+        takeover.answered = true;
         let current = self.snapshot.status.herdr_takeover.clone();
-        // The connection answers another protocol: the screen is this
-        // server's alone, so even a look with nothing to offer says so.
-        let mismatched = !self.herdr_takeover.moved_unseen
-            && self.snapshot.status.herdr.state == PROTOCOL_MISMATCH;
         let next = match &look {
             Look::Nothing | Look::Unreadable { .. } => {
                 // Only a server that is gone takes a restart's stop failure
@@ -163,17 +159,8 @@ impl Runtime {
                     self.herdr_takeover.offered_server = None;
                     self.herdr_takeover.stop_failed = None;
                 }
-                let unreadable = matches!(look, Look::Unreadable { .. });
-                match current {
-                    // A move's step the operator has not read yet stays.
-                    Some(shown) if shown.stage == "moved" => Some(shown),
-                    // A look that could not read the server keeps what it
-                    // offered (a failed move among it): the server may still
-                    // be the one offered.
-                    Some(shown) if unreadable && mismatched && shown.kind != NONE => Some(shown),
-                    _ if mismatched => Some(self.nothing_to_offer(unreadable)),
-                    _ => None,
-                }
+                // A move's step the operator has not read yet stays.
+                current.filter(|shown| shown.stage == "moved")
             }
             Look::Offer(offer) => {
                 let server = (offer.server_pid, offer.server_version.clone());
@@ -196,8 +183,10 @@ impl Runtime {
                         "offered"
                     }
                     .to_owned(),
-                    server_version: Some(offer.server_version.clone()),
-                    version: Some(offer.version.clone()),
+                    server_version: offer.server_version.clone(),
+                    version: offer.version.clone(),
+                    same_protocol: offer.server_protocol
+                        == hide_herdr_client::HERDR_PROTOCOL_REVISION,
                     failure: failure.map(str::to_owned),
                     path_herdr_behind: None,
                 })
@@ -206,25 +195,16 @@ impl Runtime {
         if next != self.snapshot.status.herdr_takeover || matches!(look, Look::Unreadable { .. }) {
             crate::diagnostic!(look_record(&look));
         }
-        let changed = self.show_herdr_takeover(next);
+        let mut changed = self.show_herdr_takeover(next);
+        if matches!(look, Look::Nothing) {
+            // The server was restarted or stopped away.
+            changed |= self.ask_the_unanswered_agent_question();
+        }
         if std::mem::take(&mut self.herdr_takeover.look_again) {
             self.look_at_herdr_server();
         }
+        changed |= self.settle_first_run_herdr();
         changed
-    }
-
-    /// The server on another protocol Hide has nothing to offer for from
-    /// here: its version as the connection read it, and whether the look
-    /// could not read it.
-    fn nothing_to_offer(&self, unreadable: bool) -> HerdrTakeoverSnapshot {
-        HerdrTakeoverSnapshot {
-            kind: NONE.to_owned(),
-            stage: "offered".to_owned(),
-            server_version: self.snapshot.status.herdr.received_version.clone(),
-            version: None,
-            failure: unreadable.then(|| FailureCause::Unreadable.as_str().to_owned()),
-            path_herdr_behind: None,
-        }
     }
 
     pub(super) fn herdr_takeover_action(&mut self, action: TakeoverAction) -> bool {
@@ -282,6 +262,34 @@ impl Runtime {
                     ..shown
                 }))
             }
+            TakeoverAction::Later => {
+                let movable = [OfferKind::Move.as_str(), OfferKind::Restart.as_str()]
+                    .contains(&shown.kind.as_str());
+                if !movable
+                    || self.herdr_takeover.moving
+                    || shown.stage == "moved"
+                    || !(shown.same_protocol || shown.stage == "failed")
+                {
+                    return refused(action, "this server cannot be left for later");
+                }
+                if self.first_run_step() != Some(FirstRunStep::Herdr) {
+                    return false;
+                }
+                if shown.same_protocol {
+                    return self.move_first_run(FirstRunStep::Herdr, FirstRunStep::Agents);
+                }
+                // A server Hide cannot read whose move failed: the wizard
+                // closes with the move unanswered, and Overview and Help >
+                // Set up Hide offer it again (B9).
+                self.snapshot.ui_state.first_run = None;
+                self.herdr_takeover.closed_unanswered = true;
+                self.persist_ui_state();
+                crate::diagnostic!(serde_json::json!({
+                    "component": "first_run",
+                    "kind": "first_run.closed_herdr_unmoved",
+                }));
+                true
+            }
             TakeoverAction::Look => false,
             TakeoverAction::StopFailed => {
                 if shown.kind != OfferKind::Restart.as_str() {
@@ -303,7 +311,8 @@ impl Runtime {
                 if shown.stage != "moved" {
                     return refused(action, "nothing was moved");
                 }
-                self.show_herdr_takeover(None)
+                let changed = self.show_herdr_takeover(None);
+                changed | self.settle_first_run_herdr()
             }
         }
     }
@@ -314,18 +323,17 @@ impl Runtime {
         let Some(shown) = self.snapshot.status.herdr_takeover.clone() else {
             return false;
         };
-        let changed = match moved {
+        let mut changed = match moved {
             Moved::Done {
                 path_herdr_behind, ..
             } => {
-                self.herdr_takeover.moved_unseen = true;
                 let next = path_herdr_behind.map(|behind| HerdrTakeoverSnapshot {
                     stage: "moved".into(),
                     failure: None,
                     path_herdr_behind: Some(behind),
                     ..shown
                 });
-                self.show_herdr_takeover(next)
+                self.show_herdr_takeover(next) | self.ask_the_unanswered_agent_question()
             }
             Moved::Failed { cause, .. } => self.show_herdr_takeover(Some(HerdrTakeoverSnapshot {
                 stage: "failed".into(),
@@ -336,12 +344,63 @@ impl Runtime {
         // The server the socket answers for now decides what is offered.
         self.herdr_takeover.look_again = false;
         self.look_at_herdr_server();
+        changed |= self.settle_first_run_herdr();
         changed
+    }
+
+    /// The wizard closed with the move or restart unanswered opens again on
+    /// the agent question it left, once that server has moved or is gone.
+    fn ask_the_unanswered_agent_question(&mut self) -> bool {
+        if std::mem::take(&mut self.herdr_takeover.closed_unanswered)
+            && self.snapshot.ui_state.agent_onboarding
+                == Some(crate::model::AgentOnboarding::Pending)
+            && self.open_first_run()
+        {
+            self.persist_ui_state();
+            return true;
+        }
+        false
+    }
+
+    /// Whether the first-run wizard has a Herdr step to show or wait for:
+    /// a look has not answered yet, or it offered a move or a restart that
+    /// has not happened.
+    pub(super) fn first_run_herdr_pending(&self) -> bool {
+        let takeover = &self.herdr_takeover;
+        if takeover.worker.is_none() {
+            return false;
+        }
+        if !takeover.answered || takeover.moving {
+            return true;
+        }
+        self.snapshot
+            .status
+            .herdr_takeover
+            .as_ref()
+            .is_some_and(|shown| {
+                shown.stage == "moved"
+                    || [OfferKind::Move.as_str(), OfferKind::Restart.as_str()]
+                        .contains(&shown.kind.as_str())
+            })
     }
 
     #[cfg(test)]
     pub(super) fn herdr_takeover_looking_for_test(&self) -> bool {
         self.herdr_takeover.looking
+    }
+
+    /// The wizard closed with the move unanswered stays closed (B9).
+    pub(super) fn first_run_closed_for_herdr(&self) -> bool {
+        self.herdr_takeover.closed_unanswered
+    }
+
+    /// The Herdr step leaves for the agent step once there is nothing to
+    /// move, as the devices step does once there is no device (D-17).
+    pub(super) fn settle_first_run_herdr(&mut self) -> bool {
+        if self.first_run_step() == Some(FirstRunStep::Herdr) && !self.first_run_herdr_pending() {
+            return self.move_first_run(FirstRunStep::Herdr, FirstRunStep::Agents);
+        }
+        false
     }
 
     fn show_herdr_takeover(&mut self, next: Option<HerdrTakeoverSnapshot>) -> bool {
@@ -356,15 +415,9 @@ impl Runtime {
 /// The failure of a restart whose stop did not end the server.
 const STOP_FAILED: &str = "stop_failed";
 
-/// The offer of a server Hide has nothing to do for from here.
-const NONE: &str = "none";
-
-/// The connection state of a server on another protocol (`live.rs`).
-const PROTOCOL_MISMATCH: &str = "protocol_mismatch";
-
-/// How long a look may take before it counts as one that could not read the
-/// server: the screen waits on it, and a server that does not answer must not
-/// hold it there (engineering rule 10). Each of the
+/// How long a look may take before it counts as one that found nothing to
+/// move: the wizard waits on its Herdr step for it, and a server that does
+/// not answer must not hold it there (engineering rule 10). Each of the
 /// look's own reads is bounded at 5 s; two in a row are the slow case.
 const LOOK_WITHIN: std::time::Duration = std::time::Duration::from_secs(8);
 
