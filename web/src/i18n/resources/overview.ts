@@ -57,11 +57,11 @@ const ko = {
   "overview.justNow": "방금",
   "overview.availability.connectingHerdr": "Herdr에 연결하는 중…",
   "overview.availability.herdrState": "Herdr 상태: {{state}}",
-  "overview.availability.agentCountsLater": "{{reason}}. 응답하면 에이전트 수가 표시되며, Hide가 계속 시도합니다.",
+  "overview.availability.agentCountsLater": "{{reason}}. 응답하면 에이전트 수가 보여요. Hide가 계속 시도해요.",
   "overview.availability.deviceState": "{{device}}: {{state}}",
-  "overview.availability.deviceStale": "{{device}}에 연결되어 있지 않습니다. 마지막으로 보고한 내용을 표시합니다",
+  "overview.availability.deviceStale": "{{device}}에 연결되어 있지 않아요. 마지막으로 받은 내용을 보여 줘요",
   "overview.availability.readingProjects": "프로젝트를 읽는 중…",
-  "overview.availability.projectsUnreadable": "프로젝트를 읽지 못했습니다",
+  "overview.availability.projectsUnreadable": "프로젝트를 읽지 못했어요",
 } satisfies Catalog<typeof overviewEnglish>;
 
 const zhCN = {
