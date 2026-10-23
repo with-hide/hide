@@ -265,6 +265,20 @@ it("a restart under the hold shows what ends; a browser tab names the desktop ap
   await app.unmount();
 });
 
+it("a restart under the hold keeps its step while the old server is gone and Hide's is not yet read", async () => {
+  const restartHerdr = desktop(vi.fn(async () => "restarted"));
+  const old = state(offer({ kind: "restart", server_version: "0.6.2" }), "done", "protocol_mismatch", { version: "0.6.2", protocol: 10 });
+  const { unmount } = await mount(old, "gate");
+  await act(async () => button("[data-herdr-takeover-restart]")!.click());
+  expect(restartHerdr).toHaveBeenCalledTimes(1);
+  // The core's look found no older server; the connection has not read Hide's Herdr yet.
+  await act(async () => { useShellStore.setState(state(null, "done", "protocol_mismatch", { version: "0.6.2", protocol: 10 }) as never); });
+  expect(document.querySelector("[data-herdr-gate]")?.getAttribute("data-herdr-gate")).toBe("older");
+  expect(button("[data-herdr-takeover-restart]")!.textContent).toContain("Restarting…");
+  expect(document.body.textContent).not.toContain("isn't compatible");
+  await unmount();
+});
+
 it("a newer protocol holds Hide with the wait for a Hide update, the two versions read, and Check for updates in the desktop app", async () => {
   const newer = offer({ kind: "update_hide", server_version: "0.10.0" });
   const received = { version: "0.10.0", protocol: 23 };

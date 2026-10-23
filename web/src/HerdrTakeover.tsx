@@ -323,11 +323,16 @@ export function HerdrGate({ actions, gate }: { actions: Actions; gate: Gate }) {
   const statePath = useShellStore((s) => s.daemon?.core_state_path ?? null);
   const bridge = hostBridge();
   const restart = useHerdrRestart(actions);
+  // A restart stops the old server before Hide's starts, so for a moment the core offers nothing while the connection
+  // still reads the old protocol; the screen keeps the restart it is running rather than calling the server incompatible.
+  const last = useRef(takeover);
+  if (takeover) last.current = takeover;
+  const shown = takeover ?? (restart.restarting && last.current?.kind === "restart" ? last.current : null);
   const look = () => actions.herdrTakeover("look");
   const again = <Button variant={gate === "older" ? "default" : "secondary"} onClick={look} data-herdr-gate-look="true">{t("herdrTakeover.retry")}</Button>;
   let parts: StepParts;
-  if ((gate === "move" || gate === "restart" || gate === "look") && takeover) {
-    parts = herdrStepParts({ takeover, actions, restart, t, onLater: null, onMoved: () => {}, desktop: bridge !== null });
+  if (shown && (gate === "move" || gate === "restart" || gate === "look" || shown !== takeover)) {
+    parts = herdrStepParts({ takeover: shown, actions, restart, t, onLater: null, onMoved: () => {}, desktop: bridge !== null });
   } else if (gate === "update_hide" || gate === "newer") {
     const server = takeover?.server_version || herdr?.received_version || null;
     const known = takeover?.version || hide;
