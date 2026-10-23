@@ -6385,8 +6385,9 @@ pub struct HerdrTakeoverSnapshot {
     /// server Hide cannot use could not be read, so the offer is to look
     /// again).
     pub kind: String,
-    /// `offered`, `moving`, `failed`, or `moved` until the operator has read
-    /// what the move left them to do.
+    /// `offered`, `moving` (a move starts on its own once offered),
+    /// `failed`, or `moved` while the first-run wizard shows the move's
+    /// result or the operator's own `herdr` is not yet settled.
     pub stage: String,
     /// Empty for `look`, which read no server.
     pub server_version: String,
@@ -6399,9 +6400,22 @@ pub struct HerdrTakeoverSnapshot {
     /// after a move, `stop_failed` after a restart that did not stop the
     /// server.
     pub failure: Option<String>,
-    /// After a move: the operator's own `herdr`'s version when its protocol
-    /// is older than the server's (B5).
-    pub path_herdr_behind: Option<String>,
+    /// After a move that left the operator's own `herdr` on an older
+    /// protocol: how Hide's update of it went (B5).
+    pub path_herdr: Option<MovedPathHerdrSnapshot>,
+}
+
+/// The operator's own `herdr` after a move left it behind.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MovedPathHerdrSnapshot {
+    /// `updating` while Hide runs its update command, `updated` once it
+    /// speaks the server's protocol, `behind` when it could not be brought
+    /// up (the command asks for an administrator, failed, or brought another
+    /// protocol), so the operator copies the command.
+    pub stage: String,
+    /// Its version: the one being updated while `updating`, the one it names
+    /// afterwards otherwise.
+    pub version: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

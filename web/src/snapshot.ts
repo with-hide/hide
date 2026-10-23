@@ -1818,8 +1818,10 @@ export type HerdrStatus = {
  * went (PRD herdr-takeover): `kind` is `move`, `restart` (Herdr cannot hand it
  * over here), `update_hide` (a newer protocol) or `look` (a server Hide cannot
  * use could not be read: always `failed`, with no versions); `stage` is
- * `offered`, `moving`, `failed`, or `moved` while the operator's own `herdr`
- * is behind.
+ * `offered`, `moving` (a move starts on its own), `failed`, or `moved` while
+ * the wizard shows the result or the operator's own `herdr` is not settled.
+ * `path_herdr` is that `herdr` after a move left it behind: Hide `updating`
+ * it, `updated`, or `behind` when the operator has to run the command.
  */
 export type HerdrTakeover = {
   kind: "move" | "restart" | "update_hide" | "look";
@@ -1828,15 +1830,15 @@ export type HerdrTakeover = {
   version: string;
   same_protocol: boolean;
   failure: "refused" | "not_confirmed" | "unreadable" | "stop_failed" | null;
-  path_herdr_behind: string | null;
+  path_herdr: { stage: "updating" | "updated" | "behind"; version: string } | null;
 };
 
 /**
  * The Herdr this app ships and the operator's own `herdr`, as Settings > About
  * names them; `path_herdr` is null when the operator's terminal finds none.
  * `behind` says its commands are refused by a server on Hide's protocol, and
- * `update_command` is the one command that brings it up, for the operator to
- * copy and run (Hide never runs it).
+ * `update_command` is the one command that brings it up, which Hide runs after
+ * a move unless it asks for `sudo`.
  */
 export type HerdrVersions = {
   hide: string;
