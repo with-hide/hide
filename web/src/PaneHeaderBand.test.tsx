@@ -592,7 +592,7 @@ it("leads the row with the turn's request before its ask, progress or result", a
   const cases: [PaneHeader, string, string][] = [
     [{ working: false, notice: null, band: ask, request }, "answer", "Proceed as proposed + check unclear states→QuestionBundle questions 1-3 into one PR?"],
     [{ working: true, notice: null, band: null, progress: "Reading the status model", request }, "progress", "Proceed as proposed + check unclear states→Reading the status model"],
-    [{ working: true, notice: null, band: null, request }, "request", "Proceed as proposed + check unclear states→Working"],
+    [{ working: true, notice: null, band: null, request }, "request", "Proceed as proposed + check unclear states"],
     [{ working: false, notice: null, band: null, progress: "Remote reads every 3 s, PR merged", finished: true, request }, "finished", "Proceed as proposed + check unclear states→DoneRemote reads every 3 s, PR merged"],
     [{ working: false, notice: null, band: null, finished: true, request: { text: null, images: 2 } }, "finished", "2 images→Done"],
   ];
@@ -601,10 +601,12 @@ it("leads the row with the turn's request before its ask, progress or result", a
     try {
       const row = container.querySelector(`[data-pane-header-band="${kind}"]`)!;
       expect(row.textContent).toBe(text);
-      // The request and the answer are the row's two parts, so a turn that
-      // does not fit one line wraps its answer under the request (B4).
-      expect([...row.querySelectorAll("[data-pane-turn-part]")].map((part) => part.getAttribute("data-pane-turn-part"))).toEqual(["request", "answer"]);
+      // A working turn with nothing beyond its request draws the request
+      // alone; every other turn has the request and the answer as its parts.
+      expect([...row.querySelectorAll("[data-pane-turn-part]")].map((part) => part.getAttribute("data-pane-turn-part"))).toEqual(kind === "request" ? ["request"] : ["request", "answer"]);
       expect(row.querySelector("[data-pane-turn-request]")?.getAttribute("aria-label")).toBe(`Request: ${text.split("→")[0]}`);
+      // Only an ask wraps its answer under the request; a quiet turn stays one line.
+      expect(row.classList.contains("flex-wrap")).toBe(kind === "answer");
     } finally { await unmount(); }
   }
 });
