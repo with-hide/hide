@@ -2867,9 +2867,10 @@ pub struct FirstRun {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FirstRunStep {
-    /// Moving the operator's older Herdr server onto this app's Herdr,
-    /// shown only while there is one to move (PRD herdr-takeover B1).
-    Herdr,
+    /// A wizard an earlier build saved on its Herdr step opens on Agents:
+    /// moving the operator's older Herdr is now the Herdr gate's, outside the
+    /// wizard (`runtime/herdr_takeover.rs`).
+    #[serde(alias = "herdr")]
     Agents,
     Devices,
     Notifications,
@@ -2880,7 +2881,6 @@ pub enum FirstRunStep {
 impl FirstRunStep {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Herdr => "herdr",
             Self::Agents => "agents",
             Self::Devices => "devices",
             Self::Notifications => "notifications",
@@ -6155,26 +6155,29 @@ pub struct ProviderStatusSnapshot {
     pub received_version: Option<String>,
 }
 
-/// What Hide offers for the operator's own older Herdr server on this
-/// machine's socket, and how far the offer went (PRD herdr-takeover). Absent
-/// while there is nothing to offer.
+/// This machine's Herdr server on another protocol than this build speaks,
+/// which Hide cannot work with until it moves (PRD herdr-takeover, operator
+/// decision 2026-10-23): the shell draws one screen for it in place of
+/// everything else. Absent while the server speaks Hide's protocol, after a
+/// move the operator has read, and while the first look has not answered.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HerdrTakeoverSnapshot {
-    /// `move`, `restart` (Herdr cannot hand over here: Windows) or
-    /// `update_hide` (a newer protocol than this build speaks).
+    /// `move`, `restart` (Herdr cannot hand over here: Windows),
+    /// `update_hide` (a newer protocol than this build speaks), or `none`:
+    /// nothing Hide can do from here (another Hide app's server, a daemon not
+    /// run from the desktop app, a server the look could not read), so the
+    /// operator stops it and Hide looks again.
     pub kind: String,
     /// `offered`, `moving`, `failed`, or `moved` until the operator has read
     /// what the move left them to do.
     pub stage: String,
-    pub server_version: String,
-    /// The release this app ships.
-    pub version: String,
-    /// The server speaks the protocol this build reads, so Hide works with
-    /// it as it is and the operator may leave it for later (D-16).
-    pub same_protocol: bool,
+    /// The server's version, where the look or the connection read one.
+    pub server_version: Option<String>,
+    /// The release this app ships, where the look read it.
+    pub version: Option<String>,
     /// `refused`, `not_confirmed` or `unreadable` while `stage` is `failed`
     /// after a move, `stop_failed` after a restart that did not stop the
-    /// server.
+    /// server; `unreadable` on `none` when the look could not read it.
     pub failure: Option<String>,
     /// After a move: the operator's own `herdr`'s version when its protocol
     /// is older than the server's (B5).
@@ -7447,7 +7450,6 @@ mod wire_enum_tests {
         checked.insert("agent_onboarding");
 
         let first_run = [
-            FirstRunStep::Herdr,
             FirstRunStep::Agents,
             FirstRunStep::Devices,
             FirstRunStep::Notifications,
@@ -7456,8 +7458,7 @@ mod wire_enum_tests {
         ];
         for variant in first_run {
             match variant {
-                FirstRunStep::Herdr
-                | FirstRunStep::Agents
+                FirstRunStep::Agents
                 | FirstRunStep::Devices
                 | FirstRunStep::Notifications
                 | FirstRunStep::Project
