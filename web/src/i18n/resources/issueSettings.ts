@@ -41,7 +41,7 @@ const zhCN = {
 
 const ja = {
   "issueSettings.local": "ローカル",
-  "issueSettings.closesInstruction": "PRにIssueをリンク",
+  "issueSettings.closesInstruction": "PRにIssueを関連付け",
   "issueSettings.auto": "自動",
   "issueSettings.autoResolved": "自動（{{source}}）",
   "issueSettings.githubRepository": "GitHub · {{repository}}",

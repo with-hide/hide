@@ -123,8 +123,8 @@ const ko = {
   "agents.part.extension": "확장",
   "agents.part.herdr": "Herdr 연동",
   "agents.problem": "{{part}}: {{state}}",
-  "agents.leftover": "Hide가 설치한 것을 모두 지우지 못했어요: {{reason}}",
-  "agents.leftoverNoReason": "Hide가 설치한 것을 모두 지우지 못했어요.",
+  "agents.leftover": "설치한 것을 모두 지우지 못했어요: {{reason}}",
+  "agents.leftoverNoReason": "설치한 것을 모두 지우지 못했어요.",
 } satisfies Catalog<typeof agentsEnglish>;
 
 const zhCN = {
